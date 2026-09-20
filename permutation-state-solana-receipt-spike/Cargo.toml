@@ -1,0 +1,21 @@
+[package]
+name = "permutation-state-receipt"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Minimal Solana receipt program for the Permutation State Worksite proof"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[features]
+default = []
+no-entrypoint = []
+
+[dependencies]
+# solana-program 2.2 permits newer blake3 releases whose current transitive
+# graph requires Rust 1.85. Pin the release Solana 2.2 itself was tested with
+# so this spike remains buildable on the workspace's Rust 1.84 toolchain.
+blake3 = "=1.5.5"
+borsh = { version = "=1.5.7", features = ["derive"] }
+solana-program = "=2.2.0"

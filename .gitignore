@@ -1,0 +1,33 @@
+# macOS / editors
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.secret
+wallet*.json
+*.keypair.json
+credentials.json
+id.json
+.config/solana/
+
+# JavaScript
+node_modules/
+npm-debug.log*
+
+# Rust / Solana
+target/
+.anchor/
+validator-ledger/
+test-ledger/
+
+# Local recordings and temporary output
+*.log
+*.tmp
+*.bak

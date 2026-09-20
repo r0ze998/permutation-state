@@ -1,0 +1,137 @@
+{
+  "suite": "PERMUTATION STATE Local Multi-Citizen Handoff Proof",
+  "buildId": "handoff-proof-2026-09-21",
+  "startedAt": "2026-09-20T19:48:20.656Z",
+  "completedAt": "2026-09-20T19:48:48.850Z",
+  "viewport": {
+    "width": 1280,
+    "height": 720,
+    "deviceScaleFactor": 1,
+    "mobile": false
+  },
+  "passCount": 10,
+  "runCount": 10,
+  "result": "PASS",
+  "results": [
+    {
+      "run": 1,
+      "route": "oath → service → M-032",
+      "events": 3,
+      "resolution": "R31-1",
+      "finalStateHash": "95666c5aa2f89c7041a0d52211c8309d3982515ba083bbc53f50f9dc8d018823",
+      "headEventHash": "37b20931a69862ffb14607fde49deaf22c088011798eef4c686a51b323c6c55a",
+      "maxSyncMs": 2,
+      "deterministicReplays": 100,
+      "transport": "BroadcastChannel + localStorage",
+      "passed": true
+    },
+    {
+      "run": 2,
+      "route": "oath → millrace → E-020",
+      "events": 3,
+      "resolution": "R31-2",
+      "finalStateHash": "af6609a552b63efdfba09250081b6287a58bed6fd3724410f553e878f2720e53",
+      "headEventHash": "170bcc69a35bb6c9b72beaa95d19841b3672314ec227530a7be3b2f72284af87",
+      "maxSyncMs": 2,
+      "deterministicReplays": 100,
+      "transport": "BroadcastChannel + localStorage",
+      "passed": true
+    },
+    {
+      "run": 3,
+      "route": "charter → cut → E-021",
+      "events": 3,
+      "resolution": "R31-3",
+      "finalStateHash": "9055eb6a20e3fe84915ec91e773ca79cded2a4af11ed8cc6918c7a57b348efeb",
+      "headEventHash": "a6e07fc235bbbd4dae6ab3f1d047a3d670a2e90178aa246e9cd3dd9abf9eec5c",
+      "maxSyncMs": 3,
+      "deterministicReplays": 100,
+      "transport": "BroadcastChannel + localStorage",
+      "passed": true
+    },
+    {
+      "run": 4,
+      "route": "charter → reconcile → M-033",
+      "events": 3,
+      "resolution": "R31-4",
+      "finalStateHash": "a7b602b5776c4d8208e3d091d9dc43842ee58e136847716da938fa4c730cb273",
+      "headEventHash": "5e346e5d9e282ab46963b78ff5c09e7516e174641d195c9349b2f2f4b06643b4",
+      "maxSyncMs": 1,
+      "deterministicReplays": 100,
+      "transport": "BroadcastChannel + localStorage",
+      "passed": true
+    },
+    {
+      "run": 5,
+      "route": "oath → service → M-032",
+      "events": 3,
+      "resolution": "R31-1",
+      "finalStateHash": "95666c5aa2f89c7041a0d52211c8309d3982515ba083bbc53f50f9dc8d018823",
+      "headEventHash": "ff16e639e22dae985235a48b05f9c5cf35a01d3c4aa55005db35e8f9cd6e1cad",
+      "maxSyncMs": 3,
+      "deterministicReplays": 100,
+      "transport": "BroadcastChannel + localStorage",
+      "passed": true
+    },
+    {
+      "run": 6,
+      "route": "charter → cut → E-021",
+      "events": 3,
+      "resolution": "R31-3",
+      "finalStateHash": "9055eb6a20e3fe84915ec91e773ca79cded2a4af11ed8cc6918c7a57b348efeb",
+      "headEventHash": "28f0303ef9b9b51fca6080cfa8859eb760e11fef5cc1e0946feb170b18bee0f7",
+      "maxSyncMs": 3,
+      "deterministicReplays": 100,
+      "transport": "BroadcastChannel + localStorage",
+      "passed": true
+    },
+    {
+      "run": 7,
+      "route": "oath → millrace → E-020",
+      "events": 3,
+      "resolution": "R31-2",
+      "finalStateHash": "af6609a552b63efdfba09250081b6287a58bed6fd3724410f553e878f2720e53",
+      "headEventHash": "182fc3da614d68c1ae66e9b35bcacfd24e7bb942f58b29e0183378770737f74e",
+      "maxSyncMs": 2,
+      "deterministicReplays": 100,
+      "transport": "BroadcastChannel + localStorage",
+      "passed": true
+    },
+    {
+      "run": 8,
+      "route": "charter → reconcile → M-033",
+      "events": 3,
+      "resolution": "R31-4",
+      "finalStateHash": "a7b602b5776c4d8208e3d091d9dc43842ee58e136847716da938fa4c730cb273",
+      "headEventHash": "f24f73e38b6576e72247de22589d81191c4e60d99b9d0c425c386495db8cd706",
+      "maxSyncMs": 14,
+      "deterministicReplays": 100,
+      "transport": "BroadcastChannel + localStorage",
+      "passed": true
+    },
+    {
+      "run": 9,
+      "route": "oath → service → M-032",
+      "events": 3,
+      "resolution": "R31-1",
+      "finalStateHash": "95666c5aa2f89c7041a0d52211c8309d3982515ba083bbc53f50f9dc8d018823",
+      "headEventHash": "9effc0da8de9253c56d23909f5eccc1e0e1c55f367f095118bd49ea16ef7d5b9",
+      "maxSyncMs": 11,
+      "deterministicReplays": 100,
+      "transport": "localStorage only",
+      "passed": true
+    },
+    {
+      "run": 10,
+      "route": "charter → cut → E-021",
+      "events": 3,
+      "resolution": "R31-3",
+      "finalStateHash": "9055eb6a20e3fe84915ec91e773ca79cded2a4af11ed8cc6918c7a57b348efeb",
+      "headEventHash": "cb07ed29a37ff2d5c94bb25ac919c6eed9846ff39458140fcef4c4fa067b430e",
+      "maxSyncMs": 2,
+      "deterministicReplays": 100,
+      "transport": "BroadcastChannel + localStorage",
+      "passed": true
+    }
+  ]
+}

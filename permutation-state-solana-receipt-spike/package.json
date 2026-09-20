@@ -1,0 +1,16 @@
+{
+  "name": "permutation-state-solana-receipt-spike",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "npm run test:client",
+    "test:client": "node --test client/adapter.test.mjs"
+  },
+  "dependencies": {
+    "@solana/web3.js": "1.99.0"
+  },
+  "overrides": {
+    "stream-json": "3.7.0",
+    "uuid": "11.1.1"
+  }
+}

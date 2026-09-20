@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="PERMUTATION STATE — a map-first prototype of one continuously evolving shared civilization."
+    />
+    <title>PERMUTATION STATE — Aster World View</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><rect width=%2232%22 height=%2232%22 rx=%224%22 fill=%22%23f4f1e7%22/><path d=%22M7 24V13h4v11zm7 0V7h4v17zm7 0V10h4v14z%22 fill=%22%233156a3%22/></svg>" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Manrope:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app" id="app">
+      <header class="topbar">
+        <button class="brand" data-view="pulse" aria-label="Open civilization pulse">
+          <span class="brand-glyph" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span>
+            <strong>PERMUTATION STATE</strong>
+            <small>ASTER · ONE SHARED CIVILIZATION</small>
+          </span>
+        </button>
+
+        <div class="resources" aria-label="Civilization resources">
+          <button class="resource" data-view="pulse" title="Shared water stability">
+            <i class="water"></i><span>WATER</span><strong id="water-value">28</strong><small id="water-delta">−4</small>
+          </button>
+          <button class="resource" data-view="pulse" title="Shared food reserve">
+            <i class="food"></i><span>FOOD</span><strong id="food-value">46</strong><small>+2</small>
+          </button>
+          <button class="resource" data-view="pulse" title="Civilization cohesion">
+            <i class="cohesion"></i><span>COHESION</span><strong id="cohesion-value">54</strong><small id="cohesion-delta">±0</small>
+          </button>
+          <button class="resource" data-view="pulse" title="Shared construction material">
+            <i class="timber"></i><span>TIMBER</span><strong id="timber-value">18</strong><small>STOCK</small>
+          </button>
+          <button class="resource route-resource" data-view="vault" title="Shared season path progress">
+            <i class="prosperity"></i><span>PROSPERITY PATH</span><strong id="prosperity-value">38%</strong><small>EPOCH 3</small>
+          </button>
+        </div>
+
+        <div class="top-status">
+          <div class="epoch-chip">
+            <span>SEASON ZERO</span>
+            <strong>03 / 04</strong>
+          </div>
+          <span class="simulation-chip">SIMULATED WORLD</span>
+          <button class="citizen-switch" data-view="citizens" aria-label="Open active citizen">
+            <span class="citizen-monogram" id="citizen-monogram">M</span>
+            <span><strong id="citizen-name">Mara Venn</strong><small id="citizen-role">ENVOY · 0214</small></span>
+            <b>⌄</b>
+          </button>
+        </div>
+      </header>
+
+      <nav class="tool-dock" aria-label="World tools">
+        <button class="dock-button active" data-view="map" aria-label="World map" title="World map">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 6 5-2 8 3 5-2v13l-5 2-8-3-5 2V6Zm5 0v9m8-6v9"/></svg>
+          <span>WORLD</span>
+        </button>
+        <button class="dock-button" data-view="mandates" aria-label="Mandates" title="Mandates">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h10v3h3v15H4V6h3V3Zm0 7h10M7 14h7"/></svg>
+          <span>MANDATES</span><em id="mandate-count">1</em>
+        </button>
+        <button class="dock-button" data-view="citizens" aria-label="Citizens" title="Citizens">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm8-1a3 3 0 1 0 0-6M2 21v-3c0-3 2.7-5 6-5s6 2 6 5v3m2-8c3.2 0 6 2 6 5v3"/></svg>
+          <span>CITIZENS</span>
+        </button>
+        <button class="dock-button" data-view="chronicle" aria-label="Live chronicle" title="Live chronicle">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h11a3 3 0 0 1 3 3v13H7a2 2 0 0 1-2-2V4Zm2 12h12M9 8h6m-6 4h7"/></svg>
+          <span>CHRONICLE</span><em id="chronicle-count">0</em>
+        </button>
+        <button class="dock-button" data-view="vault" aria-label="Season purse" title="Season purse">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8h18v12H3V8Zm3 0V5h12v3m-2 6h5"/></svg>
+          <span>PURSE</span>
+        </button>
+        <div class="dock-spacer"></div>
+        <button class="dock-button" id="reset-button" aria-label="Reset prototype" title="Reset prototype">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9a8 8 0 1 1 1 8m-1 4v-5h5"/></svg>
+          <span>RESET</span>
+        </button>
+      </nav>
+
+      <main class="world" id="world">
+        <div class="map-image" aria-hidden="true"></div>
+        <div class="terrain-wash" aria-hidden="true"></div>
+        <svg class="network-layer" viewBox="0 0 1000 620" preserveAspectRatio="none" aria-hidden="true">
+          <path class="network-path stable" d="M288,250 C390,278 470,295 552,318" />
+          <path class="network-path stable" d="M552,318 C640,302 714,276 794,295" />
+          <path class="network-path crisis" id="sluice-path" d="M552,318 C665,355 736,373 838,395" />
+          <path class="network-path ghost" d="M288,250 C264,335 258,414 335,492" />
+        </svg>
+
+        <div class="map-caption">
+          <span>ASTER CIVIC ATLAS</span>
+          <strong id="map-status">EASTERN WATER NETWORK · CRISIS ACTIVE</strong>
+        </div>
+
+        <button class="map-node capital" data-node="capital" aria-label="Aster capital">
+          <span class="node-ring"><i></i></span>
+          <span class="node-label"><small>CAPITAL · 12,840 CITIZENS</small><strong>ASTER CENTRAL</strong><em>Stable</em></span>
+        </button>
+        <button class="map-node guild" data-node="guild" aria-label="River Guild enclave">
+          <span class="node-ring"><i></i></span>
+          <span class="node-label"><small>INDEPENDENT SOCIETY</small><strong>RIVER GUILD</strong><em id="guild-status">Awaiting envoy</em></span>
+        </button>
+        <button class="map-node crisis-node" id="sluice-node" data-node="sluice" aria-label="East Sluice crisis">
+          <span class="node-ring"><i></i></span>
+          <span class="node-label"><small>ACTIVE CIVIC CRISIS</small><strong>EAST SLUICE</strong><em id="sluice-status">Closes at sunset</em></span>
+          <b>1</b>
+        </button>
+        <button class="map-node farms" data-node="farms" aria-label="Northern farms">
+          <span class="node-ring"><i></i></span>
+          <span class="node-label"><small>FOOD WORKSITE</small><strong>NORTHERN TERRACES</strong><em>Yield +2</em></span>
+        </button>
+        <button class="map-node coast" data-node="coast" aria-label="Harbor district">
+          <span class="node-ring"><i></i></span>
+          <span class="node-label"><small>TRADE DISTRICT</small><strong>GLASS HARBOR</strong><em>3 arrivals</em></span>
+        </button>
+
+        <section class="world-feed" aria-label="Live civilization events">
+          <header><span>LIVE CIVILIZATION</span><strong><i></i> WORLD SYNC</strong></header>
+          <div id="world-feed-items"></div>
+        </section>
+
+        <section class="epoch-ribbon" aria-label="Epoch progress">
+          <div><small>CURRENT EPOCH</small><strong>THE WATER DEBT</strong></div>
+          <div class="epoch-track"><i></i><b>RECKONING</b></div>
+          <div><small>TIME REMAINING</small><strong>2D 14H</strong></div>
+        </section>
+
+        <section class="mini-atlas" aria-label="World overview">
+          <div class="mini-map"><i></i><b></b><em></em></div>
+          <footer><span>ASTER BASIN</span><strong>40 ACTIVE</strong></footer>
+        </section>
+      </main>
+
+      <aside class="context-drawer open" id="context-drawer" aria-live="polite">
+        <button class="drawer-close" id="drawer-close" aria-label="Close panel">×</button>
+        <div id="drawer-content"></div>
+      </aside>
+
+      <div class="proof-caption">
+        <a class="handoff-proof-link" href="proof/?proof=1&amp;session=aster-demo&amp;role=observer">OPEN MULTI-CITIZEN PROOF ↗</a>
+        <span><i class="ai"></i>AI EXPRESSION</span>
+        <span><i class="rules"></i>FIXED RULES</span>
+        <span><i class="chain"></i>PLANNED SOLANA CANON</span>
+      </div>
+
+      <div class="toast-region" id="toast-region" aria-live="assertive"></div>
+      <div class="identity-overlay" id="identity-overlay" hidden></div>
+    </div>
+
+    <dialog class="reset-dialog" id="reset-dialog">
+      <form method="dialog">
+        <span class="kicker">LOCAL PROTOTYPE STATE</span>
+        <h2>Reset Aster to the first crisis?</h2>
+        <p>This clears Mara and Ivo’s simulated actions on this device. No wallet, chain record, or real funds are connected.</p>
+        <div>
+          <button value="cancel" class="secondary-button">KEEP WORLD</button>
+          <button value="confirm" class="danger-button">RESET LOCAL WORLD</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="app.js"></script>
+  </body>
+</html>
