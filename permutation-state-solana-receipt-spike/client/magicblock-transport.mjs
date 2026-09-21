@@ -39,22 +39,32 @@ import {
   ACCOUNT_SPACE,
   buildApplyInstruction,
   buildInitializeInstruction,
+  computeSeasonStateRoot,
   computeStateRoot,
+  deriveSeasonPursePda,
   deriveWorksitePda,
 } from "./adapter.mjs";
 
-export { deriveWorksitePda };
+export { deriveSeasonPursePda, deriveWorksitePda };
 
 export const MAGICBLOCK_SDK_VERSION = "0.17.2";
 export const TRANSPORT_SCHEMA = "permutation-state.magicblock-transport.v1";
-export const WORKSITE_STATE_BYTES = 333;
+export const WORKSITE_STATE_BYTES = 365;
+export const SEASON_STATE_BYTES = 383;
+export const SEASON_ACCOUNT_SPACE = 384;
+export const CLAIM_ACCOUNT_SPACE = 160;
 export const WORKSITE_INSTRUCTION = Object.freeze({
   INITIALIZE: 0,
   APPLY_WORKSITE_EVENT: 1,
   DELEGATE: 2,
   COMMIT: 3,
   COMMIT_AND_UNDELEGATE: 4,
+  INITIALIZE_SEASON: 5,
+  CREDIT_SEASON_PURSE: 6,
+  FINALIZE_SEASON: 7,
+  CLAIM_SEASON: 8,
 });
+export const PURSE_SOURCE = Object.freeze({ ENTRY: 1, MARKETPLACE: 2 });
 export const DEFAULT_ENDPOINTS = Object.freeze({
   routerHttp: "https://devnet-router.magicblock.app",
   routerWs: "wss://devnet-router.magicblock.app",
@@ -216,6 +226,150 @@ export function buildInitializeWorksiteInstruction(params) {
   return buildInitializeInstruction(params);
 }
 
+function encodeU32(value, label) {
+  if (!Number.isInteger(value) || value < 0 || value > 0xffff_ffff) {
+    throw new Error(`${label} must be an unsigned 32-bit integer`);
+  }
+  const bytes = Buffer.alloc(4);
+  bytes.writeUInt32LE(value);
+  return bytes;
+}
+
+function encodeU64(value, label) {
+  let amount;
+  try {
+    amount = BigInt(value);
+  } catch {
+    throw new Error(`${label} must be an unsigned 64-bit integer`);
+  }
+  if (amount < 0n || amount > 0xffff_ffff_ffff_ffffn) {
+    throw new Error(`${label} must be an unsigned 64-bit integer`);
+  }
+  const bytes = Buffer.alloc(8);
+  bytes.writeBigUInt64LE(amount);
+  return bytes;
+}
+
+export function deriveSeasonClaimPda(programId, seasonId, claimant) {
+  return PublicKey.findProgramAddressSync(
+    [
+      Buffer.from("season_claim"),
+      asBytes32(seasonId, "seasonId"),
+      asPublicKey(claimant, "claimant").toBuffer(),
+    ],
+    asPublicKey(programId, "programId"),
+  );
+}
+
+export function buildInitializeSeasonInstruction({
+  programId,
+  authority,
+  seasonPurse,
+  state,
+}) {
+  const data = Buffer.concat([
+    Buffer.from([WORKSITE_INSTRUCTION.INITIALIZE_SEASON]),
+    asBytes32(state.seasonId, "seasonId"),
+    asBytes32(state.rulesetHash, "rulesetHash"),
+    asBytes32(state.payoutRulesHash, "payoutRulesHash"),
+    asBytes32(state.stateRoot, "expectedGenesisStateRoot"),
+  ]);
+  return new TransactionInstruction({
+    programId: asPublicKey(programId, "programId"),
+    keys: [
+      { pubkey: asPublicKey(authority, "authority"), isSigner: true, isWritable: true },
+      { pubkey: asPublicKey(seasonPurse, "seasonPurse"), isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data,
+  });
+}
+
+export function buildCreditSeasonPurseInstruction({
+  programId,
+  authority,
+  seasonPurse,
+  args,
+}) {
+  if (![PURSE_SOURCE.ENTRY, PURSE_SOURCE.MARKETPLACE].includes(args.sourceKind)) {
+    throw new Error("sourceKind must be ENTRY or MARKETPLACE");
+  }
+  return new TransactionInstruction({
+    programId: asPublicKey(programId, "programId"),
+    keys: [
+      { pubkey: asPublicKey(authority, "authority"), isSigner: true, isWritable: false },
+      { pubkey: asPublicKey(seasonPurse, "seasonPurse"), isSigner: false, isWritable: true },
+    ],
+    data: Buffer.concat([
+      Buffer.from([WORKSITE_INSTRUCTION.CREDIT_SEASON_PURSE, args.sourceKind]),
+      encodeU64(args.grossUnits, "grossUnits"),
+      encodeU64(args.expectedSeq, "expectedSeq"),
+      asBytes32(args.expectedHeadEventHash, "expectedHeadEventHash"),
+      asBytes32(args.eventId, "eventId"),
+    ]),
+  });
+}
+
+export function buildFinalizeSeasonInstruction({
+  programId,
+  authority,
+  seasonPurse,
+  worksites = [],
+  args,
+}) {
+  return new TransactionInstruction({
+    programId: asPublicKey(programId, "programId"),
+    keys: [
+      { pubkey: asPublicKey(authority, "authority"), isSigner: true, isWritable: false },
+      { pubkey: asPublicKey(seasonPurse, "seasonPurse"), isSigner: false, isWritable: true },
+      ...worksites.map((worksite) => ({
+        pubkey: asPublicKey(worksite, "worksite"),
+        isSigner: false,
+        isWritable: false,
+      })),
+    ],
+    data: Buffer.concat([
+      Buffer.from([WORKSITE_INSTRUCTION.FINALIZE_SEASON]),
+      encodeU64(args.expectedSeq, "expectedSeq"),
+      asBytes32(args.expectedHeadEventHash, "expectedHeadEventHash"),
+      asBytes32(args.eventId, "eventId"),
+      asBytes32(args.outcomeHash, "outcomeHash"),
+      asBytes32(args.chronicleRoot, "chronicleRoot"),
+      asBytes32(args.claimRoot, "claimRoot"),
+    ]),
+  });
+}
+
+export function buildClaimSeasonInstruction({
+  programId,
+  claimant,
+  seasonPurse,
+  claimPda,
+  args,
+}) {
+  const proof = Array.isArray(args.merkleProof) ? args.merkleProof : [];
+  if (proof.length > 20) throw new Error("merkleProof cannot contain more than 20 nodes");
+  return new TransactionInstruction({
+    programId: asPublicKey(programId, "programId"),
+    keys: [
+      { pubkey: asPublicKey(claimant, "claimant"), isSigner: true, isWritable: true },
+      { pubkey: asPublicKey(seasonPurse, "seasonPurse"), isSigner: false, isWritable: true },
+      { pubkey: asPublicKey(claimPda, "claimPda"), isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.concat([
+      Buffer.from([WORKSITE_INSTRUCTION.CLAIM_SEASON]),
+      encodeU64(args.amount, "amount"),
+      encodeU32(args.leafIndex, "leafIndex"),
+      encodeU32(proof.length, "merkleProof.length"),
+      ...proof.map((node) => asBytes32(node, "merkleProof node")),
+      encodeU64(args.expectedSeq, "expectedSeq"),
+      asBytes32(args.expectedHeadEventHash, "expectedHeadEventHash"),
+      asBytes32(args.eventId, "eventId"),
+    ]),
+  });
+}
+
 function buildSettlementInstruction({
   programId,
   authority,
@@ -366,6 +520,42 @@ export async function sendInitializeWorksite(params) {
   };
 }
 
+export async function sendInitializeSeason(params) {
+  const instruction = buildInitializeSeasonInstruction(params);
+  return {
+    operation: "initialize-season",
+    instruction,
+    ...(await transactionSubmission(params, instruction)),
+  };
+}
+
+export async function sendCreditSeasonPurse(params) {
+  const instruction = buildCreditSeasonPurseInstruction(params);
+  return {
+    operation: "credit-season-purse",
+    instruction,
+    ...(await transactionSubmission(params, instruction)),
+  };
+}
+
+export async function sendFinalizeSeason(params) {
+  const instruction = buildFinalizeSeasonInstruction(params);
+  return {
+    operation: "finalize-season",
+    instruction,
+    ...(await transactionSubmission(params, instruction)),
+  };
+}
+
+export async function sendClaimSeason(params) {
+  const instruction = buildClaimSeasonInstruction(params);
+  return {
+    operation: "claim-season",
+    instruction,
+    ...(await transactionSubmission(params, instruction)),
+  };
+}
+
 export async function sendApplyWorksiteEvent(params) {
   const instruction = buildApplyWorksiteEventInstruction(params);
   return {
@@ -420,6 +610,10 @@ class StateCursor {
 
   u16(label) {
     return this.take(2, label).readUInt16LE(0);
+  }
+
+  u32(label) {
+    return this.take(4, label).readUInt32LE(0);
   }
 
   i16(label) {
@@ -492,9 +686,55 @@ export function decodeWorksiteState(data) {
       cursor.u8("mandateStatus[2]"),
     ],
     acceptedMandate: cursor.u16("acceptedMandate"),
+    seasonPurse: cursor.pubkey("seasonPurse"),
   };
   if (state.version !== 1) throw new Error(`Unsupported Worksite state version ${state.version}`);
   const computedStateRoot = computeStateRoot(state);
+  return {
+    ...state,
+    computedStateRoot,
+    stateRootMatches: sameBytes(state.stateRoot, computedStateRoot),
+    decodedBytes: cursor.offset,
+  };
+}
+
+export function decodeSeasonState(data) {
+  const bytes = Buffer.from(data);
+  if (bytes.length < SEASON_STATE_BYTES || bytes.length > SEASON_ACCOUNT_SPACE) {
+    throw new Error(
+      `Season account data must be ${SEASON_STATE_BYTES}-${SEASON_ACCOUNT_SPACE} bytes; received ${bytes.length}`,
+    );
+  }
+  const cursor = new StateCursor(bytes);
+  const state = {
+    version: cursor.u8("version"),
+    bump: cursor.u8("bump"),
+    authority: cursor.pubkey("authority"),
+    seasonId: cursor.bytes32("seasonId"),
+    rulesetHash: cursor.bytes32("rulesetHash"),
+    payoutRulesHash: cursor.bytes32("payoutRulesHash"),
+    outcomeHash: cursor.bytes32("outcomeHash"),
+    chronicleRoot: cursor.bytes32("chronicleRoot"),
+    claimRoot: cursor.bytes32("claimRoot"),
+    stateRoot: cursor.bytes32("stateRoot"),
+    headEventHash: cursor.bytes32("headEventHash"),
+    status: cursor.u8("status"),
+    seq: cursor.u64("seq"),
+    activeWorksites: cursor.u32("activeWorksites"),
+    activeCitizens: cursor.u32("activeCitizens"),
+    entryGrossUnits: cursor.u64("entryGrossUnits"),
+    entryPurseUnits: cursor.u64("entryPurseUnits"),
+    marketplaceGrossUnits: cursor.u64("marketplaceGrossUnits"),
+    marketplacePurseUnits: cursor.u64("marketplacePurseUnits"),
+    sellerUnits: cursor.u64("sellerUnits"),
+    opsUnits: cursor.u64("opsUnits"),
+    purseTotal: cursor.u64("purseTotal"),
+    claimableUnits: cursor.u64("claimableUnits"),
+    claimedUnits: cursor.u64("claimedUnits"),
+    claimCount: cursor.u32("claimCount"),
+  };
+  if (state.version !== 1) throw new Error(`Unsupported Season state version ${state.version}`);
+  const computedStateRoot = computeSeasonStateRoot(state);
   return {
     ...state,
     computedStateRoot,
@@ -523,6 +763,19 @@ export async function readWorksiteState(connection, worksitePda, commitment = "c
     owner: result.value.owner,
     lamports: result.value.lamports,
     state: decodeWorksiteState(result.value.data),
+  };
+}
+
+export async function readSeasonState(connection, seasonPurse, commitment = "confirmed") {
+  const address = asPublicKey(seasonPurse, "seasonPurse");
+  const result = await accountInfoWithContext(connection, address, commitment);
+  if (!result.value) throw new Error(`Season PDA ${address.toBase58()} was not found`);
+  return {
+    address,
+    slot: result.context?.slot ?? null,
+    owner: result.value.owner,
+    lamports: result.value.lamports,
+    state: decodeSeasonState(result.value.data),
   };
 }
 
@@ -572,6 +825,29 @@ export async function pollWorksiteState({
     ? Buffer.from(latest.state.stateRoot).toString("hex")
     : "unavailable";
   throw new Error(`Timed out waiting for Worksite state; last root ${lastRoot}`);
+}
+
+export async function pollSeasonState({
+  connection,
+  seasonPurse,
+  predicate = () => true,
+  commitment = "confirmed",
+  intervalMs = 250,
+  timeoutMs = 20_000,
+  signal,
+}) {
+  const startedAt = Date.now();
+  let latest = null;
+  while (Date.now() - startedAt <= timeoutMs) {
+    if (signal?.aborted) throw signal.reason || new Error("Operation aborted");
+    latest = await readSeasonState(connection, seasonPurse, commitment);
+    if (await predicate(latest.state, latest)) return latest;
+    await sleep(intervalMs, signal);
+  }
+  const lastRoot = latest?.state?.stateRoot
+    ? Buffer.from(latest.state.stateRoot).toString("hex")
+    : "unavailable";
+  throw new Error(`Timed out waiting for Season state; last root ${lastRoot}`);
 }
 
 export function erExplorerUrl(signature, rpcEndpoint = DEFAULT_ENDPOINTS.erHttp) {

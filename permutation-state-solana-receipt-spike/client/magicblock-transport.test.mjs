@@ -10,11 +10,15 @@ import {
 import {
   ACTION,
   EVENT,
+  computeSeasonStateRoot,
+  initialSeasonState,
   initialWorksiteState,
   previewEvent,
 } from "./adapter.mjs";
 import {
   TRANSPORT_SCHEMA,
+  PURSE_SOURCE,
+  SEASON_STATE_BYTES,
   WORKSITE_INSTRUCTION,
   WORKSITE_STATE_BYTES,
   buildApplyWorksiteEventInstruction,
@@ -22,6 +26,11 @@ import {
   buildCommitWorksiteInstruction,
   buildDelegateWorksiteInstruction,
   buildInitializeWorksiteInstruction,
+  buildCreditSeasonPurseInstruction,
+  buildInitializeSeasonInstruction,
+  buildFinalizeSeasonInstruction,
+  buildClaimSeasonInstruction,
+  decodeSeasonState,
   decodeWorksiteState,
   deriveDelegationAccounts,
   makeErTransactionReceipt,
@@ -33,6 +42,8 @@ import {
   sendCommitWorksite,
   sendDelegateWorksite,
   sendInitializeWorksite,
+  sendCreditSeasonPurse,
+  sendInitializeSeason,
   submitWorksiteTransaction,
   subscribeWorksiteState,
 } from "./magicblock-transport.mjs";
@@ -60,6 +71,19 @@ function fixture() {
     makerSigner,
     successorSigner,
     ...stateFixture,
+  };
+}
+
+function seasonFixture(f = fixture()) {
+  return {
+    ...f,
+    ...initialSeasonState({
+      programId: f.programId,
+      authority: f.authoritySigner.publicKey,
+      seasonId: f.state.seasonId,
+      rulesetHash: f.state.rulesetHash,
+      payoutRulesHash: Buffer.alloc(32, 10),
+    }),
   };
 }
 
@@ -119,8 +143,47 @@ function encodeWorksiteAccount(state, size = 384) {
     ...state.mandateIds.map(u16),
     ...state.mandateStatus.map(u8),
     u16(state.acceptedMandate),
+    state.seasonPurse.toBuffer(),
   ]);
   assert.equal(payload.length, WORKSITE_STATE_BYTES);
+  return Buffer.concat([payload, Buffer.alloc(size - payload.length)]);
+}
+
+function u32(value) {
+  const out = Buffer.alloc(4);
+  out.writeUInt32LE(value);
+  return out;
+}
+
+function encodeSeasonAccount(state, size = 384) {
+  const payload = Buffer.concat([
+    u8(state.version),
+    u8(state.bump),
+    state.authority.toBuffer(),
+    state.seasonId,
+    state.rulesetHash,
+    state.payoutRulesHash,
+    state.outcomeHash,
+    state.chronicleRoot,
+    state.claimRoot,
+    state.stateRoot,
+    state.headEventHash,
+    u8(state.status),
+    u64(state.seq),
+    u32(state.activeWorksites),
+    u32(state.activeCitizens),
+    u64(state.entryGrossUnits),
+    u64(state.entryPurseUnits),
+    u64(state.marketplaceGrossUnits),
+    u64(state.marketplacePurseUnits),
+    u64(state.sellerUnits),
+    u64(state.opsUnits),
+    u64(state.purseTotal),
+    u64(state.claimableUnits),
+    u64(state.claimedUnits),
+    u32(state.claimCount),
+  ]);
+  assert.equal(payload.length, SEASON_STATE_BYTES);
   return Buffer.concat([payload, Buffer.alloc(size - payload.length)]);
 }
 
@@ -153,6 +216,8 @@ test("MagicBlock builders preserve the coordinated Rust variants and account ord
     state: f.state,
   });
   assert.equal(initialize.data[0], WORKSITE_INSTRUCTION.INITIALIZE);
+  assert.equal(initialize.keys.length, 4);
+  assert.ok(initialize.keys[3].pubkey.equals(f.state.seasonPurse));
   const validator = new PublicKey("MAS1Dt9qreoRMQ14YQuhg8UTZMMzDdKhmkZMECCzk57");
   const delegation = deriveDelegationAccounts({ programId: f.programId, worksitePda: f.worksitePda });
   const delegate = buildDelegateWorksiteInstruction({
@@ -195,6 +260,117 @@ test("MagicBlock builders preserve the coordinated Rust variants and account ord
   assert.deepEqual([...undelegate.data], [WORKSITE_INSTRUCTION.COMMIT_AND_UNDELEGATE]);
 });
 
+test("Season Purse builders preserve tags, account order, and Borsh layouts", async () => {
+  const f = seasonFixture();
+  const initialize = buildInitializeSeasonInstruction({
+    programId: f.programId,
+    authority: f.authoritySigner.publicKey,
+    seasonPurse: f.seasonPurse,
+    state: f.state,
+  });
+  assert.equal(initialize.data[0], WORKSITE_INSTRUCTION.INITIALIZE_SEASON);
+  assert.equal(initialize.data.length, 129);
+  assert.equal(initialize.keys.length, 3);
+  assert.ok(initialize.keys[1].pubkey.equals(f.seasonPurse));
+
+  const commonArgs = {
+    expectedSeq: 0,
+    expectedHeadEventHash: Buffer.alloc(32, 12),
+    eventId: Buffer.alloc(32, 13),
+  };
+  const credit = buildCreditSeasonPurseInstruction({
+    programId: f.programId,
+    authority: f.authoritySigner.publicKey,
+    seasonPurse: f.seasonPurse,
+    args: { ...commonArgs, sourceKind: PURSE_SOURCE.ENTRY, grossUnits: 10_000_000 },
+  });
+  assert.equal(credit.data[0], WORKSITE_INSTRUCTION.CREDIT_SEASON_PURSE);
+  assert.equal(credit.data.length, 82);
+  assert.equal(credit.keys[0].isSigner, true);
+  assert.equal(credit.keys[0].isWritable, false);
+
+  const finalize = buildFinalizeSeasonInstruction({
+    programId: f.programId,
+    authority: f.authoritySigner.publicKey,
+    seasonPurse: f.seasonPurse,
+    worksites: [f.worksitePda],
+    args: {
+      ...commonArgs,
+      outcomeHash: Buffer.alloc(32, 15),
+      chronicleRoot: Buffer.alloc(32, 16),
+      claimRoot: Buffer.alloc(32, 17),
+    },
+  });
+  assert.equal(finalize.data[0], WORKSITE_INSTRUCTION.FINALIZE_SEASON);
+  assert.equal(finalize.data.length, 169);
+  assert.equal(finalize.keys.length, 3);
+  assert.equal(finalize.keys[2].isWritable, false);
+
+  const claimPda = PublicKey.findProgramAddressSync(
+    [Buffer.from("season_claim"), f.state.seasonId, f.successorSigner.publicKey.toBuffer()],
+    f.programId,
+  )[0];
+  const claim = buildClaimSeasonInstruction({
+    programId: f.programId,
+    claimant: f.successorSigner.publicKey,
+    seasonPurse: f.seasonPurse,
+    claimPda,
+    args: {
+      ...commonArgs,
+      amount: 1_000_000,
+      leafIndex: 0,
+      merkleProof: [Buffer.alloc(32, 14)],
+    },
+  });
+  assert.equal(claim.data[0], WORKSITE_INSTRUCTION.CLAIM_SEASON);
+  assert.equal(claim.data.length, 121);
+  assert.equal(claim.keys.length, 4);
+
+  const connection = nodeConnectionMock();
+  const initialized = await sendInitializeSeason({
+    connection,
+    programId: f.programId,
+    authority: f.authoritySigner.publicKey,
+    seasonPurse: f.seasonPurse,
+    state: f.state,
+    signers: [f.authoritySigner],
+  });
+  const credited = await sendCreditSeasonPurse({
+    connection,
+    programId: f.programId,
+    authority: f.authoritySigner.publicKey,
+    seasonPurse: f.seasonPurse,
+    args: { ...commonArgs, sourceKind: PURSE_SOURCE.ENTRY, grossUnits: 10_000_000 },
+    signers: [f.authoritySigner],
+  });
+  assert.equal(initialized.operation, "initialize-season");
+  assert.equal(credited.operation, "credit-season-purse");
+});
+
+test("Season decoder matches Constitution splits including floor remainders", () => {
+  const f = seasonFixture();
+  const state = {
+    ...f.state,
+    seq: 2,
+    entryGrossUnits: 10_000_001,
+    entryPurseUnits: 7_000_000,
+    marketplaceGrossUnits: 100_000_001,
+    marketplacePurseUnits: 1_500_000,
+    sellerUnits: 97_500_001,
+    opsUnits: 4_000_001,
+    purseTotal: 8_500_000,
+  };
+  state.stateRoot = computeSeasonStateRoot(state);
+  const decoded = decodeSeasonState(encodeSeasonAccount(state));
+  assert.equal(decoded.decodedBytes, SEASON_STATE_BYTES);
+  assert.equal(decoded.entryPurseUnits, 7_000_000);
+  assert.equal(decoded.marketplacePurseUnits, 1_500_000);
+  assert.equal(decoded.sellerUnits, 97_500_001);
+  assert.equal(decoded.opsUnits, 4_000_001);
+  assert.equal(decoded.purseTotal, 8_500_000);
+  assert.equal(decoded.stateRootMatches, true);
+});
+
 test("ApplyWorksiteEvent keeps the existing 172-byte wire contract", () => {
   const f = fixture();
   const preview = previewEvent(f.state, {
@@ -231,7 +407,7 @@ test("decoder reconstructs the fixed Worksite account and verifies its root", ()
   const unsupported = encodeWorksiteAccount(f.state);
   unsupported[0] = 2;
   assert.throws(() => decodeWorksiteState(unsupported), /Unsupported Worksite state version/);
-  assert.throws(() => decodeWorksiteState(Buffer.alloc(100)), /333-384 bytes/);
+  assert.throws(() => decodeWorksiteState(Buffer.alloc(100)), /365-384 bytes/);
 });
 
 test("Node submission wrappers cover initialize, delegate, apply, commit, and undelegate", async () => {

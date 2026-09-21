@@ -187,6 +187,14 @@
     return String(value).replaceAll("_", " ").toUpperCase();
   }
 
+  function formatMockUnits(value) {
+    if (!Number.isFinite(Number(value))) return "—";
+    return (Number(value) / 1_000_000).toLocaleString(undefined, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 6
+    });
+  }
+
   function setRoleNav() {
     const labels = { mara: "MARA · A", ivo: "IVO · B", successor: "NEXT · C", observer: "OBSERVER" };
     elements.roleNav.innerHTML = validRoles.map((item) => (
@@ -393,13 +401,15 @@
   }
 
   function renderWorldStatus(state) {
+    const season = magicBlockMode ? networkSession?.season : null;
     elements.worldStatus.innerHTML = `
       <div><span>SEASON</span><strong>${pretty(state.seasonStatus)}</strong></div>
       <div><span>WORKSITE 31</span><strong>${pretty(state.worksiteResolution || state.worksiteStatus)}</strong></div>
       <div><span>FOOD DEBT</span><strong>${state.foodDebt}</strong></div>
       <div><span>SETTLEMENT</span><strong>${pretty(state.settlementStatus)}</strong></div>
       <div><span>CLAIM</span><strong>${state.claimAvailable ? "AVAILABLE" : "UNAVAILABLE"}</strong></div>
-      <div><span>STAGE</span><strong>${pretty(state.stage)}</strong></div>`;
+      <div><span>STAGE</span><strong>${pretty(state.stage)}</strong></div>
+      ${season ? `<div><span>VERIFIED PURSE</span><strong>${formatMockUnits(season.purseTotal)} MOCK USDC</strong></div>` : ""}`;
   }
 
   function renderCausalStrip(state) {
@@ -688,6 +698,16 @@
             && checkpoint.stateRoot === receipts.find((item) => item.checkpoint === checkpoint)?.er?.stateRoot
         });
       }
+      const season = networkSession?.season;
+      invariants.push(
+        { label: "Season PDA state root recomputes", pass: Boolean(season?.stateRootMatches) },
+        { label: "Season remains ACTIVE", pass: season?.status === 1 },
+        { label: "Season claim remains unavailable", pass: season?.status === 1 && season?.claimableUnits === 0 && season?.claimCount === 0 },
+        { label: "Purse ledger allocations reconcile", pass: Boolean(season)
+          && season.purseTotal === season.entryPurseUnits + season.marketplacePurseUnits
+          && season.entryGrossUnits + season.marketplaceGrossUnits
+            === season.purseTotal + season.opsUnits + season.sellerUnits }
+      );
     }
     return invariants;
   }
@@ -723,6 +743,14 @@
       : [...receipts].reverse().find((item) => item.checkpointError)?.checkpointError || null;
     const descriptor = networkSession?.descriptor;
     const chain = networkSession?.state;
+    const season = networkSession?.season;
+    const entryOps = season ? season.entryGrossUnits - season.entryPurseUnits : 0;
+    const marketplaceOps = season
+      ? season.marketplaceGrossUnits - season.marketplacePurseUnits - season.sellerUnits
+      : 0;
+    const economyReceipts = networkSession?.seasonNetwork?.economyReceipts
+      || networkSession?.network?.economyReceipts
+      || [];
     elements.networkLayer.textContent = gatewayError
       ? "OFFLINE"
       : !networkSession?.initialized
@@ -756,14 +784,28 @@
       checkpointBody = `<strong>AWAITING VERIFIED READ-BACK</strong><span>The UI will only label this settled after the base account matches the ER root.</span><em>PENDING</em>`;
     }
 
+    const economyReceiptMarkup = economyReceipts.length
+      ? economyReceipts.map((receipt) => `<span>${escapeHtml(receipt.sourceKind?.toUpperCase() || "SEASON")} · ${signatureMarkup(receipt)} · +${formatMockUnits(receipt.purseUnits)} PURSE</span>`).join("")
+      : "<span>Ledger state was read directly from the Season PDA; this Worksite has no locally indexed credit receipts.</span>";
+    const seasonBody = season
+      ? `<strong>${formatMockUnits(season.purseTotal)} MOCK USDC</strong>
+        <span>ENTRY ${formatMockUnits(season.entryGrossUnits)} → PURSE ${formatMockUnits(season.entryPurseUnits)} · OPS ${formatMockUnits(entryOps)}</span>
+        <span>MARKET ${formatMockUnits(season.marketplaceGrossUnits)} → PURSE ${formatMockUnits(season.marketplacePurseUnits)} · OPS ${formatMockUnits(marketplaceOps)} · SELLER ${formatMockUnits(season.sellerUnits)}</span>
+        <code title="${escapeHtml(season.headEventHash || "")}">LEDGER SEQ ${season.seq} · HEAD ${escapeHtml(shortHash(season.headEventHash))}</code>
+        ${economyReceiptMarkup}
+        <em>ACTIVE · SETTLEMENT NOT STARTED · CLAIM UNAVAILABLE · ONCHAIN MOCK LEDGER</em>`
+      : `<strong>SEASON PDA NOT INITIALIZED</strong><span>No verified purse state is available.</span><em>NOT VERIFIED</em>`;
+
     elements.networkReceiptList.innerHTML = `
       <article class="layer-receipt er"><header><b>REAL-TIME ER TRANSACTION</b><i>${latestEr ? "ACCEPTED" : "WAITING"}</i></header>${erBody}</article>
-      <article class="layer-receipt checkpoint ${checkpointClass}"><header><b>SOLANA CHECKPOINT</b><i>${checkpoint ? "VERIFIED" : checkpointError ? "FAILED" : "WAITING"}</i></header>${checkpointBody}</article>`;
+      <article class="layer-receipt checkpoint ${checkpointClass}"><header><b>SOLANA CHECKPOINT</b><i>${checkpoint ? "VERIFIED" : checkpointError ? "FAILED" : "WAITING"}</i></header>${checkpointBody}</article>
+      <article class="layer-receipt checkpoint ${season ? "verified" : "failed"}"><header><b>SEASON PURSE · SOLANA</b><i>${season ? "VERIFIED" : "MISSING"}</i></header>${seasonBody}</article>`;
     elements.networkBoundary.innerHTML = `
       <span>PROGRAM <code title="${escapeHtml(descriptor?.programId || "")}">${escapeHtml(shortHash(descriptor?.programId))}</code></span>
       <span>WORKSITE <code title="${escapeHtml(descriptor?.worksitePda || "")}">${escapeHtml(shortHash(descriptor?.worksitePda))}</code></span>
+      <span>SEASON PDA <code title="${escapeHtml(descriptor?.seasonPurse || "")}">${escapeHtml(shortHash(descriptor?.seasonPurse))}</code></span>
       <span>ER SEQ <code>${chain?.seq ?? "—"}</code></span>
-      <small>Disposable local demo signers are gateway-held. Role URLs are presentation only, not authorization; production wallet approval and player session keys remain future work.</small>`;
+      <small>The verified onchain mock ledger is separate from the 348.50 MOCK USDC world projection in the visual prototype. Disposable local demo signers are gateway-held. Role URLs are presentation only, not authorization.</small>`;
     const retryButton = document.getElementById("retry-checkpoint");
     if (retryButton) retryButton.addEventListener("click", retrySolanaCheckpoint);
   }
@@ -903,8 +945,13 @@
         cluster: networkSession.cluster,
         descriptor: networkSession.descriptor,
         state: networkSession.state,
+        stateLayer: networkSession.stateLayer,
+        season: networkSession.season,
+        seasonSlot: networkSession.seasonSlot,
+        seasonNetwork: networkSession.seasonNetwork,
         delegated: networkSession.delegated,
-        receipts: networkSession.network?.receipts || []
+        receipts: networkSession.network?.receipts || [],
+        economyReceipts: networkSession.network?.economyReceipts || []
       }) : null,
       verification: { valid: verification.valid, errors: Core.clone(verification.errors) },
       exportedAt: new Date().toISOString()

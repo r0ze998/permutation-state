@@ -12,6 +12,8 @@ export const DOMAINS = Object.freeze({
   state: Buffer.from("PERMSTATE/WORKSITE_STATE/V1"),
   event: Buffer.from("PERMSTATE/WORKSITE_EVENT/V1"),
   genesis: Buffer.from("PERMSTATE/WORKSITE_GENESIS/V1"),
+  seasonState: Buffer.from("PERMSTATE/SEASON_STATE/V1"),
+  seasonGenesis: Buffer.from("PERMSTATE/SEASON_GENESIS/V1"),
 });
 export const EVENT = Object.freeze({ MARA_CHOICE: 0, IVO_CHOICE: 1, MANDATE_ACCEPTED: 2 });
 export const ACTION = Object.freeze({
@@ -83,6 +85,7 @@ function clone(state) {
     envoy: new PublicKey(state.envoy),
     maker: new PublicKey(state.maker),
     successor: new PublicKey(state.successor),
+    seasonPurse: new PublicKey(state.seasonPurse),
     seasonId: Buffer.from(state.seasonId),
     worksiteId: Buffer.from(state.worksiteId),
     rulesetHash: Buffer.from(state.rulesetHash),
@@ -99,6 +102,13 @@ export function deriveWorksitePda(programId, seasonId, worksiteId) {
   );
 }
 
+export function deriveSeasonPursePda(programId, seasonId) {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("season"), bytes32(seasonId, "seasonId")],
+    new PublicKey(programId),
+  );
+}
+
 export function initialWorksiteState({
   programId,
   authority,
@@ -108,8 +118,10 @@ export function initialWorksiteState({
   seasonId,
   worksiteId,
   rulesetHash,
+  seasonPurse = null,
 }) {
   const [worksitePda, bump] = deriveWorksitePda(programId, seasonId, worksiteId);
+  const [derivedSeasonPurse] = deriveSeasonPursePda(programId, seasonId);
   const state = {
     version: 1,
     bump,
@@ -143,6 +155,7 @@ export function initialWorksiteState({
     mandateIds: [0, 0, 0],
     mandateStatus: [0, 0, 0],
     acceptedMandate: 0,
+    seasonPurse: new PublicKey(seasonPurse || derivedSeasonPurse),
   };
   state.stateRoot = computeStateRoot(state);
   state.headEventHash = hashv(
@@ -185,7 +198,93 @@ export function encodeStateRootView(state) {
     ...state.mandateIds.map(u16),
     ...state.mandateStatus.map(u8),
     u16(state.acceptedMandate),
+    pubkeyBytes(state.seasonPurse),
   ]);
+}
+
+export function initialSeasonState({
+  programId,
+  authority,
+  seasonId,
+  rulesetHash,
+  payoutRulesHash,
+}) {
+  const [seasonPurse, bump] = deriveSeasonPursePda(programId, seasonId);
+  const state = {
+    version: 1,
+    bump,
+    authority: new PublicKey(authority),
+    seasonId: bytes32(seasonId, "seasonId"),
+    rulesetHash: bytes32(rulesetHash, "rulesetHash"),
+    payoutRulesHash: bytes32(payoutRulesHash, "payoutRulesHash"),
+    outcomeHash: Buffer.alloc(32),
+    chronicleRoot: Buffer.alloc(32),
+    claimRoot: Buffer.alloc(32),
+    stateRoot: Buffer.alloc(32),
+    headEventHash: Buffer.alloc(32),
+    status: 1,
+    seq: 0,
+    activeWorksites: 0,
+    activeCitizens: 0,
+    entryGrossUnits: 0,
+    entryPurseUnits: 0,
+    marketplaceGrossUnits: 0,
+    marketplacePurseUnits: 0,
+    sellerUnits: 0,
+    opsUnits: 0,
+    purseTotal: 0,
+    claimableUnits: 0,
+    claimedUnits: 0,
+    claimCount: 0,
+  };
+  state.stateRoot = computeSeasonStateRoot(state);
+  state.headEventHash = hashv(
+    DOMAINS.seasonGenesis,
+    new PublicKey(programId).toBuffer(),
+    seasonPurse.toBuffer(),
+    state.seasonId,
+    state.rulesetHash,
+    state.payoutRulesHash,
+    state.stateRoot,
+  );
+  return { state, seasonPurse };
+}
+
+export function encodeSeasonStateRootView(state) {
+  const u32 = (value) => {
+    const out = Buffer.alloc(4);
+    out.writeUInt32LE(value);
+    return out;
+  };
+  return Buffer.concat([
+    u8(state.version),
+    u8(state.bump),
+    pubkeyBytes(state.authority),
+    bytes32(state.seasonId, "seasonId"),
+    bytes32(state.rulesetHash, "rulesetHash"),
+    bytes32(state.payoutRulesHash, "payoutRulesHash"),
+    bytes32(state.outcomeHash, "outcomeHash"),
+    bytes32(state.chronicleRoot, "chronicleRoot"),
+    bytes32(state.claimRoot, "claimRoot"),
+    u8(state.status),
+    u64(state.seq),
+    u32(state.activeWorksites),
+    u32(state.activeCitizens),
+    u64(state.entryGrossUnits),
+    u64(state.entryPurseUnits),
+    u64(state.marketplaceGrossUnits),
+    u64(state.marketplacePurseUnits),
+    u64(state.sellerUnits),
+    u64(state.opsUnits),
+    u64(state.purseTotal),
+    u64(state.claimableUnits),
+    u64(state.claimedUnits),
+    u32(state.claimCount),
+  ]);
+}
+
+export function computeSeasonStateRoot(state) {
+  return hashv(DOMAINS.seasonState, encodeSeasonStateRootView(state));
 }
 
 export function computeStateRoot(state) {
@@ -301,6 +400,7 @@ export function buildInitializeInstruction({ programId, authority, worksitePda, 
       { pubkey: new PublicKey(authority), isSigner: true, isWritable: true },
       { pubkey: new PublicKey(worksitePda), isSigner: false, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: new PublicKey(state.seasonPurse), isSigner: false, isWritable: true },
     ],
     data: encodeInitializeInstruction({ state }),
   });

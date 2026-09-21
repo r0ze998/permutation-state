@@ -8,9 +8,11 @@ import {
   newProofStore,
   sanitizeSession,
   sessionCommitments,
+  seasonStateToJson,
   stateToJson,
 } from "./game-contract.mjs";
-import { assertSafeNetworkConfiguration } from "./devnet-gateway.mjs";
+import { allocatePurseUnits, assertSafeNetworkConfiguration } from "./devnet-gateway.mjs";
+import { PURSE_SOURCE } from "../client/magicblock-transport.mjs";
 
 const PUBLIC_GENESIS = Object.freeze({
   mainnet: "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
@@ -49,6 +51,7 @@ test("session commitments keep the season and ruleset stable but isolate Worksit
   assert.equal(first.seasonId.length, 32);
   assert.equal(first.worksiteId.length, 32);
   assert.equal(first.rulesetHash.length, 32);
+  assert.equal(first.payoutRulesHash.length, 32);
   assert.deepEqual(first.seasonId, second.seasonId);
   assert.deepEqual(first.rulesetHash, second.rulesetHash);
   assert.notDeepEqual(first.worksiteId, second.worksiteId);
@@ -173,9 +176,61 @@ test("state serialization makes root verification and identities public without 
     mandateIds: [1032, 2019, 3044],
     mandateStatus: [0, 0, 0],
     acceptedMandate: 0,
+    seasonPurse: key,
   });
   assert.equal(state.authority, key.toBase58());
   assert.equal(state.stateRoot, "07".repeat(32));
   assert.equal(state.stateRootMatches, true);
   assert.equal(Object.hasOwn(state, "secretKey"), false);
+});
+
+test("Season state serialization exposes the verified ledger without signer secrets", () => {
+  const key = new PublicKey("11111111111111111111111111111111");
+  const bytes = Buffer.alloc(32, 8);
+  const state = seasonStateToJson({
+    version: 1,
+    bump: 254,
+    authority: key,
+    seasonId: bytes,
+    rulesetHash: bytes,
+    payoutRulesHash: bytes,
+    outcomeHash: Buffer.alloc(32),
+    chronicleRoot: Buffer.alloc(32),
+    claimRoot: Buffer.alloc(32),
+    stateRoot: bytes,
+    computedStateRoot: bytes,
+    stateRootMatches: true,
+    headEventHash: bytes,
+    status: 1,
+    seq: 3,
+    activeWorksites: 1,
+    activeCitizens: 3,
+    entryGrossUnits: 10_000_000,
+    entryPurseUnits: 7_000_000,
+    marketplaceGrossUnits: 100_000_000,
+    marketplacePurseUnits: 1_500_000,
+    sellerUnits: 97_500_000,
+    opsUnits: 4_000_000,
+    purseTotal: 8_500_000,
+    claimableUnits: 0,
+    claimedUnits: 0,
+    claimCount: 0,
+  });
+  assert.equal(state.status, 1);
+  assert.equal(state.purseTotal, 8_500_000);
+  assert.equal(state.headEventHash, "08".repeat(32));
+  assert.equal(Object.hasOwn(state, "secretKey"), false);
+});
+
+test("gateway receipt allocation matches the Constitution and assigns floor remainders safely", () => {
+  assert.deepEqual(allocatePurseUnits(PURSE_SOURCE.ENTRY, 10_000_001), {
+    purse: 7_000_000n,
+    ops: 3_000_001n,
+    seller: 0n,
+  });
+  assert.deepEqual(allocatePurseUnits(PURSE_SOURCE.MARKETPLACE, 100_000_001), {
+    purse: 1_500_000n,
+    ops: 1_000_000n,
+    seller: 97_500_001n,
+  });
 });

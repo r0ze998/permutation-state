@@ -1,12 +1,13 @@
 # Permutation State — Playable MagicBlock Slice
 
-This package is the Solana program, MagicBlock transport, and local gateway behind the playable multi-client East Sluice scenario. It has been exercised end to end on the official standalone MagicBlock stack: base-layer initialization, delegation, three program-level role-gated ER actions, an ER-to-base checkpoint, confirmed base signature, and state-root read-back all pass. The browser-local proof remains available as a fallback.
+This package is the Solana program, MagicBlock transport, and local gateway behind the playable multi-client East Sluice scenario. It includes a canonical Season PDA with a mock-USDC ledger, a Worksite PDA delegated to a MagicBlock Ephemeral Rollup, and verified ER-to-Solana checkpoints. The browser-local proof remains available as a fallback.
 
 The verified target is **localnet**, using disposable demo signers and no real funds. Nothing is deployed to public devnet or mainnet. The gateway holds those disposable signers for the hackathon slice; production wallet approval and player Session Keys are not implemented. Role URLs are presentation and turn-taking aids, not authentication: the HTTP caller is not yet bound to a player wallet.
 
 The program follows MagicBlock's current Native Rust lifecycle without BOLT:
 
 ```text
+Base Layer: Initialize / credit canonical Season PDA
 Base Layer: Initialize Worksite PDA
 Base Layer: Delegate Worksite PDA
 ER:         ApplyWorksiteEvent ... (low-latency shared play)
@@ -60,13 +61,15 @@ The Program ID is intentionally **not compiled into the Rust program**. PDA deri
 
 ## What the program canonizes
 
-One PDA stores the authoritative state for one `season_id + worksite_id`. It contains:
+One Worksite PDA stores the authoritative play state for one `season_id + worksite_id`. It contains:
 
 - the published `ruleset_hash`;
 - the assigned Envoy, Maker, and Successor wallet addresses;
 - the current sequence, branch, Worksite resolution, compact resources, and Mandate queue;
 - the current state root and previous accepted event hash;
 - immutable-in-this-program `season_active`, `settlement_not_started`, and `claim_unavailable` flags.
+
+A separate Season PDA stores the active season's committed payout rules, append-only ledger head, registered Worksite/citizen counts, and mock entry/marketplace allocations. The local gateway seeds two transparent demo credits on a fresh Season: `10.00` mock USDC entry (`7.00` purse / `3.00` operations) and `100.00` marketplace volume (`1.50` purse / `1.00` operations / `97.50` seller). These are integer micro-units recorded by real local Solana transactions; no SPL token or real funds move.
 
 Every accepted `ApplyWorksiteEvent` must include the exact prior root, previous event hash, ruleset hash, predicted new root, event sequence, action, and the local proof's SHA-256 `eventHash`. The program:
 
@@ -89,6 +92,8 @@ The local browser event hash is a binding field, not the chain state root. The o
 
 The account is fixed at 384 bytes for v1. The current serialized payload is smaller; the remainder is zero-filled for modest schema evolution.
 
+`SeasonState` is a separate 384-byte PDA derived from `['season', season_id]`. Its 383-byte payload includes the payout-rule commitment, active/finalized status, ledger sequence and hash-chain head, all mock-unit allocation totals, and the three roots that remain zero until finalization. `WorksiteState` stores that Season PDA, and its state root binds the relationship.
+
 ## Instruction wire contract
 
 The ordinary instructions are a Borsh enum. Existing wire tags remain unchanged and the ER lifecycle variants are appended:
@@ -100,6 +105,10 @@ The ordinary instructions are a Borsh enum. Existing wire tags remain unchanged 
 | `2` | `Delegate` | none |
 | `3` | `Commit` | none |
 | `4` | `CommitAndUndelegate` | none |
+| `5` | `InitializeSeason` | season/rules/payout-rule commitments and expected genesis root |
+| `6` | `CreditSeasonPurse` | source, gross mock units, expected ledger head, event id |
+| `7` | `FinalizeSeason` | expected head plus outcome, chronicle, and claim roots |
+| `8` | `ClaimSeason` | mock amount, Merkle proof, expected ledger head, event id |
 
 The base-layer `Undelegate` callback is deliberately outside that enum. MagicBlock invokes the exact eight-byte discriminator `[196, 28, 41, 206, 48, 37, 51, 167]`, followed by a Borsh `Vec<Vec<u8>>` containing exactly:
 
@@ -117,7 +126,8 @@ Accounts:
 
 1. authority/payer — signer, writable;
 2. Worksite PDA — writable;
-3. System Program.
+3. System Program;
+4. Season PDA — writable.
 
 Data: season ID, Worksite ID, ruleset hash, three role wallet addresses, and the expected genesis state root. The program creates the PDA and checks the caller's predicted root.
 
@@ -141,7 +151,7 @@ expected_prev_event_hash
 client_event_hash
 ```
 
-There is deliberately no settlement or claim instruction in this spike.
+The playable route deliberately keeps the Season active and never calls finalization or claim. Tags 7-8 exist to prove the lifecycle guardrails: outcome/chronicle/claim roots remain zero while active, and a claim cannot be created before a separately verified season boundary. All amounts are non-transferable mock ledger units.
 
 ### `Delegate` — Base Layer
 
@@ -190,9 +200,9 @@ The SDK additionally verifies that the buffer is signed, owned by the Delegation
 [`client/magicblock-transport.mjs`](./client/magicblock-transport.mjs) is the transport boundary intended for the local gateway and, through a browser bundler, a wallet-connected client. It exports:
 
 - connection factories for Magic Router, a direct Ephemeral Rollup endpoint, and Solana;
-- Worksite and MagicBlock delegation PDA derivation;
-- builders and senders for `Initialize`, `Delegate`, `ApplyWorksiteEvent`, `Commit`, and `CommitAndUndelegate`;
-- fixed-width `WorksiteState` decoding with a recomputed state-root check;
+- Worksite, Season, Claim, and MagicBlock delegation PDA derivation;
+- builders and senders for all nine program instructions, including Season initialization, credits, finalization, and claims;
+- fixed-width `WorksiteState` and `SeasonState` decoding with recomputed state-root checks;
 - WebSocket account subscription and bounded polling;
 - ER execution metadata that explicitly remains unsettled;
 - base commitment-signature resolution followed by mandatory Solana PDA root read-back.
@@ -277,7 +287,7 @@ npm run test:e2e:local
 npm audit --audit-level=moderate
 ```
 
-Rust tests cover the three-citizen cooperative path, all four branch-gated resolutions, authorization, stale/ruleset/root rejection, signer enforcement, persistence, no-claim invariants, stable instruction tags, callback discrimination, exact undelegation seeds, and lifecycle authorization. Eighteen JavaScript tests cover identical commitments, all five client-callable instructions, exact MagicBlock account order, Node and browser-wallet send paths, decoding, subscription, polling, gateway command validation, safe session derivation, network identity guards, and the ER-versus-Solana receipt boundary.
+Seventeen Rust tests cover the three-citizen cooperative path, all four branch-gated resolutions, authorization, stale/ruleset/root rejection, signer enforcement, persistence, Season-ledger allocation and replay protection, no-claim invariants, stable instruction tags, callback discrimination, exact undelegation seeds, and lifecycle authorization. Twenty-three JavaScript tests cover identical Rust/JavaScript commitments, all nine client-callable instructions, exact account order, Constitution allocation parity, Node and browser-wallet send paths, decoding, subscription, polling, gateway command validation, safe session derivation, network identity guards, and the ER-versus-Solana receipt boundary.
 
 `rust-toolchain.toml` pins Rust 1.89.0. `Cargo.toml` pins `ephemeral-rollups-sdk` 0.16.2, the version used by MagicBlock's current Native Rust counter example, together with Solana Program 4.0.0. The lockfile is committed. Upgrade this matrix deliberately and rerun both host and SBF/integration tests; do not accept an unattended dependency refresh.
 
@@ -287,7 +297,7 @@ The checked lockfile pins `@magicblock-labs/ephemeral-rollups-sdk` 0.17.2, `@sol
 
 ## Verified local gate and remaining public gate
 
-The checked-in implementation passes its host suite and builds a 258,440-byte SBF artifact with Agave/Solana CLI 3.1.9. The following have been verified against the official local MagicBlock stack:
+The checked-in implementation passes its host suite and builds a 327,568-byte SBF artifact with Agave/Solana CLI 3.1.9. The following have been verified against the official local MagicBlock stack:
 
 1. initialize a fresh Worksite PDA on the base layer;
 2. delegate it through the real Delegation Program;

@@ -57,6 +57,10 @@ export function sessionCommitments(sessionIdInput) {
     seasonId: sha256Bytes("PERMSTATE/SEASON/V1", "season-zero"),
     worksiteId: sha256Bytes("PERMSTATE/WORKSITE/V1", "east-sluice-031", sessionId),
     rulesetHash: sha256Bytes("PERMSTATE/RULESET/V1", "water-debt-ruleset-v0.3"),
+    payoutRulesHash: sha256Bytes(
+      "PERMSTATE/PAYOUT_RULES/V1",
+      "80-percent-equal-20-percent-capped-role-normalized-max-2x-median",
+    ),
   };
 }
 
@@ -153,6 +157,40 @@ export function stateToJson(state) {
     mandateIds: [...state.mandateIds],
     mandateStatus: [...state.mandateStatus],
     acceptedMandate: state.acceptedMandate,
+    seasonPurse: publicKey(state.seasonPurse),
+  };
+}
+
+export function seasonStateToJson(state) {
+  if (!state) return null;
+  return {
+    version: state.version,
+    bump: state.bump,
+    authority: publicKey(state.authority),
+    seasonId: bytesHex(state.seasonId),
+    rulesetHash: bytesHex(state.rulesetHash),
+    payoutRulesHash: bytesHex(state.payoutRulesHash),
+    outcomeHash: bytesHex(state.outcomeHash),
+    chronicleRoot: bytesHex(state.chronicleRoot),
+    claimRoot: bytesHex(state.claimRoot),
+    stateRoot: bytesHex(state.stateRoot),
+    computedStateRoot: bytesHex(state.computedStateRoot),
+    stateRootMatches: state.stateRootMatches,
+    headEventHash: bytesHex(state.headEventHash),
+    status: state.status,
+    seq: state.seq,
+    activeWorksites: state.activeWorksites,
+    activeCitizens: state.activeCitizens,
+    entryGrossUnits: state.entryGrossUnits,
+    entryPurseUnits: state.entryPurseUnits,
+    marketplaceGrossUnits: state.marketplaceGrossUnits,
+    marketplacePurseUnits: state.marketplacePurseUnits,
+    sellerUnits: state.sellerUnits,
+    opsUnits: state.opsUnits,
+    purseTotal: state.purseTotal,
+    claimableUnits: state.claimableUnits,
+    claimedUnits: state.claimedUnits,
+    claimCount: state.claimCount,
   };
 }
 

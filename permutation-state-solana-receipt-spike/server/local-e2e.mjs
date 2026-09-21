@@ -52,6 +52,19 @@ const bootstrap = await request("/api/magicblock/bootstrap", {
 assert.equal(bootstrap.initialized, true);
 assert.equal(bootstrap.delegated, true);
 assert.equal(bootstrap.state.seq, 0);
+assert.equal(bootstrap.season.status, 1);
+assert.equal(bootstrap.season.stateRootMatches, true);
+assert.equal(bootstrap.season.entryGrossUnits, 10_000_000);
+assert.equal(bootstrap.season.entryPurseUnits, 7_000_000);
+assert.equal(bootstrap.season.marketplaceGrossUnits, 100_000_000);
+assert.equal(bootstrap.season.marketplacePurseUnits, 1_500_000);
+assert.equal(bootstrap.season.sellerUnits, 97_500_000);
+assert.equal(bootstrap.season.opsUnits, 4_000_000);
+assert.equal(bootstrap.season.purseTotal, 8_500_000);
+assert.equal(bootstrap.season.claimableUnits, 0);
+assert.equal(bootstrap.season.claimCount, 0);
+assert.equal(bootstrap.season.activeWorksites >= 1, true);
+assert.equal(bootstrap.season.activeCitizens, bootstrap.season.activeWorksites * 3);
 
 const mara = await append(
   "MARA_CHOICE",
@@ -87,6 +100,9 @@ assert.equal(successor.state.seq, 3);
 assert.equal(successor.state.acceptedMandate, 1032);
 assert.equal(successor.store.events.length, 3);
 assert.equal(successor.state.stateRootMatches, true);
+assert.equal(successor.season.status, 1);
+assert.equal(successor.season.purseTotal, 8_500_000);
+assert.equal(successor.season.claimableUnits, 0);
 
 console.log(JSON.stringify({
   ok: true,
@@ -97,4 +113,7 @@ console.log(JSON.stringify({
   checkpointSignature: ivo.network.lastReceipt.checkpoint.signature,
   finalSequence: successor.state.seq,
   acceptedMandate: successor.state.acceptedMandate,
+  seasonPurse: successor.descriptor.seasonPurse,
+  seasonLedgerSequence: successor.season.seq,
+  purseTotalMicroUnits: successor.season.purseTotal,
 }, null, 2));

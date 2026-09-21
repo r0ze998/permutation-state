@@ -6,29 +6,37 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Keypair, LAMPORTS_PER_SOL, PublicKey } from "@solana/web3.js";
 import {
+  initialSeasonState,
   initialWorksiteState,
   previewEvent,
 } from "../client/adapter.mjs";
 import {
+  PURSE_SOURCE,
   createBaseLayerConnection,
   createEphemeralConnection,
   createMagicRouterConnection,
   getWorksiteDelegationStatus,
   makeErTransactionReceipt,
+  pollSeasonState,
   pollWorksiteState,
+  readSeasonState,
   readWorksiteState,
   resolveSolanaCheckpoint,
   sendApplyWorksiteEvent,
   sendCommitWorksite,
+  sendCreditSeasonPurse,
   sendDelegateWorksite,
+  sendInitializeSeason,
   sendInitializeWorksite,
 } from "../client/magicblock-transport.mjs";
 import {
   eventToWire,
   newProofStore,
   sanitizeSession,
+  sha256Bytes,
   sessionCommitments,
   sessionRecord,
+  seasonStateToJson,
   stateToJson,
 } from "./game-contract.mjs";
 
@@ -40,7 +48,11 @@ const DEFAULT_WORK_DIR = path.resolve(PROJECT_DIR, "../../work/devnet");
 const DEFAULT_STATIC_DIR = path.resolve(PROJECT_DIR, "../permutation-state-prototype");
 const DEFAULT_CONFIG = path.resolve(PROJECT_DIR, "deployments/local.magicblock.json");
 const JSON_LIMIT = 1_000_000;
+const MOCK_USDC_MICRO_UNITS = 1_000_000;
+const DEMO_ENTRY_GROSS_UNITS = 10 * MOCK_USDC_MICRO_UNITS;
+const DEMO_MARKETPLACE_GROSS_UNITS = 100 * MOCK_USDC_MICRO_UNITS;
 const locks = new Map();
+const seasonLocks = new Map();
 const PUBLIC_CLUSTER_GENESIS = Object.freeze({
   mainnet: "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
   devnet: "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
@@ -242,6 +254,13 @@ async function createRuntime() {
 
 function descriptorFor(runtime, sessionIdInput) {
   const ids = sessionCommitments(sessionIdInput);
+  const season = initialSeasonState({
+    programId: runtime.programId,
+    authority: runtime.authority.publicKey,
+    seasonId: ids.seasonId,
+    rulesetHash: ids.rulesetHash,
+    payoutRulesHash: ids.payoutRulesHash,
+  });
   const initial = initialWorksiteState({
     programId: runtime.programId,
     authority: runtime.authority.publicKey,
@@ -251,6 +270,7 @@ function descriptorFor(runtime, sessionIdInput) {
     seasonId: ids.seasonId,
     worksiteId: ids.worksiteId,
     rulesetHash: ids.rulesetHash,
+    seasonPurse: season.seasonPurse,
   });
   return {
     sessionId: ids.sessionId,
@@ -259,23 +279,58 @@ function descriptorFor(runtime, sessionIdInput) {
     seasonId: ids.seasonId.toString("hex"),
     worksiteId: ids.worksiteId.toString("hex"),
     rulesetHash: ids.rulesetHash.toString("hex"),
+    payoutRulesHash: ids.payoutRulesHash.toString("hex"),
+    seasonPurse: season.seasonPurse.toBase58(),
     roles: {
       mara: runtime.roles.mara.publicKey.toBase58(),
       ivo: runtime.roles.ivo.publicKey.toBase58(),
       successor: runtime.roles.successor.publicKey.toBase58(),
     },
     initialState: initial.state,
+    initialSeasonState: season.state,
     worksiteAddress: initial.worksitePda,
+    seasonAddress: season.seasonPurse,
   };
 }
 
 function publicDescriptor(descriptor) {
-  const { initialState: _initialState, worksiteAddress: _worksiteAddress, ...value } = descriptor;
+  const {
+    initialState: _initialState,
+    initialSeasonState: _initialSeasonState,
+    worksiteAddress: _worksiteAddress,
+    seasonAddress: _seasonAddress,
+    ...value
+  } = descriptor;
   return value;
 }
 
 function sessionPath(runtime, sessionId) {
   return path.join(runtime.sessionsDir, `${sanitizeSession(sessionId)}.json`);
+}
+
+function seasonLedgerPath(runtime, descriptor) {
+  return path.join(runtime.sessionsDir, `_season-ledger-${descriptor.seasonPurse}.json`);
+}
+
+async function loadSeasonLedger(runtime, descriptor) {
+  const filePath = seasonLedgerPath(runtime, descriptor);
+  if (!existsSync(filePath)) return null;
+  return readJson(filePath);
+}
+
+async function saveSeasonLedger(runtime, descriptor, patch) {
+  const existing = await loadSeasonLedger(runtime, descriptor);
+  const next = {
+    schemaVersion: "permutation-state.season-ledger-index.v1",
+    seasonPurse: descriptor.seasonPurse,
+    cluster: runtime.config.cluster,
+    initialize: existing?.initialize || null,
+    economyReceipts: existing?.economyReceipts || [],
+    ...patch,
+    updatedAt: new Date().toISOString(),
+  };
+  await writeJsonAtomic(seasonLedgerPath(runtime, descriptor), next);
+  return next;
 }
 
 async function loadSessionRecord(runtime, sessionId) {
@@ -313,25 +368,42 @@ async function saveReceiptPatch(runtime, record, index, patch, networkPatch = {}
   return next;
 }
 
-async function withSessionLock(sessionIdInput, operation) {
-  const sessionId = sanitizeSession(sessionIdInput);
-  const previous = locks.get(sessionId) || Promise.resolve();
+async function withKeyLock(lockMap, key, operation) {
+  const previous = lockMap.get(key) || Promise.resolve();
   let release;
   const current = new Promise((resolve) => { release = resolve; });
   const queued = previous.then(() => current);
-  locks.set(sessionId, queued);
+  lockMap.set(key, queued);
   await previous;
   try {
-    return await operation(sessionId);
+    return await operation();
   } finally {
     release();
-    if (locks.get(sessionId) === queued) locks.delete(sessionId);
+    if (lockMap.get(key) === queued) lockMap.delete(key);
   }
+}
+
+async function withSessionLock(sessionIdInput, operation) {
+  const sessionId = sanitizeSession(sessionIdInput);
+  return withKeyLock(locks, sessionId, () => operation(sessionId));
+}
+
+async function withSeasonLock(seasonPurse, operation) {
+  return withKeyLock(seasonLocks, String(seasonPurse), operation);
 }
 
 async function tryRead(connection, address) {
   try {
     return await readWorksiteState(connection, address, "confirmed");
+  } catch (error) {
+    if (/was not found/.test(error.message)) return null;
+    throw error;
+  }
+}
+
+async function tryReadSeason(connection, address) {
+  try {
+    return await readSeasonState(connection, address, "confirmed");
   } catch (error) {
     if (/was not found/.test(error.message)) return null;
     throw error;
@@ -356,7 +428,12 @@ function assertWorksiteIdentity(state, descriptor) {
     .every((field) => state[field].equals(initial[field]));
   const commitmentsMatch = ["seasonId", "worksiteId", "rulesetHash"]
     .every((field) => sameBytes(state[field], initial[field]));
-  if (state.version !== initial.version || !publicKeysMatch || !commitmentsMatch) {
+  if (
+    state.version !== initial.version
+    || !publicKeysMatch
+    || !commitmentsMatch
+    || !state.seasonPurse.equals(initial.seasonPurse)
+  ) {
     throw Object.assign(
       new Error("Existing Worksite identity does not match this session descriptor"),
       { statusCode: 409 },
@@ -372,6 +449,202 @@ function assertWorksiteIdentity(state, descriptor) {
       { statusCode: 409 },
     );
   }
+}
+
+function assertSeasonIdentity(state, descriptor) {
+  const initial = descriptor.initialSeasonState;
+  if (
+    state.version !== initial.version
+    || !state.authority.equals(initial.authority)
+    || !sameBytes(state.seasonId, initial.seasonId)
+    || !sameBytes(state.rulesetHash, initial.rulesetHash)
+    || !sameBytes(state.payoutRulesHash, initial.payoutRulesHash)
+  ) {
+    throw Object.assign(
+      new Error("Existing Season identity does not match the published Season Zero commitments"),
+      { statusCode: 409 },
+    );
+  }
+  if (!state.stateRootMatches) {
+    throw Object.assign(new Error("Existing Season PDA failed its state-root check"), { statusCode: 409 });
+  }
+  if (state.status === 1 && [state.outcomeHash, state.chronicleRoot, state.claimRoot].some((hash) => (
+    Buffer.from(hash).some((byte) => byte !== 0)
+  ))) {
+    throw Object.assign(new Error("Active Season exposes finalized outcome or claim roots"), { statusCode: 409 });
+  }
+}
+
+export function allocatePurseUnits(sourceKind, grossUnits) {
+  const gross = BigInt(grossUnits);
+  if (sourceKind === PURSE_SOURCE.ENTRY) {
+    const purse = (gross * 7_000n) / 10_000n;
+    return { purse, ops: gross - purse, seller: 0n };
+  }
+  if (sourceKind === PURSE_SOURCE.MARKETPLACE) {
+    const purse = (gross * 150n) / 10_000n;
+    const ops = (gross * 100n) / 10_000n;
+    return { purse, ops, seller: gross - purse - ops };
+  }
+  throw new Error("Unsupported Season Purse source");
+}
+
+function seasonLedgerReceipt({ operation, sourceKind = null, grossUnits = 0, submission, before, after, runtime, descriptor }) {
+  const allocation = sourceKind == null ? null : allocatePurseUnits(sourceKind, grossUnits);
+  return {
+    layer: "solana-base",
+    operation,
+    signature: submission.signature,
+    slot: submission.slot ?? null,
+    cluster: runtime.config.cluster,
+    programId: runtime.programId.toBase58(),
+    seasonPurse: descriptor.seasonPurse,
+    explorerUrl: runtime.config.cluster === "devnet"
+      ? `https://explorer.solana.com/tx/${submission.signature}?cluster=devnet`
+      : null,
+    sourceKind: sourceKind === PURSE_SOURCE.ENTRY
+      ? "entry"
+      : sourceKind === PURSE_SOURCE.MARKETPLACE
+        ? "marketplace"
+        : null,
+    grossUnits,
+    purseUnits: allocation ? Number(allocation.purse) : 0,
+    opsUnits: allocation ? Number(allocation.ops) : 0,
+    sellerUnits: allocation ? Number(allocation.seller) : 0,
+    sequenceBefore: before?.seq ?? null,
+    sequenceAfter: after?.seq ?? null,
+    stateRoot: after?.stateRoot ? Buffer.from(after.stateRoot).toString("hex") : null,
+    headEventHash: after?.headEventHash ? Buffer.from(after.headEventHash).toString("hex") : null,
+    purseTotal: after?.purseTotal ?? null,
+  };
+}
+
+async function ensureSeasonInitialized(runtime, descriptor) {
+  let existing = await tryReadSeason(runtime.base, descriptor.seasonAddress);
+  if (existing) {
+    assertSeasonIdentity(existing.state, descriptor);
+    return { read: existing, initializeReceipt: null };
+  }
+  const submission = await sendInitializeSeason({
+    connection: runtime.base,
+    programId: runtime.programId,
+    authority: runtime.authority.publicKey,
+    seasonPurse: descriptor.seasonAddress,
+    state: descriptor.initialSeasonState,
+    signers: [runtime.authority],
+  });
+  existing = await pollSeasonState({
+    connection: runtime.base,
+    seasonPurse: descriptor.seasonAddress,
+    predicate: (state) => state.seq === 0 && state.stateRootMatches,
+    timeoutMs: 20_000,
+  });
+  assertSeasonIdentity(existing.state, descriptor);
+  const initializeReceipt = seasonLedgerReceipt({
+    operation: "initialize-season",
+    submission,
+    before: null,
+    after: existing.state,
+    runtime,
+    descriptor,
+  });
+  await saveSeasonLedger(runtime, descriptor, { initialize: initializeReceipt });
+  return {
+    read: existing,
+    initializeReceipt,
+  };
+}
+
+async function creditSeasonPurse(runtime, descriptor, before, sourceKind, grossUnits, eventLabel) {
+  const eventId = sha256Bytes(
+    "PERMSTATE/SEASON_LEDGER_EVENT/V1",
+    descriptor.seasonId,
+    eventLabel,
+  );
+  const submission = await sendCreditSeasonPurse({
+    connection: runtime.base,
+    programId: runtime.programId,
+    authority: runtime.authority.publicKey,
+    seasonPurse: descriptor.seasonAddress,
+    args: {
+      sourceKind,
+      grossUnits,
+      expectedSeq: before.state.seq,
+      expectedHeadEventHash: before.state.headEventHash,
+      eventId,
+    },
+    signers: [runtime.authority],
+  });
+  const allocation = allocatePurseUnits(sourceKind, grossUnits);
+  const expectedPurse = before.state.purseTotal + Number(allocation.purse);
+  const after = await pollSeasonState({
+    connection: runtime.base,
+    seasonPurse: descriptor.seasonAddress,
+    predicate: (state) => (
+      state.seq === before.state.seq + 1
+      && state.purseTotal === expectedPurse
+      && state.stateRootMatches
+    ),
+    timeoutMs: 20_000,
+  });
+  const receipt = seasonLedgerReceipt({
+    operation: "credit-season-purse",
+    sourceKind,
+    grossUnits,
+    submission,
+    before: before.state,
+    after: after.state,
+    runtime,
+    descriptor,
+  });
+  const ledger = await loadSeasonLedger(runtime, descriptor);
+  await saveSeasonLedger(runtime, descriptor, {
+    economyReceipts: [...(ledger?.economyReceipts || []), receipt],
+  });
+  return {
+    read: after,
+    receipt,
+  };
+}
+
+async function ensureDemoPurseLedger(runtime, descriptor, initialRead) {
+  let current = initialRead;
+  const receipts = [];
+  const state = current.state;
+  const isEmpty = state.entryGrossUnits === 0
+    && state.marketplaceGrossUnits === 0
+    && state.purseTotal === 0
+    && state.opsUnits === 0
+    && state.sellerUnits === 0;
+  if (isEmpty) {
+    const credited = await creditSeasonPurse(
+      runtime,
+      descriptor,
+      current,
+      PURSE_SOURCE.ENTRY,
+      DEMO_ENTRY_GROSS_UNITS,
+      "season-zero-demo-entry-10",
+    );
+    current = credited.read;
+    receipts.push(credited.receipt);
+  }
+  const afterEntry = current.state;
+  const entryOnly = afterEntry.entryGrossUnits === DEMO_ENTRY_GROSS_UNITS
+    && afterEntry.entryPurseUnits === 7 * MOCK_USDC_MICRO_UNITS
+    && afterEntry.marketplaceGrossUnits === 0;
+  if (entryOnly) {
+    const credited = await creditSeasonPurse(
+      runtime,
+      descriptor,
+      current,
+      PURSE_SOURCE.MARKETPLACE,
+      DEMO_MARKETPLACE_GROSS_UNITS,
+      "season-zero-demo-marketplace-100",
+    );
+    current = credited.read;
+    receipts.push(credited.receipt);
+  }
+  return { read: current, receipts };
 }
 
 async function isSessionDelegated(runtime, address, erRead = null) {
@@ -463,7 +736,21 @@ async function currentSession(runtime, sessionIdInput) {
   const record = await loadSessionRecord(runtime, descriptor.sessionId);
   const erRead = await tryRead(runtime.router, descriptor.worksiteAddress);
   const baseRead = await tryRead(runtime.base, descriptor.worksiteAddress);
+  const seasonRead = await tryReadSeason(runtime.base, descriptor.seasonAddress);
+  const seasonNetwork = await loadSeasonLedger(runtime, descriptor);
   const chainRead = erRead || baseRead;
+  if (chainRead) {
+    if (!chainRead.owner.equals(runtime.programId)) {
+      throw Object.assign(new Error("Worksite PDA is not owned by the configured program"), { statusCode: 409 });
+    }
+    assertWorksiteIdentity(chainRead.state, descriptor);
+  }
+  if (seasonRead) {
+    if (!seasonRead.owner.equals(runtime.programId)) {
+      throw Object.assign(new Error("Season PDA is not owned by the configured program"), { statusCode: 409 });
+    }
+    assertSeasonIdentity(seasonRead.state, descriptor);
+  }
   const delegated = chainRead
     ? await isSessionDelegated(runtime, descriptor.worksiteAddress, erRead)
     : false;
@@ -479,6 +766,10 @@ async function currentSession(runtime, sessionIdInput) {
     descriptor: publicDescriptor(descriptor),
     state: stateToJson(chainRead?.state),
     stateSlot: chainRead?.slot ?? null,
+    stateLayer: erRead ? "ephemeral-rollup" : baseRead ? "solana-base" : null,
+    season: seasonStateToJson(seasonRead?.state),
+    seasonSlot: seasonRead?.slot ?? null,
+    seasonNetwork: cleanNetwork(seasonNetwork),
     delegated,
     store: activeRecord?.store || newProofStore(descriptor.sessionId),
     network: cleanNetwork(activeRecord?.network),
@@ -493,6 +784,14 @@ async function currentSession(runtime, sessionIdInput) {
 async function bootstrapSession(runtime, sessionIdInput) {
   return withSessionLock(sessionIdInput, async (sessionId) => {
     const descriptor = descriptorFor(runtime, sessionId);
+    const { seasonSetup, purseSetup } = await withSeasonLock(
+      descriptor.seasonPurse,
+      async () => {
+        const initialized = await ensureSeasonInitialized(runtime, descriptor);
+        const seeded = await ensureDemoPurseLedger(runtime, descriptor, initialized.read);
+        return { seasonSetup: initialized, purseSetup: seeded };
+      },
+    );
     const erExisting = await tryRead(runtime.router, descriptor.worksiteAddress);
     const baseExisting = await tryRead(runtime.base, descriptor.worksiteAddress);
     const existing = erExisting || baseExisting;
@@ -553,6 +852,11 @@ async function bootstrapSession(runtime, sessionIdInput) {
         store: record?.store || newProofStore(sessionId),
         network: {
           ...(record?.network || {}),
+          seasonInitialize: record?.network?.seasonInitialize || seasonSetup.initializeReceipt,
+          economyReceipts: [
+            ...(record?.network?.economyReceipts || []),
+            ...purseSetup.receipts,
+          ],
           recoveredAt: new Date().toISOString(),
           lastLayer: "ephemeral-rollup",
           receipts: record?.network?.receipts || [],
@@ -610,6 +914,8 @@ async function bootstrapSession(runtime, sessionIdInput) {
       initializedAt: new Date().toISOString(),
       lastLayer: "ephemeral-rollup",
       receipts: [],
+      seasonInitialize: seasonSetup.initializeReceipt,
+      economyReceipts: purseSetup.receipts,
       initialize: publicReceipt({
         layer: "solana-base",
         operation: "initialize",

@@ -11,6 +11,6 @@
   "publicHttp": "http://127.0.0.1:6699",
   "publicWs": "ws://127.0.0.1:6700",
   "validatorIdentity": "mAGicPQYBMvcYveUZA5F5UNNwyHvfYh5xkLS2Fr1mev",
-  "programArtifactSha256": "b7e878b2e940bff77d026d93047fefc0a5a00161c5182981bc4dc63fa81271d7",
+  "programArtifactSha256": "660cbf5a55039fcbbf623965e428392d1fadb323ed4890333b56eb5af36ef450",
   "disclosure": "Local MagicBlock cluster; no mainnet or real funds"
 }

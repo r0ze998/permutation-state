@@ -6,10 +6,45 @@ import {
   EVENT,
   buildApplyInstruction,
   computeStateRoot,
+  initialSeasonState,
   initialWorksiteState,
   makeExplorerReceipt,
   previewEvent,
 } from "./adapter.mjs";
+
+test("JavaScript roots match the fixed Rust Season and Worksite fixture", () => {
+  const key = (byte) => new PublicKey(Buffer.alloc(32, byte));
+  const programId = key(1);
+  const authority = key(2);
+  const seasonId = Buffer.alloc(32, 3);
+  const rulesetHash = Buffer.alloc(32, 4);
+  const season = initialSeasonState({
+    programId,
+    authority,
+    seasonId,
+    rulesetHash,
+    payoutRulesHash: Buffer.alloc(32, 5),
+  });
+  assert.equal(season.seasonPurse.toBase58(), "FBgcmTa8gv9wdkCoisSfFA3nNQayk8dPm2f3XCQRY34g");
+  assert.equal(season.state.bump, 255);
+  assert.equal(season.state.stateRoot.toString("hex"), "7fcca53cdf561370b3f823ec90c05522c451077aa59ae7a4966202ed2a6fb28d");
+  assert.equal(season.state.headEventHash.toString("hex"), "405722c1ab97aefd6fd2fe4c105d0d2f6e2ccc2ed053bb88ef5de70bbafc5dc0");
+
+  const worksite = initialWorksiteState({
+    programId,
+    authority,
+    envoy: key(7),
+    maker: key(8),
+    successor: key(9),
+    seasonId,
+    worksiteId: Buffer.alloc(32, 6),
+    rulesetHash,
+  });
+  assert.equal(worksite.worksitePda.toBase58(), "BLsdrKQZVwkGjqS6XZH4evwmHg8j2rxiamYA2kB5C9uW");
+  assert.equal(worksite.state.bump, 255);
+  assert.equal(worksite.state.stateRoot.toString("hex"), "6a4974bca96781232b853abecd7c5448b3507c21cbd663da113a9f4edae3a968");
+  assert.equal(worksite.state.headEventHash.toString("hex"), "3050fd23a4fcbc832e7901cf918453fb9eac9dae0c7d77c7d06ef483cb38879c");
+});
 
 function fixture() {
   const programId = new PublicKey("11111111111111111111111111111112");
