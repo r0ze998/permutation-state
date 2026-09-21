@@ -3,99 +3,131 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Playable multi-citizen handoff proof with an optional MagicBlock shared-world transport." />
-    <title>PERMUTATION STATE — Handoff Proof</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><rect width=%2232%22 height=%2232%22 rx=%224%22 fill=%22%2308100f%22/><path d=%22M7 9h18M7 16h18M7 23h18%22 stroke=%22%2371c7b5%22 stroke-width=%222%22/></svg>" />
+    <meta name="description" content="A playable shared-civilization handoff at Aster's East Sluice, with an optional MagicBlock transport." />
+    <title>PERMUTATION STATE — East Sluice</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><rect width=%2232%22 height=%2232%22 rx=%228%22 fill=%22%23163333%22/><path d=%22M6 11c5 0 5-4 10-4s5 4 10 4M6 17c5 0 5-4 10-4s5 4 10 4M6 23c5 0 5-4 10-4s5 4 10 4%22 fill=%22none%22 stroke=%22%23f0c174%22 stroke-width=%222%22 stroke-linecap=%22round%22/></svg>" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Manrope:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,500;6..72,600&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Nunito+Sans:wght@400;600;700;800&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <div class="proof-app" id="proof-app">
+    <div class="proof-app" id="proof-app" data-chronicle="open">
+      <div class="world-scene" aria-hidden="true">
+        <div class="scene-vignette"></div>
+        <div class="scene-glow"></div>
+        <div class="water-shimmer shimmer-a"></div>
+        <div class="water-shimmer shimmer-b"></div>
+        <div class="scene-place scene-place--market"><i></i><span>Market garden</span><small>3 citizens nearby</small></div>
+        <div class="scene-place scene-place--guild"><i></i><span>River Guild</span><small>Tala is here</small></div>
+        <div class="scene-place scene-place--sluice"><i></i><span>East Sluice</span><small>Worksite 31</small></div>
+        <div class="living-note"><span>NOW IN ASTER</span><strong>Lanterns are being lit along the lower canal.</strong></div>
+      </div>
+
       <div class="disclosure"><span></span><strong id="transport-disclosure">LOCAL MULTI-CLIENT PROOF · NOT SOLANA · NOT LIVE AI</strong><span></span></div>
 
       <header class="proof-header">
         <a class="brand" href="../?build=living-atlas-v2" aria-label="Return to Aster world">
           <span class="brand-mark"><i></i><i></i><i></i></span>
-          <span><strong>PERMUTATION STATE</strong><small>CAUSAL HANDOFF LAB</small></span>
+          <span><strong>PERMUTATION STATE</strong><small>A shared civilization remembers</small></span>
         </a>
 
-        <div class="session-block">
-          <span>SESSION</span>
-          <strong id="session-label">—</strong>
-          <button id="copy-link" type="button">COPY VIEW LINK</button>
+        <div class="season-clock" aria-label="Season and place">
+          <span>SEASON ZERO</span><strong>Day 18 · Late afternoon</strong><em>East Sluice, Aster</em>
         </div>
 
-        <nav class="role-nav" id="role-nav" aria-label="Open role-specific proof views"></nav>
+        <div class="header-tools">
+          <div class="session-block">
+            <span>SHARED WORLD</span>
+            <strong id="session-label">—</strong>
+            <button id="copy-link" type="button">COPY INVITE</button>
+          </div>
+          <button class="chronicle-toggle" id="chronicle-toggle" type="button" aria-controls="world-chronicle" aria-expanded="true">
+            <span>✦</span><strong>World Chronicle</strong><em>Proof &amp; history</em>
+          </button>
+        </div>
+
+        <nav class="role-nav" id="role-nav" aria-label="Open role-specific views"></nav>
       </header>
 
-      <section class="causal-strip" aria-label="Handoff proof chain">
-        <div data-causal-step="mara"><b>01</b><span>MARA</span><strong>Promise or compel</strong></div>
-        <i>→</i>
-        <div data-causal-step="tala"><b>02</b><span>TALA</span><strong>Remember and change access</strong></div>
-        <i>→</i>
-        <div data-causal-step="ivo"><b>03</b><span>IVO</span><strong>Inherit different actions</strong></div>
-        <i>→</i>
-        <div data-causal-step="successor"><b>04</b><span>NEXT CITIZEN</span><strong>Accept generated work</strong></div>
+      <section class="causal-strip" aria-label="The civic story so far">
+        <div data-causal-step="mara"><b>01</b><span>THE APPROACH</span><strong>Mara chooses a way in</strong></div>
+        <i>›</i>
+        <div data-causal-step="tala"><b>02</b><span>THE MEMORY</span><strong>Tala remembers</strong></div>
+        <i>›</i>
+        <div data-causal-step="ivo"><b>03</b><span>THE WORK</span><strong>Ivo inherits the result</strong></div>
+        <i>›</i>
+        <div data-causal-step="successor"><b>04</b><span>THE RIPPLE</span><strong>New work enters Aster</strong></div>
       </section>
 
       <main class="proof-grid">
         <aside class="world-state panel" aria-label="Shared civilization state">
           <header class="panel-heading">
-            <div><span>CANONICAL REPLAY</span><h2>One Aster</h2></div>
+            <div><span>CIVIC ALMANAC</span><h2>Aster today</h2></div>
             <em class="sync-dot" id="sync-label">SYNCING</em>
           </header>
           <div class="mini-world" aria-hidden="true"><span></span><i></i><b></b></div>
           <div class="metric-list" id="metric-list"></div>
           <div class="world-status" id="world-status"></div>
-          <div class="hash-card">
-            <span>FINAL STATE HASH</span>
-            <code id="state-hash">—</code>
-            <span>HEAD EVENT HASH</span>
-            <code id="head-hash">—</code>
-          </div>
+          <details class="record-details">
+            <summary>Verified world record</summary>
+            <div class="hash-card">
+              <span>FINAL STATE HASH</span>
+              <code id="state-hash">—</code>
+              <span>HEAD EVENT HASH</span>
+              <code id="head-hash">—</code>
+            </div>
+          </details>
         </aside>
 
         <section class="actor-panel panel" aria-live="polite">
-          <header class="actor-header">
-            <div class="actor-avatar" id="actor-avatar">—</div>
-            <div><span id="actor-role">—</span><h1 id="actor-name">Loading proof…</h1></div>
-            <em id="actor-mode">—</em>
-          </header>
-          <div id="actor-workspace"></div>
+          <figure class="tala-portrait" aria-hidden="true">
+            <img src="../assets/tala-pixel-v1.png" alt="" />
+            <figcaption><span>RIVER GUILD</span><strong>Tala</strong></figcaption>
+          </figure>
+          <div class="actor-content">
+            <header class="actor-header">
+              <div class="actor-avatar" id="actor-avatar">—</div>
+              <div><span id="actor-role">—</span><h1 id="actor-name">Entering Aster…</h1></div>
+              <em id="actor-mode">—</em>
+            </header>
+            <div id="actor-workspace"></div>
+          </div>
         </section>
 
-        <aside class="evidence-panel panel" aria-label="Proof evidence">
-          <header class="panel-heading">
-            <div><span>APPEND-ONLY EVIDENCE</span><h2>Observer rail</h2></div>
-            <strong id="event-count">0 EVENTS</strong>
+        <aside class="evidence-panel panel" id="world-chronicle" aria-label="World Chronicle and proof evidence">
+          <header class="panel-heading chronicle-heading">
+            <div><span>THE LIVING RECORD</span><h2>World Chronicle</h2><p>Every accepted choice leaves a readable trace.</p></div>
+            <div class="chronicle-heading-actions">
+              <strong id="event-count">0 EVENTS</strong>
+              <button type="button" data-chronicle-close aria-label="Close World Chronicle">×</button>
+            </div>
           </header>
 
           <section class="client-presence">
-            <header><span>CLIENT HEAD AGREEMENT</span><em id="agreement-label">WAITING</em></header>
+            <header><span>CITIZENS IN THIS WORLD</span><em id="agreement-label">WAITING</em></header>
             <div id="client-list"></div>
           </section>
 
           <section class="invariants">
-            <header><span>INVARIANTS</span><em id="invariant-score">—</em></header>
+            <header><span>WORLD RULES HOLDING</span><em id="invariant-score">—</em></header>
             <div id="invariant-list"></div>
           </section>
 
           <section class="network-evidence" id="network-evidence" hidden>
-            <header><span>CHAIN EXECUTION</span><em id="network-layer">CONNECTING</em></header>
+            <header><span>WHERE THIS ACTION LIVES</span><em id="network-layer">CONNECTING</em></header>
             <div class="network-receipt-list" id="network-receipt-list"></div>
             <div class="network-boundary" id="network-boundary"></div>
           </section>
 
           <section class="event-stream">
-            <header><span>EVENT CHAIN</span><em>SHA-256</em></header>
+            <header><span>CHRONICLE ENTRIES</span><em>VERIFIABLE</em></header>
             <div id="event-list"></div>
           </section>
 
           <div class="observer-actions" id="observer-actions" hidden>
-            <button type="button" class="primary compact" id="export-proof">EXPORT SESSION-PROOF.JSON</button>
-            <button type="button" class="ghost danger" id="reset-proof">RESET THIS LOCAL SESSION</button>
+            <button type="button" class="primary compact" id="export-proof">EXPORT WORLD RECORD</button>
+            <button type="button" class="ghost danger" id="reset-proof">START A FRESH LOCAL WORLD</button>
           </div>
         </aside>
       </main>

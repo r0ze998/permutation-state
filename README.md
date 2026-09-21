@@ -14,7 +14,7 @@ Mara makes a civic promise
 → new Mandates enter the still-active civilization
 ```
 
-![Read-only Observer showing the three-citizen causal chain](permutation-state-prototype/proof/observer-proof.png)
+![The Living Chronicle observer view, with Aster's playable district and verifiable shared-world record](permutation-state-prototype/proof/observer-proof.png)
 
 ## Run the playable prototype
 
@@ -62,13 +62,13 @@ The Solana receipt program is tested locally but **not deployed**. A result may 
 
 ## 90-second judge path
 
-1. Show Aster's shared resources and active Season Zero map.
-2. As Mara, bind the Grain Oath at the River Guild.
-3. Hand control to Ivo and show that Tala remembers Mara's promise.
-4. Point out the Service Stair that exists only because of Mara's action.
-5. Resolve the East Sluice through the Service Stair.
-6. Show the before/after resource deltas, active-season status, and three generated Mandates.
-7. End on the Observer: actor, rule, state diff, hashes, and invariant checks are independently visible.
+1. Enter the living East Sluice district and show that Aster is one shared place, not a private kingdom.
+2. As Mara, bind the Grain Oath in a character-led conversation with Tala.
+3. Hand control to Ivo and show that Tala remembers Mara's promise and exposes a different repair route.
+4. Resolve the East Sluice through the Service Stair and watch the district state change.
+5. Show the Ephemeral Rollup receipt and verified Solana checkpoint inside the optional World Chronicle.
+6. Hand the generated Mandate to Nia while Season Zero visibly remains active.
+7. End on the Observer: the world, citizen handoff, receipts, hashes, and invariant checks remain independently inspectable.
 
 ## Repository map
 

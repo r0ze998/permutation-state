@@ -53,8 +53,17 @@
     networkBoundary: document.getElementById("network-boundary"),
     eventList: document.getElementById("event-list"),
     observerActions: document.getElementById("observer-actions"),
+    chronicleToggle: document.getElementById("chronicle-toggle"),
+    chroniclePanel: document.getElementById("world-chronicle"),
     toast: document.getElementById("toast")
   };
+
+  function setChronicle(open) {
+    elements.app.dataset.chronicle = open ? "open" : "closed";
+    elements.chronicleToggle.setAttribute("aria-expanded", open ? "true" : "false");
+    elements.chroniclePanel.inert = !open;
+    elements.chroniclePanel.setAttribute("aria-hidden", open ? "false" : "true");
+  }
 
   function sanitizeSession(value) {
     const cleaned = String(value).toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
@@ -329,6 +338,9 @@
     elements.app.dataset.role = role;
     elements.app.dataset.transport = magicBlockMode ? "magicblock" : "local";
     elements.app.dataset.integrity = verification.valid ? "valid" : "invalid";
+    elements.app.dataset.stage = state.stage || "mara";
+    elements.app.dataset.branch = state.maraChoice || "unmade";
+    elements.app.dataset.resolution = state.worksiteResolution || "unresolved";
     elements.disclosure.textContent = magicBlockMode
       ? "MAGICBLOCK LOCAL CLUSTER · REAL ER STATE · DISPOSABLE DEMO SIGNERS · NO REAL FUNDS"
       : Core.DISCLOSURE;
@@ -405,8 +417,8 @@
     elements.actorRole.textContent = `${person.civicRole} · ${person.id.toUpperCase()}`;
     elements.actorName.textContent = person.name;
     elements.actorMode.textContent = magicBlockMode
-      ? (role === "observer" ? "READ ONLY · ER" : "DEMO SIGNER · GATEWAY")
-      : (role === "observer" ? "READ ONLY" : "ROLE LOCKED BY URL");
+      ? (role === "observer" ? "WITNESS MODE · ER" : "PLAYING · DEMO SIGNER")
+      : (role === "observer" ? "WITNESS MODE · READ ONLY" : "YOU ARE PLAYING");
 
     if (magicBlockMode && (!networkSession || gatewayError)) {
       renderGatewayOffline();
@@ -516,9 +528,9 @@
   function renderMara(state) {
     if (!state.maraChoice) {
       elements.actorWorkspace.innerHTML = `
-        <div class="scene-kicker"><span>PLAYER A · EAST SLUICE ACCESS</span><em>EVENT 0 EXPECTED</em></div>
-        <h2 class="scene-title">Tala controls the only safe route below the river.</h2>
-        <p class="scene-copy">Choose how Aster gets access. Your accepted event will leave this tab and change Ivo's legal action set in another client.</p>
+        <div class="scene-kicker"><span>MARA · ENVOY AT EAST SLUICE</span><em>ASTER'S FIRST MOVE</em></div>
+        <h2 class="scene-title">Tala guards the only safe road beneath the river.</h2>
+        <p class="scene-copy">Aster needs the lower gate opened before nightfall. Decide what kind of relationship the city will carry into the work.</p>
         <blockquote>“Bring me a promise the city must remember—or bring me the old law.” <cite>— Tala, River Guild</cite></blockquote>
         <div class="choice-grid">
           ${choiceCard({ id: "oath", eyebrow: "RELATIONAL ROUTE", title: "Bind the Grain Oath", body: "Promise twelve crates after harvest. Tala keeps her engineers and opens the service stair.", facts: ["FOOD DEBT +12", "TRUST +20", "STAIR OPEN"] })}
@@ -554,16 +566,16 @@
   function renderIvo(state) {
     if (!state.maraChoice) {
       elements.actorWorkspace.innerHTML = `
-        <div class="waiting-state"><span>WAITING FOR EVENT 0</span><h2>Ivo cannot act before Mara.</h2><p>This is enforced by the reducer, not hidden by the interface. Keep this tab open; the accepted event will appear automatically.</p><div class="pulse-line"></div></div>`;
+        <div class="waiting-state"><span>WAITING FOR MARA</span><h2>Ivo's road has not been written yet.</h2><p>When the envoy reaches terms with Tala, the consequences will arrive here automatically and reveal what the Maker can do.</p><div class="pulse-line"></div></div>`;
       return;
     }
     if (!state.ivoChoice) {
       const oath = state.maraChoice === "oath";
       elements.actorWorkspace.innerHTML = `
         ${ivoRibbon(state)}
-        <div class="scene-kicker"><span>PLAYER B · INHERITED WORLD</span><em>${state.memoryReceipt}</em></div>
-        <h2 class="scene-title">Your action space was written by another citizen.</h2>
-        <p class="scene-copy">Tala's authored line expresses the memory. The two legal actions and their resource effects come from the fixed resolver.</p>
+        <div class="scene-kicker"><span>IVO · MAKER IN AN INHERITED WORLD</span><em>${state.memoryReceipt}</em></div>
+        <h2 class="scene-title">Another citizen's promise has changed the road before you.</h2>
+        <p class="scene-copy">Tala remembers how Mara approached her. That memory now decides which repairs are truly possible at the sluice.</p>
         <blockquote>“${oath ? "Mara spoke for Aster. Twelve crates after harvest. I opened the service stair for you, Maker." : "Your envoy brought law, not trust. The city may have its water. It will not have my help."}” <cite>— Tala, inherited memory</cite></blockquote>
         <div class="choice-grid">
           ${oath
@@ -596,14 +608,14 @@
   function renderSuccessor(state) {
     if (!state.worksiteResolution) {
       const waitingFor = state.maraChoice ? "Ivo's Worksite resolution" : "Mara and Ivo";
-      elements.actorWorkspace.innerHTML = `<div class="waiting-state"><span>WAITING FOR GENERATED WORK</span><h2>No Mandate has been invented early.</h2><p>This client is waiting for ${waitingFor}. It will reconstruct the result from the shared event log, even after a reload or late join.</p><div class="pulse-line"></div></div>`;
+      elements.actorWorkspace.innerHTML = `<div class="waiting-state"><span>THE CITY IS STILL CHANGING</span><h2>Nia's next calling does not exist yet.</h2><p>This view is waiting for ${waitingFor}. When the work is done, its consequences will become real jobs for Aster's next citizens.</p><div class="pulse-line"></div></div>`;
       return;
     }
     const assigned = Boolean(state.acceptedMandate);
     elements.actorWorkspace.innerHTML = `
-      <div class="scene-kicker"><span>PLAYER C · DOWNSTREAM CONSEQUENCE</span><em>${state.worksiteResolution}</em></div>
-      <h2 class="scene-title">Ivo's local result became somebody else's beginning.</h2>
-      <p class="scene-copy">These jobs were not available before Event 1. Accept one to prove the world continues without settling the season.</p>
+      <div class="scene-kicker"><span>NIA · THE NEXT CITIZEN</span><em>${state.worksiteResolution}</em></div>
+      <h2 class="scene-title">Yesterday's repair has become today's calling.</h2>
+      <p class="scene-copy">These Mandates did not exist before Ivo finished the work. Choose one and carry Aster's shared history forward.</p>
       <div class="mandate-grid">${state.nextMandates.map((mandate) => `
         <article class="mandate-card ${mandate.status === "assigned" ? "assigned" : ""}">
           <header><span>${mandate.role}</span><em>${mandate.status.toUpperCase()}</em></header>
@@ -621,24 +633,24 @@
   function renderObserver(state) {
     const checkpointBlocked = Boolean(magicBlockMode && pendingRequiredCheckpoint());
     const stageCopy = {
-      mara: ["Open Mara's URL", "Commit the first civic decision. Ivo is currently blocked."],
-      ivo: ["Watch Ivo inherit", `Mara chose ${state.maraChoice}. Ivo now has only the two legal branch actions.`],
-      successor: ["Watch work propagate", `${state.worksiteResolution} generated three Mandates for the next citizens.`],
-      continuing: ["Handoff proved", `${state.acceptedMandate} is assigned while Season Zero remains active.`]
+      mara: ["The East Sluice waits for its envoy", "Mara must decide what kind of promise Aster will make. Ivo's future is still unwritten."],
+      ivo: ["Tala remembers", `Mara chose ${state.maraChoice}. The memory has opened one future for Ivo and closed another.`],
+      successor: ["The repair becomes a ripple", `${state.worksiteResolution} has created three new Mandates for Aster's citizens.`],
+      continuing: ["Aster carries the choice forward", `${state.acceptedMandate} now belongs to Nia, while Season Zero continues around her.`]
     }[state.stage];
     const thesisBoundary = magicBlockMode
       ? "Dialogue is authored in this build. Rules are deterministic. Actions execute on a real local MagicBlock ER; Ivo's resolution requests a Solana base-layer checkpoint."
       : "Dialogue is authored in this build. State transitions are deterministic. Nothing here is a Solana transaction.";
     elements.actorWorkspace.innerHTML = `
       <div class="observer-hero">
-        <span>READ-ONLY JUDGE VIEW</span><h2>${stageCopy[0]}</h2><p>${stageCopy[1]}</p>
-        <div class="proof-thesis"><b>THE CLAIM</b><strong>A stranger's accepted action changes what another stranger can legally do next.</strong><small>${thesisBoundary}</small></div>
+        <span>WITNESSING THE SHARED WORLD</span><h2>${stageCopy[0]}</h2><p>${stageCopy[1]}</p>
+        <div class="proof-thesis"><b>WHAT MAKES ASTER ALIVE</b><strong>One citizen's choice changes what another citizen can truly do next.</strong><small>${thesisBoundary}</small></div>
       </div>
       <div class="observer-route">
-        <span>OPEN EACH ROLE IN A SEPARATE TAB</span>
-        <a href="${escapeHtml(currentUrl("mara"))}" target="_blank"><b>01</b><strong>Mara · Player A</strong><em>${state.maraChoice ? "COMMITTED" : "READY"}</em></a>
-        <a href="${escapeHtml(currentUrl("ivo"))}" target="_blank"><b>02</b><strong>Ivo · Player B</strong><em>${state.ivoChoice ? "COMMITTED" : state.maraChoice ? "READY" : "BLOCKED"}</em></a>
-        <a href="${escapeHtml(currentUrl("successor"))}" target="_blank"><b>03</b><strong>Nia · Player C</strong><em>${checkpointBlocked ? "CHECKPOINT BLOCKED" : state.acceptedMandate ? "ASSIGNED" : state.worksiteResolution ? "READY" : "BLOCKED"}</em></a>
+        <span>FOLLOW EACH CITIZEN'S PART OF THE STORY</span>
+        <a href="${escapeHtml(currentUrl("mara"))}" target="_blank"><b>01</b><strong>Mara · Envoy</strong><em>${state.maraChoice ? "REMEMBERED" : "READY"}</em></a>
+        <a href="${escapeHtml(currentUrl("ivo"))}" target="_blank"><b>02</b><strong>Ivo · Maker</strong><em>${state.ivoChoice ? "REMEMBERED" : state.maraChoice ? "READY" : "AWAITING MARA"}</em></a>
+        <a href="${escapeHtml(currentUrl("successor"))}" target="_blank"><b>03</b><strong>Nia · Successor</strong><em>${checkpointBlocked ? "CHECKPOINT WAIT" : state.acceptedMandate ? "ANSWERED" : state.worksiteResolution ? "READY" : "AWAITING IVO"}</em></a>
       </div>
       <div class="boundary-grid"><div><span>AI LAYER</span><strong>Memory expression</strong><em>Authored stand-in</em></div><div><span>RULE LAYER</span><strong>Allowed actions + effects</strong><em>Deterministic program</em></div><div><span>CANON LAYER</span><strong>${magicBlockMode ? "ER state + checkpoint" : "Hash-chained events"}</strong><em>${magicBlockMode ? "Localnet, real transactions" : "Local, not Solana"}</em></div></div>
       ${magicBlockMode ? `<p class="signer-boundary"><b>DEMO SECURITY BOUNDARY</b> Disposable localnet signers are held by the gateway for this playable slice. Production wallets and player session keys are not implemented.</p>` : ""}`;
@@ -951,6 +963,10 @@
   });
   document.getElementById("export-proof").addEventListener("click", exportProof);
   document.getElementById("reset-proof").addEventListener("click", resetProof);
+  elements.chronicleToggle.addEventListener("click", () => {
+    setChronicle(elements.app.dataset.chronicle !== "open");
+  });
+  document.querySelector("[data-chronicle-close]").addEventListener("click", () => setChronicle(false));
   if (magicBlockMode) document.getElementById("reset-proof").textContent = "START A FRESH SHARED SESSION";
 
   window.addEventListener("storage", (event) => {
@@ -974,6 +990,7 @@
   }
 
   setRoleNav();
+  setChronicle(role === "observer");
   setInterval(() => {
     announcePresence();
     if (channel) channel.postMessage({ type: "PING", sourceClientId: clientId });

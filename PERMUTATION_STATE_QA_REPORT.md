@@ -1,9 +1,22 @@
 # PERMUTATION STATE — Prototype QA Report
 
-**Build reviewed:** Living Civic Atlas v2 continuous-world prototype  
+**Build reviewed:** Living Chronicle world-first prototype  
 **Date:** 2026-09-21  
-**Result:** **PASS — all four Worksite 31 paths, continuous-world invariants, and the companion 10-run multi-client proof suite**  
-**Scope note:** This is local browser verification, not user validation, a security review, Solana verification, wallet authentication, or a human-operated stage-demo recording.
+**Result:** **PASS — world-first redesign, all four Worksite 31 paths, continuous-world invariants, and the local MagicBlock handoff**  
+**Scope note:** This covers browser behavior and the isolated local Solana + MagicBlock stack. It is not user validation, a security review, public-cluster verification, wallet authentication, or a human-operated stage-demo recording.
+
+## Living Chronicle redesign revalidation
+
+The September 21 visual rebuild replaced the forensic-dashboard hierarchy with a close, inhabited East Sluice scene. Gameplay, network, and canonical reducer contracts were preserved.
+
+- `18/18` JavaScript client/server tests pass.
+- `9/9` Rust program tests pass.
+- The live local-stack path passes: base initialization → delegation → Mara oath → Ivo Service Stair resolution → verified Solana base-layer checkpoint → Nia mandate acceptance.
+- Final local sequence is `3`; ER and checkpoint signatures are distinct and present.
+- JavaScript syntax checks, required DOM-ID contract checks, unique-ID checks, and `git diff --check` pass.
+- Desktop `1440 × 900`, compact desktop, and narrow mobile layouts were visually checked; the mobile proof orders the current citizen action before Almanac and Chronicle detail.
+- The World Chronicle opens and closes without removing proof accessibility; Observer starts open, playable citizen views start closed.
+- Runtime and browser-console errors observed during the redesign checks: `0`.
 
 ## Outcome
 
@@ -68,11 +81,11 @@ Reviewed states included:
 
 Observed result:
 
-- the map remains the main interaction surface rather than a decorative background;
-- shared civilization resources remain persistent while local context opens in a side drawer;
-- map nodes, network routes, crisis state, and resolved state remain legible;
-- the `AI`, `RULES`, and planned `SOLANA` responsibility boundary is visible;
-- `SIMULATED WORLD` and `MOCK USDC` remain explicit;
+- the inhabited East Sluice district is the main interaction surface rather than a decorative map behind a dashboard;
+- shared civilization resources remain readable in a compact civic HUD while the parchment story journal holds the current conversation and choices;
+- Tala's memory, the inherited action set, and the continuing season remain legible without exposing raw hashes during ordinary play;
+- the optional World Chronicle retains event-chain, invariant, ER, and Solana-checkpoint evidence for judges;
+- `PROTOTYPE WORLD`, local-cluster, disposable-signer, no-real-funds, ER, and Solana boundaries remain explicit where relevant;
 - the result screen communicates “Worksite resolved; season continues” and immediately exposes new work.
 
 ## 1280 × 720 Judge Mode
@@ -99,7 +112,7 @@ The full four-path automated regression was rerun after these changes: all four 
 
 These remain Evidence Ledger items. The clickable build proves the local causal loop and continuous-world semantics only.
 
-The companion [`permutation-state-solana-receipt-spike/README.md`](permutation-state-solana-receipt-spike/README.md) now supplies a host-tested native-Rust account/instruction contract and JavaScript adapter. Rust tests pass 4/4 and adapter tests pass 3/3, but this does not change the devnet item above: no SBF build, deployment, confirmed signature, or PDA read-back has occurred.
+The companion [`permutation-state-solana-receipt-spike/README.md`](permutation-state-solana-receipt-spike/README.md) supplies a host-tested native-Rust account/instruction contract and JavaScript adapter. The current suite passes 9/9 Rust and 18/18 JavaScript tests. The official isolated local stack also passes the complete ER-to-base checkpoint path; this does not change the public-devnet item above.
 
 ## Companion multi-client proof
 

@@ -2,7 +2,7 @@
 
 > **One civilization. Thousands of citizens. One continuously evolving world.**
 
-This dependency-free browser prototype presents PERMUTATION STATE as a map-first civilization RPG. Aster's map, resources, worksites, citizens, Chronicle, and Season Purse remain part of one continuous world while the player moves between civic actions.
+This dependency-free browser prototype presents PERMUTATION STATE as a world-first civilization RPG. The close-up East Sluice district, its citizens, resources, worksites, Chronicle, and Season Purse remain part of one continuous world while the player moves between civic actions.
 
 The playable scenario is **Season Zero: The Water Debt**. Mara Venn's decision at the River Guild changes Ivo Sen's available repair routes at the East Sluice. Ivo then resolves that local Worksite, leaving new resource values, obligations, faction memory, and history for the rest of the civilization.
 
@@ -10,13 +10,15 @@ The East Sluice is one Worksite inside an active season. Resolving it is **not a
 
 ## Living Civic Atlas
 
-The prototype is organized around one persistent map rather than a sequence of standalone screens:
+The prototype is organized around one persistent, inhabited district rather than a sequence of standalone dashboard screens:
 
-- The Aster world map remains the primary interaction surface.
-- Water, Food, Cohesion, Timber, and Prosperity remain visible in the header.
-- Selectable map nodes represent settlements, societies, districts, and active Worksites.
-- The right drawer supplies local context, NPC interaction, deterministic choices, and Cause Receipts without replacing the world.
-- The left dock opens World, Mandates, Citizens, the live Chronicle, and the Season Purse.
+- The East Sluice environment remains the primary interaction surface, with the wider Aster atlas available as context.
+- Water, Food, Cohesion, Timber, and Prosperity appear in a compact civic HUD rather than dominating the world.
+- Selectable place markers represent nearby districts, societies, markets, and the active Worksite.
+- A parchment story journal supplies NPC interaction, deterministic choices, and Cause Receipts while leaving the district visible behind it.
+- The bottom journal dock opens World, Stories, People, Memory, and the Season Purse.
+- Tala's memory, the open or sealed Service Stair, and the Worksite result are reflected visually in the scene as well as in text.
+- The MagicBlock experience uses the same world-first art direction; detailed receipts move into an optional World Chronicle drawer.
 - Mara's action persists when control passes to Ivo; a new citizen inherits the same world rather than entering a reset scene.
 - The Chronicle records local canonical events while the season continues.
 
@@ -66,7 +68,7 @@ The prototype stores the local world state in browser local storage. Use **Reset
 - **Citizens:** inspect the active citizen and the cross-citizen Handoff.
 - **Chronicle:** inspect the live record of accepted actions and Worksite resolutions. It is not the final season chronicle.
 - **Purse:** inspect the active mock Season Purse and settlement status.
-- **Top resource ribbon:** inspect the civilization's persistent state and current Prosperity Path progress.
+- **Compact civic HUD:** inspect the civilization's persistent state and current Prosperity Path progress.
 - **Close (`×`):** dismiss the context drawer without leaving or resetting the map.
 - **Reset:** in browser-local mode, clear this browser's proof state. In MagicBlock mode, start a fresh session ID; the prior Worksite and receipts remain intact.
 - **Keyboard:** use `Tab` / `Shift+Tab` to move through controls and `Enter` or `Space` to activate focused buttons.
@@ -187,9 +189,11 @@ http://localhost:4173/?preview=scene-b-oath&judge=1
 - `index.html` — semantic map-first application shell
 - `styles.css` — Living Civic Atlas visual system and responsive states
 - `app.js` — local shared-world state machine, four Worksite resolutions, Chronicle, previews, and Purse state
-- `assets/aster-map-v2.png` — current Living Civic Atlas world map
+- `assets/aster-east-sluice-v1.png` — current world-first East Sluice environment
+- `assets/tala-pixel-v1.png` — current Riverkeeper dialogue portrait
+- `assets/aster-map-v2.png` — wider Aster atlas used inside almanac and proof context
 - `assets/aster-map.png` — legacy first-direction Aster map
-- `assets/tala-river-guild.png` — Tala NPC portrait
+- `assets/tala-river-guild.png` — legacy painterly Tala portrait retained for provenance
 - `ART_ASSET_PROMPTS.md` — built-in ImageGen mode and exact visual prompts
 - `proof/` — local multi-citizen Handoff Proof with four URL-locked clients, deterministic reducer, SHA-256 evidence chain, Observer rail, and JSON export
 

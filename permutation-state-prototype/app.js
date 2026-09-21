@@ -382,7 +382,7 @@
     return `<section class="scene-panel scene-a-panel">
       <div class="drawer-hero coral"><span class="kicker">EAST SLUICE · LIVE NPC ENCOUNTER</span><h1>Access is a social problem.</h1><p>The gate can open two ways. The world after it will not be the same.</p></div>
       <div class="drawer-body">
-        <div class="npc-header"><img src="assets/tala-river-guild.png" alt="Portrait of Tala, Riverkeeper elder" /><div><small>AI NPC · RIVERKEEPER ELDER</small><h2>Tala</h2><p>Memory, tone, and expression are generated. Valid actions and state deltas are fixed.</p></div></div>
+        <div class="npc-header"><img src="assets/tala-pixel-v1.png" alt="Portrait of Tala, Riverkeeper elder" /><div><small>RIVERKEEPER ELDER · REMEMBERS YOUR CHOICES</small><h2>Tala</h2><p>Her words are alive; Aster's civic rules remain fixed.</p></div></div>
         <div class="npc-dialogue">Aster remembers the Charter. Does Aster remember the grain it promised my mother?</div>
         <div class="section-label"><span>MARA'S RESPONSE</span><strong>CHOOSE ONE</strong></div>
         <div class="choice-stack">
@@ -443,7 +443,7 @@
       <div class="drawer-hero ${oath ? "teal" : "coral"}"><span class="kicker">EAST SLUICE · SECOND CITIZEN · SAME WORLD</span><h1>Repair the gate—or the relationship.</h1><p>Mara's consequence has become Ivo's available action space.</p></div>
       <div class="drawer-body">
         <div class="affordance-ribbon ${oath ? "" : "fracture"}">${affordance}</div>
-        <div class="npc-header"><img src="assets/tala-river-guild.png" alt="Portrait of Tala, Riverkeeper elder" /><div><small>AI NPC · MEMORY ACTIVE</small><h2>Tala</h2><p>${state.memoryReceipt} loaded into expression context.</p></div></div>
+        <div class="npc-header"><img src="assets/tala-pixel-v1.png" alt="Portrait of Tala, Riverkeeper elder" /><div><small>TALA REMEMBERS · ${state.memoryReceipt}</small><h2>Tala</h2><p>Your earlier civic promise now changes what she says—and what Ivo can do.</p></div></div>
         <div class="npc-dialogue">${branchCopy[state.aChoice].dialogue}</div>
         <div class="memory-card"><small>CAUSAL INPUT FROM MARA</small><strong>“${branchCopy[state.aChoice].quote}”</strong><p>${branchCopy[state.aChoice].inherited}</p></div>
         <div class="section-label"><span>IVO'S ACTION</span><strong>CHOOSE ONE</strong></div>
@@ -554,6 +554,9 @@
   }
 
   function renderChrome() {
+    app.dataset.flow = state.flow;
+    app.dataset.branch = state.aChoice || "none";
+    app.dataset.resolution = state.worksiteResolution || "none";
     document.getElementById("water-value").textContent = state.water;
     document.getElementById("food-value").textContent = state.food;
     document.getElementById("cohesion-value").textContent = state.cohesion;
@@ -583,6 +586,7 @@
     app.classList.toggle("drawer-collapsed", !state.drawerOpen);
     const eastViews = ["pulse", "mandate-a", "scene-a", "access-resolution", "mandate-b", "scene-b", "worksite-resolution"];
     app.classList.toggle("map-shift-east", state.drawerOpen && eastViews.includes(state.view));
+    app.classList.toggle("story-scene-open", ["scene-a", "scene-b"].includes(state.view));
     const activeDock = dockSection();
     document.querySelectorAll(".dock-button[data-view]").forEach((button) => button.classList.toggle("active", button.dataset.view === activeDock));
     renderFeed();

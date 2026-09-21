@@ -2,6 +2,48 @@
 
 Project-bound raster assets were generated with the built-in OpenAI image-generation tool. No CLI fallback or external API key was used.
 
+## `assets/aster-east-sluice-v1.png`
+
+**Asset path:** `outputs/permutation-state-prototype/assets/aster-east-sluice-v1.png`  
+**Generation method:** built-in ImageGen  
+**Built-in ImageGen mode:** `stylized-concept`
+
+The following is the exact generation prompt:
+
+```text
+Use case: stylized-concept
+Asset type: original game environment background for a playable web prototype
+Primary request: create the living East Sluice district of Aster, a shared river civilization where individual citizens work, trade, study, repair infrastructure, and remember communal choices.
+Scene/backdrop: a dense riverside civic village built around a turquoise water gate and canal; riverkeeper guildhall, timber repair workshop, terraced herb plots, stone footbridge, small market awnings, water wheel, open service stair, grain crates, lamps, laundry, reeds, and tiny boats. Include several small NPC figures visibly following everyday routines: an engineer inspecting the gate, a courier crossing the bridge, two citizens talking, a gardener watering herbs, and a scholar reading near the canal.
+Subject: the East Sluice and its lively neighborhood, not a single character.
+Style/medium: highly polished original 2.5D isometric pixel-art game environment; crisp readable pixel clusters, richly layered architecture and foliage, expressive tiny animations implied by pose, cozy storybook warmth, sophisticated modern indie-game art direction. Establish an original river-civic fantasy identity; do not copy any existing game's buildings, characters, logo, interface, or exact palette.
+Composition/framing: wide 16:9 establishing view, slightly elevated isometric camera. Put the sluice and flowing canal near center-left, guildhall in upper right, bridge crossing diagonally. Keep the bottom 28 percent calmer and lower-contrast so a dialogue/action panel can overlay without obscuring key scene details. Keep the upper-left sky/foliage area relatively uncluttered for a compact time/season HUD.
+Lighting/mood: clear late-afternoon golden light after rain, soft mist over water, warm windows, peaceful but purposeful communal activity.
+Color palette: river teal, sage and moss green, warm cream stone, clay red roofs, muted indigo shadows, amber lanterns.
+Materials/textures: wet stone reflections, worn timber, copper mechanisms, soft foliage, moving water ripples.
+Constraints: game-ready landscape background only; no text; no typography; no logos; no watermark; no interface panels; no border; no witch-school imagery; no close-up characters; avoid photorealism and avoid 3D-render smoothness.
+```
+
+## `assets/tala-pixel-v1.png`
+
+**Asset path:** `outputs/permutation-state-prototype/assets/tala-pixel-v1.png`  
+**Generation method:** built-in ImageGen  
+**Built-in ImageGen mode:** `stylized-concept`
+
+The following is the exact generation prompt:
+
+```text
+Use case: stylized-concept
+Asset type: original game dialogue character portrait with transparent background
+Primary request: Tala Orin, senior Riverkeeper and living-memory NPC of Aster's East Sluice.
+Subject: a capable middle-aged woman water engineer and guild archivist; dark wavy hair pinned loosely, a few silver strands, observant warm brown eyes, weathered but kind face. She wears layered practical river-civic clothing: muted indigo mantle over cream work shirt, copper clasp shaped like three river ripples, leather tool belt, rolled technical chart held under one arm. Her expression is alert, reserved, and intelligent rather than hostile.
+Style/medium: highly polished original 2D pixel-art RPG dialogue portrait; crisp intentional pixel clusters, readable face and textile detail, hand-authored sprite aesthetic with subtle storybook softness. Original character design; do not copy any existing game's character, costume, logo, or exact rendering.
+Composition/framing: three-quarter upper-body portrait, turned slightly toward the player, full hair and shoulders visible, clean silhouette, suitable for a dialogue panel; no cropping at the head.
+Lighting/mood: warm late-afternoon rim light with cool reflected river light, quiet authority.
+Color palette: indigo, river teal, warm cream, weathered copper, muted clay accents.
+Constraints: genuinely transparent background with clean alpha; no environment; no text; no logos; no watermark; no frame; no staff or wand; no school uniform; avoid photorealism and avoid smooth 3D rendering.
+```
+
 ## `assets/aster-map-v2.png`
 
 **Asset path:** `outputs/permutation-state-prototype/assets/aster-map-v2.png`  
