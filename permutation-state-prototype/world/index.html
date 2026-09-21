@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta
+      name="description"
+      content="PERMUTATION STATE — live, work, and build inside one shared civilization."
+    />
+    <meta name="theme-color" content="#183f3d" />
+    <title>PERMUTATION STATE — Living Civilization Alpha</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><rect width=%2232%22 height=%2232%22 rx=%228%22 fill=%22%23174242%22/><path d=%22M7 20c4-7 14-7 18 0M9 24c4-4 10-4 14 0M16 6v18%22 fill=%22none%22 stroke=%22%23f1cd7b%22 stroke-width=%222%22 stroke-linecap=%22round%22/></svg>" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&family=Newsreader:opsz,wght@6..72,500;6..72,600;6..72,700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="game-shell is-loading" id="gameShell">
+      <main
+        class="world-viewport"
+        id="worldViewport"
+        tabindex="0"
+        aria-label="Aster shared civilization. Click the world to move."
+      >
+        <div class="map-camera" id="mapCamera">
+          <div class="map-plane" id="mapPlane">
+            <div class="world-art" aria-hidden="true"></div>
+            <div class="light-wash" aria-hidden="true"></div>
+            <div class="water-shimmer" aria-hidden="true"></div>
+            <div class="sluice-flow" id="sluiceFlow" aria-hidden="true"><i></i><i></i><b></b></div>
+
+            <svg class="route-layer" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true">
+              <path class="route route-main" d="M12 39 C25 37, 26 31, 41 31 S63 31, 72 24 S84 21, 91 29" />
+              <path class="route route-river" d="M5 46 C24 45, 33 51, 45 45 S68 41, 95 47" />
+              <path class="route route-work" d="M13 40 C23 43, 31 37, 43 31 S55 25, 71 24" />
+            </svg>
+
+            <div class="parcel-layer" id="parcelLayer" aria-hidden="true"></div>
+            <div class="hotspot-layer" id="hotspotLayer"></div>
+            <div class="actor-layer" id="actorLayer" aria-live="off"></div>
+
+            <div class="move-marker" id="moveMarker" aria-hidden="true">
+              <i></i><i></i><span>MOVE</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="world-vignette" aria-hidden="true"></div>
+        <div class="grain" aria-hidden="true"></div>
+      </main>
+
+      <header class="top-hud">
+        <div class="title-lockup">
+          <div class="sigil" aria-hidden="true"><i></i><i></i><i></i></div>
+          <div>
+            <div class="eyebrow-row">
+              <span>ONE WORLD · ONE CIVILIZATION</span>
+              <em>PLAYABLE ALPHA</em>
+            </div>
+            <h1>PERMUTATION STATE</h1>
+          </div>
+        </div>
+
+        <div class="civ-vitals" id="civVitals" aria-label="Shared civilization vitals">
+          <div class="vital water-vital">
+            <span class="vital-icon">≈</span>
+            <div><small>WATER</small><strong id="vitalWater">—</strong></div>
+            <i><b id="barWater"></b></i>
+          </div>
+          <div class="vital food-vital">
+            <span class="vital-icon">♢</span>
+            <div><small>FOOD</small><strong id="vitalFood">—</strong></div>
+            <i><b id="barFood"></b></i>
+          </div>
+          <div class="vital cohesion-vital">
+            <span class="vital-icon">✦</span>
+            <div><small>COHESION</small><strong id="vitalCohesion">—</strong></div>
+            <i><b id="barCohesion"></b></i>
+          </div>
+          <div class="vital prosperity-vital">
+            <span class="vital-icon">❖</span>
+            <div><small>PROSPERITY</small><strong id="vitalProsperity">—</strong></div>
+            <i><b id="barProsperity"></b></i>
+          </div>
+        </div>
+
+        <div class="world-clock">
+          <span class="weather-icon" id="weatherIcon" aria-hidden="true">☀</span>
+          <div><small id="seasonLabel">EARLY AUTUMN · DAY 1</small><strong id="clockLabel">07:20</strong></div>
+        </div>
+      </header>
+
+      <aside class="mission-card glass-card" aria-label="Current civic work">
+        <div class="card-kicker"><i></i><span>SHARED CIVIC WORK</span><em id="worldRevision">R—</em></div>
+        <h2 id="missionTitle">Restore the East Sluice</h2>
+        <p id="missionDescription">Move through Aster, gather supplies, and rebuild the waterworks together.</p>
+        <div class="project-track" aria-label="Project progress">
+          <i><b id="projectProgress"></b></i>
+          <strong id="projectProgressLabel">0%</strong>
+        </div>
+        <div class="project-needs" id="projectNeeds"></div>
+        <div class="building-strip" id="buildingStatus" aria-label="Building status"></div>
+      </aside>
+
+      <aside class="right-stack" aria-label="Citizen information">
+        <section class="citizen-card glass-card">
+          <div class="citizen-heading">
+            <div class="mini-portrait" aria-hidden="true">
+              <i class="portrait-head"></i><i class="portrait-body"></i><b></b>
+            </div>
+            <div><small>YOU ARE HERE AS</small><strong id="playerName">Mara Venn</strong><span id="playerProfession">CIVIC RUNNER</span></div>
+            <div class="capacity-ring" id="capacityRing"><span id="capacityLabel">0/8</span></div>
+          </div>
+          <div class="inventory-grid" id="inventoryGrid" aria-label="Carried inventory"></div>
+          <div class="job-row" id="jobRow" hidden>
+            <span id="jobLabel">Working…</span>
+            <i><b id="jobProgress"></b></i>
+          </div>
+        </section>
+
+        <section class="nearby-card glass-card" id="nearbyCard">
+          <div class="card-kicker"><span>NEARBY</span><em id="nearbyDistance">—</em></div>
+          <div class="nearby-content">
+            <span class="nearby-glyph" id="nearbyGlyph">⌖</span>
+            <div><strong id="nearbyName">Walk into the world</strong><small id="nearbyHint">Click anywhere to move</small></div>
+          </div>
+        </section>
+
+        <section class="chronicle-card glass-card">
+          <div class="card-kicker"><span>WORLD CHRONICLE</span><em class="live-dot">LIVE</em></div>
+          <ol class="event-feed" id="eventFeed"></ol>
+        </section>
+      </aside>
+
+      <div class="location-ribbon" id="locationRibbon">
+        <span id="districtLabel">ASTER · EAST SLUICE</span>
+        <strong id="statusLine">The city is waking.</strong>
+      </div>
+
+      <nav class="action-dock" id="actionDock" aria-label="Available actions">
+        <div class="action-context">
+          <span id="actionContextIcon">⌖</span>
+          <div><small>YOUR NEXT MOVE</small><strong id="actionContextLabel">Choose a place in the world</strong></div>
+        </div>
+        <div class="action-buttons" id="actionButtons">
+          <button class="action-button primary" data-action="focus-player">
+            <kbd>F</kbd><span><small>CAMERA</small><strong>Find me</strong></span>
+          </button>
+        </div>
+      </nav>
+
+      <div class="controls-hint" aria-label="Controls">
+        <span><i class="mouse-icon"></i>CLICK TO MOVE</span>
+        <span><kbd>WASD</kbd> WALK</span>
+        <span><b>＋</b><b>−</b> ZOOM</span>
+      </div>
+
+      <div class="zoom-controls" aria-label="Map zoom">
+        <button id="zoomIn" aria-label="Zoom in">＋</button>
+        <button id="zoomOut" aria-label="Zoom out">−</button>
+      </div>
+
+      <div class="connection-state" id="connectionState">
+        <i></i><span>OFFCHAIN SIMULATION ALPHA</span>
+      </div>
+
+      <div class="toast-region" id="toastRegion" aria-live="polite"></div>
+
+      <section class="loading-screen" id="loadingScreen" aria-live="polite">
+        <div class="loading-sigil"><i></i><i></i><i></i><b></b></div>
+        <span>THE SHARED WORLD IS TURNING</span>
+        <strong>Entering Aster…</strong>
+      </section>
+    </div>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

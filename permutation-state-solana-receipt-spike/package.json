@@ -8,7 +8,8 @@
     "test": "npm run test:client && npm run test:server",
     "test:client": "node --test client/*.test.mjs",
     "test:server": "node --test server/*.test.mjs",
-    "test:e2e:local": "node server/local-e2e.mjs"
+    "test:e2e:local": "node server/local-e2e.mjs",
+    "test:e2e:world:local": "node server/world-chain-local-e2e.mjs"
   },
   "dependencies": {
     "@magicblock-labs/ephemeral-rollups-sdk": "0.17.2",

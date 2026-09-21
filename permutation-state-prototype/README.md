@@ -1,6 +1,20 @@
-# PERMUTATION STATE — Living Civic Atlas Prototype
+# PERMUTATION STATE — Living Civilization Prototype
 
 > **One civilization. Thousands of citizens. One continuously evolving world.**
+
+## Primary playable world
+
+The primary game now lives at:
+
+```text
+http://127.0.0.1:4173/world/?session=aster-living-alpha&actor=mara
+```
+
+It is a real-time shared simulation, not a choice-card sequence. The player controls a visible citizen, travels to resource sites, performs timed work, carries goods, supplies the civic warehouse, and constructs the East Sluice. AI citizens now gather into their own inventories, walk cargo to its destination, and participate in the same economy. Repairing the sluice propagates through irrigation, farm yield, food reserves, and market prices. Open the same session with a different `actor` value to verify shared movement and state.
+
+The browser route is explicitly labelled `OFFCHAIN SIMULATION ALPHA`. A separate signer-authorized eight-citizen World PDA and MagicBlock checkpoint path is implemented and locally verified, but wallet/session-key synchronization between that compact canonical model and this richer simulation is still pending.
+
+The original Living Civic Atlas and `proof/` routes below remain as a causal-receipt and MagicBlock proof lab. They are supporting evidence, not the main game.
 
 This dependency-free browser prototype presents PERMUTATION STATE as a world-first civilization RPG. The close-up East Sluice district, its citizens, resources, worksites, Chronicle, and Season Purse remain part of one continuous world while the player moves between civic actions.
 

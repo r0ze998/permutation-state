@@ -39,6 +39,7 @@ import {
   seasonStateToJson,
   stateToJson,
 } from "./game-contract.mjs";
+import { createWorldService, routeWorldRequest } from "./world-service.mjs";
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -237,6 +238,7 @@ async function createRuntime() {
   ]);
   const roles = { mara, ivo, successor };
   if (config.cluster === "localnet") await ensureLocalFunding(base, roles);
+  const worldService = createWorldService({ workDir });
   return {
     config,
     configPath,
@@ -249,6 +251,7 @@ async function createRuntime() {
     ephemeral,
     roles,
     authority: mara,
+    worldService,
   };
 }
 
@@ -1128,6 +1131,7 @@ async function serveStatic(runtime, requestUrl, response, method = "GET") {
 
 async function route(runtime, request, response) {
   const requestUrl = new URL(request.url, "http://127.0.0.1");
+  if (await routeWorldRequest(runtime.worldService, request, response, requestUrl)) return;
   if (request.method === "GET" && requestUrl.pathname === "/api/magicblock/health") {
     const [baseSlot, erSlot] = await Promise.all([
       runtime.base.getSlot("confirmed"),
@@ -1182,10 +1186,20 @@ export async function startGateway({ port = Number(process.env.PORT || 4173) } =
       }
     });
   });
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(port, "127.0.0.1", resolve);
+  server.once("close", () => {
+    runtime.worldService.close().catch((error) => {
+      console.error(`[world] close: ${error.message}`);
+    });
   });
+  try {
+    await new Promise((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(port, "127.0.0.1", resolve);
+    });
+  } catch (error) {
+    await runtime.worldService.close();
+    throw error;
+  }
   console.log(`PERMUTATION STATE gateway ready at http://127.0.0.1:${port}`);
   console.log(`Network: ${runtime.config.cluster} · Program: ${runtime.programId.toBase58()}`);
   return { server, runtime };

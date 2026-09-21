@@ -25,9 +25,11 @@ pub const VERSION: u8 = 1;
 pub const WORKSITE_SEED: &[u8] = b"worksite";
 pub const SEASON_SEED: &[u8] = b"season";
 pub const SEASON_CLAIM_SEED: &[u8] = b"season_claim";
+pub const WORLD_SEED: &[u8] = b"world";
 pub const ACCOUNT_SPACE: usize = 384;
 pub const SEASON_ACCOUNT_SPACE: usize = 384;
 pub const CLAIM_ACCOUNT_SPACE: usize = 160;
+pub const WORLD_ACCOUNT_SPACE: usize = 512;
 pub const STATE_DOMAIN: &[u8] = b"PERMSTATE/WORKSITE_STATE/V1";
 pub const EVENT_DOMAIN: &[u8] = b"PERMSTATE/WORKSITE_EVENT/V1";
 pub const GENESIS_DOMAIN: &[u8] = b"PERMSTATE/WORKSITE_GENESIS/V1";
@@ -39,6 +41,10 @@ pub const SEASON_LOG_DOMAIN: &[u8] = b"PERMSTATE_SEASON_EVENT_V1";
 pub const SEASON_REGISTER_EVENT_DOMAIN: &[u8] = b"PERMSTATE/SEASON_REGISTER/V1";
 pub const CLAIM_LEAF_DOMAIN: &[u8] = b"PERMSTATE/SEASON_CLAIM_LEAF/V1";
 pub const CLAIM_NODE_DOMAIN: &[u8] = b"PERMSTATE/SEASON_CLAIM_NODE/V1";
+pub const WORLD_STATE_DOMAIN: &[u8] = b"PERMSTATE/WORLD_STATE/V1";
+pub const WORLD_GENESIS_DOMAIN: &[u8] = b"PERMSTATE/WORLD_GENESIS/V1";
+pub const WORLD_EVENT_DOMAIN: &[u8] = b"PERMSTATE/WORLD_EVENT/V1";
+pub const WORLD_LOG_DOMAIN: &[u8] = b"PERMSTATE_WORLD_EVENT_V1";
 pub const UNDELEGATE_CALLBACK_DISCRIMINATOR: [u8; 8] = [196, 28, 41, 206, 48, 37, 51, 167];
 pub const ER_COMMIT_FREQUENCY_MS: u32 = 30_000;
 pub const BPS_DENOMINATOR: u64 = 10_000;
@@ -48,6 +54,30 @@ pub const MARKETPLACE_OPS_BPS: u64 = 100;
 pub const MAX_MOCK_CREDIT_UNITS: u64 = 1_000_000_000_000;
 pub const MAX_ACTIVE_WORKSITES: u32 = 8;
 pub const MAX_CLAIM_PROOF_DEPTH: usize = 20;
+
+pub const MAX_WORLD_CITIZENS: usize = 8;
+pub const WORLD_MAX_X: u16 = 1_000;
+pub const WORLD_MAX_Y: u16 = 600;
+pub const WORLD_INTERACTION_RADIUS: u16 = 70;
+pub const WORLD_INVENTORY_CAPACITY: u16 = 12;
+pub const WORLD_GATHER_AMOUNT: u16 = 4;
+pub const TIMBER_NODE_INITIAL: u16 = 18;
+pub const STONE_NODE_INITIAL: u16 = 15;
+pub const SLUICE_REPAIR_STEPS: u8 = 4;
+pub const SLUICE_TIMBER_PER_STEP: u16 = 2;
+pub const SLUICE_STONE_PER_STEP: u16 = 1;
+/// Hundredths of a water unit produced per world minute.
+pub const BASE_WATER_RATE: u16 = 70;
+pub const REPAIRED_WATER_RATE: u16 = 480;
+
+pub const RESOURCE_TIMBER: u8 = 1;
+pub const RESOURCE_STONE: u8 = 2;
+
+pub const WORLD_EVENT_CITIZEN_JOINED: u8 = 0;
+pub const WORLD_EVENT_ACTOR_MOVED: u8 = 1;
+pub const WORLD_EVENT_RESOURCE_GATHERED: u8 = 2;
+pub const WORLD_EVENT_INVENTORY_DEPOSITED: u8 = 3;
+pub const WORLD_EVENT_SLUICE_REPAIRED: u8 = 4;
 
 pub const EVENT_MARA_CHOICE: u8 = 0;
 pub const EVENT_IVO_CHOICE: u8 = 1;
@@ -149,6 +179,49 @@ pub struct ClaimSeasonArgs {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct InitializeWorldArgs {
+    pub world_id: [u8; 32],
+    pub ruleset_hash: [u8; 32],
+    pub expected_genesis_state_root: [u8; 32],
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct WorldGuard {
+    pub expected_seq: u64,
+    pub prior_state_root: [u8; 32],
+    pub expected_head_event_hash: [u8; 32],
+    pub event_id: [u8; 32],
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct JoinWorldArgs {
+    pub guard: WorldGuard,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct MoveWorldActorArgs {
+    pub x: u16,
+    pub y: u16,
+    pub guard: WorldGuard,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct GatherWorldResourceArgs {
+    pub resource_kind: u8,
+    pub guard: WorldGuard,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct DepositWorldInventoryArgs {
+    pub guard: WorldGuard,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct RepairEastSluiceArgs {
+    pub guard: WorldGuard,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum PermutationInstruction {
     Initialize(InitializeArgs),
     ApplyWorksiteEvent(ApplyEventArgs),
@@ -159,6 +232,15 @@ pub enum PermutationInstruction {
     CreditSeasonPurse(CreditSeasonPurseArgs),
     FinalizeSeason(FinalizeSeasonArgs),
     ClaimSeason(ClaimSeasonArgs),
+    InitializeWorld(InitializeWorldArgs),
+    JoinWorld(JoinWorldArgs),
+    MoveWorldActor(MoveWorldActorArgs),
+    GatherWorldResource(GatherWorldResourceArgs),
+    DepositWorldInventory(DepositWorldInventoryArgs),
+    RepairEastSluice(RepairEastSluiceArgs),
+    DelegateWorld,
+    CommitWorld,
+    CommitAndUndelegateWorld,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -345,6 +427,95 @@ pub struct ReceiptV1 {
     pub claim_unavailable: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct WorldPosition {
+    pub x: u16,
+    pub y: u16,
+}
+
+pub const WORLD_SPAWN: WorldPosition = WorldPosition { x: 500, y: 300 };
+pub const TIMBER_NODE_POSITION: WorldPosition = WorldPosition { x: 180, y: 200 };
+pub const STONE_NODE_POSITION: WorldPosition = WorldPosition { x: 790, y: 170 };
+pub const WAREHOUSE_POSITION: WorldPosition = WorldPosition { x: 460, y: 310 };
+pub const EAST_SLUICE_POSITION: WorldPosition = WorldPosition { x: 720, y: 300 };
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct WorldState {
+    pub version: u8,
+    pub bump: u8,
+    pub authority: Pubkey,
+    pub world_id: [u8; 32],
+    pub ruleset_hash: [u8; 32],
+    pub state_root: [u8; 32],
+    pub head_event_hash: [u8; 32],
+    pub seq: u64,
+    pub citizen_count: u8,
+    pub citizens: [Pubkey; MAX_WORLD_CITIZENS],
+    pub positions: [WorldPosition; MAX_WORLD_CITIZENS],
+    pub inventory_timber: [u16; MAX_WORLD_CITIZENS],
+    pub inventory_stone: [u16; MAX_WORLD_CITIZENS],
+    pub warehouse_timber: u16,
+    pub warehouse_stone: u16,
+    pub timber_remaining: u16,
+    pub stone_remaining: u16,
+    pub repair_progress: u8,
+    pub sluice_completed: bool,
+    pub water_rate: u16,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
+struct WorldStateRootView {
+    version: u8,
+    bump: u8,
+    authority: Pubkey,
+    world_id: [u8; 32],
+    ruleset_hash: [u8; 32],
+    seq: u64,
+    citizen_count: u8,
+    citizens: [Pubkey; MAX_WORLD_CITIZENS],
+    positions: [WorldPosition; MAX_WORLD_CITIZENS],
+    inventory_timber: [u16; MAX_WORLD_CITIZENS],
+    inventory_stone: [u16; MAX_WORLD_CITIZENS],
+    warehouse_timber: u16,
+    warehouse_stone: u16,
+    timber_remaining: u16,
+    stone_remaining: u16,
+    repair_progress: u8,
+    sluice_completed: bool,
+    water_rate: u16,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct WorldReceiptV1 {
+    pub version: u8,
+    pub seq: u64,
+    pub event_kind: u8,
+    pub resource_kind: u8,
+    pub actor: Pubkey,
+    pub x: u16,
+    pub y: u16,
+    pub amount_timber: u16,
+    pub amount_stone: u16,
+    pub prior_state_root: [u8; 32],
+    pub new_state_root: [u8; 32],
+    pub previous_event_hash: [u8; 32],
+    pub event_hash: [u8; 32],
+    pub event_id: [u8; 32],
+    pub repair_progress: u8,
+    pub water_rate: u16,
+}
+
+struct WorldEventInput {
+    event_kind: u8,
+    resource_kind: u8,
+    actor: Pubkey,
+    x: u16,
+    y: u16,
+    amount_timber: u16,
+    amount_stone: u16,
+    event_id: [u8; 32],
+}
+
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReceiptError {
@@ -388,6 +559,18 @@ pub enum ReceiptError {
     ClaimAlreadyExists = 38,
     InvalidWorksiteState = 39,
     InvalidFinalization = 40,
+    InvalidWorldPda = 41,
+    WorldFull = 42,
+    AlreadyCitizen = 43,
+    PositionOutOfBounds = 44,
+    NotNearTarget = 45,
+    InventoryCapacity = 46,
+    ResourceDepleted = 47,
+    InsufficientWarehouse = 48,
+    SluiceAlreadyRepaired = 49,
+    StaleWorldSequence = 50,
+    WorldHeadMismatch = 51,
+    InvalidWorldState = 52,
 }
 
 impl From<ReceiptError> for ProgramError {
@@ -1312,6 +1495,424 @@ impl SeasonState {
     }
 }
 
+impl WorldState {
+    pub fn new(
+        program_id: &Pubkey,
+        state_pda: &Pubkey,
+        bump: u8,
+        authority: Pubkey,
+        args: &InitializeWorldArgs,
+    ) -> Result<Self, ProgramError> {
+        if authority == Pubkey::default()
+            || is_zero_hash(&args.world_id)
+            || is_zero_hash(&args.ruleset_hash)
+        {
+            return Err(ReceiptError::InvalidInitialization.into());
+        }
+        let mut state = Self {
+            version: VERSION,
+            bump,
+            authority,
+            world_id: args.world_id,
+            ruleset_hash: args.ruleset_hash,
+            state_root: [0; 32],
+            head_event_hash: [0; 32],
+            seq: 0,
+            citizen_count: 0,
+            citizens: [Pubkey::default(); MAX_WORLD_CITIZENS],
+            positions: [WorldPosition::default(); MAX_WORLD_CITIZENS],
+            inventory_timber: [0; MAX_WORLD_CITIZENS],
+            inventory_stone: [0; MAX_WORLD_CITIZENS],
+            warehouse_timber: 0,
+            warehouse_stone: 0,
+            timber_remaining: TIMBER_NODE_INITIAL,
+            stone_remaining: STONE_NODE_INITIAL,
+            repair_progress: 0,
+            sluice_completed: false,
+            water_rate: BASE_WATER_RATE,
+        };
+        state.assert_invariants()?;
+        state.state_root = state.compute_state_root()?;
+        state.head_event_hash = hashv(&[
+            WORLD_GENESIS_DOMAIN,
+            program_id.as_ref(),
+            state_pda.as_ref(),
+            &state.world_id,
+            &state.ruleset_hash,
+            &state.state_root,
+        ])
+        .to_bytes();
+        Ok(state)
+    }
+
+    fn root_view(&self) -> WorldStateRootView {
+        WorldStateRootView {
+            version: self.version,
+            bump: self.bump,
+            authority: self.authority,
+            world_id: self.world_id,
+            ruleset_hash: self.ruleset_hash,
+            seq: self.seq,
+            citizen_count: self.citizen_count,
+            citizens: self.citizens,
+            positions: self.positions,
+            inventory_timber: self.inventory_timber,
+            inventory_stone: self.inventory_stone,
+            warehouse_timber: self.warehouse_timber,
+            warehouse_stone: self.warehouse_stone,
+            timber_remaining: self.timber_remaining,
+            stone_remaining: self.stone_remaining,
+            repair_progress: self.repair_progress,
+            sluice_completed: self.sluice_completed,
+            water_rate: self.water_rate,
+        }
+    }
+
+    pub fn compute_state_root(&self) -> Result<[u8; 32], ProgramError> {
+        let bytes = borsh::to_vec(&self.root_view()).map_err(|_| ReceiptError::StateEncoding)?;
+        Ok(hashv(&[WORLD_STATE_DOMAIN, &bytes]).to_bytes())
+    }
+
+    pub fn assert_invariants(&self) -> ProgramResult {
+        if self.version != VERSION
+            || self.authority == Pubkey::default()
+            || is_zero_hash(&self.world_id)
+            || is_zero_hash(&self.ruleset_hash)
+            || self.citizen_count as usize > MAX_WORLD_CITIZENS
+            || self.timber_remaining > TIMBER_NODE_INITIAL
+            || self.stone_remaining > STONE_NODE_INITIAL
+            || self.repair_progress > SLUICE_REPAIR_STEPS
+        {
+            return Err(ReceiptError::InvalidWorldState.into());
+        }
+
+        for index in 0..MAX_WORLD_CITIZENS {
+            let active = index < self.citizen_count as usize;
+            if active {
+                if self.citizens[index] == Pubkey::default()
+                    || !position_in_bounds(self.positions[index])
+                    || self.inventory_timber[index]
+                        .checked_add(self.inventory_stone[index])
+                        .filter(|total| *total <= WORLD_INVENTORY_CAPACITY)
+                        .is_none()
+                    || self.citizens[..index]
+                        .iter()
+                        .any(|citizen| citizen == &self.citizens[index])
+                {
+                    return Err(ReceiptError::InvalidWorldState.into());
+                }
+            } else if self.citizens[index] != Pubkey::default()
+                || self.positions[index] != WorldPosition::default()
+                || self.inventory_timber[index] != 0
+                || self.inventory_stone[index] != 0
+            {
+                return Err(ReceiptError::InvalidWorldState.into());
+            }
+        }
+
+        let timber_inventories: u32 = self.inventory_timber.iter().map(|v| *v as u32).sum();
+        let stone_inventories: u32 = self.inventory_stone.iter().map(|v| *v as u32).sum();
+        let timber_harvested = (TIMBER_NODE_INITIAL - self.timber_remaining) as u32;
+        let stone_harvested = (STONE_NODE_INITIAL - self.stone_remaining) as u32;
+        let timber_used = self.repair_progress as u32 * SLUICE_TIMBER_PER_STEP as u32;
+        let stone_used = self.repair_progress as u32 * SLUICE_STONE_PER_STEP as u32;
+        if timber_harvested != timber_inventories + self.warehouse_timber as u32 + timber_used
+            || stone_harvested != stone_inventories + self.warehouse_stone as u32 + stone_used
+        {
+            return Err(ReceiptError::InvalidWorldState.into());
+        }
+
+        let completion_is_consistent = if self.repair_progress == SLUICE_REPAIR_STEPS {
+            self.sluice_completed && self.water_rate == REPAIRED_WATER_RATE
+        } else {
+            !self.sluice_completed && self.water_rate == BASE_WATER_RATE
+        };
+        if !completion_is_consistent {
+            return Err(ReceiptError::InvalidWorldState.into());
+        }
+        Ok(())
+    }
+
+    fn actor_index(&self, actor: &Pubkey) -> Result<usize, ProgramError> {
+        self.citizens[..self.citizen_count as usize]
+            .iter()
+            .position(|citizen| citizen == actor)
+            .ok_or_else(|| ReceiptError::UnauthorizedActor.into())
+    }
+
+    fn require_guard(&self, guard: &WorldGuard) -> ProgramResult {
+        validate_stored_world_state(self)?;
+        if guard.expected_seq != self.seq {
+            return Err(ReceiptError::StaleWorldSequence.into());
+        }
+        if guard.prior_state_root != self.state_root {
+            return Err(ReceiptError::PriorRootMismatch.into());
+        }
+        if guard.expected_head_event_hash != self.head_event_hash {
+            return Err(ReceiptError::WorldHeadMismatch.into());
+        }
+        if is_zero_hash(&guard.event_id) {
+            return Err(ReceiptError::InvalidEventId.into());
+        }
+        Ok(())
+    }
+
+    fn finish_transition(
+        &self,
+        mut next: Self,
+        event: WorldEventInput,
+    ) -> Result<(Self, WorldReceiptV1), ProgramError> {
+        next.seq = self
+            .seq
+            .checked_add(1)
+            .ok_or(ProgramError::ArithmeticOverflow)?;
+        next.assert_invariants()?;
+        let new_state_root = next.compute_state_root()?;
+        let event_hash = hashv(&[
+            WORLD_EVENT_DOMAIN,
+            &self.world_id,
+            &self.ruleset_hash,
+            &self.head_event_hash,
+            &self.state_root,
+            &new_state_root,
+            event.actor.as_ref(),
+            &self.seq.to_le_bytes(),
+            &[event.event_kind],
+            &[event.resource_kind],
+            &event.x.to_le_bytes(),
+            &event.y.to_le_bytes(),
+            &event.amount_timber.to_le_bytes(),
+            &event.amount_stone.to_le_bytes(),
+            &event.event_id,
+        ])
+        .to_bytes();
+        next.state_root = new_state_root;
+        next.head_event_hash = event_hash;
+        let receipt = WorldReceiptV1 {
+            version: VERSION,
+            seq: self.seq,
+            event_kind: event.event_kind,
+            resource_kind: event.resource_kind,
+            actor: event.actor,
+            x: event.x,
+            y: event.y,
+            amount_timber: event.amount_timber,
+            amount_stone: event.amount_stone,
+            prior_state_root: self.state_root,
+            new_state_root,
+            previous_event_hash: self.head_event_hash,
+            event_hash,
+            event_id: event.event_id,
+            repair_progress: next.repair_progress,
+            water_rate: next.water_rate,
+        };
+        Ok((next, receipt))
+    }
+
+    pub fn join(
+        &self,
+        actor: &Pubkey,
+        args: &JoinWorldArgs,
+    ) -> Result<(Self, WorldReceiptV1), ProgramError> {
+        self.require_guard(&args.guard)?;
+        if *actor == Pubkey::default() {
+            return Err(ReceiptError::UnauthorizedActor.into());
+        }
+        if self.actor_index(actor).is_ok() {
+            return Err(ReceiptError::AlreadyCitizen.into());
+        }
+        if self.citizen_count as usize >= MAX_WORLD_CITIZENS {
+            return Err(ReceiptError::WorldFull.into());
+        }
+        let mut next = self.clone();
+        let index = self.citizen_count as usize;
+        next.citizens[index] = *actor;
+        next.positions[index] = WORLD_SPAWN;
+        next.citizen_count += 1;
+        self.finish_transition(
+            next,
+            WorldEventInput {
+                event_kind: WORLD_EVENT_CITIZEN_JOINED,
+                resource_kind: 0,
+                actor: *actor,
+                x: WORLD_SPAWN.x,
+                y: WORLD_SPAWN.y,
+                amount_timber: 0,
+                amount_stone: 0,
+                event_id: args.guard.event_id,
+            },
+        )
+    }
+
+    pub fn move_actor(
+        &self,
+        actor: &Pubkey,
+        args: &MoveWorldActorArgs,
+    ) -> Result<(Self, WorldReceiptV1), ProgramError> {
+        self.require_guard(&args.guard)?;
+        let index = self.actor_index(actor)?;
+        let destination = WorldPosition {
+            x: args.x,
+            y: args.y,
+        };
+        if !position_in_bounds(destination) {
+            return Err(ReceiptError::PositionOutOfBounds.into());
+        }
+        let mut next = self.clone();
+        next.positions[index] = destination;
+        self.finish_transition(
+            next,
+            WorldEventInput {
+                event_kind: WORLD_EVENT_ACTOR_MOVED,
+                resource_kind: 0,
+                actor: *actor,
+                x: args.x,
+                y: args.y,
+                amount_timber: 0,
+                amount_stone: 0,
+                event_id: args.guard.event_id,
+            },
+        )
+    }
+
+    pub fn gather(
+        &self,
+        actor: &Pubkey,
+        args: &GatherWorldResourceArgs,
+    ) -> Result<(Self, WorldReceiptV1), ProgramError> {
+        self.require_guard(&args.guard)?;
+        let index = self.actor_index(actor)?;
+        let (node, remaining) = match args.resource_kind {
+            RESOURCE_TIMBER => (TIMBER_NODE_POSITION, self.timber_remaining),
+            RESOURCE_STONE => (STONE_NODE_POSITION, self.stone_remaining),
+            _ => return Err(ReceiptError::InvalidAmount.into()),
+        };
+        if !positions_near(self.positions[index], node) {
+            return Err(ReceiptError::NotNearTarget.into());
+        }
+        if remaining == 0 {
+            return Err(ReceiptError::ResourceDepleted.into());
+        }
+        let amount = remaining.min(WORLD_GATHER_AMOUNT);
+        let carried = self.inventory_timber[index]
+            .checked_add(self.inventory_stone[index])
+            .ok_or(ReceiptError::InventoryCapacity)?;
+        if carried
+            .checked_add(amount)
+            .filter(|total| *total <= WORLD_INVENTORY_CAPACITY)
+            .is_none()
+        {
+            return Err(ReceiptError::InventoryCapacity.into());
+        }
+
+        let mut next = self.clone();
+        let (amount_timber, amount_stone) = if args.resource_kind == RESOURCE_TIMBER {
+            next.timber_remaining -= amount;
+            next.inventory_timber[index] += amount;
+            (amount, 0)
+        } else {
+            next.stone_remaining -= amount;
+            next.inventory_stone[index] += amount;
+            (0, amount)
+        };
+        self.finish_transition(
+            next,
+            WorldEventInput {
+                event_kind: WORLD_EVENT_RESOURCE_GATHERED,
+                resource_kind: args.resource_kind,
+                actor: *actor,
+                x: self.positions[index].x,
+                y: self.positions[index].y,
+                amount_timber,
+                amount_stone,
+                event_id: args.guard.event_id,
+            },
+        )
+    }
+
+    pub fn deposit(
+        &self,
+        actor: &Pubkey,
+        args: &DepositWorldInventoryArgs,
+    ) -> Result<(Self, WorldReceiptV1), ProgramError> {
+        self.require_guard(&args.guard)?;
+        let index = self.actor_index(actor)?;
+        if !positions_near(self.positions[index], WAREHOUSE_POSITION) {
+            return Err(ReceiptError::NotNearTarget.into());
+        }
+        let timber = self.inventory_timber[index];
+        let stone = self.inventory_stone[index];
+        if timber == 0 && stone == 0 {
+            return Err(ReceiptError::InvalidAmount.into());
+        }
+        let mut next = self.clone();
+        next.warehouse_timber = next
+            .warehouse_timber
+            .checked_add(timber)
+            .ok_or(ProgramError::ArithmeticOverflow)?;
+        next.warehouse_stone = next
+            .warehouse_stone
+            .checked_add(stone)
+            .ok_or(ProgramError::ArithmeticOverflow)?;
+        next.inventory_timber[index] = 0;
+        next.inventory_stone[index] = 0;
+        self.finish_transition(
+            next,
+            WorldEventInput {
+                event_kind: WORLD_EVENT_INVENTORY_DEPOSITED,
+                resource_kind: 0,
+                actor: *actor,
+                x: self.positions[index].x,
+                y: self.positions[index].y,
+                amount_timber: timber,
+                amount_stone: stone,
+                event_id: args.guard.event_id,
+            },
+        )
+    }
+
+    pub fn repair_sluice(
+        &self,
+        actor: &Pubkey,
+        args: &RepairEastSluiceArgs,
+    ) -> Result<(Self, WorldReceiptV1), ProgramError> {
+        self.require_guard(&args.guard)?;
+        let index = self.actor_index(actor)?;
+        if !positions_near(self.positions[index], EAST_SLUICE_POSITION) {
+            return Err(ReceiptError::NotNearTarget.into());
+        }
+        if self.sluice_completed {
+            return Err(ReceiptError::SluiceAlreadyRepaired.into());
+        }
+        if self.warehouse_timber < SLUICE_TIMBER_PER_STEP
+            || self.warehouse_stone < SLUICE_STONE_PER_STEP
+        {
+            return Err(ReceiptError::InsufficientWarehouse.into());
+        }
+        let mut next = self.clone();
+        next.warehouse_timber -= SLUICE_TIMBER_PER_STEP;
+        next.warehouse_stone -= SLUICE_STONE_PER_STEP;
+        next.repair_progress += 1;
+        if next.repair_progress == SLUICE_REPAIR_STEPS {
+            next.sluice_completed = true;
+            next.water_rate = REPAIRED_WATER_RATE;
+        }
+        self.finish_transition(
+            next,
+            WorldEventInput {
+                event_kind: WORLD_EVENT_SLUICE_REPAIRED,
+                resource_kind: 0,
+                actor: *actor,
+                x: self.positions[index].x,
+                y: self.positions[index].y,
+                amount_timber: SLUICE_TIMBER_PER_STEP,
+                amount_stone: SLUICE_STONE_PER_STEP,
+                event_id: args.guard.event_id,
+            },
+        )
+    }
+}
+
 #[cfg(not(feature = "no-entrypoint"))]
 entrypoint!(process_instruction);
 
@@ -1350,6 +1951,27 @@ pub fn process_instruction(
         }
         PermutationInstruction::ClaimSeason(args) => {
             process_claim_season(program_id, accounts, args)
+        }
+        PermutationInstruction::InitializeWorld(args) => {
+            process_initialize_world(program_id, accounts, args)
+        }
+        PermutationInstruction::JoinWorld(args) => process_join_world(program_id, accounts, args),
+        PermutationInstruction::MoveWorldActor(args) => {
+            process_move_world_actor(program_id, accounts, args)
+        }
+        PermutationInstruction::GatherWorldResource(args) => {
+            process_gather_world_resource(program_id, accounts, args)
+        }
+        PermutationInstruction::DepositWorldInventory(args) => {
+            process_deposit_world_inventory(program_id, accounts, args)
+        }
+        PermutationInstruction::RepairEastSluice(args) => {
+            process_repair_east_sluice(program_id, accounts, args)
+        }
+        PermutationInstruction::DelegateWorld => process_delegate_world(program_id, accounts),
+        PermutationInstruction::CommitWorld => process_commit_world(program_id, accounts),
+        PermutationInstruction::CommitAndUndelegateWorld => {
+            process_commit_and_undelegate_world(program_id, accounts)
         }
     }
 }
@@ -1629,6 +2251,267 @@ fn process_claim_season(
     Ok(())
 }
 
+#[inline(never)]
+fn process_initialize_world(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    args: InitializeWorldArgs,
+) -> ProgramResult {
+    let mut accounts = accounts.iter();
+    let authority = next_account_info(&mut accounts)?;
+    let world_account = next_account_info(&mut accounts)?;
+    let system = next_account_info(&mut accounts)?;
+
+    require_signer(authority)?;
+    if !authority.is_writable || !world_account.is_writable {
+        return Err(ProgramError::InvalidAccountData);
+    }
+    if system.key != &system_program::id() {
+        return Err(ProgramError::IncorrectProgramId);
+    }
+    let (expected_pda, bump) =
+        Pubkey::find_program_address(&[WORLD_SEED, &args.world_id], program_id);
+    if world_account.key != &expected_pda {
+        return Err(ReceiptError::InvalidWorldPda.into());
+    }
+    if world_account.owner != &system_program::id() || !world_account.data_is_empty() {
+        return Err(ReceiptError::AlreadyInitialized.into());
+    }
+    let state = WorldState::new(program_id, world_account.key, bump, *authority.key, &args)?;
+    if state.state_root != args.expected_genesis_state_root {
+        return Err(ReceiptError::NewRootMismatch.into());
+    }
+    let bump_seed = [bump];
+    let signer_seeds: &[&[u8]] = &[WORLD_SEED, &args.world_id, &bump_seed];
+    initialize_pda_account(
+        authority,
+        world_account,
+        system,
+        WORLD_ACCOUNT_SPACE,
+        program_id,
+        signer_seeds,
+    )?;
+    write_world_state(world_account, &state)?;
+    msg!("PERMSTATE world initialized seq=0");
+    Ok(())
+}
+
+fn world_action_accounts<'a, 'info>(
+    program_id: &Pubkey,
+    accounts: &'a [AccountInfo<'info>],
+) -> Result<(&'a AccountInfo<'info>, &'a AccountInfo<'info>, WorldState), ProgramError> {
+    let mut accounts = accounts.iter();
+    let actor = next_account_info(&mut accounts)?;
+    let world_account = next_account_info(&mut accounts)?;
+    require_signer(actor)?;
+    if !world_account.is_writable {
+        return Err(ProgramError::InvalidAccountData);
+    }
+    let world = read_owned_world_state(program_id, world_account)?;
+    Ok((actor, world_account, world))
+}
+
+fn finish_world_action(
+    world_account: &AccountInfo,
+    next: &WorldState,
+    receipt: &WorldReceiptV1,
+) -> ProgramResult {
+    write_world_state(world_account, next)?;
+    let receipt_bytes = borsh::to_vec(receipt).map_err(|_| ReceiptError::StateEncoding)?;
+    solana_program::log::sol_log_data(&[WORLD_LOG_DOMAIN, &receipt_bytes]);
+    msg!(
+        "PERMSTATE world accepted seq={} kind={} actor={}",
+        receipt.seq,
+        receipt.event_kind,
+        receipt.actor
+    );
+    Ok(())
+}
+
+#[inline(never)]
+fn process_join_world(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    args: JoinWorldArgs,
+) -> ProgramResult {
+    let (actor, world_account, world) = world_action_accounts(program_id, accounts)?;
+    let (next, receipt) = world.join(actor.key, &args)?;
+    finish_world_action(world_account, &next, &receipt)
+}
+
+#[inline(never)]
+fn process_move_world_actor(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    args: MoveWorldActorArgs,
+) -> ProgramResult {
+    let (actor, world_account, world) = world_action_accounts(program_id, accounts)?;
+    let (next, receipt) = world.move_actor(actor.key, &args)?;
+    finish_world_action(world_account, &next, &receipt)
+}
+
+#[inline(never)]
+fn process_gather_world_resource(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    args: GatherWorldResourceArgs,
+) -> ProgramResult {
+    let (actor, world_account, world) = world_action_accounts(program_id, accounts)?;
+    let (next, receipt) = world.gather(actor.key, &args)?;
+    finish_world_action(world_account, &next, &receipt)
+}
+
+#[inline(never)]
+fn process_deposit_world_inventory(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    args: DepositWorldInventoryArgs,
+) -> ProgramResult {
+    let (actor, world_account, world) = world_action_accounts(program_id, accounts)?;
+    let (next, receipt) = world.deposit(actor.key, &args)?;
+    finish_world_action(world_account, &next, &receipt)
+}
+
+#[inline(never)]
+fn process_repair_east_sluice(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    args: RepairEastSluiceArgs,
+) -> ProgramResult {
+    let (actor, world_account, world) = world_action_accounts(program_id, accounts)?;
+    let (next, receipt) = world.repair_sluice(actor.key, &args)?;
+    finish_world_action(world_account, &next, &receipt)
+}
+
+#[inline(never)]
+fn process_delegate_world(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
+    let mut accounts = accounts.iter();
+    let authority = next_account_info(&mut accounts)?;
+    let system = next_account_info(&mut accounts)?;
+    let world_account = next_account_info(&mut accounts)?;
+    let owner_program = next_account_info(&mut accounts)?;
+    let delegation_buffer = next_account_info(&mut accounts)?;
+    let delegation_record = next_account_info(&mut accounts)?;
+    let delegation_metadata = next_account_info(&mut accounts)?;
+    let delegation_program = next_account_info(&mut accounts)?;
+    let validator = accounts.next();
+
+    require_signer(authority)?;
+    if !authority.is_writable || !world_account.is_writable {
+        return Err(ProgramError::InvalidAccountData);
+    }
+    if system.key != &system_program::id() || owner_program.key != program_id {
+        return Err(ProgramError::IncorrectProgramId);
+    }
+    if delegation_program.key != &DELEGATION_PROGRAM_ID {
+        return Err(ReceiptError::WrongDelegationProgram.into());
+    }
+    let world = read_owned_world_state(program_id, world_account)?;
+    if authority.key != &world.authority {
+        return Err(ReceiptError::UnauthorizedLifecycleActor.into());
+    }
+
+    let pda_seeds: &[&[u8]] = &[WORLD_SEED, &world.world_id];
+    delegate_account(
+        DelegateAccounts {
+            payer: authority,
+            pda: world_account,
+            owner_program,
+            buffer: delegation_buffer,
+            delegation_record,
+            delegation_metadata,
+            delegation_program,
+            system_program: system,
+        },
+        pda_seeds,
+        DelegateConfig {
+            commit_frequency_ms: ER_COMMIT_FREQUENCY_MS,
+            validator: validator.map(|account| *account.key),
+        },
+    )?;
+    msg!(
+        "PERMSTATE delegated world={} commit_frequency_ms={}",
+        world_account.key,
+        ER_COMMIT_FREQUENCY_MS
+    );
+    Ok(())
+}
+
+fn world_lifecycle_accounts<'a, 'info>(
+    program_id: &Pubkey,
+    accounts: &'a [AccountInfo<'info>],
+) -> Result<
+    (
+        &'a AccountInfo<'info>,
+        &'a AccountInfo<'info>,
+        &'a AccountInfo<'info>,
+        &'a AccountInfo<'info>,
+        WorldState,
+    ),
+    ProgramError,
+> {
+    let mut accounts = accounts.iter();
+    let payer = next_account_info(&mut accounts)?;
+    let world_account = next_account_info(&mut accounts)?;
+    let magic_program = next_account_info(&mut accounts)?;
+    let magic_context = next_account_info(&mut accounts)?;
+    require_signer(payer)?;
+    if !payer.is_writable || !world_account.is_writable || !magic_context.is_writable {
+        return Err(ProgramError::InvalidAccountData);
+    }
+    if magic_program.key != &MAGIC_PROGRAM_ID {
+        return Err(ReceiptError::WrongMagicProgram.into());
+    }
+    if magic_context.key != &MAGIC_CONTEXT_ID {
+        return Err(ReceiptError::WrongMagicContext.into());
+    }
+    let world = read_owned_world_state(program_id, world_account)?;
+    Ok((payer, world_account, magic_program, magic_context, world))
+}
+
+#[inline(never)]
+fn process_commit_world(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
+    let (payer, world_account, magic_program, magic_context, world) =
+        world_lifecycle_accounts(program_id, accounts)?;
+    if payer.key != &world.authority && world.actor_index(payer.key).is_err() {
+        return Err(ReceiptError::UnauthorizedLifecycleActor.into());
+    }
+    MagicIntentBundleBuilder::new(payer.clone(), magic_context.clone(), magic_program.clone())
+        .commit(std::slice::from_ref(world_account))
+        .build_and_invoke()?;
+    msg!(
+        "PERMSTATE scheduled ER world commit world={} seq={}",
+        world_account.key,
+        world.seq
+    );
+    Ok(())
+}
+
+#[inline(never)]
+fn process_commit_and_undelegate_world(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+) -> ProgramResult {
+    let (authority, world_account, magic_program, magic_context, world) =
+        world_lifecycle_accounts(program_id, accounts)?;
+    if authority.key != &world.authority {
+        return Err(ReceiptError::UnauthorizedLifecycleActor.into());
+    }
+    MagicIntentBundleBuilder::new(
+        authority.clone(),
+        magic_context.clone(),
+        magic_program.clone(),
+    )
+    .commit_and_undelegate(std::slice::from_ref(world_account))
+    .build_and_invoke()?;
+    msg!(
+        "PERMSTATE scheduled ER world commit+undelegate world={} seq={}",
+        world_account.key,
+        world.seq
+    );
+    Ok(())
+}
+
 /// Base-layer instruction. Delegates the canonical Worksite PDA to the
 /// validator selected by the client (or MagicBlock's default when omitted).
 #[inline(never)]
@@ -1738,7 +2621,7 @@ fn process_commit_and_undelegate(program_id: &Pubkey, accounts: &[AccountInfo]) 
 
 /// Base-layer CPI callback. The delegation program invokes this exact
 /// discriminator after the ER finalizes undelegation. It recreates the
-/// canonical Worksite PDA and copies the finalized buffer into it.
+/// canonical Worksite or World PDA and copies the finalized buffer into it.
 #[inline(never)]
 fn process_undelegate_callback(
     program_id: &Pubkey,
@@ -1761,10 +2644,19 @@ fn process_undelegate_callback(
         return Err(ReceiptError::WrongDelegationProgram.into());
     }
 
-    let finalized_state = read_state(delegation_buffer)?;
-    validate_worksite_identity(program_id, delegated_pda.key, &finalized_state)?;
-    validate_stored_state(&finalized_state)?;
-    validate_undelegate_seeds(&finalized_state, &pda_seeds)?;
+    let finalized_seq = if pda_seeds.first().map(Vec::as_slice) == Some(WORLD_SEED) {
+        let world = read_world_state(delegation_buffer)?;
+        validate_world_identity(program_id, delegated_pda.key, &world)?;
+        validate_stored_world_state(&world)?;
+        validate_world_undelegate_seeds(&world, &pda_seeds)?;
+        world.seq
+    } else {
+        let worksite = read_state(delegation_buffer)?;
+        validate_worksite_identity(program_id, delegated_pda.key, &worksite)?;
+        validate_stored_state(&worksite)?;
+        validate_undelegate_seeds(&worksite, &pda_seeds)?;
+        worksite.seq
+    };
 
     undelegate_account(
         delegated_pda,
@@ -1775,9 +2667,9 @@ fn process_undelegate_callback(
         pda_seeds,
     )?;
     msg!(
-        "PERMSTATE undelegated worksite={} seq={}",
+        "PERMSTATE undelegated state={} seq={}",
         delegated_pda.key,
-        finalized_state.seq
+        finalized_seq
     );
     Ok(())
 }
@@ -1896,6 +2788,17 @@ fn is_zero_hash(value: &[u8; 32]) -> bool {
     value.iter().all(|byte| *byte == 0)
 }
 
+fn position_in_bounds(position: WorldPosition) -> bool {
+    position.x <= WORLD_MAX_X && position.y <= WORLD_MAX_Y
+}
+
+fn positions_near(left: WorldPosition, right: WorldPosition) -> bool {
+    let dx = left.x.abs_diff(right.x) as u32;
+    let dy = left.y.abs_diff(right.y) as u32;
+    let radius = WORLD_INTERACTION_RADIUS as u32;
+    dx * dx + dy * dy <= radius * radius
+}
+
 fn validate_worksite_initialize_args(authority: Pubkey, args: &InitializeArgs) -> ProgramResult {
     if authority == Pubkey::default()
         || is_zero_hash(&args.season_id)
@@ -1988,6 +2891,19 @@ fn read_owned_season_state(
     Ok(state)
 }
 
+fn read_owned_world_state(
+    program_id: &Pubkey,
+    account: &AccountInfo,
+) -> Result<WorldState, ProgramError> {
+    if account.owner != program_id {
+        return Err(ReceiptError::WrongOwner.into());
+    }
+    let state = read_world_state(account)?;
+    validate_world_identity(program_id, account.key, &state)?;
+    validate_stored_world_state(&state)?;
+    Ok(state)
+}
+
 fn validate_worksite_identity(
     program_id: &Pubkey,
     state_key: &Pubkey,
@@ -2042,6 +2958,38 @@ fn validate_season_identity(
     Ok(())
 }
 
+fn validate_world_identity(
+    program_id: &Pubkey,
+    state_key: &Pubkey,
+    state: &WorldState,
+) -> ProgramResult {
+    if state.version != VERSION {
+        return Err(ReceiptError::StateEncoding.into());
+    }
+    let (expected_pda, expected_bump) =
+        Pubkey::find_program_address(&[WORLD_SEED, &state.world_id], program_id);
+    if state_key != &expected_pda || state.bump != expected_bump {
+        return Err(ReceiptError::InvalidWorldPda.into());
+    }
+    if state.seq == 0 {
+        let expected_genesis_head = hashv(&[
+            WORLD_GENESIS_DOMAIN,
+            program_id.as_ref(),
+            state_key.as_ref(),
+            &state.world_id,
+            &state.ruleset_hash,
+            &state.state_root,
+        ])
+        .to_bytes();
+        if state.head_event_hash != expected_genesis_head {
+            return Err(ReceiptError::StoredRootMismatch.into());
+        }
+    } else if is_zero_hash(&state.head_event_hash) {
+        return Err(ReceiptError::StoredRootMismatch.into());
+    }
+    Ok(())
+}
+
 fn validate_stored_state(state: &WorksiteState) -> ProgramResult {
     state.assert_invariants()?;
     if state.compute_state_root()? != state.state_root {
@@ -2079,12 +3027,28 @@ fn validate_stored_season_state(
     Ok(())
 }
 
+fn validate_stored_world_state(state: &WorldState) -> ProgramResult {
+    state.assert_invariants()?;
+    if state.compute_state_root()? != state.state_root {
+        return Err(ReceiptError::StoredRootMismatch.into());
+    }
+    Ok(())
+}
+
 fn validate_undelegate_seeds(state: &WorksiteState, pda_seeds: &[Vec<u8>]) -> ProgramResult {
     let expected = [
         WORKSITE_SEED.to_vec(),
         state.season_id.to_vec(),
         state.worksite_id.to_vec(),
     ];
+    if pda_seeds != expected {
+        return Err(ReceiptError::InvalidUndelegateSeeds.into());
+    }
+    Ok(())
+}
+
+fn validate_world_undelegate_seeds(state: &WorldState, pda_seeds: &[Vec<u8>]) -> ProgramResult {
+    let expected = [WORLD_SEED.to_vec(), state.world_id.to_vec()];
     if pda_seeds != expected {
         return Err(ReceiptError::InvalidUndelegateSeeds.into());
     }
@@ -2103,6 +3067,12 @@ fn read_season_state(account: &AccountInfo) -> Result<SeasonState, ProgramError>
     SeasonState::deserialize(&mut slice).map_err(|_| ReceiptError::StateEncoding.into())
 }
 
+fn read_world_state(account: &AccountInfo) -> Result<WorldState, ProgramError> {
+    let data = account.try_borrow_data()?;
+    let mut slice: &[u8] = &data;
+    WorldState::deserialize(&mut slice).map_err(|_| ReceiptError::StateEncoding.into())
+}
+
 fn write_state(account: &AccountInfo, state: &WorksiteState) -> ProgramResult {
     let bytes = borsh::to_vec(state).map_err(|_| ReceiptError::StateEncoding)?;
     if bytes.len() > account.data_len() {
@@ -2115,6 +3085,17 @@ fn write_state(account: &AccountInfo, state: &WorksiteState) -> ProgramResult {
 }
 
 fn write_season_state(account: &AccountInfo, state: &SeasonState) -> ProgramResult {
+    let bytes = borsh::to_vec(state).map_err(|_| ReceiptError::StateEncoding)?;
+    if bytes.len() > account.data_len() {
+        return Err(ProgramError::AccountDataTooSmall);
+    }
+    let mut data = account.try_borrow_mut_data()?;
+    data.fill(0);
+    data[..bytes.len()].copy_from_slice(&bytes);
+    Ok(())
+}
+
+fn write_world_state(account: &AccountInfo, state: &WorldState) -> ProgramResult {
     let bytes = borsh::to_vec(state).map_err(|_| ReceiptError::StateEncoding)?;
     if bytes.len() > account.data_len() {
         return Err(ProgramError::AccountDataTooSmall);
@@ -2142,6 +3123,311 @@ mod tests {
 
     fn bytes32(value: u8) -> [u8; 32] {
         [value; 32]
+    }
+
+    fn world_fixture() -> (Pubkey, Pubkey, WorldState, Pubkey, Pubkey) {
+        let program_id = Pubkey::new_from_array([21; 32]);
+        let authority = Pubkey::new_from_array([22; 32]);
+        let citizen = Pubkey::new_from_array([23; 32]);
+        let world_id = bytes32(24);
+        let (world_pda, bump) = Pubkey::find_program_address(&[WORLD_SEED, &world_id], &program_id);
+        let world = WorldState::new(
+            &program_id,
+            &world_pda,
+            bump,
+            authority,
+            &InitializeWorldArgs {
+                world_id,
+                ruleset_hash: bytes32(25),
+                expected_genesis_state_root: [0; 32],
+            },
+        )
+        .unwrap();
+        (program_id, world_pda, world, authority, citizen)
+    }
+
+    fn world_guard(world: &WorldState, event_id: u8) -> WorldGuard {
+        WorldGuard {
+            expected_seq: world.seq,
+            prior_state_root: world.state_root,
+            expected_head_event_hash: world.head_event_hash,
+            event_id: bytes32(event_id),
+        }
+    }
+
+    fn join_world(world: &WorldState, citizen: &Pubkey, event_id: u8) -> WorldState {
+        world
+            .join(
+                citizen,
+                &JoinWorldArgs {
+                    guard: world_guard(world, event_id),
+                },
+            )
+            .unwrap()
+            .0
+    }
+
+    fn move_world(
+        world: &WorldState,
+        citizen: &Pubkey,
+        position: WorldPosition,
+        event_id: u8,
+    ) -> WorldState {
+        world
+            .move_actor(
+                citizen,
+                &MoveWorldActorArgs {
+                    x: position.x,
+                    y: position.y,
+                    guard: world_guard(world, event_id),
+                },
+            )
+            .unwrap()
+            .0
+    }
+
+    fn gather_world(
+        world: &WorldState,
+        citizen: &Pubkey,
+        resource_kind: u8,
+        event_id: u8,
+    ) -> WorldState {
+        world
+            .gather(
+                citizen,
+                &GatherWorldResourceArgs {
+                    resource_kind,
+                    guard: world_guard(world, event_id),
+                },
+            )
+            .unwrap()
+            .0
+    }
+
+    #[test]
+    fn world_schema_fits_account_and_genesis_is_pda_bound() {
+        let (program_id, world_pda, world, _, _) = world_fixture();
+        let encoded = borsh::to_vec(&world).unwrap();
+        assert!(encoded.len() <= WORLD_ACCOUNT_SPACE);
+        assert_eq!(world.seq, 0);
+        assert_eq!(world.citizen_count, 0);
+        assert_eq!(world.water_rate, BASE_WATER_RATE);
+        assert_eq!(world.compute_state_root().unwrap(), world.state_root);
+        validate_world_identity(&program_id, &world_pda, &world).unwrap();
+
+        assert_eq!(
+            validate_world_identity(&program_id, &Pubkey::new_unique(), &world).unwrap_err(),
+            ProgramError::Custom(ReceiptError::InvalidWorldPda as u32)
+        );
+        let mut forged = world;
+        forged.warehouse_timber = 1;
+        assert_eq!(
+            validate_stored_world_state(&forged).unwrap_err(),
+            ProgramError::Custom(ReceiptError::InvalidWorldState as u32)
+        );
+    }
+
+    #[test]
+    fn world_rejects_unauthorized_stale_and_mismatched_actions() {
+        let (_, _, world, _, citizen) = world_fixture();
+        let stranger = Pubkey::new_from_array([29; 32]);
+        let stale_guard = world_guard(&world, 30);
+        let joined = join_world(&world, &citizen, 31);
+
+        assert_eq!(
+            joined
+                .move_actor(
+                    &stranger,
+                    &MoveWorldActorArgs {
+                        x: 400,
+                        y: 300,
+                        guard: world_guard(&joined, 32),
+                    },
+                )
+                .unwrap_err(),
+            ProgramError::Custom(ReceiptError::UnauthorizedActor as u32)
+        );
+        assert_eq!(
+            joined
+                .move_actor(
+                    &citizen,
+                    &MoveWorldActorArgs {
+                        x: 400,
+                        y: 300,
+                        guard: stale_guard,
+                    },
+                )
+                .unwrap_err(),
+            ProgramError::Custom(ReceiptError::StaleWorldSequence as u32)
+        );
+
+        let mut bad_root = world_guard(&joined, 33);
+        bad_root.prior_state_root = [99; 32];
+        assert_eq!(
+            joined
+                .move_actor(
+                    &citizen,
+                    &MoveWorldActorArgs {
+                        x: 400,
+                        y: 300,
+                        guard: bad_root,
+                    },
+                )
+                .unwrap_err(),
+            ProgramError::Custom(ReceiptError::PriorRootMismatch as u32)
+        );
+
+        let mut bad_head = world_guard(&joined, 34);
+        bad_head.expected_head_event_hash = [98; 32];
+        assert_eq!(
+            joined
+                .move_actor(
+                    &citizen,
+                    &MoveWorldActorArgs {
+                        x: 400,
+                        y: 300,
+                        guard: bad_head,
+                    },
+                )
+                .unwrap_err(),
+            ProgramError::Custom(ReceiptError::WorldHeadMismatch as u32)
+        );
+    }
+
+    #[test]
+    fn world_enforces_bounds_proximity_and_inventory_capacity() {
+        let (_, _, world, _, citizen) = world_fixture();
+        let joined = join_world(&world, &citizen, 40);
+        assert_eq!(
+            joined
+                .gather(
+                    &citizen,
+                    &GatherWorldResourceArgs {
+                        resource_kind: RESOURCE_TIMBER,
+                        guard: world_guard(&joined, 41),
+                    },
+                )
+                .unwrap_err(),
+            ProgramError::Custom(ReceiptError::NotNearTarget as u32)
+        );
+        assert_eq!(
+            joined
+                .move_actor(
+                    &citizen,
+                    &MoveWorldActorArgs {
+                        x: WORLD_MAX_X + 1,
+                        y: 0,
+                        guard: world_guard(&joined, 42),
+                    },
+                )
+                .unwrap_err(),
+            ProgramError::Custom(ReceiptError::PositionOutOfBounds as u32)
+        );
+
+        let at_forest = move_world(&joined, &citizen, TIMBER_NODE_POSITION, 43);
+        let carrying_four = gather_world(&at_forest, &citizen, RESOURCE_TIMBER, 44);
+        let carrying_eight = gather_world(&carrying_four, &citizen, RESOURCE_TIMBER, 45);
+        let carrying_twelve = gather_world(&carrying_eight, &citizen, RESOURCE_TIMBER, 46);
+        assert_eq!(
+            carrying_twelve.inventory_timber[0],
+            WORLD_INVENTORY_CAPACITY
+        );
+        assert_eq!(
+            carrying_twelve
+                .gather(
+                    &citizen,
+                    &GatherWorldResourceArgs {
+                        resource_kind: RESOURCE_TIMBER,
+                        guard: world_guard(&carrying_twelve, 47),
+                    },
+                )
+                .unwrap_err(),
+            ProgramError::Custom(ReceiptError::InventoryCapacity as u32)
+        );
+    }
+
+    #[test]
+    fn world_gather_deposit_and_repair_loop_changes_water_rate() {
+        let (_, _, world, _, citizen) = world_fixture();
+        let mut state = join_world(&world, &citizen, 50);
+
+        state = move_world(&state, &citizen, TIMBER_NODE_POSITION, 51);
+        state = gather_world(&state, &citizen, RESOURCE_TIMBER, 52);
+        state = gather_world(&state, &citizen, RESOURCE_TIMBER, 53);
+        state = move_world(&state, &citizen, WAREHOUSE_POSITION, 54);
+        state = state
+            .deposit(
+                &citizen,
+                &DepositWorldInventoryArgs {
+                    guard: world_guard(&state, 55),
+                },
+            )
+            .unwrap()
+            .0;
+
+        state = move_world(&state, &citizen, STONE_NODE_POSITION, 56);
+        state = gather_world(&state, &citizen, RESOURCE_STONE, 57);
+        state = move_world(&state, &citizen, WAREHOUSE_POSITION, 58);
+        state = state
+            .deposit(
+                &citizen,
+                &DepositWorldInventoryArgs {
+                    guard: world_guard(&state, 59),
+                },
+            )
+            .unwrap()
+            .0;
+        assert_eq!(state.warehouse_timber, 8);
+        assert_eq!(state.warehouse_stone, 4);
+
+        state = move_world(&state, &citizen, EAST_SLUICE_POSITION, 60);
+        let (first_repair, first_receipt) = state
+            .repair_sluice(
+                &citizen,
+                &RepairEastSluiceArgs {
+                    guard: world_guard(&state, 61),
+                },
+            )
+            .unwrap();
+        assert_eq!(first_repair.repair_progress, 1);
+        assert_eq!(first_repair.water_rate, BASE_WATER_RATE);
+        assert_eq!(first_receipt.event_kind, WORLD_EVENT_SLUICE_REPAIRED);
+
+        let second_repair = first_repair
+            .repair_sluice(
+                &citizen,
+                &RepairEastSluiceArgs {
+                    guard: world_guard(&first_repair, 62),
+                },
+            )
+            .unwrap()
+            .0;
+        assert_eq!(second_repair.repair_progress, 2);
+        let third_repair = second_repair
+            .repair_sluice(
+                &citizen,
+                &RepairEastSluiceArgs {
+                    guard: world_guard(&second_repair, 63),
+                },
+            )
+            .unwrap()
+            .0;
+        assert_eq!(third_repair.repair_progress, 3);
+        let (completed, receipt) = third_repair
+            .repair_sluice(
+                &citizen,
+                &RepairEastSluiceArgs {
+                    guard: world_guard(&third_repair, 64),
+                },
+            )
+            .unwrap();
+        assert!(completed.sluice_completed);
+        assert_eq!(completed.repair_progress, SLUICE_REPAIR_STEPS);
+        assert_eq!(completed.water_rate, REPAIRED_WATER_RATE);
+        assert_eq!(completed.warehouse_timber, 0);
+        assert_eq!(completed.warehouse_stone, 0);
+        assert_eq!(receipt.new_state_root, completed.state_root);
+        completed.assert_invariants().unwrap();
     }
 
     fn hex_value(value: &[u8]) -> String {
@@ -3167,6 +4453,37 @@ mod tests {
         assert_eq!(
             hex_value(&worksite.head_event_hash),
             "3050fd23a4fcbc832e7901cf918453fb9eac9dae0c7d77c7d06ef483cb38879c"
+        );
+
+        let world_program_id = Pubkey::new_from_array([21; 32]);
+        let world_authority = Pubkey::new_from_array([22; 32]);
+        let world_id = [24; 32];
+        let (world_pda, world_bump) =
+            Pubkey::find_program_address(&[WORLD_SEED, &world_id], &world_program_id);
+        let world = WorldState::new(
+            &world_program_id,
+            &world_pda,
+            world_bump,
+            world_authority,
+            &InitializeWorldArgs {
+                world_id,
+                ruleset_hash: [25; 32],
+                expected_genesis_state_root: [0; 32],
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            world_pda.to_string(),
+            "HFqKWrr8LXR5TyKcweKzonjkp5vNvf8NsKASYAHmdEzi"
+        );
+        assert_eq!(world_bump, 255);
+        assert_eq!(
+            hex_value(&world.state_root),
+            "928dc4d5347bae18068af3d08f0dae2790c824e2dcf019904aece57c85212703"
+        );
+        assert_eq!(
+            hex_value(&world.head_event_hash),
+            "2d6de979e06bc8b0126b747c6b211b31d17d6477c4d157c8e00e3eba0c93b7f7"
         );
     }
 

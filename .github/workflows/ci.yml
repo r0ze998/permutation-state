@@ -19,12 +19,19 @@ jobs:
       - name: Check JavaScript syntax
         run: |
           node --check permutation-state-prototype/app.js
+          node --check permutation-state-prototype/world/app.js
+          node --check permutation-state-prototype/world/core.mjs
           node --check permutation-state-prototype/proof/core.js
           node --check permutation-state-prototype/proof/app.js
           node --check permutation-state-solana-receipt-spike/server/devnet-gateway.mjs
           node --check permutation-state-solana-receipt-spike/server/game-contract.mjs
+          node --check permutation-state-solana-receipt-spike/server/world-service.mjs
+          node --check permutation-state-solana-receipt-spike/client/world-magicblock-transport.mjs
           node --check permutation-state-solana-receipt-spike/server/local-e2e.mjs
+          node --check permutation-state-solana-receipt-spike/server/world-chain-local-e2e.mjs
           node --check permutation-state-solana-receipt-spike/server/start-local-stack.mjs
+      - name: Run living-world simulation tests
+        run: node --test permutation-state-prototype/world/core.test.mjs
       - name: Validate recorded proof result
         run: python3 -m json.tool permutation-state-prototype/proof/qa-proof-result.json >/dev/null
 

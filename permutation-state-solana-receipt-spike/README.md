@@ -1,6 +1,6 @@
 # Permutation State — Playable MagicBlock Slice
 
-This package is the Solana program, MagicBlock transport, and local gateway behind the playable multi-client East Sluice scenario. It includes a canonical Season PDA with a mock-USDC ledger, a Worksite PDA delegated to a MagicBlock Ephemeral Rollup, and verified ER-to-Solana checkpoints. The browser-local proof remains available as a fallback.
+This package is the Solana program, MagicBlock transport, and local gateway behind PERMUTATION STATE. It includes a canonical Season PDA with a mock-USDC ledger, the earlier causal-proof Worksite PDA, and a new eight-citizen spatial World PDA with verified MagicBlock ER-to-Solana checkpoints.
 
 The verified target is **localnet**, using disposable demo signers and no real funds. Nothing is deployed to public devnet or mainnet. The gateway holds those disposable signers for the hackathon slice; production wallet approval and player Session Keys are not implemented. Role URLs are presentation and turn-taking aids, not authentication: the HTTP caller is not yet bound to a player wallet.
 
@@ -14,6 +14,15 @@ ER:         ApplyWorksiteEvent ... (low-latency shared play)
 ER:         Commit checkpoint(s)
 ER:         CommitAndUndelegate
 Base Layer: fixed-discriminator Undelegate callback restores the PDA
+```
+
+The World path uses the same lifecycle with a separate `['world', world_id]` PDA:
+
+```text
+Base Layer: Initialize World PDA -> Delegate World PDA
+ER:         Join -> Move -> Gather -> Deposit -> Repair ...
+ER:         Commit checkpoint(s) / CommitAndUndelegate
+Base Layer: verify the same World state root and event-chain head
 ```
 
 ## Play it locally
@@ -41,6 +50,14 @@ Start the game gateway in another:
 npm start
 ```
 
+Open the primary shared simulation:
+
+```text
+http://127.0.0.1:4173/world/?session=aster-living-alpha&actor=mara
+```
+
+This browser route is intentionally labelled `OFFCHAIN SIMULATION ALPHA`: it uses the richer gateway simulation while wallet/session-key synchronization with the compact World PDA remains pending.
+
 The localnet gateway creates three disposable keypairs under the ignored workspace `work/` directory when missing and funds them only from the local validator. It never auto-creates or funds devnet credentials.
 
 Open the shared Observer view:
@@ -57,9 +74,19 @@ npm run test:e2e:local
 
 That test creates a fresh session, executes `oath → service → M-032`, requires a verified base-layer checkpoint after Ivo, and finishes only if sequence, state roots, exact event-chain heads, and the accepted Mandate agree. This is a finite three-action vertical slice; ongoing post-Nia play and the full season loop remain future work.
 
+Run the new spatial World PDA path with:
+
+```sh
+npm run test:e2e:world:local
+```
+
+It initializes and delegates a fresh World PDA, executes 15 signer-authorized events—join, movement, timber and stone gathering, physical deposit, and four repair stages—then commits and verifies the identical completed state on the local Solana base layer.
+
 The Program ID is intentionally **not compiled into the Rust program**. PDA derivation uses the deployed program address passed by the runtime; the checked local deployment config pins the currently built artifact's Program ID.
 
 ## What the program canonizes
+
+The World PDA canonizes up to eight citizens, their fixed-point positions and timber/stone inventories, remaining resource-node supply, shared warehouse stock, four East Sluice repair stages, completion, and water-production rate (stored in hundredths per world minute: `70` = `0.70`, `480` = `4.80`). Every action includes the expected sequence, prior state root, event-chain head, and a unique nonzero event ID. The program derives the next root itself and rejects remote resource interaction, excess inventory, out-of-bounds movement, unauthorized actors, stale heads, and broken resource conservation.
 
 One Worksite PDA stores the authoritative play state for one `season_id + worksite_id`. It contains:
 
@@ -94,6 +121,14 @@ The account is fixed at 384 bytes for v1. The current serialized payload is smal
 
 `SeasonState` is a separate 384-byte PDA derived from `['season', season_id]`. Its 383-byte payload includes the payout-rule commitment, active/finalized status, ledger sequence and hash-chain head, all mock-unit allocation totals, and the three roots that remain zero until finalization. `WorksiteState` stores that Season PDA, and its state root binds the relationship.
 
+`WorldState` is a 512-byte PDA derived from:
+
+```text
+["world", world_id[32]]
+```
+
+Its v1 payload is 503 bytes. Rust and JavaScript share a fixed genesis fixture for the PDA, state root, and event-chain head.
+
 ## Instruction wire contract
 
 The ordinary instructions are a Borsh enum. Existing wire tags remain unchanged and the ER lifecycle variants are appended:
@@ -109,6 +144,15 @@ The ordinary instructions are a Borsh enum. Existing wire tags remain unchanged 
 | `6` | `CreditSeasonPurse` | source, gross mock units, expected ledger head, event id |
 | `7` | `FinalizeSeason` | expected head plus outcome, chronicle, and claim roots |
 | `8` | `ClaimSeason` | mock amount, Merkle proof, expected ledger head, event id |
+| `9` | `InitializeWorld` | world/ruleset commitments and expected genesis root |
+| `10` | `JoinWorld` | guarded event head |
+| `11` | `MoveWorldActor` | destination plus guarded event head |
+| `12` | `GatherWorldResource` | resource kind plus guarded event head |
+| `13` | `DepositWorldInventory` | guarded event head |
+| `14` | `RepairEastSluice` | guarded event head |
+| `15` | `DelegateWorld` | none |
+| `16` | `CommitWorld` | none |
+| `17` | `CommitAndUndelegateWorld` | none |
 
 The base-layer `Undelegate` callback is deliberately outside that enum. MagicBlock invokes the exact eight-byte discriminator `[196, 28, 41, 206, 48, 37, 51, 167]`, followed by a Borsh `Vec<Vec<u8>>` containing exactly:
 
@@ -221,6 +265,8 @@ Use Magic Router as the submission endpoint. Use the selected validator's direct
 
 The sender accepts either existing Node `Signer` objects or an injected browser wallet implementing `signTransaction`. It never generates, persists, exports, or logs key material.
 
+[`client/world-magicblock-transport.mjs`](./client/world-magicblock-transport.mjs) adds the corresponding World PDA derivation, fixed 503-byte decoder, Rust-compatible state-root computation, instructions and senders for tags 9–17, MagicBlock lifecycle account derivation, bounded polling, and the published 10× map-coordinate contract.
+
 ## Explorer receipt payload
 
 After confirmation, the UI should read the Worksite PDA and display/export:
@@ -284,10 +330,11 @@ npm ci --ignore-scripts
 npm test
 # With the local stack and gateway running:
 npm run test:e2e:local
+npm run test:e2e:world:local
 npm audit --audit-level=moderate
 ```
 
-Seventeen Rust tests cover the three-citizen cooperative path, all four branch-gated resolutions, authorization, stale/ruleset/root rejection, signer enforcement, persistence, Season-ledger allocation and replay protection, no-claim invariants, stable instruction tags, callback discrimination, exact undelegation seeds, and lifecycle authorization. Twenty-three JavaScript tests cover identical Rust/JavaScript commitments, all nine client-callable instructions, exact account order, Constitution allocation parity, Node and browser-wallet send paths, decoding, subscription, polling, gateway command validation, safe session derivation, network identity guards, and the ER-versus-Solana receipt boundary.
+Twenty-one Rust tests cover the three-citizen cooperative proof, all four branch-gated resolutions, the World gather/deposit/repair loop, eight-citizen state shape, authorization, proximity, inventory and resource-conservation invariants, stable instruction tags, callback discrimination, exact undelegation seeds, and lifecycle authorization. Thirty-two package JavaScript tests cover Rust/JavaScript commitments, client-callable instructions, World transport, exact account order, decoding, subscription, polling, shared gateway sessions, schema rejection, network identity guards, and the ER-versus-Solana receipt boundary. The separate simulation core has thirteen tests.
 
 `rust-toolchain.toml` pins Rust 1.89.0. `Cargo.toml` pins `ephemeral-rollups-sdk` 0.16.2, the version used by MagicBlock's current Native Rust counter example, together with Solana Program 4.0.0. The lockfile is committed. Upgrade this matrix deliberately and rerun both host and SBF/integration tests; do not accept an unattended dependency refresh.
 
@@ -297,7 +344,7 @@ The checked lockfile pins `@magicblock-labs/ephemeral-rollups-sdk` 0.17.2, `@sol
 
 ## Verified local gate and remaining public gate
 
-The checked-in implementation passes its host suite and builds a 327,568-byte SBF artifact with Agave/Solana CLI 3.1.9. The following have been verified against the official local MagicBlock stack:
+The checked-in implementation passes its host suite and builds a 381,648-byte SBF artifact with Agave/Solana CLI 3.1.9. The following have been verified against the official local MagicBlock stack:
 
 1. initialize a fresh Worksite PDA on the base layer;
 2. delegate it through the real Delegation Program;
@@ -307,6 +354,9 @@ The checked-in implementation passes its host suite and builds a 327,568-byte SB
 6. keep the account delegated so the next citizen can continue immediately;
 7. show ER execution and Solana checkpoint as separate evidence in the browser;
 8. synchronize the updated action set across Observer, Mara, and Ivo tabs.
+9. initialize and delegate an eight-citizen World PDA;
+10. execute the 15-event spatial resource-and-repair loop on the ER;
+11. checkpoint the completed sluice state and read back the identical root from the local Solana base layer.
 
 Before loading signers or sending transactions, the gateway verifies the actual base-layer genesis hash. Localnet also requires loopback endpoints and rejects all known public Solana genesis hashes; devnet requires the devnet genesis plus the official TLS MagicBlock devnet router and ER hosts. A mislabeled mainnet RPC therefore fails closed.
 
