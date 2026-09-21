@@ -1,124 +1,105 @@
 # PERMUTATION STATE
 
-> **One civilization. Thousands of citizens. One world that keeps moving.**
+**One shared civilization. Different citizens. Consequences that connect.**
 
-PERMUTATION STATE is a persistent civilization RPG simulation. Every human player enters Aster as one embodied citizen, walks to real places, carries real goods, and works inside the same economy as other players and AI citizens.
+A rebuilt, map-first civilization strategy prototype. Players are citizens in one shared real-time
+world. They explore terrain, invest common resources in different facilities, extend roads, and
+develop connected production chains. The map is simulation data, not a static background image.
 
-The current playable alpha proves a complete systemic loop:
+This is a playable foundation, **not a completed MMO**. It has no live generative AI, combat,
+real entry fees, real prizes, or live Solana execution of the new simulation. The earlier blockchain
+experiments remain available separately and are not represented as proof that this new game is onchain.
 
-```text
-walk to a resource site
-→ perform timed work
-→ carry a capacity-limited inventory
-→ deliver it to the shared warehouse
-→ travel to a public construction site
-→ contribute materials and labour
-→ complete the East Sluice
-→ change Aster's water production over time for every player
-```
+## Play
 
-This replaces the old choice-card demo as the primary game. The earlier Mara → Ivo Handoff remains available as a separate Solana/MagicBlock proof lab; it no longer defines the game loop.
+No blockchain stack or npm installation is necessary for the new game:
 
-## Play the shared world
-
-The easiest route is the existing local MagicBlock stack plus the shared-world gateway.
-
-```bash
+```sh
 cd permutation-state-solana-receipt-spike
-npm ci --ignore-scripts
-npm run start:stack:local
+npm run start:civilization
 ```
 
-In a second terminal:
+Open [the civilization](http://127.0.0.1:4174/civilization/).
+The existing integrated gateway also serves it at
+[port 4173](http://127.0.0.1:4173/civilization/) when the local Solana/MagicBlock stack is running.
+Both servers redirect their root URL to the new game.
 
-```bash
-cd permutation-state-solana-receipt-spike
-npm start
-```
+**Run only one server against a given state directory.** The default is `../work/devnet` relative
+to this repository; both server modes share it. For isolated tests, set
+`PERMSTATE_CIVILIZATION_WORK_DIR` on the standalone server. Its port can be changed with
+`CIVILIZATION_PORT=4173 npm run start:civilization`.
 
-Open:
+The default season is `aster`: every ordinary game tab joins the same civilization. Each tab has
+a separate citizen capability stored in sessionStorage; reload resumes that citizen. Closing the
+tab ends that local identity, but never resets the world. These are local prototype capabilities,
+not wallet accounts or a production anti-abuse identity system.
 
-```text
-http://127.0.0.1:4173/world/?session=aster-living-alpha&actor=mara
-```
+## Controls and the first few minutes
 
-Open a second browser or tab in the same shared civilization:
+- **Click a hex** to see its terrain, resources, legal investments, costs and constraints.
+- **Double-click known land**, or choose **ここへ移動**, to move your visible citizen. Roads are
+  faster; hills and mountains take longer; water cannot be crossed.
+- **Build nearby**. A farm produces food; a lumbermill produces wood; a quarry supplies stone.
+  A workshop consumes delivered wood and ore to produce tools. Those choices compete for the
+  same starting resources. There is no required first building.
+- **Follow the goods**. Workers travel to facilities; input and output couriers follow connected
+  roads. Goods enter common stock only when delivered. The inspector explains blocked production.
+- **Expand**. Explore an adjacent unknown hex, then extend roads to open new building sites.
+  A watchtower reveals a wider area. An archive makes knowledge; research changes farming,
+  transport, and the ability to build mines.
+- **Recover**. When resources are short, gather manually on nearby terrain. Your citizen
+  carries those goods back to the depot automatically. There is no purchase requirement.
+- **Read the world**. Switch food, industry, logistics or terrain lenses. Click resource totals
+  for the economy; open the town, research, and history panels for details.
+- **Next Action is optional**. It focuses a suggested location; it does not spend, execute,
+  complete a turn, or lock you into a quest. Cycle it to choose another opportunity.
+- Drag to pan, scroll or use `+ / −` to zoom, `F` to find your citizen, `N` to inspect the current
+  suggestion, `Esc` to close panels. The `?` button explains the game in Japanese.
 
-```text
-http://127.0.0.1:4173/world/?session=aster-living-alpha&actor=ivo&name=Ivo%20Sen
-```
+## Implemented and verified
 
-Both clients see the same character positions, NPC schedules, resources, warehouse, construction, market, world clock, and civic consequences.
+- 217 state-driven hexes with shared discovery, terrain-aware pathfinding and visible movement
+- Seven buildable facility types plus the communal depot, with physical placement and timed work
+- Limited shared starting assets, differing investment paths, renewable manual recovery
+- Road connectivity, source inventories, inbound materials, outbound deliveries and net rates
+- Deterministic NPC workers and couriers (not LLM characters)
+- Three research unlocks and shared civilization milestones; milestone completion does not end play
+- Japanese-first contextual UI, five lenses, selection previews and optional task suggestions
+- Two-client shared state, capability-authorized actions, serialized mutations and disk persistence
+- Rejected actions do not consume resources; previews and authoritative actions use the same rules
+- A tested 15-minute legal progression from founding through agriculture, industry and exploration
 
-## How to play
-
-- Click a named place to walk there, or click anywhere on the world.
-- `WASD` walks in short steps; `F` recentres your character.
-- Work is local: gathering, depositing, building, trading, crafting, and talking are rejected when the character is too far away.
-- Gather timber at **Whisperwood Grove** and stone at **Old Granite Cut**, carry both to the **Civic Warehouse**, then travel to the **East Sluice** and contribute four repair stages.
-- Other named citizens continue moving, working, eating, producing, and changing shared supply while you play.
-
-## What is simulated now
-
-- One authoritative world clock with bounded offline catch-up
-- Visible player and AI-citizen movement
-- Proximity-gated actions and timed jobs
-- Capacity-limited personal inventories
-- Resource regeneration and physical delivery
-- AI citizens who gather into personal inventories and physically haul cargo
-- Shared warehouse and construction inputs
-- A workshop production cycle
-- Supply-sensitive market prices and marketplace fee accounting
-- NPC schedules, needs, work, relationships, and deterministic memory
-- A public project whose completion changes water, irrigation, farm yield, food reserves, and prices
-- Persistent shared sessions across reloads and browsers
-
-## Honest chain boundary
-
-The playable browser world is currently an **authoritative gateway simulation alpha** and is labelled `OFFCHAIN SIMULATION ALPHA` in both its API and UI. Browser actions are not yet wallet-signed or mirrored into the World PDA.
-
-The repository's Solana program and MagicBlock integration now genuinely implement:
-
-- a dedicated eight-citizen World PDA with positions, inventories, resource nodes, warehouse stock, East Sluice progress, and water rate;
-- signer-authorized join, move, gather, deposit, and repair transitions guarded by sequence, prior root, event-chain head, and event ID;
-- World PDA initialization, MagicBlock delegation, ER execution, commit, and undelegation lifecycle instructions;
-- an automated local end-to-end path that completes all 15 world events and verifies the same state root after a Solana base-layer checkpoint;
-- local Solana initialization and account ownership;
-- MagicBlock delegation and Ephemeral Rollup execution;
-- deterministic Worksite state roots and event receipts;
-- base-layer checkpoint verification;
-- a season purse ledger and settlement scaffold.
-
-The remaining integration boundary is the browser runtime: wallet/session-key authentication and synchronization between the richer gateway simulation and the compact canonical World PDA. Until that lands, the UI deliberately does not claim that its live JSON simulation is onchain.
-
-Proof lab:
-
-```text
-http://127.0.0.1:4173/proof/?proof=1&session=aster-demo&role=observer&transport=magicblock
-```
-
-## Repository map
-
-| Path | Purpose |
-|---|---|
-| [`permutation-state-prototype/world/`](permutation-state-prototype/world/) | Primary map-first playable simulation. |
-| [`permutation-state-prototype/proof/`](permutation-state-prototype/proof/) | Previous multi-client Handoff and chain-receipt proof lab. |
-| [`permutation-state-solana-receipt-spike/`](permutation-state-solana-receipt-spike/) | Solana program, MagicBlock transport, gateway, and tests. |
-| [`PERMUTATION_STATE_SIMULATION_PIVOT.md`](PERMUTATION_STATE_SIMULATION_PIVOT.md) | Corrected game definition, system boundaries, and acceptance gates. |
-| [`PERMUTATION_STATE_GAME_CONSTITUTION.md`](PERMUTATION_STATE_GAME_CONSTITUTION.md) | Product and economic principles; sections superseded by the simulation pivot should be revised next. |
+The service runs a 250ms authoritative simulation; the UI polls snapshots and interpolates movement.
+It is a local development server bound to loopback, not a public multiplayer deployment. Catch-up
+after server downtime is bounded to 60 seconds; it does not invent unlimited offline production.
 
 ## Verify
 
-```bash
-node --check permutation-state-prototype/world/app.js
-node --test permutation-state-prototype/world/core.test.mjs
-
+```sh
+node --check permutation-state-prototype/civilization/app.mjs
+node --check permutation-state-prototype/civilization/map.mjs
+node --test permutation-state-prototype/civilization/*.test.mjs
 cd permutation-state-solana-receipt-spike
-cargo test --locked
+npm ci --ignore-scripts
 npm test
-
-# With the local MagicBlock stack running:
-npm run test:e2e:world:local
 ```
 
-The automated suite covers deterministic movement, proximity rejection, gathering, carrying, AI logistics, depositing, construction, irrigation knock-on effects, passive production, NPC schedules, market response, shared clients, persistence, chain authorization, and a verified World PDA checkpoint.
+The new simulation and service suites test branching investments, pathfinding, discovery, locality,
+construction, input/output deliveries, road connectivity, previews, research, recovery from depleted
+assets, multi-citizen state, authentication, persistence, and restart behaviour.
+
+## Project map
+
+| Path | Purpose |
+|---|---|
+| `permutation-state-prototype/civilization/` | New game, deterministic core, renderer and UI |
+| `PERMUTATION_STATE_REBUILD.md` | Active design and module contract |
+| `permutation-state-solana-receipt-spike/server/civilization-*` | Standalone/shared authoritative service and tests |
+| `permutation-state-prototype/world/` | Archived walking-and-watergate experiment |
+| `permutation-state-prototype/proof/` | Archived choice-based chain proof, not the new game |
+| `permutation-state-solana-receipt-spike/src/` | Existing Solana experiments; new simulation integration remains future work |
+| `ARCHIVED_REPAIR_DEMO.md` | Previous experiment instructions and limitations |
+
+Next product work: playtest the decisions and pacing; then connect generated NPC intentions to this
+validated simulation, add meaningful threats/trade, and design an authenticated chain/season economy.
+Those systems are not silently mocked into the playable build.

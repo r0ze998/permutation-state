@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#243e38">
+  <title>PERMUTATION STATE — A civilization in your hands</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main id="game" aria-label="共有文明アスター">
+    <canvas id="world-map" aria-label="文明の地図。クリックで選択、ドラッグで移動、ホイールで拡大。右側のパネルから行動できます。" tabindex="0"></canvas>
+    <div class="map-vignette" aria-hidden="true"></div>
+    <header class="topbar">
+      <a class="brand" href="./" aria-label="Permutation State"><span class="brand-mark">✳</span><span>PERMUTATION<em>STATE</em></span></a>
+      <div id="resources" class="resource-strip" aria-label="文明の共有資源"></div>
+      <div class="top-controls"><span id="connection" class="connection">接続中</span><button id="help-button" class="icon-button" aria-label="遊び方" title="遊び方">?</button></div>
+    </header>
+    <section class="civ-plate" aria-label="文明の目標">
+      <div class="eyebrow"><span class="live-dot"></span> ONE SHARED CIVILIZATION</div>
+      <h1>Aster<span>アスター</span></h1>
+      <div id="world-time" class="world-time">開拓の時代 · DAY 01</div>
+      <button id="ambition-toggle" class="ambition-toggle" aria-expanded="false"><span>文明の展望</span><span id="ambition-count">0 / 3</span><span>⌄</span></button>
+      <div id="ambitions" hidden></div>
+    </section>
+    <nav class="world-nav" aria-label="文明メニュー">
+      <button data-drawer="settlement" title="街と生産"><span>⌂</span><small>街</small></button>
+      <button data-drawer="economy" title="共有経済"><span>▥</span><small>経済</small></button>
+      <button data-drawer="research" title="研究"><span>✧</span><small>研究</small></button>
+      <button data-drawer="chronicle" title="文明史"><span>☷</span><small>歴史</small></button>
+    </nav>
+    <section id="drawer" class="drawer panel" aria-label="文明の詳細" hidden></section>
+    <aside id="inspector" class="inspector panel" aria-label="選択した場所" hidden></aside>
+    <div id="hover-label" class="hover-label" hidden></div>
+    <div class="map-tools"><button id="zoom-in" class="icon-button" aria-label="拡大">+</button><button id="zoom-out" class="icon-button" aria-label="縮小">−</button><button id="home-button" class="icon-button" aria-label="自分の場所へ" title="自分の場所へ（F）">⌖</button></div>
+    <section class="minimap-card" aria-label="文明の全体図"><canvas id="minimap" width="170" height="104" aria-label="ミニマップ"></canvas><div><span id="map-extent">既知の世界</span><span id="citizen-count">1 citizen</span></div></section>
+    <footer class="bottom-center">
+      <div class="lens-bar" role="group" aria-label="マップの情報レンズ">
+        <button data-lens="normal" class="active" aria-pressed="true"><span>◈</span>地形</button>
+        <button data-lens="food" aria-pressed="false"><span>❧</span>食料</button>
+        <button data-lens="industry" aria-pressed="false"><span>⚒</span>産業</button>
+        <button data-lens="logistics" aria-pressed="false"><span>⇄</span>物流</button>
+        <button data-lens="danger" aria-pressed="false"><span>⌁</span>地勢</button>
+      </div>
+      <div id="lens-description" class="lens-description">地形を選択して、文明の次の一手を。</div>
+      <button id="citizen-card" class="citizen-card" title="自分の場所へ"><span class="citizen-avatar">M</span><span><strong id="citizen-name">市民</strong><small id="citizen-status">文明に参加しています</small></span><span class="keyboard-key">F</span></button>
+    </footer>
+    <section class="next-action panel" aria-label="次の行動の提案">
+      <div class="next-heading"><span>あなたにできること</span><button id="skip-task" aria-label="別の提案を見る" title="別の提案を見る">↻</button></div>
+      <button id="next-button"><span><strong id="next-title">世界を見渡す</strong><small id="next-detail">地形を選んでみましょう</small></span><span class="next-arrow">↗</span></button>
+      <div class="next-foot"><span>提案は自由に選べます</span><span class="keyboard-key">N</span></div>
+    </section>
+    <div id="notifications" class="notifications" role="status" aria-live="polite"></div>
+    <div class="prototype-label">PLAYABLE PROTOTYPE <span>共有サーバー版 · 実資金なし</span></div>
+    <div id="loading" class="loading-screen"><div class="loading-symbol">✳</div><h2>ひとつの世界に、集まろう。</h2><p id="loading-message">アスターの現在を読み込んでいます…</p><button id="retry" class="primary-button" hidden>再接続する</button></div>
+    <dialog id="help-dialog" class="help-dialog">
+      <button class="dialog-close icon-button" data-close-dialog="help-dialog" aria-label="閉じる">×</button>
+      <div class="eyebrow">WELCOME TO ASTER</div><h2>次の街の姿を、<br>あなたが決める。</h2>
+      <p class="intro">ここにいる全員で、一つの文明を育てます。正解の順番も、決められた結末もありません。</p>
+      <ol class="help-steps"><li><strong>地形を選ぶ</strong><p>森、丘、平原をクリック。資源と建設できる施設を確認します。</p></li><li><strong>市民として現地へ行く</strong><p>「ここへ移動」、またはダブルクリック。道を通り、近くで採集・建設します。</p></li><li><strong>何を育てるか決める</strong><p>農場で食料、製材所で木材、工房で道具。共有資源を使うので、街全体を見て選びましょう。</p></li><li><strong>変わった世界を読む</strong><p>施設が生産し、運び手が物資を届けます。レンズと「あなたにできること」が次の判断を助けます。</p></li></ol>
+      <div class="help-note">世界は全員で同時に進行します。NPCはルールで働く試作版です。生成AI、戦闘、実際の賞金決済はまだ含みません。</div>
+      <div class="help-controls">ドラッグ：地図移動　スクロール：拡大縮小　F：自分へ　N：次の提案　Esc：閉じる</div>
+      <button class="primary-button wide" data-close-dialog="help-dialog">アスターを歩く <span>→</span></button>
+    </dialog>
+    <dialog id="confirm-dialog" class="confirm-dialog"><div id="confirm-content"></div></dialog>
+  </main>
+  <script type="module" src="./app.mjs"></script>
+</body>
+</html>

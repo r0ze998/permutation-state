@@ -2,7 +2,7 @@
 
 ## Game Constitution — Hackathon Edition / Season Zero
 
-**Status:** Product and demo design authority  
+**Status:** Historical design document. The fixed Handoff/East Sluice gameplay specification below is superseded by [the map-first rebuild](PERMUTATION_STATE_REBUILD.md). Shared civilization and economic safety principles remain relevant; the new playable route is `/civilization/`.  
 **Version:** 0.2  
 **Date:** 2026-09-21
 

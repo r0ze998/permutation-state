@@ -1,5 +1,7 @@
 # PERMUTATION STATE — Living Civilization Prototype
 
+> The primary game has been rebuilt at **[`civilization/`](civilization/)**. See the [current project README](../README.md). The older world/repair and proof instructions below are archived experiments, not the new game's design or completion status.
+
 > **One civilization. Thousands of citizens. One continuously evolving world.**
 
 ## Primary playable world

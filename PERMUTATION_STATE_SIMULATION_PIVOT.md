@@ -1,5 +1,7 @@
 # PERMUTATION STATE — Simulation Pivot
 
+> Archived intermediate design. This walking-and-repair slice did not satisfy the required strategic civilization gameplay. The active design is [the map-first rebuild](PERMUTATION_STATE_REBUILD.md), playable at `/civilization/`. The completion language below describes only the old narrow technical experiment, not a completed game.
+
 ## Product correction
 
 The existing East Sluice proof is a useful Solana/MagicBlock causality spike, but it is not the game. It demonstrates that one citizen's accepted action can alter a later citizen's valid action and that the resulting state can be checkpointed. Its static scene, three-step command chain, and receipt-led interface must not define the main play experience.

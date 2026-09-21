@@ -39,6 +39,7 @@ import {
   seasonStateToJson,
   stateToJson,
 } from "./game-contract.mjs";
+import { createCivilizationService, routeCivilizationRequest } from "./civilization-service.mjs";
 import { createWorldService, routeWorldRequest } from "./world-service.mjs";
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -238,6 +239,7 @@ async function createRuntime() {
   ]);
   const roles = { mara, ivo, successor };
   if (config.cluster === "localnet") await ensureLocalFunding(base, roles);
+  const civilizationService = createCivilizationService({ workDir });
   const worldService = createWorldService({ workDir });
   return {
     config,
@@ -251,6 +253,7 @@ async function createRuntime() {
     ephemeral,
     roles,
     authority: mara,
+    civilizationService,
     worldService,
   };
 }
@@ -1131,6 +1134,7 @@ async function serveStatic(runtime, requestUrl, response, method = "GET") {
 
 async function route(runtime, request, response) {
   const requestUrl = new URL(request.url, "http://127.0.0.1");
+  if (await routeCivilizationRequest(runtime.civilizationService, request, response, requestUrl)) return;
   if (await routeWorldRequest(runtime.worldService, request, response, requestUrl)) return;
   if (request.method === "GET" && requestUrl.pathname === "/api/magicblock/health") {
     const [baseSlot, erSlot] = await Promise.all([
@@ -1166,6 +1170,17 @@ async function route(runtime, request, response) {
     sendJson(response, 200, await retrySessionCheckpoint(runtime, body.session));
     return;
   }
+  if (
+    (request.method === "GET" || request.method === "HEAD")
+    && (requestUrl.pathname === "/" || requestUrl.pathname === "/civilization")
+  ) {
+    response.writeHead(302, {
+      Location: "/civilization/",
+      "Cache-Control": "no-store",
+    });
+    response.end();
+    return;
+  }
   if (request.method !== "GET" && request.method !== "HEAD") {
     sendJson(response, 405, { error: "Method not allowed" });
     return;
@@ -1187,9 +1202,10 @@ export async function startGateway({ port = Number(process.env.PORT || 4173) } =
     });
   });
   server.once("close", () => {
-    runtime.worldService.close().catch((error) => {
-      console.error(`[world] close: ${error.message}`);
-    });
+    Promise.all([
+      runtime.civilizationService.close(),
+      runtime.worldService.close(),
+    ]).catch((error) => console.error(`[gateway] close: ${error.message}`));
   });
   try {
     await new Promise((resolve, reject) => {
@@ -1197,7 +1213,10 @@ export async function startGateway({ port = Number(process.env.PORT || 4173) } =
       server.listen(port, "127.0.0.1", resolve);
     });
   } catch (error) {
-    await runtime.worldService.close();
+    await Promise.all([
+      runtime.civilizationService.close(),
+      runtime.worldService.close(),
+    ]);
     throw error;
   }
   console.log(`PERMUTATION STATE gateway ready at http://127.0.0.1:${port}`);

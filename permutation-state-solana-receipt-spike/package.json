@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "start": "node server/devnet-gateway.mjs",
+    "start:civilization": "node server/civilization-server.mjs",
     "start:stack:local": "node server/start-local-stack.mjs",
     "test": "npm run test:client && npm run test:server",
     "test:client": "node --test client/*.test.mjs",
