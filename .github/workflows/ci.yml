@@ -8,24 +8,6 @@ permissions:
   contents: read
 
 jobs:
-  devnet-bootstrap:
-    name: Fund disposable devnet deployer
-    if: github.ref == 'refs/heads/codex/magicblock-playable'
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Install pinned Solana CLI
-        run: curl --proto '=https' --tlsv1.2 -sSfL https://release.anza.xyz/v3.1.9/install | sh -s -- v3.1.9 --no-modify-path
-      - name: Request disposable devnet SOL
-        run: |
-          SOLANA="$HOME/.local/share/solana/install/active_release/bin/solana"
-          RECIPIENT="Z5LkMMWbobK8soMqkUD3BjiK1RGPh5E4TsQQPjZ6AFQ"
-          for AMOUNT in 2 1 0.5 0.1; do
-            if "$SOLANA" airdrop "$AMOUNT" "$RECIPIENT" --url https://api.devnet.solana.com; then
-              exit 0
-            fi
-          done
-          exit 1
-
   browser-smoke:
     name: Browser source smoke test
     runs-on: ubuntu-24.04
@@ -39,6 +21,10 @@ jobs:
           node --check permutation-state-prototype/app.js
           node --check permutation-state-prototype/proof/core.js
           node --check permutation-state-prototype/proof/app.js
+          node --check permutation-state-solana-receipt-spike/server/devnet-gateway.mjs
+          node --check permutation-state-solana-receipt-spike/server/game-contract.mjs
+          node --check permutation-state-solana-receipt-spike/server/local-e2e.mjs
+          node --check permutation-state-solana-receipt-spike/server/start-local-stack.mjs
       - name: Validate recorded proof result
         run: python3 -m json.tool permutation-state-prototype/proof/qa-proof-result.json >/dev/null
 
@@ -50,14 +36,19 @@ jobs:
         working-directory: permutation-state-solana-receipt-spike
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.89.0
+        with:
+          components: rustfmt, clippy
       - uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: npm
           cache-dependency-path: permutation-state-solana-receipt-spike/package-lock.json
       - name: Run Rust tests
-        run: cargo test --locked
+        run: |
+          cargo fmt -- --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
       - name: Install JavaScript dependencies
         run: npm ci --ignore-scripts
       - name: Run adapter tests

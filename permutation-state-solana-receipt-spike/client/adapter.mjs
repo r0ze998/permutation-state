@@ -1,4 +1,5 @@
-import { createHash } from "node:crypto";
+import { sha256 } from "@noble/hashes/sha256";
+import { Buffer } from "buffer";
 import {
   PublicKey,
   SystemProgram,
@@ -34,9 +35,9 @@ export const ACTION = Object.freeze({
 });
 
 function hashv(...buffers) {
-  const hash = createHash("sha256");
+  const hash = sha256.create();
   buffers.forEach((buffer) => hash.update(buffer));
-  return hash.digest();
+  return Buffer.from(hash.digest());
 }
 
 function u8(value) {

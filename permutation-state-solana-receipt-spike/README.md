@@ -1,6 +1,62 @@
-# Permutation State — Solana Receipt Spike
+# Permutation State — Playable MagicBlock Slice
 
-This is a local, non-deployed scaffold for the smallest credible Solana devnet proof behind the current multi-client demo. It does **not** touch devnet, use a wallet, or modify the prototype.
+This package is the Solana program, MagicBlock transport, and local gateway behind the playable multi-client East Sluice scenario. It has been exercised end to end on the official standalone MagicBlock stack: base-layer initialization, delegation, three program-level role-gated ER actions, an ER-to-base checkpoint, confirmed base signature, and state-root read-back all pass. The browser-local proof remains available as a fallback.
+
+The verified target is **localnet**, using disposable demo signers and no real funds. Nothing is deployed to public devnet or mainnet. The gateway holds those disposable signers for the hackathon slice; production wallet approval and player Session Keys are not implemented. Role URLs are presentation and turn-taking aids, not authentication: the HTTP caller is not yet bound to a player wallet.
+
+The program follows MagicBlock's current Native Rust lifecycle without BOLT:
+
+```text
+Base Layer: Initialize Worksite PDA
+Base Layer: Delegate Worksite PDA
+ER:         ApplyWorksiteEvent ... (low-latency shared play)
+ER:         Commit checkpoint(s)
+ER:         CommitAndUndelegate
+Base Layer: fixed-discriminator Undelegate callback restores the PDA
+```
+
+## Play it locally
+
+Prerequisites: Node.js, Rust 1.89, Solana/Agave CLI 3.1.9 with `cargo-build-sbf`, and `@magicblock-labs/ephemeral-validator` 0.14.10 available on `PATH`.
+
+From this directory:
+
+```sh
+npm ci
+cargo build-sbf
+```
+
+Start the official local stack in one terminal:
+
+```sh
+npm run start:stack:local
+```
+
+The launcher refuses to run if a local validator is already reachable, verifies the SBF artifact hash and required executables before deleting anything, and resets only this package's ignored `magicblock-test-storage/`, generated gateway session receipts, and dedicated local ledger. Receipts are coupled to that ledger and cannot survive a world reset honestly. Stop the existing stack before intentionally starting a fresh world.
+
+Start the game gateway in another:
+
+```sh
+npm start
+```
+
+The localnet gateway creates three disposable keypairs under the ignored workspace `work/` directory when missing and funds them only from the local validator. It never auto-creates or funds devnet credentials.
+
+Open the shared Observer view:
+
+```text
+http://127.0.0.1:4173/proof/?proof=1&session=aster-demo&role=observer&transport=magicblock
+```
+
+Use the Observer links to open Mara, Ivo, and Nia in separate tabs. All clients poll the same delegated Worksite PDA. Run the automated live path while both services are up with:
+
+```sh
+npm run test:e2e:local
+```
+
+That test creates a fresh session, executes `oath → service → M-032`, requires a verified base-layer checkpoint after Ivo, and finishes only if sequence, state roots, exact event-chain heads, and the accepted Mandate agree. This is a finite three-action vertical slice; ongoing post-Nia play and the full season loop remain future work.
+
+The Program ID is intentionally **not compiled into the Rust program**. PDA derivation uses the deployed program address passed by the runtime; the checked local deployment config pins the currently built artifact's Program ID.
 
 ## What the program canonizes
 
@@ -33,7 +89,27 @@ The local browser event hash is a binding field, not the chain state root. The o
 
 The account is fixed at 384 bytes for v1. The current serialized payload is smaller; the remainder is zero-filled for modest schema evolution.
 
-## Instructions
+## Instruction wire contract
+
+The ordinary instructions are a Borsh enum. Existing wire tags remain unchanged and the ER lifecycle variants are appended:
+
+| Tag | Instruction | Payload |
+| ---: | --- | --- |
+| `0` | `Initialize` | `InitializeArgs` |
+| `1` | `ApplyWorksiteEvent` | `ApplyEventArgs` |
+| `2` | `Delegate` | none |
+| `3` | `Commit` | none |
+| `4` | `CommitAndUndelegate` | none |
+
+The base-layer `Undelegate` callback is deliberately outside that enum. MagicBlock invokes the exact eight-byte discriminator `[196, 28, 41, 206, 48, 37, 51, 167]`, followed by a Borsh `Vec<Vec<u8>>` containing exactly:
+
+```text
+["worksite", season_id[32], worksite_id[32]]
+```
+
+The callback verifies those seeds against the finalized state in the canonical delegation buffer before recreating the PDA.
+
+## Instructions and accounts
 
 ### `Initialize`
 
@@ -67,6 +143,74 @@ client_event_hash
 
 There is deliberately no settlement or claim instruction in this spike.
 
+### `Delegate` — Base Layer
+
+Accounts, in order:
+
+1. Worksite authority/payer — signer, writable;
+2. System Program;
+3. Worksite PDA — writable;
+4. this owner program;
+5. delegation buffer — writable;
+6. delegation record — writable;
+7. delegation metadata — writable;
+8. MagicBlock Delegation Program;
+9. optional ER validator identity.
+
+Only the Worksite authority can delegate. The program uses a 30-second automatic commit interval and passes the optional validator selected by the client to the SDK.
+
+### `Commit` — ER
+
+Accounts, in order:
+
+1. assigned Worksite participant/payer — signer, writable;
+2. delegated Worksite PDA — writable;
+3. Magic Program;
+4. Magic Context — writable.
+
+The authority, Envoy, Maker, or Successor may request a checkpoint. This schedules an ER-to-base-layer state commit without changing game state.
+
+### `CommitAndUndelegate` — ER
+
+Accounts are identical to `Commit`, but the signer must be the Worksite authority. Ending the low-latency session is authority-only because it affects every connected participant.
+
+### `Undelegate` callback — Base Layer CPI
+
+Accounts, in order:
+
+1. Worksite PDA — writable;
+2. canonical undelegation buffer — signer, writable;
+3. callback payer — writable;
+4. System Program.
+
+The SDK additionally verifies that the buffer is signed, owned by the Delegation Program, and canonical for the Worksite PDA. The program validates the finalized Worksite identity and exact seed material before calling the SDK restore operation.
+
+## MagicBlock JavaScript transport
+
+[`client/magicblock-transport.mjs`](./client/magicblock-transport.mjs) is the transport boundary intended for the local gateway and, through a browser bundler, a wallet-connected client. It exports:
+
+- connection factories for Magic Router, a direct Ephemeral Rollup endpoint, and Solana;
+- Worksite and MagicBlock delegation PDA derivation;
+- builders and senders for `Initialize`, `Delegate`, `ApplyWorksiteEvent`, `Commit`, and `CommitAndUndelegate`;
+- fixed-width `WorksiteState` decoding with a recomputed state-root check;
+- WebSocket account subscription and bounded polling;
+- ER execution metadata that explicitly remains unsettled;
+- base commitment-signature resolution followed by mandatory Solana PDA root read-back.
+
+The expected gateway flow is:
+
+```text
+bootstrap: Initialize on Solana -> Delegate Worksite PDA
+action:    preview transition -> submit through Magic Router -> decode ER PDA
+commit:    schedule checkpoint -> confirm base signature -> decode Solana PDA -> compare root + event head
+```
+
+The gateway persists Ivo's accepted ER event before attempting its separate checkpoint. If the checkpoint fails, later play is held, the UI offers a retry, and the retry schedules a fresh same-root commit rather than looping forever on a dead scheduling transaction.
+
+Use Magic Router as the submission endpoint. Use the selected validator's direct ER connection when calling `resolveSolanaCheckpoint`; MagicBlock's official `GetCommitmentSignature` helper reads the ER scheduling transaction and returns the corresponding base-layer commitment signature.
+
+The sender accepts either existing Node `Signer` objects or an injected browser wallet implementing `signTransaction`. It never generates, persists, exports, or logs key material.
+
 ## Explorer receipt payload
 
 After confirmation, the UI should read the Worksite PDA and display/export:
@@ -98,32 +242,84 @@ After confirmation, the UI should read the Worksite PDA and display/export:
 }
 ```
 
-The Observer must only call this a Solana receipt after the signature is confirmed and the read-back account root equals `newStateRoot`.
+The Observer must only call this a Solana receipt after the signature is confirmed and the **base-layer** read-back account root and event-chain head equal their ER values at or after that transaction slot. The receipt constructor enforces confirmed/finalized status plus slot ordering, so an arbitrary nonempty signature cannot be mislabeled as verified settlement. The transport represents execution and settlement separately:
+
+```json
+{
+  "layer": "ephemeral-rollup",
+  "settlement": "not-yet-proven-on-solana",
+  "signature": "<ER transaction signature>"
+}
+```
+
+```json
+{
+  "layer": "solana",
+  "settlement": "checkpoint-read-back-verified",
+  "signature": "<MagicBlock commitment signature on Solana>",
+  "sourceErSignature": "<ER scheduling transaction>",
+  "stateRoot": "<root read back from the Solana Worksite PDA>"
+}
+```
 
 ## Local verification
 
 ```sh
 cargo test
+cargo fmt -- --check
+cargo clippy --all-targets -- -D warnings
+cargo build-sbf
+cargo test-sbf
 npm ci --ignore-scripts
-npm run test:client
+npm test
+# With the local stack and gateway running:
+npm run test:e2e:local
 npm audit --audit-level=moderate
 ```
 
-Rust tests cover the three-citizen cooperative path, all four branch-gated resolutions, authorization, stale/ruleset/root rejection, signer enforcement, persistence, and the no-claim invariants. JavaScript tests cover identical transition commitments, account metadata, instruction bytes, and the Explorer receipt shape.
+Rust tests cover the three-citizen cooperative path, all four branch-gated resolutions, authorization, stale/ruleset/root rejection, signer enforcement, persistence, no-claim invariants, stable instruction tags, callback discrimination, exact undelegation seeds, and lifecycle authorization. Eighteen JavaScript tests cover identical commitments, all five client-callable instructions, exact MagicBlock account order, Node and browser-wallet send paths, decoding, subscription, polling, gateway command validation, safe session derivation, network identity guards, and the ER-versus-Solana receipt boundary.
 
-The checked lockfile pins `@solana/web3.js` 1.99.0 and secure transitive overrides used by this narrow adapter. The verified install reported zero known npm vulnerabilities. Re-run the audit before any deployment rather than treating this snapshot as a security guarantee.
+`rust-toolchain.toml` pins Rust 1.89.0. `Cargo.toml` pins `ephemeral-rollups-sdk` 0.16.2, the version used by MagicBlock's current Native Rust counter example, together with Solana Program 4.0.0. The lockfile is committed. Upgrade this matrix deliberately and rerun both host and SBF/integration tests; do not accept an unattended dependency refresh.
 
-## Exact devnet gate
+The checked lockfile pins `@magicblock-labs/ephemeral-rollups-sdk` 0.17.2, `@solana/web3.js` 1.99.0, `@noble/hashes` 1.8.0, and `buffer` 6.0.3. MagicBlock's declared `@solana/web3.js ^1.98.0` range includes the pinned 1.99.0 client. The adapter uses Noble's browser-safe SHA-256 implementation while preserving the original commitment bytes.
 
-This machine currently has Rust and Node but not the Solana CLI or Anchor. Nothing was deployed. To cross the gate later:
+`npm audit --audit-level=moderate` passes. The full audit currently reports three low-severity findings inherited through MagicBlock's TEE dependency chain (`@phala/dcap-qvl` -> `elliptic`) and offers no non-breaking fix for the current SDK. Do not force-downgrade the SDK merely to hide that report; reassess it before deployment.
 
-1. install the Solana CLI;
-2. build with `cargo build-sbf`;
-3. deploy this program to devnet with a dedicated hackathon keypair;
-4. put the resulting Program ID in the web adapter;
-5. connect three wallet addresses and initialize one fresh Worksite PDA;
-6. submit one Mara event and one Ivo event;
-7. confirm both transactions, read back the PDA, and render the real signatures/Explorer links in Observer;
-8. rerun the four-path program tests before claiming parity.
+## Verified local gate and remaining public gate
+
+The checked-in implementation passes its host suite and builds a 258,440-byte SBF artifact with Agave/Solana CLI 3.1.9. The following have been verified against the official local MagicBlock stack:
+
+1. initialize a fresh Worksite PDA on the base layer;
+2. delegate it through the real Delegation Program;
+3. execute Mara, Ivo, and successor events on the ER with role-specific signers;
+4. schedule `Commit` after Ivo's local resolution;
+5. resolve the base commitment signature and read back the same state root;
+6. keep the account delegated so the next citizen can continue immediately;
+7. show ER execution and Solana checkpoint as separate evidence in the browser;
+8. synchronize the updated action set across Observer, Mara, and Ivo tabs.
+
+Before loading signers or sending transactions, the gateway verifies the actual base-layer genesis hash. Localnet also requires loopback endpoints and rejects all known public Solana genesis hashes; devnet requires the devnet genesis plus the official TLS MagicBlock devnet router and ER hosts. A mislabeled mainnet RPC therefore fails closed.
+
+Still unverified:
+
+- public Solana devnet deployment (faucet requests were rate-limited during this run);
+- the final `CommitAndUndelegate` callback path in a live validator run;
+- production wallets, Session Keys, remote multiplayer hosting, token entry fees, marketplace settlement, and claims.
+
+Do not relabel a localnet receipt as public devnet evidence. A public submission must use funded disposable devnet credentials, deploy the exact artifact, rerun the live path, and display public Explorer links.
 
 No Anchor dependency is required for this spike. That keeps the proof surface small; Anchor can be added later if IDL generation and wallet-client ergonomics become more valuable than the extra abstraction.
+
+The current artifact may accurately be called **local MagicBlock ER-confirmed with a local Solana base-layer checkpoint**. It must not be called public-devnet-confirmed or production-ready.
+
+Primary sources reviewed:
+
+- [Magic Router documentation](https://docs.magicblock.gg/pages/ephemeral-rollups-ers/introduction/magic-router)
+- [Delegation, commitment, and undelegation lifecycle](https://docs.magicblock.gg/pages/ephemeral-rollups-ers/introduction/ephemeral-rollup)
+- [MagicBlock Native Rust guide](https://docs.magicblock.gg/pages/ephemeral-rollups-ers/how-to-guide/rust-program)
+- [Official Native Rust counter example at the reviewed commit](https://github.com/magicblock-labs/magicblock-engine-examples/tree/e137826af4969d538ef10d8f672a8d77deb6e194/counter/native-rust)
+- [Official Web3.js lifecycle test used for account ordering and commitment-signature flow](https://github.com/magicblock-labs/magicblock-engine-examples/blob/e137826af4969d538ef10d8f672a8d77deb6e194/counter/native-rust/tests/web3js/rust-counter.test.ts)
+- [`@magicblock-labs/ephemeral-rollups-sdk` 0.17.2 release commit](https://github.com/magicblock-labs/ephemeral-rollups-sdk/commit/57f3291eb1b9949d2327a61796e9016547ed7361)
+- [`ephemeral-rollups-sdk` 0.16.2 Rust API](https://docs.rs/ephemeral-rollups-sdk/0.16.2/ephemeral_rollups_sdk/)
+
+BOLT is not used. The maintained path here is Ephemeral Rollups SDK plus Magic Router; Session Keys remain deferred until the state transport works end to end.

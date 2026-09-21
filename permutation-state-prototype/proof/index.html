@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Local multi-citizen handoff proof for PERMUTATION STATE." />
+    <meta name="description" content="Playable multi-citizen handoff proof with an optional MagicBlock shared-world transport." />
     <title>PERMUTATION STATE — Handoff Proof</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><rect width=%2232%22 height=%2232%22 rx=%224%22 fill=%22%2308100f%22/><path d=%22M7 9h18M7 16h18M7 23h18%22 stroke=%22%2371c7b5%22 stroke-width=%222%22/></svg>" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -13,7 +13,7 @@
   </head>
   <body>
     <div class="proof-app" id="proof-app">
-      <div class="disclosure"><span></span>LOCAL MULTI-CLIENT PROOF · NOT SOLANA · NOT LIVE AI<span></span></div>
+      <div class="disclosure"><span></span><strong id="transport-disclosure">LOCAL MULTI-CLIENT PROOF · NOT SOLANA · NOT LIVE AI</strong><span></span></div>
 
       <header class="proof-header">
         <a class="brand" href="../?build=living-atlas-v2" aria-label="Return to Aster world">
@@ -80,6 +80,12 @@
           <section class="invariants">
             <header><span>INVARIANTS</span><em id="invariant-score">—</em></header>
             <div id="invariant-list"></div>
+          </section>
+
+          <section class="network-evidence" id="network-evidence" hidden>
+            <header><span>CHAIN EXECUTION</span><em id="network-layer">CONNECTING</em></header>
+            <div class="network-receipt-list" id="network-receipt-list"></div>
+            <div class="network-boundary" id="network-boundary"></div>
           </section>
 
           <section class="event-stream">

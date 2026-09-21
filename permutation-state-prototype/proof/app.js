@@ -7,10 +7,12 @@
   const rawRole = params.get("role") || "observer";
   const role = validRoles.includes(rawRole) ? rawRole : "observer";
   const sessionId = sanitizeSession(params.get("session") || "aster-demo");
+  const transport = params.get("transport") || "local";
+  const magicBlockMode = transport === "magicblock";
   const storageKey = `permutation-state-proof:${sessionId}`;
-  const channelName = `permutation-state-proof:${sessionId}`;
-  const storageOnlyTransport = params.get("transport") === "storage";
-  const clientKey = `permutation-state-proof-client:${sessionId}:${role}`;
+  const channelName = `permutation-state-proof:${transport}:${sessionId}`;
+  const storageOnlyTransport = transport === "storage";
+  const clientKey = `permutation-state-proof-client:${transport}:${sessionId}:${role}`;
   const clientId = sessionStorage.getItem(clientKey) || crypto.randomUUID();
   sessionStorage.setItem(clientKey, clientId);
 
@@ -19,9 +21,15 @@
   let store = loadOrCreateStore();
   let verification = null;
   let renderRevision = 0;
+  let networkSession = null;
+  let gatewayHealth = null;
+  let gatewayError = null;
+  let actionPending = false;
+  let pollInFlight = false;
 
   const elements = {
     app: document.getElementById("proof-app"),
+    disclosure: document.getElementById("transport-disclosure"),
     sessionLabel: document.getElementById("session-label"),
     roleNav: document.getElementById("role-nav"),
     syncLabel: document.getElementById("sync-label"),
@@ -39,6 +47,10 @@
     clientList: document.getElementById("client-list"),
     invariantScore: document.getElementById("invariant-score"),
     invariantList: document.getElementById("invariant-list"),
+    networkEvidence: document.getElementById("network-evidence"),
+    networkLayer: document.getElementById("network-layer"),
+    networkReceiptList: document.getElementById("network-receipt-list"),
+    networkBoundary: document.getElementById("network-boundary"),
     eventList: document.getElementById("event-list"),
     observerActions: document.getElementById("observer-actions"),
     toast: document.getElementById("toast")
@@ -62,6 +74,7 @@
   }
 
   function loadOrCreateStore() {
+    if (magicBlockMode) return newStore();
     const raw = localStorage.getItem(storageKey);
     if (!raw) {
       const created = newStore();
@@ -76,6 +89,7 @@
   }
 
   function reloadStore() {
+    if (magicBlockMode) return store;
     try {
       const parsed = JSON.parse(localStorage.getItem(storageKey));
       if (parsed) store = parsed;
@@ -86,7 +100,7 @@
   }
 
   function saveStore(nextStore) {
-    localStorage.setItem(storageKey, JSON.stringify(nextStore));
+    if (!magicBlockMode) localStorage.setItem(storageKey, JSON.stringify(nextStore));
     store = nextStore;
   }
 
@@ -96,8 +110,51 @@
     url.searchParams.set("proof", "1");
     url.searchParams.set("session", sessionId);
     url.searchParams.set("role", nextRole);
-    if (storageOnlyTransport) url.searchParams.set("transport", "storage");
+    if (transport !== "local") url.searchParams.set("transport", transport);
     return url.toString();
+  }
+
+  async function api(path, options = {}) {
+    const response = await fetch(path, {
+      ...options,
+      headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+      cache: "no-store"
+    });
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch {
+      throw new Error(`Gateway returned ${response.status} without valid JSON`);
+    }
+    if (!response.ok) throw new Error(payload.error || `Gateway request failed (${response.status})`);
+    return payload;
+  }
+
+  function acceptNetworkSession(payload) {
+    if (!payload || !payload.store) throw new Error("Gateway session response is incomplete");
+    networkSession = payload;
+    gatewayError = null;
+    store = payload.store;
+  }
+
+  function pendingRequiredCheckpoint(session = networkSession) {
+    const receipts = session?.network?.receipts || [];
+    return [...receipts].reverse().find((receipt) => receipt.checkpointRequired && !receipt.checkpoint) || null;
+  }
+
+  async function loadGatewayHealth() {
+    if (!magicBlockMode) return;
+    try {
+      gatewayHealth = await api("/api/magicblock/health");
+      gatewayError = null;
+    } catch (error) {
+      gatewayError = error.message;
+    }
+  }
+
+  async function pullNetworkSession() {
+    const payload = await api(`/api/magicblock/session?session=${encodeURIComponent(sessionId)}`);
+    acceptNetworkSession(payload);
   }
 
   function escapeHtml(value) {
@@ -140,7 +197,15 @@
 
   async function refresh(source = "local") {
     const revision = ++renderRevision;
-    reloadStore();
+    if (magicBlockMode && source !== "network-response") {
+      try {
+        await pullNetworkSession();
+      } catch (error) {
+        gatewayError = error.message;
+      }
+    } else {
+      reloadStore();
+    }
     const envelopeErrors = checkStoreEnvelope(store);
     let nextVerification;
     if (envelopeErrors.length) {
@@ -173,7 +238,17 @@
   async function commitAction(type, payload) {
     if (role === "observer") throw new Error("Observer is read-only");
     return withSessionLock(async () => {
-      reloadStore();
+      if (magicBlockMode) {
+        await pullNetworkSession();
+        if (!networkSession.initialized || !networkSession.delegated) {
+          throw new Error("Initialize and delegate this shared MagicBlock session before playing");
+        }
+        if (pendingRequiredCheckpoint()) {
+          throw new Error("Verify the required Solana checkpoint before the next player action");
+        }
+      } else {
+        reloadStore();
+      }
       const envelopeErrors = checkStoreEnvelope(store);
       if (envelopeErrors.length) throw new Error(`Integrity halt: ${envelopeErrors.join("; ")}`);
       const current = await Core.verifyLog({ sessionId, seed: store.seed, events: store.events });
@@ -207,25 +282,79 @@
         observedAt: new Date().toISOString(),
         clientId
       });
-      const nextStore = { ...store, events: [...store.events, event], updatedAt: new Date().toISOString() };
-      saveStore(nextStore);
+      if (magicBlockMode) {
+        setActionPending(true);
+        showToast("Submitting signed action to the Ephemeral Rollup…", "success");
+        const response = await api("/api/magicblock/action", {
+          method: "POST",
+          body: JSON.stringify({ session: sessionId, event })
+        });
+        acceptNetworkSession(response);
+      } else {
+        const nextStore = { ...store, events: [...store.events, event], updatedAt: new Date().toISOString() };
+        saveStore(nextStore);
+      }
       if (channel) channel.postMessage({ type: "SESSION_UPDATED", sourceClientId: clientId, eventHash: event.eventHash });
-      await refresh("commit");
-      showToast(`Accepted ${event.type} · ${shortHash(event.eventHash)}`, "success");
+      await refresh(magicBlockMode ? "network-response" : "commit");
+      const checkpointPending = Boolean(magicBlockMode && pendingRequiredCheckpoint());
+      showToast(
+        checkpointPending
+          ? `ER accepted ${event.type} · Solana checkpoint not verified`
+          : `${magicBlockMode ? "ER accepted" : "Accepted"} ${event.type} · ${shortHash(event.eventHash)}`,
+        checkpointPending ? "error" : "success"
+      );
       return event;
     }).catch((error) => {
       showToast(error.message, "error");
       throw error;
+    }).finally(() => {
+      setActionPending(false);
     });
+  }
+
+  function setActionPending(pending) {
+    actionPending = pending;
+    elements.app.dataset.pending = pending ? "true" : "false";
+    if (pending) {
+      elements.actorWorkspace.querySelectorAll("button").forEach((button) => {
+        button.disabled = true;
+      });
+    } else if (verification) {
+      renderActor(verification.finalState);
+    }
   }
 
   function render(source) {
     const state = verification.finalState;
     elements.app.dataset.role = role;
+    elements.app.dataset.transport = magicBlockMode ? "magicblock" : "local";
     elements.app.dataset.integrity = verification.valid ? "valid" : "invalid";
+    elements.disclosure.textContent = magicBlockMode
+      ? "MAGICBLOCK LOCAL CLUSTER · REAL ER STATE · DISPOSABLE DEMO SIGNERS · NO REAL FUNDS"
+      : Core.DISCLOSURE;
     elements.sessionLabel.textContent = sessionId;
-    elements.syncLabel.textContent = verification.valid ? (source === "storage" || source === "broadcast" ? "SYNCED NOW" : "REPLAY VERIFIED") : "INTEGRITY HALT";
-    elements.syncLabel.classList.toggle("bad", !verification.valid);
+    const networkHealthy = !magicBlockMode || (!gatewayError && networkSession);
+    const checkpointBlocked = Boolean(magicBlockMode && pendingRequiredCheckpoint());
+    elements.syncLabel.textContent = !networkHealthy
+      ? "GATEWAY OFFLINE"
+      : !verification.valid
+        ? "INTEGRITY HALT"
+        : checkpointBlocked
+          ? "CHECKPOINT REQUIRED"
+        : magicBlockMode
+          ? (networkSession.initialized && networkSession.delegated
+              ? "ER STATE SYNCED"
+              : networkSession.initialized
+                ? "ER DELEGATION NEEDED"
+                : "NOT INITIALIZED")
+          : (source === "storage" || source === "broadcast" ? "SYNCED NOW" : "REPLAY VERIFIED");
+    elements.syncLabel.classList.toggle(
+      "bad",
+      !verification.valid
+        || !networkHealthy
+        || checkpointBlocked
+        || Boolean(magicBlockMode && networkSession?.initialized && !networkSession?.delegated)
+    );
     renderMetrics(state);
     renderWorldStatus(state);
     elements.stateHash.textContent = shortHash(verification.finalStateHash);
@@ -235,6 +364,7 @@
     renderCausalStrip(state);
     renderActor(state);
     renderInvariants(state);
+    renderNetworkEvidence();
     renderEvents();
     renderPresence();
     elements.observerActions.hidden = role !== "observer";
@@ -274,16 +404,106 @@
     elements.actorAvatar.textContent = role === "observer" ? "◎" : person.name.split(" ").map((part) => part[0]).join("");
     elements.actorRole.textContent = `${person.civicRole} · ${person.id.toUpperCase()}`;
     elements.actorName.textContent = person.name;
-    elements.actorMode.textContent = role === "observer" ? "READ ONLY" : "ROLE LOCKED BY URL";
+    elements.actorMode.textContent = magicBlockMode
+      ? (role === "observer" ? "READ ONLY · ER" : "DEMO SIGNER · GATEWAY")
+      : (role === "observer" ? "READ ONLY" : "ROLE LOCKED BY URL");
 
+    if (magicBlockMode && (!networkSession || gatewayError)) {
+      renderGatewayOffline();
+      return;
+    }
+    if (magicBlockMode && (!networkSession.initialized || !networkSession.delegated)) {
+      renderNetworkBootstrap();
+      return;
+    }
     if (!verification.valid) {
       elements.actorWorkspace.innerHTML = `<div class="integrity-halt"><span>FAIL CLOSED</span><h2>Proof log integrity failed.</h2><p>No client may append a new event until this local session is reset.</p><code>${escapeHtml(verification.errors.join(" · "))}</code></div>`;
+      return;
+    }
+    if (magicBlockMode && role !== "observer" && pendingRequiredCheckpoint()) {
+      renderCheckpointHalt();
       return;
     }
     if (role === "mara") renderMara(state);
     if (role === "ivo") renderIvo(state);
     if (role === "successor") renderSuccessor(state);
     if (role === "observer") renderObserver(state);
+  }
+
+  function renderCheckpointHalt() {
+    const receipt = pendingRequiredCheckpoint();
+    elements.actorWorkspace.innerHTML = `
+      <div class="integrity-halt">
+        <span>SOLANA CHECKPOINT REQUIRED</span>
+        <h2>The shared world is paused before the next handoff.</h2>
+        <p>Ivo's action is already accepted on the Ephemeral Rollup, but its required Solana checkpoint has not been verified. Nia receives no playable action until the read-back succeeds.</p>
+        <code>${escapeHtml(receipt?.checkpointError || "Checkpoint read-back is pending")}</code>
+        <p>Use RETRY SOLANA CHECKPOINT in the evidence rail. The accepted ER event will not be submitted again.</p>
+      </div>`;
+  }
+
+  function renderGatewayOffline() {
+    const fallbackUrl = new URL(window.location.href);
+    fallbackUrl.searchParams.delete("transport");
+    elements.actorWorkspace.innerHTML = `
+      <div class="network-gate offline">
+        <span>MAGICBLOCK GATEWAY UNAVAILABLE</span>
+        <h2>The shared world is not reachable yet.</h2>
+        <p>${escapeHtml(gatewayError || "Waiting for the local gateway to report its state.")}</p>
+        <button type="button" class="ghost" id="retry-gateway">RETRY CONNECTION</button>
+        <a class="ghost link-button" href="${escapeHtml(fallbackUrl.toString())}">OPEN BROWSER-LOCAL FALLBACK</a>
+      </div>`;
+    document.getElementById("retry-gateway").addEventListener("click", () => {
+      refresh("retry").catch((error) => showToast(error.message, "error"));
+    });
+  }
+
+  function renderNetworkBootstrap() {
+    const resumeDelegation = Boolean(networkSession?.initialized && !networkSession?.delegated);
+    elements.actorWorkspace.innerHTML = `
+      <div class="network-gate">
+        <span>${resumeDelegation ? "BASE ACCOUNT READY · ER HANDOFF INCOMPLETE" : "NEW SHARED CIVILIZATION"}</span>
+        <h2>${resumeDelegation ? "Resume delegation to MagicBlock." : "Open East Sluice on MagicBlock."}</h2>
+        <p>${resumeDelegation
+          ? "The Worksite already exists on the local Solana base layer, but it is not delegated to the Ephemeral Rollup yet. Resume the handoff before any player action is enabled."
+          : "This creates the Worksite account on the local Solana base layer, then delegates it to the Ephemeral Rollup. Every role URL will read the same shared account."}</p>
+        <dl>
+          <div><dt>SESSION</dt><dd>${escapeHtml(sessionId)}</dd></div>
+          <div><dt>PROGRAM</dt><dd>${escapeHtml(shortHash(gatewayHealth?.programId || networkSession.descriptor?.programId))}</dd></div>
+          <div><dt>FUNDS</dt><dd>DISPOSABLE LOCALNET ONLY</dd></div>
+        </dl>
+        <button type="button" class="primary" id="bootstrap-network" ${actionPending ? "disabled" : ""}>${resumeDelegation ? "RESUME ER DELEGATION" : "INITIALIZE + DELEGATE WORKSITE"}</button>
+        <small>The local gateway temporarily holds the three disposable demo signers. Role URLs are presentation only, not authorization; production wallets and player session keys are not implemented in this slice.</small>
+      </div>`;
+    document.getElementById("bootstrap-network").addEventListener("click", bootstrapNetwork);
+  }
+
+  async function bootstrapNetwork() {
+    if (actionPending) return;
+    const resumeDelegation = Boolean(networkSession?.initialized && !networkSession?.delegated);
+    setActionPending(true);
+    showToast(resumeDelegation ? "Resuming ER delegation…" : "Creating and delegating the shared Worksite…", "success");
+    try {
+      const response = await api("/api/magicblock/bootstrap", {
+        method: "POST",
+        body: JSON.stringify({ session: sessionId })
+      });
+      acceptNetworkSession(response);
+      if (!response.initialized || !response.delegated) {
+        await refresh("network-response");
+        showToast("The Worksite is not delegated yet; retry the ER handoff", "error");
+        return;
+      }
+      if (channel) channel.postMessage({ type: "SESSION_UPDATED", sourceClientId: clientId, bootstrap: true });
+      await refresh("network-response");
+      showToast("Worksite delegated · real-time play is ready", "success");
+    } catch (error) {
+      showToast(error.message, "error");
+      await refresh("retry");
+    } finally {
+      setActionPending(false);
+      renderNetworkEvidence();
+    }
   }
 
   function choiceCard({ id, eyebrow, title, body, facts, disabled = false }) {
@@ -305,7 +525,9 @@
           ${choiceCard({ id: "charter", eyebrow: "LEGAL ROUTE", title: "Invoke the Founding Charter", body: "Compel access without a grain promise. Tala withdraws her engineers and seals the stair.", facts: ["NO DEBT", "TRUST −20", "STAIR LOCKED"] })}
         </div>`;
       elements.actorWorkspace.querySelectorAll("[data-choice]").forEach((button) => {
-        button.addEventListener("click", () => commitAction("MARA_CHOICE", { choice: button.dataset.choice }));
+        button.addEventListener("click", () => {
+          commitAction("MARA_CHOICE", { choice: button.dataset.choice }).catch(() => {});
+        });
       });
       return;
     }
@@ -351,7 +573,9 @@
               + choiceCard({ id: "reconcile", eyebrow: "CHARTER-ONLY ROUTE", title: "Return and Reconcile", body: "Negotiate a smaller obligation and reopen the service stair.", facts: ["FOOD DEBT +8", "TRUST +25", "R31-4"] })}
         </div>`;
       elements.actorWorkspace.querySelectorAll("[data-choice]").forEach((button) => {
-        button.addEventListener("click", () => commitAction("IVO_CHOICE", { choice: button.dataset.choice }));
+        button.addEventListener("click", () => {
+          commitAction("IVO_CHOICE", { choice: button.dataset.choice }).catch(() => {});
+        });
       });
       return;
     }
@@ -388,37 +612,181 @@
         </article>`).join("")}</div>
       ${assigned ? `<div class="continuation-proof"><b>EVENT 2 ACCEPTED</b><span>${state.acceptedMandate} changed from QUEUED → ASSIGNED.</span><em>SEASON ACTIVE · SETTLEMENT NOT STARTED</em></div>` : ""}`;
     elements.actorWorkspace.querySelectorAll("[data-mandate]").forEach((button) => {
-      button.addEventListener("click", () => commitAction("MANDATE_ACCEPTED", { mandateId: button.dataset.mandate }));
+      button.addEventListener("click", () => {
+        commitAction("MANDATE_ACCEPTED", { mandateId: button.dataset.mandate }).catch(() => {});
+      });
     });
   }
 
   function renderObserver(state) {
+    const checkpointBlocked = Boolean(magicBlockMode && pendingRequiredCheckpoint());
     const stageCopy = {
       mara: ["Open Mara's URL", "Commit the first civic decision. Ivo is currently blocked."],
       ivo: ["Watch Ivo inherit", `Mara chose ${state.maraChoice}. Ivo now has only the two legal branch actions.`],
       successor: ["Watch work propagate", `${state.worksiteResolution} generated three Mandates for the next citizens.`],
       continuing: ["Handoff proved", `${state.acceptedMandate} is assigned while Season Zero remains active.`]
     }[state.stage];
+    const thesisBoundary = magicBlockMode
+      ? "Dialogue is authored in this build. Rules are deterministic. Actions execute on a real local MagicBlock ER; Ivo's resolution requests a Solana base-layer checkpoint."
+      : "Dialogue is authored in this build. State transitions are deterministic. Nothing here is a Solana transaction.";
     elements.actorWorkspace.innerHTML = `
       <div class="observer-hero">
         <span>READ-ONLY JUDGE VIEW</span><h2>${stageCopy[0]}</h2><p>${stageCopy[1]}</p>
-        <div class="proof-thesis"><b>THE CLAIM</b><strong>A stranger's accepted action changes what another stranger can legally do next.</strong><small>Dialogue is authored in this build. State transitions are deterministic. Nothing here is a Solana transaction.</small></div>
+        <div class="proof-thesis"><b>THE CLAIM</b><strong>A stranger's accepted action changes what another stranger can legally do next.</strong><small>${thesisBoundary}</small></div>
       </div>
       <div class="observer-route">
         <span>OPEN EACH ROLE IN A SEPARATE TAB</span>
         <a href="${escapeHtml(currentUrl("mara"))}" target="_blank"><b>01</b><strong>Mara · Player A</strong><em>${state.maraChoice ? "COMMITTED" : "READY"}</em></a>
         <a href="${escapeHtml(currentUrl("ivo"))}" target="_blank"><b>02</b><strong>Ivo · Player B</strong><em>${state.ivoChoice ? "COMMITTED" : state.maraChoice ? "READY" : "BLOCKED"}</em></a>
-        <a href="${escapeHtml(currentUrl("successor"))}" target="_blank"><b>03</b><strong>Nia · Player C</strong><em>${state.acceptedMandate ? "ASSIGNED" : state.worksiteResolution ? "READY" : "BLOCKED"}</em></a>
+        <a href="${escapeHtml(currentUrl("successor"))}" target="_blank"><b>03</b><strong>Nia · Player C</strong><em>${checkpointBlocked ? "CHECKPOINT BLOCKED" : state.acceptedMandate ? "ASSIGNED" : state.worksiteResolution ? "READY" : "BLOCKED"}</em></a>
       </div>
-      <div class="boundary-grid"><div><span>AI LAYER</span><strong>Memory expression</strong><em>Authored stand-in</em></div><div><span>RULE LAYER</span><strong>Allowed actions + effects</strong><em>Functional locally</em></div><div><span>CANON LAYER</span><strong>Hash-chained events</strong><em>Local, not Solana</em></div></div>`;
+      <div class="boundary-grid"><div><span>AI LAYER</span><strong>Memory expression</strong><em>Authored stand-in</em></div><div><span>RULE LAYER</span><strong>Allowed actions + effects</strong><em>Deterministic program</em></div><div><span>CANON LAYER</span><strong>${magicBlockMode ? "ER state + checkpoint" : "Hash-chained events"}</strong><em>${magicBlockMode ? "Localnet, real transactions" : "Local, not Solana"}</em></div></div>
+      ${magicBlockMode ? `<p class="signer-boundary"><b>DEMO SECURITY BOUNDARY</b> Disposable localnet signers are held by the gateway for this playable slice. Production wallets and player session keys are not implemented.</p>` : ""}`;
+  }
+
+  function allInvariantResults(state) {
+    const invariants = Core.invariantResults(state, verification);
+    if (magicBlockMode && networkSession?.initialized) {
+      const chain = networkSession?.state;
+      const receipts = networkSession?.network?.receipts || [];
+      const latestEr = receipts.at(-1)?.er || null;
+      const requiredCheckpoint = pendingRequiredCheckpoint();
+      const checkpoint = requiredCheckpoint
+        ? null
+        : receipts.map((item) => item.checkpoint).filter(Boolean).at(-1);
+      const expectsCheckpoint = Boolean(state.ivoChoice);
+      invariants.push(
+        { label: "Worksite is delegated to the Ephemeral Rollup", pass: networkSession?.delegated === true },
+        { label: "ER account state root recomputes exactly", pass: Boolean(chain?.stateRootMatches) },
+        { label: "ER sequence equals replayed event count", pass: Boolean(chain) && chain.seq === store.events.length }
+      );
+      if (latestEr) {
+        invariants.push(
+          { label: "Read-back ER head matches latest ER receipt", pass: chain?.headEventHash === latestEr.headEventHash },
+          { label: "Read-back ER sequence matches latest ER receipt", pass: chain?.seq === latestEr.sequence },
+          { label: "Read-back ER root matches latest ER receipt", pass: chain?.stateRoot === latestEr.stateRoot }
+        );
+      } else {
+        invariants.push({ label: "Genesis has no player ER receipt", pass: Boolean(chain) && chain.seq === 0 && store.events.length === 0 });
+      }
+      if (expectsCheckpoint) {
+        invariants.push({
+          label: "Ivo result read back from Solana checkpoint",
+          pass: checkpoint?.settlement === "checkpoint-read-back-verified"
+            && checkpoint.stateRoot === receipts.find((item) => item.checkpoint === checkpoint)?.er?.stateRoot
+        });
+      }
+    }
+    return invariants;
   }
 
   function renderInvariants(state) {
-    const invariants = Core.invariantResults(state, verification);
+    const invariants = allInvariantResults(state);
     const passCount = invariants.filter((item) => item.pass).length;
     elements.invariantScore.textContent = `${passCount}/${invariants.length} PASS`;
     elements.invariantScore.classList.toggle("bad", passCount !== invariants.length);
     elements.invariantList.innerHTML = invariants.map((item) => `<div class="invariant ${item.pass ? "pass" : "fail"}"><i>${item.pass ? "✓" : "!"}</i><span>${escapeHtml(item.label)}</span></div>`).join("");
+  }
+
+  function signatureMarkup(receipt) {
+    if (!receipt?.signature) return "—";
+    const label = escapeHtml(shortHash(receipt.signature));
+    return receipt.explorerUrl
+      ? `<a href="${escapeHtml(receipt.explorerUrl)}" target="_blank" rel="noreferrer">${label} ↗</a>`
+      : `<code title="${escapeHtml(receipt.signature)}">${label}</code>`;
+  }
+
+  function renderNetworkEvidence() {
+    elements.networkEvidence.hidden = !magicBlockMode;
+    if (!magicBlockMode) return;
+
+    const receipts = networkSession?.network?.receipts || [];
+    const latest = receipts.at(-1) || null;
+    const latestEr = latest?.er || null;
+    const requiredCheckpoint = pendingRequiredCheckpoint();
+    const verifiedCheckpointReceipt = [...receipts].reverse().find((item) => item.checkpoint) || null;
+    const checkpoint = requiredCheckpoint ? null : verifiedCheckpointReceipt?.checkpoint || null;
+    const checkpointError = requiredCheckpoint
+      ? requiredCheckpoint.checkpointError || null
+      : [...receipts].reverse().find((item) => item.checkpointError)?.checkpointError || null;
+    const descriptor = networkSession?.descriptor;
+    const chain = networkSession?.state;
+    elements.networkLayer.textContent = gatewayError
+      ? "OFFLINE"
+      : !networkSession?.initialized
+        ? "NOT INITIALIZED"
+        : networkSession.delegated
+          ? "ER DELEGATED"
+          : "BASE LAYER";
+    elements.networkLayer.classList.toggle("bad", Boolean(gatewayError));
+
+    const erBody = latestEr
+      ? `<strong>${signatureMarkup(latestEr)}</strong><span>SEQ ${latestEr.sequence ?? "—"} · SLOT ${latestEr.slot ?? "—"}</span><code title="${escapeHtml(latestEr.stateRoot || "")}">ROOT ${escapeHtml(shortHash(latestEr.stateRoot))}</code><em>FAST CONFIRMATION · NOT YET SOLANA SETTLEMENT</em>`
+      : networkSession?.initialized && networkSession?.delegated
+        ? `<strong>WAITING FOR FIRST PLAYER ACTION</strong><span>The delegated Worksite is ready for Mara.</span><em>NO ER TRANSACTION YET</em>`
+        : networkSession?.initialized
+          ? `<strong>ER DELEGATION INCOMPLETE</strong><span>The base-layer Worksite exists, but player actions stay locked until delegation succeeds.</span><em>RESUME DELEGATION</em>`
+          : `<strong>WORKSITE NOT INITIALIZED</strong><span>Initialize and delegate this session before sending an action.</span><em>NO ER TRANSACTION YET</em>`;
+    let checkpointBody = `<strong>POLICY: AFTER IVO RESOLUTION</strong><span>No base-layer gameplay checkpoint is expected yet.</span><em>NOT REQUESTED</em>`;
+    let checkpointClass = "pending";
+    const retryCheckpointButton = requiredCheckpoint
+      ? `<button type="button" class="ghost compact" id="retry-checkpoint" ${actionPending ? "disabled" : ""}>${actionPending ? "RETRYING CHECKPOINT…" : "RETRY SOLANA CHECKPOINT"}</button>`
+      : "";
+    if (checkpoint) {
+      checkpointClass = "verified";
+      checkpointBody = `<strong>${signatureMarkup(checkpoint)}</strong><span>SEQ ${checkpoint.sequence ?? "—"} · SLOT ${checkpoint.slot ?? "—"}</span><code title="${escapeHtml(checkpoint.stateRoot || "")}">ROOT ${escapeHtml(shortHash(checkpoint.stateRoot))}</code><em>SOLANA READ-BACK VERIFIED</em>`;
+    } else if (checkpointError) {
+      checkpointClass = "failed";
+      checkpointBody = `<strong>CHECKPOINT NOT VERIFIED</strong><span>${escapeHtml(checkpointError)}</span><em>ER RECEIPT IS NOT LABELED AS SOLANA</em>${retryCheckpointButton}`;
+    } else if (requiredCheckpoint) {
+      checkpointBody = `<strong>AWAITING VERIFIED READ-BACK</strong><span>Ivo's ER action is accepted. The next handoff stays locked until the base account matches this root.</span><em>REQUIRED · PENDING</em>${retryCheckpointButton}`;
+    } else if (verification?.finalState?.ivoChoice) {
+      checkpointBody = `<strong>AWAITING VERIFIED READ-BACK</strong><span>The UI will only label this settled after the base account matches the ER root.</span><em>PENDING</em>`;
+    }
+
+    elements.networkReceiptList.innerHTML = `
+      <article class="layer-receipt er"><header><b>REAL-TIME ER TRANSACTION</b><i>${latestEr ? "ACCEPTED" : "WAITING"}</i></header>${erBody}</article>
+      <article class="layer-receipt checkpoint ${checkpointClass}"><header><b>SOLANA CHECKPOINT</b><i>${checkpoint ? "VERIFIED" : checkpointError ? "FAILED" : "WAITING"}</i></header>${checkpointBody}</article>`;
+    elements.networkBoundary.innerHTML = `
+      <span>PROGRAM <code title="${escapeHtml(descriptor?.programId || "")}">${escapeHtml(shortHash(descriptor?.programId))}</code></span>
+      <span>WORKSITE <code title="${escapeHtml(descriptor?.worksitePda || "")}">${escapeHtml(shortHash(descriptor?.worksitePda))}</code></span>
+      <span>ER SEQ <code>${chain?.seq ?? "—"}</code></span>
+      <small>Disposable local demo signers are gateway-held. Role URLs are presentation only, not authorization; production wallet approval and player session keys remain future work.</small>`;
+    const retryButton = document.getElementById("retry-checkpoint");
+    if (retryButton) retryButton.addEventListener("click", retrySolanaCheckpoint);
+  }
+
+  async function retrySolanaCheckpoint() {
+    if (actionPending || !pendingRequiredCheckpoint()) return;
+    actionPending = true;
+    elements.app.dataset.pending = "true";
+    const button = document.getElementById("retry-checkpoint");
+    if (button) {
+      button.disabled = true;
+      button.textContent = "RETRYING CHECKPOINT…";
+    }
+    showToast("Retrying the required Solana checkpoint…", "success");
+    try {
+      const response = await api("/api/magicblock/checkpoint", {
+        method: "POST",
+        body: JSON.stringify({ session: sessionId })
+      });
+      acceptNetworkSession(response);
+      if (channel) channel.postMessage({ type: "SESSION_UPDATED", sourceClientId: clientId, checkpoint: true });
+      await refresh("network-response");
+      const unresolved = pendingRequiredCheckpoint(response);
+      if (unresolved) {
+        showToast(unresolved.checkpointError || "Checkpoint is still pending", "error");
+      } else {
+        showToast("Solana checkpoint verified · next handoff unlocked", "success");
+      }
+    } catch (error) {
+      showToast(error.message, "error");
+      await refresh("retry");
+    } finally {
+      setActionPending(false);
+      renderNetworkEvidence();
+    }
   }
 
   function eventTitle(event) {
@@ -508,14 +876,24 @@
       schemaVersion: Core.SCHEMA_VERSION,
       buildId: Core.BUILD_ID,
       sessionId,
-      localProofDisclosure: Core.DISCLOSURE,
+      localProofDisclosure: store.localProofDisclosure || Core.DISCLOSURE,
+      networkDisclosure: magicBlockMode
+        ? (networkSession?.disclosure || "MAGICBLOCK NETWORK EVIDENCE · SEE NETWORK RECEIPTS AND CLUSTER")
+        : null,
       seed: store.seed,
       genesisHash: verification.genesisHash,
       events: Core.clone(store.events),
       finalState: Core.clone(state),
       finalStateHash: verification.finalStateHash,
       headEventHash: verification.headEventHash,
-      invariantResults: Core.invariantResults(state, verification),
+      invariantResults: allInvariantResults(state),
+      network: magicBlockMode && networkSession ? Core.clone({
+        cluster: networkSession.cluster,
+        descriptor: networkSession.descriptor,
+        state: networkSession.state,
+        delegated: networkSession.delegated,
+        receipts: networkSession.network?.receipts || []
+      }) : null,
       verification: { valid: verification.valid, errors: Core.clone(verification.errors) },
       exportedAt: new Date().toISOString()
     };
@@ -537,6 +915,15 @@
   }
 
   function resetProof() {
+    if (magicBlockMode) {
+      if (!window.confirm("Start a fresh MagicBlock session? The current shared account and its receipts will remain intact.")) return;
+      const nextSession = sanitizeSession(`aster-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 6)}`);
+      const url = new URL(window.location.href);
+      url.searchParams.set("session", nextSession);
+      url.searchParams.set("transport", "magicblock");
+      window.location.assign(url);
+      return;
+    }
     if (!window.confirm(`Reset only the local proof session “${sessionId}”?`)) return;
     const resetStore = newStore();
     saveStore(resetStore);
@@ -564,6 +951,7 @@
   });
   document.getElementById("export-proof").addEventListener("click", exportProof);
   document.getElementById("reset-proof").addEventListener("click", resetProof);
+  if (magicBlockMode) document.getElementById("reset-proof").textContent = "START A FRESH SHARED SESSION";
 
   window.addEventListener("storage", (event) => {
     if (event.key === storageKey) refresh("storage");
@@ -572,7 +960,11 @@
   if (channel) {
     channel.addEventListener("message", (event) => {
       const message = event.data || {};
-      if (message.type === "SESSION_UPDATED" && message.sourceClientId !== clientId) refresh("broadcast");
+      if (message.type === "SESSION_UPDATED" && message.sourceClientId !== clientId) {
+        refresh(magicBlockMode ? "network-broadcast" : "broadcast").catch((error) => {
+          gatewayError = error.message;
+        });
+      }
       if (message.type === "PRESENCE") {
         presence.set(message.clientId, message);
         renderPresence();
@@ -587,21 +979,44 @@
     if (channel) channel.postMessage({ type: "PING", sourceClientId: clientId });
   }, 2500);
 
+  if (magicBlockMode) {
+    setInterval(async () => {
+      if (pollInFlight || actionPending || document.hidden) return;
+      pollInFlight = true;
+      try {
+        await refresh("network-poll");
+      } finally {
+        pollInFlight = false;
+      }
+    }, 1250);
+  }
+
   window.__proofLab = {
     role,
     sessionId,
     clientId,
+    transport,
     storageKey,
     commitAction,
     refresh,
     buildExport,
     async getSnapshot() {
       await refresh("qa");
-      return { store: Core.clone(store), verification: Core.clone(verification), role, clientId };
+      return {
+        store: Core.clone(store),
+        verification: Core.clone(verification),
+        networkSession: networkSession ? Core.clone(networkSession) : null,
+        role,
+        clientId,
+        transport
+      };
     }
   };
 
-  refresh("initial").catch((error) => {
+  (async () => {
+    await loadGatewayHealth();
+    await refresh("initial");
+  })().catch((error) => {
     console.error(error);
     showToast(error.message, "error");
   });

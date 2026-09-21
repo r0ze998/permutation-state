@@ -32,7 +32,15 @@ Mara makes a civic promise
 
 ## Run It
 
-Open `index.html` directly, or serve this directory locally:
+The primary playable build uses the companion MagicBlock gateway. Follow [`../permutation-state-solana-receipt-spike/README.md`](../permutation-state-solana-receipt-spike/README.md), then open:
+
+```text
+http://127.0.0.1:4173/proof/?proof=1&session=aster-demo&role=observer&transport=magicblock
+```
+
+This mode creates one shared Worksite on the local Solana base layer, delegates it to the local Ephemeral Rollup, and lets Mara, Ivo, and Nia change the same account from separate role URLs. Those URLs are presentation and turn-taking aids, not player authentication; the gateway holds all three disposable demo signers. Ivo's local resolution requests a base-layer checkpoint; the UI labels the ER transaction and verified checkpoint separately. The implemented path is a finite three-action vertical slice, not the complete ongoing season loop.
+
+For the browser-local fallback, open `index.html` directly or serve this directory without the gateway:
 
 ```bash
 python3 -m http.server 4173
@@ -40,13 +48,13 @@ python3 -m http.server 4173
 
 Then visit `http://localhost:4173`.
 
-For the separate-client causal proof, open:
+Then open:
 
 ```text
 http://localhost:4173/proof/?proof=1&session=aster-demo&role=observer
 ```
 
-The Observer view links to three role-locked URLs for Mara, Ivo, and the next citizen. Keep them open in separate tabs to watch accepted events propagate live.
+The Observer view links to three role-locked URLs for Mara, Ivo, and the next citizen. Keep them open in separate tabs to watch accepted events propagate. Omitting `transport=magicblock` intentionally uses the browser-local proof and sends no transaction.
 
 The prototype stores the local world state in browser local storage. Use **Reset** to restore Aster to the start of the East Sluice crisis.
 
@@ -60,7 +68,7 @@ The prototype stores the local world state in browser local storage. Use **Reset
 - **Purse:** inspect the active mock Season Purse and settlement status.
 - **Top resource ribbon:** inspect the civilization's persistent state and current Prosperity Path progress.
 - **Close (`×`):** dismiss the context drawer without leaving or resetting the map.
-- **Reset:** clear this browser's local prototype state. No remote or onchain record is affected.
+- **Reset:** in browser-local mode, clear this browser's proof state. In MagicBlock mode, start a fresh session ID; the prior Worksite and receipts remain intact.
 - **Keyboard:** use `Tab` / `Shift+Tab` to move through controls and `Enter` or `Space` to activate focused buttons.
 
 ## Recommended 90-Second Route
@@ -125,18 +133,20 @@ The Purse panel may show simulated entry and marketplace allocations, but no Eas
 - Browser-local persistence, reset, keyboard-operable buttons, and reduced-motion support.
 - A separate multi-client Handoff Proof in `proof/`: URL-locked Mara, Ivo, successor, and read-only Observer views share an append-only local event log across tabs.
 - SHA-256 event chaining, deterministic replay, branch and order enforcement, cross-tab head agreement, generated-Mandate acceptance, fail-closed integrity checks, and replayable `session-proof.json` export.
+- An optional real local MagicBlock transport: base-layer Worksite initialization, Delegation Program CPI, ER actions, continued shared play, and a root-verified base-layer checkpoint after Ivo.
+- Separate ER and base-layer receipts, public Program ID and Worksite PDA, sequence/root invariants, 1.25-second polling, and fresh-session reset semantics.
 
 ## What Is Simulated or Planned
 
-- No wallet is connected.
-- No Solana transaction is sent.
-- Canonical memories and Worksite resolutions are stored locally, not onchain.
+- No player wallet is connected. The local gateway holds three disposable demo signers; production wallet approval and Session Keys are future work.
+- The default MagicBlock path sends real transactions only to the isolated local stack. Nothing is deployed to public devnet or mainnet.
+- The full prose memory and browser evidence log remain offchain; the deterministic Worksite branch, resources, role progression, resolution, Mandate IDs/status, roots, and event head are stored in the delegated account.
 - Currency is `MOCK USDC`; no real funds move and no claim is executed.
 - Tala's lines are authored to demonstrate the intended AI boundary. A future model may vary expression, but not rules, Worksite effects, eligibility, or value movement.
 - Forty active citizens, other Worksites, the remainder of Epoch 3, and the final season settlement are scenario assumptions outside this vertical slice.
-- The Handoff Proof uses same-origin `localStorage` plus `BroadcastChannel` on one device. It proves separate browser clients and deterministic causal propagation, not separate wallets, a remote multiplayer backend, or Solana consensus.
+- The browser-local fallback uses same-origin `localStorage` plus `BroadcastChannel`. The MagicBlock path uses a shared local validator account plus polling/BroadcastChannel, but still does not prove remote hosting, separate wallets, public Solana consensus, or production security.
 
-The UI must continue to label these boundaries. Do not remove `SIMULATED WORLD`, `MOCK USDC`, or the not-onchain/not-started disclosures until genuine integrations replace them.
+The UI must continue to label these boundaries. Do not remove `SIMULATED WORLD`, `MOCK USDC`, localnet, disposable-signer, or not-started disclosures until genuine integrations replace them.
 
 ## Presenter Preview Routes
 
@@ -170,7 +180,7 @@ http://localhost:4173/?preview=scene-b-oath&judge=1
 |---|---|---|
 | AI | Character voice, bounded memory expression, contextual stakes, candidate intent | Decide Worksite effects, season victory, eligibility, settlement, or directly mutate canonical state |
 | Deterministic resolver | Validate actions, apply bounded deltas, assign R31 resolution IDs, and update published civilization state | Invent narrative facts or move funds outside published rules |
-| Solana — planned | Commit accepted civic outcomes, season rules, treasury state, final settlement, and claims | Treat arbitrary model prose as verified truth or settle after a local Worksite alone |
+| Solana + MagicBlock — local slice | Enforce accepted Worksite outcomes on the ER and checkpoint important state roots to the local base layer | Treat arbitrary model prose as verified truth or settle after a local Worksite alone |
 
 ## Included Files
 
@@ -185,4 +195,4 @@ http://localhost:4173/?preview=scene-b-oath&judge=1
 
 This is a hackathon validation artifact, not a production wallet, finished seasonal game, or real-money application.
 
-The companion [`../permutation-state-solana-receipt-spike/`](../permutation-state-solana-receipt-spike/README.md) contains the host-tested, non-deployed native-Rust program and JavaScript adapter for the next devnet proof gate. It must not be presented as an onchain integration until a deployed transaction is confirmed and its Worksite PDA root is read back.
+The companion [`../permutation-state-solana-receipt-spike/`](../permutation-state-solana-receipt-spike/README.md) contains the native-Rust program, transport, gateway, reproducible local runner, and exact public-devnet limitations. The local integration is verified; public devnet remains a separate proof gate.
