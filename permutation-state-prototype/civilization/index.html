@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
-  <main id="game" aria-label="共有文明アスター">
+  <main id="game" aria-label="私たちの共有文明">
     <canvas id="world-map" aria-label="文明の地図。クリックで選択、ドラッグで移動、ホイールで拡大。右側のパネルから行動できます。" tabindex="0"></canvas>
     <div class="map-vignette" aria-hidden="true"></div>
     <header class="topbar">
@@ -18,7 +18,7 @@
     </header>
     <section class="civ-plate" aria-label="文明の目標">
       <div class="eyebrow"><span class="live-dot"></span> ONE SHARED CIVILIZATION</div>
-      <h1>Aster<span>アスター</span></h1>
+      <h1>私たちの文明<span>OUR CIVILIZATION</span></h1>
       <div id="world-time" class="world-time">開拓の時代 · DAY 01</div>
       <button id="ambition-toggle" class="ambition-toggle" aria-expanded="false"><span>文明の展望</span><span id="ambition-count">0 / 3</span><span>⌄</span></button>
       <div id="ambitions" hidden></div>
@@ -52,15 +52,16 @@
     </section>
     <div id="notifications" class="notifications" role="status" aria-live="polite"></div>
     <div class="prototype-label">PLAYABLE PROTOTYPE <span>共有サーバー版 · 実資金なし</span></div>
-    <div id="loading" class="loading-screen"><div class="loading-symbol">✳</div><h2>ひとつの世界に、集まろう。</h2><p id="loading-message">アスターの現在を読み込んでいます…</p><button id="retry" class="primary-button" hidden>再接続する</button></div>
+    <div id="loading" class="loading-screen"><div class="loading-symbol">✳</div><h2>ひとつの世界に、集まろう。</h2><p id="loading-message">文明の現在を読み込んでいます…</p><button id="retry" class="primary-button" hidden>再接続する</button></div>
     <dialog id="help-dialog" class="help-dialog">
       <button class="dialog-close icon-button" data-close-dialog="help-dialog" aria-label="閉じる">×</button>
-      <div class="eyebrow">WELCOME TO ASTER</div><h2>次の街の姿を、<br>あなたが決める。</h2>
+      <div class="eyebrow">WELCOME, CITIZEN</div><h2>次の街の姿を、<br>あなたが決める。</h2>
       <p class="intro">ここにいる全員で、一つの文明を育てます。正解の順番も、決められた結末もありません。</p>
       <ol class="help-steps"><li><strong>地形を選ぶ</strong><p>森、丘、平原をクリック。資源と建設できる施設を確認します。</p></li><li><strong>市民として現地へ行く</strong><p>「ここへ移動」、またはダブルクリック。道を通り、近くで採集・建設します。</p></li><li><strong>何を育てるか決める</strong><p>農場で食料、製材所で木材、工房で道具。共有資源を使うので、街全体を見て選びましょう。</p></li><li><strong>変わった世界を読む</strong><p>施設が生産し、運び手が物資を届けます。レンズと「あなたにできること」が次の判断を助けます。</p></li></ol>
       <div class="help-note">世界は全員で同時に進行します。NPCはルールで働く試作版です。生成AI、戦闘、実際の賞金決済はまだ含みません。</div>
       <div class="help-controls">ドラッグ：地図移動　スクロール：拡大縮小　F：自分へ　N：次の提案　Esc：閉じる</div>
-      <button class="primary-button wide" data-close-dialog="help-dialog">アスターを歩く <span>→</span></button>
+      <a class="guide-link" href="./guide.html" target="_blank" rel="noopener">詳しいプレイガイドを開く ↗</a>
+      <button class="primary-button wide" data-close-dialog="help-dialog">文明に参加する <span>→</span></button>
     </dialog>
     <dialog id="confirm-dialog" class="confirm-dialog"><div id="confirm-content"></div></dialog>
   </main>

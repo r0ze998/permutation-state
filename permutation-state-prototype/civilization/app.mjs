@@ -1,9 +1,11 @@
 import { CivilizationMap } from './map.mjs';
+import { chronicleText } from './copy.mjs';
 import { BUILDINGS, TECHNOLOGIES, getBuildPreview, getRoadPreview, getResearchPreview, getCitizenTasks, hexDistance, tileById } from './core.mjs';
 
 const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const params = new URLSearchParams(location.search);
+// Legacy storage key, not the display name. Keep this stable so saved worlds and citizen tokens survive.
 const session = params.get('session') || 'aster';
 const identityKey = `permutation.citizen.v2:${session}`;
 let identity;
@@ -84,7 +86,7 @@ function receive(snapshot) {
     const lastIndex = events.findIndex((event) => event.id === lastEventId);
     if (lastIndex >= 0) {
       const important = events.slice(lastIndex + 1).filter((event) => /complete|discover|research|built|finished/i.test(event.type));
-      important.slice(-1).forEach((event) => notify(event.text));
+      important.slice(-1).forEach((event) => notify(chronicleText(event)));
     }
   }
   lastEventId = events.at(-1)?.id ?? lastEventId;
@@ -95,14 +97,14 @@ async function join() {
   reconnecting = true;
   clearTimeout(pollTimer);
   $('retry').hidden = true;
-  $('loading-message').textContent = 'アスターの現在を読み込んでいます…';
+  $('loading-message').textContent = '文明の現在を読み込んでいます…';
   try {
     const result = await api('/api/civilization/join', { session, actorId:identity.actorId, name:identity.name, ...(identity.token ? {token:identity.token} : {}) });
     identity.token = result.token; sessionStorage.setItem(identityKey, JSON.stringify(identity));
     receive(result); joined = true;
     $('loading').hidden = true;
     if (!sessionStorage.getItem('permutation.civilization.welcome.v2')) {
-      notify('ようこそ、アスターへ。土地を選ぶと、できることが見えます。');
+      notify('ようこそ、私たちの文明へ。土地を選ぶと、できることが見えます。');
       sessionStorage.setItem('permutation.civilization.welcome.v2', '1');
     }
     schedulePoll();
@@ -165,7 +167,7 @@ function renderAmbitions() {
 }
 function renderCitizen() {
   const p = citizen(); if (!p) return;
-  $('citizen-name').textContent = `${p.name} · アスターの市民`;
+  $('citizen-name').textContent = `${p.name} · 文明の市民`;
   document.querySelector('.citizen-avatar').textContent = p.name.slice(0,1);
   const cargo = p.cargo ? `${resourceNames[p.cargo.resource] || p.cargo.resource} ${number(p.cargo.amount)}` : '';
   const status = p.job ? ({build:'建設中',gather:'採集中',road:'道路を整備中',explore:'探索中'}[p.job.type] || '作業中') : p.path?.length ? '移動中' : '自由に行動できます';
@@ -200,7 +202,7 @@ function renderInspector() {
     if (b.reason) body += `<div class="explanation">${esc(b.reason)}</div>`;
     const goods = Object.entries(b.localStock || {}).filter(([,v]) => v > 0);
     if (goods.length) body += `<div class="section-label">現地の出荷待ち</div><div class="costs" style="margin:0">${costMarkup(Object.fromEntries(goods))}</div><p class="selection-description">物資は運び手が広場に届けると、共有備蓄に加わります。</p>`;
-    if (b.ownerId) body += `<p class="mini-label">建設者：${esc(world.players[b.ownerId]?.name || 'アスターの市民')}</p>`;
+    if (b.ownerId) body += `<p class="mini-label">建設者：${esc(world.players[b.ownerId]?.name || '文明の市民')}</p>`;
     const moving = world.caravans.filter((c) => c.fromTileId === tile.id);
     if (moving.length) body += `<div class="section-label">運搬中</div>${moving.map((c) => `<p class="selection-description">${icons[c.resource] || '◇'} ${resourceNames[c.resource] || c.resource} ${number(c.amount)} → 広場 <span>${Math.floor(c.progress*100)}%</span></p>`).join('')}`;
   }
@@ -251,7 +253,7 @@ function renderDrawer() {
   $('drawer').hidden = !drawer || !world;
   document.querySelectorAll('[data-drawer]').forEach((b) => { b.classList.toggle('active', b.dataset.drawer === drawer); b.setAttribute('aria-expanded', String(b.dataset.drawer === drawer)); });
   if (!drawer || !world) return;
-  const names = { settlement:'街と生産', economy:'共有経済', research:'知識と技術', chronicle:'アスターの文明史' };
+  const names = { settlement:'街と生産', economy:'共有経済', research:'知識と技術', chronicle:'私たちの文明史' };
   let html = `<div class="panel-header"><h2>${names[drawer]}</h2><button class="panel-close" data-close-drawer aria-label="閉じる">×</button></div>`;
   if (drawer === 'settlement') {
     html += '<p class="drawer-intro">施設を選ぶと現地へ。材料と物流の状態が、生産を決めます。</p>';
@@ -270,7 +272,7 @@ function renderDrawer() {
     }).join('');
   } else if (drawer === 'chronicle') {
     html += '<p class="drawer-intro">台本ではなく、市民の行動と世界の変化の記録。</p>';
-    html += [...world.events].reverse().slice(0,35).map((event) => `<div class="event"><small>DAY ${Math.floor(event.timeMs / 300000)+1} · ${Math.floor(event.timeMs / 1000)}s</small><p>${esc(event.text)}</p>${event.tileId ? `<button data-focus-tile="${esc(event.tileId)}">現地を見る ↗</button>` : ''}</div>`).join('');
+    html += [...world.events].reverse().slice(0,35).map((event) => `<div class="event"><small>DAY ${Math.floor(event.timeMs / 300000)+1} · ${Math.floor(event.timeMs / 1000)}s</small><p>${esc(chronicleText(event))}</p>${event.tileId ? `<button data-focus-tile="${esc(event.tileId)}">現地を見る ↗</button>` : ''}</div>`).join('');
   }
   setHtml('drawer', html);
 }

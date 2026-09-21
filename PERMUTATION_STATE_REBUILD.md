@@ -76,7 +76,8 @@ player's entire civilization. Research tech IDs: agriculture, logistics, metallu
 
 ## Gateway / browser contract
 
-Default public local season is `aster`; additional session IDs are test isolation only.
+The display name is 「私たちの文明」. The default local storage/session ID remains `aster` solely
+for save and citizen-token compatibility; it is not a public brand. Additional IDs are test isolation only.
 Browser-generated identity is stored in sessionStorage, not role-specific links.
 
 ```

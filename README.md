@@ -12,6 +12,10 @@ experiments remain available separately and are not represented as proof that th
 
 ## Play
 
+**日本語:** [プレイガイド](PLAY_GUIDE.ja.md) — 操作方法、最初の5分、施設・物流・探索・研究。
+ゲーム右上の「？」からも、[画面版ガイド](http://127.0.0.1:4173/civilization/guide.html)を開けます。
+文明の画面上の呼び名は「私たちの文明」です。ゲームタイトルは **PERMUTATION STATE** のままです。
+
 No blockchain stack or npm installation is necessary for the new game:
 
 ```sh
@@ -29,7 +33,8 @@ to this repository; both server modes share it. For isolated tests, set
 `PERMSTATE_CIVILIZATION_WORK_DIR` on the standalone server. Its port can be changed with
 `CIVILIZATION_PORT=4173 npm run start:civilization`.
 
-The default season is `aster`: every ordinary game tab joins the same civilization. Each tab has
+Every ordinary game tab joins the same civilization. The legacy storage ID `aster` is retained
+only for save compatibility; it is not the civilization's display name. Each tab has
 a separate citizen capability stored in sessionStorage; reload resumes that citizen. Closing the
 tab ends that local identity, but never resets the world. These are local prototype capabilities,
 not wallet accounts or a production anti-abuse identity system.
@@ -77,6 +82,7 @@ after server downtime is bounded to 60 seconds; it does not invent unlimited off
 
 ```sh
 node --check permutation-state-prototype/civilization/app.mjs
+node --check permutation-state-prototype/civilization/copy.mjs
 node --check permutation-state-prototype/civilization/map.mjs
 node --test permutation-state-prototype/civilization/*.test.mjs
 cd permutation-state-solana-receipt-spike

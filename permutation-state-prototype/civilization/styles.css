@@ -8,3 +8,6 @@
 @media(max-width:850px){.inspector{top:auto;bottom:192px;left:75px;right:15px;width:auto;max-height:34vh}.drawer{top:auto;bottom:192px;left:75px;right:15px;width:auto;max-height:38vh}.selection-description{margin:8px 0}.inspector .selection-meta{margin:8px 0}.next-action{max-height:148px;overflow:hidden}}
 @media(max-width:540px){.inspector,.drawer{left:65px;right:12px;bottom:190px;max-height:34vh}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important;scroll-behavior:auto!important}}
+.civ-plate h1{font-size:29px;letter-spacing:.02em;margin:10px 0 8px;line-height:1.3}.civ-plate h1 span{display:block;font-size:8px;font-weight:500;letter-spacing:2.1px;margin:6px 0 0;color:#546659}.guide-link{display:inline-block;margin:0 0 20px;color:var(--green-deep);font-size:11px;text-underline-offset:4px;line-height:1.7}.guide-link:hover{color:#916b2d}
+@media(max-width:850px){.civ-plate h1{font-size:25px;margin:8px 0}.civ-plate h1 span{font-size:7px;letter-spacing:1.6px;margin-top:5px}}
+@media(max-width:540px){.civ-plate h1{font-size:23px}}

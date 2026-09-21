@@ -11,7 +11,7 @@ import {
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_DIR = path.resolve(MODULE_DIR, "..");
 // Use the same default state root as the full gateway so switching between the
-// chain-independent server and port 4173 does not create a second Aster.
+// chain-independent server and port 4173 does not create a second civilization.
 // Only one writer should serve a given workDir at a time.
 const DEFAULT_WORK_DIR = path.resolve(PROJECT_DIR, "../../work/devnet");
 const DEFAULT_STATIC_DIR = path.resolve(PROJECT_DIR, "../permutation-state-prototype");

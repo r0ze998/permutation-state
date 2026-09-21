@@ -20,6 +20,7 @@ jobs:
         run: |
           node --check permutation-state-prototype/app.js
           node --check permutation-state-prototype/civilization/app.mjs
+          node --check permutation-state-prototype/civilization/copy.mjs
           node --check permutation-state-prototype/civilization/map.mjs
           node --check permutation-state-prototype/civilization/core.mjs
           node --check permutation-state-prototype/world/app.js

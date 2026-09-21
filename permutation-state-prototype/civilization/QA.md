@@ -10,6 +10,16 @@
 All 81 tests passed together. The archived world's 13 regression tests also passed (94 total).
 Source syntax and `git diff --check` passed.
 
+## Naming and play-guide follow-up — 2026-09-21
+
+- Replaced the temporary civilization name with 「私たちの文明」 across the active game's UI.
+- Added two copy-compatibility tests: old system messages are presented without the retired name,
+  while player names and persisted event text remain untouched. All 96 JavaScript tests passed.
+- Restarted the integrated gateway on 4173: the same three citizens, four buildings and 22 discovered
+  tiles remained. Existing browser authorization resumed without a world reset.
+- Inspected the updated title, citizen card, legacy history entries and help dialog in the actual browser.
+- Added the Japanese player guide; archived proof routes are not rebranded or advertised as the active game.
+
 ## Actual browser play
 
 The following was exercised through the browser UI, not by injecting state:

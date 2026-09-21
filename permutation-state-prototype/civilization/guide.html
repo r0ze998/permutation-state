@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#213f34">
+  <meta name="description" content="PERMUTATION STATEの日本語プレイガイド。ひとつの共有文明で、移動・建設・物流・研究を進める方法を紹介します。">
+  <title>プレイガイド — PERMUTATION STATE</title>
+  <link rel="stylesheet" href="./guide.css">
+</head>
+<body>
+  <a class="skip-link" href="#guide-main">本文へ移動</a>
+
+  <header class="site-header">
+    <a class="brand" href="./" aria-label="PERMUTATION STATEのゲームへ戻る">
+      <span class="brand-mark" aria-hidden="true">✳</span>
+      <span class="brand-name">PERMUTATION <em>STATE</em></span>
+    </a>
+    <span class="header-label">PLAYER'S FIELD GUIDE</span>
+    <a class="back-link" href="./">ゲームへ戻る <span aria-hidden="true">→</span></a>
+  </header>
+
+  <main id="guide-main">
+    <section class="hero" aria-labelledby="page-title">
+      <div class="hero-copy">
+        <p class="eyebrow"><span></span> LOCAL SHARED PROTOTYPE</p>
+        <h1 id="page-title">私たちの文明を、<br>どう育てるか。</h1>
+        <p class="hero-lead">ここでは、一人ずつが別の国を持つのではありません。同じ世界にいる市民として、ひとつの地図、ひとつの備蓄、ひとつの文明の未来を共有します。</p>
+        <div class="hero-actions">
+          <a class="button primary" href="./">文明に参加する <span aria-hidden="true">→</span></a>
+          <a class="button secondary" href="#first-five">最初の5分を見る</a>
+        </div>
+      </div>
+      <aside class="hero-card" aria-label="この試作の特徴">
+        <p class="card-kicker">AT A GLANCE</p>
+        <dl>
+          <div><dt>世界</dt><dd>全員でひとつ</dd></div>
+          <div><dt>進行</dt><dd>同じ時間でリアルタイム</dd></div>
+          <div><dt>目的</dt><dd>共同で繁栄の形を選ぶ</dd></div>
+          <div><dt>参加</dt><dd>無料・ウォレット不要</dd></div>
+        </dl>
+        <p class="hero-note">現在は、同じローカルサーバーにつながった人同士で遊ぶ試作です。公開MMOではありません。</p>
+      </aside>
+    </section>
+
+    <div class="page-grid">
+      <aside class="contents" aria-label="目次">
+        <p class="contents-title">CONTENTS</p>
+        <nav>
+          <a href="#how-it-works"><span>01</span>ゲームの見方</a>
+          <a href="#first-five"><span>02</span>最初の5分</a>
+          <a href="#movement"><span>03</span>移動と現地行動</a>
+          <a href="#logistics"><span>04</span>建設と物流</a>
+          <a href="#research"><span>05</span>探索と研究</a>
+          <a href="#controls"><span>06</span>操作一覧</a>
+          <a href="#troubleshooting"><span>07</span>困ったとき</a>
+          <a href="#prototype"><span>08</span>現在の試作範囲</a>
+        </nav>
+        <div class="contents-tip">
+          <span aria-hidden="true">✦</span>
+          <p><strong>正解の順番はありません。</strong>文明に今足りないものを見て、次の一手を選びましょう。</p>
+        </div>
+      </aside>
+
+      <div class="guide-body">
+        <section id="how-it-works" class="guide-section">
+          <div class="section-heading">
+            <p class="section-number">01 · THE SHARED WORLD</p>
+            <h2>まず、ゲームの見方</h2>
+            <p>あなたは地図の外から命令する神ではなく、世界の中を歩く一人の市民です。建設、採集、探索、研究は、目的地へ移動してから行います。</p>
+          </div>
+
+          <div class="principle-grid">
+            <article>
+              <span class="principle-icon" aria-hidden="true">⌖</span>
+              <h3>あなたの身体がある</h3>
+              <p>市民は地図上を実際に移動します。遠くの土地へ、その場から建物を置くことはできません。</p>
+            </article>
+            <article>
+              <span class="principle-icon" aria-hidden="true">▥</span>
+              <h3>資源は全員のもの</h3>
+              <p>画面上部の食料・木材・石材などは共有備蓄です。誰かの投資が、全員の次の選択を変えます。</p>
+            </article>
+            <article>
+              <span class="principle-icon" aria-hidden="true">⇄</span>
+              <h3>世界は動き続ける</h3>
+              <p>他の市民、働き手、運び手も同じ世界で進行します。結果は、接続している全員の画面に反映されます。</p>
+            </article>
+          </div>
+
+          <div class="screen-map" aria-label="画面の主な場所">
+            <div class="screen-map-copy">
+              <p class="mini-kicker">READING THE SCREEN</p>
+              <h3>迷ったら、この4か所を見る</h3>
+            </div>
+            <ol>
+              <li><span>1</span><div><strong>画面上部</strong><p>文明全体の共有資源と接続状態。</p></div></li>
+              <li><span>2</span><div><strong>中央の地図</strong><p>市民、土地、道路、施設、運搬の現在地。</p></div></li>
+              <li><span>3</span><div><strong>右下「あなたにできること」</strong><p>今できそうな行動の提案。選ぶかどうかは自由です。</p></div></li>
+              <li><span>4</span><div><strong>街・経済・研究・歴史</strong><p>生産、物流、技術、文明で起きた出来事の全体像。</p></div></li>
+            </ol>
+          </div>
+        </section>
+
+        <section id="first-five" class="guide-section">
+          <div class="section-heading">
+            <p class="section-number">02 · YOUR FIRST FIVE MINUTES</p>
+            <h2>最初の5分</h2>
+            <p>固定クエストをなぞるゲームではありません。まず世界を読み、いま必要だと思う仕事をひとつ選んでみてください。</p>
+          </div>
+
+          <ol class="steps">
+            <li>
+              <div class="step-number">01</div>
+              <div><h3>地形をひとつ選ぶ</h3><p>森、丘陵、草原のどれかをクリックします。詳細パネルに、その土地の資源と可能な行動が表示されます。狭い画面ではパネルが下側に開きます。</p></div>
+            </li>
+            <li>
+              <div class="step-number">02</div>
+              <div><h3>現地へ向かう</h3><p>「ここへ移動」を押すか、既知の陸地をダブルクリック。市民が歩き始めます。水域や未探索地は通れません。</p></div>
+            </li>
+            <li>
+              <div class="step-number">03</div>
+              <div><h3>小さく貢献する</h3><p>近くに資源があれば「採集して運ぶ」。未知の境界なら「周辺の未知の土地を探索」。まず一度、行動の結果を見てみましょう。</p></div>
+            </li>
+            <li>
+              <div class="step-number">04</div>
+              <div><h3>文明の最初の投資を選ぶ</h3><p>共同倉庫につながる道路の近くで、農場・製材所・採石場のどれを優先するか考えます。初期資源だけでは、すべてを一度に建てられません。</p></div>
+            </li>
+            <li>
+              <div class="step-number">05</div>
+              <div><h3>変化を見届ける</h3><p>建設、働き手の移動、生産、運搬までがひと続きです。「経済」や物流レンズで、投資が備蓄へ届くまでを追えます。</p></div>
+            </li>
+          </ol>
+
+          <div class="choice-heading">
+            <p class="mini-kicker">AN EARLY CHOICE, NOT A QUEST</p>
+            <h3>最初に何を育てる？</h3>
+          </div>
+          <div class="choice-grid">
+            <article>
+              <span class="choice-symbol" aria-hidden="true">❧</span>
+              <p class="terrain">草原</p>
+              <h4>農場</h4>
+              <p>食料を継続生産し、市民と産業の土台を安定させます。</p>
+              <dl><div><dt>費用</dt><dd>木材12 · 石材6</dd></div><div><dt>生産</dt><dd>食料5 / 12秒</dd></div></dl>
+            </article>
+            <article>
+              <span class="choice-symbol" aria-hidden="true">♧</span>
+              <p class="terrain">森</p>
+              <h4>製材所</h4>
+              <p>道路や次の施設に使う木材を増やし、開拓の速度を支えます。</p>
+              <dl><div><dt>費用</dt><dd>木材12 · 石材4</dd></div><div><dt>生産</dt><dd>木材4 / 15秒</dd></div></dl>
+            </article>
+            <article>
+              <span class="choice-symbol" aria-hidden="true">◆</span>
+              <p class="terrain">丘陵</p>
+              <h4>採石場</h4>
+              <p>建設で不足しやすい石材を増やし、街の発展を後押しします。</p>
+              <dl><div><dt>費用</dt><dd>木材8 · 石材10</dd></div><div><dt>生産</dt><dd>石材3 / 18秒</dd></div></dl>
+            </article>
+          </div>
+
+          <p class="supporting-copy">生産量は通常稼働時の基準です。働き手の到着、食料不足、研究の効果で変わります。生産した分が共有備蓄に入るまでには運搬の時間もかかります。</p>
+          <aside class="callout suggestion-callout">
+            <span class="callout-mark" aria-hidden="true">↗</span>
+            <div><h3>「あなたにできること」は、命令ではなく提案</h3><p>押すと関係する土地へ視点が移りますが、資源を消費したり、行動を勝手に確定したりはしません。↻ で別の提案を見ることもできます。</p></div>
+          </aside>
+        </section>
+
+        <section id="movement" class="guide-section">
+          <div class="section-heading">
+            <p class="section-number">03 · MOVE, THEN ACT</p>
+            <h2>移動と現地行動</h2>
+            <p>多くの行動は、対象の土地か、その隣まで行くと使えるようになります。遠くからボタンが押せないときは、まず市民の位置を確認してください。</p>
+          </div>
+
+          <div class="action-grid">
+            <article><span aria-hidden="true">⌖</span><div><h3>「ここへ移動」</h3><p>探索済みの陸地まで歩きます。道路は移動しやすく、水域は渡れません。</p></div></article>
+            <article><span aria-hidden="true">♠</span><div><h3>「採集して運ぶ」</h3><p>森・丘陵・山岳などの資源を手で採り、共同倉庫へ持ち帰ります。</p></div></article>
+            <article><span aria-hidden="true">◌</span><div><h3>「周辺の未知の土地を探索」</h3><p>境界から周囲を発見します。探索には5秒かかり、次の道や施設候補が見えるようになります。</p></div></article>
+            <article><span aria-hidden="true">⇄</span><div><h3>「道路を整備する」</h3><p>共同倉庫からつながる道路網を1マスずつ延長します。作業時間は4秒です。</p></div></article>
+          </div>
+
+          <div class="lens-note">
+            <div><p class="mini-kicker">MAP LENSES</p><h3>同じ地図を、目的別に読む</h3></div>
+            <p><strong>地形</strong>で土地の種類、<strong>食料</strong>で食の供給、<strong>産業</strong>で施設と資源、<strong>物流</strong>で道路と運搬、<strong>地勢</strong>で移動を妨げる水域・山岳を確認できます。</p>
+          </div>
+        </section>
+
+        <section id="logistics" class="guide-section">
+          <div class="section-heading">
+            <p class="section-number">04 · BUILD &amp; DELIVER</p>
+            <h2>建設と物流</h2>
+            <p>建物を完成させるだけでは、共有備蓄は増えません。資源は現地で生まれ、運び手が共同倉庫へ届けて初めて全員が使えるようになります。</p>
+          </div>
+
+          <div class="supply-flow" aria-label="資源が共有備蓄へ届くまで">
+            <div><span>01</span><strong>施設が生産</strong><small>現地在庫へ</small></div>
+            <i aria-hidden="true">→</i>
+            <div><span>02</span><strong>出荷を待つ</strong><small>道と接続を確認</small></div>
+            <i aria-hidden="true">→</i>
+            <div><span>03</span><strong>運び手が輸送</strong><small>地図上を移動</small></div>
+            <i aria-hidden="true">→</i>
+            <div><span>04</span><strong>共有備蓄へ</strong><small>全員が利用可能</small></div>
+          </div>
+
+          <div class="two-column">
+            <article class="paper-card">
+              <p class="mini-kicker">ROADS</p>
+              <h3>道路は文明の血管</h3>
+              <ul>
+                <li>共同倉庫につながっている道路の隣から延ばします。</li>
+                <li>施設は道路網のそばに建てる必要があります。</li>
+                <li>通常の道路費用は木材2・石材1です。</li>
+                <li>「輸送術」の研究後は、木材1で整備できます。</li>
+              </ul>
+            </article>
+            <article class="paper-card">
+              <p class="mini-kicker">INPUTS</p>
+              <h3>材料が必要な施設</h3>
+              <ul>
+                <li><strong>鍛冶工房：</strong>木材2 + 鉱石1 → 道具2 / 20秒</li>
+                <li><strong>学術院：</strong>食料1 → 知識3 / 18秒</li>
+              </ul>
+              <p class="card-footnote">材料切れ、道路の未接続、働き手や運び手の不足があると、生産や配送は止まります。</p>
+            </article>
+          </div>
+
+          <aside class="callout">
+            <span class="callout-mark" aria-hidden="true">!</span>
+            <div><h3>「生産したのに資源が増えない」とき</h3><p>物流レンズを選び、施設の接続、現地在庫、運搬中の荷物を確認してください。運び手が共同倉庫に到着するまで、画面上部の共有資源には加算されません。</p></div>
+          </aside>
+        </section>
+
+        <section id="research" class="guide-section">
+          <div class="section-heading">
+            <p class="section-number">05 · EXPLORE &amp; RESEARCH</p>
+            <h2>探索と研究</h2>
+            <p>文明を広げる方法は、土地を見つけることと、できることを増やすこと。探索は現地で時間を使い、研究は現地で共有資源を投じて進めます。</p>
+          </div>
+
+          <div class="explore-path">
+            <div><strong>未知の境界へ移動</strong><span>01</span></div>
+            <div><strong>周囲を探索</strong><span>02</span></div>
+            <div><strong>道路を延ばす</strong><span>03</span></div>
+            <div><strong>新しい産地をつくる</strong><span>04</span></div>
+          </div>
+          <p class="supporting-copy">見張り塔が完成すると半径3マスの範囲を発見できます。広い視界が欲しい場所では、探索への投資として役立ちます。</p>
+
+          <h3 class="subheading">共同研究を始めるまで</h3>
+          <ol class="research-prerequisites">
+            <li><span>1</span><p>道路につながる場所へ<strong>学術院</strong>を建てる</p></li>
+            <li><span>2</span><p>学術院へ食料を供給し、<strong>知識</strong>を生産する</p></li>
+            <li><span>3</span><p>完成した学術院か、その隣まで市民が移動する</p></li>
+            <li><span>4</span><p>「研究」から技術を選び、<strong>「研究条件を確認」</strong>する</p></li>
+          </ol>
+
+          <div class="tech-grid">
+            <article><p>AGRICULTURE</p><h4>輪作農法</h4><span>知識6 · 食料6 · 25秒</span><strong>全農場の収穫量 +40%</strong></article>
+            <article><p>LOGISTICS</p><h4>輸送術</h4><span>知識6 · 木材4 · 25秒</span><strong>輸送速度 +60%・道路を軽量化</strong></article>
+            <article><p>METALLURGY</p><h4>冶金</h4><span>知識8 · 道具2 · 30秒</span><strong>山岳への鉱山建設を解禁</strong></article>
+          </div>
+          <p class="supporting-copy">研究結果は個人の所有物ではなく、文明全体で共有されます。同時に進められる研究はひとつです。</p>
+        </section>
+
+        <section id="controls" class="guide-section compact-section">
+          <div class="section-heading">
+            <p class="section-number">06 · CONTROLS</p>
+            <h2>操作一覧</h2>
+          </div>
+          <dl class="controls-list">
+            <div><dt>クリック</dt><dd>土地を選び、詳細パネルを表示</dd></div>
+            <div><dt>ダブルクリック</dt><dd>選択した既知の土地へ移動</dd></div>
+            <div><dt>ドラッグ</dt><dd>地図を移動</dd></div>
+            <div><dt>スクロール / ＋ −</dt><dd>地図を拡大・縮小</dd></div>
+            <div><dt>矢印キー</dt><dd>地図にフォーカス中、表示範囲を移動</dd></div>
+            <div><dt><kbd>F</kbd></dt><dd>自分の市民へ戻る</dd></div>
+            <div><dt><kbd>N</kbd></dt><dd>「あなたにできること」の場所へ視点を移動（市民は動かない）</dd></div>
+            <div><dt><kbd>Enter</kbd></dt><dd>地図にフォーカス中、選択地へ移動</dd></div>
+            <div><dt><kbd>Esc</kbd></dt><dd>開いている選択やパネルを閉じる</dd></div>
+          </dl>
+        </section>
+
+        <section id="troubleshooting" class="guide-section">
+          <div class="section-heading">
+            <p class="section-number">07 · WHEN YOU ARE STUCK</p>
+            <h2>行動できないとき</h2>
+            <p>押せないボタンや止まった施設には理由があります。土地の詳細や確認画面に出る説明を読んだうえで、次を順に確かめてください。</p>
+          </div>
+
+          <div class="checklist">
+            <article><span>01</span><div><h3>市民は近くにいる？</h3><p>建設・採集・探索・道路整備は、対象地か隣接地から行います。</p></div></article>
+            <article><span>02</span><div><h3>前の仕事は終わった？</h3><p>移動中、作業中、荷物の運搬中は、別の行動を始められません。</p></div></article>
+            <article><span>03</span><div><h3>土地を発見している？</h3><p>未探索地へは移動できません。水域には道や建物を置けません。</p></div></article>
+            <article><span>04</span><div><h3>地形は合っている？</h3><p>農場は草原、製材所は森、採石場は丘陵、鉱山は山岳に建てます。</p></div></article>
+            <article><span>05</span><div><h3>道がつながっている？</h3><p>施設候補地の隣まで、共同倉庫から続く道路網を延ばしてください。</p></div></article>
+            <article><span>06</span><div><h3>共有資源と条件は足りる？</h3><p>上部の備蓄、必要な研究、学術院などの前提施設を確認します。</p></div></article>
+          </div>
+
+          <aside class="connection-note">
+            <div><span class="live-ring" aria-hidden="true"></span><strong>「再接続する」と表示されたら</strong></div>
+            <p>共有サーバーへの接続が切れています。ページを開いたまま再接続してください。接続中だけ進んでいるように見せる、偽のローカル進行は行いません。</p>
+          </aside>
+          <p class="safe-action-note">拒否された行動で共有資源が消費されることはありません。</p>
+        </section>
+
+        <section id="prototype" class="guide-section prototype-section">
+          <div class="section-heading">
+            <p class="section-number">08 · PROTOTYPE SCOPE</p>
+            <h2>いま遊べる範囲</h2>
+            <p>これは「生成型Civilization」の中核となる、共有世界・現地行動・生産物流・共同研究を確かめるためのプレイ可能な試作です。</p>
+          </div>
+
+          <div class="scope-grid">
+            <article class="scope-now">
+              <p class="mini-kicker">IN THIS BUILD</p>
+              <h3>この版に入っているもの</h3>
+              <ul>
+                <li>同じローカルサーバー上の共有文明</li>
+                <li>市民の移動、採集、探索、道路建設</li>
+                <li>施設の建設、生産、運び手による物流</li>
+                <li>共有備蓄と3種類の共同研究</li>
+                <li>自由な継続プレイと文明の展望</li>
+              </ul>
+            </article>
+            <article class="scope-later">
+              <p class="mini-kicker">NOT YET INCLUDED</p>
+              <h3>まだ入っていないもの</h3>
+              <ul>
+                <li>公開・常設の大規模MMO運営</li>
+                <li>生成AIで自律するNPC社会</li>
+                <li>戦闘、敵対文明、外交</li>
+                <li>参加費、暗号資産、賞金配当、実資金マーケット</li>
+                <li>ゲーム状態そのもののオンチェーン記録</li>
+              </ul>
+            </article>
+          </div>
+
+          <div class="disclosure">
+            <span aria-hidden="true">OFFCHAIN</span>
+            <div><h3>現在のゲーム進行はオフチェーンです</h3><p>Solanaの証明デモは別の検証機能です。この共有シミュレーションを「オンチェーンゲーム状態」と呼ぶ段階ではありません。NPCと運び手も、現在は決められたルールで動きます。</p></div>
+          </div>
+        </section>
+
+        <footer class="guide-footer">
+          <div><span class="brand-mark" aria-hidden="true">✳</span><p><strong>ひとつの世界に、集まろう。</strong><br>次の街の姿は、市民の選択から生まれます。</p></div>
+          <a class="button primary" href="./">ゲームへ戻る <span aria-hidden="true">→</span></a>
+        </footer>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

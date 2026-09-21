@@ -120,6 +120,7 @@ function createTiles() {
 }
 
 export function createCivilization({ sessionId = "aster", nowMs = 0 } = {}) {
+  // The legacy default ID is a persistence key, not a player-facing civilization name.
   if (typeof sessionId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(sessionId)) throw new Error("文明IDが不正です。");
   if (!finite(nowMs) || nowMs < 0) throw new Error("時刻が不正です。");
   const world = {
@@ -253,7 +254,7 @@ function command(world, action) {
     if (!world.players[actorId]) {
       const name = String(action.name || "旅人").replace(/[<>\x00-\x1f]/g, "").trim().slice(0, 24) || "旅人";
       world.players[actorId] = { id: actorId, name, q: 0, r: 0, path: [], status: "待機", job: null, contribution: 0, cargo: null, moveProgress: 0 };
-      pushEvent(world, "CITIZEN_JOINED", `${name}がアスターの市民になった。`);
+      pushEvent(world, "CITIZEN_JOINED", `${name}が文明の市民になった。`);
     }
     return;
   }
@@ -454,7 +455,7 @@ function refreshRatesAndObjectives(world) {
   }
   if (!world.season.complete && world.season.objectives.every((objective) => objective.complete)) {
     world.season.complete = true;
-    pushEvent(world, "AMBITION_REACHED", "アスターは開拓期の共同目標を達成した。文明の発展はこのまま続く。");
+    pushEvent(world, "AMBITION_REACHED", "私たちの文明は開拓期の共同目標を達成した。文明の発展はこのまま続く。");
   }
 }
 
