@@ -8,6 +8,24 @@ permissions:
   contents: read
 
 jobs:
+  devnet-bootstrap:
+    name: Fund disposable devnet deployer
+    if: github.ref == 'refs/heads/codex/magicblock-playable'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Install pinned Solana CLI
+        run: curl --proto '=https' --tlsv1.2 -sSfL https://release.anza.xyz/v3.1.9/install | sh -s -- v3.1.9 --no-modify-path
+      - name: Request disposable devnet SOL
+        run: |
+          SOLANA="$HOME/.local/share/solana/install/active_release/bin/solana"
+          RECIPIENT="Z5LkMMWbobK8soMqkUD3BjiK1RGPh5E4TsQQPjZ6AFQ"
+          for AMOUNT in 2 1 0.5 0.1; do
+            if "$SOLANA" airdrop "$AMOUNT" "$RECIPIENT" --url https://api.devnet.solana.com; then
+              exit 0
+            fi
+          done
+          exit 1
+
   browser-smoke:
     name: Browser source smoke test
     runs-on: ubuntu-24.04
