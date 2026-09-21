@@ -18,10 +18,18 @@
         <div class="scene-glow"></div>
         <div class="water-shimmer shimmer-a"></div>
         <div class="water-shimmer shimmer-b"></div>
-        <div class="scene-place scene-place--market"><i></i><span>Market garden</span><small>3 citizens nearby</small></div>
-        <div class="scene-place scene-place--guild"><i></i><span>River Guild</span><small>Tala is here</small></div>
-        <div class="scene-place scene-place--sluice"><i></i><span>East Sluice</span><small>Worksite 31</small></div>
-        <div class="living-note"><span>NOW IN ASTER</span><strong>Lanterns are being lit along the lower canal.</strong></div>
+        <div class="handoff-route">
+          <svg viewBox="0 0 100 100" preserveAspectRatio="none" focusable="false">
+            <path class="route-leg route-leg--guild" pathLength="100" d="M 82 22 C 72 23, 57 29, 42 38" />
+            <path class="route-leg route-leg--market" pathLength="100" d="M 42 38 C 55 46, 72 48, 87 47" />
+          </svg>
+        </div>
+        <div class="sluice-response"><i></i><strong></strong></div>
+        <div class="mandate-papers"><span><i></i></span><span><i></i></span><span><i></i></span></div>
+        <div class="scene-place scene-place--market"><i></i><span>Market garden</span><small id="market-status">3 citizens nearby</small></div>
+        <div class="scene-place scene-place--guild"><i></i><span>River Guild</span><small id="guild-status">Tala is here</small></div>
+        <div class="scene-place scene-place--sluice"><i></i><span>East Sluice</span><small id="sluice-status">Worksite 31</small></div>
+        <div class="living-note"><span id="world-note-kicker">NOW IN ASTER</span><strong id="world-note-copy">Lanterns are being lit along the lower canal.</strong></div>
       </div>
 
       <div class="disclosure"><span></span><strong id="transport-disclosure">LOCAL MULTI-CLIENT PROOF · NOT SOLANA · NOT LIVE AI</strong><span></span></div>

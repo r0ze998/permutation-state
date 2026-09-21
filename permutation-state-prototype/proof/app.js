@@ -26,6 +26,10 @@
   let gatewayError = null;
   let actionPending = false;
   let pollInFlight = false;
+  let lastRenderFingerprint = null;
+  let lastActorFingerprint = null;
+  let lastRenderedEventCount = null;
+  let worldReactionTimer = null;
 
   const elements = {
     app: document.getElementById("proof-app"),
@@ -55,7 +59,12 @@
     observerActions: document.getElementById("observer-actions"),
     chronicleToggle: document.getElementById("chronicle-toggle"),
     chroniclePanel: document.getElementById("world-chronicle"),
-    toast: document.getElementById("toast")
+    toast: document.getElementById("toast"),
+    worldNoteKicker: document.getElementById("world-note-kicker"),
+    worldNoteCopy: document.getElementById("world-note-copy"),
+    guildStatus: document.getElementById("guild-status"),
+    sluiceStatus: document.getElementById("sluice-status"),
+    marketStatus: document.getElementById("market-status")
   };
 
   function setChronicle(open) {
@@ -166,6 +175,47 @@
     acceptNetworkSession(payload);
   }
 
+  function getRenderFingerprint(nextVerification) {
+    const receipts = networkSession?.network?.receipts || [];
+    const latestReceipt = receipts.at(-1) || null;
+    const season = networkSession?.season || null;
+    const economyReceipts = networkSession?.seasonNetwork?.economyReceipts
+      || networkSession?.network?.economyReceipts
+      || [];
+    return JSON.stringify({
+      valid: nextVerification.valid,
+      errors: nextVerification.errors,
+      stateHash: nextVerification.finalStateHash,
+      headHash: nextVerification.headEventHash,
+      initialized: networkSession?.initialized ?? null,
+      delegated: networkSession?.delegated ?? null,
+      gatewayError,
+      receiptCount: receipts.length,
+      checkpoint: latestReceipt?.checkpoint?.signature || null,
+      checkpointError: latestReceipt?.checkpointError || null,
+      seasonSeq: season?.seq ?? null,
+      seasonHead: season?.headEventHash || null,
+      seasonPurse: season?.purseTotal ?? null,
+      economyReceiptCount: economyReceipts.length,
+      economyReceiptHead: economyReceipts.at(-1)?.signature || null,
+      seasonNetworkUpdatedAt: networkSession?.seasonNetwork?.updatedAt || null
+    });
+  }
+
+  function getActorFingerprint(nextVerification) {
+    const requiredCheckpoint = pendingRequiredCheckpoint(networkSession);
+    return JSON.stringify({
+      valid: nextVerification.valid,
+      errors: nextVerification.errors,
+      stateHash: nextVerification.finalStateHash,
+      initialized: networkSession?.initialized ?? null,
+      delegated: networkSession?.delegated ?? null,
+      gatewayError,
+      checkpointRequired: requiredCheckpoint?.er?.signature || requiredCheckpoint?.eventHash || null,
+      checkpointError: requiredCheckpoint?.checkpointError || null
+    });
+  }
+
   function escapeHtml(value) {
     return String(value)
       .replaceAll("&", "&amp;")
@@ -240,8 +290,21 @@
       nextVerification = await Core.verifyLog({ sessionId, seed: store.seed, events: store.events });
     }
     if (revision !== renderRevision) return;
+    const fingerprint = getRenderFingerprint(nextVerification);
+    const actorFingerprint = getActorFingerprint(nextVerification);
+    const shouldRender = source !== "network-poll" || fingerprint !== lastRenderFingerprint;
+    const shouldRenderActor = source !== "network-poll" || actorFingerprint !== lastActorFingerprint;
+    const priorEventCount = lastRenderedEventCount;
     verification = nextVerification;
-    render(source);
+    if (shouldRender) {
+      render(source, { renderActorPanel: shouldRenderActor });
+      lastRenderFingerprint = fingerprint;
+      if (shouldRenderActor) lastActorFingerprint = actorFingerprint;
+      lastRenderedEventCount = nextVerification.validatedEventCount;
+      if (priorEventCount !== null && nextVerification.validatedEventCount > priorEventCount) {
+        playWorldReaction(store.events.at(-1));
+      }
+    }
     announcePresence();
   }
 
@@ -254,6 +317,9 @@
 
   async function commitAction(type, payload) {
     if (role === "observer") throw new Error("Observer is read-only");
+    if (actionPending) return null;
+    setActionPending(true);
+    let submittedEvent = null;
     return withSessionLock(async () => {
       if (magicBlockMode) {
         await pullNetworkSession();
@@ -299,8 +365,8 @@
         observedAt: new Date().toISOString(),
         clientId
       });
+      submittedEvent = event;
       if (magicBlockMode) {
-        setActionPending(true);
         showToast("Submitting signed action to the Ephemeral Rollup…", "success");
         const response = await api("/api/magicblock/action", {
           method: "POST",
@@ -316,12 +382,24 @@
       const checkpointPending = Boolean(magicBlockMode && pendingRequiredCheckpoint());
       showToast(
         checkpointPending
-          ? `ER accepted ${event.type} · Solana checkpoint not verified`
-          : `${magicBlockMode ? "ER accepted" : "Accepted"} ${event.type} · ${shortHash(event.eventHash)}`,
+          ? "The work changed Aster, but its Solana checkpoint still needs verification"
+          : worldChangeMessage(event),
         checkpointPending ? "error" : "success"
       );
       return event;
-    }).catch((error) => {
+    }).catch(async (error) => {
+      if (magicBlockMode && submittedEvent) {
+        try {
+          await refresh("action-recovery");
+          const accepted = store.events.some((event) => event.eventHash === submittedEvent.eventHash);
+          if (accepted) {
+            showToast(`${worldChangeMessage(submittedEvent)} · recovered after reconnect`, "success");
+            return submittedEvent;
+          }
+        } catch {
+          // Preserve the original submission error when recovery cannot establish the shared state.
+        }
+      }
       showToast(error.message, "error");
       throw error;
     }).finally(() => {
@@ -341,7 +419,35 @@
     }
   }
 
-  function render(source) {
+  function worldChangeMessage(event) {
+    if (event?.type === "MARA_CHOICE") {
+      return event.payload?.choice === "oath"
+        ? "The Service Stair opened · Ivo can inherit Mara’s oath"
+        : "The outer gate opened · Ivo inherits a sealed stair";
+    }
+    if (event?.type === "IVO_CHOICE") return "East Sluice changed · new civic work reached Aster";
+    if (event?.type === "MANDATE_ACCEPTED") return `${event.payload?.mandateId || "A new Mandate"} now belongs to Nia`;
+    return "Aster’s shared history changed";
+  }
+
+  function playWorldReaction(event) {
+    if (!event) return;
+    clearTimeout(worldReactionTimer);
+    const reaction = event.type === "MARA_CHOICE"
+      ? `mara-${event.payload?.choice || "choice"}`
+      : event.type === "IVO_CHOICE"
+        ? `ivo-${event.payload?.choice || "choice"}`
+        : "mandate-accepted";
+    elements.app.classList.remove("world-reacting");
+    elements.app.dataset.reaction = reaction;
+    void elements.app.offsetWidth;
+    elements.app.classList.add("world-reacting");
+    worldReactionTimer = setTimeout(() => {
+      elements.app.classList.remove("world-reacting");
+    }, 1400);
+  }
+
+  function render(source, { renderActorPanel = true } = {}) {
     const state = verification.finalState;
     elements.app.dataset.role = role;
     elements.app.dataset.transport = magicBlockMode ? "magicblock" : "local";
@@ -349,6 +455,7 @@
     elements.app.dataset.stage = state.stage || "mara";
     elements.app.dataset.branch = state.maraChoice || "unmade";
     elements.app.dataset.resolution = state.worksiteResolution || "unresolved";
+    renderWorldScene(state);
     elements.disclosure.textContent = magicBlockMode
       ? "MAGICBLOCK LOCAL CLUSTER · REAL ER STATE · DISPOSABLE DEMO SIGNERS · NO REAL FUNDS"
       : Core.DISCLOSURE;
@@ -382,12 +489,53 @@
     elements.headHash.textContent = shortHash(verification.headEventHash);
     elements.headHash.title = verification.headEventHash;
     renderCausalStrip(state);
-    renderActor(state);
+    if (renderActorPanel) renderActor(state);
     renderInvariants(state);
     renderNetworkEvidence();
     renderEvents();
     renderPresence();
     elements.observerActions.hidden = role !== "observer";
+  }
+
+  function renderWorldScene(state) {
+    if (!elements.worldNoteKicker || !elements.worldNoteCopy || !elements.guildStatus || !elements.sluiceStatus || !elements.marketStatus) return;
+    const resolution = state.ivoChoice;
+    if (!state.maraChoice) {
+      elements.worldNoteKicker.textContent = "NOW IN ASTER";
+      elements.worldNoteCopy.textContent = "The East Sluice waits for an envoy’s word.";
+      elements.guildStatus.textContent = "Tala is waiting";
+      elements.sluiceStatus.textContent = "Gate held closed";
+      elements.marketStatus.textContent = "3 citizens nearby";
+      return;
+    }
+    if (!resolution) {
+      const oath = state.maraChoice === "oath";
+      elements.worldNoteKicker.textContent = "TALA REMEMBERS";
+      elements.worldNoteCopy.textContent = oath
+        ? "Riverkeepers are carrying Mara’s oath toward the Service Stair."
+        : "The charter opened the outer gate, but the Service Stair was sealed.";
+      elements.guildStatus.textContent = oath ? "Engineers departing" : "Riverkeepers withdrawn";
+      elements.sluiceStatus.textContent = oath ? "Service Stair open" : "Service Stair locked";
+      elements.marketStatus.textContent = "Ivo’s work is ready";
+      return;
+    }
+    if (!state.acceptedMandate) {
+      elements.worldNoteKicker.textContent = "THE WATER MOVED";
+      elements.worldNoteCopy.textContent = resolution === "service"
+        ? "The repaired sluice is carrying water—and three new Mandates—into Aster."
+        : resolution === "reconcile"
+          ? "Tala returned. A repaired civic route now carries work into the city."
+          : "A new water route is open. Its consequences have become civic work.";
+      elements.guildStatus.textContent = resolution === "reconcile" || resolution === "service" ? "Riverkeepers at work" : "Watching from afar";
+      elements.sluiceStatus.textContent = "Water flowing";
+      elements.marketStatus.textContent = "3 new Mandates";
+      return;
+    }
+    elements.worldNoteKicker.textContent = "THE CIVILIZATION CONTINUES";
+    elements.worldNoteCopy.textContent = `${state.acceptedMandate} has been claimed. Two needs still wait in Aster.`;
+    elements.guildStatus.textContent = "Memory carried forward";
+    elements.sluiceStatus.textContent = "Worksite stabilized";
+    elements.marketStatus.textContent = "1 Mandate assigned";
   }
 
   function renderMetrics(state) {
@@ -548,6 +696,8 @@
         </div>`;
       elements.actorWorkspace.querySelectorAll("[data-choice]").forEach((button) => {
         button.addEventListener("click", () => {
+          button.classList.add("committing");
+          button.setAttribute("aria-pressed", "true");
           commitAction("MARA_CHOICE", { choice: button.dataset.choice }).catch(() => {});
         });
       });
@@ -562,8 +712,8 @@
         <p>${escapeHtml(state.npcMemory)}</p>
         <div class="receipt-facts"><em>BRANCH ${state.maraChoice.toUpperCase()}</em><em>SERVICE STAIR ${state.serviceStair.toUpperCase()}</em><em>RIVERKEEPERS ${pretty(state.riverkeepers)}</em></div>
       </div>
-      <p class="waiting-copy">This client is finished. Ivo's separate URL now contains only the actions unlocked by this history.</p>
-      <a class="primary link-button" href="${escapeHtml(currentUrl("ivo"))}" target="_blank">OPEN IVO'S SEPARATE CLIENT →</a>`;
+      <p class="waiting-copy">The shared world has moved. Ivo can play immediately, and will inherit only the actions this history unlocked.</p>
+      <a class="primary link-button handoff-cta" href="${escapeHtml(currentUrl("ivo"))}"><span>WORLD CHANGED</span>CONTINUE AS IVO — INHERIT MARA'S CHOICE →</a>`;
   }
 
   function ivoRibbon(state) {
@@ -596,6 +746,8 @@
         </div>`;
       elements.actorWorkspace.querySelectorAll("[data-choice]").forEach((button) => {
         button.addEventListener("click", () => {
+          button.classList.add("committing");
+          button.setAttribute("aria-pressed", "true");
           commitAction("IVO_CHOICE", { choice: button.dataset.choice }).catch(() => {});
         });
       });
@@ -612,7 +764,7 @@
         <div class="resolution-rule"><em>SEASON ACTIVE</em><em>PURSE ACCUMULATING</em><em>CLAIM UNAVAILABLE</em></div>
       </div>
       <div class="mandate-preview"><span>THREE NEW JOBS NOW EXIST FOR OTHER CITIZENS</span>${state.nextMandates.map((mandate) => `<b>${mandate.id} · ${mandate.role} · ${escapeHtml(mandate.title)}</b>`).join("")}</div>
-      <a class="primary link-button" href="${escapeHtml(currentUrl("successor"))}" target="_blank">OPEN THE NEXT CITIZEN'S CLIENT →</a>`;
+      <a class="primary link-button handoff-cta" href="${escapeHtml(currentUrl("successor"))}"><span>NEW CIVIC WORK CREATED</span>CONTINUE AS NIA — CARRY THE RIPPLE FORWARD →</a>`;
   }
 
   function renderSuccessor(state) {
@@ -635,6 +787,8 @@
       ${assigned ? `<div class="continuation-proof"><b>EVENT 2 ACCEPTED</b><span>${state.acceptedMandate} changed from QUEUED → ASSIGNED.</span><em>SEASON ACTIVE · SETTLEMENT NOT STARTED</em></div>` : ""}`;
     elements.actorWorkspace.querySelectorAll("[data-mandate]").forEach((button) => {
       button.addEventListener("click", () => {
+        button.classList.add("committing");
+        button.setAttribute("aria-pressed", "true");
         commitAction("MANDATE_ACCEPTED", { mandateId: button.dataset.mandate }).catch(() => {});
       });
     });
@@ -1049,6 +1203,10 @@
       pollInFlight = true;
       try {
         await refresh("network-poll");
+      } catch (error) {
+        gatewayError = error.message;
+        elements.syncLabel.textContent = "SYNC RETRYING";
+        elements.syncLabel.classList.add("bad");
       } finally {
         pollInFlight = false;
       }
