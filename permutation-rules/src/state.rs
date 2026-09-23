@@ -254,6 +254,8 @@ pub struct WorldState {
     pub grievance: Vec<u16>,
     /// Open diplomatic proposals (§10.6).
     pub proposals: Vec<Proposal>,
+    /// Per pair (see `pair_index`): no war may be declared before this tick (§10.2 truce).
+    pub truce_until: Vec<u16>,
     /// Head of the append-only event hash chain.
     pub event_head: [u8; 32],
 }

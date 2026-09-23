@@ -168,9 +168,9 @@ select { font: 500 13px var(--body); color: var(--text); background: var(--panel
 
   <section class="card findings" aria-labelledby="h-find">
     <h2 id="h-find">What this match shows</h2>
-    <p><b>Capture ping-pong.</b> Aster and Ember retake the same cities within a few ticks, because a city captured at 0 defence with no garrison can be recaptured at once. Candidate fix: captured cities start at half defence, or get a short capture immunity.</p>
-    <p><b>Peace does not stick while grievances are high.</b> Aster keeps making peace with Ember, then re-declaring with casus belli. Candidate fix: a peace treaty carries a truce of about 12 ticks during which war cannot be declared on that civilization.</p>
-    <p><b>Science races land in the Crisis window.</b> Dunmar and Borealis finish Star Gate stage III at ticks 152 and 173, inside the Crisis (ticks 120–161) and Resolution, as the spec intends.</p>
+    <p><b>Captured cities restart at half defence.</b> With defence reset to 0, the same city changed hands after 1, 1 and 3 ticks. At 50%, the quickest recapture took two ticks of real fighting, and recaptures within 10 ticks fell from 5 to 2.</p>
+    <p><b>Peace now starts a 12-tick truce.</b> Before, war was re-declared within 12 ticks of peace 6 times, riding on leftover grievances. Now war can only resume once the truce ends; the Warlord bot does exactly that at ticks 115 and 140.</p>
+    <p><b>Science races land in the Crisis window.</b> Dunmar and Borealis finish all three Star Gate stages late in the match, inside the Crisis and Resolution phases, as the spec intends.</p>
     <p class="note">Bots are simple rule-based players reading the full state, so this is a rules test, not a showcase of play. The Crisis, markets and fog of war are not implemented yet.</p>
   </section>
 </div>

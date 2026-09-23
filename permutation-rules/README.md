@@ -68,7 +68,7 @@ The pipeline is deterministic end to end: the same seeds produce a byte-identica
 ## Development
 
 ```sh
-cargo test          # 79 tests: unit, spec vectors, combat, diplomacy, full 180-tick season
+cargo test          # 81 tests: unit, spec vectors, combat, diplomacy, full 180-tick season
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 cargo-build-sbf     # Solana SBF build check (Solana CLI)

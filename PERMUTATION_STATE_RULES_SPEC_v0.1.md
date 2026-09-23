@@ -389,9 +389,11 @@ These close gaps in §8.1–8.3. They are normative.
 5. **Units in their own city.** Attacking a unit that stands in its owner's city is an attack on that city (the garrison defends first, §8.3).
 6. **Civilians.** A melee or mounted army attacking an adjacent civilian that stands alone outside a city captures it: the civilian changes owner and stays on its tile. No combat takes place. Capturing a Settler adds +5 grievance (§9.1).
 7. **Neutrals.** Attacking a city-state or a Free City sets the attacker's aggressor flag and ends its protection. Attacking a city-state also zeroes the attacker's influence with every city-state.
-8. **Capture bookkeeping.** When a capital is captured, capital status passes to the victim's lowest-id remaining city (none means government in exile). A captured city's queue is cleared and its defence set to 0. The old owner's civilians on the tile are captured with it.
+8. **Capture bookkeeping.** When a capital is captured, capital status passes to the victim's lowest-id remaining city (none means government in exile). A captured city's queue is cleared and its defence restarts at **50% of its new maximum** `(4 + pop) × 1000` (balance fix, see 12 below). The old owner's civilians on the tile are captured with it.
 9. **Capture scoring.** Whether a holding can score (§14.1) is decided at capture: the founder must differ and the city must have been founded ≥ 12 ticks earlier. On the first tick the holding becomes eligible (the 30th tick held), it is disqualified if this captor has already scored this city this season. Otherwise the captor is recorded.
 10. **Tiles that stop being cities.** When a city becomes a ruin (§8.3 Raze) or a Free City (§9.4), any civilian sharing that tile with an army moves to the first free passable neighbour, in §0.3 order. If there is none, the civilian is disbanded.
+12. **Why captures restart at half defence (balance fix, 2026-09-24).** In a six-bot Blitz match with defence reset to 0, the same city changed hands after 1, 1 and 3 ticks: an adjacent army simply walked back in. At 50%, the shortest gap was 2 ticks, and it took a real fight; quick recaptures (≤ 10 ticks) fell from 5 to 2. No capture-immunity window was needed.
+
 11. **Razing timeline.** `Raze` at tick t sets a 3-tick countdown. The countdown advances at the start of phase 5 in ticks t+1 and t+2, and the city becomes a ruin in phase 5 of tick t+3. A city being razed produces nothing.
 
 ### 8.4 Test vectors (N in milli-troops, v = 10000 unless stated)
@@ -472,6 +474,7 @@ The pairwise states are `Peace` (the default), `War`, `NAP` (a peace with bonds)
 - `DeclareWar` takes effect at the start of the next tick. Attacks are valid from then on.
 - Declaring war ends the declarer's protected zone (§3.3).
 - **Peace:** a proposal plus an acceptance ends the war at the start of the next tick. Each side's units inside the other's territory are teleported to the nearest own-territory free tile.
+- **Truce (balance fix, 2026-09-24):** when peace takes effect at tick p, neither side may declare war on the other before tick **p + 12**, even with casus belli. Without it, grievances from the war kept casus belli alive, and the bot match re-declared war within 12 ticks of peace 6 times. With it, war can only resume once the truce ends.
 
 ### 10.3 Non-aggression pact (NAP)
 - **Duration:** 30 ticks.

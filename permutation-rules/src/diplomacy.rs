@@ -18,7 +18,7 @@ use crate::tick::{accepted, allied, TickInput};
 use alloc::vec::Vec;
 
 pub fn phase_diplomacy(state: &mut WorldState, rules: &Ruleset, input: &TickInput) {
-    scheduled_transitions(state);
+    scheduled_transitions(state, rules);
     let now = state.tick;
     state
         .proposals
@@ -30,6 +30,7 @@ pub fn phase_diplomacy(state: &mut WorldState, rules: &Ruleset, input: &TickInpu
                 Order::DeclareWar { civ: t } => {
                     if valid_pair(state, civ, t)
                         && matches!(state.relation(civ, t), Relation::Peace)
+                        && state.tick >= state.truce_until[state.pair_index(civ, t)]
                     {
                         start_war(state, rules, civ, t);
                     }
@@ -321,7 +322,7 @@ fn leave_alliance(state: &mut WorldState, rules: &Ruleset, civ: CivId) {
 
 // ------------------------------------------------------------------ transitions
 
-fn scheduled_transitions(state: &mut WorldState) {
+fn scheduled_transitions(state: &mut WorldState, rules: &Ruleset) {
     let n = state.civs.len() as u16;
     let now = state.tick;
     for a in 0..n {
@@ -331,6 +332,8 @@ fn scheduled_transitions(state: &mut WorldState) {
                     peace_at: Some(p), ..
                 } if now >= p => {
                     state.set_relation(a, b, Relation::Peace);
+                    let i = state.pair_index(a, b);
+                    state.truce_until[i] = p + rules.truce_ticks;
                     withdraw(state, a, b);
                     withdraw(state, b, a);
                 }

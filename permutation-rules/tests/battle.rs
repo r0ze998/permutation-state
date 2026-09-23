@@ -675,3 +675,28 @@ fn war_replay_is_deterministic() {
     };
     assert_eq!(script(), script());
 }
+
+#[test]
+fn captured_cities_restart_at_half_defence() {
+    let (rules, mut s) = setup();
+    war_between_0_and_1(&mut s, &rules);
+    let (a, ci) = besiege(&mut s, Spearman, 20_000);
+    remove_garrison(&mut s, ci);
+    s.cities[ci].pop = 5;
+    s.cities[ci].defense = 0;
+    step(
+        &mut s,
+        &rules,
+        vec![(
+            0,
+            vec![Order::Attack {
+                army: a,
+                target: AttackTarget::City(ci as u32),
+            }],
+        )],
+    );
+    let c = &s.cities[ci];
+    assert_eq!(c.owner, Some(0));
+    // pop 5 → 4 on capture; max defence (4 + 4) × 1000; half of it, no regen while attacked.
+    assert_eq!(c.defense, (rules.city_defense_base + c.pop) * 1000 / 2);
+}

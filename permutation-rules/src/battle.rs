@@ -408,7 +408,10 @@ fn capture_city(state: &mut WorldState, rules: &Ruleset, ci: usize, captor: CivI
         c.food /= 2;
         c.prod /= 2;
         c.queue.clear();
-        c.defense = 0;
+        // Half defence, not zero: an army adjacent to a freshly captured city
+        // must fight for it instead of walking in next tick (§8.3).
+        let max = (rules.city_defense_base + c.pop) * 1000;
+        c.defense = (max as u64 * rules.capture_defense_bps as u64 / 10_000) as u32;
         c.razing = None;
         c.capture_scores = c.founder != captor
             && tick >= c.founded_tick.saturating_add(rules.capture_min_founded_age);

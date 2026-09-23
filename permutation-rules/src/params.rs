@@ -82,6 +82,9 @@ pub struct Ruleset {
     pub city_defense_base: u32,
     pub city_regen_milli: u32,
     pub last_city_protection_ticks: u16,
+    /// A captured city's defence restarts at this share of its maximum
+    /// (§8.3, v0.1 balance fix against instant recapture).
+    pub capture_defense_bps: Bps,
 
     // --- society (§9) ---
     pub casus_belli_threshold: u16,
@@ -94,6 +97,9 @@ pub struct Ruleset {
     pub alliance_leave_delay: u16,
     /// Open proposals expire after this many ticks (§10.6).
     pub proposal_ttl: u16,
+    /// After peace takes effect, neither side may declare war on the other
+    /// for this many ticks, casus belli or not (§10.2, v0.1 balance fix).
+    pub truce_ticks: u16,
 
     // --- markets (§11) ---
     pub amm_fee_bps: Bps,
@@ -178,6 +184,7 @@ impl Ruleset {
             city_defense_base: 4,
             city_regen_milli: 2_000,
             last_city_protection_ticks: 12,
+            capture_defense_bps: 5_000,
 
             casus_belli_threshold: 30,
             aggressor_window: 12,
@@ -187,6 +194,7 @@ impl Ruleset {
             nap_min_bond: 30,
             alliance_leave_delay: 6,
             proposal_ttl: 6,
+            truce_ticks: 12,
 
             amm_fee_bps: 300,
             hub_fee_bps: 100,

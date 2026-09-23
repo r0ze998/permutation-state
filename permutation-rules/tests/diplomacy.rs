@@ -543,3 +543,52 @@ fn founding_near_a_ruin_grants_heritage_once() {
     assert_eq!(city.heritage_until, Some(60 + rules.heritage_ticks));
     assert!(s.map.tile(ruin).unwrap().heritage_claimed);
 }
+
+#[test]
+fn peace_starts_a_truce_that_blocks_war_even_with_casus_belli() {
+    let (rules, mut s) = setup(4);
+    step(
+        &mut s,
+        &rules,
+        vec![(0, vec![Order::DeclareWar { civ: 1 }])],
+    ); // t0
+    step(
+        &mut s,
+        &rules,
+        vec![(0, vec![Order::ProposePeace { civ: 1 }])],
+    ); // t1
+    step(
+        &mut s,
+        &rules,
+        vec![(1, vec![Order::AcceptPeace { civ: 0 }])],
+    ); // t2 → peace at t3
+    step(&mut s, &rules, vec![]); // t3: peace, truce until 15
+    assert_eq!(s.relation(0, 1), Relation::Peace);
+    assert!(
+        s.grievance(0, 1) >= rules.casus_belli_threshold - 4,
+        "civ 1 still holds a grievance"
+    );
+    s.add_grievance(0, 1, 30); // make casus belli certain
+    step(
+        &mut s,
+        &rules,
+        vec![(1, vec![Order::DeclareWar { civ: 0 }])],
+    ); // t4: blocked
+    assert_eq!(s.relation(0, 1), Relation::Peace);
+    while s.tick < 3 + rules.truce_ticks {
+        step(&mut s, &rules, vec![]);
+    }
+    step(
+        &mut s,
+        &rules,
+        vec![(1, vec![Order::DeclareWar { civ: 0 }])],
+    ); // t15: allowed
+    assert!(matches!(
+        s.relation(0, 1),
+        Relation::War {
+            declared_by: 1,
+            casus_belli: true,
+            ..
+        }
+    ));
+}

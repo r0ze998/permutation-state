@@ -173,6 +173,7 @@ pub fn new_season(
         relations: vec![Relation::Peace; n * n.saturating_sub(1) / 2],
         grievance: vec![0; n * n],
         proposals: Vec::new(),
+        truce_until: vec![0; n * n.saturating_sub(1) / 2],
         event_head: genesis.finalize().into(),
     })
 }
