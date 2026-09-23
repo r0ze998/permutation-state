@@ -73,8 +73,12 @@ pub struct Civ {
 
     /// Ticks with at least one order since joining (Participation, §14.5).
     pub active_ticks: u16,
-    /// USDC (6 decimals) spent on the Exchange this season (§11.3).
+    /// USDC (6 decimals) spent on the Exchange this season, notional + fee (§11.3).
     pub exchange_spent: u64,
+    /// USDC (6 decimals) delegated to the ER for this civ: deposit + sales − purchases.
+    pub usdc: u64,
+    /// Whole units bought on the Exchange this season, by `GoodKind` (§11.3 re-sale rule).
+    pub exchange_bought: [u32; 5],
 
     pub scores: Scores,
 }
@@ -140,6 +144,16 @@ pub struct City {
 pub enum Owner {
     Civ(CivId),
     Barbarian,
+}
+
+impl Owner {
+    /// The owning civ, or `None` for barbarians.
+    pub const fn civ(self) -> Option<CivId> {
+        match self {
+            Owner::Civ(c) => Some(c),
+            Owner::Barbarian => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -213,6 +227,13 @@ pub struct LastYields {
     pub max_city_prod: u32,
 }
 
+/// A constant-product pool of one strategic good against gold (§11.2), in milli-units.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct Pool {
+    pub goods: i64,
+    pub gold: i64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Specialty {
     Scientific,
@@ -256,6 +277,12 @@ pub struct WorldState {
     pub proposals: Vec<Proposal>,
     /// Per pair (see `pair_index`): no war may be declared before this tick (§10.2 truce).
     pub truce_until: Vec<u16>,
+    /// Gold AMM pools (§11.2): Iron/Gold, Horses/Gold.
+    pub pools: Vec<Pool>,
+    /// USDC ledger on the ER (§11.3): total delegated, and fee accumulators.
+    pub usdc_deposited: u64,
+    pub exchange_vault: u64,
+    pub exchange_ops: u64,
     /// Head of the append-only event hash chain.
     pub event_head: [u8; 32],
 }

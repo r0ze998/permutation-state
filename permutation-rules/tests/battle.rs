@@ -22,6 +22,7 @@ fn setup() -> (Ruleset, WorldState) {
             name: format!("civ-{i}"),
             declared_kind: DeclaredKind::Undeclared,
             payout_wallet: [i as u8; 32],
+            exchange_deposit: 0,
         })
         .collect();
     let state = new_season(&rules, &WORLD, &SEASON, &entries).unwrap();

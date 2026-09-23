@@ -35,6 +35,7 @@ A single crate runs everywhere the rules run:
 | `tick` | §15 | phase pipeline |
 | `battle` | §8, §9, §12.1 | phase 5: engagements, captures, razing |
 | `diplomacy` | §10, §12.1 | phase 1 diplomacy; transfers and envoys for phase 2 |
+| `markets` | §11 | trade hubs, gold AMM (`clear_amm`), USDC Exchange (`call_auction`) |
 | `invariants` | §17 | state and monotonicity checks |
 
 ## Implementation status of `resolve_tick`
@@ -43,7 +44,7 @@ A single crate runs everywhere the rules run:
 |---|---|---|
 | 0 | Seed | ✅ |
 | 1 | Diplomacy | ✅ (`diplomacy`): war with casus belli, proposals (accepted only on a later tick, 6-tick expiry), peace with withdrawal, NAPs with escrowed bonds, closed alliance groups with the cap and delayed leaving |
-| 2 | Economy orders | queue, focus, research, purchase, `FoundCity` (with heritage), transfers with income caps, envoys and suzerainty. **TODO:** gold AMM, Exchange |
+| 2 | Economy orders | ✅ queue, focus, research, purchase, `FoundCity` (with heritage), transfers with income caps, envoys and suzerainty, gold AMM (batch-cleared, hub fees), USDC Exchange (call auction, caps, fee split, re-sale ban) |
 | 3 | Standing rules | **TODO** |
 | 4 | Movement | ✅ paths, MP, one free tile at full MP, occupancy, foreign territory, protected zones, tie-break, no swapping |
 | 5 | Combat | ✅ (`battle`): simultaneous engagements from pre-combat counts, garrisons, walls, ranged and counter modifiers, captures of civilians, cities and city-states, last-city protection, raze to ruin, grievances and aggression. **TODO:** barbarian and standing-rule attacks |
@@ -54,21 +55,30 @@ A single crate runs everywhere the rules run:
 | 10 | Scoring | ✅ Dominion, Concord, science, alliance record, activity, order bank. **TODO:** prize coalitions |
 | 11 | Commit | ✅ next tick's budget, event chain |
 
-## Bot match and replay viewer
+## Bot match, replay viewer and playable client
 
-`examples/replay.rs` plays a six-civilization Blitz match with simple rule-based bots (Warlord, Builder, Diplomat, Scholar) on the real engine. It checks every invariant each tick and writes a JSON replay. `viewer/` turns that replay into one self-contained pixel-hex page:
+The bots and every std/JSON concern live in the sibling crate `../permutation-server`, so this crate stays `no_std`. Its `replay` binary plays a six-civilization Blitz match with simple rule-based bots (Warlord, Builder, Diplomat, Scholar) on the real engine, checks every invariant each tick and writes a JSON replay. `viewer/` turns that replay into one self-contained pixel-hex page:
 
 ```sh
-cargo run --release --example replay -- viewer/replay.json
-python3 viewer/build.py viewer/replay.json viewer/replay.html
+cd ../permutation-server
+cargo run --release --bin replay -- ../permutation-rules/viewer/replay.json
+python3 ../permutation-rules/viewer/build.py ../permutation-rules/viewer/replay.json ../permutation-rules/viewer/replay.html
 ```
 
 The pipeline is deterministic end to end: the same seeds produce a byte-identical page. The bots read the full state (there is no fog-of-war view yet), so they are a rules test harness, not the reference agent.
 
+To play one civilization against five bots in the browser:
+
+```sh
+cd ../permutation-server
+cargo run --release --bin play -- --port 4180
+# open http://127.0.0.1:4180/
+```
+
 ## Development
 
 ```sh
-cargo test          # 81 tests: unit, spec vectors, combat, diplomacy, full 180-tick season
+cargo test          # 99 tests: unit, spec vectors, combat, diplomacy, markets, full 180-tick season
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 cargo-build-sbf     # Solana SBF build check (Solana CLI)

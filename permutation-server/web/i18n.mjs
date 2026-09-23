@@ -1,0 +1,111 @@
+// Japanese-first display names and blocked-reason messages.
+// Keys are the engine's own enum names, as sent by the API.
+
+export const CIV_COLORS = ['#c1504a', '#2f8f84', '#c28f2c', '#7a5fb0', '#3f78c2', '#b5527f'];
+// Border dash pattern per civ, so ownership never relies on colour alone.
+export const CIV_DASH = [[], [7, 3], [2, 3], [9, 3, 2, 3], [4, 4], [1, 2.5]];
+export const CIV_NAMES = { Aster: 'アステル', Borealis: 'ボレアリス', Cinder: 'シンダー', Dunmar: 'ダンマール', Ember: 'エンバー', Fjordhal: 'フィヨルダル' };
+export const PERSONA = { Human: 'あなた', Warlord: '覇者型', Builder: '建設型', Diplomat: '外交型', Scholar: '学究型' };
+
+export const TERRAIN = { Grassland: '草原', Plains: '平原', Forest: '森', Hills: '丘陵', Mountain: '山岳', Water: '水域' };
+export const TERRAIN_EN = { Grassland: 'GRASSLAND', Plains: 'PLAINS', Forest: 'WOODLAND', Hills: 'HILLS', Mountain: 'MOUNTAIN', Water: 'WATER' };
+export const RESOURCE = { Wheat: '小麦', Iron: '鉄', Horses: '馬' };
+export const UNIT = { Spearman: '槍兵', Archer: '弓兵', Horseman: '騎兵', Pikeman: '長槍兵', Crossbowman: '弩兵', Knight: '騎士', Scout: '斥候', Settler: '開拓者' };
+export const UNIT_GLYPH = { Spearman: '⟋', Archer: '➶', Horseman: '♞', Pikeman: '⫽', Crossbowman: '⤓', Knight: '♘', Scout: '◎', Settler: '⚑' };
+export const BUILDING = { Granary: '穀物庫', Workshop: '工房', Temple: '神殿', Market: '市場', Academy: '学術院', Barracks: '兵舎', Walls: '城壁', StarGate1: 'スターゲート I', StarGate2: 'スターゲート II', StarGate3: 'スターゲート III' };
+export const BUILDING_GLYPH = { Granary: '❧', Workshop: '⚒', Temple: '✧', Market: '⇄', Academy: '▤', Barracks: '♜', Walls: '▥', StarGate1: '✦', StarGate2: '✦', StarGate3: '✦' };
+export const BUILDING_EFFECT = {
+  Granary: '食料 +2', Workshop: '生産 +2', Temple: '快適度 +2・影響力 +2', Market: '金 +3、都市の金 ×1.2', Academy: '科学 +3',
+  Barracks: '部隊の生産コスト ×0.75', Walls: '都市防御への被害 ×0.67', StarGate1: '科学勝利の第1段階', StarGate2: '科学勝利の第2段階', StarGate3: '科学勝利の最終段階',
+};
+export const TECH = {
+  Agriculture: '農業', BronzeWorking: '青銅器', Archery: '弓術', HorsebackRiding: '騎乗', Masonry: '石工', Mysticism: '神秘主義',
+  Writing: '筆記', Currency: '通貨', IronWorking: '製鉄', Mathematics: '数学', Chivalry: '騎士道', Philosophy: '哲学',
+  Engineering: '工学', Astronomy: '天文学', Physics: '物理学', CelestialMechanics: '天体力学',
+};
+export const TECH_UNLOCK = {
+  Agriculture: '小麦の食料 +1', BronzeWorking: '兵舎', Archery: '弓兵', HorsebackRiding: '騎兵・馬の産出', Masonry: '城壁', Mysticism: '神殿',
+  Writing: '学術院', Currency: '市場・金の市場', IronWorking: '長槍兵・鉄の産出', Mathematics: '弩兵', Chivalry: '騎士', Philosophy: '神殿の影響力 +1',
+  Engineering: '城壁の強化', Astronomy: 'スターゲート I', Physics: 'スターゲート II', CelestialMechanics: 'スターゲート III',
+};
+export const FOCUS = { Balanced: '均衡', Food: '食料', Production: '生産', Gold: '金', Science: '科学' };
+export const SPECIALTY = { Scientific: '学術', Mercantile: '商業', Agrarian: '農業' };
+export const SPECIALTY_BONUS = { Scientific: '宗主に科学 +3/ティック', Mercantile: '宗主に金 +4/ティック', Agrarian: '宗主の首都に食料 +2/ティック' };
+export const RELATION = { self: 'あなた', peace: '平和', war: '戦争', nap: '不可侵', alliance: '同盟' };
+export const PHASES = [[0, '建国', 'FOUNDING'], [18, '拡大', 'EXPANSION'], [60, '競合', 'CONTENTION'], [120, '危機', 'CRISIS'], [162, '決着', 'RESOLUTION']];
+export const DIPLO_ACTION = {
+  DeclareWar: '宣戦する', ProposePeace: '講和を申し入れる', ProposeNap: '不可侵条約を申し入れる（保証金30金）', ProposeAlliance: '同盟を申し入れる',
+  AcceptPeace: '講和を受け入れる', AcceptNap: '不可侵条約を受け入れる', AcceptAlliance: '同盟に加わる',
+};
+
+const CITY_NAMES = ['ラナ', 'ヴェル', 'オルト', 'セナ', 'カロ', 'ミラ', 'トーレ', 'ウルム', 'ネス', 'ハルカ', 'イゼル', 'ボラ', 'エダ', 'クオン', 'サイラ', 'ティモ', 'リュカ', 'ファロ', 'ジン', 'アルバ'];
+export const cityName = id => CITY_NAMES[id % CITY_NAMES.length] + (id >= CITY_NAMES.length ? ` ${Math.floor(id / CITY_NAMES.length) + 1}` : '');
+export const civName = name => CIV_NAMES[name] || name;
+export const phaseOf = tick => PHASES.filter(p => tick >= p[0]).pop();
+
+export function blockedText(b) {
+  if (!b) return '';
+  const t = TECH[b.tech] || b.tech;
+  switch (b.code) {
+    case 'NeedsTech': return `「${t}」の研究が必要です`;
+    case 'TooCloseToCity': return `都市から${b.distance}マス。${b.min}マス以上離す必要があります`;
+    case 'TooCloseToCityState': return `都市国家から${b.distance}マス。${b.min}マス以上離す必要があります`;
+    case 'NeedsPop': return `人口${b.need}以上が必要です（現在${b.have}）`;
+    case 'InTruce': return `講和後の休戦中です。ティック${b.until}まで宣戦できません`;
+    case 'BondTooSmall': return `保証金は${b.min}金以上が必要です`;
+    case 'NotEnoughGold': return `金が足りません（必要${b.need}・所持${b.have}）`;
+    case 'AllianceFull': return `同盟は${b.cap}文明までです`;
+    case 'OutOfRange': return `射程外です（距離${b.distance}・射程${b.range}）`;
+    case 'OverCap': return `上限${b.cap}を超えています`;
+    case 'ProtectedCapital': return `首都の保護区域です${b.until !== null && b.until !== undefined ? `（ティック${b.until}まで）` : ''}`;
+    default: return ({
+      UnknownUnit: '部隊が見つかりません', UnknownCity: '都市が見つかりません', UnknownCiv: '文明が見つかりません',
+      NotYours: 'あなたのものではありません', SameCiv: '自分の文明です', NotASettler: '開拓者ではありません',
+      Impassable: '通行できない地形です', ForeignTerritory: '他の文明の領土です', InProtectedZone: '他の文明の保護区域内です',
+      AlreadyBuilt: '建設済みです', AlreadyQueued: 'すでに生産予定です', StarGateInAnotherCity: 'スターゲートは1都市だけに建てられます',
+      NeedsPreviousStage: '前の段階を先に完成させてください', InvalidTroopCount: '兵数が正しくありません', AlreadyResearched: '研究済みです',
+      NotAtPeace: '平和な関係のときだけできます', AlreadyAtWar: 'すでに戦争中です', NotAtWar: '戦争中ではありません',
+      UnderNap: '不可侵条約中です。宣戦するには先に条約を破棄します', Allied: '同盟国には宣戦できません', NoProposal: '申し入れがありません',
+      AlreadyInAlliance: 'すでに同盟に加わっています', AllianceLeaving: '離脱手続き中の同盟には加われません',
+      CivilianCannotAttack: '非戦闘ユニットは攻撃できません', TargetProtected: '保護区域内の相手は攻撃できません',
+      TargetNotHostile: '戦争中の相手ではありません。先に宣戦が必要です', TargetGone: '目標がもういません',
+      Frozen: '終盤のため取引は凍結中です', NothingToSell: '売れる在庫がありません',
+    })[b.code] || b.code;
+  }
+}
+
+export function itemName(item) {
+  if (!item) return '';
+  if (item.kind === 'Building') return BUILDING[item.building] || item.building;
+  if (item.kind === 'Troops') return `${UNIT[item.unit] || item.unit} ×${item.n}`;
+  return UNIT[item.kind] || item.kind;
+}
+export function itemGlyph(item) {
+  if (item.kind === 'Building') return BUILDING_GLYPH[item.building] || '▢';
+  if (item.kind === 'Troops') return UNIT_GLYPH[item.unit] || '⚔';
+  return UNIT_GLYPH[item.kind] || '•';
+}
+
+/** Chronicle lines come from the server as `kind|English text`; translate the common forms. */
+export function chronicleText(line) {
+  const [kind, text = ''] = line.split('|');
+  const n = s => civName(s.trim());
+  let m;
+  if ((m = text.match(/^(\w+) declares war on (\w+)(.*)$/))) return [kind, `${n(m[1])}が${n(m[2])}に宣戦${m[3].includes('pact') ? '（条約破棄）' : m[3].includes('casus') ? '（正当な理由あり）' : ''}`];
+  if ((m = text.match(/^(\w+) and (\w+) make peace$/))) return [kind, `${n(m[1])}と${n(m[2])}が講和`];
+  if ((m = text.match(/^(\w+) and (\w+) form an alliance$/))) return [kind, `${n(m[1])}と${n(m[2])}が同盟を結成`];
+  if ((m = text.match(/^(\w+) and (\w+) sign a non-aggression pact$/))) return [kind, `${n(m[1])}と${n(m[2])}が不可侵条約を締結`];
+  if ((m = text.match(/^The pact between (\w+) and (\w+) expires$/))) return [kind, `${n(m[1])}と${n(m[2])}の不可侵条約が満了`];
+  if ((m = text.match(/^(\w+) and (\w+) end their alliance$/))) return [kind, `${n(m[1])}と${n(m[2])}の同盟が解消`];
+  if ((m = text.match(/^(\w+) founds a new city$/))) return [kind, `${n(m[1])}が新しい都市を建設`];
+  if ((m = text.match(/^(\w+) captures a city of (\w+)$/))) return [kind, `${n(m[1])}が${n(m[2])}の都市を占領`];
+  if ((m = text.match(/^(\w+) captures a free city$/))) return [kind, `${n(m[1])}が自由都市を占領`];
+  if ((m = text.match(/^(\w+) conquers a city-state$/))) return [kind, `${n(m[1])}が都市国家を征服`];
+  if ((m = text.match(/^A city of (\w+) revolts and becomes free$/))) return [kind, `${n(m[1])}の都市が反乱し自由都市に`];
+  if (text === 'A city is razed to a ruin') return [kind, '都市が破壊され遺跡になった'];
+  if ((m = text.match(/^(\w+) completes Star Gate stage (\d)$/))) return [kind, `${n(m[1])}がスターゲート第${m[2]}段階を完成`];
+  if ((m = text.match(/^(\w+) becomes suzerain of city-state (\d+)$/))) return [kind, `${n(m[1])}が都市国家${m[2]}の宗主に`];
+  if ((m = text.match(/^(\w+) discovers (\w+)$/))) return [kind, `${n(m[1])}が「${TECH[m[2]] || m[2]}」を発見`];
+  return [kind, text];
+}
+export const KIND_GLYPH = { war: '⚔', capture: '⚑', raze: '✕', peace: '☮', ally: '⚭', diplo: '✉', science: '✦', revolt: '!', found: '⌂', tech: '✧' };

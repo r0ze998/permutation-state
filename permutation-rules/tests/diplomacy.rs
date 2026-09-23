@@ -21,6 +21,7 @@ fn setup(n: usize) -> (Ruleset, WorldState) {
             name: format!("civ-{i}"),
             declared_kind: DeclaredKind::Undeclared,
             payout_wallet: [i as u8; 32],
+            exchange_deposit: 0,
         })
         .collect();
     let s = new_season(&rules, &[11; 32], &[22; 32], &entries).unwrap();
@@ -320,6 +321,7 @@ fn larger_games_allow_three_member_groups() {
             name: format!("c{i}"),
             declared_kind: DeclaredKind::Undeclared,
             payout_wallet: [i as u8; 32],
+            exchange_deposit: 0,
         })
         .collect();
     let mut s = new_season(&rules, &[11; 32], &[22; 32], &entries).expect("9-civ season map");

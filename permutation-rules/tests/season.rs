@@ -24,6 +24,7 @@ fn entries(n: usize) -> Vec<Entry> {
                 DeclaredKind::Agent
             },
             payout_wallet: [i as u8; 32],
+            exchange_deposit: 0,
         })
         .collect()
 }
@@ -290,4 +291,26 @@ fn scouts_move_along_paths() {
     let moved = &s.units[scout.id as usize];
     assert_ne!(moved.hex, scout.hex, "scout did not move");
     assert_eq!(moved.last_moved, Some(0));
+}
+
+#[test]
+fn entering_a_protected_capital_says_whose_and_until_when() {
+    use permutation_rules::checks::{enter, Blocked};
+    use permutation_rules::tick::may_enter;
+    let (rules, mut s) = setup(6);
+    let cap = s.cities[s.civs[1].capital.unwrap() as usize].hex;
+    // A passable hex two steps from civ 1's capital.
+    let hex = s
+        .map
+        .tiles
+        .iter()
+        .find(|t| t.hex.distance(cap) == 2 && t.terrain.is_passable())
+        .expect("passable hex two steps out")
+        .hex;
+    s.tick = 20; // radius 3 until tick 30, then 2 (still covers distance 2) until 45
+    assert_eq!(enter(&s, &rules, Some(0), hex), Err(Blocked::ProtectedCapital { civ: 1, until: 45 }));
+    assert!(!may_enter(&s, &rules, Some(0), hex));
+    assert_eq!(enter(&s, &rules, Some(1), hex), Ok(()), "own zone is open");
+    s.civs[1].protection_lost = true;
+    assert_ne!(enter(&s, &rules, Some(0), hex).err(), Some(Blocked::ProtectedCapital { civ: 1, until: 45 }));
 }

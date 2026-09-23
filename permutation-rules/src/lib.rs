@@ -12,6 +12,7 @@ extern crate alloc;
 
 pub mod battle;
 pub mod buildings;
+pub mod checks;
 pub mod combat;
 pub mod diplomacy;
 pub mod economy;
@@ -21,8 +22,10 @@ pub mod genesis;
 pub mod hex;
 pub mod invariants;
 pub mod map;
+pub mod markets;
 pub mod orders;
 pub mod params;
+pub mod preview;
 pub mod rng;
 pub mod scoring;
 pub mod state;

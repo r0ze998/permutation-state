@@ -86,7 +86,27 @@ pub fn check(state: &WorldState, rules: &Ruleset) -> Vec<Violation> {
         }
     }
 
-    // TODO(§17 #1): USDC conservation once the Exchange settles on the ER.
+    // 1. USDC conservation on the ER: balances + Vault + operations = deposits.
+    let held: u64 =
+        state.civs.iter().map(|c| c.usdc).sum::<u64>() + state.exchange_vault + state.exchange_ops;
+    if held != state.usdc_deposited {
+        v.push(Violation {
+            invariant: 1,
+            what: "USDC not conserved",
+            id: held,
+        });
+    }
+    // Exchange season spend cap (§11.3).
+    let cap = rules.entry_fee_usdc * rules.exchange_spend_cap_bps as u64 / 10_000;
+    for c in &state.civs {
+        if c.exchange_spent > cap {
+            v.push(Violation {
+                invariant: 1,
+                what: "Exchange spend cap exceeded",
+                id: c.id as u64,
+            });
+        }
+    }
     // TODO(§17 #4): budget per applied orders is enforced by `validate_batch`.
     v
 }

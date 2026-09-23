@@ -7,8 +7,8 @@ use crate::map::{generate, territory_radius};
 use crate::params::Ruleset;
 use crate::rng::{rand_id, Seed};
 use crate::state::{
-    City, CityState, Civ, DeclaredKind, Focus, Owner, Relation, Scores, Specialty, StandingRule,
-    Unit, WorldState,
+    City, CityState, Civ, DeclaredKind, Focus, Owner, Pool, Relation, Scores, Specialty,
+    StandingRule, Unit, WorldState,
 };
 use crate::tech::TechSet;
 use crate::units::UnitType;
@@ -24,6 +24,8 @@ pub struct Entry {
     pub name: String,
     pub declared_kind: DeclaredKind,
     pub payout_wallet: [u8; 32],
+    /// USDC (6 decimals) delegated to the ER for the Exchange at entry (§11.3).
+    pub exchange_deposit: u64,
 }
 
 /// Build tick-0 state. `world_seed` drives terrain (first season only);
@@ -123,6 +125,8 @@ pub fn new_season(
             protection_lost: false,
             active_ticks: 0,
             exchange_spent: 0,
+            usdc: entry.exchange_deposit,
+            exchange_bought: [0; 5],
             scores: Scores {
                 max_pop: 1,
                 ..Scores::default()
@@ -174,6 +178,16 @@ pub fn new_season(
         grievance: vec![0; n * n],
         proposals: Vec::new(),
         truce_until: vec![0; n * n.saturating_sub(1) / 2],
+        pools: vec![
+            Pool {
+                goods: rules.amm_seed_goods as i64 * 1000,
+                gold: rules.amm_seed_gold as i64 * 1000,
+            };
+            2
+        ],
+        usdc_deposited: entries.iter().map(|e| e.exchange_deposit).sum(),
+        exchange_vault: 0,
+        exchange_ops: 0,
         event_head: genesis.finalize().into(),
     })
 }

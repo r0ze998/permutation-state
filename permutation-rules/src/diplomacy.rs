@@ -9,6 +9,7 @@
 //! Transfers (§10.5) and envoys (§12.1) run in phase 2 via `apply_transfers`
 //! and `apply_envoys`.
 
+use crate::checks;
 use crate::fixed::MILLI;
 use crate::orders::{Good, Order};
 use crate::params::Ruleset;
@@ -28,38 +29,25 @@ pub fn phase_diplomacy(state: &mut WorldState, rules: &Ruleset, input: &TickInpu
         for order in orders {
             match order {
                 Order::DeclareWar { civ: t } => {
-                    if valid_pair(state, civ, t)
-                        && matches!(state.relation(civ, t), Relation::Peace)
-                        && state.tick >= state.truce_until[state.pair_index(civ, t)]
-                    {
+                    if checks::declare_war(state, civ, t).is_ok() {
                         start_war(state, rules, civ, t);
                     }
                 }
                 Order::ProposePeace { civ: t } => {
-                    if valid_pair(state, civ, t)
-                        && matches!(state.relation(civ, t), Relation::War { peace_at: None, .. })
-                    {
+                    if checks::propose_peace(state, civ, t).is_ok() {
                         propose(state, ProposalKind::Peace, civ, t);
                     }
                 }
                 Order::AcceptPeace { civ: t } => accept_peace(state, civ, t),
                 Order::ProposeNap { civ: t, bond } => {
-                    if valid_pair(state, civ, t)
-                        && bond >= rules.nap_min_bond
-                        && matches!(state.relation(civ, t), Relation::Peace)
-                    {
+                    if checks::propose_nap(state, rules, civ, t, bond).is_ok() {
                         propose(state, ProposalKind::Nap { bond }, civ, t);
                     }
                 }
                 Order::AcceptNap { civ: t, bond } => accept_nap(state, rules, civ, t, bond),
                 Order::BreakNap { civ: t } => break_nap(state, civ, t),
                 Order::ProposeAlliance { civ: t } => {
-                    if valid_pair(state, civ, t)
-                        && matches!(
-                            state.relation(civ, t),
-                            Relation::Peace | Relation::Nap { .. }
-                        )
-                    {
+                    if checks::propose_alliance(state, rules, civ, t).is_ok() {
                         propose(state, ProposalKind::Alliance, civ, t);
                     }
                 }
@@ -275,19 +263,8 @@ pub fn alliance_group(state: &WorldState, civ: CivId) -> Vec<CivId> {
 }
 
 fn accept_alliance(state: &mut WorldState, rules: &Ruleset, civ: CivId, from: CivId) {
-    if !valid_pair(state, civ, from) {
-        return;
-    }
-    let joiner_allies = alliance_group(state, civ);
+    let ok = checks::join_alliance(state, rules, civ, from).is_ok();
     let group = alliance_group(state, from);
-    let ok = joiner_allies.len() == 1
-        && group.len() < rules.alliance_cap(state.civs.len())
-        && group
-            .iter()
-            .all(|m| matches!(state.relation(civ, *m), Relation::Peace | Relation::Nap { .. }))
-        // A group with a pending departure cannot take new members.
-        && !(0..state.civs.len() as u16)
-            .any(|o| o != from && matches!(state.relation(from, o), Relation::Alliance { leaving_at: Some(_) }));
     if !ok || take_proposal(state, from, civ, false, false).is_none() {
         return;
     }

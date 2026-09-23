@@ -12,7 +12,7 @@ use crate::economy::{
 use crate::fixed::{apply_bps, milli, MILLI};
 use crate::hex::Hex;
 use crate::map::territory_radius;
-use crate::orders::{building_unlocked, next_bank, validate_batch, Order, OrderBatch};
+use crate::orders::{next_bank, validate_batch, Order, OrderBatch};
 use crate::params::Ruleset;
 use crate::rng::{tick_seed, tie_key, Seed};
 use crate::scoring::{concord_tick, dominion_tick};
@@ -156,13 +156,14 @@ fn phase_economy_orders(state: &mut WorldState, rules: &Ruleset, input: &TickInp
                 }
                 Order::SetResearch { techs } => set_research(state, civ, techs),
                 Order::Purchase { city, gold } => purchase(state, rules, civ, city, gold),
-                // TODO(§11.2, §11.3): MarketTrade, ExchangeOrder.
                 _ => {}
             }
         }
     }
     crate::diplomacy::apply_transfers(state, rules, input);
     crate::diplomacy::apply_envoys(state, rules, input);
+    crate::markets::apply_amm(state, rules, input);
+    crate::markets::apply_exchange(state, rules, input);
 }
 
 /// `FoundCity` (§4.2, §5.7): the settler founds a city where it stands.
@@ -175,23 +176,7 @@ fn found_city(state: &mut WorldState, rules: &Ruleset, civ: CivId, settler: u32)
         return;
     };
     let hex = u.hex;
-    let min = rules.city_min_distance as u32;
-    let Some(tile) = state.map.tile(hex) else {
-        return;
-    };
-    let foreign = tile
-        .owner_city
-        .and_then(|c| state.cities.get(c as usize))
-        .is_some_and(|c| c.alive && c.owner != Some(civ));
-    let valid = tile.terrain.is_passable()
-        && !foreign
-        && state
-            .cities
-            .iter()
-            .all(|c| !c.alive || c.hex.distance(hex) >= min)
-        && state.city_states.iter().all(|c| c.hex.distance(hex) >= min)
-        && !crate::battle::is_protected(state, rules, civ, hex);
-    if !valid {
+    if crate::checks::found_city(state, rules, civ, settler).is_err() {
         return;
     }
     let id = state.cities.len() as u32;
@@ -262,34 +247,7 @@ fn owned_city_mut(
 }
 
 fn item_valid(state: &WorldState, civ: CivId, city: u32, item: &QueueItem) -> bool {
-    let techs = state.civs[civ as usize].techs;
-    let c = &state.cities[city as usize];
-    match *item {
-        QueueItem::Building(b) => {
-            if c.buildings.has(b) || !building_unlocked(techs, b) {
-                return false;
-            }
-            if b.is_star_gate() {
-                // One Star Gate city per civilization (§5.6), stages in order.
-                let elsewhere = state
-                    .living_cities_of(civ)
-                    .any(|o| o.id != city && o.buildings.star_gate_stages() > 0);
-                let prev_ok = match b {
-                    Building::StarGate2 => c.buildings.has(Building::StarGate1),
-                    Building::StarGate3 => c.buildings.has(Building::StarGate2),
-                    _ => true,
-                };
-                return !elsewhere && prev_ok;
-            }
-            true
-        }
-        QueueItem::Troops { unit, n } => {
-            !unit.is_civilian()
-                && (1..=20).contains(&n)
-                && stats(unit).tech.is_none_or(|t| techs.has(t))
-        }
-        QueueItem::Scout | QueueItem::Settler => true,
-    }
+    crate::checks::queue_item(state, civ, city, item).is_ok()
 }
 
 fn set_queue(state: &mut WorldState, civ: CivId, city: u32, items: Vec<QueueItem>) {
@@ -306,7 +264,7 @@ fn set_research(state: &mut WorldState, civ: CivId, techs: Vec<Tech>) {
     let c = &mut state.civs[civ as usize];
     let mut planned = c.techs;
     for t in &techs {
-        if planned.has(*t) || !planned.prereqs_met(*t) {
+        if crate::checks::research(planned, *t).is_err() {
             return;
         }
         planned.insert(*t);
@@ -381,37 +339,7 @@ pub(crate) fn unit_civ(u: &Unit) -> Option<CivId> {
 /// Whether `mover` may enter `hex` (terrain, protected zones, borders). Public
 /// so clients and agents can list legal moves with the engine's own rule.
 pub fn may_enter(state: &WorldState, rules: &Ruleset, mover: Option<CivId>, hex: Hex) -> bool {
-    let Some(tile) = state.map.tile(hex) else {
-        return false;
-    };
-    if !tile.terrain.is_passable() {
-        return false;
-    }
-    let radius = rules.protection_radius(state.tick) as u32;
-    for civ in &state.civs {
-        if Some(civ.id) == mover || civ.protection_lost {
-            continue;
-        }
-        if let Some(cap) = civ
-            .capital
-            .and_then(|id| state.cities.get(id as usize))
-            .filter(|c| c.alive)
-        {
-            if radius > 0 && cap.hex.distance(hex) <= radius {
-                return false;
-            }
-        }
-    }
-    let Some(mover) = mover else { return true }; // barbarians ignore borders
-    match tile
-        .owner_city
-        .and_then(|id| state.cities.get(id as usize))
-        .and_then(|c| c.owner)
-    {
-        Some(owner) if owner != mover => state.at_war(mover, owner) || allied(state, mover, owner),
-        _ => true,
-    }
-    // TODO(§7.3): city-state territory for suzerains once city-states own tiles.
+    crate::checks::enter(state, rules, mover, hex).is_ok()
 }
 
 /// Occupancy: one army or one civilian per tile; inside an own city, one of each (§7.2).

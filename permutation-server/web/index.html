@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#243e38">
+  <title>PERMUTATION STATE — ひとつの世界、いくつもの文明</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<main id="game">
+  <canvas id="world-map"></canvas>
+  <div class="map-vignette"></div>
+
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">✳</span><span>PERMUTATION<em>STATE</em></span></div>
+    <div class="civ-chip" id="civ-chip"></div>
+    <nav class="resources" id="resources" aria-label="あなたの文明の資源"></nav>
+    <div class="clock" id="clock" tabindex="0" aria-live="polite"></div>
+    <div class="top-actions">
+      <button class="icon-btn" id="pause-btn" type="button" title="時計の停止・再開（このPCだけの試作）">❚❚</button>
+      <button class="icon-btn" id="advance-btn" type="button" title="今すぐ次のティックへ（一人用の試作のみ）">⏭</button>
+      <button class="icon-btn" id="help-btn" type="button" title="遊び方">?</button>
+    </div>
+  </header>
+
+  <section class="civ-plate" aria-label="あなたの文明">
+    <div class="eyebrow"><span class="live-dot" id="live-dot"></span>ONE WORLD · SEASON 0 · BLITZ</div>
+    <h1 id="civ-title">—</h1>
+    <div class="sub" id="civ-sub"></div>
+    <div class="tracks-mini" id="tracks-mini"></div>
+  </section>
+
+  <nav class="world-nav" aria-label="パネル">
+    <button class="nav-btn" data-drawer="cities" type="button"><span class="g">⌂</span><span class="l">都市・軍</span><span class="dot" id="dot-cities" hidden></span></button>
+    <button class="nav-btn" data-drawer="research" type="button"><span class="g">✧</span><span class="l">研究</span><span class="dot" id="dot-research" hidden></span></button>
+    <button class="nav-btn" data-drawer="diplomacy" type="button"><span class="g">✉</span><span class="l">外交</span><span class="dot" id="dot-diplomacy" hidden></span></button>
+    <button class="nav-btn" data-drawer="market" type="button"><span class="g">⇄</span><span class="l">市場</span></button>
+    <button class="nav-btn" data-drawer="victory" type="button"><span class="g">♛</span><span class="l">勝利</span></button>
+    <button class="nav-btn" data-drawer="chronicle" type="button"><span class="g">☷</span><span class="l">年代記</span></button>
+  </nav>
+  <aside class="drawer panel" id="drawer" hidden></aside>
+
+  <div class="right-col">
+    <section class="summary panel" id="summary" hidden></section>
+    <aside class="inspector panel" id="inspector"></aside>
+  </div>
+
+  <div class="hover-label" id="hover-label" hidden></div>
+  <div class="notifications" id="notifications" aria-live="polite"></div>
+
+  <div class="map-tools">
+    <button type="button" id="zoom-in" title="拡大">+</button>
+    <button type="button" id="zoom-out" title="縮小">−</button>
+    <button type="button" id="home" title="首都へ（H）">⌖</button>
+  </div>
+  <div class="minimap-card panel">
+    <canvas id="minimap" aria-label="全体図。クリックでその場所へ"></canvas>
+    <div class="foot"><span id="mini-left"></span><span id="mini-right"></span></div>
+  </div>
+
+  <footer class="bottom-center">
+    <div class="lens-legend" id="lens-legend" hidden></div>
+    <div class="lens-bar" role="group" aria-label="レンズ">
+      <button type="button" data-lens="normal" aria-pressed="true"><span>◈</span>地形</button>
+      <button type="button" data-lens="political" aria-pressed="false"><span>⚑</span>勢力</button>
+      <button type="button" data-lens="yields" aria-pressed="false"><span>❧</span>産出</button>
+      <button type="button" data-lens="military" aria-pressed="false"><span>⚔</span>軍事</button>
+      <button type="button" data-lens="concord" aria-pressed="false"><span>☮</span>協調</button>
+    </div>
+    <section class="dock panel" aria-label="このティックの命令">
+      <div class="dock-budget" id="dock-budget"></div>
+      <div class="chips" id="chips"></div>
+      <div class="commit" id="commit"></div>
+    </section>
+  </footer>
+
+  <section class="next-action panel" id="next-action"></section>
+  <div class="prototype-label">ローカル試作 · ボット5体と対戦 · 戦場の霧なし · USDCはテスト用</div>
+
+  <div class="loading" id="loading"><div class="mark">✳</div><h2>世界を読み込んでいます</h2><p class="desc" id="loading-text">ゲームサーバーに接続しています。</p></div>
+</main>
+
+<dialog id="help" class="help">
+  <div class="eyebrow">HOW TO PLAY · 遊び方</div>
+  <h2>ひとつの世界で、あなたの文明を率いる。</h2>
+  <p class="desc">6つの文明が同じ地図を共有しています。あなた以外の5文明はルールで動くボット（AGENT表示）です。30秒ごとの「ティック」で、全員の命令が同時に解決されます。</p>
+  <ol>
+    <li><span><b>地図を選んで調べる。</b>都市・部隊・土地をクリックすると右のパネルに詳細と、できること・できない理由が出ます。</span></li>
+    <li><span><b>命令は「枠」を使う。</b>1ティックの枠は3＋都市数（最大8）。使わなかった枠は最大4ティック分まで繰り越せます。枠は人間もボットも同じです。</span></li>
+    <li><span><b>命令は下書き→確定。</b>下の命令ドックに貯めて「確定」。締切3秒前には自動で確定します。ティック内の送信順は結果に影響しません。</span></li>
+    <li><span><b>勝ち方は3つ。</b>覇権（領土と占領）・科学（スターゲート3段階）・協調（侵略しない期間の繁栄と都市国家）。いずれも期間の積み上げで決まります。</span></li>
+  </ol>
+  <p class="note">操作：クリック＝選択 · ダブルクリック＝選択中の部隊を移動 · ドラッグ＝地図移動 · スクロール＝拡大縮小 · Space＝次の判断 · Ctrl+Enter＝確定 · H＝首都へ · Esc＝閉じる。<br>このページは一人用のローカル試作です。時計の停止と「次のティックへ」は試遊のための機能です。</p>
+  <div class="row" style="justify-content:flex-end;margin-top:14px">
+    <button class="btn" type="button" data-close-help>読むだけにする（停止のまま）</button>
+    <button class="btn primary" type="button" data-start>時計を動かしてはじめる →</button>
+  </div>
+</dialog>
+
+<script type="module" src="app.mjs"></script>
+</body>
+</html>

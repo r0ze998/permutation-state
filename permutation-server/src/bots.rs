@@ -1,33 +1,20 @@
-//! Bot match + replay recorder.
-//!
-//! Plays one Blitz match (180 ticks) with scripted bots on the real engine
-//! and writes a JSON replay for the web viewer:
-//!
-//!     cargo run --release --example replay -- replay.json
-//!
-//! The bots are deliberately simple rule-based players with four
-//! personalities. They read the full state (the engine has no fog-of-war
-//! view yet), so they are a test harness, not the reference agent.
+//! Scripted rule-based bots with four personalities (Warlord, Builder,
+//! Diplomat, Scholar). They play through the same public order API as a
+//! human and read the full state (there is no fog-of-war view yet), so they
+//! are a test harness and sparring partner, not the reference agent.
 
 use permutation_rules::buildings::Building;
-use permutation_rules::diplomacy::alliance_group;
-use permutation_rules::genesis::{new_season, Entry};
 use permutation_rules::hex::Hex;
-use permutation_rules::invariants;
-use permutation_rules::orders::{AttackTarget, Order, OrderBatch};
-use permutation_rules::rng::Seed;
-use permutation_rules::state::{
-    CivId, DeclaredKind, Owner, ProposalKind, QueueItem, Relation, WorldState,
-};
+use permutation_rules::orders::{AttackTarget, Order};
+use permutation_rules::state::{CivId, Owner, ProposalKind, QueueItem, Relation, WorldState};
 use permutation_rules::tech::{Tech, TECHS};
-use permutation_rules::tick::{may_enter, resolve_tick, TickInput};
+use permutation_rules::tick::may_enter;
 use permutation_rules::units::{stats, UnitClass, UnitType};
-use permutation_rules::{Preset, Ruleset};
+use permutation_rules::Ruleset;
 use std::collections::{BTreeSet, HashMap, VecDeque};
-use std::fmt::Write as _;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Persona {
+pub enum Persona {
     Warlord,
     Builder,
     Diplomat,
@@ -35,7 +22,7 @@ enum Persona {
 }
 
 impl Persona {
-    fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             Persona::Warlord => "Warlord",
             Persona::Builder => "Builder",
@@ -127,8 +114,8 @@ impl Persona {
     }
 }
 
-const NAMES: [&str; 6] = ["Aster", "Borealis", "Cinder", "Dunmar", "Ember", "Fjordhal"];
-const PERSONAS: [Persona; 6] = [
+pub const NAMES: [&str; 6] = ["Aster", "Borealis", "Cinder", "Dunmar", "Ember", "Fjordhal"];
+pub const PERSONAS: [Persona; 6] = [
     Persona::Warlord,
     Persona::Builder,
     Persona::Diplomat,
@@ -137,10 +124,21 @@ const PERSONAS: [Persona; 6] = [
     Persona::Diplomat,
 ];
 
-struct Bot {
-    civ: CivId,
-    persona: Persona,
-    war_started: HashMap<CivId, u16>,
+/// A scripted rule-based player. Reads the full state (no fog view yet).
+pub struct Bot {
+    pub civ: CivId,
+    pub persona: Persona,
+    pub war_started: HashMap<CivId, u16>,
+}
+
+impl Bot {
+    pub fn new(civ: CivId, persona: Persona) -> Self {
+        Bot {
+            civ,
+            persona,
+            war_started: HashMap::new(),
+        }
+    }
 }
 
 // ------------------------------------------------------------------ helpers
@@ -192,7 +190,7 @@ fn path_to(
     None
 }
 
-fn city_count(s: &WorldState, civ: CivId) -> usize {
+pub fn city_count(s: &WorldState, civ: CivId) -> usize {
     s.living_cities_of(civ).count()
 }
 
@@ -202,7 +200,7 @@ fn my_units(s: &WorldState, civ: CivId) -> impl Iterator<Item = &permutation_rul
         .filter(move |u| u.alive && u.owner == Owner::Civ(civ))
 }
 
-fn troops_of(s: &WorldState, civ: CivId) -> u32 {
+pub fn troops_of(s: &WorldState, civ: CivId) -> u32 {
     my_units(s, civ)
         .filter(|u| !u.unit_type.is_civilian())
         .map(|u| u.troops / 1000)
@@ -238,7 +236,7 @@ fn site_value(s: &WorldState, h: Hex) -> u32 {
 // ------------------------------------------------------------------ the bot
 
 impl Bot {
-    fn orders(&mut self, s: &WorldState, r: &Ruleset) -> Vec<Order> {
+    pub fn orders(&mut self, s: &WorldState, r: &Ruleset) -> Vec<Order> {
         let civ = self.civ;
         let me = &s.civs[civ as usize];
         let n = s.civs.len() as CivId;
@@ -606,397 +604,6 @@ impl Bot {
             cost += c;
             out.push(o);
         }
-        let _ = alliance_group; // re-exported for viewers; bots use relations directly
         out
-    }
-}
-
-// ------------------------------------------------------------------ recording
-
-fn json_str(out: &mut String, s: &str) {
-    out.push('"');
-    for ch in s.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            _ => out.push(ch),
-        }
-    }
-    out.push('"');
-}
-
-fn rel_code(r: Relation) -> char {
-    match r {
-        Relation::Peace => 'P',
-        Relation::War { .. } => 'W',
-        Relation::Nap { .. } => 'N',
-        Relation::Alliance { .. } => 'A',
-    }
-}
-
-fn frame(s: &WorldState, events: &[String]) -> String {
-    let mut f = String::new();
-    let n = s.civs.len() as CivId;
-    write!(f, "{{\"t\":{},\"own\":\"", s.tick).unwrap();
-    for t in &s.map.tiles {
-        let owner = t
-            .owner_city
-            .and_then(|c| s.cities.get(c as usize))
-            .filter(|c| c.alive)
-            .and_then(|c| c.owner);
-        f.push(match owner {
-            Some(o) => char::from_digit(o as u32, 36).unwrap(),
-            None => '.',
-        });
-    }
-    f.push_str("\",\"cities\":[");
-    let cities: Vec<String> = s
-        .cities
-        .iter()
-        .filter(|c| c.alive)
-        .map(|c| {
-            format!(
-                "[{},{},{},{},{},{},{},{},{}]",
-                c.id,
-                c.hex.q,
-                c.hex.r,
-                c.owner.map_or(-1, |o| o as i32),
-                c.pop,
-                c.defense / 1000,
-                c.buildings.has(Building::Walls) as u8,
-                c.buildings.star_gate_stages(),
-                c.razing.is_some() as u8
-            )
-        })
-        .collect();
-    f.push_str(&cities.join(","));
-    f.push_str("],\"units\":[");
-    let units: Vec<String> = s
-        .units
-        .iter()
-        .filter(|u| u.alive)
-        .map(|u| {
-            let owner = match u.owner {
-                Owner::Civ(c) => c as i32,
-                Owner::Barbarian => -2,
-            };
-            format!(
-                "[{},{},{},{},{},{}]",
-                u.id,
-                u.hex.q,
-                u.hex.r,
-                owner,
-                u.unit_type as u8,
-                u.troops / 100
-            )
-        })
-        .collect();
-    f.push_str(&units.join(","));
-    f.push_str("],\"civs\":[");
-    let civs: Vec<String> = s
-        .civs
-        .iter()
-        .map(|c| {
-            let pop: u32 = s.living_cities_of(c.id).map(|x| x.pop).sum();
-            format!(
-                "[{},{},{},{},{},{},{},{},{},{},{},{}]",
-                c.gold / 1000,
-                c.scores.science_total,
-                c.scores.dominion,
-                c.scores.concord_raw,
-                c.scores.star_gate_stages,
-                c.techs.count(),
-                c.war_weariness,
-                c.is_aggressor(s.tick.saturating_sub(1), 12) as u8,
-                pop,
-                city_count(s, c.id),
-                c.influence / 1000,
-                troops_of(s, c.id)
-            )
-        })
-        .collect();
-    f.push_str(&civs.join(","));
-    f.push_str("],\"rel\":\"");
-    for a in 0..n {
-        for b in a + 1..n {
-            f.push(rel_code(s.relation(a, b)));
-        }
-    }
-    f.push_str("\",\"cs\":[");
-    let cs: Vec<String> = s
-        .city_states
-        .iter()
-        .map(|c| {
-            format!(
-                "[{},{},{}]",
-                c.suzerain.map_or(-1, |x| x as i32),
-                c.captured_by.map_or(-1, |x| x as i32),
-                c.pop
-            )
-        })
-        .collect();
-    f.push_str(&cs.join(","));
-    f.push_str("],\"ev\":[");
-    let mut first = true;
-    for e in events {
-        if !first {
-            f.push(',');
-        }
-        first = false;
-        json_str(&mut f, e);
-    }
-    f.push_str("]}");
-    f
-}
-
-fn diff_events(prev: &WorldState, next: &WorldState, names: &[&str]) -> Vec<String> {
-    let mut ev = Vec::new();
-    let n = next.civs.len() as CivId;
-    let nm = |c: CivId| names[c as usize];
-    for a in 0..n {
-        for b in a + 1..n {
-            let (r0, r1) = (prev.relation(a, b), next.relation(a, b));
-            if rel_code(r0) == rel_code(r1) {
-                continue;
-            }
-            ev.push(match r1 {
-                Relation::War {
-                    declared_by,
-                    casus_belli,
-                    ..
-                } => {
-                    let other = if declared_by == a { b } else { a };
-                    let why = if matches!(r0, Relation::Nap { .. }) {
-                        " by breaking their pact"
-                    } else if casus_belli {
-                        " (casus belli)"
-                    } else {
-                        ""
-                    };
-                    format!(
-                        "war|{} declares war on {}{}",
-                        nm(declared_by),
-                        nm(other),
-                        why
-                    )
-                }
-                Relation::Peace => match r0 {
-                    Relation::War { .. } => format!("peace|{} and {} make peace", nm(a), nm(b)),
-                    Relation::Nap { .. } => {
-                        format!("diplo|The pact between {} and {} expires", nm(a), nm(b))
-                    }
-                    _ => format!("diplo|{} and {} end their alliance", nm(a), nm(b)),
-                },
-                Relation::Nap { .. } => {
-                    format!("diplo|{} and {} sign a non-aggression pact", nm(a), nm(b))
-                }
-                Relation::Alliance { .. } => {
-                    format!("ally|{} and {} form an alliance", nm(a), nm(b))
-                }
-            });
-        }
-    }
-    for c in &next.cities {
-        let before = prev.cities.get(c.id as usize);
-        match before {
-            None if c.founder != u16::MAX && c.captured_tick.is_none() => ev.push(format!(
-                "found|{} founds a new city",
-                nm(c.owner.unwrap_or(c.founder))
-            )),
-            None => ev.push(format!(
-                "capture|{} conquers a city-state",
-                nm(c.owner.unwrap_or(0))
-            )),
-            Some(b) if b.alive && !c.alive => ev.push("raze|A city is razed to a ruin".to_string()),
-            Some(b) if b.alive && c.alive && b.owner != c.owner => {
-                ev.push(match (b.owner, c.owner) {
-                    (Some(o), Some(nw)) => {
-                        format!("capture|{} captures a city of {}", nm(nw), nm(o))
-                    }
-                    (Some(o), None) => {
-                        format!("revolt|A city of {} revolts and becomes free", nm(o))
-                    }
-                    (None, Some(nw)) => format!("capture|{} captures a free city", nm(nw)),
-                    _ => continue,
-                })
-            }
-            _ => {}
-        }
-        if let Some(b) = before {
-            let (s0, s1) = (
-                b.buildings.star_gate_stages(),
-                c.buildings.star_gate_stages(),
-            );
-            if s1 > s0 {
-                ev.push(format!(
-                    "science|{} completes Star Gate stage {}",
-                    nm(c.owner.unwrap_or(0)),
-                    s1
-                ));
-            }
-        }
-    }
-    for (i, cs) in next.city_states.iter().enumerate() {
-        let before = &prev.city_states[i];
-        if cs.suzerain != before.suzerain {
-            if let Some(z) = cs.suzerain {
-                ev.push(format!(
-                    "diplo|{} becomes suzerain of city-state {}",
-                    nm(z),
-                    i + 1
-                ));
-            }
-        }
-    }
-    for c in &next.civs {
-        let p = &prev.civs[c.id as usize];
-        for t in TECHS {
-            if c.techs.has(t.tech) && !p.techs.has(t.tech) && t.era >= 3 {
-                ev.push(format!("tech|{} discovers {:?}", nm(c.id), t.tech));
-            }
-        }
-    }
-    ev
-}
-
-fn main() {
-    let out_path = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "replay.json".to_string());
-    let rules = Ruleset::new(Preset::Blitz);
-    let world: Seed = *b"permutation-state/world/blitz-01";
-    let season: Seed = *b"permutation-state/season/demo-01";
-    let entries: Vec<Entry> = NAMES
-        .iter()
-        .enumerate()
-        .map(|(i, name)| Entry {
-            name: name.to_string(),
-            declared_kind: if i % 2 == 0 {
-                DeclaredKind::Agent
-            } else {
-                DeclaredKind::Human
-            },
-            payout_wallet: [i as u8 + 1; 32],
-        })
-        .collect();
-    let mut s = new_season(&rules, &world, &season, &entries).expect("genesis");
-    let mut bots: Vec<Bot> = PERSONAS
-        .iter()
-        .enumerate()
-        .map(|(i, p)| Bot {
-            civ: i as CivId,
-            persona: *p,
-            war_started: HashMap::new(),
-        })
-        .collect();
-
-    let mut out = String::new();
-    out.push_str("{\"meta\":{");
-    write!(
-        out,
-        "\"preset\":\"Blitz\",\"ticks\":{},\"tickSeconds\":{},\"rulesetHash\":\"{}\",",
-        rules.ticks_per_season,
-        rules.tick_seconds,
-        s.ruleset_hash
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>()
-    )
-    .unwrap();
-    out.push_str("\"civs\":[");
-    let civs: Vec<String> = s
-        .civs
-        .iter()
-        .map(|c| {
-            let mut e = String::from("{\"name\":");
-            json_str(&mut e, &c.name);
-            write!(
-                e,
-                ",\"persona\":\"{}\",\"kind\":\"{:?}\"}}",
-                PERSONAS[c.id as usize].name(),
-                c.declared_kind
-            )
-            .unwrap();
-            e
-        })
-        .collect();
-    out.push_str(&civs.join(","));
-    out.push_str("]},\"map\":{");
-    write!(out, "\"radius\":{},\"tiles\":[", s.map.radius).unwrap();
-    let tiles: Vec<String> = s
-        .map
-        .tiles
-        .iter()
-        .map(|t| {
-            let res = match t.resource {
-                None => -1,
-                Some(r) => r as i32,
-            };
-            format!(
-                "[{},{},{},{},{}]",
-                t.hex.q, t.hex.r, t.terrain as u8, t.river as u8, res
-            )
-        })
-        .collect();
-    out.push_str(&tiles.join(","));
-    out.push_str("]},\"cityStates\":[");
-    let css: Vec<String> = s
-        .city_states
-        .iter()
-        .map(|c| format!("[{},{},{},\"{:?}\"]", c.id, c.hex.q, c.hex.r, c.specialty))
-        .collect();
-    out.push_str(&css.join(","));
-    out.push_str("],\"frames\":[");
-    out.push_str(&frame(&s, &[]));
-
-    let names: Vec<&str> = NAMES.to_vec();
-    let mut roots = Vec::new();
-    while s.tick < rules.ticks_per_season {
-        let batches: Vec<OrderBatch> = bots
-            .iter_mut()
-            .map(|b| OrderBatch {
-                civ: b.civ,
-                tick: s.tick,
-                decision_digest: [0; 32],
-                orders: b.orders(&s, &rules),
-            })
-            .collect();
-        let mut vrf = [0u8; 32];
-        vrf[..2].copy_from_slice(&s.tick.to_le_bytes());
-        let prev = s.clone();
-        let root = resolve_tick(&mut s, &rules, &TickInput { vrf, batches }).expect("tick");
-        let v = invariants::check(&s, &rules);
-        assert!(v.is_empty(), "invariant violated at tick {}: {v:?}", s.tick);
-        roots.push(root);
-        let ev = diff_events(&prev, &s, &names);
-        out.push(',');
-        out.push_str(&frame(&s, &ev));
-    }
-    out.push_str("],\"finalRoot\":\"");
-    out.push_str(
-        &roots
-            .last()
-            .unwrap()
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>(),
-    );
-    out.push_str("\"}");
-    std::fs::write(&out_path, &out).expect("write replay");
-    eprintln!("wrote {} ({} bytes, {} ticks)", out_path, out.len(), s.tick);
-    for c in &s.civs {
-        eprintln!(
-            "{:9} {:8} cities {} pop {:3} techs {:2} stages {} dom {:6} con {:6} sci {:5} troops {}",
-            c.name,
-            PERSONAS[c.id as usize].name(),
-            city_count(&s, c.id),
-            s.living_cities_of(c.id).map(|x| x.pop).sum::<u32>(),
-            c.techs.count(),
-            c.scores.star_gate_stages,
-            c.scores.dominion,
-            c.scores.concord_raw,
-            c.scores.science_total,
-            troops_of(&s, c.id)
-        );
     }
 }

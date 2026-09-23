@@ -1,6 +1,6 @@
 """Inline a replay JSON into the viewer template as one self-contained page.
 
-    cargo run --release --example replay -- viewer/replay.json
+    (in ../permutation-server) cargo run --release --bin replay -- ../permutation-rules/viewer/replay.json
     python3 viewer/build.py viewer/replay.json viewer/replay.html
 
 Every non-ASCII character is escaped (\\uXXXX in scripts, &#x..; elsewhere) so

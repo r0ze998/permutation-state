@@ -104,8 +104,14 @@ pub struct Ruleset {
     // --- markets (§11) ---
     pub amm_fee_bps: Bps,
     pub hub_fee_bps: Bps,
+    pub amm_seed_goods: u32,
+    pub amm_seed_gold: u32,
+    pub amm_limit_iterations: u8,
     pub exchange_fee_bps: Bps,
     pub vault_share_bps: Bps,
+    /// Entry fee in USDC base units (6 decimals); also the per-season Exchange spend cap (§11.3).
+    pub entry_fee_usdc: u64,
+    pub exchange_spend_cap_bps: Bps,
 
     // --- neutral actors (§12) ---
     pub suzerain_threshold: u32,
@@ -198,8 +204,13 @@ impl Ruleset {
 
             amm_fee_bps: 300,
             hub_fee_bps: 100,
+            amm_seed_goods: 200,
+            amm_seed_gold: 2_000,
+            amm_limit_iterations: 3,
             exchange_fee_bps: 500,
             vault_share_bps: 8_000,
+            entry_fee_usdc: 10_000_000,
+            exchange_spend_cap_bps: 10_000,
 
             suzerain_threshold: 60,
             suzerain_lock_ticks: 45,

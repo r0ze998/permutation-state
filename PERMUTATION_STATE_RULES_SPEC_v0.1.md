@@ -540,6 +540,25 @@ A hub tile inside a city's territory makes that city the **hub holder**. The hol
 | Settlement | USDC is delegated to the ER. Goods and USDC swap atomically in the resolution step. Balances are committed to Solana with the tick checkpoint |
 | Budget | `ExchangeOrder` costs 0 orders |
 
+### 11.4 Resolution details (v0.1, fixed while implementing)
+**Gold AMM**
+- Orders are whole units; reserves are milli. Let `B` = total buy units and `S` = total sell units of the live orders in a pool.
+  - `S = B`: everyone trades at spot `gold × 1000 / goods` milli-gold per unit; the pool is untouched.
+  - `S > B`: the pool takes `S − B` units. Price `p = floor((y − ceil(k / (x + net))) / net)` per unit; the pool pays out `p × net`.
+  - `S < B`: the pool gives `B − S` units. Price `p = ceil((ceil(k / (x − net)) − y) / net)`; the pool receives `p × net`.
+  - The rounding always favours the pool, so `k = x × y` never decreases.
+- Buyers pay `q × p + fee`; sellers receive `q × p − fee`; the fee is 3% of `q × p`. 1% of notional goes to hub holders, split equally over all hubs (an unheld hub's share is burned); the other 2% is burned. Gold is conserved exactly.
+- Sellers must hold the goods when the tick resolves. A buyer whose cost at the batch price exceeds its limit **or its gold** is a violator.
+- The limit loop: price, drop all violators, re-price; up to 3 rounds. If violators remain after the third round, they are dropped and the remaining orders clear at the re-computed price without further checks.
+- If the net demand would empty the pool, the largest buy order (ties: earliest) is dropped and the batch re-priced.
+
+**Exchange**
+- USDC reaches the ER as a deposit declared at entry (`exchange_deposit`). Invariant 1 (§17): `Σ civ USDC + Vault + operations = Σ deposits` after every tick.
+- Buy orders are clamped, not rejected: to the per-tick cap (summed over the civ's buy orders for that good kind that tick), to the civ's USDC balance at its limit price plus fee, and to the remaining season cap. Sell orders are clamped to sellable stock (stock minus units bought on the Exchange this season).
+- One auction per good kind (Gold, Iron, Horses, Food, Production). Food and Production orders name a city: the seller's source city, or the buyer's delivery city; each must belong to that civ.
+- Clearing price: maximum volume, then smallest imbalance, then lowest price. Fills and pairing: buyers by price high→low, sellers low→high, ties by `rand(seed_t, "tie", civ ‖ order serial)`.
+- Settlement per matched pair: buyer pays `q × P + 5%`; seller receives `q × P`; the fee splits 80% Vault / 20% operations; goods move atomically in the same step.
+
 ---
 
 ## 12. Neutral actors and the Crisis
@@ -686,7 +705,7 @@ Each track winner (§14.5 rank 1, or a coalition) picks one item. Picks are appl
 
 ## 17. Invariants (MUST hold after every tick; checked in tests and the replay verifier)
 
-1. Sum of all civilizations' USDC Exchange balances + Vault + operations = USDC delegated to the ER (no creation or loss).
+1. Sum of all civilizations' USDC Exchange balances + Vault + operations = USDC delegated to the ER (no creation or loss). No civilization's Exchange spend exceeds the season cap.
 2. No tile holds more than one army or civilian unit, except a city tile (1 army + 1 civilian).
 3. Every army holds 500–20,000 milli-troops.
 4. Orders applied this tick per civilization ≤ its spendable budget at submission.
