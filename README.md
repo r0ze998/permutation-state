@@ -2,110 +2,165 @@
 
 **One shared civilization. Different citizens. Consequences that connect.**
 
-A rebuilt, map-first civilization strategy prototype. Players are citizens in one shared real-time
-world. They explore terrain, invest common resources in different facilities, extend roads, and
-develop connected production chains. The map is simulation data, not a static background image.
+全員でひとつの文明を育てる、マップ中心のリアルタイム文明シミュレーション。プレイヤーは一人の市民として世界を歩き、採集・建設・探索・研究を通じて、共有の地図と経済を変えていきます。
 
-This is a playable foundation, **not a completed MMO**. It has no live generative AI, combat,
-real entry fees, real prizes, or live Solana execution of the new simulation. The earlier blockchain
-experiments remain available separately and are not represented as proof that this new game is onchain.
+目指すのは **「生成型Civilization」**。ただし現在のプレイ可能な土台は、ルールに基づく共有シミュレーションです。生成AIによるNPC社会や、新ゲームのSolana／MagicBlock接続が完成したという意味ではありません。
 
-## Play
+> **更新日：2026-09-22。開発途中の状態を含みます。**
+> 基礎版で確認済みの機能と、現在追加・統合中の機能を区別しています。
+> 現行ゲームは `/civilization/`。`/world/`・`/proof/`・旧 `index.html` は以前の検証デモです。
 
-**日本語:** [プレイガイド](PLAY_GUIDE.ja.md) — 操作方法、最初の5分、施設・物流・探索・研究。
-ゲーム右上の「？」からも、[画面版ガイド](http://127.0.0.1:4173/civilization/guide.html)を開けます。
-文明の画面上の呼び名は「私たちの文明」です。ゲームタイトルは **PERMUTATION STATE** のままです。
+> **設計見直し（2026-09-24）:** ゲーム設計を [Game Design V4](PERMUTATION_STATE_GAME_DESIGN_V4.md) で全面的に見直しました（1つの永続世界に人間とAI agentの複数文明、シーズン制の3つの勝利トラック、Solana上の賞金プール）。以下の `/civilization/`（市民視点のシミュレーション）は旧設計の試作です。ベンチマークは [research/](research/)。
 
-No blockchain stack or npm installation is necessary for the new game:
+## ゲームの前提
+
+- **全員でひとつの文明。** プレイヤーごとに別の国家を持つ設計ではありません。
+- **自分の市民を操作。** 対象の土地か隣接地まで移動して行動します。
+- **同じ世界でリアルタイム進行。** ターン終了ボタンはなく、他の市民・生産・運搬も同時に進みます。
+- **文明の資源と施設を共有。** 誰かの探索や投資が、他の市民の選択肢を変えます。
+- **固定クエストや既定のエンディングなし。** 現在の文明目標を達成しても世界は続きます。
+
+タイトルは **PERMUTATION STATE**、画面上の文明の呼び名は **「私たちの文明」** です。以前の仮称は現行UIから外しました。
+
+## 起動する
+
+### 文明ゲームだけを起動する
+
+Node.js 20以降を使用します。このモードにはウォレット、Solanaのローカル環境、npm依存パッケージのインストールは不要です。以下は、このREADMEのあるリポジトリルートから実行します。
 
 ```sh
 cd permutation-state-solana-receipt-spike
 npm run start:civilization
 ```
 
-Open [the civilization](http://127.0.0.1:4174/civilization/).
-The existing integrated gateway also serves it at
-[port 4173](http://127.0.0.1:4173/civilization/) when the local Solana/MagicBlock stack is running.
-Both servers redirect their root URL to the new game.
+[ゲームを開く：ポート4174](http://127.0.0.1:4174/civilization/)
 
-**Run only one server against a given state directory.** The default is `../work/devnet` relative
-to this repository; both server modes share it. For isolated tests, set
-`PERMSTATE_CIVILIZATION_WORK_DIR` on the standalone server. Its port can be changed with
-`CIVILIZATION_PORT=4173 npm run start:civilization`.
+4173を使用したい場合は、同じディレクトリで次のように起動します。
 
-Every ordinary game tab joins the same civilization. The legacy storage ID `aster` is retained
-only for save compatibility; it is not the civilization's display name. Each tab has
-a separate citizen capability stored in sessionStorage; reload resumes that citizen. Closing the
-tab ends that local identity, but never resets the world. These are local prototype capabilities,
-not wallet accounts or a production anti-abuse identity system.
+```sh
+CIVILIZATION_PORT=4173 npm run start:civilization
+```
 
-## Controls and the first few minutes
+[ゲームを開く：ポート4173](http://127.0.0.1:4173/civilization/)
 
-- **Click a hex** to see its terrain, resources, legal investments, costs and constraints.
-- **Double-click known land**, or choose **ここへ移動**, to move your visible citizen. Roads are
-  faster; hills and mountains take longer; water cannot be crossed.
-- **Build nearby**. A farm produces food; a lumbermill produces wood; a quarry supplies stone.
-  A workshop consumes delivered wood and ore to produce tools. Those choices compete for the
-  same starting resources. There is no required first building.
-- **Follow the goods**. Workers travel to facilities; input and output couriers follow connected
-  roads. Goods enter common stock only when delivered. The inspector explains blocked production.
-- **Expand**. Explore an adjacent unknown hex, then extend roads to open new building sites.
-  A watchtower reveals a wider area. An archive makes knowledge; research changes farming,
-  transport, and the ability to build mines.
-- **Recover**. When resources are short, gather manually on nearby terrain. Your citizen
-  carries those goods back to the depot automatically. There is no purchase requirement.
-- **Read the world**. Switch food, industry, logistics or terrain lenses. Click resource totals
-  for the economy; open the town, research, and history panels for details.
-- **Next Action is optional**. It focuses a suggested location; it does not spend, execute,
-  complete a turn, or lock you into a quest. Cycle it to choose another opportunity.
-- Drag to pan, scroll or use `+ / −` to zoom, `F` to find your citizen, `N` to inspect the current
-  suggestion, `Esc` to close panels. The `?` button explains the game in Japanese.
+これらは自分のPC上のサーバーへのリンクです。サーバー起動中のみ利用でき、他の人へURLを送るだけでは参加できません。現在はループバック接続のローカル試作であり、公開MMOではありません。
 
-## Implemented and verified
+### 既存のSolana／MagicBlock検証環境と一緒に起動する
 
-- 217 state-driven hexes with shared discovery, terrain-aware pathfinding and visible movement
-- Seven buildable facility types plus the communal depot, with physical placement and timed work
-- Limited shared starting assets, differing investment paths, renewable manual recovery
-- Road connectivity, source inventories, inbound materials, outbound deliveries and net rates
-- Deterministic NPC workers and couriers (not LLM characters)
-- Three research unlocks and shared civilization milestones; milestone completion does not end play
-- Japanese-first contextual UI, five lenses, selection previews and optional task suggestions
-- Two-client shared state, capability-authorized actions, serialized mutations and disk persistence
-- Rejected actions do not consume resources; previews and authoritative actions use the same rules
-- A tested 15-minute legal progression from founding through agriculture, industry and exploration
+既存の統合ゲートウェイも、ポート4173の `/civilization/` で同じゲームを配信します。チェーン側の起動条件は [検証パッケージのREADME](permutation-state-solana-receipt-spike/README.md) を参照してください。統合ゲートウェイで配信していること自体は、新しい文明ゲームのオンチェーン化を意味しません。
 
-The service runs a 250ms authoritative simulation; the UI polls snapshots and interpolates movement.
-It is a local development server bound to loopback, not a public multiplayer deployment. Catch-up
-after server downtime is bounded to 60 seconds; it does not invent unlimited offline production.
+**同じ保存先に対して、単体サーバーと統合ゲートウェイを同時に動かさないでください。** 両モードの既定の保存先は、このリポジトリの一つ上にある `work/devnet` です。独立した試験用データを使う場合は、単体サーバーの `PERMSTATE_CIVILIZATION_WORK_DIR` を別のディレクトリへ設定します。両モードともルートURL `/` から `/civilization/` へ移動します。
 
-## Verify
+## 遊び方
+
+1. **土地をクリックする。** 地形・資源・可能な行動・費用を詳細パネルで確認します。
+2. **既知の陸地をダブルクリック、または「ここへ移動」。** 道路は速く、丘陵・山岳は遅く、水面は渡れません。
+3. **現地か隣接地で仕事をする。** 採集、建設、道路整備、探索を選びます。
+4. **物資が届くまでを見る。** 生産物や手作業で集めた物資は、共同倉庫へ届いて初めて共有備蓄に加わります。
+5. **次の発展を選ぶ。** 道路を延ばす、産地を増やす、学術院で知識を作って研究する。唯一の正解の順番はありません。
+
+画面右下の **「あなたにできること」** は候補地へ視点を案内するだけです。押しただけで移動・建設したり、資源を消費したりはしません。操作できないときは、現地との距離、現在の仕事、道路接続、共有資源、必要な研究を確認してください。
+
+| 操作 | 内容 |
+|---|---|
+| クリック / ダブルクリック | 土地の選択 / 既知の陸地へ移動 |
+| ドラッグ / スクロール / ＋ − | 地図の移動 / 拡大・縮小 |
+| `F` / `N` | 自分の市民へ視点を戻す / 現在の提案の場所を見る |
+| 矢印キー / `Enter` | 地図にフォーカス中、地図移動 / 選択地へ移動 |
+| `Esc` / 右上の「？」 | パネルを閉じる / 遊び方を開く |
+
+[日本語プレイガイド](PLAY_GUIDE.ja.md) · [ブラウザ版ガイド](permutation-state-prototype/civilization/guide.html)
+
+ガイドは基礎版の操作を説明しています。追加中の機能は、統合検証後にガイドへ反映します。
+
+## 現在の実装状況
+
+### 基礎版で実装・検証済み
+
+- 217のヘックスからなる共有マップ、地形を考慮した経路探索、市民の移動、共通の探索範囲。
+- 農場・製材所・採石場・鉱山・鍛冶工房・学術院・見張り塔と、初期の共同倉庫。
+- 共有資源を使う現地建設、建設時間、材料の配送、生産、出荷、備蓄への入庫。
+- 手作業の採集による資源不足からの復帰。
+- 輪作農法・輸送術・冶金の3つの共同研究。
+- 地形・食料・産業・物流・地勢の5つの表示レンズ、費用の事前確認、任意の行動提案。
+- 複数クライアントの共有状態、市民ごとの操作権限、操作の直列処理、ディスク保存と再起動後の復帰。
+- 規則で動くNPCの働き手と運び手。LLMによる判断や会話ではありません。
+
+### 現在追加・統合検証中
+
+以下は現在の開発作業に含まれます。コードの追加と、画面・保存データ・サーバーを通した動作確認は区別しています。
+
+| 項目 | 追加内容 | 現状 |
+|---|---|---|
+| 経済 | 保管容量、増設倉庫、通常・休止・道具を使う増産 | コアとUIを追加中。長時間の進行と既存テストを調整中 |
+| 土地の価値 | 近郊と遠方の産地の収量差、移動の所要時間 | コア・表示を追加中。探索前の情報表示も検証対象 |
+| 共同計画 | 材料予約、担当、辞退・期限切れによる引継ぎ、取消、現地着工 | コア・API・UIを統合中。二重予約・二重消費を検証する |
+| 情報表示 | 容量と予約分、建設残り時間、生産方針、共同計画の状態 | 画面へ追加中。ブラウザでの操作確認は未完了 |
+| 市民の継続保存 | 利用者が明示的に端末へ保存・再開する仕組み | 保存ヘルパーとテストを追加。画面のボタンとの接続は未完了 |
+| 公開前の対策 | リクエスト制限、世界数・市民数の保護上限 | サービス側で実装・検証中。公開運用の安全性を保証するものではない |
+
+経済更新では、旧版で蓄えた資源を容量に合わせて切り捨てない方針です。超過分を保持し、追加の受入を待たせます。保存済みの文明へ適用する前に、移行・保存・再読込を検証します。
+
+### まだ実装・接続していないもの
+
+- 記憶し、提案し、物語を動かす生成AI NPC。
+- 戦闘、防衛、敵対文明、外交。
+- 新しい文明シミュレーションのSolana／MagicBlockへの実接続。
+- 実際の参加費、暗号資産移転、マーケット決済、シーズン賞金の配当。
+- 本番向けウォレット認証・セッションキー、公開サーバー、他端末からの一般参加。
+
+既存のSolana検証コードにはローカル環境で確認した処理がありますが、旧デモ用の状態モデルです。**それを新しい文明ゲームの完成・本番稼働・実資金決済の証拠として扱いません。**
+
+## 保存と共有世界
+
+通常のゲームタブは同じ文明に参加します。内部の旧保存ID `aster` は、保存データと市民の操作権限を引き継ぐために残している識別子で、画面上のブランド名ではありません。
+
+基礎版の市民情報はタブ単位の `sessionStorage` に保存され、同じタブで再読み込みすると復帰します。タブを閉じても文明そのものは消えませんが、市民情報の継続保存は上記の追加実装が完了するまでは前提にしないでください。現在の操作権限はローカル試作用であり、ウォレット所有権や複数アカウントによる不正の防止を保証するものではありません。
+
+サーバーは250ms刻みでシミュレーションを進め、画面は共有状態を取得して移動を補間します。サーバーが動いていれば、画面を閉じている間も世界は進みます。サーバー停止時間の追いつき処理は最大60秒です。
+
+## 次の完成目標（旧設計。現在は [Game Design V4 §11](PERMUTATION_STATE_GAME_DESIGN_V4.md) を優先）
+
+**30分のプレイ中に、状況の変化を見て何度も共同判断が生まれること。**
+
+1. 経済・産地・共同計画・情報表示を統合し、保存互換と長時間の進行を検証する。
+2. 複数の市民が別々に探索・供給・建設を担当し、その成果を互いに利用できることを確認する。
+3. 世界状態と記憶に基づくNPCの提案を、安全な行動検証につなぐ。
+4. 繁栄側のシーズン目標・貢献評価・重要結果のチェーン接続を設計・実装する。
+5. テスト用資金で参加費とゲーム内手数料の配分・季節精算を検証する。実資金は別途安全性・法務・運用条件の確認後。
+6. 公開先、認証、保存・復旧、安全対策を整え、他端末から試遊する。
+
+シーズンは成果の集計・精算の単位として設計します。あらかじめ用意した物語の結末へ誘導する設計には戻しません。
+
+## 検証
+
+リポジトリルートから実行します。
 
 ```sh
 node --check permutation-state-prototype/civilization/app.mjs
-node --check permutation-state-prototype/civilization/copy.mjs
 node --check permutation-state-prototype/civilization/map.mjs
+node --check permutation-state-prototype/civilization/core.mjs
 node --test permutation-state-prototype/civilization/*.test.mjs
+node --test permutation-state-prototype/world/core.test.mjs
 cd permutation-state-solana-receipt-spike
 npm ci --ignore-scripts
 npm test
 ```
 
-The new simulation and service suites test branching investments, pathfinding, discovery, locality,
-construction, input/output deliveries, road connectivity, previews, research, recovery from depleted
-assets, multi-citizen state, authentication, persistence, and restart behaviour.
+- 最後にGitHubで確認済みの基礎版は [`37ae997`](https://github.com/r0ze998/permutation-state/commit/37ae997ffca2a843d31d2fc8bc61fb7912c26ae5)。当時のJavaScriptテスト96件とCIが通過しています。
+- 本README更新時の作業ツリーでは、クライアント18件・サービス23件が通過しました。
+- 文明側は機能追加の途中です。容量制限導入後の15分進行テストと、施設数の増加を反映する描画テストに調整が残っています。**作業中の版について全テスト通過とは記載しません。**
+- ブラウザで行った基礎版の操作記録と制限は [QA記録](permutation-state-prototype/civilization/QA.md) を参照してください。
 
-## Project map
+## ファイル構成
 
-| Path | Purpose |
+| パス | 内容 |
 |---|---|
-| `permutation-state-prototype/civilization/` | New game, deterministic core, renderer and UI |
-| `PERMUTATION_STATE_REBUILD.md` | Active design and module contract |
-| `permutation-state-solana-receipt-spike/server/civilization-*` | Standalone/shared authoritative service and tests |
-| `permutation-state-prototype/world/` | Archived walking-and-watergate experiment |
-| `permutation-state-prototype/proof/` | Archived choice-based chain proof, not the new game |
-| `permutation-state-solana-receipt-spike/src/` | Existing Solana experiments; new simulation integration remains future work |
-| `ARCHIVED_REPAIR_DEMO.md` | Previous experiment instructions and limitations |
-
-Next product work: playtest the decisions and pacing; then connect generated NPC intentions to this
-validated simulation, add meaningful threats/trade, and design an authenticated chain/season economy.
-Those systems are not silently mocked into the playable build.
+| `permutation-state-prototype/civilization/` | 現行ゲームのシミュレーション、地図描画、UI、テスト、画面版ガイド |
+| `permutation-state-solana-receipt-spike/server/civilization-*` | 共有世界のサービス、保存・認証、単体サーバーとテスト |
+| [PLAY_GUIDE.ja.md](PLAY_GUIDE.ja.md) | 日本語の基本操作・遊び方 |
+| [PERMUTATION_STATE_REBUILD.md](PERMUTATION_STATE_REBUILD.md) | 再設計時の設計・モジュール契約 |
+| `permutation-state-prototype/world/` | 以前の歩行・水門修復デモ。現行ゲームではない |
+| `permutation-state-prototype/proof/` | 以前の選択・チェーン証明デモ。現行ゲームではない |
+| `permutation-state-solana-receipt-spike/src/`・`client/` | 既存のSolana／MagicBlock検証コード。新ゲームへの接続は別工程 |
+| [ARCHIVED_REPAIR_DEMO.md](ARCHIVED_REPAIR_DEMO.md) | 旧デモの手順・制約 |
