@@ -329,6 +329,21 @@ The minimum path to Celestial Mechanics costs **1,650 base**: Agriculture, Bronz
 - **Vision:** radius 2 for units and cities, 3 for Scouts, +1 on Hills. Mountains block vision.
 - A civilization's fog view is the union of its own vision and its allies' vision (§10.4).
 
+### 7.4 Fog of war and the belief state
+Rules resolve on the full state. Every player — human client or agent — decides from its **belief state**, built by one function for everyone (`vision::belief`), so no player sees more than another.
+
+- **Line of sight:** a viewer at `a` with radius `R` sees `b` if `dist(a,b) ≤ R` and no Mountain lies on a hex strictly between them. A Mountain itself is seen. The hexes between are the cube lerp of `a→b` for `i = 1..n−1`, computed in integers scaled by `1000·n` and nudged by `(+1, +2, −3)` before cube rounding, so ties always break the same way.
+- **Vision sources:** every living unit (its `vision` stat) and city (radius 2) of the civilization and its allies; +1 when the source stands on Hills.
+- **Memory:** per civilization, the tiles ever seen; each tile's owner city and ruin as last seen; and a snapshot of each foreign city as last seen, with that tick. Memory is derived from past states, so it is not part of `WorldState` or its hash.
+- **Belief state:**
+  - Terrain, rivers and resources are **public** (they follow from the published world seed).
+  - Units are shown only inside vision.
+  - Foreign cities, borders and ruins are shown as last seen, or omitted if never seen.
+  - Other civilizations' gold, science, influence, iron, horses, techs, research queue, USDC and city queues/food/production are removed — from allies too.
+- **Public announcements** stay global: war and peace, treaties, captures, revolts, razing, city founding and Star Gate stages (§14.2). Tech discoveries are private to the civilization and its allies.
+- **Validation** of orders always uses the full state; an order the belief state made look possible can still fail (for example a move into a tile an unseen army occupies stops, §7.3).
+- `obs_root` (§4.3) is the Merkle root of this belief view.
+
 ---
 
 ## 8. Combat

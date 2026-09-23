@@ -16,6 +16,7 @@ use permutation_rules::state::{
 };
 use permutation_rules::tech::{Tech, TECHS};
 use permutation_rules::units::{UnitType, UNIT_STATS};
+use crate::fog::Fog;
 use permutation_rules::Ruleset;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -376,9 +377,14 @@ pub fn map_view(s: &WorldState) -> Value {
     json!({ "radius": s.map.radius, "tiles": tiles, "hubs": hubs })
 }
 
-/// Everything the UI needs each poll, from `me`'s point of view. There is no
-/// fog-of-war yet, so all positions are visible (labelled in the UI).
-pub fn world_view(s: &WorldState, rules: &Ruleset, me: CivId) -> Value {
+/// Everything the UI needs each poll, from `me`'s point of view. `s` must be
+/// `me`'s belief state (`Fog::belief`), so nothing outside its vision or
+/// memory can leak; other civilizations' private totals are sent as `null`.
+pub fn world_view(s: &WorldState, rules: &Ruleset, me: CivId, fog: &Fog) -> Value {
+    let seen = fog.seen(me);
+    let memory = fog.memory(me);
+    let in_sight = |h: Hex| s.map.index_of(h).is_some_and(|i| seen[i]);
+    let explored = |h: Hex| s.map.index_of(h).is_some_and(|i| memory.explored[i]);
     let n = s.civs.len() as CivId;
     let owners: String = s
         .map
@@ -414,13 +420,18 @@ pub fn world_view(s: &WorldState, rules: &Ruleset, me: CivId) -> Value {
             } else {
                 (relation_code(s.relation(me, c.id)), s.truce_until[s.pair_index(me, c.id)])
             };
+            let own = c.id == me;
             json!({
                 "id": c.id, "name": c.name, "kind": name(c.declared_kind),
-                "cities": s.city_count(c.id), "pop": pop, "troops": troops,
-                "techs": c.techs.count(),
+                // Foreign totals are what `me` knows: cities it has seen, armies in sight.
+                "cities": s.city_count(c.id),
+                "pop": if own { json!(pop) } else { Value::Null },
+                "troops": if own { json!(troops) } else { Value::Null },
+                "troopsSeen": troops,
+                "techs": if own { json!(c.techs.count()) } else { Value::Null },
                 "dominion": c.scores.dominion,
                 "concord": permutation_rules::scoring::concord_final(rules, c),
-                "science": c.scores.science_total,
+                "science": if own { json!(c.scores.science_total) } else { Value::Null },
                 "stages": c.scores.star_gate_stages,
                 "stageTick": c.scores.star_gate_tick,
                 "aggressor": c.is_aggressor(s.tick.saturating_sub(1), rules.aggressor_window),
@@ -448,8 +459,10 @@ pub fn world_view(s: &WorldState, rules: &Ruleset, me: CivId) -> Value {
         .filter(|c| c.alive)
         .map(|c| {
             let mine = c.owner == Some(me);
+            let live = mine || in_sight(c.hex);
             json!({
                 "id": c.id, "q": c.hex.q, "r": c.hex.r, "owner": c.owner, "pop": c.pop,
+                "seenTick": if live { Value::Null } else { json!(memory.city_seen(c.id)) },
                 "defense": c.defense / 100, "defenseMax": (rules.city_defense_base + c.pop) * 10,
                 "walls": c.buildings.has(Building::Walls),
                 "stages": c.buildings.star_gate_stages(),
@@ -485,6 +498,7 @@ pub fn world_view(s: &WorldState, rules: &Ruleset, me: CivId) -> Value {
     let city_states: Vec<Value> = s
         .city_states
         .iter()
+        .filter(|cs| explored(cs.hex))
         .map(|cs| {
             let top = cs.influence.iter().copied().max().unwrap_or(0);
             json!({
@@ -522,6 +536,7 @@ pub fn world_view(s: &WorldState, rules: &Ruleset, me: CivId) -> Value {
     let _ = n;
     json!({
         "tick": s.tick, "ticks": rules.ticks_per_season,
+        "fog": fog.code(me),
         "protectionRadius": rules.protection_radius(s.tick),
         "me": me, "civs": civs, "owners": owners, "ruins": ruins,
         "cities": cities, "units": units, "cityStates": city_states,

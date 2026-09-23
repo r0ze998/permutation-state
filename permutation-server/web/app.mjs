@@ -138,7 +138,7 @@ function describe(dto) {
     case 'Attack': { const x = u(dto.army); const t = dto.target; let pos = null, what = '';
       if (t.kind === 'Unit') { const y = u(t.id); pos = y; what = `${civN(y?.owner)}の${T.UNIT[y?.type] || '部隊'}`; }
       if (t.kind === 'City') { const y = city(t.id); pos = y; what = T.cityName(t.id); }
-      if (t.kind === 'CityState') { const y = S.view.cityStates[t.id]; pos = y; what = `都市国家${t.id + 1}`; }
+      if (t.kind === 'CityState') { const y = S.view.cityStates.find(c => c.id === t.id); pos = y; what = `都市国家${t.id + 1}`; }
       return { dto, glyph: '⚔', label: `${T.UNIT[x?.type] || '部隊'}で${what}を攻撃`, focus: at(pos), from: x, attackAt: pos }; }
     case 'FoundCity': return { dto, glyph: '⌂', label: '開拓者が都市を建設', focus: at(u(dto.settler)) };
     case 'SetQueue': return { dto, glyph: '▤', label: `${T.cityName(dto.city)}：${dto.items.map(T.itemName).join(' → ') || '生産なし'}`, focus: at(city(dto.city)) };
@@ -154,7 +154,7 @@ function describe(dto) {
     case 'ProposeAlliance': return { dto, glyph: '⚭', label: `${civN(dto.civ)}に同盟を申し入れ` };
     case 'AcceptAlliance': return { dto, glyph: '⚭', label: `${civN(dto.civ)}の同盟に加わる` };
     case 'LeaveAlliance': return { dto, glyph: '⚭', label: '同盟から離脱' };
-    case 'SendEnvoy': return { dto, glyph: '✉', label: `都市国家${dto.cityState + 1}に使節（影響力${dto.influence}）`, focus: at(S.view.cityStates[dto.cityState]) };
+    case 'SendEnvoy': return { dto, glyph: '✉', label: `都市国家${dto.cityState + 1}に使節（影響力${dto.influence}）`, focus: at(S.view.cityStates.find(c => c.id === dto.cityState)) };
     case 'MarketTrade': return { dto, glyph: '⇄', label: `金の市場：${T.RESOURCE[dto.good.kind]}を${dto.amount}${dto.side === 'Buy' ? '購入' : '売却'}` };
     case 'ExchangeOrder': return { dto, glyph: '$', usdc: true, label: `USDC取引所：${goodName(dto.good)}${dto.amount}を${dto.side === 'Buy' ? '買い' : '売り'} @${(dto.price / 1e6).toFixed(2)}` };
     case 'Raze': return { dto, glyph: '✕', label: `${T.cityName(dto.city)}を破壊` };
@@ -327,7 +327,7 @@ function ranks() {
   const cs = S.view.civs;
   const order = (f) => cs.map(c => c.id).sort((a, b) => f(b) - f(a) || a - b);
   const dom = order(id => cs[id].dominion), con = order(id => cs[id].concord);
-  const sci = cs.map(c => c.id).sort((a, b) => (cs[b].stages - cs[a].stages) || ((cs[a].stageTick ?? 1e9) - (cs[b].stageTick ?? 1e9)) || (cs[b].science - cs[a].science) || a - b);
+  const sci = cs.map(c => c.id).sort((a, b) => (cs[b].stages - cs[a].stages) || ((cs[a].stageTick ?? 1e9) - (cs[b].stageTick ?? 1e9)) || a - b); // science totals are private; the engine's tie-break is not shown
   return { dom, sci, con };
 }
 function renderPlate() {
@@ -386,12 +386,18 @@ function introPanel() {
     ${cap ? `<button class="btn primary wide" type="button" data-focus="${key(cap.q, cap.r)}">⌖ 首都 ${T.cityName(cap.id)} を見る</button>` : ''}`;
 }
 
+const fogOf = id => S.view?.fog?.[tileIndex(id)] ?? '2';
+const FOG_NOTE = {
+  0: '<div class="explanation fog">未踏の地です。地形は公開の世界シードから分かりますが、部隊・都市・国境は見えません。偵察で視界に入れてください。</div>',
+  1: '<div class="explanation fog">霧の中です。国境と都市は最後に見たときのまま表示しています。部隊は視界の中でしか見えません。</div>',
+};
 function tilePanel(t, units) {
-  const o = ownerOf(t.id);
+  const o = ownerOf(t.id); const fog = fogOf(t.id);
   const y = { Grassland: [2, 0, 0], Plains: [1, 1, 0], Forest: [1, 2, 0], Hills: [0, 2, 0], Mountain: [0, 0, 0], Water: [1, 0, 1] }[t.terrain].slice();
   if (t.river) y[2]++; if (t.resource === 'Wheat') y[0] += 2; if (t.resource === 'Iron') y[1]++; if (t.resource === 'Horses') y[0]++;
   const hub = S.map.hubs.some(([q, r]) => q === t.q && r === t.r);
-  return `${head(`${T.TERRAIN_EN[t.terrain]} · ${t.q}, ${t.r}`, T.TERRAIN[t.terrain], o !== null ? `${esc(civN(o))}の領土です。` : 'どの文明の領土でもありません。')}
+  return `${head(`${T.TERRAIN_EN[t.terrain]} · ${t.q}, ${t.r}`, T.TERRAIN[t.terrain], fog === '0' ? '誰の領土かはまだ分かりません。' : o !== null ? `${esc(civN(o))}の領土${fog === '1' ? '（最後に見たとき）' : ''}です。` : 'どの文明の領土でもありません。')}
+    ${FOG_NOTE[fog] || ''}
     <div class="tags">${t.resource ? `<span class="tag positive">${T.RESOURCE[t.resource]}</span>` : ''}${t.river ? '<span class="tag">川 · 金+1</span>' : ''}${hub ? '<span class="tag warning">交易拠点 · 金の市場の手数料1%を得る</span>' : ''}${t.terrain === 'Mountain' || t.terrain === 'Water' ? '<span class="tag bad">通行不可</span>' : `<span class="tag">移動コスト ${t.terrain === 'Forest' || t.terrain === 'Hills' ? 2 : 1}</span>`}${t.terrain === 'Forest' || t.terrain === 'Hills' ? '<span class="tag">守備側の被害 −20%</span>' : ''}</div>
     <div class="stats"><div class="stat"><div class="k">食料</div><div class="v">${y[0]}</div></div><div class="stat"><div class="k">生産</div><div class="v">${y[1]}</div></div><div class="stat"><div class="k">金</div><div class="v">${y[2]}</div></div></div>
     ${units.length ? `<div class="section-title">この土地の部隊</div>${units.map(u => `<div class="list-row"><div class="main"><div class="title"><span class="swatch-s" style="background:${u.owner === 'barbarian' ? '#5f5a52' : T.CIV_COLORS[u.owner]}"></span>${esc(u.owner === 'barbarian' ? '蛮族' : civN(u.owner))}の${T.UNIT[u.type]}</div><div class="meta">${u.civilian ? '非戦闘' : `兵 ${(u.troops / 10).toFixed(1)}`}</div></div></div>`).join('')}` : ''}
@@ -494,6 +500,7 @@ function foreignCityPanel(c) {
   const o = c.owner; const rel = o === null ? null : civ(o)?.relation;
   const mine = S.view.units.filter(u => u.owner === S.me && !u.civilian && hexDist(u, c) <= 2);
   let html = head(`${o === null ? 'FREE CITY · 自由都市' : 'CITY · 都市'} · ${c.q}, ${c.r}`, T.cityName(c.id), o === null ? 'どの文明にも属さない自由都市です。攻撃は侵略扱いになります。' : `${esc(civN(o))}の${c.capital ? '首都' : '都市'}です。関係：${T.RELATION[rel]}`);
+  if (c.seenTick !== null && c.seenTick !== undefined) html += `<div class="explanation fog">ティック${c.seenTick}に見たときの情報です。今の持ち主・人口・防御は視界に入れるまで分かりません。</div>`;
   html += `<div class="stats"><div class="stat"><div class="k">人口</div><div class="v">${c.pop}</div></div><div class="stat"><div class="k">防御</div><div class="v">${(c.defense / 10).toFixed(1)}<small>/${(c.defenseMax / 10).toFixed(0)}</small></div></div><div class="stat"><div class="k">城壁</div><div class="v">${c.walls ? 'あり' : 'なし'}</div></div></div>`;
   if (c.stages) html += `<div class="explanation">スターゲート ${c.stages}/3 段階。この都市を占領すると、完成した段階はすべて失われます。</div>`;
   html += mine.length ? `<div class="section-title">近くのあなたの部隊</div>${mine.map(u => `<button class="option" type="button" data-select-unit="${u.id}"><span class="ic">${T.UNIT_GLYPH[u.type]}</span><span><span class="name">${T.UNIT[u.type]} 兵${(u.troops / 10).toFixed(1)}</span><div class="meta">選択して攻撃の予測を見る</div></span><span></span></button>`).join('')}` : '';
@@ -664,9 +671,9 @@ function drawerDiplomacy() {
     const allowed = opts.filter(o => !o.action.startsWith('Accept'));
     const blocked = allowed.filter(o => o.blocked);
     html += `<details class="civ-row" data-civ-row="${c.id}" ${open ? 'open' : ''}>
-      <summary><span class="l1"><span class="swatch-s" style="background:${T.CIV_COLORS[c.id]}"></span><b>${esc(civN(c.id))}</b><span class="badge ${c.kind === 'Human' ? 'human' : 'agent'}">${c.kind === 'Human' ? 'HUMAN' : 'AGENT'}</span>${hasInbox ? '<span class="tag warning">申し入れ</span>' : ''}<span class="grow"></span>${relTag}</span><span class="l2 meta">${persona} · ${c.cities}都市 · 人口${c.pop} · 兵${c.troops}</span></summary>
+      <summary><span class="l1"><span class="swatch-s" style="background:${T.CIV_COLORS[c.id]}"></span><b>${esc(civN(c.id))}</b><span class="badge ${c.kind === 'Human' ? 'human' : 'agent'}">${c.kind === 'Human' ? 'HUMAN' : 'AGENT'}</span>${hasInbox ? '<span class="tag warning">申し入れ</span>' : ''}<span class="grow"></span>${relTag}</span><span class="l2 meta">${persona} · 確認済み${c.cities}都市 · 目視の兵${c.troopsSeen}</span></summary>
       <div class="civ-body">
-        <div class="when">人口${c.pop} · 覇権${c.dominion} · 協調${c.concord}${c.aggressor ? ' · <span style="color:var(--bad)">侵略中</span>' : ''}${c.truceUntil > v.tick ? ` · 休戦 ティック${c.truceUntil}まで` : ''}</div>
+        <div class="when">覇権${c.dominion} · 協調${c.concord} · スターゲート${c.stages}/3${c.aggressor ? ' · <span style="color:var(--bad)">侵略中</span>' : ''}${c.truceUntil > v.tick ? ` · 休戦 ティック${c.truceUntil}まで` : ''}</div>
         <div class="when">あなたの不満 ${c.myGrievanceAgainst ?? 0} · 相手の不満 ${c.grievanceAgainstMe ?? 0}（30以上で正当な開戦理由）</div>
         <div class="row" style="margin-top:6px">${allowed.map(o => {
           const dto = o.action === 'ProposeNap' ? { type: 'ProposeNap', civ: c.id, bond: 30 } : { type: o.action, civ: c.id };

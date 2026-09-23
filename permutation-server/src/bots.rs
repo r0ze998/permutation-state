@@ -236,7 +236,10 @@ fn site_value(s: &WorldState, h: Hex) -> u32 {
 // ------------------------------------------------------------------ the bot
 
 impl Bot {
-    pub fn orders(&mut self, s: &WorldState, r: &Ruleset) -> Vec<Order> {
+    /// Orders for this tick. `s` must be this civ's **belief state** and
+    /// `explored` its memory of seen tiles (`vision`, §7.4): bots play under
+    /// the same fog as humans.
+    pub fn orders(&mut self, s: &WorldState, r: &Ruleset, explored: &[bool]) -> Vec<Order> {
         let civ = self.civ;
         let me = &s.civs[civ as usize];
         let n = s.civs.len() as CivId;
@@ -278,8 +281,10 @@ impl Bot {
             (0..n)
                 .filter(|o| *o != civ && filter(*o))
                 .filter_map(|o| {
+                    // Only capitals this civ has actually seen (fog, §7.4).
                     let oc = s.civs[o as usize].capital?;
-                    Some((s.cities[oc as usize].hex.distance(cap), o))
+                    let c = s.cities.get(oc as usize).filter(|c| c.alive)?;
+                    Some((c.hex.distance(cap), o))
                 })
                 .min()
                 .map(|(_, o)| o)
@@ -517,6 +522,14 @@ impl Bot {
                 if let Some(path) = path_to(s, r, civ, u.hex, |h| h == goal) {
                     wish.push((2, Order::MoveUnit { unit: u.id, path }));
                 }
+            }
+        }
+
+        // ---- scouts: walk to the nearest tile never seen
+        for u in my_units(s, civ).filter(|u| u.unit_type == UnitType::Scout && u.path.is_empty()) {
+            let unexplored = |h: Hex| s.map.index_of(h).is_some_and(|i| !explored[i]);
+            if let Some(path) = path_to(s, r, civ, u.hex, unexplored) {
+                wish.push((3, Order::MoveUnit { unit: u.id, path }));
             }
         }
 

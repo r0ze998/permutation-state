@@ -15,6 +15,7 @@ use permutation_rules::state::{CivId, DeclaredKind, Owner, Relation, WorldState}
 use permutation_rules::tick::{resolve_tick, TickInput};
 use permutation_rules::{Preset, Ruleset};
 use permutation_server::bots::{city_count, troops_of, Bot, NAMES, PERSONAS};
+use permutation_server::fog::Fog;
 use permutation_server::events::diff_events;
 use std::fmt::Write as _;
 
@@ -245,14 +246,19 @@ fn main() {
 
     let names: Vec<&str> = NAMES.to_vec();
     let mut roots = Vec::new();
+    // Bots decide from their own fogged belief state, like any player (§7.4).
+    let mut fog = Fog::new(&s);
     while s.tick < rules.ticks_per_season {
         let batches: Vec<OrderBatch> = bots
             .iter_mut()
-            .map(|b| OrderBatch {
-                civ: b.civ,
-                tick: s.tick,
-                decision_digest: [0; 32],
-                orders: b.orders(&s, &rules),
+            .map(|b| {
+                let view = fog.belief(&s, b.civ);
+                OrderBatch {
+                    civ: b.civ,
+                    tick: s.tick,
+                    decision_digest: [0; 32],
+                    orders: b.orders(&view, &rules, &fog.memory(b.civ).explored),
+                }
             })
             .collect();
         let mut vrf = [0u8; 32];
@@ -262,6 +268,7 @@ fn main() {
         let v = invariants::check(&s, &rules);
         assert!(v.is_empty(), "invariant violated at tick {}: {v:?}", s.tick);
         roots.push(root);
+        fog.update(&s);
         let ev = diff_events(&prev, &s, &names);
         out.push(',');
         out.push_str(&frame(&s, &ev));

@@ -4,9 +4,11 @@
 //!
 //! Serves the web client from `web/` and a small JSON API. Orders are
 //! validated by the engine's own `validate_batch`; previews come from
-//! `permutation_rules::preview`. This is a single-machine prototype: no
-//! wallets, no fog of war yet, and the "advance now" control exists only
-//! because it is single-player.
+//! `permutation_rules::preview`. Every view, preview and bot decision is
+//! made from that civ's fogged belief state (`vision`, §7.4); only order
+//! validation and resolution see the full state. This is a single-machine
+//! prototype: no wallets, and the "advance now" control exists only because
+//! it is single-player.
 
 use permutation_rules::genesis::{new_season, Entry};
 use permutation_rules::hex::Hex;
@@ -20,6 +22,7 @@ use permutation_rules::{Preset, Ruleset};
 use permutation_server::api::{self, OrderDto};
 use permutation_server::bots::{Bot, NAMES, PERSONAS};
 use permutation_server::events::diff_events;
+use permutation_server::fog::{line_is_public, Fog};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -32,6 +35,7 @@ const HUMAN: CivId = 0;
 struct Game {
     rules: Ruleset,
     state: WorldState,
+    fog: Fog,
     bots: Vec<Bot>,
     /// The human's committed batch for the open tick.
     committed: Vec<OrderDto>,
@@ -69,6 +73,7 @@ impl Game {
             .collect();
         Game {
             rules,
+            fog: Fog::new(&state),
             state,
             bots,
             committed: Vec::new(),
@@ -94,7 +99,9 @@ impl Game {
         let human: Vec<Order> = self.committed.iter().filter_map(|o| o.to_order().ok()).collect();
         let mut batches = vec![OrderBatch { civ: HUMAN, tick, decision_digest: [0; 32], orders: human }];
         for b in &mut self.bots {
-            batches.push(OrderBatch { civ: b.civ, tick, decision_digest: [0; 32], orders: b.orders(&self.state, &self.rules) });
+            let view = self.fog.belief(&self.state, b.civ);
+            let orders = b.orders(&view, &self.rules, &self.fog.memory(b.civ).explored);
+            batches.push(OrderBatch { civ: b.civ, tick, decision_digest: [0; 32], orders });
         }
         let mut vrf = [0u8; 32];
         vrf[..2].copy_from_slice(&tick.to_le_bytes());
@@ -104,6 +111,7 @@ impl Game {
             eprintln!("tick {tick} failed: {e}");
             return;
         }
+        self.fog.update(&self.state);
         let violations = invariants::check(&self.state, &self.rules);
         if !violations.is_empty() {
             eprintln!("invariant violations after tick {tick}: {violations:?}");
@@ -117,7 +125,7 @@ impl Game {
             let cut = self.chronicle.len() - 400;
             self.chronicle.drain(..cut);
         }
-        self.last_summary = ev;
+        self.last_summary = ev.into_iter().filter(|e| line_is_public(&self.state, HUMAN, e, &names)).collect();
         self.resolved_tick = Some(tick);
         self.committed.clear();
         self.committed_cost = 0;
@@ -125,7 +133,8 @@ impl Game {
     }
 
     fn state_json(&self) -> Value {
-        let mut v = api::world_view(&self.state, &self.rules, HUMAN);
+        let view = self.fog.belief(&self.state, HUMAN);
+        let mut v = api::world_view(&view, &self.rules, HUMAN, &self.fog);
         let secs = if self.paused {
             self.tick_seconds as f64
         } else {
@@ -135,6 +144,7 @@ impl Game {
             .chronicle
             .iter()
             .rev()
+            .filter(|(_, e)| line_is_public(&self.state, HUMAN, e, &NAMES))
             .take(120)
             .map(|(t, e)| json!({"tick": t, "text": e}))
             .collect();
@@ -245,7 +255,9 @@ fn static_file(stream: &mut TcpStream, web: &Path, path: &str) {
 fn handle(mut stream: TcpStream, game: Arc<Mutex<Game>>, web: PathBuf) {
     let Some(req) = read_request(&mut stream) else { return };
     let mut g = game.lock().unwrap();
-    let (s, r) = (&g.state, &g.rules);
+    // Everything the player can ask about is answered from its belief state.
+    let belief = g.fog.belief(&g.state, HUMAN);
+    let (s, r) = (&belief, &g.rules);
     match (req.method.as_str(), req.path.as_str()) {
         ("GET", "/api/map") => {
             let mut v = api::map_view(s);
@@ -318,8 +330,8 @@ fn handle(mut stream: TcpStream, game: Arc<Mutex<Game>>, web: PathBuf) {
                 Ok(o) => o,
                 Err(e) => return json_ok(&mut stream, &json!({"ok": false, "error": e})),
             };
-            let batch = OrderBatch { civ: HUMAN, tick: s.tick, decision_digest: [0; 32], orders };
-            match validate_batch(s, r, &batch) {
+            let batch = OrderBatch { civ: HUMAN, tick: g.state.tick, decision_digest: [0; 32], orders };
+            match validate_batch(&g.state, &g.rules, &batch) {
                 Ok(cost) => {
                     g.committed = dtos;
                     g.committed_cost = cost;

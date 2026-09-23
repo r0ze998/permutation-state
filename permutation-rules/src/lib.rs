@@ -32,6 +32,7 @@ pub mod state;
 pub mod tech;
 pub mod tick;
 pub mod units;
+pub mod vision;
 
 pub use error::RulesError;
 pub use params::{Preset, Ruleset};
