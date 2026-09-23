@@ -60,6 +60,8 @@ pub struct Civ {
     pub tick_budget: u16,
     /// Gold went negative in phase 7 of this tick (§6.1); read by phase 8.
     pub deficit: bool,
+    /// Milli-troops lost in combat this tick (war weariness, §9.3).
+    pub troops_lost: u32,
     pub war_weariness: u32,
     /// Last tick with an aggressive act (§9.2).
     pub last_aggression: Option<u16>,
@@ -122,7 +124,10 @@ pub struct City {
     pub queue: Vec<QueueItem>,
     pub captured_tick: Option<u16>,
     pub captured_from: Option<CivId>,
+    /// Civs that have already scored a capture of this city this season (§14.1).
     pub scored_by: Vec<CivId>,
+    /// Whether the current holding can earn Dominion capture points (§14.1).
+    pub capture_scores: bool,
     /// Remaining ticks of razing, if being razed (§8.3).
     pub razing: Option<u8>,
     pub heritage_until: Option<u16>,

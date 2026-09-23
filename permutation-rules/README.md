@@ -33,6 +33,7 @@ A single crate runs everywhere the rules run:
 | `combat` | §8 | `F` table, `damage`, `resolve_engagement` with modifiers in spec order |
 | `scoring` | §14 | Dominion, Concord, Science key, winners count, payout weights |
 | `tick` | §15 | phase pipeline |
+| `battle` | §8, §9, §12.1 | phase 5: engagements, captures, razing |
 | `invariants` | §17 | state and monotonicity checks |
 
 ## Implementation status of `resolve_tick`
@@ -44,10 +45,10 @@ A single crate runs everywhere the rules run:
 | 2 | Economy orders | queue (tech, star-gate and duplicate checks), focus, research, purchase. **TODO:** transfers, envoys, gold AMM, Exchange |
 | 3 | Standing rules | **TODO** |
 | 4 | Movement | ✅ paths, MP, one free tile at full MP, occupancy, foreign territory, protected zones, tie-break, no swapping |
-| 5 | Combat | **TODO:** wire `combat::resolve_engagement` into engagements, captures, raze. The damage math is done and matches every spec test vector |
+| 5 | Combat | ✅ (`battle`): simultaneous engagements from pre-combat counts, garrisons, walls, ranged and counter modifiers, captures of civilians, cities and city-states, last-city protection, raze to ruin, grievances and aggression. **TODO:** barbarian and standing-rule attacks |
 | 6 | Production and growth | ✅ governor, amenities, growth and starvation, territory, queue completion and spawning, strategic reserves, research |
 | 7 | Upkeep | ✅ including deficit disbanding |
-| 8 | Society | ✅ war weariness, loyalty and Free Cities, grievance decay, city regeneration. **TODO:** casualties term |
+| 8 | Society | ✅ war weariness (including casualties), loyalty and Free Cities, grievance decay, city regeneration |
 | 9 | Neutral actors | city-state growth and regeneration, suzerainty cycle reset. **TODO:** envoys, the Crisis |
 | 10 | Scoring | ✅ Dominion, Concord, science, alliance record, activity, order bank. **TODO:** prize coalitions |
 | 11 | Commit | ✅ next tick's budget, event chain |
@@ -55,7 +56,7 @@ A single crate runs everywhere the rules run:
 ## Development
 
 ```sh
-cargo test          # 47 tests: unit, spec reference vectors, full 180-tick season
+cargo test          # 63 tests: unit, spec reference vectors, combat scenarios, full 180-tick season
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 cargo-build-sbf     # Solana SBF build check (Solana CLI)

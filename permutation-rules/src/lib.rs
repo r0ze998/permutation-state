@@ -10,6 +10,7 @@
 
 extern crate alloc;
 
+pub mod battle;
 pub mod buildings;
 pub mod combat;
 pub mod economy;

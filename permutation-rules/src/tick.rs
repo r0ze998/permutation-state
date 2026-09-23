@@ -55,10 +55,10 @@ pub fn resolve_tick(
 /// | 2 | Economy orders | queue, focus, research, purchase. TODO: transfers, envoys, AMM, Exchange |
 /// | 3 | Standing rules | TODO |
 /// | 4 | Movement | done (paths, MP, occupancy, territory, protection, tie-break) |
-/// | 5 | Combat | TODO: wire `combat::resolve_engagement`, captures, raze |
+/// | 5 | Combat | done (see `battle`); barbarian and standing-rule attacks TODO |
 /// | 6 | Production and growth | done |
 /// | 7 | Upkeep | done |
-/// | 8 | Society | war weariness, loyalty, grievance decay, city regen. TODO: casualties term |
+/// | 8 | Society | done: war weariness (incl. casualties), loyalty, grievance decay, city regen |
 /// | 9 | Neutral actors | city-state growth/regen, suzerainty cycle reset. TODO: Crisis |
 /// | 10 | Scoring | done (coalitions TODO) |
 /// | 11 | Commit | done |
@@ -83,7 +83,7 @@ pub fn run_phase(
         2 => phase_economy_orders(state, rules, input),
         3 => {} // TODO(§13): compile standing rules into implicit orders.
         4 => phase_movement(state, rules, input),
-        5 => {} // TODO(§8, §15 phase 5): simultaneous combat, captures, raze.
+        5 => crate::battle::phase_combat(state, rules, input),
         6 => phase_production(state, rules),
         7 => phase_upkeep(state),
         8 => phase_society(state, rules),
@@ -107,7 +107,7 @@ pub fn run_phase(
 }
 
 /// The batch used for each civ, in civ order, with its cost. First valid batch wins.
-fn accepted(
+pub(crate) fn accepted(
     state: &WorldState,
     rules: &Ruleset,
     input: &TickInput,
@@ -135,6 +135,7 @@ fn phase_seed(state: &mut WorldState, input: &TickInput) {
     }
     for civ in &mut state.civs {
         civ.deficit = false;
+        civ.troops_lost = 0;
     }
 }
 
@@ -330,11 +331,11 @@ fn purchase(state: &mut WorldState, rules: &Ruleset, civ: CivId, city: u32, gold
 
 // ---------------------------------------------------------------- phase 4
 
-fn allied(state: &WorldState, a: CivId, b: CivId) -> bool {
+pub(crate) fn allied(state: &WorldState, a: CivId, b: CivId) -> bool {
     a != b && matches!(state.relation(a, b), Relation::Alliance { .. })
 }
 
-fn unit_civ(u: &Unit) -> Option<CivId> {
+pub(crate) fn unit_civ(u: &Unit) -> Option<CivId> {
     match u.owner {
         Owner::Civ(c) => Some(c),
         Owner::Barbarian => None,
@@ -413,6 +414,15 @@ fn phase_movement(state: &mut WorldState, rules: &Ruleset, input: &TickInput) {
                 if valid {
                     state.units[unit as usize].path = path;
                 }
+            } else if let Order::Attack { army, .. } = order {
+                // An attacking army holds its position this tick (§8, v0.1 clarification).
+                if let Some(u) = state
+                    .units
+                    .get_mut(army as usize)
+                    .filter(|u| u.alive && u.owner == Owner::Civ(civ))
+                {
+                    u.path.clear();
+                }
             }
         }
     }
@@ -484,7 +494,8 @@ fn phase_movement(state: &mut WorldState, rules: &Ruleset, input: &TickInput) {
 fn phase_production(state: &mut WorldState, rules: &Ruleset) {
     for i in 0..state.cities.len() {
         let (owner, alive) = (state.cities[i].owner, state.cities[i].alive);
-        let (Some(civ), true) = (owner, alive) else {
+        let razing = state.cities[i].razing.is_some();
+        let (Some(civ), true, false) = (owner, alive, razing) else {
             continue;
         };
         let c_ref = &state.civs[civ as usize];
@@ -697,7 +708,7 @@ fn phase_upkeep(state: &mut WorldState) {
 
 fn phase_society(state: &mut WorldState, rules: &Ruleset) {
     let n = state.civs.len() as u16;
-    // War weariness (§9.3). TODO: +1 per 2 troops lost once combat is wired.
+    // War weariness (§9.3), including +1 per 2 whole troops lost this tick.
     for a in 0..n {
         let mut gain = 0u32;
         let mut at_war = false;
@@ -716,6 +727,7 @@ fn phase_society(state: &mut WorldState, rules: &Ruleset) {
             };
         }
         let c = &mut state.civs[a as usize];
+        gain += c.troops_lost / 2000;
         c.war_weariness = (c.war_weariness + gain).saturating_sub(if at_war { 1 } else { 3 });
     }
 
@@ -768,8 +780,9 @@ fn phase_society(state: &mut WorldState, rules: &Ruleset) {
         }
         if city.loyalty == 0 {
             city.owner = None; // Free City
-            let id = city.id;
+            let (id, hex) = (city.id, city.hex);
             state.push_event(b"free_city", &id.to_le_bytes());
+            crate::battle::displace_civilians(state, hex);
         }
     }
 
@@ -804,6 +817,21 @@ fn phase_neutral(state: &mut WorldState, rules: &Ruleset) {
 // ---------------------------------------------------------------- phase 10
 
 fn phase_scoring(state: &mut WorldState, rules: &Ruleset, input: &TickInput) {
+    // A capture scores at most once per captor per season (§14.1): decide on
+    // the first tick the holding becomes eligible.
+    let tick = state.tick;
+    for c in &mut state.cities {
+        let (Some(owner), Some(t)) = (c.owner, c.captured_tick) else {
+            continue;
+        };
+        if c.capture_scores && tick.saturating_sub(t) + 1 == rules.capture_hold_ticks {
+            if c.scored_by.contains(&owner) {
+                c.capture_scores = false;
+            } else {
+                c.scored_by.push(owner);
+            }
+        }
+    }
     let spent: Vec<(CivId, u32, bool)> = accepted(state, rules, input)
         .into_iter()
         .map(|(civ, cost, orders)| (civ, cost, !orders.is_empty()))

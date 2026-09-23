@@ -32,8 +32,9 @@ fn owned_tile_value(map: &Map, state: &WorldState, civ: CivId) -> u64 {
 
 /// Eligibility of a captured city for Dominion points this tick (§14.1).
 ///
-/// TODO(§14.4): exclude cities captured from a member of the captor's prize
-/// coalition once coalitions are modelled.
+/// `capture_scores` is decided at capture (founder and founded-age rules) and
+/// cleared in phase 10 if this captor already scored the city this season.
+/// TODO(§14.4): exclude captures from a member of the captor's prize coalition.
 pub fn captured_city_scores(
     state: &WorldState,
     rules: &Ruleset,
@@ -43,12 +44,8 @@ pub fn captured_city_scores(
     let Some(captured) = city.captured_tick else {
         return false;
     };
-    city.founder != captor
-        && city.captured_from.is_some()
-        && captured
-            >= city
-                .founded_tick
-                .saturating_add(rules.capture_min_founded_age)
+    city.capture_scores
+        && city.owner == Some(captor)
         && state.tick.saturating_sub(captured) + 1 >= rules.capture_hold_ticks
 }
 
