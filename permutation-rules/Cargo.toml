@@ -1,0 +1,21 @@
+[package]
+name = "permutation-rules"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+description = "Deterministic rules engine for PERMUTATION STATE (Rules Specification v0.1)"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+# Pinned to match permutation-state-solana-receipt-spike so the crate can be
+# linked into the ER program without a second borsh version.
+borsh = { version = "=1.6.1", default-features = false, features = ["derive"] }
+sha2 = { version = "=0.10.9", default-features = false }
+
+[features]
+default = []
+std = ["borsh/std", "sha2/std"]

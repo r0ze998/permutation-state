@@ -27,7 +27,7 @@ Normative words: **MUST / MUST NOT / SHOULD / MAY**. Every number here is a rule
 ### 0.2 Determinism
 - Iteration order is always by ascending ID (civ_id, then entity id). Hash maps MUST NOT determine iteration order.
 - **Tick seed:** `seed_t = sha256(season_seed ‖ vrf_t ‖ t)`, where `vrf_t` is the MagicBlock VRF output requested when tick `t`'s order window closes. `seed_t` is therefore unknown while orders are being submitted. Nobody can pre-simulate the variance; that includes agents, humans and the UI.
-- `rand(seed_t, domain, id)` = the first 8 bytes of `sha256(seed_t ‖ domain ‖ id)` as `u64`. Each random draw names its own `domain` string, so draws are independent and reproducible.
+- `rand(seed_t, domain, id)` = the first 8 bytes (little-endian) of `sha256(seed_t ‖ len(domain) as u8 ‖ domain ‖ id)` as `u64`. Each random draw names its own `domain` string, so draws are independent and reproducible. The one-byte length prefix keeps domains from colliding (`"ab"‖"c"` ≠ `"a"‖"bc"`).
 - **Tie-break:** when two entities contend for the same thing (a tile, a capture, a trade fill), priority is given by ascending `rand(seed_t, "tie", id)`.
 
 ### 0.3 Coordinates
@@ -259,7 +259,7 @@ Reference values:
 |---|---|---|---|---|---|
 | city upkeep | 0 | 3 | 8 | 16 | 27 |
 
-**Deficit:** if `gold_t+1 < 0`, gold is set to 0 and troops are disbanded in order of highest upkeep first (T2 before T1, then the largest army, then highest id) until the balance is ≥ 0. Every city also gets −2 amenities that tick.
+**Deficit:** if `gold_t+1 < 0`, troops are disbanded **one whole troop at a time**, always from the army with the highest priority (T2 before T1, then the largest army, then the highest id). Upkeep is recomputed after each troop until the balance is ≥ 0; if no troops remain, gold is set to 0. Because upkeep (phase 7) runs after production (phase 6), the deficit's −2 amenities applies to that tick's **society phase** (loyalty, phase 8), not to that tick's growth.
 
 ### 6.2 Science and technology
 - **Tech cost:** `base × (10000 + 1000 × (cities − 1)) / 10000`. Each city beyond the first adds 10%, so going wide does not buy science for free.
