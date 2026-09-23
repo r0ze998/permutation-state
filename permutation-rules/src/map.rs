@@ -76,6 +76,8 @@ pub struct Tile {
     pub owner_city: Option<u32>,
     /// Peak population of a ruin left here by a previous season (§3.4).
     pub ruin_peak_pop: Option<u16>,
+    /// A city has already taken this ruin's heritage bonus this season (§3.4).
+    pub heritage_claimed: bool,
 }
 
 impl Tile {
@@ -165,12 +167,8 @@ pub fn generate(rules: &Ruleset, world_seed: &Seed, civs: usize) -> Result<Gener
         let Some(starts) = place_starts(rules, &map, world_seed, attempt, civs) else {
             continue;
         };
-        let values: Vec<u64> = starts.iter().map(|s| start_value(&map, *s)).collect();
-        let (min, max) = (
-            *values.iter().min().unwrap_or(&0),
-            *values.iter().max().unwrap_or(&0),
-        );
-        if min == 0 || max * 10_000 / min > rules.start_fairness_max_bps as u64 {
+        let mut map = map;
+        if !balance_starts(rules, &mut map, &starts) {
             continue;
         }
         let city_states = place_sites(
@@ -245,6 +243,7 @@ fn generate_terrain(rules: &Ruleset, seed: &Seed, attempt: u64) -> Map {
             reserve,
             owner_city: None,
             ruin_peak_pop: None,
+            heritage_claimed: false,
         });
     }
     Map {
@@ -285,6 +284,10 @@ fn valid_start(map: &Map, hex: Hex) -> bool {
     food_tiles >= 2 && prod_tiles >= 1 && strategic >= 1
 }
 
+/// Farthest-point start placement (§2.4): the first start is the valid
+/// candidate with the lowest random key; each next start is the valid
+/// candidate farthest from all chosen starts (ties by random key). Fails if
+/// the best remaining spacing drops below `start_min_distance`.
 fn place_starts(
     rules: &Ruleset,
     map: &Map,
@@ -293,28 +296,103 @@ fn place_starts(
     civs: usize,
 ) -> Option<Vec<Hex>> {
     let s = attempt_seed(seed, attempt);
-    let mut candidates: Vec<(u64, Hex)> = map
+    let candidates: Vec<(u64, Hex)> = map
         .tiles
         .iter()
         .enumerate()
-        .filter(|(_, t)| t.hex.radius() + 2 <= map.radius as u32)
+        .filter(|(_, t)| t.hex.radius() < map.radius as u32 && valid_start(map, t.hex))
         .map(|(i, t)| (rand_id(&s, b"start", i as u64), t.hex))
         .collect();
-    candidates.sort();
-    let mut starts: Vec<Hex> = Vec::new();
-    for (_, hex) in candidates {
-        if starts.len() == civs {
-            break;
-        }
-        if starts
+    let first = *candidates.iter().min()?;
+    let mut starts = alloc::vec![first.1];
+    while starts.len() < civs {
+        let (spacing, _, hex) = candidates
             .iter()
-            .all(|s| s.distance(hex) >= rules.start_min_distance as u32)
-            && valid_start(map, hex)
-        {
-            starts.push(hex);
+            .map(|(key, h)| {
+                let d = starts
+                    .iter()
+                    .map(|st| st.distance(*h))
+                    .min()
+                    .unwrap_or(u32::MAX);
+                (d, core::cmp::Reverse(*key), *h)
+            })
+            .max()?;
+        if spacing < rules.start_min_distance as u32 {
+            return None;
+        }
+        starts.push(hex);
+    }
+    Some(starts)
+}
+
+/// Start balancing (§2.4): raise weak starts until every start value is within
+/// the fairness bound of the best one. Only tiles within radius 3 that are
+/// strictly closer to that start than to any other are changed, so balancing
+/// one start never raises another. Upgrades, in order of preference:
+/// Mountain→Hills, then Wheat on a plain Grassland/Plains tile, then
+/// Water→Grassland. Returns false if no upgrade is left.
+fn balance_starts(rules: &Ruleset, map: &mut Map, starts: &[Hex]) -> bool {
+    for _ in 0..256 {
+        let values: Vec<u64> = starts.iter().map(|s| start_value(map, *s)).collect();
+        let max = values.iter().copied().max().unwrap_or(0);
+        let floor = (max * 10_000).div_ceil(rules.start_fairness_max_bps as u64);
+        let mut all_ok = true;
+        let mut changed = false;
+        for (i, st) in starts.iter().enumerate() {
+            if values[i] >= floor {
+                continue;
+            }
+            all_ok = false;
+            changed |= upgrade_one(map, *st, starts);
+        }
+        if all_ok {
+            return true;
+        }
+        if !changed {
+            return false;
         }
     }
-    (starts.len() == civs).then_some(starts)
+    false
+}
+
+fn upgrade_one(map: &mut Map, start: Hex, starts: &[Hex]) -> bool {
+    let own = |h: Hex| {
+        let d = h.distance(start);
+        h != start && d <= 3 && starts.iter().all(|o| *o == start || o.distance(h) > d)
+    };
+    let mut region: Vec<(u32, usize)> = map
+        .tiles
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| own(t.hex))
+        .map(|(i, t)| (t.hex.distance(start), i))
+        .collect();
+    region.sort();
+    for pass in 0..3 {
+        for &(_, i) in &region {
+            let t = &mut map.tiles[i];
+            let done = match (pass, t.terrain, t.resource) {
+                (0, Mountain, _) => {
+                    t.terrain = Hills;
+                    true
+                }
+                (1, Grassland | Plains, None) => {
+                    t.resource = Some(TileResource::Wheat);
+                    true
+                }
+                (2, Water, _) => {
+                    t.terrain = Grassland;
+                    t.river = false;
+                    true
+                }
+                _ => false,
+            };
+            if done {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// `V = Σ radius-3 (2·food + 2·prod + gold) + 6 × strategic within 5` (§2.4).
@@ -402,6 +480,33 @@ mod tests {
         assert!(mx * 10_000 / mn <= 11_000);
         assert_eq!(g.city_states.len(), 2);
         assert_eq!(g.hubs.len(), 2);
+    }
+
+    #[test]
+    fn every_supported_civ_count_generates_fair_spaced_starts() {
+        let cases = [
+            (Preset::Blitz, [2usize, 4, 6, 8]),
+            (Preset::Season, [9, 12, 14, 16]),
+        ];
+        for (preset, counts) in cases {
+            let rules = Ruleset::new(preset);
+            for civs in counts {
+                for seed in 0..3u8 {
+                    let g = generate(&rules, &[seed; 32], civs)
+                        .unwrap_or_else(|e| panic!("{preset:?} {civs} civs seed {seed}: {e:?}"));
+                    assert_eq!(g.starts.len(), civs);
+                    for (i, a) in g.starts.iter().enumerate() {
+                        assert!(valid_start(&g.map, *a));
+                        for b in &g.starts[i + 1..] {
+                            assert!(a.distance(*b) >= rules.start_min_distance as u32);
+                        }
+                    }
+                    let v: Vec<u64> = g.starts.iter().map(|s| start_value(&g.map, *s)).collect();
+                    let (mn, mx) = (*v.iter().min().unwrap(), *v.iter().max().unwrap());
+                    assert!(mx * 10_000 / mn <= rules.start_fairness_max_bps as u64);
+                }
+            }
+        }
     }
 
     #[test]

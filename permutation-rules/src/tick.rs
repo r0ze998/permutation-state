@@ -51,8 +51,8 @@ pub fn resolve_tick(
 /// | # | Phase | Status |
 /// |---|---|---|
 /// | 0 | Seed | done |
-/// | 1 | Diplomacy | `DeclareWar`, NAP expiry. TODO: peace, NAP, alliances |
-/// | 2 | Economy orders | queue, focus, research, purchase. TODO: transfers, envoys, AMM, Exchange |
+/// | 1 | Diplomacy | done (see `diplomacy`): war, peace, NAPs with bonds, alliances, proposals |
+/// | 2 | Economy orders | queue, focus, research, purchase, found city, transfers, envoys. TODO: AMM, Exchange |
 /// | 3 | Standing rules | TODO |
 /// | 4 | Movement | done (paths, MP, occupancy, territory, protection, tie-break) |
 /// | 5 | Combat | done (see `battle`); barbarian and standing-rule attacks TODO |
@@ -79,7 +79,7 @@ pub fn run_phase(
     }
     match phase {
         0 => phase_seed(state, input),
-        1 => phase_diplomacy(state, rules, input),
+        1 => crate::diplomacy::phase_diplomacy(state, rules, input),
         2 => phase_economy_orders(state, rules, input),
         3 => {} // TODO(§13): compile standing rules into implicit orders.
         4 => phase_movement(state, rules, input),
@@ -141,64 +141,13 @@ fn phase_seed(state: &mut WorldState, input: &TickInput) {
 
 // ---------------------------------------------------------------- phase 1
 
-fn phase_diplomacy(state: &mut WorldState, rules: &Ruleset, input: &TickInput) {
-    let n = state.civs.len() as u16;
-    // NAP expiry (§10.3). Bonds are not yet escrowed, so nothing is returned.
-    for a in 0..n {
-        for b in a + 1..n {
-            if let Relation::Nap { until, .. } = state.relation(a, b) {
-                if state.tick >= until {
-                    state.set_relation(a, b, Relation::Peace);
-                }
-            }
-        }
-    }
-    for (civ, _, orders) in accepted(state, rules, input) {
-        for order in orders {
-            if let Order::DeclareWar { civ: target } = order {
-                declare_war(state, rules, civ, target);
-            }
-            // TODO(§10.2–10.4): ProposePeace/AcceptPeace, NAP, alliances.
-        }
-    }
-}
-
-fn declare_war(state: &mut WorldState, rules: &Ruleset, civ: CivId, target: CivId) {
-    if target == civ || target as usize >= state.civs.len() {
-        return;
-    }
-    if !matches!(state.relation(civ, target), Relation::Peace) {
-        return; // NAPs must be broken, allies cannot be attacked, wars already exist.
-    }
-    // Casus belli: the target has done enough to the declarer (§9.1).
-    let casus_belli = state.grievance(target, civ) >= rules.casus_belli_threshold;
-    state.set_relation(
-        civ,
-        target,
-        Relation::War {
-            declared_by: civ,
-            casus_belli,
-            active_from: state.tick + 1,
-        },
-    );
-    if !casus_belli {
-        state.add_grievance(civ, target, 30);
-        state.civs[civ as usize].last_aggression = Some(state.tick);
-    }
-    state.civs[civ as usize].protection_lost = true;
-    let mut payload = [0u8; 5];
-    payload[..2].copy_from_slice(&civ.to_le_bytes());
-    payload[2..4].copy_from_slice(&target.to_le_bytes());
-    payload[4] = casus_belli as u8;
-    state.push_event(b"declare_war", &payload);
-}
-
 // ---------------------------------------------------------------- phase 2
 
 fn phase_economy_orders(state: &mut WorldState, rules: &Ruleset, input: &TickInput) {
     for (civ, _, orders) in accepted(state, rules, input) {
         for order in orders {
             match order {
+                Order::FoundCity { settler } => found_city(state, rules, civ, settler),
                 Order::SetQueue { city, items } => set_queue(state, civ, city, items),
                 Order::SetFocus { city, focus } => {
                     if let Some(c) = owned_city_mut(state, civ, city) {
@@ -207,11 +156,98 @@ fn phase_economy_orders(state: &mut WorldState, rules: &Ruleset, input: &TickInp
                 }
                 Order::SetResearch { techs } => set_research(state, civ, techs),
                 Order::Purchase { city, gold } => purchase(state, rules, civ, city, gold),
-                // TODO(§10.5, §12.1, §11.2, §11.3): Transfer, SendEnvoy, MarketTrade, ExchangeOrder.
+                // TODO(§11.2, §11.3): MarketTrade, ExchangeOrder.
                 _ => {}
             }
         }
     }
+    crate::diplomacy::apply_transfers(state, rules, input);
+    crate::diplomacy::apply_envoys(state, rules, input);
+}
+
+/// `FoundCity` (§4.2, §5.7): the settler founds a city where it stands.
+fn found_city(state: &mut WorldState, rules: &Ruleset, civ: CivId, settler: u32) {
+    let Some(u) = state
+        .units
+        .get(settler as usize)
+        .filter(|u| u.alive && u.owner == Owner::Civ(civ) && u.unit_type == UnitType::Settler)
+    else {
+        return;
+    };
+    let hex = u.hex;
+    let min = rules.city_min_distance as u32;
+    let Some(tile) = state.map.tile(hex) else {
+        return;
+    };
+    let foreign = tile
+        .owner_city
+        .and_then(|c| state.cities.get(c as usize))
+        .is_some_and(|c| c.alive && c.owner != Some(civ));
+    let valid = tile.terrain.is_passable()
+        && !foreign
+        && state
+            .cities
+            .iter()
+            .all(|c| !c.alive || c.hex.distance(hex) >= min)
+        && state.city_states.iter().all(|c| c.hex.distance(hex) >= min)
+        && !crate::battle::is_protected(state, rules, civ, hex);
+    if !valid {
+        return;
+    }
+    let id = state.cities.len() as u32;
+    // Heritage (§3.4): the first city near an unclaimed ruin this season.
+    let heritage = state
+        .map
+        .tiles
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| {
+            !t.heritage_claimed
+                && t.ruin_peak_pop.is_some()
+                && t.hex.distance(hex) <= rules.heritage_radius as u32
+        })
+        .min_by_key(|(i, t)| (t.hex.distance(hex), *i))
+        .map(|(i, t)| (i, t.ruin_peak_pop.unwrap_or(0) as u32 / 2));
+    let (heritage_until, heritage_bonus) = match heritage {
+        Some((i, bonus)) => {
+            state.map.tiles[i].heritage_claimed = true;
+            (Some(state.tick + rules.heritage_ticks), bonus)
+        }
+        None => (None, 0),
+    };
+    state.cities.push(crate::state::City {
+        id,
+        owner: Some(civ),
+        founder: civ,
+        founded_tick: state.tick,
+        hex,
+        pop: 1,
+        food: 0,
+        prod: 0,
+        buildings: Default::default(),
+        loyalty: 100,
+        defense: (rules.city_defense_base + 1) * 1000,
+        attacked_this_tick: false,
+        focus: crate::state::Focus::Balanced,
+        queue: Vec::new(),
+        captured_tick: None,
+        captured_from: None,
+        scored_by: Vec::new(),
+        capture_scores: false,
+        razing: None,
+        heritage_until,
+        heritage_bonus,
+        alive: true,
+    });
+    if let Some(t) = state.map.tile_mut(hex) {
+        t.owner_city = Some(id); // the centre always belongs to the new city
+    }
+    state.map.claim_territory(id, hex, territory_radius(1));
+    state.units[settler as usize].alive = false;
+    if state.civs[civ as usize].capital.is_none() {
+        state.civs[civ as usize].capital = Some(id);
+    }
+    state.push_event(b"found_city", &id.to_le_bytes());
 }
 
 fn owned_city_mut(
@@ -342,8 +378,9 @@ pub(crate) fn unit_civ(u: &Unit) -> Option<CivId> {
     }
 }
 
-/// May `mover` enter `hex` at all (territory and protection rules, §3.3, §7.3)?
-fn may_enter(state: &WorldState, rules: &Ruleset, mover: Option<CivId>, hex: Hex) -> bool {
+/// Whether `mover` may enter `hex` (terrain, protected zones, borders). Public
+/// so clients and agents can list legal moves with the engine's own rule.
+pub fn may_enter(state: &WorldState, rules: &Ruleset, mover: Option<CivId>, hex: Hex) -> bool {
     let Some(tile) = state.map.tile(hex) else {
         return false;
     };
@@ -378,7 +415,7 @@ fn may_enter(state: &WorldState, rules: &Ruleset, mover: Option<CivId>, hex: Hex
 }
 
 /// Occupancy: one army or one civilian per tile; inside an own city, one of each (§7.2).
-fn tile_free_for(state: &WorldState, unit: &Unit, hex: Hex) -> bool {
+pub(crate) fn tile_free_for(state: &WorldState, unit: &Unit, hex: Hex) -> bool {
     let is_civ = unit.unit_type.is_civilian();
     let mut occupants = state
         .units
@@ -492,6 +529,7 @@ fn phase_movement(state: &mut WorldState, rules: &Ruleset, input: &TickInput) {
 // ---------------------------------------------------------------- phase 6
 
 fn phase_production(state: &mut WorldState, rules: &Ruleset) {
+    let mut last = alloc::vec![crate::state::LastYields::default(); state.civs.len()];
     for i in 0..state.cities.len() {
         let (owner, alive) = (state.cities[i].owner, state.cities[i].alive);
         let razing = state.cities[i].razing.is_some();
@@ -531,6 +569,10 @@ fn phase_production(state: &mut WorldState, rules: &Ruleset) {
 
         // Civilization-level yields.
         {
+            let l = &mut last[civ as usize];
+            l.gold += y.gold;
+            l.max_city_food_surplus = l.max_city_food_surplus.max(surplus.max(0) as u32);
+            l.max_city_prod = l.max_city_prod.max(y.prod);
             let c = &mut state.civs[civ as usize];
             c.gold += y.gold as i64 * MILLI;
             c.science_store += y.science as i64 * MILLI;
@@ -543,14 +585,49 @@ fn phase_production(state: &mut WorldState, rules: &Ruleset) {
                 continue;
             }
             match tile.resource {
-                Some(crate::map::TileResource::Iron) => state.civs[civ as usize].iron += MILLI,
-                Some(crate::map::TileResource::Horses) => state.civs[civ as usize].horses += MILLI,
+                Some(crate::map::TileResource::Iron) => {
+                    state.civs[civ as usize].iron += MILLI;
+                    last[civ as usize].iron += 1;
+                }
+                Some(crate::map::TileResource::Horses) => {
+                    state.civs[civ as usize].horses += MILLI;
+                    last[civ as usize].horses += 1;
+                }
                 _ => continue,
             }
             tile.reserve -= 1;
         }
 
         complete_queue(state, rules, civ, i);
+    }
+
+    // City-state suzerain bonuses (§12.1).
+    for cs in 0..state.city_states.len() {
+        let (Some(civ), None) = (
+            state.city_states[cs].suzerain,
+            state.city_states[cs].captured_by,
+        ) else {
+            continue;
+        };
+        let c = &mut state.civs[civ as usize];
+        match state.city_states[cs].specialty {
+            crate::state::Specialty::Scientific => {
+                c.science_store += 3 * MILLI;
+                c.scores.science_total += 3;
+            }
+            crate::state::Specialty::Mercantile => {
+                c.gold += 4 * MILLI;
+                last[civ as usize].gold += 4;
+            }
+            crate::state::Specialty::Agrarian => {
+                if let Some(cap) = c.capital {
+                    state.cities[cap as usize].food += 2 * MILLI;
+                }
+            }
+        }
+    }
+    for (c, l) in state.civs.iter_mut().zip(last) {
+        c.last = l;
     }
 
     // Research (§6.2).

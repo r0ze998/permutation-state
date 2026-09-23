@@ -92,9 +92,11 @@ Reserves persist across seasons (the "one save" world). Depletion is part of the
 
 ### 2.4 Generation and fairness
 - Generation is deterministic from `world_seed` for the first season. After that the persistent map is reused; only city-states and hubs respawn, from `season_seed`.
-- **Start sites:** each lies ≥ 8 tiles from any other start. Within radius 2 it must have ≥ 2 tiles with food ≥ 2 and ≥ 1 Forest or Hills. Within radius 5 it must have ≥ 1 Iron or Horses.
+- **Start sites:** each lies ≥ **7** tiles from any other start and not on the map's outermost ring. Within radius 2 it must have ≥ 2 tiles with food ≥ 2 and ≥ 1 Forest or Hills. Within radius 5 it must have ≥ 1 Iron or Horses. A start tile carries no resource.
+- **Placement (farthest-point):** the first start is the valid site with the lowest `rand(…, "start", tile_index)`. Each next start is the valid site farthest from all chosen starts (ties: lowest random key). If the best remaining spacing is below 7, the attempt fails and the generator rerolls with the next attempt seed.
 - **Start value** `V = Σ over the radius-3 tiles of (2×food + 2×prod + gold) + 6 × strategic resources within radius 5`.
-- The generator rerolls (next `rand` domain) until `max(V) × 10000 / min(V) ≤ 11000`, i.e. starts are within ±10% of each other.
+- **Balancing:** while any start has `V < ceil(max(V) × 10000 / 11000)`, that start gets one upgrade per round. Only tiles within radius 3 that are strictly closer to that start than to any other start are eligible, taken by distance then tile index. The upgrade is the first available of: Mountain→Hills, Wheat on a plain Grassland/Plains tile, Water→Grassland. If no upgrade remains, the attempt fails. Starts therefore end within ±10% of each other.
+- *Why (v0.1 fix):* random greedy placement with spacing 8 generated 0 of 10 maps for Blitz with 8 civs and for Season with 9 or more. Farthest-point placement plus balancing generates every supported configuration (Blitz 2–8, Season up to 16).
 
 ---
 
@@ -493,6 +495,15 @@ The pairwise states are `Peace` (the default), `War`, `NAP` (a peace with bonds)
 
 - **No transfers at tick ≥ 162.**
 - Transfers never count for any score.
+- *v0.1 details:* "this tick" means the sender's yields from the **previous** tick's phase 6, since transfers resolve in phase 2, before this tick's production. Transfers are not allowed between civilizations at war. Food and Production are taken from the sender's city holding the most of that good (ties: lowest id).
+
+### 10.6 Proposals and timing (v0.1)
+- `Propose*` records a proposal. `Accept*` only matches a proposal made on an **earlier** tick, so a proposal and its acceptance can never race within one tick. Proposals expire after 6 ticks. A new proposal of the same kind to the same civ replaces the old one.
+- **Peace:** acceptance sets the war's `peace_at = t + 1`; the war is inactive from then on. At the start of phase 1 of that tick, the relation becomes Peace and each side's units in the other's territory move to the nearest free tile of their own territory (by distance, then tile). If no tile is free, the unit stays.
+- **NAP:** both bonds (≥ 30 gold each) are escrowed at acceptance. If either civ cannot pay, the pact fails. At expiry both bonds are returned.
+- **Alliances are closed groups.** Accepting civ X's proposal joins X's whole group: the joiner must have no allies, the group must be below the cap, the joiner must be at Peace or under a NAP with every member (a NAP is superseded and its bonds returned), and no member may be leaving. `LeaveAlliance` marks all of the leaver's alliances to end after 6 ticks. Membership in any alliance at any tick forfeits the Concord neutrality multiplier for the season.
+- **Envoys:** all envoys of a tick are applied first. Then each city-state without a suzerain goes to the civilization with the **most** influence at or above 60 (ties by tie-break), so civ order never decides suzerainty.
+- **Founding** (`FoundCity`, phase 2): the settler founds at its own tile if the tile is passable, not foreign territory, ≥ 3 tiles from every city and city-state, and not inside another civilization's active protected zone. The centre tile always belongs to the new city. A civilization without a capital makes the new city its capital.
 
 ---
 

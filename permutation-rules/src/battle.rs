@@ -104,7 +104,7 @@ pub fn phase_combat(state: &mut WorldState, rules: &Ruleset, input: &TickInput) 
 
 // ------------------------------------------------------------------ planning
 
-fn is_protected(
+pub(crate) fn is_protected(
     state: &WorldState,
     rules: &Ruleset,
     attacker: CivId,

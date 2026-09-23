@@ -13,6 +13,7 @@ extern crate alloc;
 pub mod battle;
 pub mod buildings;
 pub mod combat;
+pub mod diplomacy;
 pub mod economy;
 pub mod error;
 pub mod fixed;

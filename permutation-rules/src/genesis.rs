@@ -114,6 +114,7 @@ pub fn new_season(
             tick_budget: order_budget(rules, 1),
             deficit: false,
             troops_lost: 0,
+            last: Default::default(),
             war_weariness: 0,
             last_aggression: None,
             ever_allied: false,
@@ -171,6 +172,7 @@ pub fn new_season(
         hubs: generated.hubs,
         relations: vec![Relation::Peace; n * n.saturating_sub(1) / 2],
         grievance: vec![0; n * n],
+        proposals: Vec::new(),
         event_head: genesis.finalize().into(),
     })
 }

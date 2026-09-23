@@ -34,6 +34,7 @@ A single crate runs everywhere the rules run:
 | `scoring` | §14 | Dominion, Concord, Science key, winners count, payout weights |
 | `tick` | §15 | phase pipeline |
 | `battle` | §8, §9, §12.1 | phase 5: engagements, captures, razing |
+| `diplomacy` | §10, §12.1 | phase 1 diplomacy; transfers and envoys for phase 2 |
 | `invariants` | §17 | state and monotonicity checks |
 
 ## Implementation status of `resolve_tick`
@@ -41,22 +42,33 @@ A single crate runs everywhere the rules run:
 | # | Phase | Status |
 |---|---|---|
 | 0 | Seed | ✅ |
-| 1 | Diplomacy | `DeclareWar` with casus belli, grievance, aggressor flag, loss of protection; NAP expiry. **TODO:** peace, NAPs, alliances |
-| 2 | Economy orders | queue (tech, star-gate and duplicate checks), focus, research, purchase. **TODO:** transfers, envoys, gold AMM, Exchange |
+| 1 | Diplomacy | ✅ (`diplomacy`): war with casus belli, proposals (accepted only on a later tick, 6-tick expiry), peace with withdrawal, NAPs with escrowed bonds, closed alliance groups with the cap and delayed leaving |
+| 2 | Economy orders | queue, focus, research, purchase, `FoundCity` (with heritage), transfers with income caps, envoys and suzerainty. **TODO:** gold AMM, Exchange |
 | 3 | Standing rules | **TODO** |
 | 4 | Movement | ✅ paths, MP, one free tile at full MP, occupancy, foreign territory, protected zones, tie-break, no swapping |
 | 5 | Combat | ✅ (`battle`): simultaneous engagements from pre-combat counts, garrisons, walls, ranged and counter modifiers, captures of civilians, cities and city-states, last-city protection, raze to ruin, grievances and aggression. **TODO:** barbarian and standing-rule attacks |
 | 6 | Production and growth | ✅ governor, amenities, growth and starvation, territory, queue completion and spawning, strategic reserves, research |
 | 7 | Upkeep | ✅ including deficit disbanding |
 | 8 | Society | ✅ war weariness (including casualties), loyalty and Free Cities, grievance decay, city regeneration |
-| 9 | Neutral actors | city-state growth and regeneration, suzerainty cycle reset. **TODO:** envoys, the Crisis |
+| 9 | Neutral actors | city-state growth and regeneration, suzerainty cycle reset (suzerain bonuses are paid in phase 6). **TODO:** the Crisis |
 | 10 | Scoring | ✅ Dominion, Concord, science, alliance record, activity, order bank. **TODO:** prize coalitions |
 | 11 | Commit | ✅ next tick's budget, event chain |
+
+## Bot match and replay viewer
+
+`examples/replay.rs` plays a six-civilization Blitz match with simple rule-based bots (Warlord, Builder, Diplomat, Scholar) on the real engine. It checks every invariant each tick and writes a JSON replay. `viewer/` turns that replay into one self-contained pixel-hex page:
+
+```sh
+cargo run --release --example replay -- viewer/replay.json
+python3 viewer/build.py viewer/replay.json viewer/replay.html
+```
+
+The pipeline is deterministic end to end: the same seeds produce a byte-identical page. The bots read the full state (there is no fog-of-war view yet), so they are a rules test harness, not the reference agent.
 
 ## Development
 
 ```sh
-cargo test          # 63 tests: unit, spec reference vectors, combat scenarios, full 180-tick season
+cargo test          # 79 tests: unit, spec vectors, combat, diplomacy, full 180-tick season
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 cargo-build-sbf     # Solana SBF build check (Solana CLI)

@@ -92,6 +92,8 @@ pub struct Ruleset {
     pub nap_ticks: u16,
     pub nap_min_bond: u32,
     pub alliance_leave_delay: u16,
+    /// Open proposals expire after this many ticks (§10.6).
+    pub proposal_ttl: u16,
 
     // --- markets (§11) ---
     pub amm_fee_bps: Bps,
@@ -139,7 +141,7 @@ impl Ruleset {
             transfer_freeze_tick: 162,
             exchange_freeze_tick: 120,
 
-            start_min_distance: 8,
+            start_min_distance: 7,
             start_fairness_max_bps: 11_000,
             start_generation_attempts: 64,
             resource_reserve: 90,
@@ -184,6 +186,7 @@ impl Ruleset {
             nap_ticks: 30,
             nap_min_bond: 30,
             alliance_leave_delay: 6,
+            proposal_ttl: 6,
 
             amm_fee_bps: 300,
             hub_fee_bps: 100,

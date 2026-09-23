@@ -62,6 +62,7 @@ pub struct Civ {
     pub deficit: bool,
     /// Milli-troops lost in combat this tick (war weariness, §9.3).
     pub troops_lost: u32,
+    pub last: LastYields,
     pub war_weariness: u32,
     /// Last tick with an aggressive act (§9.2).
     pub last_aggression: Option<u16>,
@@ -166,12 +167,15 @@ pub struct Unit {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Relation {
     Peace,
-    /// War becomes active at `active_from` (declared one tick earlier, §10.2).
+    /// War becomes active at `active_from` (declared one tick earlier, §10.2)
+    /// and ends at `peace_at` once peace is accepted.
     War {
         declared_by: CivId,
         casus_belli: bool,
         active_from: u16,
+        peace_at: Option<u16>,
     },
+    /// Bonds are escrowed gold (whole units) of the lower- and higher-id civ.
     Nap {
         until: u16,
         bond_low: u32,
@@ -180,6 +184,33 @@ pub enum Relation {
     Alliance {
         leaving_at: Option<u16>,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum ProposalKind {
+    Peace,
+    Nap { bond: u32 },
+    Alliance,
+}
+
+/// A diplomatic offer awaiting acceptance on a later tick (§10, v0.1 §10.6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct Proposal {
+    pub kind: ProposalKind,
+    pub from: CivId,
+    pub to: CivId,
+    pub tick: u16,
+}
+
+/// Previous tick's per-tick yields, in whole units. Transfer caps (§10.5)
+/// are defined against income, which is only known after phase 6.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct LastYields {
+    pub gold: u32,
+    pub iron: u32,
+    pub horses: u32,
+    pub max_city_food_surplus: u32,
+    pub max_city_prod: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -221,6 +252,8 @@ pub struct WorldState {
     pub relations: Vec<Relation>,
     /// `grievance[a * n + v]` = grievance victim `v` holds against `a` (§9.1).
     pub grievance: Vec<u16>,
+    /// Open diplomatic proposals (§10.6).
+    pub proposals: Vec<Proposal>,
     /// Head of the append-only event hash chain.
     pub event_head: [u8; 32],
 }
@@ -253,7 +286,8 @@ impl WorldState {
 
     pub fn at_war(&self, a: CivId, b: CivId) -> bool {
         a != b
-            && matches!(self.relation(a, b), Relation::War { active_from, .. } if self.tick >= active_from)
+            && matches!(self.relation(a, b), Relation::War { active_from, peace_at, .. }
+                if self.tick >= active_from && peace_at.is_none_or(|p| self.tick < p))
     }
 
     pub fn grievance(&self, aggressor: CivId, victim: CivId) -> u16 {
