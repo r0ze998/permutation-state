@@ -1,5 +1,10 @@
 # Permutation State — Playable MagicBlock Slice
 
+> **Current game:** the active map-first civilization game is at `/civilization/`.
+> See the [project README](../README.md) for its current status and the chain-independent startup path.
+> The onchain models and receipts documented below belong to earlier experiments. They do not prove
+> that the new civilization simulation is onchain. New-game integration is still in progress.
+
 This package is the Solana program, MagicBlock transport, and local gateway behind PERMUTATION STATE. It includes a canonical Season PDA with a mock-USDC ledger, the earlier causal-proof Worksite PDA, and a new eight-citizen spatial World PDA with verified MagicBlock ER-to-Solana checkpoints.
 
 The verified target is **localnet**, using disposable demo signers and no real funds. Nothing is deployed to public devnet or mainnet. The gateway holds those disposable signers for the hackathon slice; production wallet approval and player Session Keys are not implemented. Role URLs are presentation and turn-taking aids, not authentication: the HTTP caller is not yet bound to a player wallet.
@@ -53,10 +58,12 @@ npm start
 Open the primary shared simulation:
 
 ```text
-http://127.0.0.1:4173/world/?session=aster-living-alpha&actor=mara
+http://127.0.0.1:4173/civilization/
 ```
 
-This browser route is intentionally labelled `OFFCHAIN SIMULATION ALPHA`: it uses the richer gateway simulation while wallet/session-key synchronization with the compact World PDA remains pending.
+This is the new offchain civilization prototype. The earlier `/world/` route remains an archived
+walking-and-watergate experiment. Neither simulation is automatically synchronized with the compact
+World PDA merely because it is served by this gateway.
 
 The localnet gateway creates three disposable keypairs under the ignored workspace `work/` directory when missing and funds them only from the local validator. It never auto-creates or funds devnet credentials.
 

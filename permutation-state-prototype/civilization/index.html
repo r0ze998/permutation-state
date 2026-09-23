@@ -27,6 +27,7 @@
       <button data-drawer="settlement" title="街と生産"><span>⌂</span><small>街</small></button>
       <button data-drawer="economy" title="共有経済"><span>▥</span><small>経済</small></button>
       <button data-drawer="research" title="研究"><span>✧</span><small>研究</small></button>
+      <button data-drawer="projects" title="共同計画"><span>⚑</span><small>計画</small></button>
       <button data-drawer="chronicle" title="文明史"><span>☷</span><small>歴史</small></button>
     </nav>
     <section id="drawer" class="drawer panel" aria-label="文明の詳細" hidden></section>
@@ -60,6 +61,7 @@
       <ol class="help-steps"><li><strong>地形を選ぶ</strong><p>森、丘、平原をクリック。資源と建設できる施設を確認します。</p></li><li><strong>市民として現地へ行く</strong><p>「ここへ移動」、またはダブルクリック。道を通り、近くで採集・建設します。</p></li><li><strong>何を育てるか決める</strong><p>農場で食料、製材所で木材、工房で道具。共有資源を使うので、街全体を見て選びましょう。</p></li><li><strong>変わった世界を読む</strong><p>施設が生産し、運び手が物資を届けます。レンズと「あなたにできること」が次の判断を助けます。</p></li></ol>
       <div class="help-note">世界は全員で同時に進行します。NPCはルールで働く試作版です。生成AI、戦闘、実際の賞金決済はまだ含みません。</div>
       <div class="help-controls">ドラッグ：地図移動　スクロール：拡大縮小　F：自分へ　N：次の提案　Esc：閉じる</div>
+      <section class="identity-controls" aria-label="市民の継続保存"><h3>次も、同じ市民として。</h3><p>共有PCでは保存しないでください。保存すると、このブラウザを使う人は同じ市民として操作できます。別タブの市民は自動では統合しません。</p><div class="action-row"><button id="remember-citizen" class="secondary-button">この端末に市民を保存</button><button id="resume-citizen" class="secondary-button">保存した市民で再開</button></div><button id="forget-citizen" class="text-button">この端末の保存を解除</button><p id="identity-message" role="status"></p></section>
       <a class="guide-link" href="./guide.html" target="_blank" rel="noopener">詳しいプレイガイドを開く ↗</a>
       <button class="primary-button wide" data-close-dialog="help-dialog">文明に参加する <span>→</span></button>
     </dialog>

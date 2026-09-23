@@ -6,6 +6,7 @@ import {
   advanceCivilization,
   applyCivilizationAction,
   createCivilization,
+  upgradeCivilization,
 } from "../../permutation-state-prototype/civilization/core.mjs";
 
 export const CIVILIZATION_DISCLOSURE = "OFFCHAIN CIVILIZATION ALPHA · SOLANA PROOFS ARE SEPARATE";
@@ -14,8 +15,18 @@ export const CIVILIZATION_SERVICE_SCHEMA = "permutation.civilization-service.v1"
 const BODY_LIMIT_BYTES = 64_000;
 const DEFAULT_TICK_INTERVAL_MS = 250;
 const DEFAULT_PERSIST_INTERVAL_MS = 1_000;
+const DEFAULT_MAX_LOADED_CIVILIZATIONS = 64;
+const DEFAULT_MAX_PLAYERS_PER_CIVILIZATION = 128;
+const DEFAULT_REQUEST_LIMIT = Object.freeze({
+  capacity: 240,
+  refillPerSecond: 30,
+  entryTtlMs: 5 * 60_000,
+  maxEntries: 4_096,
+});
 const BUILDING_TYPES = new Set(["farm", "lumbermill", "quarry", "mine", "workshop", "watchtower", "archive"]);
 const RESEARCH_TECHS = new Set(["agriculture", "logistics", "metallurgy"]);
+const PRODUCTION_MODES = new Set(["normal", "paused", "boost"]);
+const PROJECT_ACTIONS = new Set(["CLAIM_PROJECT", "RELEASE_PROJECT", "CANCEL_PROJECT", "START_PROJECT"]);
 
 function serviceError(message, statusCode = 400, code = "INVALID_REQUEST") {
   return Object.assign(new Error(message), { statusCode, code });
@@ -76,6 +87,15 @@ function validateTileId(value) {
   return `${q},${r}`;
 }
 
+function validateEntityId(value, label) {
+  const reserved = value === "prototype"
+    || (typeof value === "string" && Object.prototype.hasOwnProperty.call(Object.prototype, value));
+  if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/.test(value) || reserved) {
+    throw serviceError(`${label} must be a safe 1-80 character identifier`);
+  }
+  return value;
+}
+
 export function validateCivilizationAction(value) {
   if (!isObject(value) || typeof value.type !== "string") {
     throw serviceError("action must be an object with a type");
@@ -101,7 +121,31 @@ export function validateCivilizationAction(value) {
         throw serviceError("techId is not supported");
       }
       return { type, techId: value.techId };
+    case "SET_PRODUCTION":
+      exactKeys(value, ["type", "buildingId", "mode"], "SET_PRODUCTION action");
+      if (typeof value.mode !== "string" || !PRODUCTION_MODES.has(value.mode)) {
+        throw serviceError("mode must be normal, paused, or boost");
+      }
+      return {
+        type,
+        buildingId: validateEntityId(value.buildingId, "buildingId"),
+        mode: value.mode,
+      };
+    case "CREATE_PROJECT":
+      exactKeys(value, ["type", "tileId", "buildingType"], "CREATE_PROJECT action");
+      if (typeof value.buildingType !== "string" || !BUILDING_TYPES.has(value.buildingType)) {
+        throw serviceError("buildingType is not supported");
+      }
+      return {
+        type,
+        tileId: validateTileId(value.tileId),
+        buildingType: value.buildingType,
+      };
     default:
+      if (PROJECT_ACTIONS.has(type)) {
+        exactKeys(value, ["type", "projectId"], `${type} action`);
+        return { type, projectId: validateEntityId(value.projectId, "projectId") };
+      }
       throw serviceError(`Unsupported civilization action: ${value.type}`);
   }
 }
@@ -188,6 +232,26 @@ function assertPersistedEnvelope(value, sessionId) {
   }
 }
 
+function normalizePositiveInteger(value, label) {
+  if (!Number.isInteger(value) || value < 1) throw new Error(`${label} must be a positive integer`);
+  return value;
+}
+
+function normalizeRequestLimit(value) {
+  if (value === false) return null;
+  if (value !== undefined && !isObject(value)) throw new Error("requestLimit must be an object or false");
+  const config = { ...DEFAULT_REQUEST_LIMIT, ...(value || {}) };
+  if (!Number.isFinite(config.capacity) || config.capacity < 1) {
+    throw new Error("requestLimit.capacity must be at least 1");
+  }
+  if (!Number.isFinite(config.refillPerSecond) || config.refillPerSecond < 0) {
+    throw new Error("requestLimit.refillPerSecond must be zero or greater");
+  }
+  normalizePositiveInteger(config.entryTtlMs, "requestLimit.entryTtlMs");
+  normalizePositiveInteger(config.maxEntries, "requestLimit.maxEntries");
+  return config;
+}
+
 export function createCivilizationService({
   workDir,
   now = () => Date.now(),
@@ -196,16 +260,23 @@ export function createCivilizationService({
   autoStart = true,
   tokenFactory = () => randomBytes(32).toString("base64url"),
   onError = (error) => console.error(`[civilization] ${error.message}`),
+  maxLoadedCivilizations = DEFAULT_MAX_LOADED_CIVILIZATIONS,
+  maxPlayersPerCivilization = DEFAULT_MAX_PLAYERS_PER_CIVILIZATION,
+  requestLimit,
 } = {}) {
   if (typeof workDir !== "string" || !workDir) throw new Error("civilization service workDir is required");
   if (typeof now !== "function") throw new Error("civilization service now must be a function");
   if (typeof tokenFactory !== "function") throw new Error("civilization service tokenFactory must be a function");
   if (!Number.isInteger(tickIntervalMs) || tickIntervalMs < 1) throw new Error("tickIntervalMs must be positive");
   if (!Number.isInteger(persistIntervalMs) || persistIntervalMs < 1) throw new Error("persistIntervalMs must be positive");
+  normalizePositiveInteger(maxLoadedCivilizations, "maxLoadedCivilizations");
+  normalizePositiveInteger(maxPlayersPerCivilization, "maxPlayersPerCivilization");
+  const requestLimitConfig = normalizeRequestLimit(requestLimit);
 
   const civilizationsDir = path.join(workDir, "civilizations");
   const records = new Map();
   const locks = new Map();
+  const requestBuckets = new Map();
   let timer = null;
   let closed = false;
 
@@ -228,7 +299,19 @@ export function createCivilizationService({
 
   async function loadRecord(sessionId, nowMs, { create = false } = {}) {
     const cached = records.get(sessionId);
-    if (cached) return cached;
+    if (cached) {
+      cached.lastAccessedAt = nowMs;
+      return cached;
+    }
+    if (records.size >= maxLoadedCivilizations) {
+      const evictable = [...records.entries()]
+        .filter(([candidateId, candidate]) => !candidate.dirty && !locks.has(candidateId))
+        .sort(([, left], [, right]) => left.lastAccessedAt - right.lastAccessedAt)[0];
+      if (!evictable) {
+        throw serviceError("Civilization service has reached its active-world capacity", 503, "WORLD_CAPACITY_REACHED");
+      }
+      records.delete(evictable[0]);
+    }
     const filePath = filePathFor(sessionId);
     let record;
     if (existsSync(filePath)) {
@@ -239,11 +322,31 @@ export function createCivilizationService({
         throw serviceError(`Persisted civilization could not be loaded: ${error.message}`, 500, "CORRUPT_STATE");
       }
       assertPersistedEnvelope(value, sessionId);
-      record = { world: value.world, auth: value.auth, dirty: false, lastPersistedAt: nowMs };
+      let world;
+      try {
+        world = returnedWorld(value.world, upgradeCivilization(value.world));
+      } catch (error) {
+        throw serviceError(`Persisted civilization could not be upgraded: ${error.message}`, 500, "CORRUPT_STATE");
+      }
+      record = {
+        world,
+        auth: value.auth,
+        dirty: true,
+        migrationDirty: true,
+        lastPersistedAt: nowMs,
+        lastAccessedAt: nowMs,
+      };
     } else if (create) {
       const world = createCivilization({ sessionId, nowMs });
       if (!isObject(world)) throw serviceError("Civilization core returned invalid state", 500, "INVALID_CORE_STATE");
-      record = { world, auth: {}, dirty: true, lastPersistedAt: 0 };
+      record = {
+        world,
+        auth: {},
+        dirty: true,
+        migrationDirty: false,
+        lastPersistedAt: 0,
+        lastAccessedAt: nowMs,
+      };
     } else {
       throw serviceError("Civilization session was not found; join it first", 404, "SESSION_NOT_FOUND");
     }
@@ -259,9 +362,10 @@ export function createCivilizationService({
 
   async function persistRecord(sessionId, record, nowMs, { force = false } = {}) {
     if (!record.dirty) return;
-    if (!force && nowMs - record.lastPersistedAt < persistIntervalMs) return;
+    if (!force && !record.migrationDirty && nowMs - record.lastPersistedAt < persistIntervalMs) return;
     await writeJsonAtomic(filePathFor(sessionId), persistedEnvelope(record));
     record.dirty = false;
+    record.migrationDirty = false;
     record.lastPersistedAt = nowMs;
   }
 
@@ -292,6 +396,40 @@ export function createCivilizationService({
       if (!capabilityIsInUse(record, token)) return token;
     }
     throw serviceError("Could not issue a unique citizen capability", 500, "TOKEN_ISSUE_FAILED");
+  }
+
+  function admitRequest(clientKeyInput, cost = 1) {
+    assertOpen();
+    if (!requestLimitConfig) return;
+    if (!Number.isFinite(cost) || cost <= 0 || cost > requestLimitConfig.capacity) {
+      throw new Error("request cost must fit within the configured request limit");
+    }
+    const nowMs = now();
+    const clientKey = String(clientKeyInput || "unknown").slice(0, 128);
+    let bucket = requestBuckets.get(clientKey);
+    if (!bucket) {
+      for (const [key, candidate] of requestBuckets) {
+        if (nowMs - candidate.lastSeenAt > requestLimitConfig.entryTtlMs) requestBuckets.delete(key);
+      }
+      if (requestBuckets.size >= requestLimitConfig.maxEntries) {
+        const oldest = [...requestBuckets.entries()]
+          .sort(([, left], [, right]) => left.lastSeenAt - right.lastSeenAt)[0];
+        if (oldest) requestBuckets.delete(oldest[0]);
+      }
+      bucket = { tokens: requestLimitConfig.capacity, updatedAt: nowMs, lastSeenAt: nowMs };
+      requestBuckets.set(clientKey, bucket);
+    }
+    const elapsedMs = Math.max(0, nowMs - bucket.updatedAt);
+    bucket.tokens = Math.min(
+      requestLimitConfig.capacity,
+      bucket.tokens + (elapsedMs / 1_000) * requestLimitConfig.refillPerSecond,
+    );
+    bucket.updatedAt = nowMs;
+    bucket.lastSeenAt = nowMs;
+    if (bucket.tokens + Number.EPSILON < cost) {
+      throw serviceError("Too many civilization requests; please wait before trying again", 429, "RATE_LIMITED");
+    }
+    bucket.tokens -= cost;
   }
 
   async function state(sessionInput) {
@@ -330,6 +468,13 @@ export function createCivilizationService({
         }
         token = requireCapability(record, actorId, suppliedToken);
       } else {
+        if (Object.keys(record.world.players || {}).length >= maxPlayersPerCivilization) {
+          throw serviceError(
+            "This civilization has reached its hosted-trial player capacity",
+            503,
+            "PLAYER_CAPACITY_REACHED",
+          );
+        }
         // A browser can retain sessionStorage while the local world directory
         // is intentionally replaced. Reusing that high-entropy capability for
         // a genuinely absent citizen is safe and makes the reload recoverable.
@@ -431,7 +576,7 @@ export function createCivilizationService({
     timer.unref?.();
   }
 
-  return { civilizationsDir, state, join, action, tickAll, close };
+  return { civilizationsDir, state, join, action, tickAll, close, admitRequest };
 }
 
 async function parseBody(request) {
@@ -467,16 +612,19 @@ export async function routeCivilizationRequest(
   requestUrl = new URL(request.url, "http://127.0.0.1"),
 ) {
   if (requestUrl.pathname === "/api/civilization/state") {
+    service.admitRequest?.(request.socket?.remoteAddress || "unknown", 1);
     if (request.method !== "GET") throw serviceError("Method not allowed", 405, "METHOD_NOT_ALLOWED");
     sendJson(response, 200, await service.state(requestUrl.searchParams.get("session")));
     return true;
   }
   if (requestUrl.pathname === "/api/civilization/join") {
+    service.admitRequest?.(request.socket?.remoteAddress || "unknown", 8);
     if (request.method !== "POST") throw serviceError("Method not allowed", 405, "METHOD_NOT_ALLOWED");
     sendJson(response, 200, await service.join(await parseBody(request)));
     return true;
   }
   if (requestUrl.pathname === "/api/civilization/action") {
+    service.admitRequest?.(request.socket?.remoteAddress || "unknown", 4);
     if (request.method !== "POST") throw serviceError("Method not allowed", 405, "METHOD_NOT_ALLOWED");
     sendJson(response, 200, await service.action(await parseBody(request)));
     return true;

@@ -16,6 +16,7 @@ export const BUILDINGS = Object.freeze({
   workshop: { name: "鍛冶工房", cost: { wood: 18, stone: 12 }, durationMs: 22_000, terrains: ["grass", "hill"], cycleMs: 20_000, inputs: { wood: 2, ore: 1 }, outputs: { tools: 2 }, effect: "木材 2 + 鉱石 1 → 道具 2 / 20秒。原料がないと停止。", description: "石の炉と木製の作業台から道具づくりを始める。建設に道具は不要。" },
   watchtower: { name: "見張り塔", cost: { wood: 10, stone: 10 }, durationMs: 18_000, terrains: ["grass", "hill"], cycleMs: 0, inputs: {}, outputs: {}, effect: "完成時に周囲3マスを発見。新しい資源と開拓地が見える。", description: "遠くの開拓機会を見つける。" },
   archive: { name: "学術院", cost: { wood: 12, stone: 14, tools: 2 }, durationMs: 24_000, terrains: ["grass", "hill"], cycleMs: 18_000, inputs: { food: 1 }, outputs: { knowledge: 3 }, effect: "食料 1 → 知識 3 / 18秒。農業・物流・冶金研究へ。", description: "食料を使って研究に必要な知識を生む。" },
+  warehouse: { name: "増設倉庫", cost: { wood: 18, stone: 12 }, durationMs: 20_000, terrains: ["grass", "hill"], cycleMs: 0, inputs: {}, outputs: {}, effect: "文明の保管容量を全資源 +100。満杯で止まった物流を再開する。", description: "資源は消さず、受け入れられる量を増やす。", storageBonus: 100 },
   townhall: { name: "共同倉庫", cost: {}, durationMs: 0, terrains: ["grass"], cycleMs: 0, inputs: {}, outputs: {}, effect: "全市民の資源と物流の拠点。", buildable: false }
 });
 
@@ -32,6 +33,9 @@ const MAX_ADVANCE_MS = 60_000;
 const STEP_MS = 250;
 const EPSILON = 1e-8;
 const TERRAIN_COST = { grass: 1, forest: 1.25, hill: 1.6, mountain: 2.5, water: Infinity };
+const BASE_CAPACITY = Object.freeze({ food: 160, wood: 120, stone: 100, ore: 80, tools: 60, knowledge: 100 });
+const LOCAL_CAPACITY = 32;
+const CLAIM_LEASE_MS = 120_000;
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const zeroStock = () => Object.fromEntries(KEYS.map((key) => [key, 0]));
 const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
@@ -119,6 +123,50 @@ function createTiles() {
   return tiles;
 }
 
+function siteQuality(tile) {
+  const distance = hexDistance(tile, { q: 0, r: 0 });
+  if (tile.terrain === "water") return { siteYield: 1, siteLabel: "水域" };
+  if (distance <= 2) return { siteYield: 1, siteLabel: "近郊・標準収量" };
+  const rich = ["-4,2", "4,-2", "4,-3", "0,4", "-4,0", "2,-4"].includes(tile.id);
+  const hash = Math.abs(tile.q * 71 + tile.r * 43) % 5;
+  const siteYield = rich || (distance >= 5 && hash === 0) ? 2 : distance >= 4 && hash <= 2 ? 1.5 : 1;
+  return { siteYield, siteLabel: siteYield === 2 ? "豊かな開拓地・収量2倍" : siteYield === 1.5 ? "良質な開拓地・収量1.5倍" : "標準収量" };
+}
+
+/** Additive v1 migration. Existing balances, actors, jobs and history are never reset/clamped. */
+export function upgradeCivilization(world) {
+  requireWorld(world);
+  world.projects ||= {};
+  world.economy ||= {};
+  world.economy.version = 1;
+  world.economy.baseCapacity ||= { ...BASE_CAPACITY };
+  for (const key of KEYS) if (!finite(world.economy.baseCapacity[key])) world.economy.baseCapacity[key] = BASE_CAPACITY[key];
+  for (const tile of world.tiles) {
+    const quality = siteQuality(tile);
+    if (!finite(tile.siteYield)) tile.siteYield = quality.siteYield;
+    if (!tile.siteLabel) tile.siteLabel = quality.siteLabel;
+    if (!Object.hasOwn(tile, "projectId")) tile.projectId = null;
+  }
+  for (const building of Object.values(world.buildings)) {
+    building.mode ||= "normal";
+    if (building.cyclePaid && !building.cycleMode) building.cycleMode = "normal";
+  }
+  refreshEconomy(world);
+  return world;
+}
+
+function refreshEconomy(world) {
+  const bonus = Object.values(world.buildings).filter((building) => building.type === "warehouse" && building.status !== "building" && building.connected).reduce((sum, building) => sum + BUILDINGS[building.type].storageBonus, 0);
+  world.economy.capacity = Object.fromEntries(KEYS.map((key) => [key, world.economy.baseCapacity[key] + bonus]));
+  world.economy.reserved = zeroStock();
+  for (const project of Object.values(world.projects)) if (["open", "claimed"].includes(project.status)) add(world.economy.reserved, project.reserved);
+  world.economy.overflow = Object.fromEntries(KEYS.map((key) => [key, Math.max(0, world.stock[key] + world.economy.reserved[key] - world.economy.capacity[key])]));
+}
+
+function storageRoom(world, resource) {
+  return Math.max(0, world.economy.capacity[resource] - world.stock[resource] - world.economy.reserved[resource]);
+}
+
 export function createCivilization({ sessionId = "aster", nowMs = 0 } = {}) {
   // The legacy default ID is a persistence key, not a player-facing civilization name.
   if (typeof sessionId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(sessionId)) throw new Error("文明IDが不正です。");
@@ -138,6 +186,7 @@ export function createCivilization({ sessionId = "aster", nowMs = 0 } = {}) {
     ] },
     research: { active: null, progress: 0, unlocked: [] }, totals: { delivered: zeroStock(), explored: 19, buildings: 0 }
   };
+  upgradeCivilization(world);
   refreshRatesAndObjectives(world);
   pushEvent(world, "FOUNDING", "全員で一つの文明。農業・産業・探索のどれに資源を使うかは、市民が決める。");
   return world;
@@ -171,6 +220,24 @@ export function findPath(world, fromId, toId, roadOnly = false) {
   return path;
 }
 
+export function getMoveEta(world, actorId, tileId) {
+  const result = { allowed: false, reason: "", durationMs: 0, path: [], distance: 0 };
+  const player = world.players[actorId], tile = tileById(world, tileId);
+  if (!player) result.reason = "先に市民として参加してください。";
+  else if (!tile?.explored) result.reason = "未知の土地です。隣から探索してください。";
+  else if (player.job || player.cargo) result.reason = "現在の作業・運搬が終わってから移動してください。";
+  else {
+    const path = findPath(world, pointId(player.q, player.r), tileId);
+    if (!path) result.reason = "ここへ続く陸路がありません。";
+    else {
+      result.allowed = true; result.path = path; result.distance = path.length;
+      result.durationMs = Math.ceil(path.reduce((sum, id) => { const next = tileById(world, id); return sum + 900 * (next.road ? 0.65 : TERRAIN_COST[next.terrain]); }, 0));
+      result.reason = "道路は速く、丘陵・山岳は移動に時間がかかります。";
+    }
+  }
+  return result;
+}
+
 function connectedRoads(world) {
   const tileMap = new Map(world.tiles.map((tile) => [tile.id, tile]));
   const connected = new Set([HOME]), queue = [HOME];
@@ -192,7 +259,7 @@ export function getBuildPreview(world, actorId, tileId, buildingType) {
   if (!definition || definition.buildable === false) result.reason = "この建物は建設できません。";
   else if (!player) result.reason = "先に市民として参加してください。";
   else if (!tile || !tile.explored) result.reason = "まずこの土地を探索してください。";
-  else if (tile.buildingId || tile.roadJob) result.reason = "この土地はすでに使われています。";
+  else if (tile.buildingId || tile.roadJob || tile.projectId) result.reason = "この土地はすでに使われています。共同計画がある場合は、その担当者として着工してください。";
   else if (!definition.terrains.includes(tile.terrain)) result.reason = `${definition.name}は${definition.terrains.map((t) => ({ grass: "平原", forest: "森林", hill: "丘陵", mountain: "鉱山地形" })[t]).join("・")}に建てられます。`;
   else if (definition.requires && !world.research.unlocked.includes(definition.requires)) result.reason = `先に「${TECHNOLOGIES[definition.requires].name}」を研究してください。`;
   else if (!isConnected(tile, connectedRoads(world))) result.reason = "共同倉庫につながる道を、この土地の隣まで延ばしてください。";
@@ -222,6 +289,7 @@ export function getRoadPreview(world, actorId, tileId) {
   else if (hexDistance(player, tile) > 1) result.reason = "作業地点か、その隣のマスまで移動してください。";
   else if (!tile.explored) result.reason = "まずこの土地を探索してください。";
   else if (tile.terrain === "water") result.reason = "水面には道路を建設できません。";
+  else if (tile.projectId) result.reason = "共同計画の予定地です。まず計画を着工するか取り消してください。";
   else if (tile.road || tile.roadJob) result.reason = "この土地にはすでに道があります。";
   else if (!isConnected(tile, connectedRoads(world))) result.reason = "道は共同倉庫につながる道の隣から延ばせます。";
   else if (!canPay(world.stock, result.cost)) result.reason = `道路の資源が不足：${costText(result.cost)}`;
@@ -248,6 +316,95 @@ export function getResearchPreview(world, actorId, techId) {
   return result;
 }
 
+export function getProjectPreview(world, actorId, tileId, buildingType) {
+  const player = world.players[actorId], tile = tileById(world, tileId);
+  // Planning is remote; use the identical site/funds rules without pretending the citizen moved.
+  if (!player || !tile) return getBuildPreview(world, actorId, tileId, buildingType);
+  const planningWorld = { ...world, players: { ...world.players, [actorId]: { ...player, q: tile.q, r: tile.r, path: [], job: null, cargo: null } } };
+  const preview = getBuildPreview(planningWorld, actorId, tileId, buildingType);
+  if (preview.allowed && Object.values(world.projects || {}).filter((project) => project.creatorId === actorId && ["open", "claimed"].includes(project.status)).length >= 3) { preview.allowed = false; preview.reason = "未着工の計画は1人3件までです。既存の計画を進めるか取り消してください。"; }
+  if (preview.allowed) preview.reason = "材料を一度だけ確保して共同計画を出します。担当者が現地へ移動して着工します。";
+  return preview;
+}
+
+export function getBuildingManagementPreview(world, actorId, buildingId, mode) {
+  const building = world.buildings[buildingId], player = world.players[actorId];
+  const result = { allowed: false, reason: "", cost: {}, durationMs: 0, effect: mode === "boost" ? "道具1を現地へ運び、1回の生産ごとに消費。収量2倍。原料費は通常と同じ。" : mode === "paused" ? "新しい生産と原料調達を停止。現物・作業途中の材料は保持。" : "道具を追加消費せず、通常収量で稼働。" };
+  if (!player) result.reason = "先に市民として参加してください。";
+  else if (!building || !BUILDINGS[building.type]?.cycleMs) result.reason = "この施設には生産モードがありません。";
+  else if (!["normal", "paused", "boost"].includes(mode)) result.reason = "生産モードが不正です。";
+  else if (building.status === "building") result.reason = "建設が終わるまで設定できません。";
+  else if (idleReason(player)) result.reason = idleReason(player);
+  else if (hexDistance(player, tileById(world, building.tileId)) > 1) result.reason = "施設か、その隣まで移動して設定してください。";
+  else if (building.mode === mode) result.reason = "すでにこの生産モードです。";
+  else { result.allowed = true; result.reason = "変更は文明全体で共有されます。進行中の生産の投入量・収量は変更されません。"; }
+  return result;
+}
+
+function startBuilding(world, player, tile, buildingType, projectId = null) {
+  const id = `building-${++world.entitySerial}`, definition = BUILDINGS[buildingType];
+  world.buildings[id] = { id, type: buildingType, tileId: tile.id, status: "building", progress: 0, ownerId: player.id, connected: true, localStock: zeroStock(), reason: "建設中", productionMs: 0, elapsedMs: 0, durationMs: definition.durationMs, mode: "normal", projectId };
+  tile.buildingId = id;
+  player.job = { type: "build", tileId: tile.id, buildingId: id, elapsedMs: 0, durationMs: definition.durationMs, progress: 0 };
+  player.status = `${definition.name}を建設中`;
+  return id;
+}
+
+function projectCommand(world, player, action, type) {
+  if (type === "CREATE_PROJECT") {
+    const preview = getProjectPreview(world, player.id, action.tileId, action.buildingType);
+    if (!preview.allowed) throw new Error(preview.reason);
+    if (Object.values(world.projects).filter((project) => project.creatorId === player.id && ["open", "claimed"].includes(project.status)).length >= 3) throw new Error("未着工の計画は1人3件までです。既存の計画を進めるか取り消してください。");
+    const id = `project-${++world.entitySerial}`;
+    pay(world.stock, preview.cost);
+    world.projects[id] = { id, tileId: action.tileId, buildingType: action.buildingType, creatorId: player.id, assigneeId: null, status: "open", reserved: clone(preview.cost), createdMs: world.timeMs, expiresMs: null, buildingId: null };
+    tileById(world, action.tileId).projectId = id;
+    refreshEconomy(world);
+    pushEvent(world, "PROJECT_CREATED", `${player.name}が${BUILDINGS[action.buildingType].name}の共同計画を出した。材料は確保済み、担当者を募集中。`, action.tileId);
+    return;
+  }
+  const project = Object.hasOwn(world.projects, action.projectId) ? world.projects[action.projectId] : null;
+  if (!project) throw new Error("その共同計画はありません。");
+  if (!["open", "claimed"].includes(project.status)) throw new Error("この計画は着工済み、完成済み、または取り消し済みです。");
+  if (type === "CLAIM_PROJECT") {
+    if (project.assigneeId) throw new Error("この計画にはすでに担当者がいます。辞退または担当期限を待ってください。");
+    if (Object.values(world.projects).some((entry) => entry.assigneeId === player.id && entry.status === "claimed")) throw new Error("まず現在担当している計画を着工するか、担当を辞退してください。");
+    project.assigneeId = player.id; project.status = "claimed"; project.expiresMs = world.timeMs + CLAIM_LEASE_MS;
+    pushEvent(world, "PROJECT_CLAIMED", `${player.name}が${BUILDINGS[project.buildingType].name}を担当。2分以内に現地で着工できなければ、再び募集中になる。`, project.tileId);
+  } else if (type === "RELEASE_PROJECT") {
+    if (project.assigneeId !== player.id) throw new Error("担当を辞退できるのは現在の担当者だけです。");
+    project.assigneeId = null; project.status = "open"; project.expiresMs = null;
+    pushEvent(world, "PROJECT_RELEASED", `${player.name}が担当を引き継げるようにした。確保済みの材料は計画に残る。`, project.tileId);
+  } else if (type === "CANCEL_PROJECT") {
+    if (project.creatorId !== player.id && project.assigneeId !== player.id) throw new Error("計画を取り消せるのは提案者か現在の担当者だけです。");
+    add(world.stock, project.reserved);
+    project.status = "cancelled"; project.expiresMs = null;
+    tileById(world, project.tileId).projectId = null;
+    refreshEconomy(world);
+    pushEvent(world, "PROJECT_CANCELLED", `${player.name}が共同計画を取り消した。確保していた材料は共有備蓄へ全額戻った。`, project.tileId);
+  } else if (type === "START_PROJECT") {
+    if (project.assigneeId !== player.id) throw new Error("先にこの計画の担当を引き受けてください。");
+    requireIdle(player);
+    const tile = tileById(world, project.tileId); requireLocal(player, tile);
+    const available = { ...world.stock }; add(available, project.reserved);
+    const previewWorld = { ...world, stock: available, tiles: world.tiles.map((entry) => entry.id === tile.id ? { ...entry, projectId: null } : entry) };
+    const preview = getBuildPreview(previewWorld, player.id, tile.id, project.buildingType);
+    if (!preview.allowed) throw new Error(preview.reason);
+    project.status = "building"; project.expiresMs = null; project.startedMs = world.timeMs;
+    project.buildingId = startBuilding(world, player, tile, project.buildingType, project.id);
+    refreshEconomy(world);
+    pushEvent(world, "PROJECT_STARTED", `${player.name}が共同計画の${BUILDINGS[project.buildingType].name}に着工。確保済みの材料を使い、追加の支払いはない。`, tile.id);
+  }
+}
+
+function expireClaims(world) {
+  for (const project of Object.values(world.projects)) {
+    if (project.status !== "claimed" || !finite(project.expiresMs) || world.timeMs < project.expiresMs) continue;
+    project.assigneeId = null; project.status = "open"; project.expiresMs = null;
+    pushEvent(world, "PROJECT_LEASE_EXPIRED", "共同計画の担当期限が切れた。材料を保持したまま、別の市民が引き継げる。", project.tileId);
+  }
+}
+
 function command(world, action) {
   const actorId = actorIdOf(action), type = String(action.type || "").toUpperCase();
   if (type === "JOIN") {
@@ -259,6 +416,16 @@ function command(world, action) {
     return;
   }
   const player = requireActor(world, actorId);
+  if (["CREATE_PROJECT", "CLAIM_PROJECT", "RELEASE_PROJECT", "CANCEL_PROJECT", "START_PROJECT"].includes(type)) return projectCommand(world, player, action, type);
+  if (type === "SET_PRODUCTION") {
+    const preview = getBuildingManagementPreview(world, actorId, action.buildingId, action.mode);
+    if (!preview.allowed) throw new Error(preview.reason);
+    const building = world.buildings[action.buildingId];
+    building.mode = action.mode;
+    pushEvent(world, "PRODUCTION_MODE_CHANGED", `${player.name}が${BUILDINGS[building.type].name}を${{ normal: "通常稼働", paused: "一時停止", boost: "道具を使う増産" }[action.mode]}に変更した。`, building.tileId);
+    if (action.mode === "paused") { building.status = "blocked"; building.reason = "市民の判断で生産を一時停止中"; }
+    return;
+  }
   if (type === "RESEARCH") {
     const preview = getResearchPreview(world, actorId, action.techId);
     if (!preview.allowed) throw new Error(preview.reason);
@@ -297,20 +464,19 @@ function command(world, action) {
   if (type === "BUILD") {
     const preview = getBuildPreview(world, actorId, tile.id, action.buildingType);
     if (!preview.allowed) throw new Error(preview.reason);
-    const id = `building-${++world.entitySerial}`, definition = BUILDINGS[action.buildingType];
+    const definition = BUILDINGS[action.buildingType];
     pay(world.stock, definition.cost);
-    world.buildings[id] = { id, type: action.buildingType, tileId: tile.id, status: "building", progress: 0, ownerId: actorId, connected: true, localStock: zeroStock(), reason: "建設中", productionMs: 0, elapsedMs: 0, durationMs: definition.durationMs };
-    tile.buildingId = id;
-    player.job = { type: "build", tileId: tile.id, buildingId: id, elapsedMs: 0, durationMs: definition.durationMs, progress: 0 };
-    player.status = `${definition.name}を建設中`;
+    startBuilding(world, player, tile, action.buildingType);
     pushEvent(world, "BUILD_STARTED", `${player.name}が${definition.name}に投資した（${costText(definition.cost)}）。`, tile.id);
     return;
   }
   if (type === "GATHER") {
-    if (tile.terrain === "water" || tile.buildingId) throw new Error("この土地では手作業で採集できません。");
+    if (tile.terrain === "water" || tile.buildingId || tile.projectId) throw new Error("この土地では手作業で採集できません。共同計画の予定地も保護されています。");
     if (tile.resourceAmount < 1) throw new Error("資源が回復するまで少し待ってください。");
     if (!findPath(world, pointId(player.q, player.r), HOME)) throw new Error("共同倉庫への帰り道がありません。");
-    const resource = tile.resource || "food", desired = resource === "stone" ? 3 : resource === "ore" ? 2 : 4;
+    const resource = tile.resource || "food", base = resource === "stone" ? 3 : resource === "ore" ? 2 : 4;
+    if (world.caravans.some((courier) => courier.actorId === actorId && courier.resource === resource && courier.progress >= 1)) throw new Error("前の採集品が倉庫前で待っています。資源を使うか倉庫を増設してください。");
+    const desired = Math.floor(base * tile.siteYield);
     const amount = Math.min(desired, Math.floor(tile.resourceAmount));
     tile.resourceAmount -= amount;
     player.job = { type: "gather", tileId: tile.id, resource, amount, elapsedMs: 0, durationMs: 6_000, progress: 0 };
@@ -331,10 +497,12 @@ function completeJob(world, player) {
   } else if (job.type === "build") {
     const building = world.buildings[job.buildingId];
     building.progress = 1; building.status = "active"; building.reason = "";
+    if (building.projectId && world.projects[building.projectId]) { world.projects[building.projectId].status = "complete"; world.projects[building.projectId].completedMs = world.timeMs; }
     player.contribution += 10; world.totals.buildings += 1;
     world.npcs.push({ id: `worker-${building.id}`, name: ["タラ", "オリン", "ブラム", "セラ", "イヴォ"][world.totals.buildings % 5], q: 0, r: 0, role: building.type, status: "職場へ移動中", targetTileId: tile.id, path: findPath(world, HOME, tile.id) || [], moveProgress: 0, buildingId: building.id });
     pushEvent(world, "BUILD_COMPLETED", `${BUILDINGS[building.type].name}が完成。${BUILDINGS[building.type].effect}`, tile.id);
     if (building.type === "watchtower") player.contribution += revealAround(world, tile, 3, player.name);
+    if (building.type === "warehouse") refreshEconomy(world);
   } else if (job.type === "gather") {
     player.cargo = { resource: job.resource, amount: job.amount };
     player.path = findPath(world, pointId(player.q, player.r), HOME) || [];
@@ -346,9 +514,14 @@ function completeJob(world, player) {
 function depositCargo(world, player) {
   if (!player.cargo || player.q !== 0 || player.r !== 0) return;
   const { resource, amount } = player.cargo;
-  world.stock[resource] += amount; world.totals.delivered[resource] += amount; player.contribution += amount;
+  const delivered = Math.min(amount, storageRoom(world, resource));
+  world.stock[resource] += delivered; world.totals.delivered[resource] += delivered; player.contribution += delivered;
+  if (delivered < amount) {
+    // A full warehouse never traps a citizen or destroys the cargo: keep one visible waiting load.
+    world.caravans.push({ id: `courier-${++world.entitySerial}`, actorId: player.id, fromTileId: HOME, toTileId: HOME, progress: 1, resource, amount: amount - delivered, direction: "output", buildingId: null, route: [HOME], durationMs: 0, elapsedMs: 0, q: 0, r: 0, status: "倉庫が満杯のため荷下ろし待ち" });
+  }
   player.cargo = null; player.path = []; player.status = "待機";
-  pushEvent(world, "FORAGE_DELIVERED", `${player.name}が${RESOURCE_META[resource].name}${amount}を共同倉庫へ運んだ。`);
+  pushEvent(world, "FORAGE_DELIVERED", `${player.name}が${RESOURCE_META[resource].name}${amount}を共同倉庫へ運んだ。${delivered < amount ? "容量を超えた分は倉庫前で待機している。" : ""}`);
 }
 
 function moveUnit(world, unit, dtMs) {
@@ -379,13 +552,19 @@ function launchCourier(world, building, resource, amount, direction) {
 function advanceCouriers(world, dtMs) {
   const complete = [];
   for (const courier of world.caravans) {
-    courier.elapsedMs += dtMs; courier.progress = clamp(courier.elapsedMs / courier.durationMs, 0, 1);
+    courier.elapsedMs += dtMs; courier.progress = courier.durationMs > 0 ? clamp(courier.elapsedMs / courier.durationMs, 0, 1) : 1;
     const routeStep = courier.progress * (courier.route.length - 1), index = Math.min(Math.floor(routeStep), courier.route.length - 1);
     const from = tileById(world, courier.route[index]), to = tileById(world, courier.route[Math.min(index + 1, courier.route.length - 1)]), between = routeStep - index;
     courier.q = from.q + (to.q - from.q) * between; courier.r = from.r + (to.r - from.r) * between;
     if (courier.progress >= 1) {
-      if (courier.direction === "output") { world.stock[courier.resource] += courier.amount; world.totals.delivered[courier.resource] += courier.amount; }
-      else if (world.buildings[courier.buildingId]) world.buildings[courier.buildingId].localStock[courier.resource] += courier.amount;
+      if (courier.direction === "output") {
+        const amount = Math.min(courier.amount, storageRoom(world, courier.resource));
+        world.stock[courier.resource] += amount; world.totals.delivered[courier.resource] += amount;
+        if (courier.actorId && world.players[courier.actorId]) world.players[courier.actorId].contribution += amount;
+        courier.amount -= amount;
+        if (courier.amount > EPSILON) { courier.status = "倉庫が満杯のため荷下ろし待ち"; continue; }
+      } else if (world.buildings[courier.buildingId]) world.buildings[courier.buildingId].localStock[courier.resource] += courier.amount;
+      else { courier.status = "届け先がないため荷物を保持中"; continue; }
       complete.push(courier.id);
     }
   }
@@ -395,7 +574,17 @@ function advanceCouriers(world, dtMs) {
 function buildingOutput(world, building) {
   const output = { ...BUILDINGS[building.type].outputs };
   if (building.type === "farm" && world.research.unlocked.includes("agriculture")) output.food *= 1.4;
+  const yieldMultiplier = ["farm", "lumbermill", "quarry", "mine"].includes(building.type) ? tileById(world, building.tileId).siteYield : 1;
+  const mode = building.cyclePaid ? building.cycleMode || "normal" : building.mode;
+  for (const key of Object.keys(output)) output[key] *= yieldMultiplier * (mode === "boost" ? 2 : 1);
   return output;
+}
+
+function buildingInputs(building) {
+  if (building.cyclePaid && building.cycleInputs) return building.cycleInputs;
+  const inputs = { ...BUILDINGS[building.type].inputs };
+  if ((building.cyclePaid ? building.cycleMode : building.mode) === "boost") inputs.tools = (inputs.tools || 0) + 1;
+  return inputs;
 }
 
 function updateBuildings(world, dtMs, roads) {
@@ -410,28 +599,36 @@ function updateBuildings(world, dtMs, roads) {
     const output = buildingOutput(world, building);
     for (const [resource] of Object.entries(output)) {
       if (building.localStock[resource] < 1 || world.caravans.some((courier) => courier.buildingId === building.id && courier.direction === "output" && courier.resource === resource)) continue;
-      const amount = Math.min(Math.floor(building.localStock[resource]), world.research.unlocked.includes("logistics") ? 12 : 8);
-      if (launchCourier(world, building, resource, amount, "output")) building.localStock[resource] -= amount;
+      const incoming = world.caravans.filter((courier) => courier.direction === "output" && courier.resource === resource).reduce((sum, courier) => sum + courier.amount, 0);
+      const amount = Math.min(Math.floor(building.localStock[resource]), world.research.unlocked.includes("logistics") ? 12 : 8, Math.floor(Math.max(0, storageRoom(world, resource) - incoming)));
+      if (amount > 0 && launchCourier(world, building, resource, amount, "output")) building.localStock[resource] -= amount;
     }
-    for (const [resource, required] of Object.entries(definition.inputs)) {
+    if (building.mode === "paused") { building.status = "blocked"; building.reason = "市民の判断で生産を一時停止中"; if (worker) worker.status = "生産を停止中"; continue; }
+    if (Object.entries(output).some(([resource, amount]) => building.localStock[resource] + amount > LOCAL_CAPACITY + EPSILON)) {
+      building.status = "blocked"; building.reason = "現地の出荷待ちが満杯。共有資源を使うか倉庫を増設してください。";
+      if (worker) worker.status = "出荷待ち";
+      continue;
+    }
+    const inputs = buildingInputs(building);
+    for (const [resource, required] of Object.entries(inputs)) {
       const inbound = world.caravans.filter((courier) => courier.buildingId === building.id && courier.direction === "input" && courier.resource === resource).reduce((sum, courier) => sum + courier.amount, 0);
       if (building.localStock[resource] + inbound >= required * 2 || world.stock[resource] < required) continue;
       const amount = Math.min(required * 2, Math.floor(world.stock[resource]));
       if (launchCourier(world, building, resource, amount, "input")) world.stock[resource] -= amount;
     }
-    if (!building.cyclePaid && !canPay(building.localStock, definition.inputs)) {
+    if (!building.cyclePaid && !canPay(building.localStock, inputs)) {
       building.status = "blocked";
-      building.reason = Object.entries(definition.inputs).filter(([resource, quantity]) => building.localStock[resource] < quantity).map(([resource]) => `${RESOURCE_META[resource].name}${world.caravans.some((courier) => courier.buildingId === building.id && courier.direction === "input" && courier.resource === resource) ? "を輸送中" : "が不足"}`).join("・");
+      building.reason = Object.entries(inputs).filter(([resource, quantity]) => building.localStock[resource] < quantity).map(([resource]) => `${RESOURCE_META[resource].name}${world.caravans.some((courier) => courier.buildingId === building.id && courier.direction === "input" && courier.resource === resource) ? "を輸送中" : "が不足"}`).join("・");
       if (worker) worker.status = building.reason;
       continue;
     }
     building.status = "active"; building.reason = "";
-    if (!building.cyclePaid) { pay(building.localStock, definition.inputs); building.cyclePaid = true; }
+    if (!building.cyclePaid) { pay(building.localStock, inputs); building.cycleInputs = { ...inputs }; building.cycleMode = building.mode; building.cyclePaid = true; }
     if (worker) worker.status = "生産中";
     const speed = world.stock.food <= 0 ? 0.55 : 1;
     building.productionMs += dtMs * speed;
     if (building.productionMs >= definition.cycleMs) {
-      building.productionMs -= definition.cycleMs; add(building.localStock, output); building.cyclePaid = false;
+      building.productionMs -= definition.cycleMs; add(building.localStock, output); building.cyclePaid = false; building.cycleInputs = null; building.cycleMode = null;
     }
   }
 }
@@ -439,13 +636,14 @@ function updateBuildings(world, dtMs, roads) {
 function upkeepPerMinute(world) { return 1.5 + Math.max(0, world.npcs.length - 1) * 0.45 + Object.keys(world.players).length * 0.25; }
 
 function refreshRatesAndObjectives(world) {
+  refreshEconomy(world);
   world.rates = zeroStock(); world.rates.food -= upkeepPerMinute(world);
   for (const building of Object.values(world.buildings)) {
     const definition = BUILDINGS[building.type];
     if (building.status !== "active" || !definition.cycleMs) continue;
     const factor = 60_000 / definition.cycleMs * (world.stock.food <= 0 ? 0.55 : 1);
     for (const [key, amount] of Object.entries(buildingOutput(world, building))) world.rates[key] += amount * factor;
-    for (const [key, amount] of Object.entries(definition.inputs)) world.rates[key] -= amount * factor;
+    for (const [key, amount] of Object.entries(buildingInputs(building))) world.rates[key] -= amount * factor;
   }
   const values = { food: world.stock.food, industry: world.stock.tools, exploration: world.tiles.filter((tile) => tile.explored).length, research: world.research.unlocked.length };
   world.totals.explored = values.exploration;
@@ -461,6 +659,7 @@ function refreshRatesAndObjectives(world) {
 
 function step(world, dtMs) {
   world.timeMs += dtMs; world.season.elapsedMs = world.timeMs;
+  expireClaims(world);
   const roads = connectedRoads(world);
   for (const tile of world.tiles) if (tile.resourceAmount < tile.resourceCapacity) tile.resourceAmount = Math.min(tile.resourceCapacity, tile.resourceAmount + dtMs / 1_000 * (tile.resource ? 0.025 : 0.04));
   for (const player of Object.values(world.players)) {
@@ -491,6 +690,7 @@ function step(world, dtMs) {
 export function advanceCivilization(world, nowMs) {
   requireWorld(world);
   if (!finite(nowMs) || nowMs < 0) throw new Error("時刻が不正です。");
+  upgradeCivilization(world);
   if (nowMs <= world.lastNowMs) return world;
   const elapsed = Math.min(MAX_ADVANCE_MS, nowMs - world.lastNowMs);
   world.lastNowMs = nowMs;

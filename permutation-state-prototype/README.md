@@ -4,9 +4,16 @@
 
 > **One civilization. Thousands of citizens. One continuously evolving world.**
 
-## Primary playable world
+## Current game
 
-The primary game now lives at:
+Open `/civilization/`, not the archived routes below. See the [current project README](../README.md)
+for startup, implementation status and limitations, or the [Japanese player guide](../PLAY_GUIDE.ja.md)
+for controls. The new game uses one shared civilization with exploration, construction, production,
+logistics and research. Economy and shared-project extensions are being integrated.
+
+## Archived playable-world experiment
+
+The previous walking-and-repair experiment used:
 
 ```text
 http://127.0.0.1:4173/world/?session=aster-living-alpha&actor=mara
@@ -48,9 +55,9 @@ Mara makes a civic promise
 → Aster continues from the changed state
 ```
 
-## Run It
+## Run the archived proof demo
 
-The primary playable build uses the companion MagicBlock gateway. Follow [`../permutation-state-solana-receipt-spike/README.md`](../permutation-state-solana-receipt-spike/README.md), then open:
+The archived chain-proof demo uses the companion MagicBlock gateway. Follow [`../permutation-state-solana-receipt-spike/README.md`](../permutation-state-solana-receipt-spike/README.md), then open:
 
 ```text
 http://127.0.0.1:4173/proof/?proof=1&session=aster-demo&role=observer&transport=magicblock

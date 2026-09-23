@@ -1,5 +1,7 @@
 import { CivilizationMap } from './map.mjs';
 import { chronicleText } from './copy.mjs';
+import * as Strategy from './core.mjs';
+import { stockDetail, journeyMarkup, tileValueMarkup, managementMarkup, projectOfferMarkup, projectsMarkup, tileProjectMarkup } from './strategy-ui.mjs';
 import { BUILDINGS, TECHNOLOGIES, getBuildPreview, getRoadPreview, getResearchPreview, getCitizenTasks, hexDistance, tileById } from './core.mjs';
 
 const $ = (id) => document.getElementById(id);
@@ -29,12 +31,12 @@ const icons = { food:'❧', wood:'♧', stone:'◆', ore:'⬡', tools:'⚒', kno
 const resourceNames = { food:'食料', wood:'木材', stone:'石材', ore:'鉱石', tools:'道具', knowledge:'知識' };
 const resourceColors = { food:'#829852', wood:'#9b7950', stone:'#7e8c8a', ore:'#a27151', tools:'#5b8278', knowledge:'#7b7698' };
 const buildingNames = Object.fromEntries(Object.entries(BUILDINGS).map(([id, definition]) => [id, definition.name]));
-const buildingIcons = { townhall:'♜', farm:'❧', lumbermill:'♧', quarry:'◆', mine:'⬡', workshop:'⚒', watchtower:'♖', archive:'✧' };
+const buildingIcons = { townhall:'♜', farm:'❧', lumbermill:'♧', quarry:'◆', mine:'⬡', workshop:'⚒', watchtower:'♖', archive:'✧', warehouse:'▤' };
 const buildingEffects = {
   farm:'食料を育て、街と生産を支えます。', lumbermill:'森から木材を生産。建築の選択肢を広げます。',
   quarry:'石材を切り出し、工房や街の発展を支えます。', mine:'鉱石を採掘。道具を作る産業の起点です。',
   workshop:'木材と鉱石を道具に。生産を次の段階へ。', watchtower:'見渡せる範囲を広げ、未知の土地を発見します。',
-  archive:'資源を知識に変え、新しい技術へつなぎます。', townhall:'みんなの物資が集まる、文明の出発点。'
+  archive:'資源を知識に変え、新しい技術へつなぎます。', townhall:'みんなの物資が集まる、文明の出発点。', warehouse:'備蓄できる容量を増やし、満杯で待つ物流を受け入れます。'
 };
 const terrains = {
   grass:{name:'草原',en:'GRASSLAND',description:'穏やかな平原。食料を育てるか、産業の拠点を置くか。街の未来を選べる土地です。'},
@@ -122,10 +124,10 @@ async function poll() {
 }
 async function act(action) {
   if (pending || !joined) return;
-  pending = true; renderInspector();
+  pending = true; renderInspector(); renderDrawer();
   try {
     receive(await api('/api/civilization/action', { session, actorId:identity.actorId, token:identity.token, action }));
-    const messages = { MOVE:'移動を始めました。', EXPLORE:'探索を始めました。', BUILD:`${buildingNames[action.buildingType] || '施設'}の建設を始めました。`, ROAD:'道路の整備を始めました。', GATHER:'資源の採集と運搬を始めました。', RESEARCH:'研究を始めました。' };
+    const messages = { MOVE:'移動を始めました。', EXPLORE:'探索を始めました。', BUILD:`${buildingNames[action.buildingType] || '施設'}の建設を始めました。`, ROAD:'道路の整備を始めました。', GATHER:'資源の採集と運搬を始めました。', RESEARCH:'研究を始めました。', CREATE_PROJECT:'共同計画を掲示し、材料を予約しました。', CLAIM_PROJECT:'この計画を担当します。現地へ向かいましょう。', RELEASE_PROJECT:'担当を空けました。他の市民が引き継げます。', CANCEL_PROJECT:'計画を取り消し、予約した資源を戻しました。', START_PROJECT:'予約した材料で共同建設を始めました。', SET_PRODUCTION:'生産の方針を変更しました。' };
     notify(messages[action.type] || '世界に反映されました。');
   } catch (error) { notify(error.message, true); }
   finally { pending = false; renderInspector(); renderDrawer(); }
@@ -157,7 +159,7 @@ function render() {
 function renderResources() {
   setHtml('resources', resourceKeys.map((key) => {
     const rate = Number(world.rates?.[key] || 0);
-    return `<button class="resource" data-open-economy="${key}" style="--resource-color:${resourceColors[key]}" aria-label="${resourceNames[key]} ${number(world.stock[key])}、毎分${number(rate,1)}"><span class="resource-icon">${icons[key]}</span><span class="resource-amount">${number(world.stock[key])}<span class="resource-name">${resourceNames[key]}</span></span><span class="resource-flow ${rate < 0 ? 'negative' : ''}">${rate >= 0 ? '+' : ''}${number(rate,1)} / 分</span><span class="resource-tip">${resourceNames[key]} · 文明の共有備蓄<br>運搬完了後に備蓄へ届きます。<br>増減は現在の稼働条件での見込みです。</span></button>`;
+    return `<button class="resource" data-open-economy="${key}" style="--resource-color:${resourceColors[key]}" aria-label="${resourceNames[key]} ${number(world.stock[key])}、毎分${number(rate,1)}"><span class="resource-icon">${icons[key]}</span><span class="resource-amount">${number(world.stock[key])}<span class="resource-name">${resourceNames[key]}</span></span><span class="resource-flow ${rate < 0 ? 'negative' : ''}">${rate >= 0 ? '+' : ''}${number(rate,1)} / 分</span><span class="resource-tip">${resourceNames[key]} · 今使える共有備蓄<br>${esc(stockDetail(world,key))}<br>運搬完了後に備蓄へ届きます。<br>増減は現在の稼働条件での見込みです。</span></button>`;
   }).join(''));
 }
 function renderAmbitions() {
@@ -171,7 +173,8 @@ function renderCitizen() {
   document.querySelector('.citizen-avatar').textContent = p.name.slice(0,1);
   const cargo = p.cargo ? `${resourceNames[p.cargo.resource] || p.cargo.resource} ${number(p.cargo.amount)}` : '';
   const status = p.job ? ({build:'建設中',gather:'採集中',road:'道路を整備中',explore:'探索中'}[p.job.type] || '作業中') : p.path?.length ? '移動中' : '自由に行動できます';
-  $('citizen-status').textContent = cargo ? `${cargo} を運搬中` : status;
+  const remaining = p.job ? Math.max(0,p.job.durationMs-p.job.elapsedMs) : null;
+  $('citizen-status').textContent = cargo ? `${cargo} を運搬中${p.path?.length ? '' : ' · 倉庫の受入待ち'}` : status + (remaining ? ` · 残り${seconds(remaining)}` : '');
   $('citizen-count').textContent = `${Object.keys(world.players).length} 人の市民`;
 }
 function preview(tileId, type) {
@@ -195,16 +198,18 @@ function renderInspector() {
     return;
   }
   let body = `${head}<p class="selection-description">${esc(b ? buildingEffects[b.type] || '文明を支える施設です。' : terrain.description)}</p><div class="selection-meta"><span class="tag">${terrain.name}</span>${tile.road ? '<span class="tag positive">道路あり</span>' : ''}${tile.resource ? `<span class="tag">${icons[tile.resource] || ''} ${resourceNames[tile.resource] || tile.resource}</span>` : ''}<span class="tag ${nearby ? 'positive' : ''}">${nearby ? '活動できる距離' : '移動が必要'}</span></div>`;
+  body += tileValueMarkup(tile) + journeyMarkup(world, identity.actorId, tile.id) + tileProjectMarkup(world, identity.actorId, tile.id, pending);
   if (b) {
     const status = b.status === 'building' ? '建設中' : b.status === 'blocked' ? '生産待ち' : '稼働中';
     body += `<div class="production-detail"><div class="stat-box"><small>施設の状態</small><strong>${status}</strong></div><div class="stat-box"><small>街への物流</small><strong>${b.connected ? '接続済み' : '未接続'}</strong></div></div>`;
-    if (b.status === 'building') body += `<div class="objective-label"><span>建設の進捗</span><span>${Math.floor((b.progress || 0)*100)}%</span></div><div class="progress-track"><i style="width:${(b.progress || 0)*100}%"></i></div>`;
+    if (b.status === 'building') body += `<div class="objective-label"><span>建設の進捗 · 残り${seconds((1-(b.progress||0))*(BUILDINGS[b.type]?.durationMs||0))}</span><span>${Math.floor((b.progress || 0)*100)}%</span></div><div class="progress-track"><i style="width:${(b.progress || 0)*100}%"></i></div>`;
     if (b.reason) body += `<div class="explanation">${esc(b.reason)}</div>`;
     const goods = Object.entries(b.localStock || {}).filter(([,v]) => v > 0);
     if (goods.length) body += `<div class="section-label">現地の出荷待ち</div><div class="costs" style="margin:0">${costMarkup(Object.fromEntries(goods))}</div><p class="selection-description">物資は運び手が広場に届けると、共有備蓄に加わります。</p>`;
     if (b.ownerId) body += `<p class="mini-label">建設者：${esc(world.players[b.ownerId]?.name || '文明の市民')}</p>`;
     const moving = world.caravans.filter((c) => c.fromTileId === tile.id);
     if (moving.length) body += `<div class="section-label">運搬中</div>${moving.map((c) => `<p class="selection-description">${icons[c.resource] || '◇'} ${resourceNames[c.resource] || c.resource} ${number(c.amount)} → 広場 <span>${Math.floor(c.progress*100)}%</span></p>`).join('')}`;
+    body += managementMarkup(world, identity.actorId, b, pending);
   }
   const canWalk = tile.terrain !== 'water';
   body += `<div class="action-row">${canWalk ? `<button class="secondary-button" data-action="MOVE" data-tile="${esc(tile.id)}" ${pending || busy || (playerTile()?.id === tile.id) ? 'disabled' : ''}>⌖ ここへ移動</button>` : ''}${(tile.resource || tile.terrain === 'grass') && !b ? `<button class="secondary-button" data-action="GATHER" data-tile="${esc(tile.id)}" ${pending || busy || !nearby ? 'disabled' : ''}>${icons[tile.resource || 'food']} 採集して運ぶ</button>` : ''}</div>`;
@@ -227,7 +232,7 @@ function renderInspector() {
     });
     body += relevant.map((type) => {
       const info = preview(tile.id, type);
-      return `<button class="build-option" data-review-build="${type}" data-tile="${esc(tile.id)}" ${!info.allowed || pending ? 'disabled' : ''}><span class="build-option-heading"><span class="building-icon">${buildingIcons[type]}</span><strong>${buildingNames[type]}</strong><time>${seconds(info.durationMs)}</time></span><p>${esc(info.effect || buildingEffects[type])}</p><span class="costs">${costMarkup(info.cost)}</span>${info.allowed ? '' : `<span class="locked-reason">${esc(info.reason || '今は建設できません')}</span>`}</button>`;
+      return `<div class="investment-choice"><button class="build-option" data-review-build="${type}" data-tile="${esc(tile.id)}" ${!info.allowed || pending ? 'disabled' : ''}><span class="build-option-heading"><span class="building-icon">${buildingIcons[type] || '⌂'}</span><strong>${buildingNames[type]}</strong><time>${seconds(info.durationMs)}</time></span><p>${esc(info.effect || buildingEffects[type])}</p><span class="costs">${costMarkup(info.cost)}</span>${info.allowed ? '' : `<span class="locked-reason">${esc(info.reason || '今は建設できません')}</span>`}</button>${projectOfferMarkup(world,identity.actorId,tile.id,type,pending)}</div>`;
     }).join('');
     if (!relevant.length) body += '<p class="empty-copy">この地形に建設できる施設はありません。</p>';
   } else if (!b && tile.terrain === 'mountain' && tile.resource === 'ore') {
@@ -253,7 +258,7 @@ function renderDrawer() {
   $('drawer').hidden = !drawer || !world;
   document.querySelectorAll('[data-drawer]').forEach((b) => { b.classList.toggle('active', b.dataset.drawer === drawer); b.setAttribute('aria-expanded', String(b.dataset.drawer === drawer)); });
   if (!drawer || !world) return;
-  const names = { settlement:'街と生産', economy:'共有経済', research:'知識と技術', chronicle:'私たちの文明史' };
+  const names = { settlement:'街と生産', economy:'共有経済', research:'知識と技術', chronicle:'私たちの文明史', projects:'共同計画' };
   let html = `<div class="panel-header"><h2>${names[drawer]}</h2><button class="panel-close" data-close-drawer aria-label="閉じる">×</button></div>`;
   if (drawer === 'settlement') {
     html += '<p class="drawer-intro">施設を選ぶと現地へ。材料と物流の状態が、生産を決めます。</p>';
@@ -262,14 +267,17 @@ function renderDrawer() {
     html += (world.npcs || []).map((npc) => `<div class="building-row"><span>♙</span><span><strong>${esc(npc.name)}</strong><small>${esc(npc.status || npc.role)}</small></span></div>`).join('');
   } else if (drawer === 'economy') {
     html += '<p class="drawer-intro">すべての市民で共有する備蓄です。各施設の出荷待ち・運搬中の物資は、到着するまで含まれません。</p><div class="economy-row mini-label"><span>資源</span><span>備蓄</span><span>見込み / 分</span></div>';
-    html += resourceKeys.map((key) => `<div class="economy-row"><span style="color:${resourceColors[key]}">${icons[key]} ${resourceNames[key]}</span><strong>${number(world.stock[key],1)}</strong><span class="${world.rates[key] < 0 ? 'negative' : ''}">${world.rates[key] >= 0 ? '+' : ''}${number(world.rates[key],1)}</span></div>`).join('');
+    html += resourceKeys.map((key) => `<div class="economy-row"><span style="color:${resourceColors[key]}">${icons[key]} ${resourceNames[key]}</span><strong>${number(world.stock[key],1)}</strong><span class="${world.rates[key] < 0 ? 'negative' : ''}">${world.rates[key] >= 0 ? '+' : ''}${number(world.rates[key],1)}</span></div><p class="capacity-note">${esc(stockDetail(world,key))}</p>`).join('');
     html += `<div class="explanation">${world.caravans.length} 件の運搬が進行中。食料は街と働く人々に消費されます。生産施設を増やすと、その材料も必要になります。</div><button class="secondary-button" data-select-lens="logistics" style="width:100%">物流を地図で見る →</button>`;
+    if (world.economy) html += '<p class="drawer-intro" style="margin-top:14px">容量がいっぱいなら、施設を休止する、共有資源を投資する、倉庫を増築する、という選択があります。予約材料も容量に含まれ、旧版の超過備蓄は消えません。</p>';
   } else if (drawer === 'research') {
     html += '<p class="drawer-intro">学術院が生む知識を、新しい生産や移動の可能性へ。研究には学術院の近くへ移動します。成果は文明全体で共有します。</p>';
     html += Object.entries(techs).map(([id,tech]) => {
       const unlocked = world.research.unlocked.includes(id); const active = world.research.active === id;
       return `<div class="tech-card"><h3>✧ ${tech.name}</h3><p>${tech.effect}</p><div class="costs" style="margin:0 0 10px">${costMarkup(tech.cost)}<span>${seconds(tech.durationMs)}</span></div>${active ? `<div class="objective-label"><span>研究中</span><span>${Math.floor(world.research.progress*100)}%</span></div><div class="progress-track"><i style="width:${world.research.progress*100}%"></i></div>` : `<button data-review-research="${id}" ${unlocked || world.research.active || pending ? 'disabled' : ''}>${unlocked ? '✓ 文明で共有済み' : '研究条件を確認 →'}</button>`}</div>`;
     }).join('');
+  } else if (drawer === 'projects') {
+    html += projectsMarkup(world,identity.actorId,pending);
   } else if (drawer === 'chronicle') {
     html += '<p class="drawer-intro">台本ではなく、市民の行動と世界の変化の記録。</p>';
     html += [...world.events].reverse().slice(0,35).map((event) => `<div class="event"><small>DAY ${Math.floor(event.timeMs / 300000)+1} · ${Math.floor(event.timeMs / 1000)}s</small><p>${esc(chronicleText(event))}</p>${event.tileId ? `<button data-focus-tile="${esc(event.tileId)}">現地を見る ↗</button>` : ''}</div>`).join('');
@@ -314,6 +322,27 @@ function confirmResearch(techId) {
   setHtml('confirm-content', `<div class="eyebrow">CIVILIZATION RESEARCH</div><h2>${techs[techId].name}</h2><p>${techs[techId].effect} · ${seconds(info.durationMs)}</p><div class="costs">${costMarkup(info.cost)}</div>${!info.allowed ? `<div class="explanation">${esc(info.reason)}</div>` : ''}<div class="confirm-disclosure">研究は学術院の近くで開始します。文明の共有資源を使い、成果は全市民で共有します。</div><div class="action-row"><button class="secondary-button" data-close-dialog="confirm-dialog">戻る</button><button class="primary-button" data-confirm-action ${!info.allowed ? 'disabled' : ''}>研究を開始</button></div>`);
   $('confirm-dialog').showModal();
 }
+function confirmProject(buildingType,tileId) {
+  const info = Strategy.getProjectPreview(world,identity.actorId,tileId,buildingType);
+  confirmation = {type:'CREATE_PROJECT',tileId,buildingType};
+  setHtml('confirm-content', `<div class="eyebrow">A PLAN FOR EVERYONE</div><h2>${esc(buildingNames[buildingType])}の共同計画</h2><p>${esc(info.effect || buildingEffects[buildingType])}</p><div class="costs">${costMarkup(info.cost)}</div><p>場所：${esc(tileId)} · 建設${seconds(info.durationMs)}</p>${!info.allowed ? `<div class="explanation">${esc(info.reason)}</div>` : ''}<div class="confirm-disclosure">材料を共有備蓄から予約し、他の用途では使えなくします。提案しただけでは建設しません。担当する市民が現地で着工します。着工前なら取り消して材料を戻せます。</div><div class="action-row"><button class="secondary-button" data-close-dialog="confirm-dialog">戻る</button><button class="primary-button" data-confirm-action ${info.allowed ? '' : 'disabled'}>提案・資源を予約</button></div>`);
+  $('confirm-dialog').showModal();
+}
+function confirmMode(buildingId,mode) {
+  const info = Strategy.getBuildingManagementPreview(world,identity.actorId,buildingId,mode);
+  confirmation = {type:'SET_PRODUCTION',buildingId,mode};
+  const label = {normal:'通常生産へ戻す',paused:'生産を休止する',boost:'道具を使って増産する'}[mode];
+  setHtml('confirm-content', `<div class="eyebrow">PRODUCTION POLICY</div><h2>${label}</h2><p>${esc(info.effect || (mode === 'boost' ? '次の生産から道具を1つ使い、1回あたりの収量を2倍にします。' : mode === 'paused' ? '生産を一時停止します。すでに投入した材料と生産の進捗は保持します。' : '新しい生産は道具を追加消費せず、通常の収量に戻ります。'))}</p>${!info.allowed ? `<div class="explanation">${esc(info.reason)}</div>` : ''}<div class="confirm-disclosure">全員が使う施設の方針を変更します。道具の配送待ちや倉庫満杯で、生産が待機することがあります。</div><div class="action-row"><button class="secondary-button" data-close-dialog="confirm-dialog">戻る</button><button class="primary-button" data-confirm-action ${info.allowed ? '' : 'disabled'}>方針を変更</button></div>`);
+  $('confirm-dialog').showModal();
+}
+function projectAction(type,projectId) {
+  const project = world.projects?.[projectId]; if(!project)return;
+  if(type === 'FOCUS') { selectTile(project.tileId,true); return; }
+  if(type !== 'CANCEL_PROJECT') { act({type,projectId}); return; }
+  confirmation = {type,projectId};
+  setHtml('confirm-content', `<div class="eyebrow">RETURN RESERVED MATERIALS</div><h2>共同計画を取り消す</h2><p>${esc(buildingNames[project.buildingType])} · ${esc(project.tileId)}<br>着工前の予約材料を共有備蓄に戻します。</p><div class="costs">${costMarkup(project.reserved || {})}</div><div class="action-row"><button class="secondary-button" data-close-dialog="confirm-dialog">戻る</button><button class="primary-button" data-confirm-action>取り消して材料を戻す</button></div>`);
+  $('confirm-dialog').showModal();
+}
 document.addEventListener('click', (event) => {
   const button = event.target.closest('button'); if(!button || button.disabled) return;
   if(button.dataset.closeDialog) $(button.dataset.closeDialog).close();
@@ -330,6 +359,9 @@ document.addEventListener('click', (event) => {
   else if(button.dataset.reviewBuild) confirmBuild(button.dataset.reviewBuild,button.dataset.tile);
   else if(button.dataset.reviewRoad) confirmRoad(button.dataset.reviewRoad);
   else if(button.dataset.reviewResearch) confirmResearch(button.dataset.reviewResearch);
+  else if(button.dataset.reviewProject) confirmProject(button.dataset.reviewProject,button.dataset.tile);
+  else if(button.dataset.reviewMode) confirmMode(button.dataset.building,button.dataset.reviewMode);
+  else if(button.dataset.projectAction) projectAction(button.dataset.projectAction,button.dataset.projectId);
 });
 $('ambition-toggle').addEventListener('click', () => { $('ambitions').hidden=!$('ambitions').hidden; $('ambition-toggle').setAttribute('aria-expanded',String(!$('ambitions').hidden)); });
 $('next-button').addEventListener('click',focusTask);
