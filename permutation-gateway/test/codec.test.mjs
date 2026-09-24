@@ -42,6 +42,8 @@ test('every program instruction encodes exactly like ChainInstruction', () => {
     openGovernment: IX.openGovernment(),
     submitGov: IX.submitGov({ member: 11, action: vectors.gov[2].dto }),
     withdrawOps: IX.withdrawOps(),
+    logTickInput: IX.logTickInput(2),
+    commitPart: IX.commitPart([1000, 1001, 7]),
   };
   for (const v of vectors.instructions) assert.equal(hex(built[v.name]), v.hex, v.name);
   assert.equal(Object.keys(built).length, vectors.instructions.length, 'every instruction is covered');

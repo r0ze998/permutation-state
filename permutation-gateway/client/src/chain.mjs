@@ -25,7 +25,8 @@ export class ChainClient {
     this.programId = new PublicKey(programId);
     this.seasonId = BigInt(seasonId);
     this.season = seasonPda(this.programId, this.seasonId);
-    // The world is stored in WORLD_CHUNKS 10 KiB accounts (the CPI allocation limit).
+    // The world is stored in WORLD_CHUNKS accounts of 4 KiB, small enough for
+    // the ER committor to finalize one densely written chunk on devnet.
     this.worldChunks = Array.from({ length: WORLD_CHUNKS }, (_, k) => worldChunkPda(this.programId, this.seasonId, k));
     this.world = this.worldChunks[0];
     this.vault = vaultPda(this.programId, this.seasonId);
@@ -100,6 +101,11 @@ export class ChainClient {
   undelegatePart({ payer, targets }) {
     const keys = targets.filter(t => t !== 0).map(t => W(this.target(t)));
     return [this.ix([W(payer, true), R(MAGIC_PROGRAM_ID), W(MAGIC_CONTEXT_ID), W(this.worldChunks[0]), ...keys], IX.undelegatePart(targets))];
+  }
+  /** Commit `targets` to the base layer during play, in one small intent (same accounts as `undelegatePart`). */
+  commitPart({ payer, targets }) {
+    const keys = targets.filter(t => t !== 0).map(t => W(this.target(t)));
+    return [this.ix([W(payer, true), R(MAGIC_PROGRAM_ID), W(MAGIC_CONTEXT_ID), W(this.worldChunks[0]), ...keys], IX.commitPart(targets))];
   }
   finishSeason() {
     return [...heavy(), this.ix([W(this.season), ...this.worldChunks.map(k => R(k))], IX.finishSeason())];

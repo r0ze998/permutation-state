@@ -24,7 +24,7 @@ const wallet = await loadOrCreateKeypair('.local/me/wallet.json');   // pays the
 const session = await loadOrCreateKeypair('.local/me/session.json'); // signs orders and governance, cannot move USDC
 game.session = session;
 
-const { usdcAccount } = await game.faucet(wallet.publicKey);         // localnet test USDC (no value)
+const { usdcAccount } = await game.faucet(wallet.publicKey);         // localnet/devnet test USDC (no value)
 const joined = await game.joinViaX402({ wallet, session, civ: 4, name: 'Hypatia', usdcAccount,
   stand: ['Science', 'Diplomat'] });                                 // candidacy for the first election
 console.log(joined.member, joined.nation, joined.paymentResponse);   // X-PAYMENT-RESPONSE, decoded
@@ -60,7 +60,7 @@ Orders for offices you do not hold come back in `notHeld`; send them as proposal
 | `lobby()`, `map()`, `state()` | nations and members; the static map; your nation's fogged view with `gov` (offices, candidates, proposals, recalls) |
 | `preview(kind, params)`, `validate(orders)` | the same previews and dry-run a person sees |
 | `season()` | the gateway's season: members, accounts, genesis and seating records |
-| `faucet(owner)` | localnet only: a token account with 100 test USDC |
+| `faucet(owner)` | localnet and devnet: a token account with 100 of the gateway's test USDC (no value); once per owner every 10 minutes |
 | `joinViaX402({ wallet, session, civ, name, stand, votes, deposit })` | register over HTTP 402 |
 | `submit({ orders, policy, rationale, adopt, view })` | sealed batches for the offices you hold |
 | `propose`, `support`, `vote`, `stand`, `recall`, `gov(action)` | governance actions |

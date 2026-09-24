@@ -107,20 +107,16 @@ export class Crank {
     const { meta } = snap.header;
     if (meta.finished) {
       this.log('last tick resolved: committing and undelegating');
-      // One intent's base-layer finalize runs all its undelegations in one
-      // transaction; 14 exceed Solana's instruction-trace limit. Small groups,
-      // world chunk 0 (it carries the "finished" header) last.
-      const targets = [...Array.from({ length: this.nations }, (_, c) => NATION_TARGET + c), ...this.chain.worldChunks.map((_, k) => k).filter(k => k !== 0), 0];
+      const groups = this.intents();
       const done = new Set(this.state.undelegated ?? []);
-      for (let i = 0; i < targets.length; i += UNDELEGATE_GROUP) {
-        const group = targets.slice(i, i + UNDELEGATE_GROUP);
+      for (const group of groups) {
         if (group.every(t => done.has(t))) continue;
         await send(this.er, this.chain.undelegatePart({ payer: this.crank.publicKey, targets: group }), [this.crank], `undelegate ${group.join(',')}`);
         for (const t of group) done.add(t);
         this.state.undelegated = [...done];
         writeState(this.state);
       }
-      this.log(`undelegation scheduled for ${targets.length} accounts in ${Math.ceil(targets.length / UNDELEGATE_GROUP)} groups`);
+      this.log(`undelegation scheduled for ${groups.flat().length} accounts in ${groups.length} intents`);
       this.phase = 'settling';
       return;
     }
@@ -174,12 +170,33 @@ export class Crank {
     }
     this.log(`tick ${open} resolved on ER (${submitted}/${offices} offices submitted, ${cus.join(' + ')} CU)`);
     const commits = this.state.commits ?? 0;
-    if ((open + 1) % this.cfg.commitEvery === 0 && commits < SPONSORED_COMMITS - 1) {
-      await send(this.er, this.chain.commit({ payer: this.crank.publicKey, nations: this.nations }), [this.crank], 'commit');
+    if (this.cfg.commitEvery > 0 && (open + 1) % this.cfg.commitEvery === 0 && commits < SPONSORED_COMMITS - 1) {
+      for (const group of this.intents()) {
+        await send(this.er, this.chain.commitPart({ payer: this.crank.publicKey, targets: group }), [this.crank], `commit ${group.join(',')}`);
+      }
       this.state.commits = commits + 1;
       writeState(this.state);
       this.log(`requested an ER→base commit at tick ${open + 1} (the ER validator settles it on base)`);
     }
+  }
+
+  /**
+   * The season's accounts in small intents, for commits and undelegation.
+   * One intent's base-layer finalize runs every target in one transaction,
+   * so intents must stay small (measured on devnet): 14 accounts in one
+   * intent exceed 64 account keys (magicblock-validator#1693) and Solana's
+   * instruction trace, and several densely written world chunks exceed the
+   * finalize's compute budget, leaving them stuck undelegating. So: nation
+   * accounts in threes, each world chunk alone, chunk 0 (its header says
+   * whether the season is over) last.
+   */
+  intents() {
+    const nationTargets = Array.from({ length: this.nations }, (_, c) => NATION_TARGET + c);
+    const groups = [];
+    for (let i = 0; i < nationTargets.length; i += UNDELEGATE_GROUP) groups.push(nationTargets.slice(i, i + UNDELEGATE_GROUP));
+    for (let k = 1; k < this.chain.worldChunks.length; k++) groups.push([k]);
+    groups.push([0]);
+    return groups;
   }
 
   /**

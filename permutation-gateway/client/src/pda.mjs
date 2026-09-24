@@ -6,7 +6,7 @@ const u64 = v => { const b = Buffer.alloc(8); b.writeBigUInt64LE(BigInt(v)); ret
 const u16 = v => { const b = Buffer.alloc(2); b.writeUInt16LE(v); return b; };
 
 export const seasonPda = (programId, id) => PublicKey.findProgramAddressSync([Buffer.from('season'), u64(id)], programId)[0];
-export const WORLD_CHUNKS = 8;
+export const WORLD_CHUNKS = 20; // 4 KiB each (see permutation-chain state.rs)
 export const worldChunkPda = (programId, id, k) => PublicKey.findProgramAddressSync([Buffer.from('world'), u64(id), Buffer.from([k])], programId)[0];
 export const vaultPda = (programId, id) => PublicKey.findProgramAddressSync([Buffer.from('vault'), u64(id)], programId)[0];
 /** A nation's office batches and governance inbox (delegated to the ER during play). */

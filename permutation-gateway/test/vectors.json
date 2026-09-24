@@ -124,6 +124,14 @@
     {
       "hex": "12",
       "name": "withdrawOps"
+    },
+    {
+      "hex": "130200",
+      "name": "logTickInput"
+    },
+    {
+      "hex": "1403000000e803e9030700",
+      "name": "commitPart"
     }
   ],
   "orders": [

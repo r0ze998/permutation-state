@@ -24,7 +24,7 @@ export async function send(connection, ixs, signers, label, { feePayer } = {}) {
   tx.sign(...signers);
   let signature;
   try {
-    signature = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: true });
+    signature = await sendRaw(connection, tx.serialize());
     await confirm(connection, signature, lastValidBlockHeight);
   } catch (e) {
     const t = signature ? await connection.getTransaction(signature, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 }).catch(() => null) : null;
@@ -35,7 +35,7 @@ export async function send(connection, ixs, signers, label, { feePayer } = {}) {
 
 /** Send an already signed transaction (e.g. relayed for an agent). */
 export async function sendSigned(connection, tx, label) {
-  const signature = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: true });
+  const signature = await sendRaw(connection, tx.serialize());
   try {
     await confirm(connection, signature);
   } catch (e) {
@@ -46,18 +46,33 @@ export async function sendSigned(connection, tx, label) {
 }
 
 /**
+ * Send raw bytes, retrying transient RPC errors (public RPCs answer 429 under
+ * load). Resending the same signed bytes is idempotent: one signature.
+ */
+async function sendRaw(connection, bytes, attempts = 6) {
+  for (let i = 0; ; i++) {
+    try {
+      return await connection.sendRawTransaction(bytes, { skipPreflight: true });
+    } catch (e) {
+      if (i + 1 >= attempts || !/429|rate limit|ECONNRESET|fetch failed|timed? ?out/i.test(e.message)) throw e;
+      await new Promise(r => setTimeout(r, 500 * 2 ** i));
+    }
+  }
+}
+
+/**
  * Poll signature status (HTTP only). Websocket confirmation is not relied on:
  * against a local ER it can stall for its full timeout.
  */
 export async function confirm(connection, signature, lastValidBlockHeight, timeoutMs = 60_000) {
   const until = Date.now() + timeoutMs;
   while (Date.now() < until) {
-    const { value } = await connection.getSignatureStatuses([signature]);
-    const st = value[0];
+    // A failed poll (e.g. HTTP 429 from a public RPC) is not a failed transaction: poll again.
+    const st = await connection.getSignatureStatuses([signature]).then(r => r.value[0], () => undefined);
     if (st?.err) throw new Error(JSON.stringify(st.err));
     if (st && (st.confirmationStatus === 'confirmed' || st.confirmationStatus === 'finalized')) return;
     if (lastValidBlockHeight && (await connection.getBlockHeight('confirmed').catch(() => 0)) > lastValidBlockHeight) throw new Error('blockhash expired');
-    await new Promise(r => setTimeout(r, 150));
+    await new Promise(r => setTimeout(r, st === undefined ? 600 : 150));
   }
   throw new Error('confirmation timed out');
 }

@@ -12,7 +12,8 @@ import { send } from './send.mjs';
 
 export const NATIONS = ['Aster', 'Borealis', 'Cinder', 'Dunmar', 'Ember', 'Fjordal'];
 const USDC = 1_000_000n;
-const SEAT_BATCH = 10;
+// Members per SeatMembers: the transaction also carries every world chunk.
+const SEAT_BATCH = 6;
 
 async function airdrop(conn, key, sol = 20) {
   const bal = await conn.getBalance(key, 'confirmed');
@@ -62,7 +63,7 @@ export async function bootstrap({ base, cfg, roster = defaultRoster(), log = con
   }
   if (!(await base.getAccountInfo(mint.publicKey))) {
     await send(base, await createMintIxs(base, { payer: admin.publicKey, mint: mint.publicKey, authority: admin.publicKey }), [admin, mint], 'create test USDC mint');
-    log(`test USDC mint ${mint.publicKey.toBase58()} (localnet only, not real USDC)`);
+    log(`test USDC mint ${mint.publicKey.toBase58()} on ${cfg.cluster} (created by this gateway; no value, not real USDC)`);
   }
   const seasonId = BigInt(Date.now());
   const chain = new ChainClient(cfg.programId, seasonId);

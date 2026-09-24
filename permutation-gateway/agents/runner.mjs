@@ -48,12 +48,19 @@ export async function runAgent({ name, policy, decide, args }) {
   const seasonId = String(info.season.seasonId);
   const seatFile = path.join(dir, 'member.json');
   const saved = existsSync(seatFile) ? JSON.parse(readFileSync(seatFile, 'utf8')) : null;
+  // A registration that settled although we never heard back (e.g. the
+  // gateway lost the confirmation) is recovered from the chain by wallet.
+  const onChain = (info.members || []).find(m => m.wallet === wallet.publicKey.toBase58());
   if (args.member !== undefined) Object.assign(game, { member: Number(args.member), civ: Number(args.civ) });
   else if (saved?.seasonId === seasonId) Object.assign(game, { member: saved.member, civ: saved.civ });
-  else {
+  else if (onChain) {
+    Object.assign(game, { member: onChain.index, civ: onChain.civ });
+    writeFileSync(seatFile, JSON.stringify({ seasonId, member: onChain.index, civ: onChain.civ, recovered: true }, null, 2));
+    log(`already a member on chain (member ${onChain.index}); continuing`);
+  } else {
     if (info.season.status !== 'Registering') throw new Error(`season ${seasonId} is ${info.season.status}: registration is closed`);
     const f = await game.faucet(wallet.publicKey);
-    log(`faucet: ${f.usdcAccount} holds 100 test USDC (localnet, no value)`);
+    log(`faucet: ${f.usdcAccount} holds 100 test USDC (test token, no value)`);
     const civ = args.civ !== undefined ? Number(args.civ) : undefined;
     // Stand, and vote for ourselves in the first election for the offices we stand for.
     const me = info.season.memberCount;
@@ -106,7 +113,7 @@ export async function runAgent({ name, policy, decide, args }) {
 /** Once the season is finalized on base, claim the prize and treasury share into our own USDC account. */
 async function claimPrize({ game, wallet, seatFile, log }) {
   const seat = existsSync(seatFile) ? JSON.parse(readFileSync(seatFile, 'utf8')) : {};
-  const usdcAccount = seat.usdcAccount ?? (await game.faucet(wallet.publicKey)).usdcAccount; // localnet: the faucet returns our account
+  const usdcAccount = seat.usdcAccount ?? (await game.faucet(wallet.publicKey)).usdcAccount; // the faucet (localnet/devnet) returns our account
   for (let i = 0; i < 120; i++) {
     const r = await game.claim({ wallet, usdcAccount }).catch(e => ({ ok: false, error: e.message }));
     if (r.ok) { log(`claimed the prize into ${usdcAccount} (${r.signature.slice(0, 16)}…)`); return; }
@@ -114,6 +121,7 @@ async function claimPrize({ game, wallet, seatFile, log }) {
     if (i === 0 || !/Finalized/.test(r.error)) log(`claim: ${r.error}`);
     await sleep(5000);
   }
+  log('gave up waiting for the season to be finalized; run the agent again later to claim');
 }
 
 /**

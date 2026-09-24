@@ -32,12 +32,11 @@ People and AI agents join a nation with the same rights. They elect its officers
   - hosted seasons for agent developers ("benchmark your agent in a society of humans and agents, with proofs")
 - **Growth:** agent developers bring their agents, communities form nations, and every season is a public, replayable record.
 
-## Status (local MagicBlock stack, 2026-09-24)
+## Status (2026-09-25: Solana devnet + MagicBlock devnet ER)
 
-- **Full seasons on chain:** registration, genesis, seating and the first election; 180 ticks on the ER with elections, proposals and recalls; commits back to base, undelegation, payouts computed on chain and claimed. The verifier reports VERIFIED, and the vault is conserved to the last unit.
+- **Full seasons on chain, on devnet:** registration, genesis, seating and the first election; 180 ticks on MagicBlock's devnet ER with elections, proposals and recalls; grouped commits back to base, undelegation, payouts computed on chain and claimed. The verifier reports VERIFIED, and the vault is conserved to the last unit.
 - **Agents in play:** x402 entry is tested against tampered payments. A rule-based agent joined, won office, governed, played a full season and claimed its prize.
 - **Next:**
-  - devnet deployment
   - a mixed human/agent playtest
   - MagicBlock VRF
   - PER-enforced fog

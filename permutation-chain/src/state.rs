@@ -37,11 +37,14 @@ pub const VAULT_SEED: &[u8] = b"vault";
 pub const SEASON_SPACE: usize = 4 * 1024;
 pub const MEMBER_SPACE: usize = 320;
 pub const NATION_SPACE: usize = 8 * 1024;
-/// Size of each world chunk: the CPI allocation limit.
-pub const CHUNK: usize = 10 * 1024;
-/// Blitz peaks near 22 KB without members; 8 chunks leave room for members
-/// and Season-sized worlds.
-pub const WORLD_CHUNKS: usize = 8;
+/// Size of each world chunk. Small enough that the MagicBlock committor's
+/// base-layer finalize of one densely written chunk fits its compute limit
+/// (measured on devnet: a full 10 KiB chunk exceeded it, ~2.5 KiB of data
+/// fit), and far below the 10 KiB CPI allocation limit.
+pub const CHUNK: usize = 4 * 1024;
+/// 80 KiB in total. A Blitz world with ~15 members ends near 23 KB; the rest
+/// is room for up to 256 members and Season-sized worlds.
+pub const WORLD_CHUNKS: usize = 20;
 pub const MAX_NAME: usize = 24;
 pub const MAX_NATIONS: usize = 8;
 /// Members per season: bounded by the world account and the payout table in

@@ -93,6 +93,8 @@ fn vectors_match_the_js_encoder_fixture() {
         ("openGovernment", ChainInstruction::OpenGovernment),
         ("submitGov", ChainInstruction::SubmitGov { member: 11, action: gov_action }),
         ("withdrawOps", ChainInstruction::WithdrawOps),
+        ("logTickInput", ChainInstruction::LogTickInput { chunk: 2 }),
+        ("commitPart", ChainInstruction::CommitPart { targets: vec![1000, 1001, 7] }),
     ];
     let ix_vectors: Vec<Value> = ixs.iter().map(|(name, ix)| json!({"name": name, "hex": hex(&borsh::to_vec(ix).unwrap())})).collect();
     let doc = json!({"orders": order_vectors, "gov": gov_vectors, "instructions": ix_vectors});

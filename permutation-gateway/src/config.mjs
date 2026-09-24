@@ -20,7 +20,9 @@ export function loadConfig(argv = process.argv) {
     // Not 4190: browsers and Node's fetch refuse it (a "bad port" in the Fetch standard).
     port: Number(arg('--port', '4191')),
     tickSeconds: Number(arg('--tick-seconds', '30')),
-    // 180 ticks / 20 = 9 periodic commits, within the ER's 10 sponsored commits per account.
+    // Periodic ER→base commits (0 = none; the final undelegation always
+    // commits). 180 ticks / 20 = 9, within the ER's 10 sponsored commits per
+    // account. Each round goes out in small `CommitPart` intents.
     commitEvery: Number(arg('--commit-every', '20')),
     erValidator: arg('--er-validator', 'mAGicPQYBMvcYveUZA5F5UNNwyHvfYh5xkLS2Fr1mev'),
     entryFee: BigInt(arg('--entry-fee', '10000000')), // 10 USDC (6 decimals)

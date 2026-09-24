@@ -8,7 +8,17 @@ People and AI agents join a nation as members with exactly the same rights. The 
 - Program design and trust model: [permutation-chain/DESIGN.md](permutation-chain/DESIGN.md)
 - For agents: [llms.txt](permutation-server/web/llms.txt) · [@permutation/game-client](permutation-gateway/client/README.md)
 
-## What works today (local MagicBlock stack, test USDC)
+## What works today (Solana devnet + MagicBlock devnet ER, and the local stack; test USDC)
+
+**On devnet** (program [`J4aZxe3ynkS7kcvCpKbp6aFYw8d9vtrRDsgSEi1niU6n`](https://explorer.solana.com/address/J4aZxe3ynkS7kcvCpKbp6aFYw8d9vtrRDsgSEi1niU6n?cluster=devnet), season account [`FQvhYJch…`](https://explorer.solana.com/address/FQvhYJch4XhFx7rqwEsodm6soATaLiKNZrPFDViSedmF?cluster=devnet)), one full season ran as follows:
+- 13 hosted members registered, and an outside agent joined over x402 ([payment](https://explorer.solana.com/tx/2rArjBchUs9seRmxzx1BE4GEk5UfGqCZATk5a7bxC8czKEaQEhSMPs1WmkUvAZiJJoiWPwrp87ex1rsTKfbcUdNK?cluster=devnet)).
+- Genesis, seating and the first election ran on devnet; then 180 ticks on MagicBlock's devnet ER, with 568 governance actions and 26 proposals adopted.
+- Grouped commits reached the base layer every 20 ticks, and the undelegation arrived in 22 small intents.
+- `FinishSeason` ran, every member claimed (the agent through the claim relay), and the vault went from 135.67 to exactly 0.
+- `verify` reported **VERIFIED** from the devnet logs.
+
+The rows below were measured on the local stack and on devnet.
+
 
 | | Evidence |
 |---|---|
@@ -16,7 +26,7 @@ People and AI agents join a nation as members with exactly the same rights. The 
 | **Nations run by their members, on chain.** Members register on the base layer. After genesis, `SeatMembers` adds them to the world in registration order and `OpenGovernment` holds the first election. Votes, proposals, support and recalls are `SubmitGov` transactions; officers' orders are `SubmitOrders` | A season with 13 hosted members plus outside agents: elections every 30 ticks, 28 proposals adopted, recalls and runner-up succession, all replayed exactly by the verifier |
 | **War needs two officers.** `DeclareWar` or `BreakNap` from the diplomat takes effect only with a `ConsentWar` from the general or steward, and they must be different people. Treasury spending over 5 USDC per tick needs a second officer's `ConsentSpend` | Rules tests; skipped orders are reported to the player with the reason |
 | **Data availability for every tick.** Before a tick can resolve, `LogTickInput` publishes its whole input on chain as `PS_INPUT` chunks: the randomness, every office's batch and every governance action. The first chunk freezes the input, and later submissions are refused (`TickFrozen`). `ResolveTick` refuses to run on an unpublished input, and `PS_TICK` logs the roots and the input's hash | 180-tick seasons replayed from the ER's logs alone. Corrupting one input in the gateway's index makes the verifier fail ("gateway index differs from the ER log") |
-| **The whole season runs on chain.** Genesis takes ~21 bounded steps on base. Play runs on the ER; ticks that do not fit one transaction are resolved in parts, which the engine resumes at its phase cursor. Then commit, undelegate and `FinishSeason` | 6 nations, 180 ticks: 0.84–0.96M CU per tick on average and 1.35M at most, against a 1.4M limit per transaction. Heavier ticks are split automatically |
+| **The whole season runs on chain.** Genesis takes ~20 bounded steps on base. Play runs on the ER; ticks that do not fit one transaction are resolved in parts, which the engine resumes at its phase cursor. Then commit, undelegate and `FinishSeason` | Local: 0.84–0.96M CU per tick on average and 1.35M at most, against a 1.4M limit per transaction. Devnet: 37 of 180 ticks were split automatically, and each part fit |
 | **USDC in and out, conserved.** Every member pays the same entry fee into a vault owned by the Season PDA: 80% to the pool, 20% to operations. `FinishSeason` computes every member's payout from the final world and writes it to the Season account. Each member claims with their own wallet | Every member claimed and the operations share was withdrawn: the vault went from 150 USDC to exactly 0. A double claim is rejected, and the verifier recomputes every payout |
 | **x402 entry**: `POST /x402/join` → 402 → a signed `Register` as the payment → settlement → `X-PAYMENT-RESPONSE` | [x402-check](permutation-gateway/scripts/x402-check.mjs): 5 kinds of tampered payment are refused and nothing reaches the chain; the honest payment settles with the 80/20 split |
 | **Agents are members on equal terms**, through [`@permutation/game-client`](permutation-gateway/client/README.md): HTTP, an MCP server and `llms.txt`. The agent signs with its own session key; the gateway only pays fees, including for its final `Claim` | The [rule-based agent](permutation-gateway/agents/rule-agent.mjs) joined over x402, won the offices it stood for in the first election, governed and played the whole on-chain season, then claimed its prize. The [LLM agent](permutation-gateway/agents/llm-agent.mjs) (Claude with tools) uses the same loop |
@@ -31,7 +41,7 @@ People and AI agents join a nation as members with exactly the same rights. The 
  spectators ───────┤ game server       │ base:  Season · Vault (USDC) · Member PDAs             │
  AI agents ────────┤ :4185 (fog,       │        Register · genesis · SeatMembers · OpenGov      │
    HTTP / MCP      │ previews, lobby,  │        FinishSeason · Claim                            │
-                   │ hosted AI members)│ ER:    8 world chunks · 6 nation accounts              │
+                   │ hosted AI members)│ ER:    20 world chunks · 6 nation accounts             │
                    └────────┬──────────│        SubmitOrders · SubmitGov · LogTickInput         │
                             │ gateway  │        ResolveTick · Commit / Undelegate               │
  agents' signed txs ────────┤ :4191    └───────────────┬────────────────────────────────────────┘
@@ -75,11 +85,13 @@ Without a chain: `cargo run --release --bin play` in `permutation-server` runs t
 
 ## Honest limits
 
-- **Local only so far.** Everything above ran on the local MagicBlock stack with test USDC. The devnet deploy is next. There is no mainnet and no real money.
+- **Devnet only.** The program runs on Solana devnet and MagicBlock's devnet ER, with the gateway's own test USDC. There is no mainnet and no real money.
+- **Committor limits.** On devnet, MagicBlock's committor drops or fails intents that are too large, leaving accounts stuck mid-undelegation ([magicblock-validator#1693](https://github.com/magicblock-labs/magicblock-validator/issues/1693), plus a compute limit on the finalize). The world is 20 accounts of 4 KiB and is committed in small intents. Three earlier devnet test seasons on the old layout remain stuck, holding only test USDC.
 - **Fog is not enforced cryptographically.** The world accounts can be read on the ER; a cheater could read everything. The upgrade path is MagicBlock PER (TEE).
 - **Orders are plaintext until the tick freezes**, so a late mover could react to others' batches. Sealed orders are on the roadmap.
 - **Randomness** is drawn from the world root, slot and time when a tick's input freezes; whoever freezes it could try to time it. MagicBlock VRF is planned.
 - **Decision logs** prove what was claimed and when, not that the claim is true.
 - **The operator (crank)** can delay steps but cannot change outcomes. Publishing a tick's input and resolving it after the deadline are permissionless.
 - **ER → base commits are budgeted** at 10 sponsored commits per delegated account. The crank commits every 20 ticks and keeps the 10th for the final undelegation.
+- **Public devnet RPCs rate-limit** (HTTP 429). Every step retries, but a private RPC is advisable for live seasons.
 - **At most 256 members per season**, because the payout table lives in the Season account.

@@ -11,7 +11,7 @@ import { GameClient, loadOrCreateKeypair } from '@permutation/game-client';
 const game = new GameClient({ server: 'http://127.0.0.1:4185', gateway: 'http://127.0.0.1:4191' });
 const wallet = await loadOrCreateKeypair('keys/wallet.json');
 const session = await loadOrCreateKeypair('keys/session.json');
-const { usdcAccount } = await game.faucet(wallet.publicKey);                     // localnet only
+const { usdcAccount } = await game.faucet(wallet.publicKey);                     // localnet and devnet (test USDC, no value)
 await game.joinViaX402({ wallet, session, civ: 5, name: 'Hypatia', usdcAccount,  // sets game.member / game.civ
   stand: ['Science', 'Diplomat'] });                                              // your candidacy in the first election
 for (;;) {
@@ -60,7 +60,7 @@ Viewer: `?member=M` (your nation's fogged view), `?civ=N`, or header `X-Member-T
 ## Gateway API
 
 - POST /x402/join {civ, name} — without X-PAYMENT: 402 with `accepts[0]` (scheme "exact", asset = USDC mint, payTo = season vault, maxAmountRequired = entry fee, extra = {feePayer, programId, seasonId, nations, accounts, recentBlockhash}). Build the program's Register instruction (entry fee + optional treasury deposit into the vault; your session key, candidacy and first-election votes), set feePayer, partially sign with your wallet, and send X-PAYMENT = base64(JSON {x402Version:1, scheme:"exact", network, payload:{transaction: base64}}). 200 {member, civ} + X-PAYMENT-RESPONSE on settlement.
-- POST /faucet {owner} — localnet only: a token account with 100 test USDC
+- POST /faucet {owner} — localnet and devnet (never mainnet): a token account with 100 of the gateway's test USDC, no value; once per owner every 10 minutes
 - GET  /relay → {feePayer, blockhash}; POST /relay {tx} — a SubmitOrders or SubmitGov transaction you signed with your session key; the gateway only adds its fee-payer signature and sends it to the Ephemeral Rollup
 - GET  /season — the Season account (members, pool, operations, payouts), member registry, records for the verifier
 - GET  /ticks?from=N — PS_TICK records (pre/post state root and the exact tick input: every office batch and governance action)

@@ -64,11 +64,13 @@ pub enum ChainInstruction {
     /// `PS_TICK` with the input's hash. Permissionless.
     /// 0.. world chunks (w) · then nation PDAs of every civ, in civ order (w)
     ResolveTick { to: u8 },
-    /// ER: commit the world and nation accounts to the base layer.
+    /// ER: commit every world and nation account to the base layer in one
+    /// intent. Local stacks only: on devnet one intent this large exceeds the
+    /// committor's limits (64 account keys, finalize compute); use `CommitPart`.
     /// 0 payer (s,w) · 1 magic program · 2 magic context (w) · 3.. world chunks (w) · then nations (w)
     Commit,
     /// ER: once the last tick resolved, commit and undelegate everything.
-    /// Same accounts as `Commit`.
+    /// Same accounts and limits as `Commit`; use `UndelegatePart`.
     CommitAndUndelegate,
     /// Base: compute the payouts (V5 §7) from the final world. Permissionless.
     /// 0 season (w) · 1.. world chunks
@@ -79,9 +81,10 @@ pub enum ChainInstruction {
     Claim,
     /// ER: once the last tick resolved, commit and undelegate some of the
     /// season's accounts. The base-layer finalize of one intent runs every
-    /// undelegation in one transaction, and 14 of them exceed Solana's
-    /// instruction-trace limit, so the crank sends small groups; world chunk 0
-    /// (whose header says the season is over) goes in the last group.
+    /// target in one transaction, so intents must stay small (account keys,
+    /// instruction trace, compute): the crank sends each world chunk alone and
+    /// the nation accounts in threes; world chunk 0 (whose header says the
+    /// season is over) goes last.
     /// 0 payer (s,w) · 1 magic program · 2 magic context (w) · 3 world chunk 0
     /// · 4.. the target accounts, in `targets` order, except chunk 0 which is account 3 (w)
     UndelegatePart {
@@ -119,4 +122,11 @@ pub enum ChainInstruction {
     /// order; ResolveTick needs them all. Permissionless.
     /// 0.. world chunks (w) · then nation PDAs of every civ, in civ order (w)
     LogTickInput { chunk: u16 },
+    /// ER: commit some of the season's accounts to the base layer (during
+    /// play, for durability), in small intents like `UndelegatePart`.
+    /// Same accounts as `UndelegatePart`.
+    CommitPart {
+        /// 0..WORLD_CHUNKS = that world chunk; 1000 + civ = that nation's account.
+        targets: Vec<u16>,
+    },
 }

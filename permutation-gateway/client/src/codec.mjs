@@ -127,6 +127,7 @@ export const IX = {
   submitGov: a => encodeGov(new Writer().u8(17).u32(a.member), a.action).toBytes(),
   withdrawOps: () => Uint8Array.of(18),
   logTickInput: chunk => new Writer().u8(19).u16(chunk).toBytes(),
+  commitPart: targets => new Writer().u8(20).vec(targets, (w, t) => w.u16(t)).toBytes(),
 };
 
 // ------------------------------------------------------------------ accounts

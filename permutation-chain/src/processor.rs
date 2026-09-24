@@ -62,7 +62,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -> Pr
         ChainInstruction::CommitAndUndelegate => commit(program_id, accounts, true),
         ChainInstruction::FinishSeason => finish_season(program_id, accounts),
         ChainInstruction::Claim => claim(program_id, accounts),
-        ChainInstruction::UndelegatePart { targets } => undelegate_part(program_id, accounts, targets),
+        ChainInstruction::UndelegatePart { targets } => commit_part(program_id, accounts, targets, true),
         ChainInstruction::UpdateMember { stand, votes } => update_member(program_id, accounts, stand, votes),
         ChainInstruction::AllocNation { civ } => alloc_nation(program_id, accounts, civ),
         ChainInstruction::SeatMembers => seat_members(program_id, accounts),
@@ -70,6 +70,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -> Pr
         ChainInstruction::SubmitGov { member, action } => submit_gov(program_id, accounts, member, action),
         ChainInstruction::WithdrawOps => withdraw_ops(program_id, accounts),
         ChainInstruction::LogTickInput { chunk } => log_tick_input(program_id, accounts, chunk),
+        ChainInstruction::CommitPart { targets } => commit_part(program_id, accounts, targets, false),
     }
 }
 
@@ -693,7 +694,8 @@ fn commit(program_id: &Pubkey, accounts: &[AccountInfo], undelegate: bool) -> Pr
     Ok(())
 }
 
-fn undelegate_part(program_id: &Pubkey, accounts: &[AccountInfo], targets: Vec<u16>) -> ProgramResult {
+/// Commit (and with `undelegate`, undelegate) the `targets` in one small intent.
+fn commit_part(program_id: &Pubkey, accounts: &[AccountInfo], targets: Vec<u16>, undelegate: bool) -> ProgramResult {
     let it = &mut accounts.iter();
     let payer = next_account_info(it)?;
     let magic_program = next_account_info(it)?;
@@ -706,7 +708,7 @@ fn undelegate_part(program_id: &Pubkey, accounts: &[AccountInfo], targets: Vec<u
     if targets.is_empty() || targets.len() > WORLD_CHUNKS + MAX_NATIONS {
         return Err(ChainError::InvalidParams.into());
     }
-    // The season is over: read from chunk 0's header.
+    // Undelegation needs the season to be over: read from chunk 0's header.
     let season_id = world_season_id(chunk0)?;
     let id = season_id.to_le_bytes();
     if chunk0.owner != program_id || chunk0.data_len() != CHUNK {
@@ -714,7 +716,7 @@ fn undelegate_part(program_id: &Pubkey, accounts: &[AccountInfo], targets: Vec<u
     }
     expect_pda(program_id, chunk0, &[WORLD_SEED, &id, &[0]])?;
     let meta = WorldMeta::deserialize(&mut &chunk0.try_borrow_data()?[12..WORLD_HEADER]).map_err(|_| ChainError::WrongWorld)?;
-    if !meta.finished {
+    if undelegate && !meta.finished {
         return Err(ChainError::SeasonNotOver.into());
     }
     let mut list: Vec<AccountInfo> = Vec::with_capacity(targets.len());
@@ -738,8 +740,13 @@ fn undelegate_part(program_id: &Pubkey, accounts: &[AccountInfo], targets: Vec<u
         }
         list.push(ai.clone());
     }
-    MagicIntentBundleBuilder::new(payer.clone(), magic_context.clone(), magic_program.clone()).commit_and_undelegate(&list).build_and_invoke()?;
-    msg!("PS undelegate {:?} season {}", targets, season_id);
+    let builder = MagicIntentBundleBuilder::new(payer.clone(), magic_context.clone(), magic_program.clone());
+    if undelegate {
+        builder.commit_and_undelegate(&list).build_and_invoke()?;
+    } else {
+        builder.commit(&list).build_and_invoke()?;
+    }
+    msg!("PS {} {:?} season {}", if undelegate { "undelegate" } else { "commit" }, targets, season_id);
     Ok(())
 }
 

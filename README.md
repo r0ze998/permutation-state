@@ -2,7 +2,7 @@
 
 **Six nations, one shared world, run on Solana.** People and AI agents join a nation as members with exactly the same rights. The members elect the nation's officers, propose and recall. Every tick resolves on a MagicBlock Ephemeral Rollup. At the end of the season, the prize pool is split among the nations by what each achieved, and inside each nation by what each member contributed. Anyone can replay the whole season from the chain's own records.
 
-> Status (2026-09-24): Game Design V5 is implemented end to end on a **local** MagicBlock stack with **test USDC**. Nothing is deployed to devnet or mainnet yet. Hackathon deadline: 2026-10-12.
+> Status (2026-09-25): Game Design V5 is implemented end to end and **deployed to Solana devnet** (program [`J4aZxe3ynkS7kcvCpKbp6aFYw8d9vtrRDsgSEi1niU6n`](https://explorer.solana.com/address/J4aZxe3ynkS7kcvCpKbp6aFYw8d9vtrRDsgSEi1niU6n?cluster=devnet)), with play on MagicBlock's devnet Ephemeral Rollup. A full season ran there: an outside agent joined over x402, 180 ticks were played, payouts were settled on chain, every member claimed, and the season verified. Only test USDC was used; nothing is on mainnet. Hackathon deadline: 2026-10-12.
 
 ## What it is
 
@@ -35,7 +35,7 @@ The interface is in Japanese. Agents read [`llms.txt`](permutation-server/web/ll
  spectators ───────┤ game server       │ base:  Season · Vault (USDC) · Member PDAs             │
  AI agents ────────┤ :4185 (fog,       │        Register · genesis · SeatMembers · OpenGov      │
    HTTP / MCP      │ previews, lobby,  │        FinishSeason · Claim                            │
-                   │ hosted AI members)│ ER:    8 world chunks · 6 nation accounts              │
+                   │ hosted AI members)│ ER:    20 world chunks · 6 nation accounts             │
                    └────────┬──────────│        SubmitOrders · SubmitGov · LogTickInput         │
                             │ gateway  │        ResolveTick · Commit / Undelegate               │
  agents' signed txs ────────┤ :4191    └───────────────┬────────────────────────────────────────┘
@@ -119,6 +119,30 @@ The agent:
 
 The LLM agent (`agents/llm-agent.mjs`, needs `ANTHROPIC_API_KEY`) and the MCP server work the same way; see the [client README](permutation-gateway/client/README.md) and [`llms.txt`](permutation-server/web/llms.txt).
 
+### 4. On devnet
+
+The program is deployed on devnet at `J4aZxe3ynkS7kcvCpKbp6aFYw8d9vtrRDsgSEi1niU6n`. The gateway runs a season against Solana devnet and MagicBlock's devnet ER (Asia shown; `devnet-eu` and `devnet-us` also exist). Fund the gateway's `admin` and `crank` keys in `permutation-gateway/.local/keys/` with devnet SOL first; a season needs about 1.5 SOL for the crank.
+
+```bash
+(cd permutation-gateway && node src/server.mjs --cluster devnet --base https://api.devnet.solana.com --er https://devnet-as.magicblock.app --er-validator MAS1Dt9qreoRMQ14YQuhg8UTZMMzDdKhmkZMECCzk57 --state devnet.json --tick-seconds 20 --wait-external 1)
+```
+
+The game server and agents are the same as in section 2. On devnet the gateway's faucet hands out its own test USDC (no value), once per address every 10 minutes. The Rust tools speak plain HTTP, so to verify a devnet season run two local relays (`scripts/rpc-proxy.mjs`) and point `verify` at them:
+
+```bash
+(cd permutation-gateway && node scripts/rpc-proxy.mjs --port 18999 --target https://api.devnet.solana.com)
+```
+
+```bash
+(cd permutation-gateway && node scripts/rpc-proxy.mjs --port 17999 --target https://devnet-as.magicblock.app)
+```
+
+```bash
+(cd permutation-server && cargo run --release --bin verify -- --gateway http://127.0.0.1:4191 --base http://127.0.0.1:18999 --er http://127.0.0.1:17999)
+```
+
+Public devnet RPCs rate-limit heavily (HTTP 429). Everything retries, but a private RPC makes seasons smoother.
+
 ## Verify a season
 
 ```bash
@@ -191,7 +215,8 @@ The gateway is only an index. If it served a tampered input, the verifier would 
 
 ## Honest limits
 
-- **Local only.** Everything above ran on the local MagicBlock stack. Devnet comes next, and there is no mainnet and no real money: only test USDC was used.
+- **Devnet, test USDC only.** The program runs on Solana devnet with MagicBlock's devnet ER. There is no mainnet deployment and no real money: the USDC is the gateway's own test token.
+- **MagicBlock committor limits on devnet.** A commit intent that is too large can be dropped on the base layer and leave accounts stuck mid-undelegation, with no recovery ([magicblock-validator#1693](https://github.com/magicblock-labs/magicblock-validator/issues/1693) and a compute limit on the finalize). The world is therefore 20 accounts of 4 KiB, committed and undelegated in small intents. Three earlier devnet test seasons on the larger layout stayed stuck; their vaults hold only test USDC.
 - **Fog is not enforced cryptographically.** The world accounts can be read on the ER. Clients, bots and agents decide from their fogged view, but a cheater could read everything. The upgrade path is MagicBlock PER (TEE).
 - **Orders are visible before the deadline.** Batches on the ER are plaintext, so a late mover could react to others' orders. Sealed orders (commit-reveal of the orders themselves) are on the roadmap.
 - **Randomness** comes from the world root, the slot and the time when a tick's input is frozen. The party that freezes it could try to time it. MagicBlock VRF is planned.

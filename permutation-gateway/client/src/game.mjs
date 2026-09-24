@@ -133,7 +133,7 @@ export class GameClient {
   }
 
   // ------------------------------------------------------------ registration (x402)
-  /** Localnet only: a token account with 100 test USDC (no value) for `owner`. */
+  /** Localnet and devnet: a token account with 100 of the gateway's test USDC (no value) for `owner`. */
   faucet(owner) { return this.post(this.gateway, '/faucet', { owner: owner.toBase58() }); }
 
   /**

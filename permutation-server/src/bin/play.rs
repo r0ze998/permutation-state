@@ -224,15 +224,21 @@ impl Game {
 
     /// Attach to a running on-chain season through the gateway.
     fn from_chain(link: Arc<ChainLink>) -> Result<Game, String> {
-        let info = link.get_json("/season")?;
+        // The gateway may be starting or restarting: wait for it rather than give up.
         let snap = loop {
-            match link.world()? {
-                Some(s) => break s,
-                None => {
-                    eprintln!("waiting for the on-chain world (registration, genesis or delegation in progress)…");
-                    std::thread::sleep(Duration::from_secs(2));
-                }
+            match link.world() {
+                Ok(Some(s)) => break s,
+                Ok(None) => eprintln!("waiting for the on-chain world (registration, genesis or delegation in progress)…"),
+                Err(e) => eprintln!("waiting for the gateway ({e})…"),
             }
+            std::thread::sleep(Duration::from_secs(2));
+        };
+        let info = loop {
+            match link.get_json("/season") {
+                Ok(v) => break v,
+                Err(e) => eprintln!("waiting for the gateway ({e})…"),
+            }
+            std::thread::sleep(Duration::from_secs(2));
         };
         let mut rules = match snap.meta.preset {
             1 => Ruleset::new(Preset::Season),

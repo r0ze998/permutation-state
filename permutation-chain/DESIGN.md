@@ -9,21 +9,21 @@ The on-chain half of PERMUTATION STATE (Game Design V5). One native Solana progr
 | Season (`PSSEASN5`, 4 KiB) | `["season", id]` | base | Admin, crank, USDC mint, preset, nation count, entry fee, tick length, market flag, status, seeds; member count and members per nation, seated count; pool (80% of fees), operations (20%), treasury deposits and final treasuries per nation; after `FinishSeason`, the payout per member and the final world root |
 | Vault | `["vault", id]` | base | SPL token account holding fees and treasury deposits; its owner is the Season PDA |
 | Member (`PSMEMBR5`) | `["member", id, wallet]` | base | Member index (registration order), nation, wallet (pays and receives), session key (signs orders and governance, cannot move USDC), self-declared kind, optional attestation hash, pre-season candidacy and first-election votes, treasury shares, claimed flag |
-| World chunks | `["world", id, k]`, k = 0..8 | ER during play | One logical buffer over 8 accounts of 10 KiB: header (magic `PSWORLD5`, body length, `WorldMeta`: season id, preset, nation count, tick length, deadline, finished, market, and the frozen-input state: frozen flag, tick randomness, chunks published) + the borsh `WorldState` (a `GenesisJob` while genesis runs) |
+| World chunks | `["world", id, k]`, k = 0..20 | ER during play | One logical buffer over 20 accounts of 4 KiB (80 KiB; a Blitz world with ~15 members ends near 23 KB): header (magic `PSWORLD5`, body length, `WorldMeta`: season id, preset, nation count, tick length, deadline, finished, market, and the frozen-input state: frozen flag, tick randomness, chunks published) + the borsh `WorldState` (a `GenesisJob` while genesis runs) |
 | Nation (`PSNATN06`, 8 KiB) | `["nation", id, civ]` | ER during play | The open tick; its officers and their session keys; each office's spendable budget; which offices submitted; up to 4 office batches for the open tick; the governance inbox (≤ 8 actions per signer per tick); the frozen flag. Submissions never decode the world |
 
 ## Season lifecycle
 
 ```
-base  CreateSeason ─ AllocWorld ×8 ─ AllocNation ×6
+base  CreateSeason ─ AllocWorld ×20 ─ AllocNation ×6
 base  Register ×N  (entry fee + optional treasury deposit → vault; wallet-signed, via x402 or directly)
-base  StartSeason ─ GenesisStep ×~21 (permissionless) ─ SeatMembers ×⌈N/10⌉ ─ OpenGovernment (first election)
-base  Delegate the 8 world chunks + 6 nation accounts to the ER
+base  StartSeason ─ GenesisStep ×~20 (permissionless) ─ SeatMembers ×⌈N/6⌉ ─ OpenGovernment (first election)
+base  Delegate the 20 world chunks + 6 nation accounts to the ER
 ER    loop per tick:
         SubmitGov (member's session key) … SubmitOrders (office holder's key, or the crank for a vacant office)
         LogTickInput chunk 0..n   (after the deadline or once every office submitted; freezes the input)
         ResolveTick { to } ×1..k  (the phases up to `to`; resumes at the phase cursor)
-ER    Commit (every 20 ticks) … UndelegatePart ×5 once the last tick resolved
+ER    CommitPart ×22 every 20 ticks … UndelegatePart ×22 once the last tick resolved
 base  FinishSeason (permissionless: every member's payout from the final world) ─ Claim (each wallet) ─ WithdrawOps (admin)
 ```
 
@@ -37,24 +37,30 @@ base  FinishSeason (permissionless: every member's payout from the final world) 
   - `ResolveTick` logs `PS_TICK ‖ tick ‖ to ‖ pre_root ‖ post_root ‖ sha256(input)`.
   - A verifier can therefore rebuild every tick from the ER's logs alone, whatever the size of the input.
 - **Split resolution.** `ResolveTick { to }` runs the phases from the engine's `phase_cursor` up to `to`; the tick completes when the cursor wraps. A split tick logs one `PS_TICK` per part, with the same input hash. Parts are needed when a tick exceeds the compute budget or the heap: the program's bump allocator never frees, so running many phases in one transaction can run out of the 256 KiB heap before it runs out of compute. The crank learns, per starting phase, the furthest stop that fit, and probes further every 10 ticks. Stops are 2, 4, 5, 6, 7, 9 and 12.
-- **Commits and undelegation (measured on the local MagicBlock stack).**
+- **Commits and undelegation (measured on devnet and the local stack).** An intent (one `CommitPart` or `UndelegatePart`) is finalized on the base layer by the ER's committor, and one transaction finalizes every target of the intent. Devnet showed three limits. Each of them left accounts stuck mid-undelegation, with no recovery:
+  - **64 account keys per transaction.** A commit of all 14 accounts of the earlier layout needed about 90 keys and was silently dropped ([magicblock-validator#1693](https://github.com/magicblock-labs/magicblock-validator/issues/1693)).
+  - **Compute per finalize.** The committor gives the delegation program's finalize 359,700 CU. Three 10 KiB world chunks in one intent exceeded it, and so did one densely written 10 KiB chunk. About 2.5 KB of data fit.
+  - **The instruction trace**, for large intents.
+
+  That is why the world is 20 chunks of 4 KiB. The crank sends every commit round and the final undelegation as small intents: the nation accounts in threes and each world chunk alone, with chunk 0 last (its header says whether the season is over). `Commit`/`CommitAndUndelegate` (everything in one intent) remain for local stacks only.
   - MagicBlock sponsors 10 commits per delegated account when the payer is not delegated. The crank commits every 20 ticks and stops at 9, keeping the 10th for the final undelegation.
-  - On base, the finalize step of one intent runs every undelegation in one transaction, and 14 accounts exceed Solana's instruction-trace limit. `UndelegatePart` therefore sends groups of 3, with world chunk 0 (which carries the "finished" header) last.
-- **Why chunks.** Accounts that a program creates or grows through CPI are limited to 10 KiB per step. That limit also applies to the delegation program's buffer and to undelegation, so a single large world could not be delegated or brought back. Eight 10 KiB PDAs avoid it; the program reads and writes them as one buffer (`state::Chunks`).
+- **Why chunks.** Accounts that a program creates or grows through CPI are limited to 10 KiB per step, and the committor's finalize limits above apply per intent. So the world is spread over twenty 4 KiB PDAs, which the program reads and writes as one buffer (`state::Chunks`). Transactions that pass every chunk stay within the size limit: 26 world and nation accounts for a resolve, and 6 members per `SeatMembers`.
 - **Genesis is on chain,** split into bounded steps (`map::MapJob`). Running the steps back to back is exactly `generate`; a test checks equality.
 - **The season seed** is the latest slot hash, mixed with the season id, the member count and the treasury deposits, taken when registration closes (`StartSeason`). The slot leader could grind it; MagicBlock VRF is the plan.
 - **Settlement.** `FinishSeason` needs every account back on base and the world finished. It computes the V5 payout from the final world (`permutation_rules::payout::settle`) and writes one payout per member into the Season account, together with the final treasuries and the final root. `Claim` pays the member's payout plus `shares × final treasury / deposits` of its nation's treasury, only into a token account owned by the member's wallet. Rounding dust goes to operations, so the vault ends at exactly zero once everyone has claimed and operations are withdrawn.
 
 ## Compute
 
-Measured on the local MagicBlock stack. Each season has 6 nations, 13–15 members and 180 ticks.
+Measured on the local MagicBlock stack and on devnet (program `J4aZxe3ynkS7kcvCpKbp6aFYw8d9vtrRDsgSEi1niU6n`, MagicBlock `devnet-as`). Each season has 6 nations, 13–15 members and 180 ticks.
 
 | Operation | CU | Transactions |
 |---|---|---|
 | Genesis step (`work = 50`) | sized to fit one transaction | ~21 in total |
 | One tick, average over a season | 0.84–0.96M of 1.4M | 1 |
 | One tick, peak | 1.35M | 1 |
-| A tick too heavy for one transaction (seen late in a season with an outside agent, on the earlier fixed split plan) | parts of 0.45–0.9M each | 2–7 |
+| 20 × 4 KiB layout, local | 0.88M average, 1.10M peak | 1 |
+| 20 × 4 KiB layout, devnet (an outside agent playing) | 1.11M average per tick in total; 37 of 180 ticks split, every part under 1.4M | 1–3 |
+| A tick too heavy for one transaction | parts of 0.45–0.9M each | 2–7 |
 | `LogTickInput` | small | 1–2 per tick (inputs of 3.5 KB on average, 6.3 KB at most) |
 | All on-chain roots vs a native replay | identical | — |
 
