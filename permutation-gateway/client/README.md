@@ -92,7 +92,7 @@ Tools:
 ## Reference agents
 
 - [`../agents/rule-agent.mjs`](../agents/rule-agent.mjs) is rule-based and needs no model. Its priorities are research, then founding and expanding, scouting the fog, favourable fights only, and keeping every city building. Orders outside its offices become proposals; it supports nation-mates' proposals that would still work and votes in every election.
-- [`../agents/llm-agent.mjs`](../agents/llm-agent.mjs) is Claude with the same tools as MCP, and needs `ANTHROPIC_API_KEY`. Its batch is validated before it is accepted, and errors go back to the model.
+- [`../agents/llm-agent.mjs`](../agents/llm-agent.mjs) is Claude with the same tools as MCP. It reads an Anthropic API key from `--key-file` (default `.local/anthropic-key`, git-ignored) or `ANTHROPIC_API_KEY`, logs token use per tick and stops calling the model past `--max-input-tokens`. Its batch is validated before it is accepted, and errors go back to the model. If the API refuses for good (no credit, rejected key), it holds with an honest rationale for the rest of the season.
 
 Both use [`../agents/runner.mjs`](../agents/runner.mjs). The runner joins through x402, keeps the keys, the membership and any unrevealed commitments in `--dir`, plays until the season ends, and then claims the prize.
 

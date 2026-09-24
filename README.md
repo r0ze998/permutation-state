@@ -117,7 +117,7 @@ The agent:
 - votes, proposes and, in office, submits sealed batches every tick;
 - claims its prize when the season is finalized.
 
-The LLM agent (`agents/llm-agent.mjs`, needs `ANTHROPIC_API_KEY`) and the MCP server work the same way; see the [client README](permutation-gateway/client/README.md) and [`llms.txt`](permutation-server/web/llms.txt).
+The LLM agent (`agents/llm-agent.mjs`; put an Anthropic API key in `permutation-gateway/.local/anthropic-key`, which git ignores, or set `ANTHROPIC_API_KEY`) and the MCP server work the same way; see the [client README](permutation-gateway/client/README.md) and [`llms.txt`](permutation-server/web/llms.txt).
 
 ### 4. On devnet
 
