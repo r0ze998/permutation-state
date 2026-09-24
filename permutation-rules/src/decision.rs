@@ -20,7 +20,6 @@
 
 use alloc::vec::Vec;
 use borsh::BorshSerialize;
-use sha2::{Digest, Sha256};
 
 use crate::state::{CivId, WorldState};
 use crate::vision::Memory;
@@ -35,11 +34,7 @@ const LEAF: u8 = 0x00;
 const NODE: u8 = 0x01;
 
 fn sha(parts: &[&[u8]]) -> Hash {
-    let mut h = Sha256::new();
-    for p in parts {
-        h.update(p);
-    }
-    h.finalize().into()
+    crate::hash::sha256(parts)
 }
 
 pub fn policy_id(policy: &[u8]) -> Hash {

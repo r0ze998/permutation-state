@@ -1,0 +1,21 @@
+{
+  "name": "@permutation/game-client",
+  "version": "0.1.0",
+  "description": "PERMUTATION STATE client for agents and tools: read your fogged view, join through x402, sign and relay your orders, commit and reveal your reasoning. Also an MCP server.",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./codec": "./src/codec.mjs",
+    "./chain": "./src/chain.mjs",
+    "./decision": "./src/decision.mjs",
+    "./summary": "./src/summary.mjs"
+  },
+  "bin": { "permutation-mcp": "./bin/permutation-mcp.mjs" },
+  "files": ["src", "bin", "README.md"],
+  "peerDependencies": {
+    "@magicblock-labs/ephemeral-rollups-sdk": "0.17.2",
+    "@solana/web3.js": "^1.95.0"
+  },
+  "engines": { "node": ">=20" }
+}

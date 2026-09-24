@@ -5,29 +5,20 @@
 //! domain; the domain is length-prefixed so `("ab", "c")` and `("a", "bc")`
 //! can never collide.
 
-use sha2::{Digest, Sha256};
+use crate::hash::sha256;
 
 pub type Seed = [u8; 32];
 
 /// `seed_t = sha256(season_seed ‖ vrf_t ‖ t)`.
 pub fn tick_seed(season_seed: &Seed, vrf: &Seed, tick: u16) -> Seed {
-    let mut h = Sha256::new();
-    h.update(season_seed);
-    h.update(vrf);
-    h.update(tick.to_le_bytes());
-    h.finalize().into()
+    sha256(&[season_seed, vrf, &tick.to_le_bytes()])
 }
 
 /// `rand(seed, domain, id)` = first 8 bytes (LE) of
 /// `sha256(seed ‖ len(domain) ‖ domain ‖ id)`.
 pub fn rand(seed: &Seed, domain: &[u8], id: &[u8]) -> u64 {
     debug_assert!(domain.len() <= u8::MAX as usize);
-    let mut h = Sha256::new();
-    h.update(seed);
-    h.update([domain.len() as u8]);
-    h.update(domain);
-    h.update(id);
-    let out = h.finalize();
+    let out = sha256(&[seed, &[domain.len() as u8], domain, id]);
     let mut b = [0u8; 8];
     b.copy_from_slice(&out[..8]);
     u64::from_le_bytes(b)

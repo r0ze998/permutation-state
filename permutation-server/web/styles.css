@@ -261,6 +261,20 @@ dialog::backdrop { background: #203c3266; backdrop-filter: blur(6px); }
 .help li { counter-increment: steps; display: grid; grid-template-columns: 34px 1fr; gap: 8px; font-size: 12.5px; line-height: 1.7; }
 .help li::before { content: counter(steps, decimal-leading-zero); font: 400 20px/1.2 var(--serif); color: var(--gold); }
 .help .note { font-size: 11px; color: var(--ink-soft); background: #f0ede0; padding: 9px 11px; border-radius: 6px; line-height: 1.7; }
+.seat-list { list-style: none; padding: 0; margin: 14px 0; display: grid; gap: 8px; }
+.seat-list li { counter-increment: none; }
+.seat-list li::before { content: none; }
+.seat-list .seat .btn { white-space: nowrap; }
+.seat-list .seat { display: grid; grid-template-columns: 14px 1fr auto; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid #d8d2bd; border-radius: 8px; background: #fbf8ee; }
+.seat-list .seat.bot, .seat-list .seat.external { opacity: .62; }
+.seat-list .swatch { width: 12px; height: 12px; border-radius: 3px; }
+.seat-list .who { display: grid; gap: 1px; font-size: 13px; }
+.seat-list .who small { font-size: 10.5px; color: var(--ink-soft); }
+.seat-list .taken { font-size: 11px; color: var(--ink-soft); }
+.seat-list .seat-error { font-size: 12px; color: #a8483c; }
+.seat-list .seat-none { display: grid; grid-template-columns: 1fr; gap: 10px; justify-items: start; font-size: 12.5px; line-height: 1.7; padding: 10px 12px; border-radius: 8px; background: var(--warn-bg); color: var(--ink); }
+.seat-list .seat-none .btn { text-decoration: none; }
+.help .note a { color: inherit; }
 .loading { position: absolute; inset: 0; z-index: 50; background: #eeeede; display: grid; place-content: center; text-align: center; gap: 10px; }
 .loading .mark { font-size: 60px; color: var(--gold); animation: spin 16s linear infinite; }
 .loading h2 { font: 400 24px var(--serif); margin: 0; }

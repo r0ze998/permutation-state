@@ -82,7 +82,7 @@
   </footer>
 
   <section class="next-action panel" id="next-action"></section>
-  <div class="prototype-label">ローカル試作 · ボット5体と対戦（同じ霧の中で判断） · USDCはテスト用</div>
+  <div class="prototype-label">同じ霧の中で判断 · USDCはテスト用</div>
 
   <div class="loading" id="loading"><div class="mark">✳</div><h2>世界を読み込んでいます</h2><p class="desc" id="loading-text">ゲームサーバーに接続しています。</p></div>
 </main>
@@ -90,7 +90,7 @@
 <dialog id="help" class="help">
   <div class="eyebrow">HOW TO PLAY · 遊び方</div>
   <h2>ひとつの世界で、あなたの文明を率いる。</h2>
-  <p class="desc">6つの文明が同じ地図を共有しています。あなた以外の5文明はルールで動くボット（AGENT表示）です。30秒ごとの「ティック」で、全員の命令が同時に解決されます。</p>
+  <p class="desc" id="help-desc">6つの文明が同じ地図を共有しています。あなた以外の5文明はルールで動くボット（AGENT表示）です。30秒ごとの「ティック」で、全員の命令が同時に解決されます。</p>
   <ol>
     <li><span><b>地図を選んで調べる。</b>都市・部隊・土地をクリックすると右のパネルに詳細と、できること・できない理由が出ます。</span></li>
     <li><span><b>命令は「枠」を使う。</b>1ティックの枠は3＋都市数（最大8）。使わなかった枠は最大4ティック分まで繰り越せます。枠は人間もボットも同じです。</span></li>
@@ -98,11 +98,19 @@
     <li><span><b>見えるのは視界の中だけ。</b>部隊と都市のまわり2マス（斥候は3、丘陵は+1、山の向こうは見えない）。一度見た都市と国境は霧の中でも「最後に見た姿」で残ります。ボットも同じ霧の中で判断しています。</span></li>
     <li><span><b>勝ち方は3つ。</b>覇権（領土と占領）・科学（スターゲート3段階）・協調（侵略しない期間の繁栄と都市国家）。いずれも期間の積み上げで決まります。</span></li>
   </ol>
-  <p class="note">操作：クリック＝選択 · ダブルクリック＝選択中の部隊を移動 · ドラッグ＝地図移動 · スクロール＝拡大縮小 · Space＝次の判断 · Ctrl+Enter＝確定 · H＝首都へ · Esc＝閉じる。<br>このページは一人用のローカル試作です。時計の停止と「次のティックへ」は試遊のための機能です。</p>
+  <p class="note">操作：クリック＝選択 · ダブルクリック＝選択中の部隊を移動 · ドラッグ＝地図移動 · スクロール＝拡大縮小 · Space＝次の判断 · Ctrl+Enter＝確定 · H＝首都へ · Esc＝閉じる。<br><span id="help-mode">ローカルでは時計を止められます。「次のティックへ」は自分の手番を終える操作で、席についた全員が終えるとすぐに解決されます。</span></p>
   <div class="row" style="justify-content:flex-end;margin-top:14px">
     <button class="btn" type="button" data-close-help>読むだけにする（停止のまま）</button>
     <button class="btn primary" type="button" data-start>時計を動かしてはじめる →</button>
   </div>
+</dialog>
+
+<dialog id="seats" class="help seats">
+  <div class="eyebrow">CHOOSE A SEAT · 席をえらぶ</div>
+  <h2>どの文明を率いますか。</h2>
+  <p class="desc"><span id="seat-mode"></span>。人間の席はひとり一席で、複数の人が同時に遊べます。この席はこのブラウザに保存されます。</p>
+  <ul class="seat-list" id="seat-list"></ul>
+  <p class="note">席を取らずに<a href="spectate.html">観戦する</a>（全文明を霧なしで表示）。AI エージェントとして参加する方法は <a href="llms.txt">llms.txt</a> にあります。</p>
 </dialog>
 
 <script type="module" src="app.mjs"></script>

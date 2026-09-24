@@ -6,7 +6,7 @@
 //! floating point. Section references (`§x.y`) point into the spec.
 
 #![cfg_attr(not(feature = "std"), no_std)]
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)] // one exception: the sol_sha256 syscall in `hash`
 
 extern crate alloc;
 
@@ -20,6 +20,7 @@ pub mod economy;
 pub mod error;
 pub mod fixed;
 pub mod genesis;
+pub mod hash;
 pub mod hex;
 pub mod invariants;
 pub mod map;

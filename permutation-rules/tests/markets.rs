@@ -130,10 +130,27 @@ fn amm_orders_in_one_tick_share_one_price_regardless_of_civ_order() {
 #[test]
 fn amm_hub_holders_earn_one_percent() {
     let (rules, mut s) = setup();
-    // Give civ 2 a hub by putting the hub tile inside its capital's territory.
+    // Give civ 2 a hub: move its capital next to the hub and re-claim its
+    // territory there, so the state stays consistent (invariant 11).
     let cap = s.civs[2].capital.unwrap();
     let hub = s.hubs[0];
-    s.map.tile_mut(hub).unwrap().owner_city = Some(cap);
+    for t in &mut s.map.tiles {
+        if t.owner_city == Some(cap) || t.hex == hub {
+            t.owner_city = None;
+        }
+    }
+    let site = hub
+        .neighbors()
+        .into_iter()
+        .find(|h| s.map.tile(*h).is_some_and(|t| t.terrain.is_passable()) && !s.cities.iter().any(|c| c.hex == *h))
+        .expect("land next to the hub");
+    s.cities[cap as usize].hex = site;
+    for u in s.units.iter_mut().filter(|u| u.owner == permutation_rules::state::Owner::Civ(2)) {
+        u.hex = site;
+    }
+    s.map.tile_mut(site).unwrap().owner_city = Some(cap);
+    s.map.claim_territory(cap, site, 1);
+    assert_eq!(s.map.tile(hub).unwrap().owner_city, Some(cap));
     let g2 = s.civs[2].gold;
     step(
         &mut s,

@@ -107,6 +107,14 @@ pub fn check(state: &WorldState, rules: &Ruleset) -> Vec<Violation> {
             });
         }
     }
+    // 11. Territory stays within the largest territory radius of its city (§5.4).
+    for t in &state.map.tiles {
+        if let Some(c) = t.owner_city.and_then(|c| state.cities.get(c as usize)) {
+            if c.hex.distance(t.hex) > crate::map::MAX_TERRITORY_RADIUS {
+                v.push(Violation { invariant: 11, what: "tile owned beyond territory radius", id: c.id as u64 });
+            }
+        }
+    }
     // TODO(§17 #4): budget per applied orders is enforced by `validate_batch`.
     v
 }

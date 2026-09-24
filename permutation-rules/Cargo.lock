@@ -138,6 +138,7 @@ version = "0.1.0"
 dependencies = [
  "borsh",
  "sha2",
+ "solana-define-syscall",
 ]
 
 [[package]]
@@ -197,6 +198,12 @@ dependencies = [
  "cpufeatures",
  "digest",
 ]
+
+[[package]]
+name = "solana-define-syscall"
+version = "4.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57e5b1c0bc1d4a4d10c88a4100499d954c09d3fecfae4912c1a074dff68b1738"
 
 [[package]]
 name = "syn"

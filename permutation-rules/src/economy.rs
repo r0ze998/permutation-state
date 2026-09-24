@@ -96,10 +96,12 @@ pub fn city_yield(
     has_philosophy: bool,
 ) -> (CityYield, Vec<usize>) {
     let (wf, wp, wg) = focus_weights(city.focus);
+    // A city only ever owns tiles within the largest territory radius (§5.4;
+    // invariant 11), so only that neighbourhood is scanned.
     let mut worked: Vec<(u32, usize)> = map
-        .tiles
-        .iter()
-        .enumerate()
+        .indices_within(city.hex, crate::map::MAX_TERRITORY_RADIUS)
+        .into_iter()
+        .map(|i| (i, &map.tiles[i]))
         .filter(|(_, t)| t.owner_city == Some(city.id) && t.hex != city.hex)
         // Water is workable only by an adjacent city (§2.1).
         .filter(|(_, t)| t.terrain.is_land() || t.hex.distance(city.hex) == 1)

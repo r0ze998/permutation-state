@@ -107,11 +107,31 @@ pub struct Map {
 }
 
 impl Map {
+    /// Tile index of `hex`. Maps are always the full hexagon `hexes_within(radius)`
+    /// in (q, r) order, so the index is arithmetic: the tiles of every column
+    /// `q' < q`, plus the offset of `r` inside column `q`. (A binary search
+    /// here dominated the engine's cost on chain.)
     pub fn index_of(&self, hex: Hex) -> Option<usize> {
+        let big_r = self.radius as i64;
         if hex.radius() > self.radius as u32 {
             return None;
         }
-        self.tiles.binary_search_by(|t| t.hex.cmp(&hex)).ok()
+        let (q, r) = (hex.q as i64, hex.r as i64);
+        let width = 2 * big_r + 1;
+        let offset = if q <= 0 {
+            let n = q + big_r; // columns -R ..= q-1, lengths width + q'
+            n * width + n * (q - 1 - big_r) / 2
+        } else {
+            let at0 = big_r * width - big_r * (big_r + 1) / 2;
+            at0 + q * width - q * (q - 1) / 2
+        };
+        let r_min = (-big_r).max(-q - big_r);
+        let i = (offset + r - r_min) as usize;
+        match self.tiles.get(i) {
+            Some(t) if t.hex == hex => Some(i),
+            // Only a hand-built, non-hexagonal map gets here.
+            _ => self.tiles.binary_search_by(|t| t.hex.cmp(&hex)).ok(),
+        }
     }
     pub fn tile(&self, hex: Hex) -> Option<&Tile> {
         self.index_of(hex).map(|i| &self.tiles[i])
@@ -120,15 +140,30 @@ impl Map {
         self.index_of(hex).map(move |i| &mut self.tiles[i])
     }
 
+    /// Indices of the on-map tiles within `radius` of `center`, ascending.
+    /// Visits only the hexes in range (≤ 37 for radius 3), which matters on
+    /// chain where scanning every tile per city is the dominant cost.
+    pub fn indices_within(&self, center: Hex, radius: u32) -> Vec<usize> {
+        let r = radius as i32;
+        let mut out = Vec::with_capacity((3 * radius * (radius + 1) + 1) as usize);
+        for dq in -r..=r {
+            for dr in (-r).max(-dq - r)..=r.min(-dq + r) {
+                if let Some(i) = self.index_of(Hex::new(center.q + dq, center.r + dr)) {
+                    out.push(i);
+                }
+            }
+        }
+        out // (q, r) iteration order is tile-index order
+    }
+
     /// Claim unowned tiles within `radius` of `center` for `city` (§5.4):
     /// ascending distance, then tile index. Owned tiles are never taken.
     pub fn claim_territory(&mut self, city: u32, center: Hex, radius: u32) {
         let mut targets: Vec<(u32, usize)> = self
-            .tiles
-            .iter()
-            .enumerate()
-            .filter(|(_, t)| t.owner_city.is_none() && t.hex.distance(center) <= radius)
-            .map(|(i, t)| (t.hex.distance(center), i))
+            .indices_within(center, radius)
+            .into_iter()
+            .filter(|&i| self.tiles[i].owner_city.is_none())
+            .map(|i| (self.tiles[i].hex.distance(center), i))
             .collect();
         targets.sort();
         for (_, i) in targets {
@@ -136,6 +171,9 @@ impl Map {
         }
     }
 }
+
+/// The largest `territory_radius`: no city owns a tile farther away.
+pub const MAX_TERRITORY_RADIUS: u32 = 3;
 
 /// Territory radius for a city of this population (§5.4).
 pub const fn territory_radius(pop: u32) -> u32 {
@@ -149,6 +187,7 @@ pub const fn territory_radius(pop: u32) -> u32 {
 }
 
 /// Output of generation: the map plus special sites.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Generated {
     pub map: Map,
     pub starts: Vec<Hex>,
@@ -159,50 +198,109 @@ pub struct Generated {
 /// Deterministic generation (§2.4). Rerolls (new `attempt` in the domain)
 /// until starts are within the fairness bound or attempts run out.
 pub fn generate(rules: &Ruleset, world_seed: &Seed, civs: usize) -> Result<Generated, RulesError> {
-    if civs == 0 || civs > rules.max_civs as usize {
-        return Err(RulesError::MapGeneration("civilization count out of range"));
-    }
-    for attempt in 0..rules.start_generation_attempts as u64 {
-        let map = generate_terrain(rules, world_seed, attempt);
-        let Some(starts) = place_starts(rules, &map, world_seed, attempt, civs) else {
-            continue;
-        };
-        let mut map = map;
-        if !balance_starts(rules, &mut map, &starts) {
-            continue;
+    let mut job = MapJob::new(rules, civs)?;
+    loop {
+        match job.step(rules, world_seed, u32::MAX)? {
+            MapStep::Working(j) => job = j,
+            MapStep::Done(g) => return Ok(g),
         }
-        let city_states = place_sites(
-            &map,
-            world_seed,
-            attempt,
-            b"citystate",
-            (civs / 3).max(2),
-            &starts,
-            6,
-            true,
-        );
-        let hubs = place_sites(
-            &map,
-            world_seed,
-            attempt,
-            b"hub",
-            (civs / 4).max(2),
-            &starts,
-            5,
-            false,
-        );
-        if let (Some(city_states), Some(hubs)) = (city_states, hubs) {
-            return Ok(Generated {
-                map,
-                starts,
-                city_states,
-                hubs,
+    }
+}
+
+/// Map generation in bounded steps, for callers with a compute budget (the
+/// on-chain program runs one step per transaction). Driving it to the end
+/// gives exactly `generate`'s result; `generate` is implemented with it.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct MapJob {
+    pub civs: u16,
+    pub attempt: u64,
+    /// Terrain of the current attempt, once generated.
+    pub map: Option<Map>,
+    /// Start validity per tile index, filled up to `scanned`.
+    pub valid: Vec<bool>,
+    pub scanned: u32,
+    /// Starts of this attempt, once placed.
+    pub starts: Vec<Hex>,
+    /// Balancing rounds that changed a tile so far (at most `BALANCE_ROUNDS`).
+    pub rounds: u16,
+    pub balanced: bool,
+}
+
+/// Cap on start-balancing rounds (§2.4).
+pub const BALANCE_ROUNDS: u16 = 256;
+/// Work units per balancing round when stepping (one unit = one start
+/// candidate checked); a round re-values every start.
+pub const BALANCE_ROUND_WORK: u32 = 25;
+
+pub enum MapStep {
+    Working(MapJob),
+    Done(Generated),
+}
+
+impl MapJob {
+    pub fn new(rules: &Ruleset, civs: usize) -> Result<MapJob, RulesError> {
+        if civs == 0 || civs > rules.max_civs as usize {
+            return Err(RulesError::MapGeneration("civilization count out of range"));
+        }
+        Ok(MapJob { civs: civs as u16, attempt: 0, map: None, valid: Vec::new(), scanned: 0, starts: Vec::new(), rounds: 0, balanced: false })
+    }
+
+    /// One step: generate the attempt's terrain; or check up to `work` start
+    /// candidates; or place starts; or run up to `work / BALANCE_ROUND_WORK`
+    /// balancing rounds; or place sites. A failed stage moves to the next attempt.
+    pub fn step(mut self, rules: &Ruleset, world_seed: &Seed, work: u32) -> Result<MapStep, RulesError> {
+        if self.attempt >= rules.start_generation_attempts as u64 {
+            return Err(RulesError::MapGeneration("no fair start layout within attempt limit"));
+        }
+        let Some(mut map) = self.map.take() else {
+            let map = generate_terrain(rules, world_seed, self.attempt);
+            self.valid = alloc::vec![false; map.tiles.len()];
+            self.map = Some(map);
+            return Ok(MapStep::Working(self));
+        };
+        let n = map.tiles.len() as u32;
+        if self.scanned < n {
+            let end = self.scanned.saturating_add(work).min(n);
+            for i in self.scanned..end {
+                let hex = map.tiles[i as usize].hex;
+                self.valid[i as usize] = hex.radius() < map.radius as u32 && valid_start(&map, hex);
+            }
+            self.scanned = end;
+        } else if self.starts.is_empty() {
+            match place_starts(rules, &map, world_seed, self.attempt, self.civs as usize, &self.valid) {
+                Some(starts) => self.starts = starts,
+                None => return Ok(MapStep::Working(self.next_attempt())),
+            }
+        } else if !self.balanced {
+            for _ in 0..(work / BALANCE_ROUND_WORK).max(1) {
+                if self.rounds >= BALANCE_ROUNDS {
+                    return Ok(MapStep::Working(self.next_attempt()));
+                }
+                match balance_round(rules, &mut map, &self.starts) {
+                    Balance::Fair => {
+                        self.balanced = true;
+                        break;
+                    }
+                    Balance::Changed => self.rounds += 1,
+                    Balance::Stuck => return Ok(MapStep::Working(self.next_attempt())),
+                }
+            }
+        } else {
+            let civs = self.civs as usize;
+            let city_states = place_sites(&map, world_seed, self.attempt, b"citystate", (civs / 3).max(2), &self.starts, 6, true);
+            let hubs = place_sites(&map, world_seed, self.attempt, b"hub", (civs / 4).max(2), &self.starts, 5, false);
+            return Ok(match (city_states, hubs) {
+                (Some(city_states), Some(hubs)) => MapStep::Done(Generated { map, starts: self.starts, city_states, hubs }),
+                _ => MapStep::Working(self.next_attempt()),
             });
         }
+        self.map = Some(map);
+        Ok(MapStep::Working(self))
     }
-    Err(RulesError::MapGeneration(
-        "no fair start layout within attempt limit",
-    ))
+
+    fn next_attempt(self) -> MapJob {
+        MapJob { civs: self.civs, attempt: self.attempt + 1, map: None, valid: Vec::new(), scanned: 0, starts: Vec::new(), rounds: 0, balanced: false }
+    }
 }
 
 fn generate_terrain(rules: &Ruleset, seed: &Seed, attempt: u64) -> Map {
@@ -270,9 +368,10 @@ fn valid_start(map: &Map, hex: Hex) -> bool {
         return false;
     }
     let near = |r: u32| {
-        map.tiles
-            .iter()
-            .filter(move |t| t.hex.distance(hex) <= r && t.hex != hex)
+        map.indices_within(hex, r)
+            .into_iter()
+            .map(|i| &map.tiles[i])
+            .filter(move |t| t.hex != hex)
     };
     let food_tiles = near(2).filter(|t| t.yields().0 >= 2).count();
     let prod_tiles = near(2)
@@ -294,13 +393,14 @@ fn place_starts(
     seed: &Seed,
     attempt: u64,
     civs: usize,
+    valid: &[bool],
 ) -> Option<Vec<Hex>> {
     let s = attempt_seed(seed, attempt);
     let candidates: Vec<(u64, Hex)> = map
         .tiles
         .iter()
         .enumerate()
-        .filter(|(_, t)| t.hex.radius() < map.radius as u32 && valid_start(map, t.hex))
+        .filter(|(i, _)| valid[*i])
         .map(|(i, t)| (rand_id(&s, b"start", i as u64), t.hex))
         .collect();
     let first = *candidates.iter().min()?;
@@ -330,29 +430,39 @@ fn place_starts(
 /// strictly closer to that start than to any other are changed, so balancing
 /// one start never raises another. Upgrades, in order of preference:
 /// Mountain→Hills, then Wheat on a plain Grassland/Plains tile, then
-/// Water→Grassland. Returns false if no upgrade is left.
-fn balance_starts(rules: &Ruleset, map: &mut Map, starts: &[Hex]) -> bool {
-    for _ in 0..256 {
-        let values: Vec<u64> = starts.iter().map(|s| start_value(map, *s)).collect();
-        let max = values.iter().copied().max().unwrap_or(0);
-        let floor = (max * 10_000).div_ceil(rules.start_fairness_max_bps as u64);
-        let mut all_ok = true;
-        let mut changed = false;
-        for (i, st) in starts.iter().enumerate() {
-            if values[i] >= floor {
-                continue;
-            }
-            all_ok = false;
-            changed |= upgrade_one(map, *st, starts);
+/// Water→Grassland. The attempt fails if no upgrade is left or after
+/// `BALANCE_ROUNDS` rounds.
+enum Balance {
+    /// Every start is within the fairness bound.
+    Fair,
+    /// Some start was raised; value again.
+    Changed,
+    /// A weak start has no upgrade left.
+    Stuck,
+}
+
+/// One balancing round (see above): re-value every start and upgrade one tile
+/// near each start below the floor. `MapJob` runs at most `BALANCE_ROUNDS`.
+fn balance_round(rules: &Ruleset, map: &mut Map, starts: &[Hex]) -> Balance {
+    let values: Vec<u64> = starts.iter().map(|s| start_value(map, *s)).collect();
+    let max = values.iter().copied().max().unwrap_or(0);
+    let floor = (max * 10_000).div_ceil(rules.start_fairness_max_bps as u64);
+    let mut all_ok = true;
+    let mut changed = false;
+    for (i, st) in starts.iter().enumerate() {
+        if values[i] >= floor {
+            continue;
         }
-        if all_ok {
-            return true;
-        }
-        if !changed {
-            return false;
-        }
+        all_ok = false;
+        changed |= upgrade_one(map, *st, starts);
     }
-    false
+    if all_ok {
+        Balance::Fair
+    } else if changed {
+        Balance::Changed
+    } else {
+        Balance::Stuck
+    }
 }
 
 fn upgrade_one(map: &mut Map, start: Hex, starts: &[Hex]) -> bool {
@@ -361,11 +471,10 @@ fn upgrade_one(map: &mut Map, start: Hex, starts: &[Hex]) -> bool {
         h != start && d <= 3 && starts.iter().all(|o| *o == start || o.distance(h) > d)
     };
     let mut region: Vec<(u32, usize)> = map
-        .tiles
-        .iter()
-        .enumerate()
-        .filter(|(_, t)| own(t.hex))
-        .map(|(i, t)| (t.hex.distance(start), i))
+        .indices_within(start, 3)
+        .into_iter()
+        .filter(|&i| own(map.tiles[i].hex))
+        .map(|i| (map.tiles[i].hex.distance(start), i))
         .collect();
     region.sort();
     for pass in 0..3 {
@@ -398,7 +507,8 @@ fn upgrade_one(map: &mut Map, start: Hex, starts: &[Hex]) -> bool {
 /// `V = Σ radius-3 (2·food + 2·prod + gold) + 6 × strategic within 5` (§2.4).
 pub fn start_value(map: &Map, hex: Hex) -> u64 {
     let mut v = 0u64;
-    for t in &map.tiles {
+    for i in map.indices_within(hex, 5) {
+        let t = &map.tiles[i];
         let d = t.hex.distance(hex);
         if d <= 3 {
             let (f, p, g) = t.yields();
@@ -461,6 +571,45 @@ mod tests {
         );
         for (i, t) in TERRAIN_TABLE.iter().enumerate() {
             assert_eq!(t.terrain as usize, i);
+        }
+    }
+
+    #[test]
+    fn stepped_generation_equals_generate() {
+        for (preset, civs) in [(Preset::Blitz, 6), (Preset::Season, 16)] {
+            let rules = Ruleset::new(preset);
+            let seed = [9u8; 32];
+            let whole = generate(&rules, &seed, civs).expect("map");
+            let mut job = MapJob::new(&rules, civs).unwrap();
+            let mut steps = 0;
+            let stepped = loop {
+                steps += 1;
+                match job.step(&rules, &seed, 37).unwrap() {
+                    MapStep::Working(j) => job = borsh::from_slice(&borsh::to_vec(&j).unwrap()).unwrap(), // survives storage
+                    MapStep::Done(g) => break g,
+                }
+            };
+            assert_eq!(stepped, whole);
+            assert!(steps > 3, "work was actually split ({steps} steps)");
+        }
+    }
+
+    #[test]
+    fn arithmetic_index_matches_every_tile() {
+        for (preset, civs) in [(Preset::Blitz, 6), (Preset::Season, 16)] {
+            let rules = Ruleset::new(preset);
+            let g = generate(&rules, &[5u8; 32], civs).expect("map");
+            for (i, t) in g.map.tiles.iter().enumerate() {
+                assert_eq!(g.map.index_of(t.hex), Some(i), "{:?}", t.hex);
+            }
+            let r = g.map.radius as i32;
+            for h in [Hex::new(r + 1, 0), Hex::new(0, -r - 1), Hex::new(r, 1), Hex::new(-r, -1)] {
+                assert_eq!(g.map.index_of(h), None, "{h:?} is off the map");
+            }
+            let c = g.starts[0];
+            let near = g.map.indices_within(c, 3);
+            let brute: Vec<usize> = (0..g.map.tiles.len()).filter(|&i| g.map.tiles[i].hex.distance(c) <= 3).collect();
+            assert_eq!(near, brute);
         }
     }
 

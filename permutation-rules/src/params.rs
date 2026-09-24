@@ -8,7 +8,6 @@
 use crate::fixed::Bps;
 use crate::{buildings, map, tech, units};
 use borsh::{BorshDeserialize, BorshSerialize};
-use sha2::{Digest, Sha256};
 
 pub const RULES_VERSION: u16 = 1; // Rules Specification v0.1
 
@@ -247,14 +246,14 @@ impl Ruleset {
     /// `ruleset_hash = sha256(borsh(ruleset) ‖ borsh(tables))`. The static
     /// tables are part of the rules, so changing any table changes the hash.
     pub fn hash(&self) -> [u8; 32] {
-        let mut h = Sha256::new();
-        h.update(b"permutation-rules/ruleset");
-        h.update(borsh::to_vec(self).expect("ruleset serializes"));
-        h.update(borsh::to_vec(&units::UNIT_STATS[..]).expect("units serialize"));
-        h.update(borsh::to_vec(&tech::TECHS[..]).expect("techs serialize"));
-        h.update(borsh::to_vec(&buildings::BUILDINGS[..]).expect("buildings serialize"));
-        h.update(borsh::to_vec(&map::TERRAIN_TABLE[..]).expect("terrain serializes"));
-        h.finalize().into()
+        crate::hash::sha256(&[
+            b"permutation-rules/ruleset",
+            &borsh::to_vec(self).expect("ruleset serializes"),
+            &borsh::to_vec(&units::UNIT_STATS[..]).expect("units serialize"),
+            &borsh::to_vec(&tech::TECHS[..]).expect("techs serialize"),
+            &borsh::to_vec(&buildings::BUILDINGS[..]).expect("buildings serialize"),
+            &borsh::to_vec(&map::TERRAIN_TABLE[..]).expect("terrain serializes"),
+        ])
     }
 }
 

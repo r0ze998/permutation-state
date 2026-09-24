@@ -1,0 +1,388 @@
+{
+  "instructions": [
+    {
+      "hex": "002a0000000000000000068096980000000000002d3101000000001e00000007070707070707070707070707070707070707070707070707070707070707070909090909090909090909090909090909090909090909090909090909090909",
+      "name": "createSeason"
+    },
+    {
+      "hex": "0103",
+      "name": "allocWorld"
+    },
+    {
+      "hex": "020c000000e382a2e382b9e38386e383ab0101010101010101010101010101010101010101010101010101010101010101010202020202020202020202020202020202020202020202020202020202020202",
+      "name": "joinSeason"
+    },
+    {
+      "hex": "03",
+      "name": "startSeason"
+    },
+    {
+      "hex": "0432000000",
+      "name": "genesisStep"
+    },
+    {
+      "hex": "050300",
+      "name": "delegate"
+    },
+    {
+      "hex": "06110005050505050505050505050505050505050505050505050505050505050505050600000000070000000300000001000000feffffff02000000fefffffffdffffff0400000001030000000009000000010300000001020000000103000000020100020c00000003000000000400000000000101050203",
+      "name": "submitOrders"
+    },
+    {
+      "hex": "070c",
+      "name": "resolveTick"
+    },
+    {
+      "hex": "08",
+      "name": "commit"
+    },
+    {
+      "hex": "09",
+      "name": "commitAndUndelegate"
+    },
+    {
+      "hex": "0a",
+      "name": "finishSeason"
+    },
+    {
+      "hex": "0b0400",
+      "name": "claim"
+    },
+    {
+      "hex": "0c030000000300ea030000",
+      "name": "undelegatePart"
+    }
+  ],
+  "orders": [
+    {
+      "dto": {
+        "path": [
+          [
+            1,
+            -2
+          ],
+          [
+            2,
+            -2
+          ],
+          [
+            -3,
+            4
+          ]
+        ],
+        "type": "MoveUnit",
+        "unit": 7
+      },
+      "hex": "00070000000300000001000000feffffff02000000fefffffffdffffff04000000"
+    },
+    {
+      "dto": {
+        "army": 3,
+        "target": {
+          "id": 9,
+          "kind": "Unit"
+        },
+        "type": "Attack"
+      },
+      "hex": "01030000000009000000"
+    },
+    {
+      "dto": {
+        "army": 3,
+        "target": {
+          "id": 2,
+          "kind": "City"
+        },
+        "type": "Attack"
+      },
+      "hex": "01030000000102000000"
+    },
+    {
+      "dto": {
+        "army": 3,
+        "target": {
+          "id": 1,
+          "kind": "CityState"
+        },
+        "type": "Attack"
+      },
+      "hex": "0103000000020100"
+    },
+    {
+      "dto": {
+        "settler": 12,
+        "type": "FoundCity"
+      },
+      "hex": "020c000000"
+    },
+    {
+      "dto": {
+        "city": 0,
+        "items": [
+          {
+            "building": "Granary",
+            "kind": "Building"
+          },
+          {
+            "kind": "Troops",
+            "n": 5,
+            "unit": "Archer"
+          },
+          {
+            "kind": "Scout"
+          },
+          {
+            "kind": "Settler"
+          }
+        ],
+        "type": "SetQueue"
+      },
+      "hex": "03000000000400000000000101050203"
+    },
+    {
+      "dto": {
+        "city": 1,
+        "focus": "Science",
+        "type": "SetFocus"
+      },
+      "hex": "040100000004"
+    },
+    {
+      "dto": {
+        "city": 1,
+        "gold": 60,
+        "type": "Purchase"
+      },
+      "hex": "05010000003c000000"
+    },
+    {
+      "dto": {
+        "techs": [
+          "Agriculture",
+          "CelestialMechanics",
+          "Writing"
+        ],
+        "type": "SetResearch"
+      },
+      "hex": "0603000000000f06"
+    },
+    {
+      "dto": {
+        "civ": 4,
+        "type": "DeclareWar"
+      },
+      "hex": "070400"
+    },
+    {
+      "dto": {
+        "civ": 4,
+        "type": "ProposePeace"
+      },
+      "hex": "080400"
+    },
+    {
+      "dto": {
+        "civ": 4,
+        "type": "AcceptPeace"
+      },
+      "hex": "090400"
+    },
+    {
+      "dto": {
+        "bond": 30,
+        "civ": 2,
+        "type": "ProposeNap"
+      },
+      "hex": "0a02001e000000"
+    },
+    {
+      "dto": {
+        "bond": 30,
+        "civ": 2,
+        "type": "AcceptNap"
+      },
+      "hex": "0b02001e000000"
+    },
+    {
+      "dto": {
+        "civ": 2,
+        "type": "BreakNap"
+      },
+      "hex": "0c0200"
+    },
+    {
+      "dto": {
+        "civ": 5,
+        "type": "ProposeAlliance"
+      },
+      "hex": "0d0500"
+    },
+    {
+      "dto": {
+        "civ": 5,
+        "type": "AcceptAlliance"
+      },
+      "hex": "0e0500"
+    },
+    {
+      "dto": {
+        "type": "LeaveAlliance"
+      },
+      "hex": "0f"
+    },
+    {
+      "dto": {
+        "cityState": 1,
+        "influence": 20,
+        "type": "SendEnvoy"
+      },
+      "hex": "10010014000000"
+    },
+    {
+      "dto": {
+        "amount": 10,
+        "civ": 3,
+        "good": {
+          "city": 4,
+          "kind": "Food"
+        },
+        "type": "Transfer"
+      },
+      "hex": "11030003040000000a000000"
+    },
+    {
+      "dto": {
+        "amount": 5,
+        "good": {
+          "kind": "Iron"
+        },
+        "limitGold": 200,
+        "side": "Buy",
+        "type": "MarketTrade"
+      },
+      "hex": "12010005000000c8000000"
+    },
+    {
+      "dto": {
+        "amount": 3,
+        "good": {
+          "city": 2,
+          "kind": "Production"
+        },
+        "price": 1500000,
+        "side": "Sell",
+        "type": "ExchangeOrder"
+      },
+      "hex": "130402000000010300000060e3160000000000"
+    },
+    {
+      "dto": {
+        "city": 6,
+        "type": "Raze"
+      },
+      "hex": "1406000000"
+    },
+    {
+      "dto": {
+        "rule": {
+          "kind": "AutoDefend",
+          "radius": 2
+        },
+        "target": {
+          "id": 1,
+          "kind": "Unit"
+        },
+        "type": "SetStanding"
+      },
+      "hex": "1500010000000102"
+    },
+    {
+      "dto": {
+        "rule": {
+          "kind": "Retreat",
+          "ratioBps": 15000
+        },
+        "target": {
+          "id": 1,
+          "kind": "Unit"
+        },
+        "type": "SetStanding"
+      },
+      "hex": "15000100000002983a0000"
+    },
+    {
+      "dto": {
+        "rule": {
+          "kind": "Patrol",
+          "route": [
+            [
+              1,
+              1
+            ],
+            [
+              2,
+              0
+            ]
+          ]
+        },
+        "target": {
+          "id": 0,
+          "kind": "Unit"
+        },
+        "type": "SetStanding"
+      },
+      "hex": "150000000000030200000001000000010000000200000000000000"
+    },
+    {
+      "dto": {
+        "rule": {
+          "kind": "QueueRepeat",
+          "on": false
+        },
+        "target": {
+          "id": 0,
+          "kind": "City"
+        },
+        "type": "SetStanding"
+      },
+      "hex": "1501000000000400"
+    },
+    {
+      "dto": {
+        "rule": {
+          "kind": "AutoPurchase",
+          "maxGold": 40
+        },
+        "target": {
+          "id": 0,
+          "kind": "City"
+        },
+        "type": "SetStanding"
+      },
+      "hex": "1501000000000528000000"
+    },
+    {
+      "dto": {
+        "rule": {
+          "kind": "Clear"
+        },
+        "target": {
+          "id": 0,
+          "kind": "Unit"
+        },
+        "type": "SetStanding"
+      },
+      "hex": "15000000000000"
+    },
+    {
+      "dto": {
+        "policy": "bot/warlord@1",
+        "salt": "00112233445566778899aabbccddeeff",
+        "text": "攻撃は最大の防御",
+        "tick": 3,
+        "type": "RevealRationale"
+      },
+      "hex": "1603000d000000626f742f7761726c6f7264403100112233445566778899aabbccddeeff18000000e694bbe69283e381afe69c80e5a4a7e381aee998b2e5bea1"
+    }
+  ]
+}

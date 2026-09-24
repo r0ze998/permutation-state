@@ -122,9 +122,114 @@ pub fn split_pool(pool: u64, weights: &[u64]) -> (Vec<u64>, u64) {
     (shares, pool - paid)
 }
 
-// TODO(§14.4): prize coalitions. TODO(§14.5): the one-top-3-per-entry
-// iteration and Participation eligibility; both need the finalized split,
-// which is ON HOLD (V4 §12).
+/// Tracks in the order used for tie-breaks between tracks (§14.5).
+pub const TRACKS: [&str; 3] = ["dominion", "science", "concord"];
+
+/// Full ranking of every civ on each track, best first. Ties go to the lower
+/// civ id (entry order), so the result is total and deterministic.
+pub fn rankings(rules: &Ruleset, state: &WorldState) -> [Vec<CivId>; 3] {
+    let ids = || (0..state.civs.len() as CivId).collect::<Vec<_>>();
+    let mut dom = ids();
+    dom.sort_by_key(|&c| (core::cmp::Reverse(state.civs[c as usize].scores.dominion), c));
+    let mut sci = ids();
+    sci.sort_by_key(|&c| (science_key(&state.civs[c as usize]), c));
+    let mut con = ids();
+    con.sort_by_key(|&c| (core::cmp::Reverse(concord_final(rules, &state.civs[c as usize])), c));
+    [dom, sci, con]
+}
+
+/// Final prize distribution (§14.5).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Payouts {
+    /// Amount per civ (index = civ id), in the pool's unit (USDC base units).
+    pub per_civ: Vec<u64>,
+    /// Paid winners per track, best first: (civ, amount).
+    pub tracks: [Vec<(CivId, u64)>; 3],
+    /// Participation recipients.
+    pub participation: Vec<CivId>,
+    /// Integer remainders, unclaimed track pools and the participation excess.
+    pub rollover: u64,
+}
+
+/// Split `pool` by §14.5. Prize coalitions (§14.4) are not registrable yet,
+/// so every civ is its own entry.
+///
+/// * Each track gets `pool × track_share_bps / 10000`; its `N` winners
+///   (`winners_count`) share it by geometric weights.
+/// * One top-3 per entry: an entry placed top-3 on several tracks keeps the
+///   highest-paying one (ties: Dominion, Science, Concord) and is removed from
+///   the other tracks, whose placements are recomputed; repeated until stable.
+/// * Participation: an equal split among entries that ordered in ≥ 60% of
+///   their ticks and ranked in the top half of some track, capped at
+///   2 × entry fee each.
+pub fn payouts(rules: &Ruleset, state: &WorldState, pool: u64) -> Payouts {
+    let n = state.civs.len();
+    let full = rankings(rules, state);
+    let track_pool = |t: usize| (pool as u128 * rules.track_share_bps[t] as u128 / BPS_ONE as u128) as u64;
+    let mut excluded: [Vec<CivId>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+    let place = |excluded: &[Vec<CivId>; 3]| -> [Vec<(CivId, u64)>; 3] {
+        core::array::from_fn(|t| {
+            let eligible: Vec<CivId> = full[t].iter().copied().filter(|c| !excluded[t].contains(c)).collect();
+            let k = winners_count(rules, n).min(eligible.len());
+            let (shares, _) = split_pool(track_pool(t), &payout_weights(rules, k));
+            eligible.into_iter().zip(shares).collect()
+        })
+    };
+    let mut tracks = place(&excluded);
+    for _ in 0..3 {
+        let mut changed = false;
+        for civ in 0..n as CivId {
+            // (amount, -track) so max() prefers the higher amount, then the earlier track.
+            let top3: Vec<(u64, core::cmp::Reverse<usize>)> = (0..3)
+                .filter_map(|t| tracks[t].iter().take(3).find(|(c, _)| *c == civ).map(|(_, a)| (*a, core::cmp::Reverse(t))))
+                .collect();
+            if top3.len() < 2 {
+                continue;
+            }
+            let keep = top3.iter().max().unwrap().1 .0;
+            for (_, core::cmp::Reverse(t)) in top3 {
+                if t != keep && !excluded[t].contains(&civ) {
+                    excluded[t].push(civ);
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+        tracks = place(&excluded);
+    }
+    let mut per_civ = alloc::vec![0u64; n];
+    let mut paid = 0u64;
+    for list in &tracks {
+        for (c, a) in list {
+            per_civ[*c as usize] += a;
+            paid += a;
+        }
+    }
+    // Participation (§14.5).
+    let half = n.div_ceil(2);
+    let participation: Vec<CivId> = state
+        .civs
+        .iter()
+        .filter(|c| {
+            let ticks = state.tick.saturating_sub(c.joined_tick) as u64;
+            let active = c.active_ticks as u64 * BPS_ONE as u64 >= 6_000 * ticks && ticks > 0;
+            let ranked = full.iter().any(|r| r.iter().take(half).any(|x| *x == c.id));
+            active && ranked
+        })
+        .map(|c| c.id)
+        .collect();
+    let part_pool = track_pool(3);
+    if !participation.is_empty() {
+        let each = (part_pool / participation.len() as u64).min(2 * rules.entry_fee_usdc);
+        for c in &participation {
+            per_civ[*c as usize] += each;
+            paid += each;
+        }
+    }
+    Payouts { per_civ, tracks, participation, rollover: pool - paid }
+}
 
 #[cfg(test)]
 mod tests {

@@ -12,11 +12,19 @@ use permutation_rules::decision::{
     decision_digest, merkle_proof, obs_leaves, obs_root, policy_id, rationale_hash, verify_reveal, Hash, ObsLeaf,
     Step, MAX_POLICY, MAX_RATIONALE,
 };
-use permutation_rules::orders::Order;
+use permutation_rules::orders::{Order, OrderBatch};
 use permutation_rules::state::{CivId, WorldState};
 use sha2::{Digest, Sha256};
 
 use crate::fog::Fog;
+
+/// Encoded orders that fit in one `SubmitOrders` transaction next to its
+/// signatures, accounts, blockhash and header (the packet limit is 1232 bytes).
+pub const BATCH_BYTES: usize = 820;
+
+fn encoded_len(o: &Order) -> usize {
+    borsh::to_vec(o).map_or(usize::MAX / 4, |v| v.len())
+}
 
 /// Full observations kept for proofs; older ticks keep only their root.
 const KEEP_TICKS: u16 = 60;
@@ -37,6 +45,9 @@ pub struct Record {
     pub text: String,
     /// Tick whose batch carried the reveal, once it has been processed.
     pub revealed_at: Option<u16>,
+    /// Committed by an outside agent: the server only saw the digest on
+    /// chain, and learns policy, salt and text from the agent's reveal.
+    pub external: bool,
 }
 
 impl Record {
@@ -109,27 +120,61 @@ impl Ledger {
         let obs_root = self.root(tick, civ).expect("observe() runs when a tick opens");
         let salt = self.salt(tick, civ);
         let digest = decision_digest(tick, &obs_root, &policy_id(policy.as_bytes()), &rationale_hash(&salt, text.as_bytes()));
-        self.records.insert((tick, civ), Record { tick, civ, policy, obs_root, digest, salt, text, revealed_at: None });
+        self.records.insert((tick, civ), Record { tick, civ, policy, obs_root, digest, salt, text, revealed_at: None, external: false });
         digest
+    }
+
+    /// Learn an outside agent's decision from its resolved batch: the digest
+    /// it committed to (against the obs_root this server published for it)
+    /// and the reveals it carries for earlier ticks.
+    pub fn ingest_external(&mut self, batch: &OrderBatch) {
+        if batch.decision_digest != [0; 32] {
+            let obs_root = self.root(batch.tick, batch.civ).unwrap_or([0; 32]);
+            self.records.entry((batch.tick, batch.civ)).or_insert(Record {
+                tick: batch.tick,
+                civ: batch.civ,
+                policy: String::new(),
+                obs_root,
+                digest: batch.decision_digest,
+                salt: [0; 16],
+                text: String::new(),
+                revealed_at: None,
+                external: true,
+            });
+        }
+        for o in &batch.orders {
+            if let Order::RevealRationale { tick, policy, salt, text } = o {
+                if let Some(r) = self.records.get_mut(&(*tick, batch.civ)).filter(|r| r.external && r.revealed_at.is_none()) {
+                    r.policy = String::from_utf8_lossy(policy).into_owned();
+                    r.salt = *salt;
+                    r.text = String::from_utf8_lossy(text).into_owned();
+                    r.revealed_at = Some(batch.tick);
+                }
+            }
+        }
     }
 
     pub fn record(&self, tick: u16, civ: CivId) -> Option<&Record> {
         self.records.get(&(tick, civ))
     }
 
-    /// Reveal orders for `civ`'s resolved, not yet revealed decisions (oldest first, at most 3).
-    pub fn reveals(&self, civ: CivId, open_tick: u16) -> Vec<Order> {
-        self.records
-            .values()
-            .filter(|r| r.civ == civ && r.tick < open_tick && r.revealed_at.is_none())
-            .take(3)
-            .map(|r| Order::RevealRationale {
-                tick: r.tick,
-                policy: r.policy.as_bytes().to_vec(),
-                salt: r.salt,
-                text: r.text.as_bytes().to_vec(),
-            })
-            .collect()
+    /// Reveal orders for `civ`'s resolved, not yet revealed decisions (oldest
+    /// first, at most 3) that fit next to `orders` in one Solana transaction
+    /// (`BATCH_BYTES` of encoded orders). Whatever does not fit waits for the
+    /// next batch; the oldest always goes first, so none is skipped.
+    pub fn reveals(&self, civ: CivId, open_tick: u16, orders: &[Order]) -> Vec<Order> {
+        let mut used: usize = orders.iter().map(encoded_len).sum();
+        let mut out = Vec::new();
+        for r in self.records.values().filter(|r| r.civ == civ && r.tick < open_tick && r.revealed_at.is_none()).take(3) {
+            let o = Order::RevealRationale { tick: r.tick, policy: r.policy.as_bytes().to_vec(), salt: r.salt, text: r.text.as_bytes().to_vec() };
+            let n = encoded_len(&o);
+            if used + n > BATCH_BYTES {
+                break;
+            }
+            used += n;
+            out.push(o);
+        }
+        out
     }
 
     /// Mark the reveals that were in an accepted batch of tick `at`.

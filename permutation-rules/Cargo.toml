@@ -19,3 +19,11 @@ sha2 = { version = "=0.10.9", default-features = false }
 [features]
 default = []
 std = ["borsh/std", "sha2/std"]
+
+# On Solana, hash with the runtime's sol_sha256 syscall (bit-identical, far
+# cheaper in compute units than hashing in SBF code).
+[target.'cfg(target_os = "solana")'.dependencies]
+solana-define-syscall = "=4.0.1"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }

@@ -1,0 +1,57 @@
+/* Spectator view: the same paper-and-ink language as the player client. */
+.watch-chip { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-soft); }
+.watch-chip b { color: var(--ink); font: 400 15px/1.2 var(--serif); }
+.watch-chip .badge { font-size: 9.5px; letter-spacing: 1px; padding: 2px 7px; border-radius: 99px; background: var(--green-pale); color: var(--green-deep); }
+.watch-chip .badge.fog { background: var(--warn-bg); color: var(--warn); }
+.spectate .top-actions a.icon-btn { display: grid; place-items: center; text-decoration: none; color: inherit; }
+
+.spectate .panel { position: absolute; z-index: 6; padding: 14px 16px; }
+.watch-clock { margin-left: auto; font-size: 12px; color: var(--ink-soft); white-space: nowrap; }
+.watch-clock b { font: 400 17px/1 var(--serif); color: var(--ink); margin-right: 4px; }
+.watch-clock small { font-size: 9.5px; letter-spacing: 1px; color: var(--muted); }
+.board { top: 80px; left: 16px; width: min(400px, 44vw); max-height: calc(100% - 180px); overflow: auto; }
+.board table { width: 100%; border-collapse: collapse; font-size: 11.5px; margin-top: 8px; table-layout: auto; }
+.board td, .board th { white-space: nowrap; }
+.board th { font-weight: 500; font-size: 10px; letter-spacing: .6px; color: var(--muted); text-align: right; padding: 0 4px 6px; }
+.board th:first-child, .board td:first-child { text-align: left; }
+.board td { padding: 7px 4px; border-top: 1px solid var(--line); text-align: right; font-variant-numeric: tabular-nums; }
+.board tr.civ-row { cursor: pointer; }
+.board tr.civ-row:hover td { background: var(--paper-soft); }
+.board tr.watching td { background: var(--gold-pale); }
+.board .name { display: grid; grid-template-columns: 10px auto; column-gap: 6px; align-items: center; }
+.board .name .sub { grid-column: 2; display: flex; gap: 4px; align-items: center; }
+.board .swatch-s { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.board .kind { font-size: 9px; letter-spacing: .8px; padding: 1px 5px; border-radius: 99px; background: var(--paper-deep); color: var(--ink-soft); }
+.board .kind.human { background: var(--green-pale); color: var(--green-deep); }
+.board .kind.external { background: var(--usdc-bg); color: var(--usdc); }
+.board .ready { color: var(--good); font-size: 10px; }
+.board .hint { font-size: 10.5px; color: var(--muted); margin: 10px 0 0; line-height: 1.6; }
+
+.chainbox { top: 80px; right: 16px; width: min(330px, 34vw); font-size: 12px; }
+.chainbox dl { display: grid; grid-template-columns: auto 1fr; gap: 5px 10px; margin: 8px 0 0; }
+.chainbox dt { color: var(--muted); font-size: 10.5px; }
+.chainbox dd { margin: 0; font-family: ui-monospace, Menlo, monospace; font-size: 11px; overflow-wrap: anywhere; }
+.chainbox a { color: var(--usdc); }
+.chainbox .layer { display: inline-block; padding: 1px 7px; border-radius: 99px; background: var(--usdc-bg); color: var(--usdc); font-family: var(--sans); }
+.chainbox pre { margin: 10px 0 0; padding: 8px 10px; background: var(--paper-soft); border-radius: 6px; font-size: 10.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chainbox .none { color: var(--muted); }
+
+.feed { right: 16px; bottom: 16px; width: min(420px, 40vw); max-height: 42%; display: flex; flex-direction: column; }
+.feed-tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+.feed-tabs button { font: inherit; font-size: 11.5px; border: 1px solid var(--line); background: transparent; color: var(--ink-soft); padding: 4px 10px; border-radius: 99px; cursor: pointer; }
+.feed-tabs button[aria-pressed="true"] { background: var(--green-deep); border-color: var(--green-deep); color: var(--paper); }
+.feed ol { list-style: none; margin: 0; padding: 0; overflow: auto; display: grid; gap: 8px; font-size: 12px; line-height: 1.6; }
+.feed li { display: grid; grid-template-columns: 34px 1fr; gap: 8px; }
+.feed .t { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 11px; }
+.feed .who { font-weight: 600; }
+.feed .policy { font-size: 10px; color: var(--muted); }
+.feed .ok { color: var(--good); font-size: 10.5px; }
+.feed .bad { color: var(--bad); font-size: 10.5px; }
+.feed .empty { color: var(--muted); display: block; }
+
+@media (max-width: 900px) {
+  .board, .chainbox, .feed { position: absolute; left: 16px; right: 16px; width: auto; }
+  .board { top: 76px; max-height: 32%; }
+  .chainbox { display: none; }
+  .feed { bottom: 70px; max-height: 30%; }
+}

@@ -10,9 +10,18 @@ import * as V from './verify.mjs';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const fmt = n => Number(n ?? 0).toLocaleString('ja-JP');
+// Seat token: this browser's claim on one civilization (POST /api/claim).
+// Kept per origin; storage can be unavailable, so every access is guarded.
+const SEAT_KEY = 'ps-seat-token';
+const seatStore = {
+  get() { try { return localStorage.getItem(SEAT_KEY); } catch { return null; } },
+  set(v) { try { if (v) localStorage.setItem(SEAT_KEY, v); else localStorage.removeItem(SEAT_KEY); } catch { /* private mode */ } },
+};
+let seatToken = null;
+const auth = () => (seatToken ? { 'X-Seat-Token': seatToken } : {});
 const api = {
-  get: p => fetch(p, { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }),
-  post: (p, b) => fetch(p, { method: 'POST', body: JSON.stringify(b) }).then(r => r.json()),
+  get: p => fetch(p, { cache: 'no-store', headers: auth() }).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }),
+  post: (p, b) => fetch(p, { method: 'POST', headers: { 'Content-Type': 'application/json', ...auth() }, body: JSON.stringify(b) }).then(r => r.json()),
 };
 const hexDist = (a, b) => (Math.abs(a.q - b.q) + Math.abs(a.r - b.r) + Math.abs(a.q + a.r - b.q - b.r)) / 2;
 
@@ -41,11 +50,59 @@ function toast(text, kind = '', action = null) {
 }
 
 // ================================================================== state
+/** Show the seat list until this browser holds a seat. Resolves with the token. */
+function pickSeat(info) {
+  const dlg = $('#seats');
+  const kindText = { human: '人間の席', bot: 'ボット', external: '外部エージェント' };
+  const render = (info, error = '') => setHtml($('#seat-list'), info.seats.map(s => `
+    <li class="seat ${s.kind}">
+      <span class="swatch" style="background:${T.CIV_COLORS[s.civ % T.CIV_COLORS.length]}"></span>
+      <span class="who"><b>${esc(T.civName(s.name))}</b><small>${kindText[s.kind]}${s.kind === 'bot' ? `・${esc(T.PERSONA[s.persona] || s.persona)}` : ''}</small></span>
+      ${s.kind === 'human' ? (s.claimed ? '<span class="taken">使用中</span>' : `<button class="btn primary" type="button" data-claim="${s.civ}">この席で遊ぶ</button>`) : ''}
+    </li>`).join('') + (error ? `<li class="seat-error">${esc(error)}</li>` : '')
+    + (info.seats.some(s => s.kind === 'human' && !s.claimed) ? '' : `<li class="seat-none">いま空いている人間の席はありません。使われていない席は1分で空きます（この画面は自動で更新されます）。<a class="btn primary" href="spectate.html">観戦する →</a></li>`));
+  render(info);
+  // Seats free up when their holder leaves; keep the list current.
+  const refresh = setInterval(async () => { if (dlg.open) render(await api.get('/api/seats').catch(() => info)); }, 3000);
+  $('#seat-mode').textContent = info.mode === 'chain' ? 'オンチェーンのシーズン（MagicBlock ER）' : 'ローカルのシーズン';
+  dlg.showModal();
+  return new Promise(resolve => {
+    dlg.onclick = async e => {
+      const civ = e.target.closest('[data-claim]')?.dataset.claim;
+      if (civ === undefined) return;
+      const r = await api.post('/api/claim', { civ: +civ }).catch(() => ({ ok: false, error: 'network' }));
+      if (r.ok) { clearInterval(refresh); seatStore.set(r.token); dlg.close(); resolve(r.token); return; }
+      render(await api.get('/api/seats'), r.error === 'this seat is already taken' ? 'その席は先に取られました。別の席を選んでください。' : r.error);
+    };
+    dlg.oncancel = e => e.preventDefault(); // a seat (or spectating) is required
+  });
+}
+
+/** Who the other civilizations are, from the seat list. */
+function othersText(v) {
+  const n = k => (v?.seats || []).filter(x => x.kind === k).length;
+  const others = [n('human') > 1 ? `人間${n('human') - 1}人` : '', n('bot') ? `ルールで動くボット${n('bot')}体（AGENT表示）` : '', n('external') ? `外部のAIエージェント${n('external')}体` : ''].filter(Boolean).join('、');
+  return `あなた以外は${others}です。`;
+}
+
+/** Help text that matches who is actually in this season. */
+function describeSeats(v) {
+  $('#help-desc').textContent = `${v.civs.length}つの文明が同じ地図を共有しています。${othersText(v)}${v.tickSeconds}秒ごとの「ティック」で、全員の命令が同時に解決されます。`;
+  if (v.chain) $('#help-mode').textContent = 'このシーズンはオンチェーンです（MagicBlock ER）。時計は止まりません。「次のティックへ」で手番を終えると、全員がそろった時点ですぐに解決されます。';
+}
+
 async function boot() {
+  const params = new URLSearchParams(location.search);
+  if (params.has('spectate')) { location.replace('spectate.html'); return; }
+  if (params.get('token')) { seatStore.set(params.get('token')); history.replaceState(null, '', location.pathname); }
+  seatToken = seatStore.get();
   try {
+    const seats = await api.get('/api/seats');
+    if (seats.you === null) { seatStore.set(null); seatToken = null; seatToken = await pickSeat(seats); }
     S.map = await api.get('/api/map');
     map.setMap(S.map);
     await poll();
+    describeSeats(S.view);
     $('#loading').hidden = true;
     if (S.view.paused && S.view.tick === 0) $('#help').showModal();
   } catch (e) {
@@ -61,6 +118,8 @@ async function poll() {
   const newTick = S.lastTick !== null && v.tick !== S.lastTick;
   const prev = S.view;
   S.view = v; S.me = v.me;
+  const seats = k => (v.seats || []).filter(x => x.kind === k).length;
+  $('.prototype-label').textContent = `${v.chain ? 'オンチェーン · MagicBlock ER' : 'ローカル'} · 人間${seats('human')}席 · ボット${seats('bot')}体${seats('external') ? ` · 外部エージェント${seats('external')}` : ''} · 同じ霧の中で判断 · USDCはテスト用`;
   if (S.lastTick === null && v.committed?.length) { S.drafts = v.committed.map(describe); S.committedJson = JSON.stringify(v.committed); map.setDrafts(S.drafts); }
   if (S.lastTick === null && v.decision?.rationale) { $('#rationale').value = v.decision.rationale; S.committedRationale = v.decision.rationale; }
   if (newTick) onNewTick(v, prev);
@@ -406,7 +465,7 @@ const head = (eyebrow, title, desc = '') => `<button class="close-x" type="butto
 function introPanel() {
   const cap = S.view.cities.find(c => c.id === civ(S.me).capital);
   return `${head('YOUR TURN · このティック', 'まず地図を選ぶ', '都市・部隊・土地をクリックすると、ここに詳細と「できること」が出ます。できないことには理由が表示されます。')}
-    <div class="explanation">この試作では、あなた以外の5文明はルールで動くボット（AGENT）です。全員が同じ命令の枠を持ち、ティックの締切で同時に解決されます。</div>
+    <div class="explanation">${esc(othersText(S.view))}全員が同じ命令の枠を持ち、ティックの締切（または全員の手番終了）で同時に解決されます。</div>
     ${cap ? `<button class="btn primary wide" type="button" data-focus="${key(cap.q, cap.r)}">⌖ 首都 ${T.cityName(cap.id)} を見る</button>` : ''}`;
 }
 
@@ -678,7 +737,7 @@ function openDrawer(name) {
 async function loadResearch() { S.research = await api.get('/api/preview/research'); renderDrawer(); }
 async function loadDiplomacy() {
   const ids = S.view.civs.map(c => c.id).filter(id => id !== S.me);
-  const res = await Promise.all(ids.map(id => api.get(`/api/preview/diplomacy?civ=${id}`)));
+  const res = await Promise.all(ids.map(id => api.get(`/api/preview/diplomacy?with=${id}`)));
   S.diplo = Object.fromEntries(ids.map((id, i) => [id, res[i]])); renderDrawer();
 }
 function renderDrawer() {
@@ -908,7 +967,12 @@ document.addEventListener('click', async e => {
   switch (t.id) {
     case 'commit-btn': commit(); break;
     case 'pause-btn': await api.post('/api/control', { paused: !S.view.paused }); poll(); break;
-    case 'advance-btn': if (isDirty()) await commit(true); await api.post('/api/control', { advance: true }); poll(); break;
+    case 'advance-btn': {
+      if (isDirty()) await commit(true);
+      const r = await api.post('/api/control', { advance: true });
+      if (r.waitingFor?.length) toast(`手番を終えました。${r.waitingFor.map(civN).join('・')}の手番終了を待っています。`);
+      poll(); break;
+    }
     case 'help-btn': $('#help').showModal(); break;
     case 'zoom-in': map.zoomBy(1.2); break;
     case 'zoom-out': map.zoomBy(1 / 1.2); break;

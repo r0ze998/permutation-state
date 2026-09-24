@@ -12,3 +12,6 @@ permutation-rules = { path = "../permutation-rules", features = ["std"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 sha2 = "=0.10.9"
+borsh = { version = "=1.6.1", features = ["derive"] }
+# Account layouts (Season) for the replay verifier; no program entrypoint.
+permutation-chain = { path = "../permutation-chain", features = ["no-entrypoint"] }

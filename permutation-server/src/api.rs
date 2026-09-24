@@ -103,6 +103,8 @@ pub enum OrderDto {
     ExchangeOrder { good: GoodDto, side: String, amount: u32, price: u64 },
     Raze { city: u32 },
     SetStanding { target: TargetDto, rule: StandingDto },
+    /// Opens an earlier decision commitment (§7.5). `salt` is 32 hex chars.
+    RevealRationale { tick: u16, policy: String, salt: String, text: String },
 }
 
 /// Standing rules (§13) as the client sends them.
@@ -150,7 +152,80 @@ pub fn item_dto(i: QueueItem) -> ItemDto {
     }
 }
 
+fn good_dto(g: Good) -> GoodDto {
+    match g {
+        Good::Gold => GoodDto::Gold,
+        Good::Iron => GoodDto::Iron,
+        Good::Horses => GoodDto::Horses,
+        Good::Food(city) => GoodDto::Food { city },
+        Good::Production(city) => GoodDto::Production { city },
+    }
+}
+
+fn side_name(s: Side) -> String {
+    match s {
+        Side::Buy => "Buy".into(),
+        Side::Sell => "Sell".into(),
+    }
+}
+
 impl OrderDto {
+    /// The inverse of `to_order` (used to send engine-built orders, e.g. the
+    /// bots', through the gateway). `from_order(o).to_order() == o`.
+    pub fn from_order(o: &Order) -> OrderDto {
+        use OrderDto as D;
+        let target = |t: &AttackTarget| match *t {
+            AttackTarget::Unit(id) => TargetDto::Unit { id },
+            AttackTarget::City(id) => TargetDto::City { id },
+            AttackTarget::CityState(id) => TargetDto::CityState { id },
+        };
+        match o {
+            Order::MoveUnit { unit, path } => D::MoveUnit { unit: *unit, path: path.iter().map(|h| [h.q, h.r]).collect() },
+            Order::Attack { army, target: t } => D::Attack { army: *army, target: target(t) },
+            Order::FoundCity { settler } => D::FoundCity { settler: *settler },
+            Order::SetQueue { city, items } => D::SetQueue { city: *city, items: items.iter().map(|i| item_dto(*i)).collect() },
+            Order::SetFocus { city, focus } => D::SetFocus { city: *city, focus: name(focus) },
+            Order::Purchase { city, gold } => D::Purchase { city: *city, gold: *gold },
+            Order::SetResearch { techs } => D::SetResearch { techs: techs.iter().map(name).collect() },
+            Order::DeclareWar { civ } => D::DeclareWar { civ: *civ },
+            Order::ProposePeace { civ } => D::ProposePeace { civ: *civ },
+            Order::AcceptPeace { civ } => D::AcceptPeace { civ: *civ },
+            Order::ProposeNap { civ, bond } => D::ProposeNap { civ: *civ, bond: *bond },
+            Order::AcceptNap { civ, bond } => D::AcceptNap { civ: *civ, bond: *bond },
+            Order::BreakNap { civ } => D::BreakNap { civ: *civ },
+            Order::ProposeAlliance { civ } => D::ProposeAlliance { civ: *civ },
+            Order::AcceptAlliance { civ } => D::AcceptAlliance { civ: *civ },
+            Order::LeaveAlliance => D::LeaveAlliance,
+            Order::SendEnvoy { city_state, influence } => D::SendEnvoy { city_state: *city_state, influence: *influence },
+            Order::Transfer { civ, good, amount } => D::Transfer { civ: *civ, good: good_dto(*good), amount: *amount },
+            Order::MarketTrade { good, side, amount, limit_gold } => {
+                D::MarketTrade { good: good_dto(*good), side: side_name(*side), amount: *amount, limit_gold: *limit_gold }
+            }
+            Order::ExchangeOrder { good, side, amount, price } => D::ExchangeOrder { good: good_dto(*good), side: side_name(*side), amount: *amount, price: *price },
+            Order::Raze { city } => D::Raze { city: *city },
+            Order::SetStanding { target: t, rule } => D::SetStanding {
+                target: match *t {
+                    StandingTarget::Unit(id) => TargetDto::Unit { id },
+                    StandingTarget::City(id) => TargetDto::City { id },
+                },
+                rule: match rule {
+                    StandingOrder::Clear => StandingDto::Clear,
+                    StandingOrder::AutoDefend { radius } => StandingDto::AutoDefend { radius: *radius },
+                    StandingOrder::Retreat { ratio_bps } => StandingDto::Retreat { ratio_bps: *ratio_bps },
+                    StandingOrder::Patrol { route } => StandingDto::Patrol { route: route.iter().map(|h| [h.q, h.r]).collect() },
+                    StandingOrder::QueueRepeat { on } => StandingDto::QueueRepeat { on: *on },
+                    StandingOrder::AutoPurchase { max_gold } => StandingDto::AutoPurchase { max_gold: *max_gold },
+                },
+            },
+            Order::RevealRationale { tick, policy, salt, text } => D::RevealRationale {
+                tick: *tick,
+                policy: String::from_utf8_lossy(policy).into_owned(),
+                salt: salt.iter().map(|b| format!("{b:02x}")).collect(),
+                text: String::from_utf8_lossy(text).into_owned(),
+            },
+        }
+    }
+
     pub fn to_order(&self) -> Result<Order, String> {
         use OrderDto as D;
         Ok(match self {
@@ -213,6 +288,19 @@ impl OrderDto {
                 price: *price,
             },
             D::Raze { city } => Order::Raze { city: *city },
+            D::RevealRationale { tick, policy, salt, text } => {
+                let raw: Vec<u8> = (0..salt.len())
+                    .step_by(2)
+                    .map(|i| u8::from_str_radix(salt.get(i..i + 2).unwrap_or("zz"), 16))
+                    .collect::<Result<_, _>>()
+                    .map_err(|_| "salt must be hex".to_string())?;
+                Order::RevealRationale {
+                    tick: *tick,
+                    policy: policy.as_bytes().to_vec(),
+                    salt: raw.try_into().map_err(|_| "salt must be 16 bytes".to_string())?,
+                    text: text.as_bytes().to_vec(),
+                }
+            }
             D::SetStanding { target, rule } => Order::SetStanding {
                 target: match *target {
                     TargetDto::Unit { id } => StandingTarget::Unit(id),
@@ -338,7 +426,9 @@ pub fn unit_preview(s: &WorldState, rules: &Ruleset, me: CivId, unit: u32) -> Va
         .get(unit as usize)
         .filter(|u| u.unit_type == UnitType::Settler)
         .map(|_| result(permutation_rules::checks::found_city(s, rules, me, unit)));
-    json!({ "reach": reach, "attacks": attacks, "found": found })
+    // `found` is null both for "not a settler" and "can found"; `canFound` says which.
+    let can_found = s.units.get(unit as usize).filter(|u| u.unit_type == UnitType::Settler).map(|_| found.as_ref().is_some_and(Value::is_null));
+    json!({ "reach": reach, "attacks": attacks, "found": found, "canFound": can_found })
 }
 
 pub fn city_preview(s: &WorldState, rules: &Ruleset, me: CivId, city: u32) -> Value {
@@ -410,11 +500,15 @@ pub fn map_view(s: &WorldState) -> Value {
 /// Everything the UI needs each poll, from `me`'s point of view. `s` must be
 /// `me`'s belief state (`Fog::belief`), so nothing outside its vision or
 /// memory can leak; other civilizations' private totals are sent as `null`.
-pub fn world_view(s: &WorldState, rules: &Ruleset, me: CivId, fog: &Fog) -> Value {
+/// The world as `viewer` sees it (its belief state `s`), or with `None` the
+/// omniscient spectator view of the full state.
+pub fn world_view(s: &WorldState, rules: &Ruleset, viewer: Option<CivId>, fog: &Fog) -> Value {
+    let omni = viewer.is_none();
+    let me = viewer.unwrap_or(0);
     let seen = fog.seen(me);
     let memory = fog.memory(me);
-    let in_sight = |h: Hex| s.map.index_of(h).is_some_and(|i| seen[i]);
-    let explored = |h: Hex| s.map.index_of(h).is_some_and(|i| memory.explored[i]);
+    let in_sight = |h: Hex| omni || s.map.index_of(h).is_some_and(|i| seen[i]);
+    let explored = |h: Hex| omni || s.map.index_of(h).is_some_and(|i| memory.explored[i]);
     let n = s.civs.len() as CivId;
     let owners: String = s
         .map
@@ -445,12 +539,14 @@ pub fn world_view(s: &WorldState, rules: &Ruleset, me: CivId, fog: &Fog) -> Valu
                 .filter(|u| u.alive && u.owner == Owner::Civ(c.id) && !u.unit_type.is_civilian())
                 .map(|u| u.troops / 1000)
                 .sum();
-            let (rel, truce) = if c.id == me {
+            let (rel, truce) = if omni {
+                ("none", 0)
+            } else if c.id == me {
                 ("self", 0)
             } else {
                 (relation_code(s.relation(me, c.id)), s.truce_until[s.pair_index(me, c.id)])
             };
-            let own = c.id == me;
+            let own = omni || c.id == me;
             json!({
                 "id": c.id, "name": c.name, "kind": name(c.declared_kind),
                 // Foreign totals are what `me` knows: cities it has seen, armies in sight.
@@ -467,8 +563,8 @@ pub fn world_view(s: &WorldState, rules: &Ruleset, me: CivId, fog: &Fog) -> Valu
                 "aggressor": c.is_aggressor(s.tick.saturating_sub(1), rules.aggressor_window),
                 "everAllied": c.ever_allied,
                 "relation": rel, "truceUntil": truce,
-                "grievanceAgainstMe": if c.id == me { 0 } else { s.grievance(me, c.id) },
-                "myGrievanceAgainst": if c.id == me { 0 } else { s.grievance(c.id, me) },
+                "grievanceAgainstMe": if omni || c.id == me { 0 } else { s.grievance(me, c.id) },
+                "myGrievanceAgainst": if omni || c.id == me { 0 } else { s.grievance(c.id, me) },
                 "capital": c.capital,
                 "protectionLost": c.protection_lost,
             })
@@ -488,7 +584,7 @@ pub fn world_view(s: &WorldState, rules: &Ruleset, me: CivId, fog: &Fog) -> Valu
         .iter()
         .filter(|c| c.alive)
         .map(|c| {
-            let mine = c.owner == Some(me);
+            let mine = omni || c.owner == Some(me);
             let live = mine || in_sight(c.hex);
             json!({
                 "id": c.id, "q": c.hex.q, "r": c.hex.r, "owner": c.owner, "pop": c.pop,
@@ -517,7 +613,7 @@ pub fn world_view(s: &WorldState, rules: &Ruleset, me: CivId, fog: &Fog) -> Valu
                 Owner::Civ(c) => json!(c),
                 Owner::Barbarian => json!("barbarian"),
             };
-            let mine = u.owner == Owner::Civ(me);
+            let mine = if omni { matches!(u.owner, Owner::Civ(_)) } else { u.owner == Owner::Civ(me) };
             json!({
                 "id": u.id, "q": u.hex.q, "r": u.hex.r, "owner": owner, "type": name(u.unit_type),
                 "troops": u.troops / 100, "civilian": u.unit_type.is_civilian(),
@@ -537,14 +633,14 @@ pub fn world_view(s: &WorldState, rules: &Ruleset, me: CivId, fog: &Fog) -> Valu
                 "id": cs.id, "q": cs.hex.q, "r": cs.hex.r, "specialty": name(cs.specialty),
                 "pop": cs.pop, "defense": cs.defense / 100, "suzerain": cs.suzerain,
                 "capturedBy": cs.captured_by,
-                "myInfluence": cs.influence[me as usize] / 1000, "topInfluence": top / 1000,
+                "myInfluence": if omni { 0 } else { cs.influence[me as usize] / 1000 }, "topInfluence": top / 1000,
             })
         })
         .collect();
     let proposals: Vec<Value> = s
         .proposals
         .iter()
-        .filter(|p| p.to == me || p.from == me)
+        .filter(|p| omni || p.to == me || p.from == me)
         .map(|p| {
             let (kind, bond) = match p.kind {
                 ProposalKind::Peace => ("Peace", 0),
@@ -566,27 +662,28 @@ pub fn world_view(s: &WorldState, rules: &Ruleset, me: CivId, fog: &Fog) -> Valu
         })
         .collect();
     let _ = n;
+    let economy = json!({
+        "gold": m.gold / 1000, "goldIncome": m.last.gold, "iron": m.iron / 1000, "horses": m.horses / 1000,
+        "ironIncome": m.last.iron, "horseIncome": m.last.horses,
+        "influence": m.influence / 1000, "scienceStore": m.science_store / 1000,
+        "research": current_research,
+        "researchQueue": m.research_queue.iter().map(|t| name(*t)).collect::<Vec<_>>(),
+        "techs": TECHS.iter().filter(|t| m.techs.has(t.tech)).map(|t| name(t.tech)).collect::<Vec<_>>(),
+        "upkeepUnits": upkeep_units, "upkeepCities": upkeep_cities,
+        "warWeariness": m.war_weariness,
+        "budget": m.tick_budget, "bank": m.order_bank,
+        "usdc": m.usdc, "exchangeSpent": m.exchange_spent,
+        "exchangeCap": rules.entry_fee_usdc * rules.exchange_spend_cap_bps as u64 / 10_000,
+        "protectionLost": m.protection_lost,
+    });
     json!({
         "tick": s.tick, "ticks": rules.ticks_per_season,
-        "fog": fog.code(me),
+        "fog": if omni { "2".repeat(s.map.tiles.len()) } else { fog.code(me) },
         "protectionRadius": rules.protection_radius(s.tick),
-        "me": me, "civs": civs, "owners": owners, "ruins": ruins,
+        "me": viewer, "spectator": omni, "civs": civs, "owners": owners, "ruins": ruins,
         "cities": cities, "units": units, "cityStates": city_states,
         "proposals": proposals, "pools": pools,
-        "economy": {
-            "gold": m.gold / 1000, "goldIncome": m.last.gold, "iron": m.iron / 1000, "horses": m.horses / 1000,
-            "ironIncome": m.last.iron, "horseIncome": m.last.horses,
-            "influence": m.influence / 1000, "scienceStore": m.science_store / 1000,
-            "research": current_research,
-            "researchQueue": m.research_queue.iter().map(|t| name(*t)).collect::<Vec<_>>(),
-            "techs": TECHS.iter().filter(|t| m.techs.has(t.tech)).map(|t| name(t.tech)).collect::<Vec<_>>(),
-            "upkeepUnits": upkeep_units, "upkeepCities": upkeep_cities,
-            "warWeariness": m.war_weariness,
-            "budget": m.tick_budget, "bank": m.order_bank,
-            "usdc": m.usdc, "exchangeSpent": m.exchange_spent,
-            "exchangeCap": rules.entry_fee_usdc * rules.exchange_spend_cap_bps as u64 / 10_000,
-            "protectionLost": m.protection_lost,
-        },
+        "economy": if omni { Value::Null } else { economy },
         "vault": s.exchange_vault,
     })
 }
@@ -601,4 +698,73 @@ fn standing_json(r: StandingRule) -> Value {
             "route": route[..len as usize].iter().map(|h| [h.q, h.r]).collect::<Vec<_>>(),
         }),
     }
+}
+
+/// Resolution-time checks for a batch, as far as `civ` can know them from its
+/// belief state `s`. `validate_batch` only enforces what the chain checks at
+/// submit time (structure, tick, budget); an order that is illegal when the
+/// tick resolves is skipped. Outside agents use this to catch those early.
+/// Returns one `{index, type, blocked}` per order that would be skipped now.
+pub fn preflight(s: &WorldState, rules: &Ruleset, civ: CivId, orders: &[Order]) -> Vec<Value> {
+    use permutation_rules::checks as c;
+    let unit = |id: u32| -> Result<&permutation_rules::state::Unit, Blocked> {
+        let u = s.units.get(id as usize).filter(|u| u.alive).ok_or(Blocked::UnknownUnit)?;
+        if u.owner != Owner::Civ(civ) {
+            return Err(Blocked::NotYours);
+        }
+        Ok(u)
+    };
+    let city = |id: u32| -> Result<(), Blocked> {
+        let x = s.cities.get(id as usize).filter(|x| x.alive).ok_or(Blocked::UnknownCity)?;
+        if x.owner != Some(civ) {
+            return Err(Blocked::NotYours);
+        }
+        Ok(())
+    };
+    let mut planned = s.civs[civ as usize].techs;
+    let mut out = Vec::new();
+    for (i, o) in orders.iter().enumerate() {
+        let r: Result<(), Blocked> = match o {
+            Order::MoveUnit { unit: id, path } => match unit(*id) {
+                Err(b) => Err(b),
+                Ok(u) => {
+                    // Each step must be a neighbour of the previous hex.
+                    let mut at = u.hex;
+                    let mut r = Ok(());
+                    for h in path {
+                        if at.distance(*h) != 1 {
+                            out.push(json!({"index": i, "type": "MoveUnit", "blocked": {"code": "PathNotContiguous", "at": [h.q, h.r]}}));
+                            break;
+                        }
+                        if let Err(b) = c::enter(s, rules, Some(civ), *h) {
+                            r = Err(b);
+                            break;
+                        }
+                        at = *h;
+                    }
+                    r
+                }
+            },
+            Order::Attack { army, .. } => unit(*army).map(|_| ()),
+            Order::FoundCity { settler } => c::found_city(s, rules, civ, *settler).map(|_| ()),
+            Order::SetQueue { city: id, items } => items.iter().try_for_each(|it| c::queue_item(s, civ, *id, it)),
+            Order::SetFocus { city: id, .. } | Order::Purchase { city: id, .. } | Order::Raze { city: id } => city(*id),
+            Order::SetResearch { techs } => techs.iter().try_for_each(|t| {
+                c::research(planned, *t)?;
+                planned.insert(*t);
+                Ok(())
+            }),
+            Order::DeclareWar { civ: t } => c::declare_war(s, civ, *t),
+            Order::ProposePeace { civ: t } => c::propose_peace(s, civ, *t),
+            Order::ProposeNap { civ: t, bond } => c::propose_nap(s, rules, civ, *t, *bond),
+            Order::ProposeAlliance { civ: t } => c::propose_alliance(s, rules, civ, *t),
+            _ => Ok(()),
+        };
+        if let Err(b) = r {
+            let dto = OrderDto::from_order(o);
+            let kind = serde_json::to_value(&dto).ok().and_then(|v| v["type"].as_str().map(String::from)).unwrap_or_default();
+            out.push(json!({"index": i, "type": kind, "blocked": blocked(b)}));
+        }
+    }
+    out
 }

@@ -14,7 +14,6 @@ use crate::RulesError;
 use alloc::string::String;
 use alloc::vec::Vec;
 use borsh::{BorshDeserialize, BorshSerialize};
-use sha2::{Digest, Sha256};
 
 pub type CivId = u16;
 pub type CityId = u32;
@@ -368,18 +367,12 @@ impl WorldState {
 
     /// Append an event to the hash chain: `head = sha256(head ‖ tick ‖ kind ‖ payload)`.
     pub fn push_event(&mut self, kind: &[u8], payload: &[u8]) {
-        let mut h = Sha256::new();
-        h.update(self.event_head);
-        h.update(self.tick.to_le_bytes());
-        h.update([kind.len() as u8]);
-        h.update(kind);
-        h.update(payload);
-        self.event_head = h.finalize().into();
+        self.event_head = crate::hash::sha256(&[&self.event_head, &self.tick.to_le_bytes(), &[kind.len() as u8], kind, payload]);
     }
 
     /// `state_root = sha256(borsh(state))` (§15 phase 11).
     pub fn state_root(&self) -> Result<[u8; 32], RulesError> {
         let bytes = borsh::to_vec(self).map_err(|_| RulesError::Serialization)?;
-        Ok(Sha256::digest(bytes).into())
+        Ok(crate::hash::sha256(&[&bytes]))
     }
 }

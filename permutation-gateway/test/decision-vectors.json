@@ -1,0 +1,26 @@
+[
+ {
+  "tick": 12,
+  "obsRoot": "ad81bfff7c7628e05b955ddf52254009329f7a6501f1552a8b82fc596254758d",
+  "policy": "rule-agent/v1",
+  "salt": "4936b257f4b1b517d951900b8e9ede79",
+  "text": "斥候10で未踏の37マスへ（残り枠19）",
+  "digest": "1d835f5df733bbb66731377b454548e72b4acceaca4467ee5a8ab6a9982a75c0"
+ },
+ {
+  "tick": 11,
+  "obsRoot": "dba3761ade7fd467fb043863bcb5cfd081d748ea5267629464478b0b55ba633c",
+  "policy": "rule-agent/v1",
+  "salt": "99c370ddfef3f0b6f4126d962c306d2e",
+  "text": "斥候10で未踏の37マスへ（残り枠19）",
+  "digest": "433a6dd93193c933fcfde6e00b4013935608468984ace15affab54da172ab9f7"
+ },
+ {
+  "tick": 10,
+  "obsRoot": "9a65e1f4afd97aa206d9e309f4c054b85004b000e0921a7af1a21feabab4a264",
+  "policy": "rule-agent/v1",
+  "salt": "c7d5230dc8c905ffd3fbb0c6a8a70924",
+  "text": "斥候10で未踏の37マスへ（残り枠19）",
+  "digest": "5cac34bb300c748f8d9ffafe28981be785627fb0b8c7226e1b692773d0f7742c"
+ }
+]

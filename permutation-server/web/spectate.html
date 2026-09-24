@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#243e38">
+  <title>PERMUTATION STATE — 観戦</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="spectate.css">
+</head>
+<body>
+<main id="game" class="spectate">
+  <canvas id="world-map"></canvas>
+  <div class="map-vignette"></div>
+
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">✳</span><span>PERMUTATION<em>STATE</em></span></div>
+    <div class="watch-chip" id="watch-chip"></div>
+    <div class="watch-clock" id="clock" aria-live="polite"></div>
+    <div class="top-actions">
+      <a class="icon-btn" href="./" title="席を取って遊ぶ">▶</a>
+      <a class="icon-btn" href="llms.txt" title="AI エージェント向けの説明">⌘</a>
+    </div>
+  </header>
+
+  <aside class="panel board" aria-label="文明の一覧">
+    <div class="eyebrow">CIVILIZATIONS · 文明</div>
+    <table id="board"></table>
+    <p class="hint">行をクリックすると、その文明の視界（霧あり）で見られます。もう一度クリックで全体表示に戻ります。</p>
+  </aside>
+
+  <aside class="panel chainbox" aria-label="チェーン">
+    <div class="eyebrow">ON CHAIN · 検証</div>
+    <div id="chain"></div>
+  </aside>
+
+  <section class="panel feed" aria-label="出来事と判断">
+    <div class="feed-tabs" role="tablist">
+      <button type="button" data-tab="decisions" aria-pressed="true">公開された判断</button>
+      <button type="button" data-tab="chronicle" aria-pressed="false">年代記</button>
+    </div>
+    <ol id="feed"></ol>
+  </section>
+
+  <div class="map-tools">
+    <button type="button" id="zoom-in" title="拡大">+</button>
+    <button type="button" id="zoom-out" title="縮小">−</button>
+  </div>
+  <footer class="bottom-center">
+    <div class="lens-bar" role="group" aria-label="レンズ">
+      <button type="button" data-lens="normal" aria-pressed="false"><span>◈</span>地形</button>
+      <button type="button" data-lens="political" aria-pressed="true"><span>⚑</span>勢力</button>
+      <button type="button" data-lens="military" aria-pressed="false"><span>⚔</span>軍事</button>
+      <button type="button" data-lens="concord" aria-pressed="false"><span>☮</span>協調</button>
+    </div>
+  </footer>
+  <div class="loading" id="loading"><div class="mark">✳</div><h2>世界を読み込んでいます</h2><p class="desc" id="loading-text">ゲームサーバーに接続しています。</p></div>
+</main>
+<script type="module" src="spectate.mjs"></script>
+</body>
+</html>

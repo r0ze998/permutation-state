@@ -1,0 +1,19 @@
+{
+  "name": "permutation-gateway",
+  "private": true,
+  "type": "module",
+  "description": "PERMUTATION STATE chain gateway: crank, x402 entry, session-key relay, local test USDC",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@magicblock-labs/ephemeral-rollups-sdk": "0.17.2",
+    "@noble/hashes": "1.8.0",
+    "@solana/web3.js": "1.99.0",
+    "buffer": "6.0.3"
+  },
+  "overrides": {
+    "stream-json": "3.7.0",
+    "uuid": "11.1.1"
+  }
+}

@@ -10,6 +10,8 @@
 > 基礎版で確認済みの機能と、現在追加・統合中の機能を区別しています。
 > 現行ゲームは `/civilization/`。`/world/`・`/proof/`・旧 `index.html` は以前の検証デモです。
 
+> **提出物（2026-09-24）:** V4 の遊べる実装（Rust のルールエンジン、MagicBlock ER 上のプログラム、x402 での参加、エージェント用 SDK・MCP、観戦画面、リプレイ検証）の概要は [SUBMISSION.md](SUBMISSION.md) にあります（英語）。3分デモの台本は [DEMO_SCRIPT.md](DEMO_SCRIPT.md)、ピッチは [PITCH.md](PITCH.md) です。
+>
 > **設計見直し（2026-09-24）:** ゲーム設計を [Game Design V4](PERMUTATION_STATE_GAME_DESIGN_V4.md) で全面的に見直しました（1つの永続世界に人間とAI agentの複数文明、シーズン制の3つの勝利トラック、Solana上の賞金プール）。以下の `/civilization/`（市民視点のシミュレーション）は旧設計の試作です。ベンチマークは [research/](research/)。
 
 ## ゲームの前提

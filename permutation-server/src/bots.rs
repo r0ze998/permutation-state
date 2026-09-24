@@ -115,6 +115,11 @@ impl Persona {
 }
 
 pub const NAMES: [&str; 6] = ["Aster", "Borealis", "Cinder", "Dunmar", "Ember", "Fjordhal"];
+/// Persona of a scripted civ (seats beyond six reuse the list).
+pub fn persona_of(civ: CivId) -> Persona {
+    PERSONAS[civ as usize % PERSONAS.len()]
+}
+
 pub const PERSONAS: [Persona; 6] = [
     Persona::Warlord,
     Persona::Builder,
@@ -309,7 +314,7 @@ impl Bot {
             Persona::Diplomat => {
                 if s.tick == 6 || s.tick == 40 {
                     for o in 0..n {
-                        if o != civ && PERSONAS[o as usize] == Persona::Diplomat {
+                        if o != civ && persona_of(o) == Persona::Diplomat {
                             wish.push((1, Order::ProposeAlliance { civ: o }));
                         }
                     }

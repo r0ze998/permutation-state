@@ -216,14 +216,27 @@ pub fn validate_batch(
     if batch.civ as usize >= state.civs.len() {
         return Err(RulesError::UnknownCiv(batch.civ));
     }
+    let cost = check_structure(rules, state.tick, &batch.orders)?;
+    let spendable = spendable(state, batch.civ);
+    if cost > spendable {
+        return Err(RulesError::OverBudget { cost, spendable });
+    }
+    Ok(cost)
+}
+
+/// The checks on a batch that need no world state (§4.2): freezes, list
+/// lengths, one manual order per unit, reveal timing. Returns the order cost.
+/// `validate_batch` runs these plus the tick and budget; the on-chain
+/// `SubmitOrders` runs them to reject malformed batches cheaply.
+pub fn check_structure(rules: &Ruleset, open_tick: u16, orders: &[Order]) -> Result<u32, RulesError> {
     let mut seen: Vec<UnitId> = Vec::new();
     let mut cost = 0u32;
-    for order in &batch.orders {
+    for order in orders {
         match order {
-            Order::Transfer { .. } if state.tick >= rules.transfer_freeze_tick => {
+            Order::Transfer { .. } if open_tick >= rules.transfer_freeze_tick => {
                 return Err(RulesError::Frozen)
             }
-            Order::ExchangeOrder { .. } if state.tick >= rules.exchange_freeze_tick => {
+            Order::ExchangeOrder { .. } if open_tick >= rules.exchange_freeze_tick => {
                 return Err(RulesError::Frozen)
             }
             Order::SetQueue { items, .. } if items.len() > MAX_QUEUE => {
@@ -244,7 +257,7 @@ pub fn validate_batch(
                 return Err(RulesError::TooLong)
             }
             // Only a decision whose tick has resolved can be opened.
-            Order::RevealRationale { tick, .. } if *tick >= state.tick => {
+            Order::RevealRationale { tick, .. } if *tick >= open_tick => {
                 return Err(RulesError::RevealTooEarly { tick: *tick })
             }
             _ => {}
@@ -256,10 +269,6 @@ pub fn validate_batch(
             seen.push(unit);
         }
         cost += order.cost();
-    }
-    let spendable = spendable(state, batch.civ);
-    if cost > spendable {
-        return Err(RulesError::OverBudget { cost, spendable });
     }
     Ok(cost)
 }

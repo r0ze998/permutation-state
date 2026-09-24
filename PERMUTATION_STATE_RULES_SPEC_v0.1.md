@@ -170,6 +170,11 @@ At most **one** manual order per unit per tick. A manual order overrides that un
 ### 4.3 Order commitments
 Every `submit_orders` transaction carries `decision_digest = sha256("PS/decision/v1" ‖ tick ‖ obs_root ‖ policy_id ‖ rationale_hash)` (§7.5). `obs_root` is the Merkle root of the fog-filtered view served to that civilization for tick `t`. In phase 0 the digest of each accepted batch is appended to the event chain as `decision(civ, digest)`, before anything resolves. It is never interpreted by the rules.
 
+Notes (2026-09-24, as implemented):
+- The game server publishes each civ's `obs_root` for the open tick (`decision.obsRoot` in that civ's view). Hosted players and bots commit through the server's ledger; an outside agent computes the digest itself against the published root, and the server learns it from the resolved batch (`PS_TICK`).
+- The reveal is a `RevealRationale { tick, policy, salt, text }` order in a later batch (cost 0; only for ticks already resolved: `tick < open_tick`). Anyone recomputes the digest; a mismatch is shown as unverified, never trusted.
+- A zero digest means "no commitment". The commitment proves what was claimed and when, not that the claim is true.
+
 ---
 
 ## 5. Cities
@@ -696,10 +701,10 @@ Being attacked never sets the flag, so griefers cannot take Concord away.
 - **Weights:** rank `k` (1-based) gets `w_k = 7500^(k−1)` in bps-power, computed iteratively as `w_1 = 10000`, `w_{k+1} = w_k × 7500 / 10000`. Its share is `pool_track × w_k / Σ w`.
 - **One top-3 per entry:**
   1. Compute all tracks.
-  2. For any entry holding more than one top-3 placement, keep the placement with the highest amount (ties: the earlier track in the order Dominion, Science, Concord). Remove the entry from the other tracks' top-3 and recompute those tracks.
+  2. For any entry holding more than one top-3 placement, keep the placement with the highest amount (ties: the earlier track in the order Dominion, Science, Concord). Remove the entry from the other tracks entirely — it takes no paid place there, not even below the top 3 — and recompute those tracks. *(Clarified 2026-09-24 to match `scoring::payouts`.)*
   3. Repeat until stable. This takes at most 3 iterations.
 - **Participation:** an equal split among entries that submitted ≥ 1 order in ≥ 60% of ticks since joining **and** placed in the top 50% of at least one track. The per-entry amount is capped at `2 × entry fee`; the remainder rolls over.
-- **Claims:** each leaf is `claim_leaf_hash(season_id, payout_wallet, index, amount)`. Coalition amounts are split to member wallets by the pre-registered bps. Remainders from integer division go to rollover.
+- **Claims:** `FinishSeason` stores the amount per entry in the Season account, and each entry's payout owner claims it with `Claim` (one transfer from the vault, once). With at most `max_civs` entries per season no Merkle tree is needed; `claim_leaf_hash(season_id, payout_wallet, index, amount)` remains the format if claims move to a Merkle root. Coalition amounts are split to member wallets by the pre-registered bps. Remainders from integer division go to rollover. *(Updated 2026-09-24 to match `permutation-chain`.)*
 
 ---
 

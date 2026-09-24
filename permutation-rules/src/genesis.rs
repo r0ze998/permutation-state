@@ -16,10 +16,9 @@ use crate::RulesError;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
-use sha2::{Digest, Sha256};
 
 /// One paid entry (§3.1).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct Entry {
     pub name: String,
     pub declared_kind: DeclaredKind,
@@ -36,7 +35,13 @@ pub fn new_season(
     season_seed: &Seed,
     entries: &[Entry],
 ) -> Result<WorldState, RulesError> {
-    let n = entries.len();
+    check_entries(rules, entries)?;
+    let generated = generate(rules, world_seed, entries.len())?;
+    season_from_map(rules, world_seed, season_seed, entries, generated)
+}
+
+/// Entry rules checked before any generation work (§3.1).
+pub fn check_entries(rules: &Ruleset, entries: &[Entry]) -> Result<(), RulesError> {
     for e in entries {
         let same_wallet = entries
             .iter()
@@ -46,7 +51,23 @@ pub fn new_season(
             return Err(RulesError::WalletCap);
         }
     }
-    let generated = generate(rules, world_seed, n)?;
+    Ok(())
+}
+
+/// Tick-0 state from a generated map (the second half of `new_season`, for
+/// callers that ran `map::MapJob` step by step).
+pub fn season_from_map(
+    rules: &Ruleset,
+    world_seed: &Seed,
+    season_seed: &Seed,
+    entries: &[Entry],
+    generated: crate::map::Generated,
+) -> Result<WorldState, RulesError> {
+    check_entries(rules, entries)?;
+    let n = entries.len();
+    if generated.starts.len() != n {
+        return Err(RulesError::MapGeneration("map was generated for a different number of civilizations"));
+    }
     let mut map = generated.map;
 
     let mut civs = Vec::with_capacity(n);
@@ -158,10 +179,7 @@ pub fn new_season(
         })
         .collect();
 
-    let mut genesis = Sha256::new();
-    genesis.update(b"permutation-rules/genesis");
-    genesis.update(world_seed);
-    genesis.update(season_seed);
+    let genesis = crate::hash::sha256(&[b"permutation-rules/genesis", world_seed, season_seed]);
 
     Ok(WorldState {
         ruleset_hash: rules.hash(),
@@ -189,7 +207,7 @@ pub fn new_season(
         usdc_deposited: entries.iter().map(|e| e.exchange_deposit).sum(),
         exchange_vault: 0,
         exchange_ops: 0,
-        event_head: genesis.finalize().into(),
+        event_head: genesis,
         implicit: Vec::new(),
     })
 }

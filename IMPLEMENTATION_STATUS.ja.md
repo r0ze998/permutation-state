@@ -17,6 +17,21 @@
 
 [Game Design V4](PERMUTATION_STATE_GAME_DESIGN_V4.md) を正とする。上の①〜⑦は旧設計（市民視点の `/civilization/`）の工程で、V4 では新しいルールエンジン・ER プログラム・USDC Vault・agent API・x402 参加に置き換わる。旧工程は削除せず履歴として残す。
 
+### V4 ハッカソン Must の状況（2026-09-24、ローカルの MagicBlock スタックで検証）
+
+| # | 項目 | 状態 |
+|---|---|---|
+| 1 | resolve_tick の CU 計測 | 完了（平均 634k・最大 862k / 1.4M。[DESIGN.md](permutation-chain/DESIGN.md)） |
+| 2 | ER プログラム（参加・命令・解決・コミット） | 完了（ワールドを 10 KiB×8 に分割、クランク、ER 上でプレイ） |
+| 3 | Season PDA と USDC（参加費・精算・受け取り） | 完了。ER で 180 ティック → ベースへコミット・返却 → 精算 → 6文明が受け取り → 検証 CLI で最終ルートと支払い額が一致。devnet は未デプロイ（確認待ち） |
+| 4 | x402 参加 | 完了（改ざん支払い5種を拒否。エージェントが参加しシーズン開始まで確認） |
+| 5 | game-client・HTTP・MCP・llms.txt | 完了（[client](permutation-gateway/client/README.md)） |
+| 6 | 参照エージェント2種 | ルール型は実プレイ済み。LLM 型はモック API でループを検証、実キーでの試験は未実施 |
+| 7 | 複数人の同時プレイ | 完了（席トークン、全員の手番終了で即解決） |
+| 8 | リプレイ検証 CLI | 完了（`verify`、実シーズンで VERIFIED） |
+| 9 | 観戦画面 | 完了（`/spectate.html`） |
+| 10 | デモ・提出資料 | 資料は完了（[SUBMISSION.md](SUBMISSION.md)・[DEMO_SCRIPT.md](DEMO_SCRIPT.md)・[PITCH.md](PITCH.md)）。動画の収録は未実施 |
+
 ## 実装・検証の順序（旧設計）
 
 1. コア・サービス・UIを接続し、旧保存データの無破壊更新をテストする。
