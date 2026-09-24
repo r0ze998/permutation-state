@@ -1,7 +1,7 @@
 //! Scripted rule-based bots with four personalities (Warlord, Builder,
-//! Diplomat, Scholar). They play through the same public order API as a
-//! human and read the full state (there is no fog-of-war view yet), so they
-//! are a test harness and sparring partner, not the reference agent.
+//! Diplomat, Scholar). They play through the same order API as a human,
+//! decide from their own fogged belief state, and commit a short rationale
+//! each tick (§4.3). They are a sparring partner, not the reference agent.
 
 use permutation_rules::buildings::Building;
 use permutation_rules::hex::Hex;
@@ -618,5 +618,97 @@ impl Bot {
             out.push(o);
         }
         out
+    }
+}
+
+// ------------------------------------------------------------------ rationale
+
+const NAMES_JA: [&str; 6] = ["アステル", "ボレアリス", "シンダー", "ダンマール", "エンバー", "フィヨルダル"];
+
+fn civ_ja(c: CivId) -> &'static str {
+    NAMES_JA.get(c as usize).copied().unwrap_or("?")
+}
+
+const TECH_JA: [&str; 16] = [
+    "農業", "青銅器", "弓術", "騎乗", "石工", "神秘主義", "筆記", "通貨", "製鉄", "数学", "騎士道", "哲学", "工学", "天文学", "物理学", "天体力学",
+];
+const BUILDING_JA: [&str; 10] = ["穀物庫", "工房", "神殿", "市場", "学術院", "兵舎", "城壁", "スターゲートI", "スターゲートII", "スターゲートIII"];
+const UNIT_JA: [&str; 8] = ["槍兵", "弓兵", "騎兵", "長槍兵", "弩兵", "騎士", "斥候", "開拓者"];
+
+fn item_ja(i: &QueueItem) -> String {
+    match i {
+        QueueItem::Building(b) => BUILDING_JA[*b as usize].to_string(),
+        QueueItem::Troops { unit, n } => format!("{}×{}", UNIT_JA[*unit as usize], n),
+        QueueItem::Scout => "斥候".to_string(),
+        QueueItem::Settler => "開拓者".to_string(),
+    }
+}
+
+impl Bot {
+    /// Self-declared policy id for the decision digest.
+    pub fn policy(&self) -> String {
+        format!("bot/{}@1", self.persona.name().to_lowercase())
+    }
+
+    /// A short, honest summary of why these orders were chosen, written from
+    /// the same belief state the orders came from. Committed before the tick
+    /// resolves and revealed after it.
+    pub fn rationale(&self, s: &WorldState, orders: &[Order]) -> String {
+        let civ = self.civ;
+        let mine = troops_of(s, civ);
+        let mut parts: Vec<String> = Vec::new();
+        let mut moves = 0;
+        let mut scouting = 0;
+        for o in orders {
+            match o {
+                Order::DeclareWar { civ: t } => parts.push(format!(
+                    "{}に宣戦：見えている首都で最も近く、自軍{}に対し目視の相手兵{}",
+                    civ_ja(*t),
+                    mine,
+                    troops_of(s, *t)
+                )),
+                Order::ProposePeace { civ: t } => parts.push(format!("{}に講和を提案：戦争を長引かせない", civ_ja(*t))),
+                Order::AcceptPeace { civ: t } => parts.push(format!("{}の講和を受諾", civ_ja(*t))),
+                Order::AcceptNap { civ: t, .. } => parts.push(format!("{}の不可侵条約を受諾：金に余裕あり", civ_ja(*t))),
+                Order::ProposeNap { civ: t, .. } => parts.push(format!("{}に不可侵条約を提案：国境を落ち着かせる", civ_ja(*t))),
+                Order::ProposeAlliance { civ: t } => parts.push(format!("{}に同盟を提案：同じ外交方針", civ_ja(*t))),
+                Order::AcceptAlliance { civ: t } => parts.push(format!("{}の同盟に参加", civ_ja(*t))),
+                Order::Attack { target, .. } => parts.push(match target {
+                    AttackTarget::City(id) => format!("都市{}を攻撃：射程内の敵都市を優先", id),
+                    AttackTarget::Unit(_) => "射程内で最も弱い敵部隊を攻撃".to_string(),
+                    AttackTarget::CityState(id) => format!("都市国家{}を攻撃", id + 1),
+                }),
+                Order::FoundCity { .. } => parts.push("開拓者が良い立地に着いたので都市を建設".to_string()),
+                Order::SetResearch { techs } => parts.push(format!(
+                    "研究：{}",
+                    techs.iter().map(|t| TECH_JA[*t as usize]).collect::<Vec<_>>().join("→")
+                )),
+                Order::SetQueue { city, items } => parts.push(format!(
+                    "都市{}の生産：{}",
+                    city,
+                    if items.is_empty() { "なし".to_string() } else { items.iter().map(item_ja).collect::<Vec<_>>().join("→") }
+                )),
+                Order::SendEnvoy { city_state, .. } => parts.push(format!("最寄りの都市国家{}へ使節", city_state + 1)),
+                Order::Purchase { .. } => parts.push("余った金で首都の生産を購入".to_string()),
+                Order::MoveUnit { unit, .. } => {
+                    if s.units.get(*unit as usize).is_some_and(|u| u.unit_type == UnitType::Scout) {
+                        scouting += 1;
+                    } else {
+                        moves += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if scouting > 0 {
+            parts.push("斥候で未踏の地を探索".to_string());
+        }
+        if moves > 0 {
+            parts.push(format!("部隊{}つを移動（開拓地・進軍）", moves));
+        }
+        if parts.is_empty() {
+            parts.push("様子見：急ぐ判断なし".to_string());
+        }
+        format!("[{}] {}", self.persona.name(), parts.join(" / "))
     }
 }

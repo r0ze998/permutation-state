@@ -163,12 +163,12 @@ Founding a city within 2 tiles of a ruin grants that city `+(ruin_peak_pop / 2)`
 | `ExchangeOrder(...)` | **0** | within the Exchange caps (§11.3) and tick < 120 |
 | `Raze(city)` | 1 | the city was captured this tick or the previous one |
 | `SetStanding(unit|city, rule)` | 1 | §13. **Execution** of standing rules is free |
-| `RevealRationale(tick, text)` | 0 | a commit-reveal disclosure (V4 §5.4), not a game action |
+| `RevealRationale(tick, policy, salt, text)` | 0 | opens the commitment of a resolved `tick` (§7.5), not a game action |
 
 At most **one** manual order per unit per tick. A manual order overrides that unit's standing rule for that tick.
 
 ### 4.3 Order commitments
-Every `submit_orders` transaction carries `decision_digest = sha256(tick ‖ obs_root ‖ policy_id ‖ rationale_hash)`. `obs_root` is the Merkle root of the fog-filtered view served to that civilization for tick `t`. The digest is stored and never interpreted by the rules.
+Every `submit_orders` transaction carries `decision_digest = sha256("PS/decision/v1" ‖ tick ‖ obs_root ‖ policy_id ‖ rationale_hash)` (§7.5). `obs_root` is the Merkle root of the fog-filtered view served to that civilization for tick `t`. In phase 0 the digest of each accepted batch is appended to the event chain as `decision(civ, digest)`, before anything resolves. It is never interpreted by the rules.
 
 ---
 
@@ -342,7 +342,33 @@ Rules resolve on the full state. Every player — human client or agent — deci
   - Other civilizations' gold, science, influence, iron, horses, techs, research queue, USDC and city queues/food/production are removed — from allies too.
 - **Public announcements** stay global: war and peace, treaties, captures, revolts, razing, city founding and Star Gate stages (§14.2). Tech discoveries are private to the civilization and its allies.
 - **Validation** of orders always uses the full state; an order the belief state made look possible can still fail (for example a move into a tile an unseen army occupies stops, §7.3).
-- `obs_root` (§4.3) is the Merkle root of this belief view.
+- `obs_root` (§4.3) is the Merkle root of this belief view (§7.5).
+
+### 7.5 Decision logs (commit-reveal)
+- **Hashes:**
+  - `policy_id = sha256("PS/policy/v1" ‖ policy)`, where `policy` ≤ 64 bytes (for example `human` or `bot/warlord@1`).
+  - `rationale_hash = sha256("PS/rationale/v1" ‖ salt₁₆ ‖ text)`, where `text` ≤ 512 bytes. The random salt stops short reasons from being guessed before the reveal.
+  - `decision_digest = sha256("PS/decision/v1" ‖ tick_le16 ‖ obs_root ‖ policy_id ‖ rationale_hash)`.
+- **Observation leaves**, in this order; each body is Borsh-encoded:
+  1. `header`: `("PS/obs/v1", tick, civ, ruleset_hash)`.
+  2. `tile` × every tile: `(index u32, q i32, r i32, fog u8, owner_city Option<u32>, ruin Option<u16>)`. `fog` is 0 = never seen, 1 = remembered, 2 = in sight.
+  3. `civ` × every civ, as in the belief state (private fields cleared).
+  4. `city` × every city present in the belief state: `(City, last_seen Option<u16>)`.
+  5. `unit` × every unit present in the belief state.
+  6. `city_state` × every explored city-state: `(id, q, r, pop, defense, specialty, suzerain, captured_by, own influence, top influence)`.
+  7. `diplomacy`: `(relations, truce_until, proposals to/from civ, [(other, their grievance, own grievance)])`.
+  8. `market`: `pools`.
+- **Merkle tree:**
+  - `leaf = sha256(0x00 ‖ len(kind) ‖ kind ‖ body)` and `node = sha256(0x01 ‖ left ‖ right)`.
+  - An odd node at the end of a level is carried up unchanged.
+  - The root of an empty list is `sha256("")`.
+- **Reveal:** `RevealRationale(tick, policy, salt, text)` is valid only for `tick < current tick`. Phase 2 appends `reveal(civ, tick, policy_id, rationale_hash)` to the event chain.
+- **Verification:** a verifier recomputes `obs_root` from the replayed state and the memory, recomputes the digest from the revealed parts, and compares it with the `decision` event of that tick. An inclusion proof for a single leaf proves one fact about what the civ saw, for example "this tile was fog".
+- **What it proves:**
+  - The choice was fixed before the tick resolved.
+  - It was made with only that civ's view.
+  - The reason was not edited afterwards.
+- **What it does not prove:** who or what wrote the reason.
 
 ---
 

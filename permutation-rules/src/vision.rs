@@ -18,7 +18,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 
 use crate::hex::Hex;
 use crate::map::Terrain;
-use crate::state::{City, CityId, CivId, Owner, Relation, WorldState};
+use crate::state::{City, CityId, CivId, LastYields, Owner, Relation, WorldState};
 use crate::tech::TechSet;
 use crate::units::stats;
 
@@ -172,7 +172,8 @@ pub fn belief(state: &WorldState, civ: CivId, seen: &[bool], memory: &Memory) ->
             u.alive = false;
         }
     }
-    // Treasuries, research and foreign queues are private, even to allies.
+    // Treasuries, income, research, order bank and foreign queues are private,
+    // even to allies (§7.4).
     for o in b.civs.iter_mut().filter(|o| o.id != civ) {
         o.gold = 0;
         o.science_store = 0;
@@ -184,6 +185,11 @@ pub fn belief(state: &WorldState, civ: CivId, seen: &[bool], memory: &Memory) ->
         o.usdc = 0;
         o.exchange_spent = 0;
         o.exchange_bought = [0; 5];
+        o.last = LastYields::default();
+        o.order_bank = 0;
+        o.deficit = false;
+        o.troops_lost = 0;
+        o.war_weariness = 0;
     }
     for c in b.cities.iter_mut().filter(|c| c.owner != Some(civ)) {
         c.queue.clear();

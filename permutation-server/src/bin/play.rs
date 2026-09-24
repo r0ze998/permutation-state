@@ -23,6 +23,7 @@ use permutation_server::api::{self, OrderDto};
 use permutation_server::bots::{Bot, NAMES, PERSONAS};
 use permutation_server::events::diff_events;
 use permutation_server::fog::{line_is_public, Fog};
+use permutation_server::ledger::{hex, Ledger};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -36,6 +37,7 @@ struct Game {
     rules: Ruleset,
     state: WorldState,
     fog: Fog,
+    ledger: Ledger,
     bots: Vec<Bot>,
     /// The human's committed batch for the open tick.
     committed: Vec<OrderDto>,
@@ -71,9 +73,13 @@ impl Game {
             .skip(1)
             .map(|(i, p)| Bot::new(i as CivId, *p))
             .collect();
+        let fog = Fog::new(&state);
+        let mut ledger = Ledger::new(&world);
+        ledger.observe(&state, &fog);
         Game {
             rules,
-            fog: Fog::new(&state),
+            fog,
+            ledger,
             state,
             bots,
             committed: Vec::new(),
@@ -96,13 +102,27 @@ impl Game {
             return;
         }
         let tick = self.state.tick;
-        let human: Vec<Order> = self.committed.iter().filter_map(|o| o.to_order().ok()).collect();
-        let mut batches = vec![OrderBatch { civ: HUMAN, tick, decision_digest: [0; 32], orders: human }];
+        // Every batch commits to its decision (§4.3) and opens earlier ones.
+        let mut human: Vec<Order> = self.committed.iter().filter_map(|o| o.to_order().ok()).collect();
+        human.extend(self.ledger.reveals(HUMAN, tick));
+        let digest = match self.ledger.record(tick, HUMAN) {
+            Some(r) => r.digest,
+            None => self.ledger.commit(tick, HUMAN, "human", ""),
+        };
+        let mut batches = vec![OrderBatch { civ: HUMAN, tick, decision_digest: digest, orders: human }];
         for b in &mut self.bots {
             let view = self.fog.belief(&self.state, b.civ);
-            let orders = b.orders(&view, &self.rules, &self.fog.memory(b.civ).explored);
-            batches.push(OrderBatch { civ: b.civ, tick, decision_digest: [0; 32], orders });
+            let mut orders = b.orders(&view, &self.rules, &self.fog.memory(b.civ).explored);
+            let digest = self.ledger.commit(tick, b.civ, &b.policy(), &b.rationale(&view, &orders));
+            orders.extend(self.ledger.reveals(b.civ, tick));
+            batches.push(OrderBatch { civ: b.civ, tick, decision_digest: digest, orders });
         }
+        // Which batches the engine will accept, so reveals are only marked when processed.
+        let accepted: Vec<(CivId, Vec<Order>)> = batches
+            .iter()
+            .filter(|b| validate_batch(&self.state, &self.rules, b).is_ok())
+            .map(|b| (b.civ, b.orders.clone()))
+            .collect();
         let mut vrf = [0u8; 32];
         vrf[..2].copy_from_slice(&tick.to_le_bytes());
         vrf[2..10].copy_from_slice(&(self.deadline.elapsed().as_nanos() as u64).to_le_bytes());
@@ -112,6 +132,10 @@ impl Game {
             return;
         }
         self.fog.update(&self.state);
+        for (civ, orders) in &accepted {
+            self.ledger.mark_revealed(*civ, orders, tick);
+        }
+        self.ledger.observe(&self.state, &self.fog);
         let violations = invariants::check(&self.state, &self.rules);
         if !violations.is_empty() {
             eprintln!("invariant violations after tick {tick}: {violations:?}");
@@ -158,6 +182,16 @@ impl Game {
         o.insert("chronicle".into(), json!(chronicle));
         o.insert("lastSummary".into(), json!(self.last_summary));
         o.insert("resolvedTick".into(), json!(self.resolved_tick));
+        let t = self.state.tick;
+        o.insert(
+            "decision".into(),
+            json!({
+                "tick": t,
+                "obsRoot": self.ledger.root(t, HUMAN).map(|h| hex(&h)),
+                "digest": self.ledger.record(t, HUMAN).map(|r| hex(&r.digest)),
+                "rationale": self.ledger.record(t, HUMAN).map(|r| r.text.clone()),
+            }),
+        );
         o.insert(
             "personas".into(),
             json!(NAMES.iter().enumerate().map(|(i, _)| if i == HUMAN as usize { "Human" } else { PERSONAS[i].name() }).collect::<Vec<_>>()),
@@ -333,11 +367,59 @@ fn handle(mut stream: TcpStream, game: Arc<Mutex<Game>>, web: PathBuf) {
             let batch = OrderBatch { civ: HUMAN, tick: g.state.tick, decision_digest: [0; 32], orders };
             match validate_batch(&g.state, &g.rules, &batch) {
                 Ok(cost) => {
+                    let body: Value = serde_json::from_slice(&req.body).unwrap_or(json!({}));
+                    let text = body["rationale"].as_str().unwrap_or("").trim().to_string();
+                    let tick = g.state.tick;
+                    let digest = g.ledger.commit(tick, HUMAN, "human", &text);
                     g.committed = dtos;
                     g.committed_cost = cost;
-                    json_ok(&mut stream, &json!({"ok": true, "cost": cost, "tick": g.state.tick}))
+                    json_ok(&mut stream, &json!({"ok": true, "cost": cost, "tick": tick, "digest": hex(&digest)}))
                 }
                 Err(e) => json_ok(&mut stream, &json!({"ok": false, "error": e.to_string()})),
+            }
+        }
+        ("GET", "/api/decisions") => {
+            let limit: usize = req.qi("limit").unwrap_or(120).min(600);
+            let open = g.state.tick;
+            let records: Vec<Value> = g
+                .ledger
+                .history(limit)
+                .into_iter()
+                .filter(|r| r.tick < open || r.civ == HUMAN)
+                .map(|r| {
+                    let revealed = r.revealed_at.is_some();
+                    json!({
+                        "tick": r.tick, "civ": r.civ,
+                        "obsRoot": hex(&r.obs_root), "digest": hex(&r.digest),
+                        // Only what has been revealed on the event chain is public.
+                        "policy": if revealed || r.civ == HUMAN { json!(r.policy) } else { Value::Null },
+                        "reveal": if revealed { json!({"at": r.revealed_at, "salt": hex(&r.salt), "text": r.text}) } else { Value::Null },
+                        "serverVerified": if revealed { json!(r.verified()) } else { Value::Null },
+                    })
+                })
+                .collect();
+            json_ok(&mut stream, &json!({ "open": open, "records": records }))
+        }
+        ("GET", "/api/decisions/proof") => {
+            let (Some(tick), Some(civ), Some(kind), Some(id)) =
+                (req.qi::<u16>("tick"), req.qi::<CivId>("civ"), req.q("kind"), req.qi::<u32>("id"))
+            else {
+                return respond(&mut stream, "400 Bad Request", "text/plain", b"tick, civ, kind, id required");
+            };
+            // Past observations only; another civ's view only down to fog/ownership of a tile.
+            if tick >= g.state.tick || (civ != HUMAN && kind != "tile" && kind != "header") {
+                return json_ok(&mut stream, &json!({"ok": false, "error": "not available"}));
+            }
+            match g.ledger.proof(tick, civ, kind, id) {
+                Some((root, leaf, proof)) => {
+                    let v = json!({
+                        "ok": true, "tick": tick, "civ": civ, "root": hex(&root),
+                        "kind": leaf.kind, "id": leaf.id, "body": hex(&leaf.body),
+                        "proof": proof.iter().map(|p| json!([hex(&p.sibling), p.left])).collect::<Vec<_>>(),
+                    });
+                    json_ok(&mut stream, &v)
+                }
+                None => json_ok(&mut stream, &json!({"ok": false, "error": "no such leaf (older observations keep only their root)"})),
             }
         }
         ("POST", "/api/control") => {

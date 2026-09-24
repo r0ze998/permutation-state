@@ -14,6 +14,7 @@ pub mod battle;
 pub mod buildings;
 pub mod checks;
 pub mod combat;
+pub mod decision;
 pub mod diplomacy;
 pub mod economy;
 pub mod error;

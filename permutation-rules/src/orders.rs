@@ -122,8 +122,12 @@ pub enum Order {
         unit: UnitId,
         rule: StandingRule,
     },
+    /// Opens the commitment made at `tick` (§4.3): anyone can then check
+    /// `decision_digest == digest(tick, obs_root, policy_id(policy), rationale_hash(salt, text))`.
     RevealRationale {
         tick: u16,
+        policy: Vec<u8>,
+        salt: [u8; 16],
         text: Vec<u8>,
     },
 }
@@ -206,6 +210,15 @@ pub fn validate_batch(
             }
             Order::MoveUnit { path, .. } if path.len() > rules.max_path_len as usize => {
                 return Err(RulesError::TooLong)
+            }
+            Order::RevealRationale { policy, text, .. }
+                if policy.len() > crate::decision::MAX_POLICY || text.len() > crate::decision::MAX_RATIONALE =>
+            {
+                return Err(RulesError::TooLong)
+            }
+            // Only a decision whose tick has resolved can be opened.
+            Order::RevealRationale { tick, .. } if *tick >= state.tick => {
+                return Err(RulesError::RevealTooEarly { tick: *tick })
             }
             _ => {}
         }

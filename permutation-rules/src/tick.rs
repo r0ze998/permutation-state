@@ -78,7 +78,7 @@ pub fn run_phase(
         });
     }
     match phase {
-        0 => phase_seed(state, input),
+        0 => phase_seed(state, rules, input),
         1 => crate::diplomacy::phase_diplomacy(state, rules, input),
         2 => phase_economy_orders(state, rules, input),
         3 => {} // TODO(§13): compile standing rules into implicit orders.
@@ -128,8 +128,23 @@ pub(crate) fn accepted(
 
 // ---------------------------------------------------------------- phase 0
 
-fn phase_seed(state: &mut WorldState, input: &TickInput) {
+fn phase_seed(state: &mut WorldState, rules: &Ruleset, input: &TickInput) {
     state.tick_seed = tick_seed(&state.season_seed, &input.vrf, state.tick);
+    // Decision commitments enter the event chain before anything resolves (§4.3).
+    for civ in 0..state.civs.len() as u16 {
+        let digest = input
+            .batches
+            .iter()
+            .filter(|b| b.civ == civ)
+            .find(|b| validate_batch(state, rules, b).is_ok())
+            .map(|b| b.decision_digest);
+        if let Some(d) = digest {
+            let mut payload = [0u8; 34];
+            payload[..2].copy_from_slice(&civ.to_le_bytes());
+            payload[2..].copy_from_slice(&d);
+            state.push_event(b"decision", &payload);
+        }
+    }
     for c in &mut state.cities {
         c.attacked_this_tick = false;
     }
@@ -156,6 +171,16 @@ fn phase_economy_orders(state: &mut WorldState, rules: &Ruleset, input: &TickInp
                 }
                 Order::SetResearch { techs } => set_research(state, civ, techs),
                 Order::Purchase { city, gold } => purchase(state, rules, civ, city, gold),
+                Order::RevealRationale { tick, policy, salt, text } => {
+                    // Recorded, never interpreted: verifiers check it against the
+                    // `decision` event of `tick` (§4.3).
+                    let mut payload = Vec::with_capacity(68);
+                    payload.extend_from_slice(&civ.to_le_bytes());
+                    payload.extend_from_slice(&tick.to_le_bytes());
+                    payload.extend_from_slice(&crate::decision::policy_id(&policy));
+                    payload.extend_from_slice(&crate::decision::rationale_hash(&salt, &text));
+                    state.push_event(b"reveal", &payload);
+                }
                 _ => {}
             }
         }

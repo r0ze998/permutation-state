@@ -35,6 +35,10 @@ pub enum RulesError {
         got: u8,
     },
     Serialization,
+    /// A rationale may only be revealed after its tick resolved (§4.3).
+    RevealTooEarly {
+        tick: u16,
+    },
 }
 
 impl fmt::Display for RulesError {
@@ -62,6 +66,9 @@ impl fmt::Display for RulesError {
                 write!(f, "phase {got} requested, phase {expected} is next")
             }
             RulesError::Serialization => write!(f, "state serialization failed"),
+            RulesError::RevealTooEarly { tick } => {
+                write!(f, "the decision for tick {tick} has not resolved yet")
+            }
         }
     }
 }

@@ -38,6 +38,7 @@
     <button class="nav-btn" data-drawer="market" type="button"><span class="g">⇄</span><span class="l">市場</span></button>
     <button class="nav-btn" data-drawer="victory" type="button"><span class="g">♛</span><span class="l">勝利</span></button>
     <button class="nav-btn" data-drawer="chronicle" type="button"><span class="g">☷</span><span class="l">年代記</span></button>
+    <button class="nav-btn" data-drawer="decisions" type="button"><span class="g">⛓</span><span class="l">判断ログ</span></button>
   </nav>
   <aside class="drawer panel" id="drawer" hidden></aside>
 
@@ -72,6 +73,11 @@
       <div class="dock-budget" id="dock-budget"></div>
       <div class="chips" id="chips"></div>
       <div class="commit" id="commit"></div>
+      <label class="rationale" title="確定時にハッシュだけを送り、ティック解決後に公開されます（コミット・リビール）">
+        <span class="rl">判断メモ</span>
+        <input id="rationale" type="text" maxlength="160" autocomplete="off" placeholder="任意・1行。ハッシュで先に約束し、解決後に公開されます">
+        <span class="digest" id="digest"></span>
+      </label>
     </section>
   </footer>
 

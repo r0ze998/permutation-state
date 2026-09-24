@@ -107,7 +107,7 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible, select:focu
 .track-pill .v small { font: 500 10px var(--sans); color: var(--muted); margin-left: 2px; }
 
 .world-nav { position: absolute; left: 24px; top: 262px; display: flex; flex-direction: column; gap: 7px; z-index: 6; }
-.nav-btn { all: unset; cursor: pointer; width: 52px; height: 56px; border-radius: 7px; background: #fbf8eee8; border: 1px solid #fffcef; box-shadow: 0 3px 14px #1f392718; display: grid; place-items: center; align-content: center; gap: 1px; text-align: center; position: relative; }
+.nav-btn { all: unset; cursor: pointer; width: 52px; height: 50px; border-radius: 7px; background: #fbf8eee8; border: 1px solid #fffcef; box-shadow: 0 3px 14px #1f392718; display: grid; place-items: center; align-content: center; gap: 1px; text-align: center; position: relative; }
 .nav-btn .g { font: 21px/1 var(--serif); }
 .nav-btn .l { font-size: 9px; color: var(--ink-soft); }
 .nav-btn.active { background: var(--green-deep); color: var(--paper); }
@@ -176,7 +176,13 @@ button:focus-visible, [tabindex]:focus-visible, input:focus-visible, select:focu
 .lens-bar button { all: unset; cursor: pointer; padding: 6px 11px; border-radius: 4px; font-size: 10px; color: var(--ink-soft); display: flex; gap: 5px; align-items: center; }
 .lens-bar button span { font: 14px/1 var(--serif); }
 .lens-bar button[aria-pressed="true"] { background: #385845; color: #fbf9ec; }
-.dock { width: 100%; padding: 10px 12px; display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center; }
+.dock { width: 100%; padding: 10px 12px; display: grid; grid-template-columns: auto 1fr auto; gap: 8px 12px; align-items: center; }
+.rationale { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; border-top: 1px dashed #e2dccb; padding-top: 7px; }
+.rationale .rl { font: 700 9px/1 var(--sans); letter-spacing: 1px; color: var(--muted); white-space: nowrap; }
+.rationale input { flex: 1; min-width: 0; border: 1px solid #e3e1d2; background: #fffdf6; border-radius: 5px; padding: 4px 8px; font: 12px/1.4 var(--sans); color: var(--ink); }
+.rationale input:focus { outline: 2px solid #c9b07a55; border-color: #c9b07a; }
+.rationale .digest { font: 10px/1 var(--mono); color: var(--muted); white-space: nowrap; }
+.rationale .digest b { color: var(--good); font-weight: 600; }
 .dock-budget { position: relative; display: grid; gap: 4px; }
 .pips { display: flex; gap: 3px; }
 .pip { width: 13px; height: 17px; border-radius: 3px; border: 1.5px solid #9fb094; background: transparent; }
@@ -347,3 +353,23 @@ dialog::backdrop { background: #203c3266; backdrop-filter: blur(6px); }
 .lens-legend i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
 .lens-legend .hint { color: var(--muted); }
 .legend-row .sw-prot { background: repeating-linear-gradient(-60deg, rgba(120,110,100,.55) 0 1.5px, transparent 1.5px 5px); border: 1px solid rgba(120,110,100,.4); }
+
+/* decision log */
+.proof-tool { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 11px; color: var(--ink-soft); }
+.proof-tool select, .proof-tool input { font: 12px var(--sans); border: 1px solid #e3e1d2; border-radius: 5px; background: #fffdf6; padding: 3px 6px; }
+.proof-tool input { width: 64px; }
+.proof-result { margin: 8px 0; padding: 9px 10px; border-radius: 7px; background: #f4f6ef; border: 1px solid #dfe5d6; font-size: 11.5px; }
+.proof-result .pr-head { margin-bottom: 5px; }
+.proof-result .pr-row { display: flex; gap: 6px; align-items: baseline; line-height: 1.7; }
+.proof-result code, .dec-row code { font: 10px var(--mono); color: var(--muted); }
+.vchk { font: 700 10px/1 var(--sans); color: var(--muted); }
+.vchk.ok { color: var(--good); } .vchk.bad { color: var(--bad); }
+.dec-list { margin-top: 8px; display: grid; gap: 4px; }
+.dec-tick { font: 700 9px/1 var(--sans); letter-spacing: 1px; color: var(--muted); margin: 8px 0 2px; }
+.dec-row { border: 1px solid #ebe7d8; background: #fdfbf4; border-radius: 6px; padding: 6px 8px; display: grid; gap: 3px; font-size: 11.5px; }
+.dec-who { display: flex; align-items: center; gap: 6px; }
+.dec-steps { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; font-size: 10.5px; color: var(--ink-soft); }
+.dec-steps .arrow { color: var(--muted); }
+.dec-text { color: var(--ink); line-height: 1.55; }
+.dec-filter { gap: 4px; }
+.dec-filter .btn { padding: 3px 7px; font-size: 10.5px; min-height: 0; }

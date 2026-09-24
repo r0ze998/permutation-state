@@ -5,6 +5,7 @@
 // drafts until committed; nothing modal interrupts a running tick.
 import { WorldMap, drawMinimap, key } from './map.mjs';
 import * as T from './i18n.mjs';
+import * as V from './verify.mjs';
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -61,6 +62,7 @@ async function poll() {
   const prev = S.view;
   S.view = v; S.me = v.me;
   if (S.lastTick === null && v.committed?.length) { S.drafts = v.committed.map(describe); S.committedJson = JSON.stringify(v.committed); map.setDrafts(S.drafts); }
+  if (S.lastTick === null && v.decision?.rationale) { $('#rationale').value = v.decision.rationale; S.committedRationale = v.decision.rationale; }
   if (newTick) onNewTick(v, prev);
   S.lastTick = v.tick;
   map.setView(v, v.me);
@@ -71,6 +73,8 @@ async function poll() {
 
 function onNewTick(v, prev) {
   S.drafts = []; S.committedJson = '[]'; map.setDrafts([]);
+  $('#rationale').value = ''; S.committedRationale = ''; S.digest = null;
+  if (S.drawer === 'decisions') loadDecisions();
   S.digest = prev ? digest(prev, v) : [];
   S.unitPreview = null; S.cityPreview = null; S.research = null; S.diplo = {};
   S.summaryOpen = true; S.summaryCollapsed = false; S.summaryPinned = false;
@@ -93,7 +97,8 @@ const tileIndex = id => map.tiles.get(id)?.index;
 const ownerOf = id => { const c = S.view.owners[tileIndex(id)]; return c && c !== '.' ? parseInt(c, 36) : null; };
 
 // ================================================================== drafts
-function isDirty() { return JSON.stringify(S.drafts.map(d => d.dto)) !== S.committedJson; }
+const rationaleText = () => ($('#rationale')?.value || '').trim();
+function isDirty() { return JSON.stringify(S.drafts.map(d => d.dto)) !== S.committedJson || rationaleText() !== (S.committedRationale || ''); }
 function spendable() { return (S.view?.economy.budget ?? 0) + (S.view?.economy.bank ?? 0); }
 function used() { return S.drafts.reduce((a, d) => a + (d.dto.type === 'ExchangeOrder' ? 0 : 1), 0); }
 
@@ -167,10 +172,12 @@ async function commit(auto = false) {
   if (S.committing) return;
   S.committing = true;
   const orders = S.drafts.map(d => d.dto);
-  const res = await api.post('/api/orders', { orders }).catch(() => ({ ok: false, error: 'network' }));
+  const rationale = rationaleText();
+  const res = await api.post('/api/orders', { orders, rationale }).catch(() => ({ ok: false, error: 'network' }));
   S.committing = false;
   if (res.ok) {
     S.committedJson = JSON.stringify(orders);
+    S.committedRationale = rationale; S.digest = res.digest;
     if (!auto) toast(orders.length ? `命令を確定しました（${orders.length}件・枠${res.cost}）。締切まで変更できます。` : '命令なしで確定しました。未使用の枠は繰り越されます。');
     else if (orders.length) toast('締切が近いため、下書きを自動で確定しました。');
   } else {
@@ -356,6 +363,9 @@ function renderDock() {
   const dirty = isDirty(), v = S.view;
   const resolving = !v.paused && v.secondsLeft < .6;
   const state = resolving ? ['resolving', '解決中'] : dirty ? ['draft', `下書き · 未確定`] : S.drafts.length ? ['committed', '確定済み ✓'] : ['committed', v.resolvedTick !== null ? `ティック${v.resolvedTick}は解決済み` : '命令なし'];
+  const dg = v.decision?.digest;
+  setHtml($('#digest'), dg && !dirty ? `約束 <b>${dg.slice(0, 8)}…${dg.slice(-4)}</b>` : dirty ? '確定で約束' : '');
+  $('#digest').title = dg ? `decision_digest ${dg}\nobs_root ${v.decision.obsRoot}` : '';
   setHtml($('#commit'), `<span class="commit-state ${state[0]}">${state[1]}</span><button class="btn ${dirty ? 'primary' : ''}" type="button" id="commit-btn" ${S.committing || v.over ? 'disabled' : ''}>${dirty ? '確定する' : '確定済み'}<span class="key" style="margin-left:4px">⌃↵</span></button>`);
 }
 
@@ -607,6 +617,7 @@ function openDrawer(name) {
   $('#drawer').hidden = !S.drawer;
   if (S.drawer === 'research') loadResearch();
   if (S.drawer === 'diplomacy') loadDiplomacy();
+  if (S.drawer === 'decisions') loadDecisions();
   renderDrawer();
 }
 async function loadResearch() { S.research = await api.get('/api/preview/research'); renderDrawer(); }
@@ -617,7 +628,7 @@ async function loadDiplomacy() {
 }
 function renderDrawer() {
   const el = $('#drawer'); if (!S.drawer || !S.view) return;
-  const f = { cities: drawerCities, research: drawerResearch, diplomacy: drawerDiplomacy, market: drawerMarket, victory: drawerVictory, chronicle: drawerChronicle }[S.drawer];
+  const f = { cities: drawerCities, research: drawerResearch, diplomacy: drawerDiplomacy, market: drawerMarket, victory: drawerVictory, chronicle: drawerChronicle, decisions: drawerDecisions }[S.drawer];
   setHtml(el, `<button class="close-x" type="button" data-drawer="${S.drawer}" aria-label="閉じる">×</button>` + f());
 }
 function drawerCities() {
@@ -735,6 +746,69 @@ function drawerChronicle() {
     <div class="row">${[['all', 'すべて'], ['war', '戦い'], ['diplo', '外交'], ['growth', '発展']].map(([k, n]) => `<button class="btn ${f === k ? 'primary' : ''}" type="button" data-chron="${k}">${n}</button>`).join('')}</div>
     <div style="margin-top:8px">${rows.map(e => `<div class="list-row" style="cursor:default"><div class="main"><div class="title" style="font-weight:400">${T.KIND_GLYPH[e.kt[0]] || '·'} ${esc(e.kt[1])}</div></div><span class="meta">t${e.tick}</span></div>`).join('') || '<p class="desc">まだ記録はありません。</p>'}</div>`;
 }
+// ------------------------------------------------------------------ decision log
+async function loadDecisions() {
+  const d = await api.get('/api/decisions?limit=240');
+  S.decisions = d; S.verified ??= {};
+  renderDrawer();
+  for (const r of d.records) {
+    const k = `${r.tick}:${r.civ}:${r.digest}`;
+    if (r.reveal && S.verified[k] === undefined) { S.verified[k] = await V.verifyRecord(r); }
+  }
+  renderDrawer();
+}
+async function proveTile() {
+  const t = S.tile && map.tiles.get(S.tile);
+  if (!t) { S.proof = { error: '先に地図でマスを選んでください。' }; return renderDrawer(); }
+  const civId = +(S.proofCiv ?? S.me), tick = +(S.proofTick ?? Math.max(0, S.view.tick - 1));
+  const p = await api.get(`/api/decisions/proof?tick=${tick}&civ=${civId}&kind=tile&id=${t.index}`);
+  if (!p.ok) { S.proof = { error: p.error === 'not available' ? 'まだ解決していないティックは証明できません。' : '古い観測は根（ルート）しか残っていません。' }; return renderDrawer(); }
+  const leafOk = await V.verifyProof(p);
+  const rec = (S.decisions?.records || []).find(r => r.tick === tick && r.civ === civId);
+  const digestOk = rec?.reveal ? await V.verifyRecord(rec) : null;
+  S.proof = { tick, civ: civId, tile: V.decodeTile(p.body), steps: p.proof.length, root: p.root, leafOk, rootMatches: rec ? rec.obsRoot === p.root : null, digestOk, text: rec?.reveal?.text };
+  renderDrawer();
+}
+function drawerDecisions() {
+  const d = S.decisions; const civs = S.view.civs;
+  const who = S.decFilter ?? 'all';
+  const fogName = ['未踏（見えない）', '霧の中（記憶のみ）', '視界の中'];
+  const pr = S.proof; const pt = S.tile && map.tiles.get(S.tile);
+  const check = ok => ok === true ? '<span class="vchk ok">✓</span>' : ok === false ? '<span class="vchk bad">✗</span>' : '<span class="vchk">…</span>';
+  let html = `<div class="eyebrow">DECISION LOG · 判断ログ</div><h2>判断の証拠</h2>
+    <p class="drawer-intro">全文明が毎ティック、解決<b>前</b>に「見えていた世界（観測ルート）・方針・理由」を1つのハッシュで約束し、解決<b>後</b>に理由を公開します。下の ✓ はサーバーではなく、このブラウザが SHA-256 で再計算した結果です。</p>
+    <div class="section-title">観測の証明 · そのとき何が見えていたか</div>
+    <div class="proof-tool">
+      <label>文明 <select id="proof-civ">${civs.map(c => `<option value="${c.id}" ${+(S.proofCiv ?? S.me) === c.id ? 'selected' : ''}>${esc(civN(c.id))}</option>`).join('')}</select></label>
+      <label>ティック <input id="proof-tick" type="number" min="0" max="${Math.max(0, S.view.tick - 1)}" value="${S.proofTick ?? Math.max(0, S.view.tick - 1)}"></label>
+      <span class="meta">マス：${pt ? `${pt.q}, ${pt.r}` : '地図で選択'}</span>
+      <button class="btn primary" type="button" id="prove-tile" ${pt ? '' : 'disabled'}>証明する</button>
+    </div>
+    ${pr?.error ? `<div class="explanation">${esc(pr.error)}</div>` : pr ? `<div class="proof-result">
+      <div class="pr-head">ティック${pr.tick}の<b>${esc(civN(pr.civ))}</b>から見たマス (${pr.tile.q}, ${pr.tile.r})：<b>${fogName[pr.tile.fog]}</b>${pr.tile.ownerCity !== null ? ` · ${esc(T.cityName(pr.tile.ownerCity))}の領土と認識` : ''}</div>
+      <div class="pr-row">${check(pr.leafOk)} このマスの葉 → 観測ルート（経路${pr.steps}段）</div>
+      <div class="pr-row">${check(pr.rootMatches)} 観測ルートが約束に使われたものと一致 <code>${pr.root.slice(0, 10)}…</code></div>
+      <div class="pr-row">${check(pr.digestOk)} ${pr.digestOk === null ? '理由はまだ非公開です（次のティックで公開され、約束と照合できます）' : `公開された理由が約束（digest）と一致${pr.text ? `：「${esc(pr.text)}」` : '（理由の記入なし）'}`}</div>
+      ${pr.tile.fog < 2 ? '<p class="desc">このマスは判断のとき見えていませんでした。ここにいた部隊について、この文明は知り得なかったことになります。</p>' : ''}
+    </div>` : ''}
+    <div class="section-title">タイムライン</div>
+    <div class="row dec-filter"><button class="btn ${who === 'all' ? 'primary' : ''}" type="button" data-dec="all">全員</button>${civs.map(c => `<button class="btn ${+who === c.id && who !== 'all' ? 'primary' : ''}" type="button" data-dec="${c.id}"><span class="swatch-s" style="background:${T.CIV_COLORS[c.id]}"></span>${esc(civN(c.id))}</button>`).join('')}</div>`;
+  if (!d) return html + '<p class="desc">読み込んでいます…</p>';
+  const rows = d.records.filter(r => who === 'all' || r.civ === +who);
+  let last = null;
+  html += '<div class="dec-list">';
+  for (const r of rows.slice(0, 120)) {
+    if (r.tick !== last) { html += `<div class="dec-tick">ティック ${r.tick}${r.tick >= d.open ? ' · 解決待ち' : ''}</div>`; last = r.tick; }
+    const k = `${r.tick}:${r.civ}:${r.digest}`; const ok = S.verified?.[k];
+    const agent = civ(r.civ)?.kind !== 'Human';
+    html += `<div class="dec-row"><div class="dec-who"><span class="swatch-s" style="background:${T.CIV_COLORS[r.civ]}"></span><b>${esc(civN(r.civ))}</b><span class="badge ${agent ? 'agent' : 'human'}">${agent ? 'AGENT' : 'HUMAN'}</span>${r.policy ? `<code>${esc(r.policy)}</code>` : ''}</div>
+      <div class="dec-steps"><span title="decision_digest ${r.digest}">約束 <code>${r.digest.slice(0, 8)}</code></span><span class="arrow">→</span>${r.reveal ? `<span>公開 t${r.reveal.at}</span><span class="arrow">→</span>${ok === true ? '<span class="vchk ok">✓ 一致</span>' : ok === false ? '<span class="vchk bad">✗ 不一致</span>' : '<span class="vchk">検証中</span>'}` : '<span class="meta">解決後に公開</span>'}</div>
+      ${r.reveal ? `<div class="dec-text">${r.reveal.text ? esc(r.reveal.text) : '<span class="meta">（理由の記入なし）</span>'}</div>` : ''}</div>`;
+  }
+  html += rows.length ? '</div>' : '<p class="desc">まだ記録はありません。ティックが進むと並びます。</p></div>';
+  return html;
+}
+
 function renderNavDots() {
   const v = S.view;
   const inbox = v.proposals.filter(p => p.to === S.me).length;
@@ -772,6 +846,7 @@ document.addEventListener('click', async e => {
   if (d.move) { quickMove(d.move); return; }
   if (d.queueClear) { addDraft({ type: 'SetQueue', city: +d.queueClear, items: [] }); renderInspector(); return; }
   if (d.chron) { S.chronFilter = d.chron; renderDrawer(); return; }
+  if (d.dec) { S.decFilter = d.dec; renderDrawer(); return; }
   if (d.closeHelp !== undefined) { $('#help').close(); return; }
   if (d.start !== undefined) { $('#help').close(); await api.post('/api/control', { paused: false }); poll(); return; }
   switch (t.id) {
@@ -785,6 +860,7 @@ document.addEventListener('click', async e => {
     case 'next-skip': S.nextIndex++; renderNext(); break;
     case 'next-go': goNext(false); break;
     case 'summary-close': S.summaryOpen = false; renderSummary(); break;
+    case 'prove-tile': proveTile(); break;
     case 'summary-toggle': {
       const wasCollapsed = S.summaryCollapsed && (S.tile !== null || S.unit !== null);
       S.summaryCollapsed = !wasCollapsed; S.summaryPinned = wasCollapsed; renderSummary(); break;
@@ -833,6 +909,12 @@ function renderLensLegend() {
   }[S.lens];
   el.hidden = !body; if (body) el.innerHTML = body;
 }
+document.addEventListener('change', e => {
+  if (e.target.id === 'proof-civ') { S.proofCiv = +e.target.value; S.proof = null; renderDrawer(); }
+  if (e.target.id === 'proof-tick') { S.proofTick = Math.max(0, Math.min(S.view.tick - 1, +e.target.value || 0)); S.proof = null; renderDrawer(); }
+});
+$('#rationale').addEventListener('input', () => renderDock());
+$('#rationale').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } });
 document.addEventListener('keydown', e => {
   if (e.target.closest('input, select, textarea') || document.querySelector('dialog[open]')) return;
   if (e.key === ' ') { e.preventDefault(); goNext(true); renderNext(); }
