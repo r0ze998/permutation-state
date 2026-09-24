@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UI mock V4.1</title>
+<style>
+/* Design tokens — the proposal for permutation-server/web/styles.css. */
+:root {
+  --ink: #1f332d; --ink-2: #455a52; --muted: #6b7a72;
+  --paper: #fbf8ef; --paper-2: #f3efe2; --paper-3: #e7e1cf; --line: #dcd6c2;
+  --green: #2f5a45; --green-deep: #1d3b30; --green-pale: #dfe8da;
+  --gold: #a57d36; --gold-pale: #efe2c2;
+  --good: #3f7a4a; --good-bg: #e2eedd; --warn: #9a6a24; --warn-bg: #f4e7cf; --bad: #a4513f; --bad-bg: #f5e0d8;
+  --usdc: #2f6a8c; --usdc-bg: #dfecf3;
+  --serif: Georgia, 'Yu Mincho', 'Hiragino Mincho ProN', serif;
+  --sans: -apple-system, BlinkMacSystemFont, 'Hiragino Kaku Gothic ProN', 'Noto Sans JP', sans-serif;
+  /* type scale: 11 label · 13 body · 15 emphasis · 20 title · 28 display */
+  --t-label: 11px; --t-body: 13px; --t-em: 15px; --t-title: 20px; --t-display: 28px;
+  --r: 10px; --r-s: 7px; --shadow: 0 10px 34px #13281f24;
+  --civ0: #c1504a; --civ1: #2f8f84; --civ2: #c28f2c; --civ3: #7a5fb0; --civ4: #3f78c2; --civ5: #b5527f;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: #cfd6c4; color: var(--ink); font: var(--t-body)/1.55 var(--sans); }
+.mock-nav { position: fixed; z-index: 100; top: 10px; left: 50%; transform: translateX(-50%); display: flex; gap: 6px; padding: 6px; background: #1d3b30ee; border-radius: 99px; box-shadow: var(--shadow); }
+.mock-nav button { all: unset; cursor: pointer; color: #e8efe6; font-size: 12px; padding: 6px 14px; border-radius: 99px; }
+.mock-nav button[aria-pressed="true"] { background: var(--paper); color: var(--ink); }
+.stage { position: relative; width: 1440px; height: 900px; margin: 60px auto 40px; overflow: hidden; border-radius: 14px; box-shadow: 0 30px 80px #0e221a55; background: #b9c6a4; }
+canvas#map { position: absolute; inset: 0; }
+.vignette { position: absolute; inset: 0; background: radial-gradient(ellipse at center, transparent 55%, #1d3b3033 100%); pointer-events: none; }
+.panel { position: absolute; background: var(--paper); border-radius: var(--r); box-shadow: var(--shadow); border: 1px solid #fff9; }
+.eyebrow { font-size: var(--t-label); letter-spacing: .08em; color: var(--muted); font-weight: 600; }
+h2, h3 { font-family: var(--serif); font-weight: 400; margin: 0; }
+.num { font-variant-numeric: tabular-nums; }
+.pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 99px; font-size: var(--t-label); font-weight: 600; }
+.btn { all: unset; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 9px 16px; border-radius: 8px; font-weight: 600; font-size: var(--t-body); border: 1px solid var(--line); background: #fff; }
+.btn.primary { background: var(--green-deep); color: #f4efdc; border-color: var(--green-deep); }
+.btn.big { padding: 12px 22px; font-size: var(--t-em); }
+.sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; flex: none; }
+
+/* ---------- topbar ---------- */
+.topbar { top: 14px; left: 14px; right: 14px; height: 64px; display: flex; align-items: center; gap: 18px; padding: 0 16px; }
+.brand { font-family: var(--serif); font-size: 15px; letter-spacing: .12em; line-height: 1.05; }
+.brand em { display: block; font-style: normal; font-size: 11px; letter-spacing: .3em; color: var(--muted); }
+.civ { display: flex; align-items: center; gap: 9px; padding-left: 16px; border-left: 1px solid var(--line); }
+.civ b { font-family: var(--serif); font-weight: 400; font-size: var(--t-em); }
+.res { display: flex; gap: 14px; }
+.res div { display: grid; line-height: 1.2; }
+.res .v { font-size: var(--t-em); font-weight: 600; }
+.res .d { font-size: var(--t-label); color: var(--good); }
+.res .k { font-size: var(--t-label); color: var(--muted); }
+.season { flex: 1; min-width: 300px; display: grid; gap: 5px; }
+.season .row { display: flex; justify-content: space-between; align-items: baseline; font-size: var(--t-label); color: var(--muted); }
+.season .row b { color: var(--ink); font-size: var(--t-em); font-family: var(--serif); font-weight: 400; }
+.bar { position: relative; height: 10px; border-radius: 99px; background: var(--paper-3); overflow: visible; display: flex; }
+.bar .seg { height: 100%; border-right: 2px solid var(--paper); }
+.bar .seg:first-child { border-radius: 99px 0 0 99px; } .bar .seg:last-child { border-radius: 0 99px 99px 0; border-right: 0; }
+.bar .fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 99px; background: linear-gradient(90deg, #2f5a45, #3f7a4a); opacity: .9; }
+.bar .mark { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--bad); }
+.bar .now { position: absolute; top: -5px; width: 20px; height: 20px; margin-left: -10px; border-radius: 50%; background: #fff; border: 3px solid var(--green-deep); }
+.phases { display: flex; font-size: 10px; color: var(--muted); }
+.phases span { text-align: center; }
+.clock { display: grid; justify-items: center; gap: 1px; padding: 0 6px; }
+.clock .t { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.clock .l { font-size: var(--t-label); color: var(--muted); }
+.pool { display: grid; gap: 1px; padding: 6px 12px; border-radius: 9px; background: var(--usdc-bg); color: var(--usdc); line-height: 1.2; }
+.pool .v { font-size: 18px; font-weight: 700; }
+.pool .k { font-size: var(--t-label); }
+
+/* ---------- tracks panel ---------- */
+.tracks { top: 92px; left: 14px; width: 330px; padding: 16px; display: grid; gap: 12px; }
+.track { display: grid; grid-template-columns: 40px 1fr auto; gap: 10px; align-items: center; padding: 11px 12px; border-radius: 9px; background: var(--paper-2); border: 1px solid transparent; }
+.track.best { border-color: var(--gold); background: #fbf3df; }
+.track .ic { width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; font-size: 20px; background: #fff; }
+.track .n { font-family: var(--serif); font-size: var(--t-em); }
+.track .s { font-size: var(--t-label); color: var(--muted); }
+.track .r { text-align: right; line-height: 1.1; }
+.track .r b { display: block; font-size: 22px; font-family: var(--serif); font-weight: 400; }
+.track .r span { font-size: var(--t-label); color: var(--muted); }
+.gap { height: 5px; background: var(--paper-3); border-radius: 99px; margin-top: 6px; overflow: hidden; }
+.gap i { display: block; height: 100%; background: var(--green); }
+.payout { display: flex; justify-content: space-between; align-items: center; padding: 12px; border-radius: 9px; background: var(--usdc-bg); }
+.payout b { font-size: 20px; color: var(--usdc); white-space: nowrap; }
+.hint { font-size: var(--t-label); color: var(--muted); line-height: 1.5; }
+
+/* ---------- inspector ---------- */
+.inspector { top: 92px; right: 14px; width: 350px; padding: 16px; display: grid; gap: 12px; }
+.kv { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.kv div { background: var(--paper-2); border-radius: 8px; padding: 8px 10px; }
+.kv b { display: block; font-size: var(--t-em); }
+.kv span { font-size: var(--t-label); color: var(--muted); }
+.opt { display: grid; grid-template-columns: 26px 1fr auto; gap: 8px; align-items: center; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.opt small { display: block; color: var(--muted); font-size: var(--t-label); }
+.opt.off { background: var(--paper-2); color: var(--muted); }
+.opt .why { color: var(--warn); font-size: var(--t-label); }
+
+/* ---------- dock ---------- */
+.dock { left: 50%; transform: translateX(-50%); bottom: 14px; width: 760px; padding: 12px 14px; display: grid; gap: 10px; }
+.dock-top { display: flex; align-items: center; gap: 14px; }
+.pips { display: flex; gap: 4px; align-items: center; }
+.pips i { width: 14px; height: 14px; border-radius: 4px; background: var(--green); }
+.pips i.free { background: var(--paper-3); }
+.pips i.bank { background: transparent; border: 2px dashed var(--gold); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 99px; background: var(--green-pale); font-size: 12px; }
+.chip.warn { background: var(--warn-bg); color: var(--warn); outline: 1px solid #e3c795; }
+.chip .x { color: var(--muted); }
+.memo { display: flex; gap: 10px; align-items: center; }
+.memo input { flex: 1; font: inherit; padding: 9px 12px; border-radius: 8px; border: 1px solid var(--line); background: #fff; }
+.memo .lock { font-size: var(--t-label); color: var(--muted); }
+
+/* ---------- report / waiting / end ---------- */
+.report { left: 14px; bottom: 14px; width: 330px; padding: 16px; display: grid; gap: 10px; }
+.line { display: grid; grid-template-columns: 22px 1fr; gap: 8px; font-size: var(--t-body); }
+.line .ok { color: var(--good); } .line .ng { color: var(--bad); }
+.line small { display: block; color: var(--muted); font-size: var(--t-label); }
+.waiting { left: 50%; transform: translateX(-50%); bottom: 14px; width: 760px; padding: 16px 18px; display: grid; gap: 10px; }
+.seats { display: flex; gap: 8px; flex-wrap: wrap; }
+.seat { display: inline-flex; gap: 7px; align-items: center; padding: 6px 11px; border-radius: 99px; background: var(--paper-2); font-size: 12px; }
+.seat.done { background: var(--good-bg); color: var(--good); }
+.overlay { position: absolute; inset: 0; background: #1d3b3066; backdrop-filter: blur(3px); display: grid; place-items: center; }
+.end { width: 900px; padding: 28px 32px; display: grid; gap: 18px; position: static; }
+.end-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.end-col { background: var(--paper-2); border-radius: 10px; padding: 12px 14px; display: grid; gap: 6px; }
+.end-col ol { margin: 0; padding-left: 20px; display: grid; gap: 4px; }
+.end-col li.me { font-weight: 700; }
+.you { display: flex; gap: 16px; align-items: center; padding: 16px; border-radius: 12px; background: var(--usdc-bg); }
+.you .amt { font-size: 34px; font-weight: 700; color: var(--usdc); font-family: var(--serif); }
+.verify { font: 12px/1.5 ui-monospace, Menlo, monospace; background: #f1efe6; padding: 10px 12px; border-radius: 8px; color: var(--ink-2); }
+[hidden] { display: none !important; }
+.note { width: 1440px; margin: 0 auto 60px; color: #33483f; font-size: 13px; }
+</style>
+</head>
+<body>
+<nav class="mock-nav" aria-label="画面の状態">
+  <button data-view="play" aria-pressed="true">プレイ中</button>
+  <button data-view="waiting" aria-pressed="false">手番終了後</button>
+  <button data-view="report" aria-pressed="false">ティック結果</button>
+  <button data-view="end" aria-pressed="false">シーズン終了</button>
+</nav>
+
+<div class="stage">
+  <canvas id="map" width="1440" height="900"></canvas>
+  <div class="vignette"></div>
+
+  <header class="panel topbar">
+    <div class="brand">PERMUTATION<em>STATE</em></div>
+    <div class="civ"><span class="sw" style="background:var(--civ0)"></span><div><b>アステル</b><div class="eyebrow">人間 · あなた</div></div></div>
+    <div class="res">
+      <div><span class="k">金</span><span class="v num">148</span><span class="d">+9</span></div>
+      <div><span class="k">科学</span><span class="v num">62</span><span class="d">+6</span></div>
+      <div><span class="k">影響力</span><span class="v num">31</span><span class="d">+2</span></div>
+      <div><span class="k">鉄</span><span class="v num">4</span><span class="d">+1</span></div>
+    </div>
+    <div class="season">
+      <div class="row"><span>シーズン · <b>競合期</b></span><span class="num">ティック 64 / 180</span></div>
+      <div class="bar">
+        <div class="seg" style="width:10%;background:#dfe6d6"></div><div class="seg" style="width:23.3%;background:#d6dfcb"></div><div class="seg" style="width:33.3%;background:#cfd8c1"></div><div class="seg" style="width:23.3%;background:#e8d7c8"></div><div class="seg" style="width:10%;background:#e7cfc6"></div>
+        <div class="fill" style="width:35.5%"></div>
+        <div class="mark" style="left:66.6%" title="ティック120: 取引所の凍結"></div>
+        <div class="mark" style="left:90%" title="ティック162: 譲渡の凍結"></div>
+        <div class="now" style="left:35.5%"></div>
+      </div>
+      <div class="phases"><span style="width:10%">建国</span><span style="width:23.3%">拡大</span><span style="width:33.3%">競合</span><span style="width:23.3%">危機</span><span style="width:10%">決着</span></div>
+    </div>
+    <div class="clock"><span class="t">00:17</span><span class="l">次の解決まで</span></div>
+    <div class="pool"><span class="k">賞金プール</span><span class="v num">60 USDC</span></div>
+  </header>
+
+  <aside class="panel tracks" aria-label="勝ち筋">
+    <div><div class="eyebrow">勝ち筋 · 3つのうち1つで入賞</div><h3 style="font-size:var(--t-title)">あなたの順位</h3></div>
+    <div class="track"><div class="ic">⚔</div><div><div class="n">覇権</div><div class="s">征服と領土 · 首位 ボレアリス まで −312</div><div class="gap"><i style="width:78%"></i></div></div><div class="r"><b>#2</b><span>1,184</span></div></div>
+    <div class="track best"><div class="ic">✦</div><div><div class="n">科学</div><div class="s">スターゲート 1/3 · 次の段階は6ティック後から</div><div class="gap"><i style="width:100%;background:var(--gold)"></i></div></div><div class="r"><b>#1</b><span>1段階</span></div></div>
+    <div class="track"><div class="ic">☮</div><div><div class="n">協調</div><div class="s">都市国家と条約 · 首位 シンダー まで −90</div><div class="gap"><i style="width:40%"></i></div></div><div class="r"><b>#4</b><span>60</span></div></div>
+    <div class="payout"><div><div class="eyebrow">いま終わったら</div><div class="hint">いちばん高い1トラックだけで入賞します</div></div><b class="num">≈ 14.2 USDC</b></div>
+  </aside>
+
+  <aside class="panel inspector" data-state="play">
+    <div><div class="eyebrow">あなたの都市 · 首都</div><h2 style="font-size:var(--t-title)">アステリア</h2></div>
+    <div class="kv"><div><b>6</b><span>人口</span></div><div><b>+4</b><span>食料/ティック</span></div><div><b>+7</b><span>生産/ティック</span></div></div>
+    <div class="eyebrow">いまの生産</div>
+    <div class="opt"><span>✦</span><div>スターゲート II<small>残り 212 生産 · 約30ティック</small></div><span class="pill" style="background:var(--gold-pale);color:var(--gold)">進行中</span></div>
+    <div class="eyebrow">次に積めるもの</div>
+    <div class="opt"><span>▤</span><div>学術院<small>60 生産 · 9ティック</small></div><button class="btn">追加</button></div>
+    <div class="opt off"><span>⇄</span><div>市場<small class="why">「通貨」の研究が必要です</small></div><span></span></div>
+    <div class="opt off"><span>◆</span><div>金で購入<small class="why">スターゲートは金では買えません</small></div><span></span></div>
+  </aside>
+
+  <section class="panel dock" data-state="play">
+    <div class="dock-top">
+      <div><div class="eyebrow">このティックの命令</div><div class="pips" title="使える枠 5 + 繰越 2"><i></i><i></i><i></i><i class="free"></i><i class="free"></i><i class="bank"></i><i class="bank"></i></div></div>
+      <div class="chips">
+        <span class="chip">✧ 研究: 数学 <span class="x">×</span></span>
+        <span class="chip">⌂ 首都: 学術院を追加 <span class="x">×</span></span>
+        <span class="chip warn" title="移動先に敵の部隊がいるため、実行されない見込みです">⚠ 槍兵3 → (4,−2) · 実行されない見込み <span class="x">×</span></span>
+      </div>
+      <button class="btn primary big">確定して手番を終える</button>
+    </div>
+    <div class="memo"><input value="科学で先行しているので、守りを固めつつ学術院を急ぐ" aria-label="判断メモ"><span class="lock">🔒 解決後に公開</span></div>
+  </section>
+
+  <section class="panel waiting" data-state="waiting" hidden>
+    <div style="display:flex;justify-content:space-between;align-items:center"><div><div class="eyebrow">手番を終えました · ティック 64</div><h3 style="font-size:var(--t-title)">ほかの文明を待っています</h3></div><button class="btn">命令を直す（締切まで可）</button></div>
+    <div class="seats">
+      <span class="seat done"><span class="sw" style="background:var(--civ0)"></span>アステル（あなた）✓</span>
+      <span class="seat"><span class="sw" style="background:var(--civ1)"></span>ボレアリス · 人間 · 考え中</span>
+      <span class="seat done"><span class="sw" style="background:var(--civ2)"></span>シンダー · ボット ✓</span>
+      <span class="seat done"><span class="sw" style="background:var(--civ3)"></span>ダンマール · ボット ✓</span>
+      <span class="seat done"><span class="sw" style="background:var(--civ4)"></span>エンバー · ボット ✓</span>
+      <span class="seat"><span class="sw" style="background:var(--civ5)"></span>Gaia · 外部エージェント · 考え中</span>
+    </div>
+    <div class="hint">全員がそろうと、締切を待たずにすぐ解決されます。送った命令はチェーン上で署名済みです（MagicBlock ER）。</div>
+  </section>
+
+  <section class="panel report" data-state="report" hidden>
+    <div><div class="eyebrow">ティック 63 の結果</div><h3 style="font-size:var(--t-title)">4件実行 · 1件見送り</h3></div>
+    <div class="line"><span class="ok">✓</span><div>研究を「数学」に変更</div></div>
+    <div class="line"><span class="ok">✓</span><div>首都に学術院を追加</div></div>
+    <div class="line"><span class="ok">✓</span><div>弓兵2が (3,−1) へ移動</div></div>
+    <div class="line"><span class="ok">✓</span><div>シンダーと不可侵条約（保証金 30 金）</div></div>
+    <div class="line"><span class="ng">✕</span><div>槍兵3 の移動は見送り<small>移動先 (4,−2) にボレアリスの部隊がいました</small></div></div>
+    <div class="hint">この世界では：ボレアリスがダンマールに宣戦 · シンダーが都市国家の宗主に</div>
+  </section>
+
+  <div class="overlay" data-state="end" hidden>
+    <section class="panel end">
+      <div style="display:flex;justify-content:space-between;align-items:end"><div><div class="eyebrow">シーズン 0 · 180ティック終了</div><h2 style="font-size:var(--t-display)">決着</h2></div><span class="pill" style="background:var(--good-bg);color:var(--good)">✓ 全ティックの検証済み</span></div>
+      <div class="end-grid">
+        <div class="end-col"><div class="eyebrow">⚔ 覇権</div><ol><li>ボレアリス · 18.0</li><li class="me">アステル · —</li><li>エンバー · 7.7</li></ol></div>
+        <div class="end-col"><div class="eyebrow">✦ 科学</div><ol><li class="me">アステル · 14.2</li><li>ダンマール · 10.7</li><li>ボレアリス · —</li></ol></div>
+        <div class="end-col"><div class="eyebrow">☮ 協調</div><ol><li>シンダー · 13.3</li><li>Gaia · 10.0</li><li>ダンマール · —</li></ol></div>
+      </div>
+      <div class="you"><div><div class="eyebrow">あなたの賞金</div><div class="amt num">14.2 USDC</div><div class="hint">科学1位として入賞（1文明が入賞できるのは1トラックまで）</div></div><div style="margin-left:auto;display:grid;gap:8px;justify-items:end"><button class="btn primary big">受け取る</button><span class="hint">支払額はチェーン上のプログラムが計算しました</span></div></div>
+      <div class="verify">自分で検証する: cargo run --release --bin verify -- --gateway … --base … --er …</div>
+    </section>
+  </div>
+</div>
+
+<p class="note">UI V4.1 モック。上のボタンで状態を切り替えます。地図は描画の目安で、実際の地図は既存の <code>map.mjs</code> を使います。</p>
+
+<script>
+// A plausible hex map, only for the mock's backdrop.
+const c = document.getElementById('map'), x = c.getContext('2d');
+const R = 26, W = c.width, H = c.height;
+const terr = ['#b8c294', '#cbc28f', '#86a079', '#b3a784', '#9c978b', '#6f9fa0'];
+let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+const own = [[560, 470, '#c1504a', 'アステリア'], [880, 380, '#2f8f84', 'ノルデン'], [760, 650, '#c28f2c', 'エムバ'], [1080, 600, '#7a5fb0', 'ダンホルム']];
+for (let row = -1; row < H / (R * 1.5) + 1; row++) for (let col = -1; col < W / (R * Math.sqrt(3)) + 1; col++) {
+  const cx = col * R * Math.sqrt(3) + (row % 2) * R * Math.sqrt(3) / 2, cy = row * R * 1.5;
+  const n = Math.sin(cx * 0.004) + Math.cos(cy * 0.005) + rnd() * 0.9;
+  const t = n > 1.6 ? 4 : n > 1.2 ? 3 : n > 0.7 ? 2 : n < -0.9 ? 5 : n < 0 ? 0 : 1;
+  x.beginPath(); for (let i = 0; i < 6; i++) { const a = Math.PI / 180 * (60 * i - 30); x.lineTo(cx + R * Math.cos(a), cy + R * Math.sin(a)); } x.closePath();
+  x.fillStyle = terr[t]; x.fill();
+  for (const [ox, oy, col2] of own) if (Math.hypot(cx - ox, cy - oy) < 95 && t !== 5) { x.fillStyle = col2 + '55'; x.fill(); }
+  x.strokeStyle = '#00000014'; x.stroke();
+}
+for (const [ox, oy, col2, nm] of own) { x.fillStyle = '#fbf8ef'; x.fillRect(ox - 40, oy - 30, 80, 20); x.fillStyle = col2; x.fillRect(ox - 40, oy - 30, 5, 20); x.fillStyle = '#1f332d'; x.font = '12px Georgia, serif'; x.fillText(nm, ox - 30, oy - 16); x.beginPath(); x.arc(ox, oy + 4, 9, 0, Math.PI * 2); x.fillStyle = col2; x.fill(); }
+
+document.querySelector('.mock-nav').addEventListener('click', e => {
+  const v = e.target.dataset.view; if (!v) return;
+  document.querySelectorAll('.mock-nav button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.view === v)));
+  document.querySelectorAll('[data-state]').forEach(el => {
+    const s = el.dataset.state;
+    el.hidden = !(s === v || (s === 'play' && (v === 'play' || v === 'report')) );
+  });
+  document.querySelector('.inspector').hidden = v === 'waiting';
+});
+</script>
+</body>
+</html>

@@ -39,6 +39,20 @@ pub enum RulesError {
     RevealTooEarly {
         tick: u16,
     },
+    /// Members join only before the season starts (V5 §4).
+    RegistrationClosed,
+    /// The season's member cap is reached.
+    NationFull,
+    /// This key is already a member this season.
+    AlreadyMember,
+    /// The batch's member does not hold the office (V5 §5.1).
+    NotOfficer,
+    /// A member officer's batch must seal a rationale (V5 D17).
+    MissingRationale,
+    /// The adopted proposal does not exist for this office.
+    UnknownProposal(u32),
+    /// Order `i` is outside the office's domain (V5 §5.1).
+    WrongOffice(u16),
 }
 
 impl fmt::Display for RulesError {
@@ -69,6 +83,13 @@ impl fmt::Display for RulesError {
             RulesError::RevealTooEarly { tick } => {
                 write!(f, "the decision for tick {tick} has not resolved yet")
             }
+            RulesError::RegistrationClosed => write!(f, "registration is closed"),
+            RulesError::NationFull => write!(f, "the season has no room for more members"),
+            RulesError::AlreadyMember => write!(f, "this key is already a member"),
+            RulesError::NotOfficer => write!(f, "the signer does not hold this office"),
+            RulesError::MissingRationale => write!(f, "an officer must seal a rationale (decision digest)"),
+            RulesError::UnknownProposal(id) => write!(f, "proposal {id} is not open for this office"),
+            RulesError::WrongOffice(i) => write!(f, "order {i} belongs to another office"),
         }
     }
 }

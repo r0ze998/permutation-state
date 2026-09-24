@@ -4,10 +4,11 @@ use ephemeral_rollups_sdk::{
     cpi::{delegate_account, undelegate_account, DelegateAccounts, DelegateConfig},
     ephem::{FoldableIntentBuilder, MagicIntentBundleBuilder},
 };
-use permutation_rules::genesis::{check_entries, season_from_map, Entry};
+use permutation_rules::genesis::{check_entries, nation_entries, season_from_map};
+use permutation_rules::gov::{self, GovAction, GovEntry, Role, NOBODY};
 use permutation_rules::map::{MapJob, MapStep};
-use permutation_rules::orders::{check_structure, OrderBatch};
-use permutation_rules::state::DeclaredKind;
+use permutation_rules::orders::{check_structure, role_allows_static, Order, OrderBatch};
+use permutation_rules::state::WorldState;
 use permutation_rules::tick::{run_phase, TickInput};
 use permutation_rules::{Preset, Ruleset};
 use solana_program::{
@@ -31,8 +32,8 @@ use crate::token;
 
 /// Fixed discriminator the delegation program calls on undelegation.
 pub const UNDELEGATE_CALLBACK_DISCRIMINATOR: [u8; 8] = [196, 28, 41, 206, 48, 37, 51, 167];
-/// `Delegate { target }`: world chunks are 0..WORLD_CHUNKS, orders are ORDERS_TARGET + civ.
-pub const ORDERS_TARGET: u16 = 1000;
+/// `Delegate { target }`: world chunks are 0..WORLD_CHUNKS, nations are NATION_TARGET + civ.
+pub const NATION_TARGET: u16 = 1000;
 /// How often the ER auto-commits delegated accounts to the base layer.
 pub const ER_COMMIT_FREQUENCY_MS: u32 = 30_000;
 
@@ -43,32 +44,46 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -> Pr
     }
     let ix = ChainInstruction::try_from_slice(data).map_err(|_| ChainError::InvalidInstruction)?;
     match ix {
-        ChainInstruction::CreateSeason { season_id, preset, max_civs, entry_fee, exchange_credit, tick_seconds, world_seed, crank } => {
-            create_season(program_id, accounts, season_id, preset, max_civs, entry_fee, exchange_credit, tick_seconds, world_seed, crank)
+        ChainInstruction::CreateSeason { season_id, preset, nations, entry_fee, tick_seconds, world_seed, crank, market } => {
+            create_season(program_id, accounts, season_id, preset, nations, entry_fee, tick_seconds, world_seed, crank, market)
         }
         ChainInstruction::AllocWorld { chunk } => alloc_world(program_id, accounts, chunk),
-        ChainInstruction::JoinSeason { name, kind, session, payout } => join_season(program_id, accounts, name, kind, session, payout),
+        ChainInstruction::Register { civ, name, kind, session, attestation, stand, votes, deposit } => {
+            register(program_id, accounts, civ, name, kind, session, attestation, stand, votes, deposit)
+        }
         ChainInstruction::StartSeason => start_season(program_id, accounts),
         ChainInstruction::GenesisStep { work } => genesis_step(program_id, accounts, work),
         ChainInstruction::Delegate { target } => delegate(program_id, accounts, target),
-        ChainInstruction::SubmitOrders { tick, decision_digest, orders } => submit_orders(program_id, accounts, tick, decision_digest, orders),
+        ChainInstruction::SubmitOrders { role, tick, decision_digest, orders, adopt } => {
+            submit_orders(program_id, accounts, role, tick, decision_digest, orders, adopt)
+        }
         ChainInstruction::ResolveTick { to } => resolve_tick(program_id, accounts, to),
         ChainInstruction::Commit => commit(program_id, accounts, false),
         ChainInstruction::CommitAndUndelegate => commit(program_id, accounts, true),
         ChainInstruction::FinishSeason => finish_season(program_id, accounts),
-        ChainInstruction::Claim { civ } => claim(program_id, accounts, civ),
+        ChainInstruction::Claim => claim(program_id, accounts),
         ChainInstruction::UndelegatePart { targets } => undelegate_part(program_id, accounts, targets),
+        ChainInstruction::UpdateMember { stand, votes } => update_member(program_id, accounts, stand, votes),
+        ChainInstruction::AllocNation { civ } => alloc_nation(program_id, accounts, civ),
+        ChainInstruction::SeatMembers => seat_members(program_id, accounts),
+        ChainInstruction::OpenGovernment => open_government(program_id, accounts),
+        ChainInstruction::SubmitGov { member, action } => submit_gov(program_id, accounts, member, action),
+        ChainInstruction::WithdrawOps => withdraw_ops(program_id, accounts),
+        ChainInstruction::LogTickInput { chunk } => log_tick_input(program_id, accounts, chunk),
     }
 }
 
 // ------------------------------------------------------------------ helpers
 
-fn rules_for(preset: u8) -> Result<Ruleset, ProgramError> {
-    match preset {
-        0 => Ok(Ruleset::new(Preset::Blitz)),
-        1 => Ok(Ruleset::new(Preset::Season)),
-        _ => Err(ChainError::InvalidParams.into()),
-    }
+/// The season's ruleset: the preset, with the market switched on or off (V5 §7.5).
+fn rules_for(preset: u8, market: bool) -> Result<Ruleset, ProgramError> {
+    let mut rules = match preset {
+        0 => Ruleset::new(Preset::Blitz),
+        1 => Ruleset::new(Preset::Season),
+        _ => return Err(ChainError::InvalidParams.into()),
+    };
+    rules.market_enabled = market;
+    Ok(rules)
 }
 
 fn signer(a: &AccountInfo) -> ProgramResult {
@@ -117,15 +132,46 @@ fn load_season(program_id: &Pubkey, account: &AccountInfo) -> Result<Season, Pro
     Ok(s)
 }
 
-fn load_orders(program_id: &Pubkey, account: &AccountInfo, season_id: u64, civ: u16) -> Result<Orders, ProgramError> {
+fn load_nation(program_id: &Pubkey, account: &AccountInfo, season_id: u64, civ: u16) -> Result<NationAccount, ProgramError> {
     if account.owner != program_id {
-        return Err(ChainError::MissingOrders.into());
+        return Err(ChainError::MissingNation.into());
     }
-    let o: Orders = load(&account.try_borrow_data()?)?;
-    if o.magic != ORDERS_MAGIC || o.season_id != season_id || o.civ != civ {
-        return Err(ChainError::MissingOrders.into());
+    let n: NationAccount = load(&account.try_borrow_data()?)?;
+    if n.magic != NATION_MAGIC || n.season_id != season_id || n.civ != civ {
+        return Err(ChainError::MissingNation.into());
     }
-    Ok(o)
+    Ok(n)
+}
+
+fn load_member(program_id: &Pubkey, account: &AccountInfo, season_id: u64) -> Result<MemberAccount, ProgramError> {
+    if account.owner != program_id {
+        return Err(ChainError::NotInitialized.into());
+    }
+    let m: MemberAccount = load(&account.try_borrow_data()?)?;
+    if m.magic != MEMBER_MAGIC || m.season_id != season_id {
+        return Err(ChainError::NotInitialized.into());
+    }
+    expect_pda(program_id, account, &[MEMBER_SEED, &season_id.to_le_bytes(), &m.wallet])?;
+    Ok(m)
+}
+
+/// Refresh a nation account for the open tick from the world: office
+/// holders, their keys and budgets; clear the batches and the inbox.
+fn open_nation(n: &mut NationAccount, state: &WorldState, rules: &Ruleset) {
+    let civ = n.civ as usize;
+    let nation = &state.nations[civ];
+    n.open_tick = state.tick;
+    for role in Role::ALL {
+        let i = role.index();
+        let m = nation.offices[i];
+        n.officers[i] = m;
+        n.keys[i] = state.members.get(m as usize).map_or([0; 32], |x| x.key);
+        n.spendable[i] = permutation_rules::orders::spendable(state, rules, civ as u16, role);
+    }
+    n.batches = [None, None, None, None];
+    n.submitted = [u16::MAX; 4];
+    n.frozen = false;
+    n.inbox.clear();
 }
 
 /// The `WORLD_CHUNKS` world accounts at the front of `accounts`, checked.
@@ -159,12 +205,12 @@ fn create_season(
     accounts: &[AccountInfo],
     season_id: u64,
     preset: u8,
-    max_civs: u8,
+    nations: u8,
     entry_fee: u64,
-    exchange_credit: u64,
     tick_seconds: u32,
     world_seed: [u8; 32],
     crank: [u8; 32],
+    market: bool,
 ) -> ProgramResult {
     let it = &mut accounts.iter();
     let admin = next_account_info(it)?;
@@ -174,8 +220,9 @@ fn create_season(
     let token_program = next_account_info(it)?;
     let _system = next_account_info(it)?;
     signer(admin)?;
-    let rules = rules_for(preset)?;
-    if !(2..=MAX_CIVS as u8).contains(&max_civs) || max_civs > rules.max_civs || tick_seconds == 0 {
+    let rules = rules_for(preset, market)?;
+    let max = (rules.max_civs as usize).min(MAX_NATIONS).min(permutation_rules::genesis::NATIONS.len());
+    if !(2..=max as u8).contains(&nations) || tick_seconds == 0 {
         return Err(ChainError::InvalidParams.into());
     }
     if token_program.key != &token::TOKEN_PROGRAM_ID {
@@ -198,22 +245,26 @@ fn create_season(
         usdc_mint: mint.key.to_bytes(),
         usdc_decimals: decimals,
         preset,
-        max_civs,
+        nations,
         entry_fee,
-        exchange_credit,
         tick_seconds,
+        market,
         status: SeasonStatus::Registering,
         world_seed,
         season_seed: [0; 32],
-        civs: Vec::new(),
+        member_count: 0,
+        nation_members: vec![0; nations as usize],
+        seated: 0,
         pool: 0,
+        ops: 0,
+        ops_withdrawn: false,
+        treasury: vec![0; nations as usize],
+        treasury_final: Vec::new(),
         payouts: Vec::new(),
-        claimed: Vec::new(),
-        rollover: 0,
         final_root: [0; 32],
     };
     store(&mut season_ai.try_borrow_mut_data()?, &season)?;
-    msg!("PS season {} created: preset {} max {} fee {}", season_id, preset, max_civs, entry_fee);
+    msg!("PS season {} created: preset {} nations {} fee {} market {}", season_id, preset, nations, entry_fee, market);
     Ok(())
 }
 
@@ -233,67 +284,148 @@ fn alloc_world(program_id: &Pubkey, accounts: &[AccountInfo], chunk: u8) -> Prog
     init_pda(payer, world, CHUNK, program_id, &[WORLD_SEED, &id, &[chunk], &[bump]])
 }
 
-fn join_season(program_id: &Pubkey, accounts: &[AccountInfo], name: String, kind: u8, session: [u8; 32], payout: [u8; 32]) -> ProgramResult {
+fn alloc_nation(program_id: &Pubkey, accounts: &[AccountInfo], civ: u16) -> ProgramResult {
     let it = &mut accounts.iter();
-    let player = next_account_info(it)?;
+    let payer = next_account_info(it)?;
+    let season_ai = next_account_info(it)?;
+    let nation_ai = next_account_info(it)?;
+    let _system = next_account_info(it)?;
+    signer(payer)?;
+    let season = load_season(program_id, season_ai)?;
+    if civ >= season.nations as u16 {
+        return Err(ChainError::InvalidParams.into());
+    }
+    let id = season.season_id.to_le_bytes();
+    let civ_bytes = civ.to_le_bytes();
+    let bump = expect_pda(program_id, nation_ai, &[NATION_SEED, &id, &civ_bytes])?;
+    init_pda(payer, nation_ai, NATION_SPACE, program_id, &[NATION_SEED, &id, &civ_bytes, &[bump]])?;
+    let n = NationAccount {
+        magic: NATION_MAGIC,
+        season_id: season.season_id,
+        civ,
+        bump,
+        preset: season.preset,
+        market: season.market,
+        crank: season.crank,
+        open_tick: u16::MAX, // opened with the government
+        officers: [NOBODY; 4],
+        keys: [[0; 32]; 4],
+        spendable: [0; 4],
+        submitted: [u16::MAX; 4],
+        frozen: false,
+        batches: [None, None, None, None],
+        inbox: Vec::new(),
+    };
+    store(&mut nation_ai.try_borrow_mut_data()?, &n)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn register(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    civ: u16,
+    name: String,
+    kind: u8,
+    session: [u8; 32],
+    attestation: [u8; 32],
+    stand: u8,
+    votes: [u32; 4],
+    deposit: u64,
+) -> ProgramResult {
+    let it = &mut accounts.iter();
+    let wallet = next_account_info(it)?;
     let fee_payer = next_account_info(it)?;
     let season_ai = next_account_info(it)?;
-    let orders_ai = next_account_info(it)?;
-    let player_token = next_account_info(it)?;
+    let member_ai = next_account_info(it)?;
+    let wallet_token = next_account_info(it)?;
     let vault = next_account_info(it)?;
     let mint = next_account_info(it)?;
     let token_program = next_account_info(it)?;
     let _system = next_account_info(it)?;
-    signer(player)?;
+    signer(wallet)?;
     signer(fee_payer)?;
     let mut season = load_season(program_id, season_ai)?;
     if season.status != SeasonStatus::Registering {
         return Err(ChainError::WrongStatus.into());
     }
-    if season.civs.len() >= season.max_civs as usize {
+    if civ >= season.nations as u16 {
+        return Err(ChainError::InvalidParams.into());
+    }
+    if season.member_count >= MAX_MEMBERS {
         return Err(ChainError::SeasonFull.into());
     }
-    if name.is_empty() || name.len() > MAX_NAME || kind > 2 {
+    if name.is_empty() || name.len() > MAX_NAME || kind > 2 || stand > 0x0f {
         return Err(ChainError::InvalidName.into());
     }
-    let rules = rules_for(season.preset)?;
-    if season.civs.iter().filter(|c| c.payout == payout).count() >= rules.max_civs_per_wallet as usize {
-        return Err(ChainError::TooManyCivs.into());
+    if deposit > 0 && !season.market {
+        return Err(ChainError::InvalidParams.into());
     }
     if token_program.key != &token::TOKEN_PROGRAM_ID || mint.key.as_ref() != season.usdc_mint {
         return Err(ChainError::WrongMint.into());
     }
     let id = season.season_id.to_le_bytes();
     expect_pda(program_id, vault, &[VAULT_SEED, &id])?;
-    let (from_mint, _) = token::token_account_mint_owner(player_token).ok_or(ChainError::WrongTokenAccount)?;
+    let (from_mint, _) = token::token_account_mint_owner(wallet_token).ok_or(ChainError::WrongTokenAccount)?;
     if from_mint != *mint.key {
         return Err(ChainError::WrongTokenAccount.into());
     }
-    let civ = season.civs.len() as u16;
-    let civ_bytes = civ.to_le_bytes();
-    let bump = expect_pda(program_id, orders_ai, &[ORDERS_SEED, &id, &civ_bytes])?;
-    init_pda(fee_payer, orders_ai, ORDERS_SPACE, program_id, &[ORDERS_SEED, &id, &civ_bytes, &[bump]])?;
-    let orders = Orders {
-        magic: ORDERS_MAGIC,
+    // One member per wallet per season (V5 D1): the PDA is keyed by the wallet.
+    let bump = expect_pda(program_id, member_ai, &[MEMBER_SEED, &id, wallet.key.as_ref()])?;
+    init_pda(fee_payer, member_ai, MEMBER_SPACE, program_id, &[MEMBER_SEED, &id, wallet.key.as_ref(), &[bump]])?;
+    let member = MemberAccount {
+        magic: MEMBER_MAGIC,
         season_id: season.season_id,
-        civ,
         bump,
-        preset: season.preset,
-        player: player.key.to_bytes(),
+        index: season.member_count,
+        civ,
+        wallet: wallet.key.to_bytes(),
         session,
-        open_tick: u16::MAX, // opened when genesis completes
-        spendable: 0,
-        batch: None,
+        kind,
+        name,
+        attestation,
+        stand,
+        votes,
+        shares: deposit,
+        claimed: false,
     };
-    store(&mut orders_ai.try_borrow_mut_data()?, &orders)?;
-    if season.entry_fee > 0 {
-        token::transfer_checked(player_token, mint, vault, player, season.entry_fee, season.usdc_decimals, None)?;
+    store(&mut member_ai.try_borrow_mut_data()?, &member)?;
+    let total = season.entry_fee.checked_add(deposit).ok_or(ChainError::InvalidParams)?;
+    if total > 0 {
+        token::transfer_checked(wallet_token, mint, vault, wallet, total, season.usdc_decimals, None)?;
     }
-    season.pool += season.entry_fee;
-    season.civs.push(CivSlot { player: player.key.to_bytes(), session, payout, kind, name });
+    // Entry fees: 80% prize pool, 20% operations (V5 D10).
+    let rules = rules_for(season.preset, season.market)?;
+    let ops = season.entry_fee * rules.ops_share_bps as u64 / 10_000;
+    season.ops += ops;
+    season.pool += season.entry_fee - ops;
+    season.treasury[civ as usize] += deposit;
+    season.nation_members[civ as usize] += 1;
+    season.member_count += 1;
     store(&mut season_ai.try_borrow_mut_data()?, &season)?;
-    msg!("PS join season {} civ {} pool {}", season.season_id, civ, season.pool);
+    msg!("PS member {} joined nation {} season {} pool {}", member.index, civ, season.season_id, season.pool);
     Ok(())
+}
+
+fn update_member(program_id: &Pubkey, accounts: &[AccountInfo], stand: u8, votes: [u32; 4]) -> ProgramResult {
+    let it = &mut accounts.iter();
+    let who = next_account_info(it)?;
+    let season_ai = next_account_info(it)?;
+    let member_ai = next_account_info(it)?;
+    signer(who)?;
+    let season = load_season(program_id, season_ai)?;
+    if season.status != SeasonStatus::Registering {
+        return Err(ChainError::WrongStatus.into());
+    }
+    let mut m = load_member(program_id, member_ai, season.season_id)?;
+    if who.key.as_ref() != m.wallet && who.key.as_ref() != m.session {
+        return Err(ChainError::Unauthorized.into());
+    }
+    if stand > 0x0f {
+        return Err(ChainError::InvalidParams.into());
+    }
+    m.stand = stand;
+    m.votes = votes;
+    store(&mut member_ai.try_borrow_mut_data()?, &m)
 }
 
 fn start_season(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
@@ -306,48 +438,35 @@ fn start_season(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult 
     if !is_operator(&season, authority.key) {
         return Err(ChainError::Unauthorized.into());
     }
-    if season.status != SeasonStatus::Registering || season.civs.len() < 2 {
+    if season.status != SeasonStatus::Registering || season.member_count == 0 {
         return Err(ChainError::WrongStatus.into());
     }
     let world = world_chunks(program_id, &accounts[3..], season.season_id)?;
     if hashes.key != &slot_hashes::id() {
         return Err(ChainError::InvalidParams.into());
     }
-    // Season seed (§0.2): the latest slot hash, mixed with every entrant, so
-    // nobody who joined could know it. Documented limitation: the slot leader
-    // could grind it; MagicBlock VRF is the planned source.
+    // Season seed (§0.2): the latest slot hash, mixed with the season id and
+    // the registration totals, taken when registration closes. Documented
+    // limitation: the slot leader could grind it; MagicBlock VRF is the plan.
     let recent = hashes.try_borrow_data()?.get(16..48).map(|h| h.to_vec()).ok_or(ChainError::InvalidParams)?;
-    let mut parts: Vec<&[u8]> = vec![b"PS/season-seed/v1", &recent];
     let id = season.season_id.to_le_bytes();
-    parts.push(&id);
-    for c in &season.civs {
-        parts.push(&c.player);
+    let count = season.member_count.to_le_bytes();
+    let treasury = borsh::to_vec(&season.treasury).map_err(|_| ChainError::InvalidParams)?;
+    season.season_seed = hashv(&[b"PS/season-seed/v5", &recent, &id, &count, &treasury]).to_bytes();
+    let rules = rules_for(season.preset, season.market)?;
+    let mut entries = nation_entries(season.nations as usize);
+    for (e, t) in entries.iter_mut().zip(&season.treasury) {
+        e.treasury = *t;
     }
-    season.season_seed = hashv(&parts).to_bytes();
-    let rules = rules_for(season.preset)?;
-    let entries: Vec<Entry> = season
-        .civs
-        .iter()
-        .map(|c| Entry {
-            name: c.name.clone(),
-            declared_kind: match c.kind {
-                0 => DeclaredKind::Human,
-                1 => DeclaredKind::Agent,
-                _ => DeclaredKind::Undeclared,
-            },
-            payout_wallet: c.payout,
-            exchange_deposit: season.exchange_credit,
-        })
-        .collect();
     check_entries(&rules, &entries).map_err(|_| ChainError::Rules)?;
     let map = MapJob::new(&rules, entries.len()).map_err(|_| ChainError::Rules)?;
     let job = GenesisJob { world_seed: season.world_seed, season_seed: season.season_seed, entries, map };
     world.write_genesis(&job)?;
-    let meta = WorldMeta { season_id: season.season_id, preset: season.preset, civs: season.civs.len() as u8, tick_seconds: season.tick_seconds, deadline: 0, finished: false };
+    let meta = WorldMeta { season_id: season.season_id, preset: season.preset, civs: season.nations, tick_seconds: season.tick_seconds, deadline: 0, finished: false, market: season.market, ..Default::default() };
     world.set_meta(&meta)?;
     season.status = SeasonStatus::Genesis;
     store(&mut season_ai.try_borrow_mut_data()?, &season)?;
-    msg!("PS season {} genesis started with {} civs", season.season_id, season.civs.len());
+    msg!("PS season {} genesis started: {} nations, {} members", season.season_id, season.nations, season.member_count);
     Ok(())
 }
 
@@ -358,8 +477,7 @@ fn genesis_step(program_id: &Pubkey, accounts: &[AccountInfo], work: u32) -> Pro
         return Err(ChainError::WrongStatus.into());
     }
     let world = world_chunks(program_id, &accounts[1..], season.season_id)?;
-    let it = &mut accounts[1 + WORLD_CHUNKS..].iter();
-    let rules = rules_for(season.preset)?;
+    let rules = rules_for(season.preset, season.market)?;
     let GenesisJob { world_seed, season_seed, entries, map } = world.read_genesis()?;
     match map.step(&rules, &world_seed, work).map_err(|_| ChainError::Rules)? {
         MapStep::Working(map) => {
@@ -368,27 +486,90 @@ fn genesis_step(program_id: &Pubkey, accounts: &[AccountInfo], work: u32) -> Pro
         }
         MapStep::Done(generated) => {
             let state = season_from_map(&rules, &world_seed, &season_seed, &entries, generated).map_err(|_| ChainError::Rules)?;
-            // Open tick 0 on every civ's orders account.
-            for civ in 0..season.civs.len() as u16 {
-                let ai = next_account_info(it)?;
-                let mut o = load_orders(program_id, ai, season.season_id, civ)?;
-                let c = &state.civs[civ as usize];
-                o.open_tick = state.tick;
-                o.spendable = c.tick_budget as u32 + c.order_bank as u32;
-                o.batch = None;
-                store(&mut ai.try_borrow_mut_data()?, &o)?;
-            }
             let root = world.write_world(&state)?;
-            let mut meta = world.meta()?;
-            meta.deadline = Clock::get()?.unix_timestamp + meta.tick_seconds as i64;
-            world.set_meta(&meta)?;
-            season.status = SeasonStatus::Running;
+            season.status = SeasonStatus::Seating;
             store(&mut season_ai.try_borrow_mut_data()?, &season)?;
             solana_program::log::sol_log_data(&[b"PS_GENESIS", &root, &season_seed]);
             msg!("PS genesis complete");
             Ok(())
         }
     }
+}
+
+/// Add the next members (registration order) to the world with their
+/// pre-season candidacy and votes. Logged as `PS_SEAT ‖ borsh(members)` for
+/// the verifier.
+fn seat_members(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
+    let authority = accounts.first().ok_or(ProgramError::NotEnoughAccountKeys)?;
+    let season_ai = accounts.get(1).ok_or(ProgramError::NotEnoughAccountKeys)?;
+    signer(authority)?;
+    let mut season = load_season(program_id, season_ai)?;
+    if !is_operator(&season, authority.key) {
+        return Err(ChainError::Unauthorized.into());
+    }
+    if season.status != SeasonStatus::Seating {
+        return Err(ChainError::WrongStatus.into());
+    }
+    let world = world_chunks(program_id, &accounts[2..], season.season_id)?;
+    let rules = rules_for(season.preset, season.market)?;
+    let mut state = world.read_world()?;
+    let mut seated = Vec::new();
+    for ai in &accounts[2 + WORLD_CHUNKS..] {
+        let m = load_member(program_id, ai, season.season_id)?;
+        if m.index != state.members.len() as u32 {
+            return Err(ChainError::InvalidParams.into());
+        }
+        let id = gov::join(&mut state, &rules, m.civ, m.session).map_err(|_| ChainError::Rules)?;
+        let mut entries = vec![GovEntry { member: id, signer: m.session, action: GovAction::Stand { roles: m.stand } }];
+        for role in Role::ALL {
+            let candidate = m.votes[role.index()];
+            if candidate != NOBODY {
+                entries.push(GovEntry { member: id, signer: m.session, action: GovAction::Vote { role, candidate } });
+            }
+        }
+        gov::apply_pre_season(&mut state, &rules, &entries).map_err(|_| ChainError::Rules)?;
+        seated.push((m.civ, m.session, m.stand, m.votes));
+    }
+    season.seated = state.members.len() as u32;
+    let root = world.write_world(&state)?;
+    store(&mut season_ai.try_borrow_mut_data()?, &season)?;
+    let record = borsh::to_vec(&seated).map_err(|_| ChainError::Rules)?;
+    solana_program::log::sol_log_data(&[b"PS_SEAT", &root, &record]);
+    msg!("PS seated {} members ({} of {})", seated.len(), season.seated, season.member_count);
+    Ok(())
+}
+
+fn open_government(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
+    let authority = accounts.first().ok_or(ProgramError::NotEnoughAccountKeys)?;
+    let season_ai = accounts.get(1).ok_or(ProgramError::NotEnoughAccountKeys)?;
+    signer(authority)?;
+    let mut season = load_season(program_id, season_ai)?;
+    if !is_operator(&season, authority.key) {
+        return Err(ChainError::Unauthorized.into());
+    }
+    if season.status != SeasonStatus::Seating || season.seated != season.member_count {
+        return Err(ChainError::WrongStatus.into());
+    }
+    let world = world_chunks(program_id, &accounts[2..], season.season_id)?;
+    let rules = rules_for(season.preset, season.market)?;
+    let mut state = world.read_world()?;
+    gov::first_election(&mut state, &rules).map_err(|_| ChainError::Rules)?;
+    let it = &mut accounts[2 + WORLD_CHUNKS..].iter();
+    for civ in 0..season.nations as u16 {
+        let ai = next_account_info(it)?;
+        let mut n = load_nation(program_id, ai, season.season_id, civ)?;
+        open_nation(&mut n, &state, &rules);
+        store(&mut ai.try_borrow_mut_data()?, &n)?;
+    }
+    let root = world.write_world(&state)?;
+    let mut meta = world.meta()?;
+    meta.deadline = Clock::get()?.unix_timestamp + meta.tick_seconds as i64;
+    world.set_meta(&meta)?;
+    season.status = SeasonStatus::Running;
+    store(&mut season_ai.try_borrow_mut_data()?, &season)?;
+    solana_program::log::sol_log_data(&[b"PS_OPEN", &root]);
+    msg!("PS government opened: tick 0 is open");
+    Ok(())
 }
 
 // ------------------------------------------------------------------ base: ER lifecycle
@@ -425,9 +606,9 @@ fn delegate(program_id: &Pubkey, accounts: &[AccountInfo], target: u16) -> Progr
     let seeds: Vec<&[u8]> = if (target as usize) < WORLD_CHUNKS {
         chunk = [target as u8];
         vec![WORLD_SEED, &id, &chunk]
-    } else if target >= ORDERS_TARGET {
-        civ_bytes = (target - ORDERS_TARGET).to_le_bytes();
-        vec![ORDERS_SEED, &id, &civ_bytes]
+    } else if target >= NATION_TARGET && target - NATION_TARGET < season.nations as u16 {
+        civ_bytes = (target - NATION_TARGET).to_le_bytes();
+        vec![NATION_SEED, &id, &civ_bytes]
     } else {
         return Err(ChainError::InvalidParams.into());
     };
@@ -468,7 +649,7 @@ fn undelegate_callback(program_id: &Pubkey, accounts: &[AccountInfo], seeds: Vec
         Some(s) if s == WORLD_SEED => {
             data.len() == CHUNK && (refs.get(2) != Some(&&[0u8][..]) || data[..8] == WORLD_MAGIC || data[..8] == GENESIS_MAGIC)
         }
-        Some(s) if s == ORDERS_SEED => data.len() >= 8 && data[..8] == ORDERS_MAGIC,
+        Some(s) if s == NATION_SEED => data.len() >= 8 && data[..8] == NATION_MAGIC,
         _ => false,
     };
     drop(data);
@@ -499,7 +680,7 @@ fn commit(program_id: &Pubkey, accounts: &[AccountInfo], undelegate: bool) -> Pr
     let mut list: Vec<AccountInfo> = world.accounts.to_vec();
     for civ in 0..meta.civs as u16 {
         let ai = next_account_info(it)?;
-        load_orders(program_id, ai, meta.season_id, civ)?;
+        load_nation(program_id, ai, meta.season_id, civ)?;
         list.push(ai.clone());
     }
     let builder = MagicIntentBundleBuilder::new(payer.clone(), magic_context.clone(), magic_program.clone());
@@ -522,7 +703,7 @@ fn undelegate_part(program_id: &Pubkey, accounts: &[AccountInfo], targets: Vec<u
     if magic_program.key != &MAGIC_PROGRAM_ID || magic_context.key != &MAGIC_CONTEXT_ID {
         return Err(ChainError::WrongMagicProgram.into());
     }
-    if targets.is_empty() || targets.len() > WORLD_CHUNKS + MAX_CIVS {
+    if targets.is_empty() || targets.len() > WORLD_CHUNKS + MAX_NATIONS {
         return Err(ChainError::InvalidParams.into());
     }
     // The season is over: read from chunk 0's header.
@@ -552,8 +733,8 @@ fn undelegate_part(program_id: &Pubkey, accounts: &[AccountInfo], targets: Vec<u
             }
             expect_pda(program_id, ai, &[WORLD_SEED, &id, &[t as u8]])?;
         } else {
-            let civ = t.checked_sub(ORDERS_TARGET).filter(|c| *c < meta.civs as u16).ok_or(ChainError::InvalidParams)?;
-            load_orders(program_id, ai, season_id, civ)?;
+            let civ = t.checked_sub(NATION_TARGET).filter(|c| *c < meta.civs as u16).ok_or(ChainError::InvalidParams)?;
+            load_nation(program_id, ai, season_id, civ)?;
         }
         list.push(ai.clone());
     }
@@ -564,32 +745,158 @@ fn undelegate_part(program_id: &Pubkey, accounts: &[AccountInfo], targets: Vec<u
 
 // ------------------------------------------------------------------ ER: play
 
-fn submit_orders(program_id: &Pubkey, accounts: &[AccountInfo], tick: u16, decision_digest: [u8; 32], orders: Vec<permutation_rules::orders::Order>) -> ProgramResult {
+#[allow(clippy::too_many_arguments)]
+fn submit_orders(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    role: Role,
+    tick: u16,
+    decision_digest: [u8; 32],
+    orders: Vec<Order>,
+    adopt: Vec<u32>,
+) -> ProgramResult {
     let it = &mut accounts.iter();
     let who = next_account_info(it)?;
-    let orders_ai = next_account_info(it)?;
+    let nation_ai = next_account_info(it)?;
     signer(who)?;
-    if orders_ai.owner != program_id {
-        return Err(ChainError::MissingOrders.into());
+    if nation_ai.owner != program_id {
+        return Err(ChainError::MissingNation.into());
     }
-    let mut o: Orders = load(&orders_ai.try_borrow_data()?)?;
-    if o.magic != ORDERS_MAGIC {
-        return Err(ChainError::MissingOrders.into());
+    let mut n: NationAccount = load(&nation_ai.try_borrow_data()?)?;
+    if n.magic != NATION_MAGIC {
+        return Err(ChainError::MissingNation.into());
     }
-    expect_pda(program_id, orders_ai, &[ORDERS_SEED, &o.season_id.to_le_bytes(), &o.civ.to_le_bytes()])?;
-    if who.key.as_ref() != o.session && who.key.as_ref() != o.player {
+    expect_pda(program_id, nation_ai, &[NATION_SEED, &n.season_id.to_le_bytes(), &n.civ.to_le_bytes()])?;
+    let i = role.index();
+    let member = n.officers[i];
+    // The office holder's session key; the crank for a vacant office (the acting official).
+    let allowed = if member == NOBODY { n.crank } else { n.keys[i] };
+    if who.key.as_ref() != allowed {
         return Err(ChainError::Unauthorized.into());
     }
-    if tick != o.open_tick {
+    if tick != n.open_tick {
         return Err(ChainError::WrongTick.into());
     }
-    let rules = rules_for(o.preset)?;
+    if n.frozen {
+        return Err(ChainError::TickFrozen.into());
+    }
+    // Officers seal a rationale (V5 D17).
+    if member != NOBODY && decision_digest == [0; 32] {
+        return Err(ChainError::Rules.into());
+    }
+    if !orders.iter().all(|o| role_allows_static(role, o)) {
+        return Err(ChainError::WrongOffice.into());
+    }
+    let rules = rules_for(n.preset, n.market)?;
     let cost = check_structure(&rules, tick, &orders).map_err(|_| ChainError::Rules)?;
-    if cost > o.spendable {
+    if cost > n.spendable[i] || adopt.len() > rules.max_open_proposals as usize {
         return Err(ChainError::OverBudget.into());
     }
-    o.batch = Some(OrderBatch { civ: o.civ, tick, decision_digest, orders });
-    store(&mut orders_ai.try_borrow_mut_data()?, &o)?;
+    n.batches[i] = Some(OrderBatch { civ: n.civ, tick, role, member, decision_digest, orders, adopt });
+    n.submitted[i] = tick;
+    store(&mut nation_ai.try_borrow_mut_data()?, &n)?;
+    Ok(())
+}
+
+fn submit_gov(program_id: &Pubkey, accounts: &[AccountInfo], member: u32, action: GovAction) -> ProgramResult {
+    let it = &mut accounts.iter();
+    let who = next_account_info(it)?;
+    let nation_ai = next_account_info(it)?;
+    signer(who)?;
+    if nation_ai.owner != program_id {
+        return Err(ChainError::MissingNation.into());
+    }
+    let mut n: NationAccount = load(&nation_ai.try_borrow_data()?)?;
+    if n.magic != NATION_MAGIC {
+        return Err(ChainError::MissingNation.into());
+    }
+    expect_pda(program_id, nation_ai, &[NATION_SEED, &n.season_id.to_le_bytes(), &n.civ.to_le_bytes()])?;
+    if n.open_tick == u16::MAX {
+        return Err(ChainError::WrongStatus.into());
+    }
+    if n.frozen {
+        return Err(ChainError::TickFrozen.into());
+    }
+    let signer_key = who.key.to_bytes();
+    if n.inbox.iter().filter(|e| e.signer == signer_key).count() >= MAX_GOV_PER_SIGNER {
+        return Err(ChainError::InboxFull.into());
+    }
+    n.inbox.push(GovEntry { member, signer: signer_key, action });
+    // Fails with AccountDataTooSmall when the inbox is full for this tick.
+    store(&mut nation_ai.try_borrow_mut_data()?, &n)
+}
+
+/// The open tick's input as it stands in the nation accounts (batches for
+/// the open tick, governance inboxes), with `vrf` as its randomness.
+fn pending_input<'a, 'info>(
+    program_id: &Pubkey,
+    nations: &'a [AccountInfo<'info>],
+    meta: &WorldMeta,
+    vrf: [u8; 32],
+) -> Result<(TickInput, u16, usize, Vec<&'a AccountInfo<'info>>), ProgramError> {
+    let it = &mut nations.iter();
+    let mut ais = Vec::with_capacity(meta.civs as usize);
+    let (mut batches, mut gov, mut done, mut tick) = (Vec::new(), Vec::new(), 0, u16::MAX);
+    for civ in 0..meta.civs as u16 {
+        let ai = next_account_info(it)?;
+        let n = load_nation(program_id, ai, meta.season_id, civ)?;
+        if tick == u16::MAX {
+            tick = n.open_tick;
+        }
+        for b in n.batches.into_iter().flatten().filter(|b| b.tick == tick) {
+            batches.push(b);
+            done += 1;
+        }
+        gov.extend(n.inbox);
+        ais.push(ai);
+    }
+    Ok((TickInput { vrf, batches, gov, deposits: Vec::new() }, tick, done, ais))
+}
+
+fn log_tick_input(program_id: &Pubkey, accounts: &[AccountInfo], chunk: u16) -> ProgramResult {
+    let chunk0 = accounts.first().ok_or(ProgramError::NotEnoughAccountKeys)?;
+    let world = world_chunks(program_id, accounts, world_season_id(chunk0)?)?;
+    let mut meta = world.meta()?;
+    if meta.finished {
+        return Err(ChainError::WrongStatus.into());
+    }
+    let nations = &accounts[WORLD_CHUNKS..];
+    if !meta.frozen {
+        if chunk != 0 {
+            return Err(ChainError::InputNotPublished.into());
+        }
+        let (_, _, done, ais) = pending_input(program_id, nations, &meta, [0; 32])?;
+        let clock = Clock::get()?;
+        if clock.unix_timestamp < meta.deadline && done < 4 * meta.civs as usize {
+            return Err(ChainError::TooEarly.into());
+        }
+        // Tick randomness (§0.2): the committed world plus this slot, fixed
+        // before anyone can see the input's effect. MagicBlock VRF is the
+        // planned replacement.
+        let body = world.body(&WORLD_MAGIC)?;
+        let root = hashv(&[&body]).to_bytes();
+        drop(body);
+        meta.vrf = hashv(&[b"PS/tick-vrf/v2", &root, &clock.slot.to_le_bytes(), &clock.unix_timestamp.to_le_bytes()]).to_bytes();
+        meta.frozen = true;
+        meta.input_logged = 0;
+        for ai in ais {
+            let mut n: NationAccount = load(&ai.try_borrow_data()?)?;
+            n.frozen = true;
+            store(&mut ai.try_borrow_mut_data()?, &n)?;
+        }
+    }
+    let (input, tick, _, _) = pending_input(program_id, nations, &meta, meta.vrf)?;
+    let bytes = borsh::to_vec(&input).map_err(|_| ChainError::Rules)?;
+    let total = bytes.len().div_ceil(INPUT_CHUNK).max(1) as u16;
+    if chunk >= total || chunk > meta.input_logged {
+        return Err(ChainError::InvalidParams.into());
+    }
+    meta.input_chunks = total;
+    meta.input_logged = meta.input_logged.max(chunk + 1);
+    world.set_meta(&meta)?;
+    let hash = hashv(&[&bytes]).to_bytes();
+    let part = &bytes[chunk as usize * INPUT_CHUNK..bytes.len().min((chunk as usize + 1) * INPUT_CHUNK)];
+    solana_program::log::sol_log_data(&[b"PS_INPUT", &tick.to_le_bytes(), &chunk.to_le_bytes(), &total.to_le_bytes(), &hash, part]);
     Ok(())
 }
 
@@ -600,32 +907,18 @@ fn resolve_tick(program_id: &Pubkey, accounts: &[AccountInfo], to: u8) -> Progra
     if meta.finished {
         return Err(ChainError::WrongStatus.into());
     }
-    let it = &mut accounts[WORLD_CHUNKS..].iter();
+    // Data availability: a tick resolves only on an input the chain published.
+    if !meta.frozen || meta.input_logged < meta.input_chunks || meta.input_chunks == 0 {
+        return Err(ChainError::InputNotPublished.into());
+    }
     let body = world.body(&WORLD_MAGIC)?;
     let pre_root = hashv(&[&body]).to_bytes();
-    let mut state = permutation_rules::state::WorldState::try_from_slice(&body).map_err(|_| ChainError::WrongWorld)?;
+    let mut state = WorldState::try_from_slice(&body).map_err(|_| ChainError::WrongWorld)?;
     drop(body);
-    let rules = rules_for(meta.preset)?;
-    let mut order_ais = Vec::with_capacity(meta.civs as usize);
-    let mut batches = Vec::new();
-    for civ in 0..meta.civs as u16 {
-        let ai = next_account_info(it)?;
-        let o = load_orders(program_id, ai, meta.season_id, civ)?;
-        if let Some(b) = o.batch.filter(|b| b.tick == state.tick) {
-            batches.push(b);
-        }
-        order_ais.push(ai);
-    }
-    let clock = Clock::get()?;
-    let everyone = batches.len() == meta.civs as usize;
-    if state.phase_cursor == 0 && clock.unix_timestamp < meta.deadline && !everyone {
-        return Err(ChainError::TooEarly.into());
-    }
-    // Tick randomness (§0.2): the committed history plus this slot. Only
-    // phase 0 reads it. MagicBlock VRF is the planned replacement.
-    let vrf = hashv(&[b"PS/tick-vrf/v1", &state.event_head, &clock.slot.to_le_bytes(), &clock.unix_timestamp.to_le_bytes()]).to_bytes();
+    let rules = rules_for(meta.preset, meta.market)?;
+    // Submissions are refused while frozen, so this is the input PS_INPUT published.
+    let (input, _, _, nation_ais) = pending_input(program_id, &accounts[WORLD_CHUNKS..], &meta, meta.vrf)?;
     let tick = state.tick;
-    let input = TickInput { vrf, batches };
     while state.phase_cursor < to.min(12) {
         let p = state.phase_cursor;
         run_phase(&mut state, &rules, &input, p).map_err(|_| ChainError::Rules)?;
@@ -635,23 +928,24 @@ fn resolve_tick(program_id: &Pubkey, accounts: &[AccountInfo], to: u8) -> Progra
     }
     let completed = state.tick != tick;
     if completed {
-        for (civ, ai) in order_ais.iter().enumerate() {
-            let mut o: Orders = load(&ai.try_borrow_data()?)?;
-            let c = &state.civs[civ];
-            o.open_tick = state.tick;
-            o.spendable = c.tick_budget as u32 + c.order_bank as u32;
-            o.batch = None;
-            store(&mut ai.try_borrow_mut_data()?, &o)?;
+        for ai in &nation_ais {
+            let mut n: NationAccount = load(&ai.try_borrow_data()?)?;
+            open_nation(&mut n, &state, &rules);
+            store(&mut ai.try_borrow_mut_data()?, &n)?;
         }
+        let clock = Clock::get()?;
         meta.deadline = clock.unix_timestamp + meta.tick_seconds as i64;
         meta.finished = state.tick >= rules.ticks_per_season;
+        (meta.frozen, meta.vrf, meta.input_chunks, meta.input_logged) = (false, [0; 32], 0, 0);
     }
     let root = world.write_world(&state)?;
     world.set_meta(&meta)?;
-    // Tick record for the replay verifier: everything needed to recompute this
-    // step from the previous state, and the root it must produce.
-    let batches = borsh::to_vec(&input.batches).map_err(|_| ChainError::Rules)?;
-    solana_program::log::sol_log_data(&[b"PS_TICK", &tick.to_le_bytes(), &[to], &vrf, &pre_root, &root, &batches]);
+    // Tick record for the replay verifier: the step from the previous root
+    // to this one, and the hash of the input (published in full as PS_INPUT
+    // before the tick could resolve). A split tick logs one record per part.
+    let record = borsh::to_vec(&input).map_err(|_| ChainError::Rules)?;
+    let input_hash = hashv(&[&record]).to_bytes();
+    solana_program::log::sol_log_data(&[b"PS_TICK", &tick.to_le_bytes(), &[to], &pre_root, &root, &input_hash]);
     msg!("PS tick {} {}", tick, if completed { "resolved" } else { "partial" });
     Ok(())
 }
@@ -670,43 +964,58 @@ fn finish_season(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult
         return Err(ChainError::WrongWorld.into());
     }
     let state = world.read_world()?;
-    let rules = rules_for(season.preset)?;
+    let rules = rules_for(season.preset, season.market)?;
     if state.tick < rules.ticks_per_season {
         return Err(ChainError::SeasonNotOver.into());
     }
-    let p = permutation_rules::scoring::payouts(&rules, &state, season.pool);
-    season.payouts = p.per_civ;
-    season.claimed = vec![false; season.payouts.len()];
-    season.rollover = p.rollover;
+    // In-play income (market fees and tariffs) joins the pool and operations
+    // in the same 80/20 split as the fees (V5 D11).
+    let pool = season.pool + state.exchange_vault;
+    let s = permutation_rules::payout::settle(&state, &rules, pool, season.entry_fee);
+    season.pool = pool;
+    season.ops += state.exchange_ops + s.dust;
+    season.payouts = s.per_member;
+    season.treasury_final = state.civs.iter().map(|c| c.usdc).collect();
     season.final_root = state.state_root().map_err(|_| ChainError::Rules)?;
     season.status = SeasonStatus::Finalized;
     store(&mut season_ai.try_borrow_mut_data()?, &season)?;
-    msg!("PS season {} finalized: payouts {:?} rollover {}", season.season_id, season.payouts, season.rollover);
+    msg!("PS season {} finalized: pool {} ops {} refund {}", season.season_id, season.pool, season.ops, s.refund);
     Ok(())
 }
 
-fn claim(program_id: &Pubkey, accounts: &[AccountInfo], civ: u16) -> ProgramResult {
+/// What a member receives: its prize, plus its share of what is left in
+/// its nation's treasury (V5 §7.5).
+pub fn claim_amount(season: &Season, member: &MemberAccount) -> u64 {
+    let prize = season.payouts.get(member.index as usize).copied().unwrap_or(0);
+    let civ = member.civ as usize;
+    let deposited = season.treasury.get(civ).copied().unwrap_or(0);
+    let left = season.treasury_final.get(civ).copied().unwrap_or(0);
+    let refund = if deposited == 0 { 0 } else { (member.shares as u128 * left as u128 / deposited as u128) as u64 };
+    prize + refund
+}
+
+fn claim(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
     let it = &mut accounts.iter();
-    let owner = next_account_info(it)?;
+    let wallet = next_account_info(it)?;
     let season_ai = next_account_info(it)?;
+    let member_ai = next_account_info(it)?;
     let vault = next_account_info(it)?;
     let dest = next_account_info(it)?;
     let mint = next_account_info(it)?;
     let token_program = next_account_info(it)?;
-    signer(owner)?;
-    let mut season = load_season(program_id, season_ai)?;
+    signer(wallet)?;
+    let season = load_season(program_id, season_ai)?;
     if season.status != SeasonStatus::Finalized {
         return Err(ChainError::WrongStatus.into());
     }
-    let i = civ as usize;
-    let slot = season.civs.get(i).ok_or(ChainError::InvalidParams)?;
-    if owner.key.as_ref() != slot.payout {
+    let mut member = load_member(program_id, member_ai, season.season_id)?;
+    if wallet.key.as_ref() != member.wallet {
         return Err(ChainError::Unauthorized.into());
     }
-    if season.claimed[i] {
+    if member.claimed {
         return Err(ChainError::AlreadyClaimed.into());
     }
-    let amount = season.payouts[i];
+    let amount = claim_amount(&season, &member);
     if amount == 0 {
         return Err(ChainError::NothingToClaim.into());
     }
@@ -716,12 +1025,47 @@ fn claim(program_id: &Pubkey, accounts: &[AccountInfo], civ: u16) -> ProgramResu
     let id = season.season_id.to_le_bytes();
     expect_pda(program_id, vault, &[VAULT_SEED, &id])?;
     let (dmint, downer) = token::token_account_mint_owner(dest).ok_or(ChainError::WrongTokenAccount)?;
-    if dmint != *mint.key || downer != *owner.key {
+    if dmint != *mint.key || downer != *wallet.key {
         return Err(ChainError::WrongTokenAccount.into());
     }
-    season.claimed[i] = true;
-    store(&mut season_ai.try_borrow_mut_data()?, &season)?;
+    member.claimed = true;
+    store(&mut member_ai.try_borrow_mut_data()?, &member)?;
     token::transfer_checked(vault, mint, dest, season_ai, amount, season.usdc_decimals, Some(&[SEASON_SEED, &id, &[season.bump]]))?;
-    msg!("PS claim season {} civ {} amount {}", season.season_id, civ, amount);
+    msg!("PS claim season {} member {} amount {}", season.season_id, member.index, amount);
+    Ok(())
+}
+
+fn withdraw_ops(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
+    let it = &mut accounts.iter();
+    let admin = next_account_info(it)?;
+    let season_ai = next_account_info(it)?;
+    let vault = next_account_info(it)?;
+    let dest = next_account_info(it)?;
+    let mint = next_account_info(it)?;
+    let token_program = next_account_info(it)?;
+    signer(admin)?;
+    let mut season = load_season(program_id, season_ai)?;
+    if admin.key.as_ref() != season.admin {
+        return Err(ChainError::Unauthorized.into());
+    }
+    if season.status != SeasonStatus::Finalized || season.ops_withdrawn {
+        return Err(ChainError::WrongStatus.into());
+    }
+    if token_program.key != &token::TOKEN_PROGRAM_ID || mint.key.as_ref() != season.usdc_mint {
+        return Err(ChainError::WrongMint.into());
+    }
+    let id = season.season_id.to_le_bytes();
+    expect_pda(program_id, vault, &[VAULT_SEED, &id])?;
+    let (dmint, _) = token::token_account_mint_owner(dest).ok_or(ChainError::WrongTokenAccount)?;
+    if dmint != *mint.key {
+        return Err(ChainError::WrongTokenAccount.into());
+    }
+    season.ops_withdrawn = true;
+    let amount = season.ops;
+    store(&mut season_ai.try_borrow_mut_data()?, &season)?;
+    if amount > 0 {
+        token::transfer_checked(vault, mint, dest, season_ai, amount, season.usdc_decimals, Some(&[SEASON_SEED, &id, &[season.bump]]))?;
+    }
+    msg!("PS operations share {} withdrawn", amount);
     Ok(())
 }

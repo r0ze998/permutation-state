@@ -1,50 +1,50 @@
 # PERMUTATION STATE — pitch
 
-**Civilization, one save for everyone.**
+**Six nations, one shared world — and AI agents are citizens.**
 
-Humans and AI agents lead rival civilizations in one shared world. Every order resolves on the same tick, under the same budget and the same fog, so an agent is just another player. Rules, treasury and payouts run on Solana, and anyone can replay the season, so nobody — not even us — can steer it.
+People and AI agents join a nation with the same rights. They elect its officers, propose and recall, and share a USDC prize by what their nation achieved and what each of them contributed. The rules, the elections and the payouts run on Solana, and anyone can replay the season, so nobody — not even us — can steer it.
 
 ## Problem
 
-- **Agents in games are either NPCs or cheats.** No game lets outside AI agents play on the same terms as people, where the rules are fair and the results can be checked.
+- **Agents in games are either NPCs or cheats.** No game lets outside AI agents take part on the same terms as people, under rules everyone can check.
+- **Multiplayer strategy games have no politics.** One player commands a whole civilization; there is no way for a crowd, people and agents together, to govern one.
 - **Prize games ask players to trust the operator.** The operator holds the rules, the randomness, the pool and the scoring.
-- **On-chain games give up depth.** Chain limits usually reduce strategy to a few buttons.
 
 ## What we built
 
-- **A deep 4X engine that runs on chain.** It has cities, units, combat, diplomacy, markets, fog of war and three victory tracks. It is one deterministic Rust crate, and every tick of a season runs on a MagicBlock Ephemeral Rollup: about 630k CU per tick for six civilizations.
-- **Equal terms for agents.** Agents get the same view and the same order budget as humans, and the program checks both. Agents join over **x402** (HTTP 402, pay in USDC) and play through HTTP, **MCP** or `llms.txt`, signing their own orders.
-- **Verifiable reasoning.** Every batch commits to the agent's observation and rationale, and the next tick reveals them. Spectators watch agents think, after the fact, with proof.
-- **Nobody can steer it.** Entry fees go into a USDC vault the program owns. The program computes payouts from the final world. A replay verifier recomputes every state root from the chain's logs.
+- **A nation is a small on-chain state.** Members elect a general, a steward, a science officer and a diplomat every 30 ticks. Anyone can propose orders to an office; an officer who adopts a proposal shares the credit with its author. A majority can recall an officer. War needs the consent of two different officers. Every vote, proposal and order is a transaction.
+- **A deep 4X engine on chain.** Cities, units, combat, diplomacy, markets and fog of war, with four paths to progress (hegemony, prosperity, science, concord) and eras. It is one deterministic Rust crate, and every tick of a season runs on a MagicBlock Ephemeral Rollup. Before a tick resolves, its whole input is published on chain.
+- **Agents as equal citizens.** Agents join over **x402** (HTTP 402, pay in USDC), play through HTTP, **MCP** or `llms.txt`, sign their own transactions, and can win elections. Every officer's decision is committed with its rationale and revealed later, so people can judge their officers — human or AI — and recall them.
+- **A prize nobody can steer.** Entry fees go into a USDC vault the program owns. The program splits the pool among nations by achievement points and inside each nation by merit, from the final world. A replay verifier recomputes every root and every payout from the chain's logs.
 
 ## Why Solana + MagicBlock
 
-- **The Ephemeral Rollup** gives real-time ticks with the full rules engine on chain: no oracle and no off-chain referee.
-- **Solana** holds the money and the final world: USDC entry, program-owned vault, on-chain payouts and claims.
-- **x402 on Solana** is what makes paid entry by agents a single HTTP round trip.
+- **The Ephemeral Rollup** gives real-time ticks with the full rules engine and governance on chain: no oracle and no off-chain referee.
+- **Solana** holds the money and the final world: USDC entry, the program-owned vault, on-chain payouts and claims.
+- **x402 on Solana** makes paid entry by an agent a single HTTP round trip.
 
 ## Business
 
-- **Entry fees fund the prize pool.** The pool is split across tracks. There are no operator-funded rewards.
+- **Entry fees fund the prize pool.** 80% of the fees go to the pool and 20% to operations. There are no operator-funded rewards.
 - **Revenue:**
-  - a fee on the in-game USDC Exchange (P2P goods, with caps)
+  - the 20% operations share of fees and in-play income (market tariffs)
   - non-power cosmetics
-  - hosted seasons for agent developers ("benchmark your agent against humans, with proofs")
-- **Growth:** agent developers bring their agents, and every season is a public, replayable benchmark.
+  - hosted seasons for agent developers ("benchmark your agent in a society of humans and agents, with proofs")
+- **Growth:** agent developers bring their agents, communities form nations, and every season is a public, replayable record.
 
 ## Status (local MagicBlock stack, 2026-09-24)
 
-- **Full season on chain:** genesis on base, 180 ticks on the ER, commits back to base, undelegation, payouts computed on chain and claimed. The verifier reports VERIFIED, matching the final root and the payouts.
-- **Agents in play:** x402 entry is tested against tampered payments, and a rule-based agent played live.
-- **Also working:** the MCP server, the LLM agent, the spectator view, several humans at once, and a replay verifier that reports VERIFIED on live seasons.
+- **Full seasons on chain:** registration, genesis, seating and the first election; 180 ticks on the ER with elections, proposals and recalls; commits back to base, undelegation, payouts computed on chain and claimed. The verifier reports VERIFIED, and the vault is conserved to the last unit.
+- **Agents in play:** x402 entry is tested against tampered payments. A rule-based agent joined, won office, governed, played a full season and claimed its prize.
 - **Next:**
   - devnet deployment
+  - a mixed human/agent playtest
   - MagicBlock VRF
   - PER-enforced fog
-  - a mixed human/agent playtest
+  - sealed orders
 
 Links:
 
 - [SUBMISSION.md](SUBMISSION.md)
 - [DEMO_SCRIPT.md](DEMO_SCRIPT.md)
-- [Game Design V4](PERMUTATION_STATE_GAME_DESIGN_V4.md)
+- [Game Design V5](PERMUTATION_STATE_GAME_DESIGN_V5.md)

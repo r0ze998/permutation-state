@@ -1,21 +1,26 @@
 //! Account layouts.
 //!
-//! * **Season** `["season", id]` — base layer. Entry, the USDC pool, the civ
-//!   registry (wallet, session key, payout owner) and, after the season, the
-//!   payouts and claims.
+//! * **Season** `["season", id]` — base layer. Entry, the USDC pool and the
+//!   operations share, member and treasury totals, and after the season the
+//!   per-member payouts and the final world root.
+//! * **Member** `["member", id, wallet]` — base layer. One per wallet per
+//!   season (V5 D1): nation, session key, self-declared kind, pre-season
+//!   candidacy and votes, treasury shares, claim flag.
 //! * **World** `["world", id, k]`, k = 0..WORLD_CHUNKS — delegated to the ER
 //!   during play. Every account the ER delegates, commits or undelegates is
 //!   created through CPI, which Solana caps at 10 KiB, so the world is stored
 //!   in 10 KiB chunks: chunk 0 starts with a fixed header (magic, body length,
 //!   `WorldMeta`), and the borsh `WorldState` (or the `GenesisJob` while
 //!   genesis runs) continues across the chunks in order.
-//! * **Orders** `["orders", id, civ]` — delegated to the ER. One civ's batch
-//!   for the open tick, plus the cached budget so `SubmitOrders` can check it
-//!   without decoding the world.
-//! * **Vault** `["vault", id]` — an SPL token account owned by the Season PDA.
+//! * **Nation** `["nation", id, civ]` — delegated to the ER. The nation's
+//!   office batches for the open tick, its governance inbox, and a cache of
+//!   the office holders' keys and budgets so submissions never decode the world.
+//! * **Vault** `["vault", id]` — an SPL token account owned by the Season PDA:
+//!   entry fees (pool and operations) and nation treasuries.
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use permutation_rules::genesis::Entry;
+use permutation_rules::gov::GovEntry;
 use permutation_rules::map::MapJob;
 use permutation_rules::orders::OrderBatch;
 use permutation_rules::state::WorldState;
@@ -25,43 +30,40 @@ use crate::error::ChainError;
 
 pub const SEASON_SEED: &[u8] = b"season";
 pub const WORLD_SEED: &[u8] = b"world";
-pub const ORDERS_SEED: &[u8] = b"orders";
+pub const NATION_SEED: &[u8] = b"nation";
+pub const MEMBER_SEED: &[u8] = b"member";
 pub const VAULT_SEED: &[u8] = b"vault";
 
 pub const SEASON_SPACE: usize = 4 * 1024;
-pub const ORDERS_SPACE: usize = 2 * 1024;
+pub const MEMBER_SPACE: usize = 320;
+pub const NATION_SPACE: usize = 8 * 1024;
 /// Size of each world chunk: the CPI allocation limit.
 pub const CHUNK: usize = 10 * 1024;
-/// Blitz peaks near 22 KB; 8 chunks leave room for Season-sized worlds.
+/// Blitz peaks near 22 KB without members; 8 chunks leave room for members
+/// and Season-sized worlds.
 pub const WORLD_CHUNKS: usize = 8;
 pub const MAX_NAME: usize = 24;
-pub const MAX_CIVS: usize = 16;
+pub const MAX_NATIONS: usize = 8;
+/// Members per season: bounded by the world account and the payout table in
+/// the Season account (V5 §11; sharding members out of the world is roadmap).
+pub const MAX_MEMBERS: u32 = 256;
+/// Governance actions one signer may queue per tick.
+pub const MAX_GOV_PER_SIGNER: usize = 8;
 
 // ------------------------------------------------------------------ season
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SeasonStatus {
-    /// Accepting entries.
+    /// Accepting members.
     Registering,
     /// Genesis is being built in the world account.
     Genesis,
-    /// Tick 0 is ready; play runs on the ER once delegated.
+    /// Tick 0 exists; members are being seated in the world.
+    Seating,
+    /// The first election ran; play runs on the ER once delegated.
     Running,
     /// Payouts computed from the final world; claims open.
     Finalized,
-}
-
-#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
-pub struct CivSlot {
-    /// Paid the entry; may submit orders.
-    pub player: [u8; 32],
-    /// Low-value key allowed to submit orders for this civ (session key).
-    pub session: [u8; 32],
-    /// Owner of the token account that receives prizes.
-    pub payout: [u8; 32],
-    /// 0 Human, 1 Agent, 2 Undeclared (cosmetic, §3.1).
-    pub kind: u8,
-    pub name: String,
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
@@ -71,54 +73,107 @@ pub struct Season {
     pub bump: u8,
     pub vault_bump: u8,
     pub admin: [u8; 32],
-    /// Runs genesis, delegation and commits (any key can resolve ticks).
+    /// Runs genesis, seating, delegation and commits, and the acting
+    /// officials of vacant offices (any key can resolve ticks).
     pub crank: [u8; 32],
     pub usdc_mint: [u8; 32],
     pub usdc_decimals: u8,
     pub preset: u8,
-    pub max_civs: u8,
+    pub nations: u8,
+    /// The same for every member (V5 D4).
     pub entry_fee: u64,
-    /// Exchange credit per civ in USDC base units (test credits, §11.3).
-    pub exchange_credit: u64,
     pub tick_seconds: u32,
+    /// Whether the USDC market is open this season (V5 §7.5).
+    pub market: bool,
     pub status: SeasonStatus,
     pub world_seed: [u8; 32],
     pub season_seed: [u8; 32],
-    pub civs: Vec<CivSlot>,
-    /// USDC held for prizes (entry fees).
+    pub member_count: u32,
+    pub nation_members: Vec<u32>,
+    /// Members already added to the world (Seating).
+    pub seated: u32,
+    /// Prize pool: 80% of entry fees, plus the pool's share of in-play
+    /// income at the end (V5 D10, D11).
     pub pool: u64,
+    /// Operations: 20% of entry fees, plus its share of in-play income and
+    /// rounding dust at the end.
+    pub ops: u64,
+    pub ops_withdrawn: bool,
+    /// Treasury deposits per nation (V5 §7.5).
+    pub treasury: Vec<u64>,
+    /// Treasury left per nation in the final world, returned to depositors.
+    pub treasury_final: Vec<u64>,
+    /// USDC per member (index = member id), set by FinishSeason.
     pub payouts: Vec<u64>,
-    pub claimed: Vec<bool>,
-    pub rollover: u64,
     /// `state_root` of the final world the payouts were computed from.
     pub final_root: [u8; 32],
 }
 
-pub const SEASON_MAGIC: [u8; 8] = *b"PSSEASN1";
+pub const SEASON_MAGIC: [u8; 8] = *b"PSSEASN5";
 
-// ------------------------------------------------------------------ orders
+// ------------------------------------------------------------------ member
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
-pub struct Orders {
+pub struct MemberAccount {
+    pub magic: [u8; 8],
+    pub season_id: u64,
+    pub bump: u8,
+    /// Member id in the world (registration order).
+    pub index: u32,
+    pub civ: u16,
+    /// Pays the entry, owns the prize and the treasury shares.
+    pub wallet: [u8; 32],
+    /// Signs governance actions and, in office, orders. Cannot move USDC.
+    pub session: [u8; 32],
+    /// 0 Human, 1 Agent, 2 Undeclared (self-declared, V5 D16).
+    pub kind: u8,
+    pub name: String,
+    /// Optional agent registration proof (e.g. an ERC-8004 id hash), all zero if none.
+    pub attestation: [u8; 32],
+    /// Pre-season candidacy (`Role::bit` mask) and votes per office (`u32::MAX` = none).
+    pub stand: u8,
+    pub votes: [u32; 4],
+    /// Treasury shares: USDC deposited into the nation treasury.
+    pub shares: u64,
+    pub claimed: bool,
+}
+
+pub const MEMBER_MAGIC: [u8; 8] = *b"PSMEMBR5";
+
+// ------------------------------------------------------------------ nation
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct NationAccount {
     pub magic: [u8; 8],
     pub season_id: u64,
     pub civ: u16,
     pub bump: u8,
     pub preset: u8,
-    pub player: [u8; 32],
-    pub session: [u8; 32],
-    /// Tick the batch must be for; set by genesis and every resolved tick.
+    pub market: bool,
+    /// Signs for the acting official of a vacant office.
+    pub crank: [u8; 32],
+    /// Tick the batches must be for; set when the government opens and by every resolved tick.
     pub open_tick: u16,
-    /// This tick's budget + bank (§4.1), cached from the world.
-    pub spendable: u32,
-    pub batch: Option<OrderBatch>,
+    /// Office holders (`Role::index`), `u32::MAX` = vacant; and their session keys.
+    pub officers: [u32; 4],
+    pub keys: [[u8; 32]; 4],
+    /// This tick's budget + bank per office, cached from the world.
+    pub spendable: [u32; 4],
+    /// Tick of each office's stored batch (`u16::MAX` = none), so clients
+    /// can see who submitted without decoding the batches.
+    pub submitted: [u16; 4],
+    /// The open tick's input is frozen (see `WorldMeta::frozen`).
+    pub frozen: bool,
+    pub batches: [Option<OrderBatch>; 4],
+    /// Governance actions for the open tick, in arrival order.
+    pub inbox: Vec<GovEntry>,
 }
 
-pub const ORDERS_MAGIC: [u8; 8] = *b"PSORDER1";
+pub const NATION_MAGIC: [u8; 8] = *b"PSNATN06";
 
 // ------------------------------------------------------------------ world
 
-pub const WORLD_MAGIC: [u8; 8] = *b"PSWORLD1";
+pub const WORLD_MAGIC: [u8; 8] = *b"PSWORLD5";
 /// Magic of a world account whose genesis is still being built.
 pub const GENESIS_MAGIC: [u8; 8] = *b"PSGENJB1";
 /// magic (8) + body length (4) + `WorldMeta` (padded to 64).
@@ -134,7 +189,21 @@ pub struct WorldMeta {
     pub deadline: i64,
     /// Set once the last tick resolved.
     pub finished: bool,
+    /// The USDC market is open this season (part of the ruleset).
+    pub market: bool,
+    /// The open tick's input is frozen and being published (`LogTickInput`):
+    /// submissions are refused until the tick resolves.
+    pub frozen: bool,
+    /// Tick randomness, drawn when the input froze.
+    pub vrf: [u8; 32],
+    /// Chunks the frozen input takes, and how many were logged (in order).
+    pub input_chunks: u16,
+    pub input_logged: u16,
 }
+
+/// Bytes of tick input per `PS_INPUT` log: a transaction's logs are capped at
+/// 10 000 bytes and `sol_log_data` writes base64.
+pub const INPUT_CHUNK: usize = 6000;
 
 /// Genesis in progress (§2.4): map generation is too heavy for one
 /// transaction, so it advances one `MapJob` step per transaction.

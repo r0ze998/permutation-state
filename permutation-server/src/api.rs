@@ -8,6 +8,7 @@
 use permutation_rules::battle::AttackForecast;
 use permutation_rules::buildings::{Building, BUILDINGS};
 use permutation_rules::checks::Blocked;
+use permutation_rules::gov::{GovAction, MemberId, Role, NOBODY};
 use permutation_rules::hex::Hex;
 use permutation_rules::orders::{AttackTarget, Good, Order, Side, StandingOrder, StandingTarget};
 use permutation_rules::preview;
@@ -105,6 +106,10 @@ pub enum OrderDto {
     SetStanding { target: TargetDto, rule: StandingDto },
     /// Opens an earlier decision commitment (§7.5). `salt` is 32 hex chars.
     RevealRationale { tick: u16, policy: String, salt: String, text: String },
+    /// The general or steward agrees to this tick's war on `civ` (V5 §5.6).
+    ConsentWar { civ: CivId },
+    /// Another officer allows treasury spending up to `usdc` this tick (V5 §7.5).
+    ConsentSpend { usdc: u64 },
 }
 
 /// Standing rules (§13) as the client sends them.
@@ -223,6 +228,8 @@ impl OrderDto {
                 salt: salt.iter().map(|b| format!("{b:02x}")).collect(),
                 text: String::from_utf8_lossy(text).into_owned(),
             },
+            Order::ConsentWar { civ } => D::ConsentWar { civ: *civ },
+            Order::ConsentSpend { usdc } => D::ConsentSpend { usdc: *usdc },
         }
     }
 
@@ -288,6 +295,8 @@ impl OrderDto {
                 price: *price,
             },
             D::Raze { city } => Order::Raze { city: *city },
+            D::ConsentWar { civ } => Order::ConsentWar { civ: *civ },
+            D::ConsentSpend { usdc } => Order::ConsentSpend { usdc: *usdc },
             D::RevealRationale { tick, policy, salt, text } => {
                 let raw: Vec<u8> = (0..salt.len())
                     .step_by(2)
@@ -547,16 +556,17 @@ pub fn world_view(s: &WorldState, rules: &Ruleset, viewer: Option<CivId>, fog: &
                 (relation_code(s.relation(me, c.id)), s.truce_until[s.pair_index(me, c.id)])
             };
             let own = omni || c.id == me;
+            let a = &c.achievements;
             json!({
-                "id": c.id, "name": c.name, "kind": name(c.declared_kind),
+                "id": c.id, "name": c.name,
                 // Foreign totals are what `me` knows: cities it has seen, armies in sight.
                 "cities": s.city_count(c.id),
                 "pop": if own { json!(pop) } else { Value::Null },
                 "troops": if own { json!(troops) } else { Value::Null },
                 "troopsSeen": troops,
                 "techs": if own { json!(c.techs.count()) } else { Value::Null },
-                "dominion": c.scores.dominion,
-                "concord": permutation_rules::scoring::concord_final(rules, c),
+                // Milestone tiers and eras are announced publicly (V5 §6.3).
+                "tiers": a.tiers, "era": a.era,
                 "science": if own { json!(c.scores.science_total) } else { Value::Null },
                 "stages": c.scores.star_gate_stages,
                 "stageTick": c.scores.star_gate_tick,
@@ -648,7 +658,7 @@ pub fn world_view(s: &WorldState, rules: &Ruleset, viewer: Option<CivId>, fog: &
                 ProposalKind::Alliance => ("Alliance", 0),
             };
             json!({"kind": kind, "bond": bond, "from": p.from, "to": p.to, "tick": p.tick,
-                   "expires": p.tick + rules.proposal_ttl})
+                   "expires": p.tick + rules.proposal_ttl, "proposer": member_ref(p.credit.officer)})
         })
         .collect();
     let pools: Vec<Value> = s
@@ -671,10 +681,17 @@ pub fn world_view(s: &WorldState, rules: &Ruleset, viewer: Option<CivId>, fog: &
         "techs": TECHS.iter().filter(|t| m.techs.has(t.tech)).map(|t| name(t.tech)).collect::<Vec<_>>(),
         "upkeepUnits": upkeep_units, "upkeepCities": upkeep_cities,
         "warWeariness": m.war_weariness,
-        "budget": m.tick_budget, "bank": m.order_bank,
-        "usdc": m.usdc, "exchangeSpent": m.exchange_spent,
-        "exchangeCap": rules.entry_fee_usdc * rules.exchange_spend_cap_bps as u64 / 10_000,
+        "budget": m.tick_budget,
+        "offices": Role::ALL.iter().map(|r| json!({
+            "role": name(r), "budget": rules.role_budget(m.tick_budget, r.index()),
+            "bank": s.nations[me as usize].role_bank[r.index()],
+            "spendable": permutation_rules::orders::spendable(s, rules, me, *r),
+        })).collect::<Vec<_>>(),
+        "treasury": m.usdc, "marketSpent": m.market_spent,
+        "tariffBps": rules.tariff_bps(m.market_spent),
+        "deliveries": s.deliveries.iter().filter(|d| d.civ == me).map(|d| json!({"good": good_dto(d.good), "qty": d.qty, "due": d.due})).collect::<Vec<_>>(),
         "protectionLost": m.protection_lost,
+        "wealth": m.achievements.wealth,
     });
     json!({
         "tick": s.tick, "ticks": rules.ticks_per_season,
@@ -767,4 +784,252 @@ pub fn preflight(s: &WorldState, rules: &Ruleset, civ: CivId, orders: &[Order]) 
         }
     }
     out
+}
+
+// ------------------------------------------------------------------ V5: nations and governance
+
+/// A member id on the wire: `null` for nobody (the acting official).
+pub fn member_ref(m: MemberId) -> Value {
+    if m == NOBODY {
+        Value::Null
+    } else {
+        json!(m)
+    }
+}
+
+pub fn parse_role(s: &str) -> Option<Role> {
+    Role::ALL.into_iter().find(|r| name(r) == s)
+}
+
+/// Display data the server keeps for each member (not part of the rules).
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct MemberMeta {
+    pub name: String,
+    /// "human", "agent" or "undeclared" (self-declared, V5 D16).
+    pub kind: String,
+    /// Verified agent registration (e.g. ERC-8004), shown as a badge.
+    pub attested: bool,
+}
+
+/// Governance actions as clients send them (`POST /api/gov`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all_fields = "camelCase")]
+pub enum GovDto {
+    /// Offices to stand for, by role name; empty withdraws.
+    Stand { roles: Vec<String> },
+    Vote { role: String, candidate: MemberId },
+    Propose { role: String, orders: Vec<OrderDto> },
+    Support { proposal: u32 },
+    Recall { role: String },
+}
+
+impl GovDto {
+    pub fn to_action(&self) -> Result<GovAction, String> {
+        let role = |r: &str| parse_role(r).ok_or_else(|| format!("unknown office {r}"));
+        Ok(match self {
+            GovDto::Stand { roles } => GovAction::Stand { roles: roles.iter().map(|r| role(r).map(|x| x.bit())).sum::<Result<u8, _>>()? },
+            GovDto::Vote { role: r, candidate } => GovAction::Vote { role: role(r)?, candidate: *candidate },
+            GovDto::Propose { role: r, orders } => GovAction::Propose {
+                role: role(r)?,
+                orders: orders.iter().map(OrderDto::to_order).collect::<Result<_, _>>()?,
+            },
+            GovDto::Support { proposal } => GovAction::Support { proposal: *proposal },
+            GovDto::Recall { role: r } => GovAction::Recall { role: role(r)? },
+        })
+    }
+
+    pub fn from_action(a: &GovAction) -> GovDto {
+        match a {
+            GovAction::Stand { roles } => GovDto::Stand { roles: Role::ALL.iter().filter(|r| roles & r.bit() != 0).map(name).collect() },
+            GovAction::Vote { role, candidate } => GovDto::Vote { role: name(role), candidate: *candidate },
+            GovAction::Propose { role, orders } => GovDto::Propose { role: name(role), orders: orders.iter().map(OrderDto::from_order).collect() },
+            GovAction::Support { proposal } => GovDto::Support { proposal: *proposal },
+            GovAction::Recall { role } => GovDto::Recall { role: name(role) },
+        }
+    }
+}
+
+/// The government of `civ` (V5 §5): offices, the coming election, recalls
+/// and proposals. Everything here is recorded on chain, so it is public to
+/// the nation; other nations' proposals are hidden by the belief state.
+pub fn gov_view(s: &WorldState, rules: &Ruleset, civ: CivId, meta: &[MemberMeta]) -> Value {
+    let n = &s.nations[civ as usize];
+    let who = |m: MemberId| {
+        if m == NOBODY {
+            return Value::Null;
+        }
+        let x = meta.get(m as usize).cloned().unwrap_or_default();
+        json!({"id": m, "name": x.name, "kind": x.kind, "attested": x.attested})
+    };
+    let t = s.tick;
+    let offices: Vec<Value> = Role::ALL
+        .iter()
+        .map(|r| {
+            let i = r.index();
+            let last = n.office_last_act[i];
+            json!({
+                "role": name(r), "holder": who(n.offices[i]), "since": n.office_since[i],
+                "lastAct": if last == permutation_rules::gov::NEVER { Value::Null } else { json!(last) },
+                "active": permutation_rules::gov::active_officer(s, rules, civ, *r).is_some(),
+                "runnerUp": who(n.runner_up[i]),
+            })
+        })
+        .collect();
+    let candidates: Vec<Value> = Role::ALL
+        .iter()
+        .map(|r| {
+            let list: Vec<Value> = s
+                .members
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| m.civ == civ && m.standing_for & r.bit() != 0)
+                .map(|(id, _)| {
+                    let votes = n.votes.iter().filter(|v| v.role == *r && v.candidate == id as MemberId).count();
+                    json!({"member": who(id as MemberId), "votes": votes})
+                })
+                .collect();
+            json!({"role": name(r), "candidates": list})
+        })
+        .collect();
+    let recalls: Vec<Value> = n
+        .recalls
+        .iter()
+        .map(|rc| json!({"role": name(rc.role), "holder": who(rc.holder), "opened": rc.opened, "automatic": rc.automatic,
+                        "yes": rc.yes.len(), "closes": rc.opened + rules.recall_ticks}))
+        .collect();
+    let proposals: Vec<Value> = n
+        .proposals
+        .iter()
+        .map(|p| json!({
+            "id": p.id, "role": name(p.role), "proposer": who(p.proposer), "tick": p.tick,
+            "expires": p.tick + rules.proposal_ttl_ticks, "supporters": p.supporters.len(),
+            "supportedBy": p.supporters, "orders": p.orders.iter().map(OrderDto::from_order).collect::<Vec<_>>(),
+        }))
+        .collect();
+    let electorate = s
+        .members
+        .iter()
+        .filter(|m| m.civ == civ && m.last_active != permutation_rules::gov::NEVER && t - m.last_active < rules.recall_electorate_ticks)
+        .count();
+    let next = permutation_rules::gov::next_term_start(rules, t);
+    json!({
+        "offices": offices, "candidates": candidates, "recalls": recalls, "proposals": proposals,
+        "members": n.members, "electorate": electorate,
+        "nextElection": next, "voteOpen": permutation_rules::gov::vote_open(rules, t),
+        "voteFrom": next.map(|x| x.saturating_sub(rules.vote_window)),
+        "idleRecallTicks": rules.idle_recall_ticks, "termTicks": rules.term_ticks,
+    })
+}
+
+/// Milestone board of every nation (V5 §6): tiers, era and points now
+/// ("if the season ended now"). Tiers and eras are public announcements.
+pub fn achievements_view(s: &WorldState, rules: &Ruleset) -> Value {
+    let facts = permutation_rules::scoring::facts_all(s, rules);
+    let list: Vec<Value> = facts
+        .iter()
+        .enumerate()
+        .map(|(civ, f)| {
+            let sc = permutation_rules::scoring::score_of(rules, f);
+            json!({
+                "civ": civ, "tiers": sc.tiers, "era": sc.era, "pathPoints": sc.path_points,
+                "eraPoints": sc.era_points, "points": sc.total(),
+            })
+        })
+        .collect();
+    json!({
+        "nations": list,
+        "tierPoints": rules.tier_points,
+        "thresholds": {
+            "hegemonyTiles": rules.hegemony_tiles, "hegemonyCities": rules.hegemony_cities,
+            "prosperityPop": rules.prosperity_pop, "prosperityWealth": rules.prosperity_wealth,
+            "scienceTechs": rules.science_techs, "concordTrade": rules.concord_trade,
+        },
+    })
+}
+
+/// What `civ` knows of its own milestone facts (V5 §6.2), for the board.
+pub fn facts_view(s: &WorldState, rules: &Ruleset, civ: CivId) -> Value {
+    let f = permutation_rules::scoring::facts_all(s, rules)[civ as usize];
+    json!({
+        "tiles": f.tiles, "capturedHeld": f.captured_held, "pop": f.pop, "wealth": f.wealth,
+        "techs": f.techs, "starGateMax": f.star_gate_max, "partners": f.partners, "alliances": f.alliances,
+        "suzerainties": f.suzerainties, "everSuzerain": f.ever_suzerain, "envoySent": f.envoy_sent, "trade": f.trade,
+    })
+}
+
+/// The payout projection for the whole world (V5 §7): per nation, and per member.
+pub fn settlement_view(p: &permutation_rules::payout::Settlement) -> Value {
+    json!({
+        "pool": p.pool, "refund": p.refund, "counted": p.counted,
+        "nationShare": p.nation_share, "equalEach": p.equal_each, "perMember": p.per_member,
+        "points": p.scores.iter().map(|x| x.total()).collect::<Vec<_>>(),
+    })
+}
+
+/// One member as seen by itself: merit, activity, offices, projection.
+pub fn member_view(s: &WorldState, rules: &Ruleset, m: MemberId, meta: &[MemberMeta], projection: Option<&permutation_rules::payout::Settlement>) -> Value {
+    let Some(x) = s.members.get(m as usize) else { return Value::Null };
+    let n = &s.nations[x.civ as usize];
+    let offices: Vec<String> = Role::ALL.iter().filter(|r| n.holder(**r) == m).map(name).collect();
+    let log: Vec<Value> = s
+        .merit_log
+        .iter()
+        .filter(|e| e.member == m)
+        .map(|e| json!({"path": name(e.path), "merit": e.milli as f64 / 1000.0, "what": String::from_utf8_lossy(e.what)}))
+        .collect();
+    let info = meta.get(m as usize).cloned().unwrap_or_default();
+    json!({
+        "id": m, "civ": x.civ, "name": info.name, "kind": info.kind, "attested": info.attested,
+        "offices": offices,
+        "standingFor": Role::ALL.iter().filter(|r| x.standing_for & r.bit() != 0).map(name).collect::<Vec<_>>(),
+        "merit": {
+            "hegemony": x.merit[0] as f64 / 1000.0, "prosperity": x.merit[1] as f64 / 1000.0,
+            "science": x.merit[2] as f64 / 1000.0, "concord": x.merit[3] as f64 / 1000.0,
+            "common": x.merit[4] as f64 / 1000.0, "total": x.merit_total() as f64 / 1000.0,
+        },
+        "activeWindows": x.active_windows(), "windowsNeeded": rules.active_windows_needed,
+        "windows": rules.activity_windows(), "active": permutation_rules::gov::is_active_member(rules, x),
+        "lastActive": if x.last_active == permutation_rules::gov::NEVER { Value::Null } else { json!(x.last_active) },
+        "projectedPayout": projection.and_then(|p| p.per_member.get(m as usize)).copied(),
+        "meritLog": log,
+    })
+}
+
+/// Everyone in `civ`'s nation, for the plaza.
+pub fn roster_view(s: &WorldState, rules: &Ruleset, civ: CivId, meta: &[MemberMeta]) -> Value {
+    let list: Vec<Value> = s
+        .members
+        .iter()
+        .enumerate()
+        .filter(|(_, x)| x.civ == civ)
+        .map(|(id, x)| {
+            let info = meta.get(id).cloned().unwrap_or_default();
+            json!({
+                "id": id, "name": info.name, "kind": info.kind, "attested": info.attested,
+                "merit": x.merit_total() as f64 / 1000.0, "active": permutation_rules::gov::is_active_member(rules, x),
+                "activeWindows": x.active_windows(),
+            })
+        })
+        .collect();
+    json!(list)
+}
+
+/// This nation's orders that did not take effect last tick (v0.2 C12).
+pub fn skipped_view(s: &WorldState, civ: CivId) -> Value {
+    let list: Vec<Value> = s
+        .last_skipped
+        .iter()
+        .filter(|k| k.civ == civ)
+        .map(|k| json!({
+            "role": Role::from_index(k.role as usize).map(name),
+            "index": if k.index == u16::MAX { Value::Null } else { json!(k.index) },
+            "reason": permutation_rules::checks::BLOCKED_NAMES.get(k.reason as usize).copied().unwrap_or("Unknown"),
+        }))
+        .collect();
+    json!(list)
+}
+
+/// The office an order belongs to, by name (for clients' drafting).
+pub fn office_of(s: &WorldState, o: &Order) -> Option<String> {
+    Role::ALL.into_iter().find(|r| permutation_rules::orders::role_allows(s, *r, o)).map(name)
 }

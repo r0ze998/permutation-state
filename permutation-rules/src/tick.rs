@@ -9,13 +9,15 @@ use crate::economy::{
     amenities, apply_amenities, city_upkeep, city_yield, growth_threshold, order_budget,
     stalemate_multiplier, tech_cost, unit_upkeep,
 };
+use crate::checks::Blocked;
 use crate::fixed::{apply_bps, milli, MILLI};
+use crate::gov::{active_officer, Credit, GovEntry, Path, Role, NOBODY};
 use crate::hex::Hex;
 use crate::map::territory_radius;
-use crate::orders::{next_bank, validate_batch, Order, OrderBatch};
+use crate::merit;
+use crate::orders::{batch_orders, next_bank, role_allows, validate_batch, CivOrders, Order, OrderBatch};
 use crate::params::Ruleset;
 use crate::rng::{tick_seed, tie_key, Seed};
-use crate::scoring::{concord_tick, dominion_tick};
 use crate::state::{CivId, Owner, QueueItem, Relation, StandingRule, Unit, WorldState};
 use crate::tech::Tech;
 use crate::units::{stats, UnitType};
@@ -26,12 +28,17 @@ pub const PHASE_COUNT: u8 = 12;
 
 /// Everything outside the state that a tick consumes. Replaying the same
 /// inputs over the same state must give the same root (§17 invariant 7).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct TickInput {
     /// MagicBlock VRF output for this tick (§0.2).
     pub vrf: Seed,
-    /// At most one batch per civ is used; extra or invalid batches are ignored.
+    /// At most one batch per office per civ is used (the first valid one);
+    /// extra or invalid batches are ignored.
     pub batches: Vec<OrderBatch>,
+    /// Governance actions, applied in this order in phase 0 (V5 §5.7).
+    pub gov: Vec<GovEntry>,
+    /// USDC deposited into nation treasuries since the last tick (V5 §7.5).
+    pub deposits: Vec<(CivId, u64)>,
 }
 
 /// Run all remaining phases of the current tick. Returns the new state root.
@@ -106,45 +113,17 @@ pub fn run_phase(
     Ok(())
 }
 
-/// The batch used for each civ, in civ order, with its cost. First valid batch wins.
-pub(crate) fn accepted(
-    state: &WorldState,
-    rules: &Ruleset,
-    input: &TickInput,
-) -> Vec<(CivId, u32, Vec<Order>)> {
-    let mut out = Vec::new();
-    for civ in 0..state.civs.len() as u16 {
-        if let Some((batch, cost)) = input
-            .batches
-            .iter()
-            .filter(|b| b.civ == civ)
-            .find_map(|b| validate_batch(state, rules, b).ok().map(|c| (b, c)))
-        {
-            out.push((civ, cost, batch.orders.clone()));
-        }
-    }
-    out
+/// The orders accepted for this tick, per civ in civ order (merged in phase 0).
+pub(crate) fn accepted(state: &WorldState) -> Vec<CivOrders> {
+    state.tick_orders.clone()
 }
 
 // ---------------------------------------------------------------- phase 0
 
 fn phase_seed(state: &mut WorldState, rules: &Ruleset, input: &TickInput) {
     state.tick_seed = tick_seed(&state.season_seed, &input.vrf, state.tick);
-    // Decision commitments enter the event chain before anything resolves (§4.3).
-    for civ in 0..state.civs.len() as u16 {
-        let digest = input
-            .batches
-            .iter()
-            .filter(|b| b.civ == civ)
-            .find(|b| validate_batch(state, rules, b).is_ok())
-            .map(|b| b.decision_digest);
-        if let Some(d) = digest {
-            let mut payload = [0u8; 34];
-            payload[..2].copy_from_slice(&civ.to_le_bytes());
-            payload[2..].copy_from_slice(&d);
-            state.push_event(b"decision", &payload);
-        }
-    }
+    state.last_skipped.clear();
+    state.merit_log.clear();
     for c in &mut state.cities {
         c.attacked_this_tick = false;
     }
@@ -152,59 +131,189 @@ fn phase_seed(state: &mut WorldState, rules: &Ruleset, input: &TickInput) {
         civ.deficit = false;
         civ.troops_lost = 0;
     }
+    // Governance first: supports and proposals of this tick count for adoption.
+    crate::gov::apply_actions(state, rules, &input.gov);
+    for &(civ, amount) in &input.deposits {
+        if state.tick < rules.exchange_freeze_tick && rules.market_enabled && (civ as usize) < state.civs.len() {
+            state.civs[civ as usize].usdc += amount;
+            state.usdc_deposited += amount;
+        }
+    }
+    state.tick_orders = (0..state.civs.len() as CivId).map(|civ| merge_orders(state, rules, input, civ)).collect();
+}
+
+/// An office's accepted batch, its orders with credits, and its cost.
+type Chosen = (OrderBatch, Vec<(Order, Credit)>, u32);
+
+/// Pick each office's batch (the first valid one), commit its decision,
+/// and merge the offices' orders in `Role::ALL` order (V5 §5.1–§5.6).
+fn merge_orders(state: &mut WorldState, rules: &Ruleset, input: &TickInput, civ: CivId) -> CivOrders {
+    let tick = state.tick;
+    let mut chosen: [Option<Chosen>; 4] = [None, None, None, None];
+    for role in Role::ALL {
+        let mut rejected = false;
+        for b in input.batches.iter().filter(|b| b.civ == civ && b.role == role) {
+            match validate_batch(state, rules, b) {
+                Ok(cost) => {
+                    let orders = batch_orders(state, b).unwrap_or_default();
+                    chosen[role.index()] = Some((b.clone(), orders, cost));
+                    break;
+                }
+                Err(_) => rejected = true,
+            }
+        }
+        if rejected && chosen[role.index()].is_none() {
+            state.skip(civ, (role as u8, u16::MAX), Blocked::BatchRejected.code());
+        }
+    }
+
+    // Decision commitments enter the event chain before anything resolves (§4.3).
+    for (b, _, _) in chosen.iter().flatten() {
+        let mut payload = [0u8; 39];
+        payload[..2].copy_from_slice(&civ.to_le_bytes());
+        payload[2] = b.role as u8;
+        payload[3..7].copy_from_slice(&b.member.to_le_bytes());
+        payload[7..].copy_from_slice(&b.decision_digest);
+        state.push_event(b"decision", &payload);
+    }
+
+    // War needs a second officer (V5 §5.6): the general's or the steward's
+    // consent, from a different person than the diplomat.
+    let diplomat = chosen[Role::Diplomat.index()].as_ref().map(|c| c.0.member);
+    let consents: Vec<CivId> = [Role::General, Role::Steward]
+        .iter()
+        .filter_map(|r| chosen[r.index()].as_ref())
+        .filter(|(b, _, _)| diplomat.is_none_or(|d| b.member != d || d == NOBODY))
+        .flat_map(|(_, orders, _)| orders.iter().filter_map(|(o, _)| match o {
+            Order::ConsentWar { civ } => Some(*civ),
+            _ => None,
+        }))
+        .collect();
+
+    let mut out = CivOrders { civ, orders: Vec::new(), credits: Vec::new(), origin: Vec::new(), spent: [0; 4] };
+    for role in Role::ALL {
+        let Some((batch, orders, cost)) = chosen[role.index()].take() else { continue };
+        out.spent[role.index()] = cost as u16;
+        if batch.member != NOBODY {
+            state.nations[civ as usize].office_seen[role.index()] = tick;
+        }
+        for id in &batch.adopt {
+            let n = &mut state.nations[civ as usize];
+            if let Some(p) = n.proposals.iter_mut().find(|p| p.id == *id && !p.adopted) {
+                p.adopted = true;
+                n.adopted += 1;
+            }
+        }
+        let mut acted = false;
+        for (i, (order, mut credit)) in orders.into_iter().enumerate() {
+            let origin = (role as u8, i as u16);
+            if !role_allows(state, role, &order) {
+                state.skip(civ, origin, Blocked::WrongOffice.code());
+                continue;
+            }
+            let war = matches!(order, Order::DeclareWar { civ: t } | Order::BreakNap { civ: t } if !consents.contains(&t));
+            if war {
+                state.skip(civ, origin, Blocked::NeedsConsent.code());
+                continue;
+            }
+            if credit.proposer == NOBODY && credit.officer != NOBODY {
+                credit.proposer = auto_match(state, civ, role, &order);
+            }
+            acted |= order.is_action();
+            out.orders.push(order);
+            out.credits.push(credit);
+            out.origin.push(origin);
+        }
+        // An office acted this tick (v0.2 C9: reveals alone do not count).
+        if acted && batch.member != NOBODY {
+            crate::gov::mark_active(state, rules, batch.member);
+            state.nations[civ as usize].office_last_act[role.index()] = tick;
+            merit::credit(state, Credit::officer(batch.member), Path::Common, rules.merit_office_tick as u64, b"office");
+        }
+    }
+    out
+}
+
+/// An officer's own order identical to one in a supported proposal made on
+/// an earlier tick counts as adopting it (V5 §5.4, against claim-jumping).
+fn auto_match(state: &mut WorldState, civ: CivId, role: Role, order: &Order) -> u32 {
+    let tick = state.tick;
+    let n = &mut state.nations[civ as usize];
+    match n
+        .proposals
+        .iter_mut()
+        .find(|p| p.role == role && !p.adopted && p.tick < tick && !p.supporters.is_empty() && p.orders.contains(order))
+    {
+        Some(p) => {
+            p.adopted = true;
+            let proposer = p.proposer;
+            n.adopted += 1;
+            proposer
+        }
+        None => NOBODY,
+    }
 }
 
 // ---------------------------------------------------------------- phase 1
 
 // ---------------------------------------------------------------- phase 2
 
-fn phase_economy_orders(state: &mut WorldState, rules: &Ruleset, input: &TickInput) {
-    for (civ, _, orders) in accepted(state, rules, input) {
-        for order in orders {
-            match order {
-                Order::FoundCity { settler } => found_city(state, rules, civ, settler),
-                Order::SetQueue { city, items } => set_queue(state, civ, city, items),
-                Order::SetFocus { city, focus } => {
-                    if let Some(c) = owned_city_mut(state, civ, city) {
+fn phase_economy_orders(state: &mut WorldState, rules: &Ruleset, _input: &TickInput) {
+    crate::markets::deliver(state);
+    let mut purchased: Vec<u32> = Vec::new();
+    for a in accepted(state) {
+        let civ = a.civ;
+        for (order, credit, origin) in a.iter() {
+            let result = match order.clone() {
+                Order::FoundCity { settler } => found_city(state, rules, civ, settler, credit),
+                Order::SetQueue { city, items } => set_queue(state, civ, city, items, credit),
+                Order::SetFocus { city, focus } => match owned_city_mut(state, civ, city) {
+                    Some(c) => {
                         c.focus = focus;
+                        c.steward_credit = credit;
+                        Ok(())
+                    }
+                    None => Err(Blocked::NotYours),
+                },
+                Order::SetResearch { techs } => set_research(state, civ, techs, credit),
+                // One purchase per city per tick (v0.2 C3).
+                Order::Purchase { city, gold } => {
+                    if purchased.contains(&city) {
+                        Err(Blocked::AlreadyPurchased)
+                    } else {
+                        purchased.push(city);
+                        purchase(state, rules, civ, city, gold)
                     }
                 }
-                Order::SetResearch { techs } => set_research(state, civ, techs),
-                Order::Purchase { city, gold } => purchase(state, rules, civ, city, gold),
                 Order::SetStanding { target, rule } => crate::standing::apply(state, civ, target, rule),
                 Order::RevealRationale { tick, policy, salt, text } => {
                     // Recorded, never interpreted: verifiers check it against the
-                    // `decision` event of `tick` (§4.3).
-                    let mut payload = Vec::with_capacity(68);
+                    // `decision` event of (`civ`, office, `tick`) (§4.3).
+                    let mut payload = Vec::with_capacity(69);
                     payload.extend_from_slice(&civ.to_le_bytes());
+                    payload.push(origin.0);
                     payload.extend_from_slice(&tick.to_le_bytes());
                     payload.extend_from_slice(&crate::decision::policy_id(&policy));
                     payload.extend_from_slice(&crate::decision::rationale_hash(&salt, &text));
                     state.push_event(b"reveal", &payload);
+                    Ok(())
                 }
-                _ => {}
+                _ => Ok(()),
+            };
+            if let Err(why) = result {
+                state.skip(civ, origin, why.code());
             }
         }
     }
-    crate::diplomacy::apply_transfers(state, rules, input);
-    crate::diplomacy::apply_envoys(state, rules, input);
-    crate::markets::apply_amm(state, rules, input);
-    crate::markets::apply_exchange(state, rules, input);
+    crate::diplomacy::apply_transfers(state, rules);
+    crate::diplomacy::apply_envoys(state, rules);
+    crate::markets::apply_amm(state, rules);
+    crate::markets::apply_exchange(state, rules);
 }
 
 /// `FoundCity` (§4.2, §5.7): the settler founds a city where it stands.
-fn found_city(state: &mut WorldState, rules: &Ruleset, civ: CivId, settler: u32) {
-    let Some(u) = state
-        .units
-        .get(settler as usize)
-        .filter(|u| u.alive && u.owner == Owner::Civ(civ) && u.unit_type == UnitType::Settler)
-    else {
-        return;
-    };
-    let hex = u.hex;
-    if crate::checks::found_city(state, rules, civ, settler).is_err() {
-        return;
-    }
+fn found_city(state: &mut WorldState, rules: &Ruleset, civ: CivId, settler: u32, credit: Credit) -> Result<(), Blocked> {
+    let hex = crate::checks::found_city(state, rules, civ, settler)?;
     let id = state.cities.len() as u32;
     // Heritage (§3.4): the first city near an unclaimed ruin this season.
     let heritage = state
@@ -241,9 +350,10 @@ fn found_city(state: &mut WorldState, rules: &Ruleset, civ: CivId, settler: u32)
         attacked_this_tick: false,
         focus: crate::state::Focus::Balanced,
         queue: Vec::new(),
+        queue_credit: credit,
+        steward_credit: credit,
         captured_tick: None,
         captured_from: None,
-        scored_by: Vec::new(),
         capture_scores: false,
         razing: None,
         heritage_until,
@@ -260,6 +370,10 @@ fn found_city(state: &mut WorldState, rules: &Ruleset, civ: CivId, settler: u32)
         state.civs[civ as usize].capital = Some(id);
     }
     state.push_event(b"found_city", &id.to_le_bytes());
+    let tiles = state.map.tiles.iter().filter(|t| t.owner_city == Some(id)).count() as u64;
+    let m = rules.merit_found_city as u64 + tiles * rules.merit_found_per_tile as u64;
+    merit::credit(state, credit, Path::Prosperity, m, b"found_city");
+    Ok(())
 }
 
 fn owned_city_mut(
@@ -273,30 +387,30 @@ fn owned_city_mut(
         .filter(|c| c.alive && c.owner == Some(civ))
 }
 
-fn item_valid(state: &WorldState, civ: CivId, city: u32, item: &QueueItem) -> bool {
-    crate::checks::queue_item(state, civ, city, item).is_ok()
-}
-
-fn set_queue(state: &mut WorldState, civ: CivId, city: u32, items: Vec<QueueItem>) {
+fn set_queue(state: &mut WorldState, civ: CivId, city: u32, items: Vec<QueueItem>, credit: Credit) -> Result<(), Blocked> {
     if owned_city_mut(state, civ, city).is_none() {
-        return;
+        return Err(Blocked::NotYours);
     }
-    if !items.iter().all(|i| item_valid(state, civ, city, i)) {
-        return; // dropped without refund (§4.1)
+    for i in &items {
+        crate::checks::queue_item(state, civ, city, i)?; // dropped without refund (§4.1)
     }
-    state.cities[city as usize].queue = items;
+    let c = &mut state.cities[city as usize];
+    c.queue = items;
+    c.queue_credit = credit;
+    c.steward_credit = credit;
+    Ok(())
 }
 
-fn set_research(state: &mut WorldState, civ: CivId, techs: Vec<Tech>) {
+fn set_research(state: &mut WorldState, civ: CivId, techs: Vec<Tech>, credit: Credit) -> Result<(), Blocked> {
     let c = &mut state.civs[civ as usize];
     let mut planned = c.techs;
     for t in &techs {
-        if crate::checks::research(planned, *t).is_err() {
-            return;
-        }
+        crate::checks::research(planned, *t)?;
         planned.insert(*t);
     }
     c.research_queue = techs;
+    c.research_credit = credit;
+    Ok(())
 }
 
 fn item_cost(
@@ -328,26 +442,29 @@ fn item_cost(
     milli(prod)
 }
 
-pub(crate) fn purchase(state: &mut WorldState, rules: &Ruleset, civ: CivId, city: u32, gold: u32) {
-    let Some(c) = state
+/// `Purchase` (§5.6): gold buys up to `purchase_max_bps` of the current
+/// item's remaining production. Never a Star Gate stage (v0.2 C3).
+pub(crate) fn purchase(state: &mut WorldState, rules: &Ruleset, civ: CivId, city: u32, gold: u32) -> Result<(), Blocked> {
+    let c = state
         .cities
         .get(city as usize)
         .filter(|c| c.alive && c.owner == Some(civ))
-    else {
-        return;
-    };
-    let Some(item) = c.queue.first() else { return };
+        .ok_or(Blocked::NotYours)?;
+    let item = c.queue.first().ok_or(Blocked::NothingQueued)?;
+    if matches!(item, QueueItem::Building(b) if b.is_star_gate()) {
+        return Err(Blocked::CannotBuyStarGate);
+    }
     let remaining = (item_cost(state, rules, c, item) - c.prod).max(0);
     let cap = apply_bps(remaining, rules.purchase_max_bps);
     let wanted = milli(gold as i64) / rules.purchase_gold_per_prod as i64;
-    let prod = wanted
-        .min(cap)
-        .min(state.civs[civ as usize].gold / rules.purchase_gold_per_prod as i64);
+    let have = state.civs[civ as usize].gold;
+    let prod = wanted.min(cap).min(have / rules.purchase_gold_per_prod as i64);
     if prod <= 0 {
-        return;
+        return Err(Blocked::NotEnoughGold { need: rules.purchase_gold_per_prod, have: (have / MILLI).max(0) as u32 });
     }
     state.civs[civ as usize].gold -= prod * rules.purchase_gold_per_prod as i64;
     state.cities[city as usize].prod += prod;
+    Ok(())
 }
 
 // ---------------------------------------------------------------- phase 4
@@ -383,22 +500,28 @@ pub(crate) fn tile_free_for(state: &WorldState, unit: &Unit, hex: Hex) -> bool {
     occupants.all(|o| o.owner == unit.owner && own_city && o.unit_type.is_civilian() != is_civ)
 }
 
-fn phase_movement(state: &mut WorldState, rules: &Ruleset, input: &TickInput) {
+/// Office and position of an order (see `CivOrders::origin`).
+type Origin = (u8, u16);
+
+fn phase_movement(state: &mut WorldState, rules: &Ruleset, _input: &TickInput) {
     // 1. Accept MoveUnit orders (paths continue on later ticks without orders),
     //    manual first, then those compiled from standing rules (§13).
-    let mut all: Vec<(CivId, Order)> = Vec::new();
-    for (civ, _, orders) in accepted(state, rules, input) {
-        all.extend(orders.into_iter().map(|o| (civ, o)));
+    let mut all: Vec<(CivId, Order, Option<Origin>)> = Vec::new();
+    for a in accepted(state) {
+        all.extend(a.orders.into_iter().zip(a.origin).map(|(o, g)| (a.civ, o, Some(g))));
     }
-    all.extend(state.implicit.iter().cloned());
+    all.extend(state.implicit.iter().cloned().map(|(c, o)| (c, o, None)));
     {
-        for (civ, order) in all {
+        for (civ, order, origin) in all {
             if let Order::MoveUnit { unit, path } = order {
                 let Some(u) = state
                     .units
                     .get(unit as usize)
                     .filter(|u| u.alive && u.owner == Owner::Civ(civ))
                 else {
+                    if let Some(g) = origin {
+                        state.skip(civ, g, Blocked::UnknownUnit.code());
+                    }
                     continue;
                 };
                 let mut prev = u.hex;
@@ -411,6 +534,8 @@ fn phase_movement(state: &mut WorldState, rules: &Ruleset, input: &TickInput) {
                     });
                 if valid {
                     state.units[unit as usize].path = path;
+                } else if let Some(g) = origin {
+                    state.skip(civ, g, Blocked::Impassable.code());
                 }
             } else if let Order::Attack { army, .. } = order {
                 // An attacking army holds its position this tick (§8, v0.1 clarification).
@@ -491,6 +616,7 @@ fn phase_movement(state: &mut WorldState, rules: &Ruleset, input: &TickInput) {
 
 fn phase_production(state: &mut WorldState, rules: &Ruleset) {
     let mut last = alloc::vec![crate::state::LastYields::default(); state.civs.len()];
+    let mut grown: Vec<Credit> = Vec::new();
     for i in 0..state.cities.len() {
         let (owner, alive) = (state.cities[i].owner, state.cities[i].alive);
         let razing = state.cities[i].razing.is_some();
@@ -515,6 +641,7 @@ fn phase_production(state: &mut WorldState, rules: &Ruleset) {
             if city.food >= threshold {
                 city.food -= threshold;
                 city.pop += 1;
+                grown.push(city.steward_credit);
             } else if city.food < 0 {
                 city.pop = city.pop.saturating_sub(1).max(1);
                 city.food = 0;
@@ -534,11 +661,19 @@ fn phase_production(state: &mut WorldState, rules: &Ruleset) {
             l.gold += y.gold;
             l.max_city_food_surplus = l.max_city_food_surplus.max(surplus.max(0) as u32);
             l.max_city_prod = l.max_city_prod.max(y.prod);
+            // The Science focus multiplies the city's science in milli units
+            // (v0.2 C6: applied before rounding, so it always has an effect).
+            let science = if state.cities[i].focus == crate::state::Focus::Science {
+                y.science as i64 * 12_500
+            } else {
+                y.science as i64 * MILLI
+            };
             let c = &mut state.civs[civ as usize];
             c.gold += y.gold as i64 * MILLI;
-            c.science_store += y.science as i64 * MILLI;
+            c.achievements.wealth += y.gold as u64;
+            c.science_store += science;
             c.influence += y.influence as i64 * MILLI;
-            c.scores.science_total += y.science as u64;
+            c.scores.science_total += (science / MILLI) as u64;
         }
         for t in worked {
             let tile = &mut state.map.tiles[t];
@@ -578,6 +713,7 @@ fn phase_production(state: &mut WorldState, rules: &Ruleset) {
             }
             crate::state::Specialty::Mercantile => {
                 c.gold += 4 * MILLI;
+                c.achievements.wealth += 4;
                 last[civ as usize].gold += 4;
             }
             crate::state::Specialty::Agrarian => {
@@ -585,6 +721,16 @@ fn phase_production(state: &mut WorldState, rules: &Ruleset) {
                     state.cities[cap as usize].food += 2 * MILLI;
                 }
             }
+        }
+    }
+    for c in grown {
+        merit::credit(state, c, Path::Prosperity, rules.merit_pop as u64, b"growth");
+    }
+    // City gold earns the steward merit (V5 §7.3).
+    for (civ, l) in last.iter().enumerate() {
+        if let Some(m) = active_officer(state, rules, civ as CivId, Role::Steward) {
+            let amount = l.gold as u64 * MILLI as u64 / rules.merit_gold_div.max(1) as u64;
+            merit::credit(state, Credit::officer(m), Path::Prosperity, amount, b"gold");
         }
     }
     for (c, l) in state.civs.iter_mut().zip(last) {
@@ -610,25 +756,68 @@ fn phase_production(state: &mut WorldState, rules: &Ruleset) {
             c.science_store -= cost;
             c.techs.insert(tech);
             c.research_queue.remove(0);
+            let credit = c.research_credit;
+            let amount = (cost / rules.merit_tech_div.max(1) as i64) as u64;
+            merit::credit(state, credit, Path::Science, amount, b"tech");
         }
     }
 }
 
+/// Complete at most one queue item (v0.2 C1), then cap the production
+/// store at the next item's cost (nothing is banked without an item).
 fn complete_queue(state: &mut WorldState, rules: &Ruleset, civ: CivId, i: usize) {
-    while let Some(item) = state.cities[i].queue.first().copied() {
+    // Overflow from a completion carries to the next item, up to its cost.
+    try_complete(state, rules, civ, i);
+    let cap = match state.cities[i].queue.first().copied() {
+        Some(next) => item_cost(state, rules, &state.cities[i], &next),
+        None => 0,
+    };
+    let city = &mut state.cities[i];
+    city.prod = city.prod.min(cap);
+}
+
+fn try_complete(state: &mut WorldState, rules: &Ruleset, civ: CivId, i: usize) -> bool {
+    {
+        let Some(item) = state.cities[i].queue.first().copied() else {
+            return false;
+        };
         let cost = item_cost(state, rules, &state.cities[i], &item);
         if state.cities[i].prod < cost {
-            return;
+            return false;
         }
         match item {
             QueueItem::Building(b) => {
+                if b.is_star_gate() {
+                    // Stages of one civ are at least `star_gate_spacing` ticks apart (v0.2 C2).
+                    let last = state.civs[civ as usize].last_star_gate;
+                    if last.is_some_and(|t| state.tick < t + rules.star_gate_spacing) {
+                        return false;
+                    }
+                }
                 let city = &mut state.cities[i];
                 city.buildings.insert(b);
+                let credit = city.queue_credit;
                 if b.is_star_gate() {
                     let stages = city.buildings.star_gate_stages();
-                    let s = &mut state.civs[civ as usize].scores;
-                    s.star_gate_stages = s.star_gate_stages.max(stages);
-                    s.star_gate_tick = Some(state.tick);
+                    let tick = state.tick;
+                    let c = &mut state.civs[civ as usize];
+                    c.scores.star_gate_stages = c.scores.star_gate_stages.max(stages);
+                    c.scores.star_gate_tick = Some(tick);
+                    c.last_star_gate = Some(tick);
+                    c.achievements.star_gate_max = c.achievements.star_gate_max.max(stages);
+                    let mut payload = [0u8; 3];
+                    payload[..2].copy_from_slice(&civ.to_le_bytes());
+                    payload[2] = stages;
+                    state.push_event(b"star_gate", &payload);
+                    // Half to the steward who queued it, half to the science officer.
+                    let half = rules.merit_star_gate as u64 / 2;
+                    merit::credit(state, credit, Path::Science, rules.merit_star_gate as u64 - half, b"star_gate");
+                    if let Some(m) = active_officer(state, rules, civ, Role::Science) {
+                        merit::credit(state, Credit::officer(m), Path::Science, half, b"star_gate");
+                    }
+                } else {
+                    let amount = (cost / rules.merit_building_div.max(1) as i64) as u64;
+                    merit::credit(state, credit, Path::Prosperity, amount, b"building");
                 }
             }
             QueueItem::Troops { unit, n } => {
@@ -639,10 +828,10 @@ fn complete_queue(state: &mut WorldState, rules: &Ruleset, civ: CivId, i: usize)
                 );
                 let c = &state.civs[civ as usize];
                 if c.iron < iron || c.horses < horses {
-                    return; // wait for strategic resources
+                    return false; // wait for strategic resources
                 }
                 if !spawn(state, civ, i, unit, n as u32 * 1000) {
-                    return; // no free tile: delayed (§5.6)
+                    return false; // no free tile: delayed (§5.6)
                 }
                 let c = &mut state.civs[civ as usize];
                 c.iron -= iron;
@@ -650,15 +839,15 @@ fn complete_queue(state: &mut WorldState, rules: &Ruleset, civ: CivId, i: usize)
             }
             QueueItem::Scout => {
                 if !spawn(state, civ, i, UnitType::Scout, 1000) {
-                    return;
+                    return false;
                 }
             }
             QueueItem::Settler => {
                 if state.cities[i].pop < rules.settler_min_pop {
-                    return;
+                    return false;
                 }
                 if !spawn(state, civ, i, UnitType::Settler, 1000) {
-                    return;
+                    return false;
                 }
                 state.cities[i].pop -= 1;
             }
@@ -670,6 +859,7 @@ fn complete_queue(state: &mut WorldState, rules: &Ruleset, civ: CivId, i: usize)
         if city.queue.is_empty() && city.standing.repeat_queue && !matches!(item, QueueItem::Building(_)) {
             city.queue.push(item);
         }
+        true
     }
 }
 
@@ -825,8 +1015,12 @@ fn phase_society(state: &mut WorldState, rules: &Ruleset) {
         }
     }
 
-    for g in &mut state.grievance {
-        *g = g.saturating_sub(1);
+    // Grievance decays by 1, but what was added this tick does not (v0.2 C7).
+    for (g, fresh) in state.grievance.iter_mut().zip(state.grievance_fresh.iter_mut()) {
+        if *g > *fresh {
+            *g -= 1;
+        }
+        *fresh = 0;
     }
 }
 
@@ -855,45 +1049,52 @@ fn phase_neutral(state: &mut WorldState, rules: &Ruleset) {
 
 // ---------------------------------------------------------------- phase 10
 
-fn phase_scoring(state: &mut WorldState, rules: &Ruleset, input: &TickInput) {
-    // A capture scores at most once per captor per season (§14.1): decide on
-    // the first tick the holding becomes eligible.
-    let tick = state.tick;
-    for c in &mut state.cities {
-        let (Some(owner), Some(t)) = (c.owner, c.captured_tick) else {
+fn phase_scoring(state: &mut WorldState, rules: &Ruleset, _input: &TickInput) {
+    let n = state.civs.len();
+    // Suzerainty: the milestone record and merit for the envoys (V5 §7.3).
+    for cs in 0..state.city_states.len() {
+        let (Some(civ), None) = (state.city_states[cs].suzerain, state.city_states[cs].captured_by) else {
             continue;
         };
-        if c.capture_scores && tick.saturating_sub(t) + 1 == rules.capture_hold_ticks {
-            if c.scored_by.contains(&owner) {
-                c.capture_scores = false;
-            } else {
-                c.scored_by.push(owner);
-            }
+        state.civs[civ as usize].achievements.ever_suzerain = true;
+        let shares: Vec<(Credit, u64)> = state.city_states[cs]
+            .envoys
+            .iter()
+            .filter(|e| e.civ == civ)
+            .map(|e| (e.credit, e.influence))
+            .collect();
+        merit::credit_shared(state, &shares, Path::Concord, rules.merit_suzerain as u64, b"suzerain");
+    }
+    // Office banks (§4.1 per office, V5 §5.2).
+    let spent: Vec<[u16; 4]> = (0..n)
+        .map(|c| state.tick_orders.iter().find(|a| a.civ as usize == c).map_or([0; 4], |a| a.spent))
+        .collect();
+    for (civ, used) in spent.iter().enumerate() {
+        let b = state.civs[civ].tick_budget;
+        let in_alliance = (0..n as u16).any(|o| allied(state, civ as u16, o));
+        state.civs[civ].ever_allied |= in_alliance;
+        let nation = &mut state.nations[civ];
+        for (role, u) in used.iter().enumerate() {
+            nation.role_bank[role] = next_bank(rules, nation.role_bank[role], rules.role_budget(b, role), *u as u32);
         }
     }
-    let spent: Vec<(CivId, u32, bool)> = accepted(state, rules, input)
-        .into_iter()
-        .map(|(civ, cost, orders)| (civ, cost, !orders.is_empty()))
-        .collect();
-    for civ in 0..state.civs.len() as u16 {
-        let d = dominion_tick(state, rules, civ);
-        let total_pop: u32 = state.living_cities_of(civ).map(|c| c.pop).sum();
-        let before = state.civs[civ as usize].scores.max_pop;
-        let cd = concord_tick(state, rules, &state.civs[civ as usize], total_pop, before);
-        let in_alliance = (0..state.civs.len() as u16).any(|o| allied(state, civ, o));
-        let (cost, active) = spent
-            .iter()
-            .find(|s| s.0 == civ)
-            .map_or((0, false), |s| (s.1, s.2));
-        let c = &mut state.civs[civ as usize];
-        c.scores.dominion += d;
-        c.scores.concord_raw += cd;
-        c.scores.max_pop = before.max(total_pop);
-        c.ever_allied |= in_alliance;
-        if active {
-            c.active_ticks += 1;
+    // Milestones and eras, announced when they change (V5 §6.3).
+    let facts = crate::scoring::facts_all(state, rules);
+    for (civ, f) in facts.iter().enumerate() {
+        let score = crate::scoring::score_of(rules, f);
+        let a = &state.civs[civ].achievements;
+        let (old_tiers, old_era) = (a.tiers, a.era);
+        for (p, (new, old)) in score.tiers.iter().zip(old_tiers).enumerate() {
+            if *new != old {
+                state.push_event(b"milestone", &[civ as u8, p as u8, *new]);
+            }
         }
-        c.order_bank = next_bank(rules, c.order_bank, c.tick_budget, cost);
+        if score.era != old_era {
+            state.push_event(b"era", &[civ as u8, score.era]);
+        }
+        let a = &mut state.civs[civ].achievements;
+        a.tiers = score.tiers;
+        a.era = score.era;
     }
 }
 
@@ -904,7 +1105,10 @@ fn phase_commit(state: &mut WorldState, rules: &Ruleset) {
         let cities = state.city_count(civ);
         state.civs[civ as usize].tick_budget = order_budget(rules, cities);
     }
+    // Recalls, idle recalls and elections take effect next tick (V5 §5.3–§5.5).
+    crate::gov::end_of_tick(state, rules);
     state.implicit.clear();
+    state.tick_orders.clear();
     let tick = state.tick;
     state.push_event(b"tick", &tick.to_le_bytes());
 }

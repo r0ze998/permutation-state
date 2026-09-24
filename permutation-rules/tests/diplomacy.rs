@@ -5,10 +5,10 @@ use permutation_rules::fixed::MILLI;
 use permutation_rules::genesis::{new_season, Entry};
 use permutation_rules::hex::Hex;
 use permutation_rules::invariants;
-use permutation_rules::orders::{validate_batch, Good, Order, OrderBatch};
+use permutation_rules::orders::{office_batches, validate_batch, Good, Order, OrderBatch};
 use permutation_rules::rng::Seed;
 use permutation_rules::state::{
-    DeclaredKind, Owner, Relation, Specialty, StandingRule, Unit, WorldState,
+    Owner, Relation, Specialty, StandingRule, Unit, WorldState,
 };
 use permutation_rules::tick::{resolve_tick, TickInput};
 use permutation_rules::units::UnitType::{self, *};
@@ -17,12 +17,7 @@ use permutation_rules::{Preset, RulesError, Ruleset};
 fn setup(n: usize) -> (Ruleset, WorldState) {
     let rules = Ruleset::new(Preset::Blitz);
     let entries: Vec<Entry> = (0..n)
-        .map(|i| Entry {
-            name: format!("civ-{i}"),
-            declared_kind: DeclaredKind::Undeclared,
-            payout_wallet: [i as u8; 32],
-            exchange_deposit: 0,
-        })
+        .map(|i| Entry { name: format!("civ-{i}"), treasury: 0 })
         .collect();
     let s = new_season(&rules, &[11; 32], &[22; 32], &entries).unwrap();
     (rules, s)
@@ -35,22 +30,20 @@ fn vrf(tick: u16) -> Seed {
 }
 
 fn step(s: &mut WorldState, rules: &Ruleset, orders: Vec<(u16, Vec<Order>)>) {
+    // Tests exercise mechanics, not office budgets (V5 §5.2 has its own tests).
+    for n in &mut s.nations {
+        n.role_bank = [20; 4];
+    }
     let batches = orders
         .into_iter()
-        .map(|(civ, orders)| OrderBatch {
-            civ,
-            tick: s.tick,
-            decision_digest: [0; 32],
-            orders,
-        })
+        .flat_map(|(civ, orders)| office_batches(s, civ, [0; 32], orders))
         .collect();
     resolve_tick(
         s,
         rules,
         &TickInput {
             vrf: vrf(s.tick),
-            batches,
-        },
+            batches, ..Default::default() },
     )
     .unwrap();
     let v = invariants::check(s, rules);
@@ -268,7 +261,7 @@ fn breaking_a_nap_forfeits_the_bond_and_starts_war() {
         s.relation(0, 1),
         Relation::War { declared_by: 0, casus_belli: false, active_from, .. } if active_from == t + 1
     ));
-    assert_eq!(s.grievance(0, 1), 40 - 1);
+    assert_eq!(s.grievance(0, 1), 40, "added this tick: no decay yet (v0.2 C7)");
     assert_eq!(s.civs[0].last_aggression, Some(t));
     // Civ 1 received both bonds (plus its normal income); civ 0 got nothing back.
     let income1 = s.civs[1].last.gold as i64 * MILLI;
@@ -317,12 +310,7 @@ fn alliances_form_groups_up_to_the_cap() {
 fn larger_games_allow_three_member_groups() {
     let rules = Ruleset::new(Preset::Season); // cap = min(3, 9 / 3) = 3
     let entries: Vec<Entry> = (0..9)
-        .map(|i| Entry {
-            name: format!("c{i}"),
-            declared_kind: DeclaredKind::Undeclared,
-            payout_wallet: [i as u8; 32],
-            exchange_deposit: 0,
-        })
+        .map(|i| Entry { name: format!("c{i}"), treasury: 0 })
         .collect();
     let mut s = new_season(&rules, &[11; 32], &[22; 32], &entries).expect("9-civ season map");
     ally(&mut s, &rules, 0, 1);
@@ -404,6 +392,9 @@ fn transfers_are_frozen_in_the_final_phase() {
     let b = OrderBatch {
         civ: 0,
         tick: s.tick,
+        role: permutation_rules::gov::Role::Diplomat,
+        member: permutation_rules::gov::NOBODY,
+        adopt: vec![],
         decision_digest: [0; 32],
         orders: vec![Order::Transfer {
             civ: 1,

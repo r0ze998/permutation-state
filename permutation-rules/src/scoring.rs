@@ -1,234 +1,220 @@
-//! Victory tracks and payout arithmetic (§14). All scores are cumulative
-//! integer sums over ticks and never decrease (§17 invariant 6).
+//! Achievements (Game Design V5 §6): four paths, five milestone tiers each,
+//! and eras.
+//!
+//! Every milestone is an absolute threshold, so any number of nations can
+//! reach it. A path's tier is the highest `k` such that milestones `1..=k`
+//! all hold (a ladder). Milestones built only on quantities that never
+//! decrease (wealth, techs, the Star Gate record, trade, "was suzerain",
+//! "sent an envoy") are permanent once reached; the others (territory,
+//! population, suzerainties, treaties, captured cities held) are judged on
+//! the state at the end of the season and shown provisionally until then.
 
-use crate::fixed::BPS_ONE;
-use crate::map::Map;
 use crate::params::Ruleset;
-use crate::state::{Civ, CivId, WorldState};
-use alloc::vec::Vec;
+use crate::state::{CivId, Relation, WorldState};
 
-/// Dominion contribution of one tick (§14.1).
-pub fn dominion_tick(state: &WorldState, rules: &Ruleset, civ: CivId) -> u64 {
-    let tiles = owned_tile_value(&state.map, state, civ);
-    let captured: u64 = state
-        .living_cities_of(civ)
-        .filter(|c| captured_city_scores(state, rules, c, civ))
-        .map(|c| 5 * c.pop as u64)
-        .sum();
-    tiles + captured
-}
+pub const PATH_NAMES: [&str; 4] = ["hegemony", "prosperity", "science", "concord"];
 
-fn owned_tile_value(map: &Map, state: &WorldState, civ: CivId) -> u64 {
-    map.tiles
+/// Tiles owned by the civ's living cities.
+pub fn owned_tiles(state: &WorldState, civ: CivId) -> u32 {
+    state
+        .map
+        .tiles
         .iter()
         .filter(|t| {
             t.owner_city
                 .and_then(|id| state.cities.get(id as usize))
                 .is_some_and(|c| c.alive && c.owner == Some(civ))
         })
-        .map(|t| 1 + t.resource.is_some() as u64)
-        .sum()
+        .count() as u32
 }
 
-/// Eligibility of a captured city for Dominion points this tick (§14.1).
-///
-/// `capture_scores` is decided at capture (founder and founded-age rules) and
-/// cleared in phase 10 if this captor already scored the city this season.
-/// TODO(§14.4): exclude captures from a member of the captor's prize coalition.
-pub fn captured_city_scores(
-    state: &WorldState,
-    rules: &Ruleset,
-    city: &crate::state::City,
-    captor: CivId,
-) -> bool {
-    let Some(captured) = city.captured_tick else {
-        return false;
-    };
-    city.capture_scores
-        && city.owner == Some(captor)
-        && state.tick.saturating_sub(captured) + 1 >= rules.capture_hold_ticks
+/// Cities held that the civ took from another founder (V5 §6.2). The city
+/// must have been at least `capture_min_founded_age` ticks old when taken.
+pub fn captured_held(state: &WorldState, civ: CivId) -> u32 {
+    state
+        .living_cities_of(civ)
+        .filter(|c| c.captured_tick.is_some() && c.capture_scores && c.founder != civ)
+        .count() as u32
 }
 
-/// Concord contribution of one tick (§14.3). `max_pop_before` is the civ's
-/// highest total population before this tick.
-pub fn concord_tick(
-    state: &WorldState,
-    rules: &Ruleset,
-    civ: &Civ,
-    total_pop: u32,
-    max_pop_before: u32,
-) -> u64 {
-    if civ.is_aggressor(state.tick, rules.aggressor_window) {
-        return 0;
-    }
-    let new_highs = total_pop.saturating_sub(max_pop_before) as u64;
-    let suzerain = state
+pub fn total_pop(state: &WorldState, civ: CivId) -> u32 {
+    state.living_cities_of(civ).map(|c| c.pop).sum()
+}
+
+/// Civs with a NAP or an alliance with `civ` ("条約相手").
+pub fn treaty_partners(state: &WorldState, civ: CivId) -> u32 {
+    (0..state.civs.len() as CivId)
+        .filter(|o| *o != civ && matches!(state.relation(civ, *o), Relation::Nap { .. } | Relation::Alliance { .. }))
+        .count() as u32
+}
+
+pub fn alliances(state: &WorldState, civ: CivId) -> u32 {
+    (0..state.civs.len() as CivId)
+        .filter(|o| *o != civ && matches!(state.relation(civ, *o), Relation::Alliance { .. }))
+        .count() as u32
+}
+
+pub fn suzerainties(state: &WorldState, civ: CivId) -> u32 {
+    state
         .city_states
         .iter()
-        .filter(|cs| cs.suzerain == Some(civ.id))
-        .count() as u64;
-    total_pop as u64 + 10 * new_highs + 5 * suzerain
+        .filter(|cs| cs.suzerain == Some(civ) && cs.captured_by.is_none())
+        .count() as u32
 }
 
-/// Final Concord with the neutrality multiplier (§14.3).
-pub fn concord_final(rules: &Ruleset, civ: &Civ) -> u64 {
-    let m = if civ.ever_allied {
-        BPS_ONE
-    } else {
-        rules.neutrality_mult_bps
-    };
-    civ.scores.concord_raw * m as u64 / BPS_ONE as u64
+/// Trade volume with each counterparty counted up to
+/// `trade_counterparty_bps` of the raw total (V5 §6.2 "馴れ合いの防止").
+pub fn trade_effective(rules: &Ruleset, trade: &[u64]) -> u64 {
+    let raw: u64 = trade.iter().sum();
+    let cap = raw as u128 * rules.trade_counterparty_bps as u128 / 10_000;
+    trade.iter().map(|v| (*v as u128).min(cap) as u64).sum()
 }
 
-/// Science ranking key (§14.2): more stages, then earlier completion, then
-/// more cumulative science. Sorts ascending = best first.
-pub fn science_key(civ: &Civ) -> (core::cmp::Reverse<u8>, u16, core::cmp::Reverse<u64>) {
+/// Everything the milestones read, for one civ at one moment.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Facts {
+    pub tiles: u32,
+    pub captured_held: u32,
+    pub pop: u32,
+    pub wealth: u64,
+    pub techs: u32,
+    pub star_gate_max: u8,
+    pub partners: u32,
+    pub alliances: u32,
+    pub suzerainties: u32,
+    pub ever_suzerain: bool,
+    pub envoy_sent: bool,
+    pub trade: u64,
+}
+
+/// Facts for every civ, with one pass over the map.
+pub fn facts_all(state: &WorldState, rules: &Ruleset) -> alloc::vec::Vec<Facts> {
+    let n = state.civs.len();
+    let mut tiles = alloc::vec![0u32; n];
+    for t in &state.map.tiles {
+        if let Some(owner) = t.owner_city.and_then(|id| state.cities.get(id as usize)).filter(|c| c.alive).and_then(|c| c.owner) {
+            tiles[owner as usize] += 1;
+        }
+    }
+    (0..n as CivId)
+        .map(|civ| {
+            let c = &state.civs[civ as usize];
+            let a = &c.achievements;
+            Facts {
+                tiles: tiles[civ as usize],
+                captured_held: captured_held(state, civ),
+                pop: total_pop(state, civ),
+                wealth: a.wealth,
+                techs: c.techs.count(),
+                star_gate_max: a.star_gate_max,
+                partners: treaty_partners(state, civ),
+                alliances: alliances(state, civ),
+                suzerainties: suzerainties(state, civ),
+                ever_suzerain: a.ever_suzerain,
+                envoy_sent: a.envoy_sent,
+                trade: trade_effective(rules, &a.trade),
+            }
+        })
+        .collect()
+}
+
+/// Whether milestone `tier` (1..=5) of `path` (0..4) holds (V5 §6.2).
+pub fn milestone(rules: &Ruleset, f: &Facts, path: usize, tier: usize) -> bool {
+    let k = tier - 1;
+    match path {
+        0 => {
+            let tiles_ok = f.tiles >= rules.hegemony_tiles[k];
+            let held_ok = f.captured_held >= rules.hegemony_cities[k];
+            // Tier 3 is reached by territory *or* by holding a conquest; the others need both.
+            if tier == 3 {
+                tiles_ok || (rules.hegemony_cities[k] > 0 && held_ok)
+            } else {
+                tiles_ok && held_ok
+            }
+        }
+        1 => f.pop >= rules.prosperity_pop[k] && f.wealth >= rules.prosperity_wealth[k] as u64,
+        2 => match tier {
+            1..=3 => f.techs >= rules.science_techs[k],
+            4 => f.star_gate_max >= 1,
+            _ => f.star_gate_max >= 3,
+        },
+        _ => {
+            let partners = f.partners >= rules.concord_partners[k];
+            let suz = f.suzerainties >= rules.concord_suzerains[k];
+            match tier {
+                1 => partners || f.envoy_sent,
+                2 => partners && f.ever_suzerain,
+                3 => partners && suz,
+                4 => partners && suz && f.alliances >= 1 && f.trade >= rules.concord_trade[0] as u64,
+                _ => partners && suz && f.trade >= rules.concord_trade[1] as u64,
+            }
+        }
+    }
+}
+
+/// Tier reached on each path (0 = none).
+pub fn tiers(rules: &Ruleset, f: &Facts) -> [u8; 4] {
+    core::array::from_fn(|p| (1..=5).take_while(|t| milestone(rules, f, p, *t)).count() as u8)
+}
+
+/// Era: the highest tier reached on at least two paths (three for tier 5).
+pub fn era(tiers: [u8; 4]) -> u8 {
+    let mut e = 0;
+    for k in 1..=5u8 {
+        let need = if k == 5 { 3 } else { 2 };
+        if tiers.iter().filter(|t| **t >= k).count() >= need {
+            e = k;
+        } else {
+            break;
+        }
+    }
+    e
+}
+
+/// A nation's achievement points (V5 §6.4).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NationScore {
+    pub tiers: [u8; 4],
+    pub era: u8,
+    pub path_points: [u64; 4],
+    pub era_points: u64,
+}
+
+impl NationScore {
+    pub fn total(&self) -> u64 {
+        self.path_points.iter().sum::<u64>() + self.era_points
+    }
+}
+
+/// Points of a ladder climbed to `tier`: 10 + 20 + … (V5 §6.4).
+pub fn ladder_points(rules: &Ruleset, tier: u8) -> u64 {
+    rules.tier_points.iter().take(tier as usize).map(|p| *p as u64).sum()
+}
+
+/// Points of every civ now.
+pub fn nation_scores(state: &WorldState, rules: &Ruleset) -> alloc::vec::Vec<NationScore> {
+    facts_all(state, rules).iter().map(|f| score_of(rules, f)).collect()
+}
+
+pub fn score_of(rules: &Ruleset, f: &Facts) -> NationScore {
+    let t = tiers(rules, f);
+    let e = era(t);
+    NationScore {
+        tiers: t,
+        era: e,
+        path_points: t.map(|x| ladder_points(rules, x)),
+        era_points: ladder_points(rules, e),
+    }
+}
+
+/// Science ranking key for displays: more stages, then earlier completion,
+/// then more cumulative science. Sorts ascending = best first.
+pub fn science_key(civ: &crate::state::Civ) -> (core::cmp::Reverse<u8>, u16, core::cmp::Reverse<u64>) {
     (
         core::cmp::Reverse(civ.scores.star_gate_stages),
         civ.scores.star_gate_tick.unwrap_or(u16::MAX),
         core::cmp::Reverse(civ.scores.science_total),
     )
-}
-
-/// `N = clamp(entrants × winners_bps / 10000, min, max)` (§14.5).
-pub fn winners_count(rules: &Ruleset, entrants: usize) -> usize {
-    (entrants * rules.winners_bps as usize / BPS_ONE as usize)
-        .clamp(rules.winners_min as usize, rules.winners_max as usize)
-        .min(entrants)
-}
-
-/// Geometric payout weights: `w_1 = 10000`, `w_{k+1} = w_k × decay / 10000` (§14.5).
-pub fn payout_weights(rules: &Ruleset, n: usize) -> Vec<u64> {
-    let mut w = Vec::with_capacity(n);
-    let mut cur = BPS_ONE as u64;
-    for _ in 0..n {
-        w.push(cur);
-        cur = cur * rules.payout_decay_bps as u64 / BPS_ONE as u64;
-    }
-    w
-}
-
-/// Split `pool` by weights; integer remainder is returned for rollover.
-pub fn split_pool(pool: u64, weights: &[u64]) -> (Vec<u64>, u64) {
-    let total: u64 = weights.iter().sum();
-    if total == 0 {
-        return (Vec::new(), pool);
-    }
-    let shares: Vec<u64> = weights
-        .iter()
-        .map(|w| (pool as u128 * *w as u128 / total as u128) as u64)
-        .collect();
-    let paid: u64 = shares.iter().sum();
-    (shares, pool - paid)
-}
-
-/// Tracks in the order used for tie-breaks between tracks (§14.5).
-pub const TRACKS: [&str; 3] = ["dominion", "science", "concord"];
-
-/// Full ranking of every civ on each track, best first. Ties go to the lower
-/// civ id (entry order), so the result is total and deterministic.
-pub fn rankings(rules: &Ruleset, state: &WorldState) -> [Vec<CivId>; 3] {
-    let ids = || (0..state.civs.len() as CivId).collect::<Vec<_>>();
-    let mut dom = ids();
-    dom.sort_by_key(|&c| (core::cmp::Reverse(state.civs[c as usize].scores.dominion), c));
-    let mut sci = ids();
-    sci.sort_by_key(|&c| (science_key(&state.civs[c as usize]), c));
-    let mut con = ids();
-    con.sort_by_key(|&c| (core::cmp::Reverse(concord_final(rules, &state.civs[c as usize])), c));
-    [dom, sci, con]
-}
-
-/// Final prize distribution (§14.5).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Payouts {
-    /// Amount per civ (index = civ id), in the pool's unit (USDC base units).
-    pub per_civ: Vec<u64>,
-    /// Paid winners per track, best first: (civ, amount).
-    pub tracks: [Vec<(CivId, u64)>; 3],
-    /// Participation recipients.
-    pub participation: Vec<CivId>,
-    /// Integer remainders, unclaimed track pools and the participation excess.
-    pub rollover: u64,
-}
-
-/// Split `pool` by §14.5. Prize coalitions (§14.4) are not registrable yet,
-/// so every civ is its own entry.
-///
-/// * Each track gets `pool × track_share_bps / 10000`; its `N` winners
-///   (`winners_count`) share it by geometric weights.
-/// * One top-3 per entry: an entry placed top-3 on several tracks keeps the
-///   highest-paying one (ties: Dominion, Science, Concord) and is removed from
-///   the other tracks, whose placements are recomputed; repeated until stable.
-/// * Participation: an equal split among entries that ordered in ≥ 60% of
-///   their ticks and ranked in the top half of some track, capped at
-///   2 × entry fee each.
-pub fn payouts(rules: &Ruleset, state: &WorldState, pool: u64) -> Payouts {
-    let n = state.civs.len();
-    let full = rankings(rules, state);
-    let track_pool = |t: usize| (pool as u128 * rules.track_share_bps[t] as u128 / BPS_ONE as u128) as u64;
-    let mut excluded: [Vec<CivId>; 3] = [Vec::new(), Vec::new(), Vec::new()];
-    let place = |excluded: &[Vec<CivId>; 3]| -> [Vec<(CivId, u64)>; 3] {
-        core::array::from_fn(|t| {
-            let eligible: Vec<CivId> = full[t].iter().copied().filter(|c| !excluded[t].contains(c)).collect();
-            let k = winners_count(rules, n).min(eligible.len());
-            let (shares, _) = split_pool(track_pool(t), &payout_weights(rules, k));
-            eligible.into_iter().zip(shares).collect()
-        })
-    };
-    let mut tracks = place(&excluded);
-    for _ in 0..3 {
-        let mut changed = false;
-        for civ in 0..n as CivId {
-            // (amount, -track) so max() prefers the higher amount, then the earlier track.
-            let top3: Vec<(u64, core::cmp::Reverse<usize>)> = (0..3)
-                .filter_map(|t| tracks[t].iter().take(3).find(|(c, _)| *c == civ).map(|(_, a)| (*a, core::cmp::Reverse(t))))
-                .collect();
-            if top3.len() < 2 {
-                continue;
-            }
-            let keep = top3.iter().max().unwrap().1 .0;
-            for (_, core::cmp::Reverse(t)) in top3 {
-                if t != keep && !excluded[t].contains(&civ) {
-                    excluded[t].push(civ);
-                    changed = true;
-                }
-            }
-        }
-        if !changed {
-            break;
-        }
-        tracks = place(&excluded);
-    }
-    let mut per_civ = alloc::vec![0u64; n];
-    let mut paid = 0u64;
-    for list in &tracks {
-        for (c, a) in list {
-            per_civ[*c as usize] += a;
-            paid += a;
-        }
-    }
-    // Participation (§14.5).
-    let half = n.div_ceil(2);
-    let participation: Vec<CivId> = state
-        .civs
-        .iter()
-        .filter(|c| {
-            let ticks = state.tick.saturating_sub(c.joined_tick) as u64;
-            let active = c.active_ticks as u64 * BPS_ONE as u64 >= 6_000 * ticks && ticks > 0;
-            let ranked = full.iter().any(|r| r.iter().take(half).any(|x| *x == c.id));
-            active && ranked
-        })
-        .map(|c| c.id)
-        .collect();
-    let part_pool = track_pool(3);
-    if !participation.is_empty() {
-        let each = (part_pool / participation.len() as u64).min(2 * rules.entry_fee_usdc);
-        for c in &participation {
-            per_civ[*c as usize] += each;
-            paid += each;
-        }
-    }
-    Payouts { per_civ, tracks, participation, rollover: pool - paid }
 }
 
 #[cfg(test)]
@@ -237,21 +223,32 @@ mod tests {
     use crate::params::Preset;
 
     #[test]
-    fn winners_count_clamps() {
-        let r = Ruleset::new(Preset::Blitz);
-        assert_eq!(winners_count(&r, 6), 3);
-        assert_eq!(winners_count(&r, 100), 20);
-        assert_eq!(winners_count(&r, 1000), 50);
-        assert_eq!(winners_count(&r, 2), 2);
+    fn era_needs_two_paths_and_three_at_the_top() {
+        assert_eq!(era([0, 0, 0, 0]), 0);
+        assert_eq!(era([5, 0, 0, 0]), 0);
+        assert_eq!(era([1, 1, 0, 0]), 1);
+        assert_eq!(era([3, 2, 1, 0]), 2);
+        assert_eq!(era([5, 5, 4, 0]), 4);
+        assert_eq!(era([5, 5, 5, 0]), 5);
     }
 
     #[test]
-    fn payout_split_conserves_value() {
+    fn points_grow_by_tier_and_cap_at_1125() {
         let r = Ruleset::new(Preset::Blitz);
-        let w = payout_weights(&r, 5);
-        assert_eq!(w, [10_000, 7_500, 5_625, 4_218, 3_163]);
-        let (shares, rest) = split_pool(1_000_000_007, &w);
-        assert_eq!(shares.iter().sum::<u64>() + rest, 1_000_000_007);
-        assert!(shares.windows(2).all(|p| p[0] >= p[1]));
+        assert_eq!(ladder_points(&r, 0), 0);
+        assert_eq!(ladder_points(&r, 1), 10);
+        assert_eq!(ladder_points(&r, 3), 65);
+        assert_eq!(ladder_points(&r, 5), 225);
+        let max = NationScore { tiers: [5; 4], era: 5, path_points: [225; 4], era_points: 225 };
+        assert_eq!(max.total(), 1_125);
+    }
+
+    #[test]
+    fn one_counterparty_counts_up_to_forty_percent() {
+        let r = Ruleset::new(Preset::Blitz);
+        assert_eq!(trade_effective(&r, &[1000, 0, 0]), 400);
+        assert_eq!(trade_effective(&r, &[300, 300, 400]), 1000);
+        assert_eq!(trade_effective(&r, &[800, 100, 100]), 600);
+        assert_eq!(trade_effective(&r, &[]), 0);
     }
 }

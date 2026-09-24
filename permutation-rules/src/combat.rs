@@ -108,9 +108,16 @@ pub struct Situation {
     pub attacker_on_river: bool,
     pub city_walls: bool,
     pub engineering: bool,
+    /// Defence of the city (or city-state) a ranged attack targets; it strikes
+    /// back with it (v0.2 C5). 0 = no strike.
+    pub city_strike: MilliTroops,
 }
 
 /// Damage both ways for one engagement: `(to_defender, to_attacker)`.
+///
+/// Ranged attacks receive no retaliation from armies (§8.2 #2), but a city
+/// strikes back with its defence at the city retaliation modifier ×
+/// `ranged_city_strike_bps` (v0.2 C5).
 pub fn resolve_engagement(
     rules: &Ruleset,
     attacker: Combatant,
@@ -168,9 +175,18 @@ pub fn resolve_engagement(
         v_attacker,
     );
 
-    // Defender's retaliation. Ranged attacks receive none (§8.2 #2).
+    // Defender's retaliation. Ranged attacks receive none from armies (§8.2 #2).
     if sit.ranged_attack {
-        return (to_def, 0);
+        let strike = damage(
+            rules,
+            sit.city_strike,
+            10,
+            attacker.troops(),
+            attacker.strength(),
+            &[CITY_RETALIATION, rules.ranged_city_strike_bps],
+            v_defender,
+        );
+        return (to_def, strike);
     }
     let mut d_mods: [Bps; 8] = [0; 8];
     let mut nd = 0;

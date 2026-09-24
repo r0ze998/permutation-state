@@ -2,10 +2,11 @@
 //! ledger learning an outside agent's commitment from its batch.
 
 use permutation_rules::decision::{decision_digest, policy_id, rationale_hash};
-use permutation_rules::genesis::{new_season, Entry};
+use permutation_rules::genesis::{nation_entries, new_season};
+use permutation_rules::gov::{Role, NOBODY};
 use permutation_rules::hex::Hex;
 use permutation_rules::orders::{Order, OrderBatch};
-use permutation_rules::state::{CivId, DeclaredKind, Owner, WorldState};
+use permutation_rules::state::{CivId, Owner, WorldState};
 use permutation_rules::tech::Tech;
 use permutation_rules::{Preset, Ruleset};
 use permutation_server::api::{preflight, world_view};
@@ -14,15 +15,7 @@ use permutation_server::ledger::Ledger;
 
 fn season() -> (Ruleset, WorldState) {
     let rules = Ruleset::new(Preset::Blitz);
-    let entries: Vec<Entry> = (0..6)
-        .map(|i| Entry {
-            name: ["Aster", "Borealis", "Cinder", "Dunmar", "Ember", "Fjordhal"][i].into(),
-            declared_kind: if i == 0 { DeclaredKind::Human } else { DeclaredKind::Agent },
-            payout_wallet: [i as u8 + 1; 32],
-            exchange_deposit: 0,
-        })
-        .collect();
-    let state = new_season(&rules, b"permutation-state/world/test-001", b"permutation-state/season/test-01", &entries).unwrap();
+    let state = new_season(&rules, b"permutation-state/world/test-001", b"permutation-state/season/test-01", &nation_entries(6)).unwrap();
     (rules, state)
 }
 
@@ -83,19 +76,19 @@ fn ledger_verifies_an_outside_agents_reveal() {
     let obs = ledger.root(0, civ).unwrap();
     let (policy, salt, text) = (b"agent/v1".to_vec(), [7u8; 16], "北へ探索する".as_bytes().to_vec());
     let digest = decision_digest(0, &obs, &policy_id(&policy), &rationale_hash(&salt, &text));
-    ledger.ingest_external(&OrderBatch { civ, tick: 0, decision_digest: digest, orders: vec![] });
-    assert!(ledger.record(0, civ).unwrap().revealed_at.is_none());
-    ledger.ingest_external(&OrderBatch { civ, tick: 1, decision_digest: [0; 32], orders: vec![Order::RevealRationale { tick: 0, policy, salt, text }] });
-    let r = ledger.record(0, civ).unwrap();
+    ledger.ingest_external(&OrderBatch { civ, tick: 0, role: Role::General, member: NOBODY, adopt: vec![], decision_digest: digest, orders: vec![] });
+    assert!(ledger.record(0, civ, 0).unwrap().revealed_at.is_none());
+    ledger.ingest_external(&OrderBatch { civ, tick: 1, role: Role::General, member: NOBODY, adopt: vec![], decision_digest: [0; 32], orders: vec![Order::RevealRationale { tick: 0, policy, salt, text }] });
+    let r = ledger.record(0, civ, 0).unwrap();
     assert_eq!(r.revealed_at, Some(1));
     assert!(r.external && r.verified());
-    assert!(ledger.record(1, civ).is_none(), "a zero digest is not a commitment");
+    assert!(ledger.record(1, civ, 0).is_none(), "a zero digest is not a commitment");
 
     // A reveal that does not match fails verification instead of being trusted.
     let digest2 = decision_digest(1, &ledger.root(0, 4).unwrap(), &policy_id(b"x"), &rationale_hash(&[1; 16], b"y"));
-    ledger.ingest_external(&OrderBatch { civ: 4, tick: 0, decision_digest: digest2, orders: vec![] });
-    ledger.ingest_external(&OrderBatch { civ: 4, tick: 1, decision_digest: [0; 32], orders: vec![Order::RevealRationale { tick: 0, policy: b"x".to_vec(), salt: [2; 16], text: b"y".to_vec() }] });
-    assert!(!ledger.record(0, 4).unwrap().verified());
+    ledger.ingest_external(&OrderBatch { civ: 4, tick: 0, role: Role::General, member: NOBODY, adopt: vec![], decision_digest: digest2, orders: vec![] });
+    ledger.ingest_external(&OrderBatch { civ: 4, tick: 1, role: Role::General, member: NOBODY, adopt: vec![], decision_digest: [0; 32], orders: vec![Order::RevealRationale { tick: 0, policy: b"x".to_vec(), salt: [2; 16], text: b"y".to_vec() }] });
+    assert!(!ledger.record(0, 4, 0).unwrap().verified());
 }
 
 #[test]
@@ -108,9 +101,9 @@ fn reveals_fit_in_one_transaction_and_keep_their_order() {
     for t in 0..3u16 {
         state.tick = t;
         ledger.observe(&state, &fog);
-        ledger.commit(t, 1, "bot/test", &long);
+        ledger.commit(t, 1, 0, "bot/test", &long);
     }
-    let r = ledger.reveals(1, 3, &[]);
+    let r = ledger.reveals(1, 0, 3, &[]);
     let size: usize = r.iter().map(|o| borsh::to_vec(o).unwrap().len()).sum();
     assert_eq!(r.len(), 1, "two long reveals do not fit next to each other");
     assert!(size <= BATCH_BYTES);
@@ -120,7 +113,7 @@ fn reveals_fit_in_one_transaction_and_keep_their_order() {
     for t in 0..3u16 {
         state.tick = t;
         ledger.observe(&state, &fog);
-        ledger.commit(t, 1, "bot/test", "short");
+        ledger.commit(t, 1, 0, "bot/test", "short");
     }
-    assert_eq!(ledger.reveals(1, 3, &[]).len(), 3);
+    assert_eq!(ledger.reveals(1, 0, 3, &[]).len(), 3);
 }

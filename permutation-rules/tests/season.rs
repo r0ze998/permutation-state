@@ -3,9 +3,10 @@
 use permutation_rules::genesis::{new_season, Entry};
 use permutation_rules::hex::Hex;
 use permutation_rules::invariants;
-use permutation_rules::orders::{Order, OrderBatch};
+use permutation_rules::gov::Role;
+use permutation_rules::orders::{office_batches, Order, OrderBatch};
 use permutation_rules::rng::Seed;
-use permutation_rules::state::{DeclaredKind, QueueItem, WorldState};
+use permutation_rules::state::{QueueItem, WorldState};
 use permutation_rules::tech::Tech;
 use permutation_rules::tick::{resolve_tick, run_phase, TickInput};
 use permutation_rules::units::UnitType;
@@ -16,16 +17,7 @@ const SEASON: Seed = [22; 32];
 
 fn entries(n: usize) -> Vec<Entry> {
     (0..n)
-        .map(|i| Entry {
-            name: format!("civ-{i}"),
-            declared_kind: if i % 2 == 0 {
-                DeclaredKind::Human
-            } else {
-                DeclaredKind::Agent
-            },
-            payout_wallet: [i as u8; 32],
-            exchange_deposit: 0,
-        })
+        .map(|i| Entry { name: format!("civ-{i}"), treasury: 0 })
         .collect()
 }
 
@@ -41,13 +33,8 @@ fn vrf(tick: u16) -> Seed {
     s
 }
 
-fn batch(state: &WorldState, civ: u16, orders: Vec<Order>) -> OrderBatch {
-    OrderBatch {
-        civ,
-        tick: state.tick,
-        decision_digest: [0; 32],
-        orders,
-    }
+fn batch(state: &WorldState, civ: u16, orders: Vec<Order>) -> Vec<OrderBatch> {
+    office_batches(state, civ, [0; 32], orders)
 }
 
 /// A simple scripted opening used by several tests.
@@ -77,7 +64,7 @@ fn run(state: &mut WorldState, rules: &Ruleset, ticks: u16) -> Vec<[u8; 32]> {
     let mut roots = Vec::new();
     for _ in 0..ticks {
         let batches = (0..state.civs.len() as u16)
-            .map(|c| batch(state, c, opening_orders(state, c)))
+            .flat_map(|c| batch(state, c, opening_orders(state, c)))
             .collect();
         let before = state.clone();
         let root = resolve_tick(
@@ -85,8 +72,7 @@ fn run(state: &mut WorldState, rules: &Ruleset, ticks: u16) -> Vec<[u8; 32]> {
             rules,
             &TickInput {
                 vrf: vrf(state.tick),
-                batches,
-            },
+                batches, ..Default::default() },
         )
         .expect("tick");
         assert!(
@@ -130,8 +116,7 @@ fn different_vrf_changes_the_root() {
         &rules,
         &TickInput {
             vrf: [1; 32],
-            batches: vec![],
-        },
+            batches: vec![], ..Default::default() },
     )
     .unwrap();
     let rb = resolve_tick(
@@ -139,8 +124,7 @@ fn different_vrf_changes_the_root() {
         &rules,
         &TickInput {
             vrf: [2; 32],
-            batches: vec![],
-        },
+            batches: vec![], ..Default::default() },
     )
     .unwrap();
     assert_ne!(ra, rb);
@@ -159,7 +143,7 @@ fn full_season_holds_invariants_and_grows() {
             "civ {} research stalled",
             civ.id
         );
-        assert!(civ.scores.dominion > 0 && civ.scores.concord_raw > 0);
+        assert!(civ.achievements.wealth > 0);
     }
     // Season over: further ticks are rejected.
     let err = resolve_tick(&mut s, &rules, &TickInput::default()).unwrap_err();
@@ -177,11 +161,14 @@ fn over_budget_batches_are_ignored() {
         })
         .collect();
     let b = batch(&s, 0, too_many);
+    assert_eq!(b.len(), 1);
+    assert_eq!(b[0].role, Role::Steward);
+    // B = 4 gives the steward 1 order (V5 §5.2).
     assert!(matches!(
-        permutation_rules::orders::validate_batch(&s, &rules, &b),
+        permutation_rules::orders::validate_batch(&s, &rules, &b[0]),
         Err(RulesError::OverBudget {
             cost: 5,
-            spendable: 4
+            spendable: 1
         })
     ));
     resolve_tick(
@@ -189,20 +176,20 @@ fn over_budget_batches_are_ignored() {
         &rules,
         &TickInput {
             vrf: vrf(0),
-            batches: vec![b],
-        },
+            batches: b, ..Default::default() },
     )
     .unwrap();
     assert_eq!(
         s.cities[capital as usize].focus,
         permutation_rules::state::Focus::Balanced
     );
-    // Unused budget was banked instead.
-    assert_eq!(s.civs[0].order_bank, 4);
+    // Unused budget was banked instead, per office.
+    assert_eq!(s.nations[0].role_bank, [1, 1, 1, 1]);
+    assert!(s.last_skipped.iter().any(|k| k.civ == 0 && k.role == Role::Steward as u8 && k.index == u16::MAX));
 }
 
 #[test]
-fn declaring_war_without_casus_belli_blocks_concord() {
+fn a_war_declaration_gives_the_victim_casus_belli() {
     let (rules, mut s) = setup(4);
     let b = batch(&s, 0, vec![Order::DeclareWar { civ: 1 }]);
     resolve_tick(
@@ -210,16 +197,13 @@ fn declaring_war_without_casus_belli_blocks_concord() {
         &rules,
         &TickInput {
             vrf: vrf(0),
-            batches: vec![b],
-        },
+            batches: b, ..Default::default() },
     )
     .unwrap();
-    assert_eq!(s.grievance(0, 1), 29); // +30 then −1 decay
+    // v0.2 C7: grievance created this tick does not decay this tick.
+    assert_eq!(s.grievance(0, 1), rules.casus_belli_threshold);
     assert!(s.civs[0].protection_lost);
-    let concord_after_war = s.civs[0].scores.concord_raw;
-    assert_eq!(concord_after_war, 0, "aggressor accrues no Concord");
-    assert!(s.civs[1].scores.concord_raw > 0, "the victim keeps Concord");
-    assert!(!s.at_war(0, 1) || s.tick >= 1);
+    assert!(s.civs[0].is_aggressor(s.tick, rules.aggressor_window));
 }
 
 #[test]
@@ -227,8 +211,7 @@ fn phases_must_run_in_order_and_can_resume() {
     let (rules, mut s) = setup(4);
     let input = TickInput {
         vrf: vrf(0),
-        batches: vec![],
-    };
+        batches: vec![], ..Default::default() };
     assert_eq!(
         run_phase(&mut s, &rules, &input, 3),
         Err(RulesError::PhaseOutOfOrder {
@@ -284,8 +267,7 @@ fn scouts_move_along_paths() {
         &rules,
         &TickInput {
             vrf: vrf(0),
-            batches: vec![b],
-        },
+            batches: b, ..Default::default() },
     )
     .unwrap();
     let moved = &s.units[scout.id as usize];

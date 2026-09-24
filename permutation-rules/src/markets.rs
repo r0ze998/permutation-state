@@ -1,21 +1,26 @@
-//! Markets (§11): trade hubs, the gold AMM and the USDC Exchange.
+//! Markets (§11): trade hubs, the gold AMM and the USDC market.
 //!
 //! Both markets clear **once per tick at one price**, so the order in which
 //! orders arrived never matters (V4 §5.2):
 //! - the AMM nets all orders per pool and executes only the net against the
 //!   constant-product curve; every trader pays or receives the same price;
-//! - the Exchange runs a uniform-price call auction per good.
+//! - the USDC market (V5 §7.5) runs a uniform-price call auction per good
+//!   between nation treasuries, with a rising tariff on the buyer's
+//!   cumulative spend, delivery after `delivery_ticks`, and no trades with
+//!   oneself or an enemy.
 //!
 //! The clearing functions are pure (`clear_amm`, `call_auction`) so clients
 //! and agents can forecast with exactly the engine's arithmetic.
 
+use crate::checks::Blocked;
 use crate::fixed::{BPS_ONE, MILLI};
+use crate::gov::{Credit, Role, NOBODY};
 use crate::orders::{Good, Order, Side};
 use crate::params::Ruleset;
 use crate::rng::tie_key;
-use crate::state::{CivId, WorldState};
+use crate::state::{CivId, Delivery, QueueItem, WorldState};
 use crate::tech::Tech;
-use crate::tick::{accepted, TickInput};
+use crate::tick::accepted;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -221,28 +226,35 @@ fn pool_index(good: Good) -> Option<usize> {
 }
 
 /// Phase 2: clear both AMM pools and settle (§11.2).
-pub fn apply_amm(state: &mut WorldState, rules: &Ruleset, input: &TickInput) {
-    let mut per_pool: [Vec<(CivId, AmmOrder)>; 2] = [Vec::new(), Vec::new()];
-    for (civ, _, orders) in accepted(state, rules, input) {
-        let c = &state.civs[civ as usize];
-        if !c.techs.has(Tech::Currency) {
-            continue;
-        }
-        for order in orders {
+pub fn apply_amm(state: &mut WorldState, rules: &Ruleset) {
+    let mut per_pool: [Vec<(CivId, AmmOrder, Credit)>; 2] = [Vec::new(), Vec::new()];
+    for a in accepted(state) {
+        let civ = a.civ;
+        for (order, credit, origin) in a.iter() {
             let Order::MarketTrade {
                 good,
                 side,
                 amount,
                 limit_gold,
-            } = order
+            } = *order
             else {
                 continue;
             };
-            let Some(pi) = pool_index(good) else { continue };
-            let stock = if pi == 0 { c.iron } else { c.horses };
-            if side == Side::Sell && stock < amount as i64 * MILLI {
-                continue; // sellers must own the goods
+            let c = &state.civs[civ as usize];
+            let why = if !c.techs.has(Tech::Currency) {
+                Some(Blocked::NeedsTech(Tech::Currency))
+            } else if pool_index(good).is_none() {
+                Some(Blocked::NothingToSell)
+            } else {
+                let pi = pool_index(good).unwrap_or(0);
+                let stock = if pi == 0 { c.iron } else { c.horses };
+                (side == Side::Sell && stock < amount as i64 * MILLI).then_some(Blocked::NothingToSell) // sellers must own the goods
+            };
+            if let Some(why) = why {
+                state.skip(civ, origin, why.code());
+                continue;
             }
+            let pi = pool_index(good).unwrap_or(0);
             per_pool[pi].push((
                 civ,
                 AmmOrder {
@@ -251,6 +263,7 @@ pub fn apply_amm(state: &mut WorldState, rules: &Ruleset, input: &TickInput) {
                     limit_gold,
                     budget_milli: c.gold,
                 },
+                credit,
             ));
         }
     }
@@ -259,20 +272,25 @@ pub fn apply_amm(state: &mut WorldState, rules: &Ruleset, input: &TickInput) {
         if list.is_empty() {
             continue;
         }
-        let orders: Vec<AmmOrder> = list.iter().map(|(_, o)| *o).collect();
+        let orders: Vec<AmmOrder> = list.iter().map(|(_, o, _)| *o).collect();
         let pool = state.pools[pi];
         let result = clear_amm(rules, pool.goods, pool.gold, &orders);
+        let market = state.civs.len();
         for (i, fill) in result.fills.iter().enumerate() {
-            let Some((dgold, dgoods)) = fill else {
+            let Some((dgold, dgoods)) = *fill else {
                 continue;
             };
-            let c = &mut state.civs[list[i].0 as usize];
+            let civ = list[i].0;
+            let c = &mut state.civs[civ as usize];
             c.gold += dgold;
             if pi == 0 {
                 c.iron += dgoods * MILLI;
             } else {
                 c.horses += dgoods * MILLI;
             }
+            // Gold market trades count as trade volume (V5 §6.2).
+            let value = (dgold.unsigned_abs()) / MILLI as u64;
+            crate::diplomacy::record_trade(state, rules, civ, market, value, list[i].2);
         }
         state.pools[pi].goods += result.pool_goods_delta;
         state.pools[pi].gold += result.pool_gold_delta;
@@ -430,40 +448,119 @@ fn fee_of(rules: &Ruleset, notional: u64) -> u64 {
     notional * rules.exchange_fee_bps as u64 / BPS_ONE as u64
 }
 
-/// Phase 2: run one call auction per good and settle in USDC (§11.3).
-/// Submission already rejects Exchange orders from tick 120 on.
-pub fn apply_exchange(state: &mut WorldState, rules: &Ruleset, input: &TickInput) {
-    let cap_total = rules.entry_fee_usdc * rules.exchange_spend_cap_bps as u64 / BPS_ONE as u64;
+/// A city whose current item is a Star Gate stage: bought production may
+/// not reach it (v0.2 C8, V5 §7.5).
+fn building_star_gate(state: &WorldState, city: u32) -> bool {
+    state
+        .cities
+        .get(city as usize)
+        .and_then(|c| c.queue.first())
+        .is_some_and(|q| matches!(q, QueueItem::Building(b) if b.is_star_gate()))
+}
+
+/// Where bought goods may be delivered to `civ` now.
+fn deliverable(state: &WorldState, civ: CivId, good: Good) -> bool {
+    match good {
+        Good::Food(c) | Good::Production(c) => {
+            let own = state.cities.get(c as usize).is_some_and(|x| x.alive && x.owner == Some(civ));
+            own && !(matches!(good, Good::Production(_)) && building_star_gate(state, c))
+        }
+        _ => true,
+    }
+}
+
+/// Price per unit a buyer pays at its limit: price + fee + tariff (V5 §7.5).
+fn unit_cost(rules: &Ruleset, price: u64, tariff_bps: u32) -> u64 {
+    price + fee_of(rules, price) + price * tariff_bps as u64 / BPS_ONE as u64
+}
+
+/// Most the diplomat may spend from the treasury this tick: the threshold,
+/// or more with another officer's `ConsentSpend` (V5 §7.5).
+fn spend_limit(state: &WorldState, rules: &Ruleset, civ: CivId) -> u64 {
+    let diplomat = state.nations.get(civ as usize).map_or(NOBODY, |n| n.holder(Role::Diplomat));
+    let consent = state
+        .tick_orders
+        .iter()
+        .filter(|a| a.civ == civ)
+        .flat_map(|a| a.iter())
+        .filter(|(_, credit, origin)| origin.0 != Role::Diplomat as u8 && (credit.officer != diplomat || diplomat == NOBODY))
+        .filter_map(|(o, _, _)| match o {
+            Order::ConsentSpend { usdc } => Some(*usdc),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0);
+    rules.spend_consent_usdc.max(consent)
+}
+
+/// Phase 2 (start): hand over goods bought `delivery_ticks` ago (V5 §7.5).
+/// Food and production go to the named city if it is still the buyer's and
+/// (for production) not building a Star Gate stage, else to the capital
+/// under the same rule, else they are lost.
+pub fn deliver(state: &mut WorldState) {
+    let tick = state.tick;
+    let due: Vec<Delivery> = state.deliveries.iter().copied().filter(|d| d.due <= tick).collect();
+    state.deliveries.retain(|d| d.due > tick);
+    for d in due {
+        let q = d.qty as i64 * MILLI;
+        let civ = d.civ as usize;
+        match d.good {
+            Good::Gold => state.civs[civ].gold += q,
+            Good::Iron => state.civs[civ].iron += q,
+            Good::Horses => state.civs[civ].horses += q,
+            Good::Food(city) | Good::Production(city) => {
+                let is_food = matches!(d.good, Good::Food(_));
+                let capital = state.civs[civ].capital;
+                let target = [Some(city), capital].into_iter().flatten().find(|c| {
+                    let g = if is_food { Good::Food(*c) } else { Good::Production(*c) };
+                    deliverable(state, d.civ, g)
+                });
+                if let Some(c) = target {
+                    if is_food {
+                        state.cities[c as usize].food += q;
+                    } else {
+                        state.cities[c as usize].prod += q;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Phase 2: run one call auction per good between treasuries and settle in
+/// USDC (V5 §7.5). Submission rejects market orders from tick 120 on and in
+/// seasons without a market.
+pub fn apply_exchange(state: &mut WorldState, rules: &Ruleset) {
+    let n = state.civs.len();
+    let tariff: Vec<u32> = state.civs.iter().map(|c| rules.tariff_bps(c.market_spent)).collect();
+    let limit: Vec<u64> = (0..n as CivId).map(|c| spend_limit(state, rules, c).min(state.civs[c as usize].usdc)).collect();
+    let mut reserved = vec![0u64; n];
     let mut orders: Vec<(bool, ExOrder)> = Vec::new(); // (is_buy, order)
     let mut serial = 0u64;
-    for (civ, _, list) in accepted(state, rules, input) {
-        for order in list {
+    for a in accepted(state) {
+        let civ = a.civ;
+        for (order, _, origin) in a.iter() {
             let Order::ExchangeOrder {
                 good,
                 side,
                 amount,
                 price,
-            } = order
+            } = *order
             else {
                 continue;
             };
             serial += 1;
             if amount == 0 || price == 0 {
+                state.skip(civ, origin, Blocked::NothingToSell.code());
                 continue;
             }
             let key = tie_key(&state.tick_seed, ((civ as u64) << 32) | serial);
             let kind = GoodKind::of(good);
             let qty = match side {
                 Side::Buy => {
-                    // Delivery city must be the buyer's own.
-                    if let Good::Food(c) | Good::Production(c) = good {
-                        if !state
-                            .cities
-                            .get(c as usize)
-                            .is_some_and(|x| x.alive && x.owner == Some(civ))
-                        {
-                            continue;
-                        }
+                    if !deliverable(state, civ, good) {
+                        state.skip(civ, origin, Blocked::CannotBuyStarGate.code());
+                        continue;
                     }
                     let already: u32 = orders
                         .iter()
@@ -471,12 +568,21 @@ pub fn apply_exchange(state: &mut WorldState, rules: &Ruleset, input: &TickInput
                         .map(|(_, o)| o.bid.qty)
                         .sum();
                     let cap = buy_cap(state, civ, kind).saturating_sub(already);
-                    // Affordable at the limit price, within balance and the season cap.
-                    let c = &state.civs[civ as usize];
-                    let room = c.usdc.min(cap_total.saturating_sub(c.exchange_spent));
-                    let unit = price + fee_of(rules, price);
+                    // Affordable at the limit price, within the treasury and the tick's spend limit.
+                    let unit = unit_cost(rules, price, tariff[civ as usize]);
+                    let room = limit[civ as usize].saturating_sub(reserved[civ as usize]);
                     let affordable = (room / unit.max(1)).min(u32::MAX as u64) as u32;
-                    amount.min(cap).min(affordable)
+                    let q = amount.min(cap).min(affordable);
+                    if q == 0 {
+                        let why = if limit[civ as usize] < state.civs[civ as usize].usdc {
+                            Blocked::NeedsSpendConsent
+                        } else {
+                            Blocked::NotEnoughUsdc
+                        };
+                        state.skip(civ, origin, why.code());
+                    }
+                    reserved[civ as usize] += q as u64 * unit;
+                    q
                 }
                 Side::Sell => {
                     let already: u32 = orders
@@ -484,7 +590,11 @@ pub fn apply_exchange(state: &mut WorldState, rules: &Ruleset, input: &TickInput
                         .filter(|(b, o)| !*b && o.civ == civ && o.good == good)
                         .map(|(_, o)| o.bid.qty)
                         .sum();
-                    amount.min(sellable(state, civ, good).saturating_sub(already))
+                    let q = amount.min(sellable(state, civ, good).saturating_sub(already));
+                    if q == 0 {
+                        state.skip(civ, origin, Blocked::NothingToSell.code());
+                    }
+                    q
                 }
             };
             if qty > 0 {
@@ -520,7 +630,9 @@ pub fn apply_exchange(state: &mut WorldState, rules: &Ruleset, input: &TickInput
             continue;
         };
 
-        // Pair fills in order (buyers and sellers each sorted as the auction filled them).
+        // Pair fills: buyers by priority take from sellers by priority,
+        // skipping themselves and enemies; what cannot be paired stays
+        // unfilled at the same price (v0.2 C8).
         let mut sell_queue: Vec<(usize, u32)> = sfill
             .iter()
             .enumerate()
@@ -535,17 +647,19 @@ pub fn apply_exchange(state: &mut WorldState, rules: &Ruleset, input: &TickInput
             .map(|(i, q)| (i, *q))
             .collect();
         buy_queue.sort_by_key(|(i, _)| (core::cmp::Reverse(bb[*i].price), bb[*i].key));
-        let mut si = 0;
         for (bi, mut bq) in buy_queue {
-            while bq > 0 && si < sell_queue.len() {
-                let (s_idx, ref mut sq) = sell_queue[si];
+            for (s_idx, sq) in sell_queue.iter_mut() {
+                if bq == 0 {
+                    break;
+                }
+                let (b, sl) = (buys[bi], sells[*s_idx]);
+                if *sq == 0 || b.civ == sl.civ || state.at_war(b.civ, sl.civ) {
+                    continue;
+                }
                 let q = bq.min(*sq);
-                settle(state, rules, buys[bi], sells[s_idx], q, price);
+                settle(state, rules, b, sl, q, price, tariff[b.civ as usize]);
                 bq -= q;
                 *sq -= q;
-                if *sq == 0 {
-                    si += 1;
-                }
             }
         }
     }
@@ -558,45 +672,34 @@ fn settle(
     sell: &ExOrder,
     qty: u32,
     price: u64,
+    tariff_bps: u32,
 ) {
     let notional = qty as u64 * price;
     let fee = fee_of(rules, notional);
-    let vault = fee * rules.vault_share_bps as u64 / BPS_ONE as u64;
-    // USDC
+    let tariff = notional * tariff_bps as u64 / BPS_ONE as u64;
+    let income = fee + tariff;
+    // Income from play is split like entry fees: 80% prize pool, 20% operations (V5 D11).
+    let pool = income * rules.vault_share_bps as u64 / BPS_ONE as u64;
     {
         let b = &mut state.civs[buy.civ as usize];
-        b.usdc -= notional + fee;
-        b.exchange_spent += notional + fee;
+        b.usdc -= notional + income;
+        b.market_spent += notional + income;
         b.exchange_bought[GoodKind::of(buy.good) as usize] += qty;
     }
     state.civs[sell.civ as usize].usdc += notional;
-    state.exchange_vault += vault;
-    state.exchange_ops += fee - vault;
-    // Goods
+    state.exchange_vault += pool;
+    state.exchange_ops += income - pool;
+    // The seller's goods leave now; the buyer's arrive after the delivery delay.
     let q = qty as i64 * MILLI;
-    match (sell.good, buy.good) {
-        (Good::Gold, _) => {
-            state.civs[sell.civ as usize].gold -= q;
-            state.civs[buy.civ as usize].gold += q;
-        }
-        (Good::Iron, _) => {
-            state.civs[sell.civ as usize].iron -= q;
-            state.civs[buy.civ as usize].iron += q;
-        }
-        (Good::Horses, _) => {
-            state.civs[sell.civ as usize].horses -= q;
-            state.civs[buy.civ as usize].horses += q;
-        }
-        (Good::Food(from), Good::Food(to)) => {
-            state.cities[from as usize].food -= q;
-            state.cities[to as usize].food += q;
-        }
-        (Good::Production(from), Good::Production(to)) => {
-            state.cities[from as usize].prod -= q;
-            state.cities[to as usize].prod += q;
-        }
-        _ => {}
+    match sell.good {
+        Good::Gold => state.civs[sell.civ as usize].gold -= q,
+        Good::Iron => state.civs[sell.civ as usize].iron -= q,
+        Good::Horses => state.civs[sell.civ as usize].horses -= q,
+        Good::Food(from) => state.cities[from as usize].food -= q,
+        Good::Production(from) => state.cities[from as usize].prod -= q,
     }
+    let due = state.tick + rules.delivery_ticks;
+    state.deliveries.push(Delivery { civ: buy.civ, good: buy.good, qty, due });
     let mut payload = [0u8; 12];
     payload[..2].copy_from_slice(&buy.civ.to_le_bytes());
     payload[2..4].copy_from_slice(&sell.civ.to_le_bytes());

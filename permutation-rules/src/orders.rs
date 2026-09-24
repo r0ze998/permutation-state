@@ -6,9 +6,11 @@
 //! without refund (§4.1).
 
 use crate::buildings::Building;
+use crate::gov::{Credit, MemberId, Role, NOBODY};
 use crate::hex::Hex;
 use crate::params::Ruleset;
 use crate::state::{CityId, CivId, Focus, QueueItem, UnitId, WorldState};
+use crate::units::UnitType;
 use crate::tech::Tech;
 use crate::RulesError;
 use alloc::vec::Vec;
@@ -131,6 +133,16 @@ pub enum Order {
         salt: [u8; 16],
         text: Vec<u8>,
     },
+    /// The general or steward agrees to this tick's `DeclareWar` or
+    /// `BreakNap` against `civ` (V5 §5.6). Free.
+    ConsentWar {
+        civ: CivId,
+    },
+    /// Another officer allows the diplomat to spend up to `usdc` from the
+    /// treasury this tick, above `spend_consent_usdc` (V5 §7.5). Free.
+    ConsentSpend {
+        usdc: u64,
+    },
 }
 
 /// What a `SetStanding` order applies to.
@@ -159,9 +171,17 @@ impl Order {
     /// Budget cost (§4.2).
     pub const fn cost(&self) -> u32 {
         match self {
-            Order::ExchangeOrder { .. } | Order::RevealRationale { .. } => 0,
+            Order::ExchangeOrder { .. }
+            | Order::RevealRationale { .. }
+            | Order::ConsentWar { .. }
+            | Order::ConsentSpend { .. } => 0,
             _ => 1,
         }
+    }
+
+    /// Whether the order does something (anything but a reveal, v0.2 C9).
+    pub const fn is_action(&self) -> bool {
+        !matches!(self, Order::RevealRationale { .. })
     }
 
     /// The unit this order commands, for the one-manual-order-per-unit rule.
@@ -176,29 +196,169 @@ impl Order {
     }
 }
 
-/// One civilization's orders for one tick (§4.3).
+/// One office's orders for one tick (§4.3, V5 §5.1).
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct OrderBatch {
     pub civ: CivId,
     pub tick: u16,
-    /// `sha256(tick ‖ obs_root ‖ policy_id ‖ rationale_hash)`, stored, never interpreted.
+    pub role: Role,
+    /// The office holder who issued it, or `NOBODY` for the acting official
+    /// of a vacant office. The chain program sets it from the signer.
+    pub member: MemberId,
+    /// `sha256(tick ‖ obs_root ‖ policy_id ‖ rationale_hash)`, stored, never
+    /// interpreted. Required (non-zero) from a member (V5 D17).
     pub decision_digest: [u8; 32],
     pub orders: Vec<Order>,
+    /// Proposals adopted (V5 §5.4): their orders run after `orders`, with
+    /// the merit shared with the proposer.
+    pub adopt: Vec<u32>,
+}
+
+/// One civ's accepted orders for the current tick, all offices merged in
+/// `Role::ALL` order (phase 0).
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct CivOrders {
+    pub civ: CivId,
+    pub orders: Vec<Order>,
+    /// Merit credit of each order.
+    pub credits: Vec<Credit>,
+    /// Office and position within that office's batch of each order (for `Skip`).
+    pub origin: Vec<(u8, u16)>,
+    /// Budget spent per office.
+    pub spent: [u16; 4],
+}
+
+impl CivOrders {
+    /// `(order, credit, origin)` triples.
+    pub fn iter(&self) -> impl Iterator<Item = (&Order, Credit, (u8, u16))> {
+        self.orders.iter().zip(self.credits.iter().copied()).zip(self.origin.iter().copied()).map(|((o, c), g)| (o, c, g))
+    }
+}
+
+/// The office an order belongs to (V5 §5.1). Unit orders depend on the
+/// unit: settlers belong to the steward, armies and scouts to the general.
+/// `ConsentWar` belongs to the general and the steward, `ConsentSpend` to
+/// any office but the diplomat, reveals to every office.
+pub fn role_allows(state: &WorldState, role: Role, order: &Order) -> bool {
+    let settler = |u: &UnitId| state.units.get(*u as usize).is_some_and(|x| x.unit_type == UnitType::Settler);
+    match order {
+        Order::MoveUnit { unit, .. } | Order::SetStanding { target: StandingTarget::Unit(unit), .. } => {
+            role == if settler(unit) { Role::Steward } else { Role::General }
+        }
+        _ => role_allows_static(role, order),
+    }
+}
+
+/// Split one civ's mixed orders by office (V5 §5.1), keeping their order.
+/// Reveals go to the general. For an agent that runs several offices (or
+/// the acting official of a bot nation).
+pub fn split_by_office(state: &WorldState, orders: Vec<Order>) -> [Vec<Order>; 4] {
+    let mut out: [Vec<Order>; 4] = Default::default();
+    for o in orders {
+        let role = Role::ALL.into_iter().find(|r| role_allows(state, *r, &o)).unwrap_or(Role::General);
+        out[role.index()].push(o);
+    }
+    out
+}
+
+/// One batch per office for `civ`, from mixed orders, issued by the
+/// current office holders (the acting official for vacant offices). Every
+/// `DeclareWar`/`BreakNap` gets a `ConsentWar` in the general's batch, as
+/// when one agent runs the offices involved. Offices with no orders are
+/// omitted.
+pub fn office_batches(state: &WorldState, civ: CivId, digest: [u8; 32], orders: Vec<Order>) -> Vec<OrderBatch> {
+    let mut parts = split_by_office(state, orders);
+    let wars: Vec<CivId> = parts[Role::Diplomat.index()]
+        .iter()
+        .filter_map(|o| match o {
+            Order::DeclareWar { civ } | Order::BreakNap { civ } => Some(*civ),
+            _ => None,
+        })
+        .collect();
+    parts[Role::General.index()].extend(wars.into_iter().map(|civ| Order::ConsentWar { civ }));
+    let holders = state.nations.get(civ as usize).map_or([NOBODY; 4], |n| n.offices);
+    Role::ALL
+        .into_iter()
+        .zip(parts)
+        .filter(|(_, o)| !o.is_empty())
+        .map(|(role, orders)| OrderBatch {
+            civ,
+            tick: state.tick,
+            role,
+            member: holders[role.index()],
+            decision_digest: digest,
+            orders,
+            adopt: Vec::new(),
+        })
+        .collect()
+}
+
+/// `role_allows` without the world: unit orders are accepted from the
+/// general or the steward (the engine decides by unit type). Used by the
+/// chain program at submission.
+pub fn role_allows_static(role: Role, order: &Order) -> bool {
+    use Role::*;
+    match order {
+        Order::MoveUnit { .. } | Order::SetStanding { target: StandingTarget::Unit(_), .. } => matches!(role, General | Steward),
+        Order::Attack { .. } | Order::Raze { .. } => role == General,
+        Order::FoundCity { .. }
+        | Order::SetQueue { .. }
+        | Order::SetFocus { .. }
+        | Order::Purchase { .. }
+        | Order::SetStanding { target: StandingTarget::City(_), .. } => role == Steward,
+        Order::SetResearch { .. } => role == Science,
+        Order::DeclareWar { .. }
+        | Order::ProposePeace { .. }
+        | Order::AcceptPeace { .. }
+        | Order::ProposeNap { .. }
+        | Order::AcceptNap { .. }
+        | Order::BreakNap { .. }
+        | Order::ProposeAlliance { .. }
+        | Order::AcceptAlliance { .. }
+        | Order::LeaveAlliance
+        | Order::SendEnvoy { .. }
+        | Order::Transfer { .. }
+        | Order::MarketTrade { .. }
+        | Order::ExchangeOrder { .. } => role == Diplomat,
+        Order::ConsentWar { .. } => matches!(role, General | Steward),
+        Order::ConsentSpend { .. } => role != Diplomat,
+        Order::RevealRationale { .. } => true,
+    }
 }
 
 pub const MAX_QUEUE: usize = 3;
 pub const MAX_RESEARCH_QUEUE: usize = 3;
 
-/// Spendable orders this tick: `budget + bank` (§4.1). The budget was fixed
-/// when the previous tick committed (cities counted at the start of this tick).
-pub fn spendable(state: &WorldState, civ: CivId) -> u32 {
-    state
-        .civs
-        .get(civ as usize)
-        .map_or(0, |c| c.tick_budget as u32 + c.order_bank as u32)
+/// Spendable orders of one office this tick: its share of the nation
+/// budget plus its bank (§4.1, V5 §5.2). The budget was fixed when the
+/// previous tick committed (cities counted at the start of this tick).
+pub fn spendable(state: &WorldState, rules: &Ruleset, civ: CivId, role: Role) -> u32 {
+    match (state.civs.get(civ as usize), state.nations.get(civ as usize)) {
+        (Some(c), Some(n)) => rules.role_budget(c.tick_budget, role.index()) as u32 + n.role_bank[role.index()] as u32,
+        _ => 0,
+    }
 }
 
-/// Submit-time validation, run by `submit_orders` on chain.
+/// The orders a batch runs: its own, then those of the proposals it adopts.
+/// Fails if an adopted proposal does not exist for this civ and office.
+pub fn batch_orders(state: &WorldState, batch: &OrderBatch) -> Result<Vec<(Order, Credit)>, RulesError> {
+    let own = Credit::officer(batch.member);
+    let mut out: Vec<(Order, Credit)> = batch.orders.iter().map(|o| (o.clone(), own)).collect();
+    let nation = state.nations.get(batch.civ as usize).ok_or(RulesError::UnknownCiv(batch.civ))?;
+    for (i, id) in batch.adopt.iter().enumerate() {
+        if batch.adopt[..i].contains(id) {
+            return Err(RulesError::UnknownProposal(*id));
+        }
+        let p = nation.proposal(*id).filter(|p| p.role == batch.role && !p.adopted).ok_or(RulesError::UnknownProposal(*id))?;
+        let credit = Credit { officer: batch.member, proposer: p.proposer };
+        out.extend(p.orders.iter().map(|o| (o.clone(), credit)));
+    }
+    Ok(out)
+}
+
+/// Validation of one office's batch against the world (the engine runs it
+/// in phase 0; the chain program runs the parts it can without the world at
+/// submission). Returns the cost.
 pub fn validate_batch(
     state: &WorldState,
     rules: &Ruleset,
@@ -213,11 +373,19 @@ pub fn validate_batch(
             got: batch.tick,
         });
     }
-    if batch.civ as usize >= state.civs.len() {
-        return Err(RulesError::UnknownCiv(batch.civ));
+    let nation = state.nations.get(batch.civ as usize).ok_or(RulesError::UnknownCiv(batch.civ))?;
+    if nation.holder(batch.role) != batch.member {
+        return Err(RulesError::NotOfficer);
     }
-    let cost = check_structure(rules, state.tick, &batch.orders)?;
-    let spendable = spendable(state, batch.civ);
+    if batch.member != NOBODY && batch.decision_digest == [0; 32] {
+        return Err(RulesError::MissingRationale);
+    }
+    let orders: Vec<Order> = batch_orders(state, batch)?.into_iter().map(|(o, _)| o).collect();
+    if let Some(i) = orders.iter().position(|o| !role_allows_static(batch.role, o)) {
+        return Err(RulesError::WrongOffice(i as u16));
+    }
+    let cost = check_structure(rules, state.tick, &orders)?;
+    let spendable = spendable(state, rules, batch.civ, batch.role);
     if cost > spendable {
         return Err(RulesError::OverBudget { cost, spendable });
     }
@@ -236,7 +404,9 @@ pub fn check_structure(rules: &Ruleset, open_tick: u16, orders: &[Order]) -> Res
             Order::Transfer { .. } if open_tick >= rules.transfer_freeze_tick => {
                 return Err(RulesError::Frozen)
             }
-            Order::ExchangeOrder { .. } if open_tick >= rules.exchange_freeze_tick => {
+            Order::ExchangeOrder { .. } | Order::ConsentSpend { .. }
+                if open_tick >= rules.exchange_freeze_tick || !rules.market_enabled =>
+            {
                 return Err(RulesError::Frozen)
             }
             Order::SetQueue { items, .. } if items.len() > MAX_QUEUE => {

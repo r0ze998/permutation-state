@@ -4,7 +4,7 @@
 export const CIV_COLORS = ['#c1504a', '#2f8f84', '#c28f2c', '#7a5fb0', '#3f78c2', '#b5527f'];
 // Border dash pattern per civ, so ownership never relies on colour alone.
 export const CIV_DASH = [[], [7, 3], [2, 3], [9, 3, 2, 3], [4, 4], [1, 2.5]];
-export const CIV_NAMES = { Aster: 'アステル', Borealis: 'ボレアリス', Cinder: 'シンダー', Dunmar: 'ダンマール', Ember: 'エンバー', Fjordhal: 'フィヨルダル' };
+export const CIV_NAMES = { Aster: 'アステル', Borealis: 'ボレアリス', Cinder: 'シンダー', Dunmar: 'ダンマール', Ember: 'エンバー', Fjordal: 'フィヨルダル', Fjordhal: 'フィヨルダル' };
 export const PERSONA = { Human: 'あなた', Warlord: '覇者型', Builder: '建設型', Diplomat: '外交型', Scholar: '学究型' };
 
 export const TERRAIN = { Grassland: '草原', Plains: '平原', Forest: '森', Hills: '丘陵', Mountain: '山岳', Water: '水域' };
@@ -72,6 +72,11 @@ export function blockedText(b) {
       TargetNotHostile: '戦争中の相手ではありません。先に宣戦が必要です', TargetGone: '目標がもういません',
       Frozen: '終盤のため取引は凍結中です', NothingToSell: '売れる在庫がありません',
       WrongStandingTarget: 'この対象には使えない継続命令です',
+      BatchRejected: 'この役職の命令全体が受け付けられませんでした（枠・役職・献策の採用を確認）', WrongOffice: '担当外の役職の命令です',
+      NeedsConsent: '宣戦には将軍か内政官（外交官とは別の人）の同意が必要です', AlreadyPurchased: '購入は1都市1ティックに1回までです',
+      CannotBuyStarGate: 'スターゲートはお金で買えません', NothingQueued: '生産予定がありません', NotEnoughInfluence: '影響力が足りません',
+      NoCounterparty: '自国・交戦中の国とは取引できません', NeedsSpendConsent: '一定額を超える支出には別の役職者の同意が必要です',
+      NotEnoughUsdc: '国庫のUSDCが足りません',
     })[b.code] || b.code;
   }
 }
@@ -108,9 +113,21 @@ export function chronicleText(line) {
   if ((m = text.match(/^(\w+) completes Star Gate stage (\d)$/))) return [kind, `${n(m[1])}がスターゲート第${m[2]}段階を完成`];
   if ((m = text.match(/^(\w+) becomes suzerain of city-state (\d+)$/))) return [kind, `${n(m[1])}が都市国家${m[2]}の宗主に`];
   if ((m = text.match(/^(\w+) discovers (\w+)$/))) return [kind, `${n(m[1])}が「${TECH[m[2]] || m[2]}」を発見`];
+  if ((m = text.match(/^(\w+): (.+) becomes (general|steward|science officer|diplomat) \(was (.+)\)$/))) return [kind, `${n(m[1])}：${actor(m[2])}が${ROLE_NAME[m[3]]}に${kind === 'recall' ? '（解任による交代）' : ''}（前任 ${actor(m[4])}）`];
+  if ((m = text.match(/^First election — (\w+): (.+)$/))) return [kind, `${n(m[1])}の第1回選挙：${m[2].split(', ').map(x => { const r = Object.keys(ROLE_NAME).find(k => x.startsWith(`${k} `)); return r ? `${ROLE_NAME[r]} ${actor(x.slice(r.length + 1))}` : x; }).join('・')}`];
+  if ((m = text.match(/^(\w+) adopts (\d+) proposals?$/))) return [kind, `${n(m[1])}が献策を${m[2]}件採用`];
+  if ((m = text.match(/^(\w+) reaches (\w+) (\d)$/))) return [kind, `${n(m[1])}が${PATH_NAME[m[2]]}の第${m[3]}段階に到達`];
+  if ((m = text.match(/^(\w+) loses (\w+) (\d)$/))) return [kind, `${n(m[1])}が${PATH_NAME[m[2]]}の第${m[3]}段階を失った`];
+  if ((m = text.match(/^(\w+) enters era (\d)$/))) return [kind, `${n(m[1])}が第${m[2]}時代に入った`];
   return [kind, text];
 }
-export const KIND_GLYPH = { war: '⚔', capture: '⚑', raze: '✕', peace: '☮', ally: '⚭', diplo: '✉', science: '✦', revolt: '!', found: '⌂', tech: '✧' };
+export const KIND_GLYPH = { war: '⚔', capture: '⚑', raze: '✕', peace: '☮', ally: '⚭', diplo: '✉', science: '✦', revolt: '!', found: '⌂', tech: '✧', gov: '⚖', recall: '⚠', milestone: '◆', era: '✺' };
+const ROLE_NAME = { general: '将軍', steward: '内政官', 'science officer': '科学官', diplomat: '外交官' };
+const PATH_NAME = { Hegemony: '覇権', Prosperity: '繁栄', Science: '科学', Concord: '協調' };
+const actor = s => (s === 'the acting official' || s === 'acting' ? '代行' : s);
+/** What earned merit (engine event names, V5 §7.3). */
+export const MERIT_WHAT = { office: '役職者として活動', gold: '都市が稼いだ金（内政官）', growth: '人口の成長', building: '建物の完成', found_city: '都市の建設', tech: '技術の完成',
+  star_gate: 'スターゲートの段階', capture: '都市の占領', troops: '敵部隊への損害', held: '攻撃に耐えた都市（将軍）', treaty: '条約の成立', suzerain: '都市国家の宗主', trade: '交易' };
 
 // Standing rules (§13)
 export const STANDING_GLYPH = { AutoDefend: '⛨', Retreat: '↩', Patrol: '⟳', QueueRepeat: '↻', AutoPurchase: '◆' };

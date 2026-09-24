@@ -429,17 +429,11 @@ mod tests {
     use super::*;
     use crate::genesis::{new_season, Entry};
     use crate::params::Preset;
-    use crate::state::DeclaredKind;
 
     fn world() -> (Ruleset, WorldState) {
         let rules = Ruleset::new(Preset::Blitz);
         let entries: Vec<Entry> = (0..4)
-            .map(|i| Entry {
-                name: alloc::format!("c{i}"),
-                declared_kind: DeclaredKind::Undeclared,
-                payout_wallet: [i as u8; 32],
-                exchange_deposit: 0,
-            })
+            .map(|i| Entry { name: alloc::format!("c{i}"), treasury: 0 })
             .collect();
         let s = new_season(&rules, &[11; 32], &[22; 32], &entries).unwrap();
         (rules, s)

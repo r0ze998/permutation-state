@@ -3,6 +3,7 @@
 pub mod api;
 pub mod bots;
 pub mod chainlink;
+pub mod driver;
 pub mod events;
 pub mod fog;
 pub mod ledger;

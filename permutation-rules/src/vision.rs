@@ -183,13 +183,19 @@ pub fn belief(state: &WorldState, civ: CivId, seen: &[bool], memory: &Memory) ->
         o.techs = TechSet::default();
         o.research_queue.clear();
         o.usdc = 0;
-        o.exchange_spent = 0;
+        o.market_spent = 0;
         o.exchange_bought = [0; 5];
         o.last = LastYields::default();
-        o.order_bank = 0;
         o.deficit = false;
         o.troops_lost = 0;
         o.war_weariness = 0;
+    }
+    // Other nations' order banks and proposals are theirs (V5).
+    for (i, n) in b.nations.iter_mut().enumerate() {
+        if i != civ as usize {
+            n.role_bank = [0; 4];
+            n.proposals.clear();
+        }
     }
     for c in b.cities.iter_mut().filter(|c| c.owner != Some(civ)) {
         c.queue.clear();

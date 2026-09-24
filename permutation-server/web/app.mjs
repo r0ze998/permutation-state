@@ -1,8 +1,10 @@
-// PERMUTATION STATE — playable client.
-// Flow (carried over from the /civilization/ prototype): select on the map →
-// the inspector explains it → every option shows cost, time and, when
-// blocked, the engine's own reason → add to this tick's orders. Orders are
-// drafts until committed; nothing modal interrupts a running tick.
+// PERMUTATION STATE — playable client (Game Design V5).
+// You are a member of one nation. Flow: select on the map → the inspector
+// explains it → every option shows cost, time and, when blocked, the engine's
+// own reason → add to this tick's orders. Orders of offices you hold are
+// sealed and sent; orders of other offices become proposals (献策) to their
+// officers. The nation plaza holds the government: offices, elections,
+// proposals and recalls.
 import { WorldMap, drawMinimap, key } from './map.mjs';
 import * as T from './i18n.mjs';
 import * as V from './verify.mjs';
@@ -10,15 +12,16 @@ import * as V from './verify.mjs';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const fmt = n => Number(n ?? 0).toLocaleString('ja-JP');
-// Seat token: this browser's claim on one civilization (POST /api/claim).
-// Kept per origin; storage can be unavailable, so every access is guarded.
-const SEAT_KEY = 'ps-seat-token';
+// Member token: this browser's membership of one nation (POST /api/join, or
+// /api/claim in chain mode). Kept per origin; storage can be unavailable, so
+// every access is guarded.
+const SEAT_KEY = 'ps-member-token';
 const seatStore = {
   get() { try { return localStorage.getItem(SEAT_KEY); } catch { return null; } },
   set(v) { try { if (v) localStorage.setItem(SEAT_KEY, v); else localStorage.removeItem(SEAT_KEY); } catch { /* private mode */ } },
 };
 let seatToken = null;
-const auth = () => (seatToken ? { 'X-Seat-Token': seatToken } : {});
+const auth = () => (seatToken ? { 'X-Member-Token': seatToken } : {});
 const api = {
   get: p => fetch(p, { cache: 'no-store', headers: auth() }).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }),
   post: (p, b) => fetch(p, { method: 'POST', headers: { 'Content-Type': 'application/json', ...auth() }, body: JSON.stringify(b) }).then(r => r.json()),
@@ -26,7 +29,7 @@ const api = {
 const hexDist = (a, b) => (Math.abs(a.q - b.q) + Math.abs(a.r - b.r) + Math.abs(a.q + a.r - b.q - b.r)) / 2;
 
 const S = {
-  map: null, view: null, me: 0, online: false,
+  map: null, view: null, me: 0, member: null, online: false,
   tile: null, unit: null, drawer: null, lens: 'normal',
   drafts: [], committedJson: '[]', lastTick: null, committing: false,
   unitPreview: null, cityPreview: null, research: null, diplo: {},
@@ -50,45 +53,75 @@ function toast(text, kind = '', action = null) {
 }
 
 // ================================================================== state
-/** Show the seat list until this browser holds a seat. Resolves with the token. */
+const ROLE_JA = { General: '将軍', Steward: '内政官', Science: '科学官', Diplomat: '外交官' };
+const ROLE_GLYPH = { General: '⚔', Steward: '⌂', Science: '✧', Diplomat: '✉' };
+const ROLES = ['General', 'Steward', 'Science', 'Diplomat'];
+const PATH_JA = ['覇権', '繁栄', '科学', '協調'];
+const KIND_JA = { human: '人間', agent: 'AI', undeclared: '未申告' };
+const usdc = x => (Number(x ?? 0) / 1e6).toLocaleString('ja-JP', { maximumFractionDigits: 2 });
+
+/**
+ * Registration (V5 §4): choose a nation, a name, and the offices to stand
+ * for; in chain mode, take over a member the gateway registered for you.
+ * Resolves with the member token.
+ */
 function pickSeat(info) {
   const dlg = $('#seats');
-  const kindText = { human: '人間の席', bot: 'ボット', external: '外部エージェント' };
-  const render = (info, error = '') => setHtml($('#seat-list'), info.seats.map(s => `
-    <li class="seat ${s.kind}">
-      <span class="swatch" style="background:${T.CIV_COLORS[s.civ % T.CIV_COLORS.length]}"></span>
-      <span class="who"><b>${esc(T.civName(s.name))}</b><small>${kindText[s.kind]}${s.kind === 'bot' ? `・${esc(T.PERSONA[s.persona] || s.persona)}` : ''}</small></span>
-      ${s.kind === 'human' ? (s.claimed ? '<span class="taken">使用中</span>' : `<button class="btn primary" type="button" data-claim="${s.civ}">この席で遊ぶ</button>`) : ''}
-    </li>`).join('') + (error ? `<li class="seat-error">${esc(error)}</li>` : '')
-    + (info.seats.some(s => s.kind === 'human' && !s.claimed) ? '' : `<li class="seat-none">いま空いている人間の席はありません。使われていない席は1分で空きます（この画面は自動で更新されます）。<a class="btn primary" href="spectate.html">観戦する →</a></li>`));
+  S.lobbyPick ??= { civ: null, stand: ['General', 'Steward'] };
+  const render = (info, error = '') => {
+    $('#seat-mode').textContent = info.mode === 'chain' ? 'オンチェーンのシーズン（MagicBlock ER）' : 'ローカルのシーズン（テスト用USDC）';
+    if (info.mode === 'chain') {
+      const claimable = info.members.filter(m => m.claimable);
+      setHtml($('#seat-list'), (claimable.map(m => `<li class="seat human"><span class="swatch" style="background:${T.CIV_COLORS[m.civ]}"></span><span class="who"><b>${esc(m.name)}</b><small>${esc(T.civName(info.nations[m.civ]?.name))}の国民（ゲートウェイが登録済み）</small></span><button class="btn primary" type="button" data-claim-member="${m.id}">この国民で遊ぶ</button></li>`).join('')
+        || '<li class="seat-none">いま引き継げる国民はいません。AI エージェントは x402 で参加できます（llms.txt）。<a class="btn primary" href="spectate.html">観戦する →</a></li>') + (error ? `<li class="seat-error">${esc(error)}</li>` : ''));
+      return;
+    }
+    const pick = S.lobbyPick;
+    const fee = usdc(info.entryFee);
+    setHtml($('#seat-list'), info.nations.map(n => `<li class="seat nation ${pick.civ === n.civ ? 'picked' : ''}" data-pick-civ="${n.civ}">
+        <span class="swatch" style="background:${T.CIV_COLORS[n.civ]}"></span>
+        <span class="who"><b>${esc(T.civName(n.name))}</b><small>国民 ${n.members}人${n.perMember ? ` · 今の1人あたりの見込み ${usdc(n.perMember)} USDC` : ''}</small></span>
+        <span class="meta">${pick.civ === n.civ ? '選択中 ✓' : 'えらぶ'}</span></li>`).join('')
+      + `<li class="seat-form"><label class="field">名前<input id="join-name" maxlength="24" placeholder="あなたの名前" value="${esc(S.joinName || '')}"></label>
+         <div class="field">立候補する役職（2つまで）<div class="row">${ROLES.map(r => `<button type="button" class="btn ${pick.stand.includes(r) ? 'primary' : ''}" data-pick-stand="${r}">${ROLE_GLYPH[r]} ${ROLE_JA[r]}</button>`).join('')}</div></div>
+         <p class="desc">参加費は全員同じ ${fee} USDC（80%が賞金プール、20%が運営）。国民がいない役職はAIの代行が務めます。</p>
+         <button class="btn primary wide" type="button" id="join-btn" ${pick.civ === null ? 'disabled' : ''}>${pick.civ === null ? '国を選んでください' : `${esc(T.civName(info.nations[pick.civ].name))}の国民になる`}</button></li>`
+      + (error ? `<li class="seat-error">${esc(error)}</li>` : ''));
+  };
   render(info);
-  // Seats free up when their holder leaves; keep the list current.
-  const refresh = setInterval(async () => { if (dlg.open) render(await api.get('/api/seats').catch(() => info)); }, 3000);
-  $('#seat-mode').textContent = info.mode === 'chain' ? 'オンチェーンのシーズン（MagicBlock ER）' : 'ローカルのシーズン';
+  const refresh = setInterval(async () => { if (dlg.open) { info = await api.get('/api/lobby').catch(() => info); render(info); } }, 3000);
   dlg.showModal();
   return new Promise(resolve => {
     dlg.onclick = async e => {
-      const civ = e.target.closest('[data-claim]')?.dataset.claim;
-      if (civ === undefined) return;
-      const r = await api.post('/api/claim', { civ: +civ }).catch(() => ({ ok: false, error: 'network' }));
-      if (r.ok) { clearInterval(refresh); seatStore.set(r.token); dlg.close(); resolve(r.token); return; }
-      render(await api.get('/api/seats'), r.error === 'this seat is already taken' ? 'その席は先に取られました。別の席を選んでください。' : r.error);
+      const t = e.target.closest('[data-pick-civ], [data-pick-stand], #join-btn, [data-claim-member]');
+      if (!t) return;
+      if (t.dataset.pickCiv !== undefined) { S.lobbyPick.civ = +t.dataset.pickCiv; S.joinName = $('#join-name')?.value; return render(info); }
+      if (t.dataset.pickStand) {
+        const st = S.lobbyPick.stand, r = t.dataset.pickStand;
+        S.lobbyPick.stand = st.includes(r) ? st.filter(x => x !== r) : [...st, r].slice(-2);
+        S.joinName = $('#join-name')?.value; return render(info);
+      }
+      let res;
+      if (t.dataset.claimMember !== undefined) res = await api.post('/api/claim', { member: +t.dataset.claimMember }).catch(() => ({ ok: false, error: 'network' }));
+      else res = await api.post('/api/join', { civ: S.lobbyPick.civ, name: $('#join-name').value, kind: 'human', stand: S.lobbyPick.stand }).catch(() => ({ ok: false, error: 'network' }));
+      if (res.ok) { clearInterval(refresh); seatStore.set(res.token); dlg.close(); resolve(res.token); return; }
+      render(await api.get('/api/lobby'), res.error);
     };
-    dlg.oncancel = e => e.preventDefault(); // a seat (or spectating) is required
+    dlg.oncancel = e => e.preventDefault(); // membership (or spectating) is required
   });
 }
 
-/** Who the other civilizations are, from the seat list. */
+/** Who else is in this season, from the member list. */
 function othersText(v) {
-  const n = k => (v?.seats || []).filter(x => x.kind === k).length;
-  const others = [n('human') > 1 ? `人間${n('human') - 1}人` : '', n('bot') ? `ルールで動くボット${n('bot')}体（AGENT表示）` : '', n('external') ? `外部のAIエージェント${n('external')}体` : ''].filter(Boolean).join('、');
-  return `あなた以外は${others}です。`;
+  const ms = v?.members || [];
+  const n = h => ms.filter(x => x.host === h).length;
+  return `この季節の国民は${ms.length}人（人間${n('human')}・AI${n('ai') + n('external')}）。国民のいない役職はAIの代行が務めます。`;
 }
 
 /** Help text that matches who is actually in this season. */
 function describeSeats(v) {
-  $('#help-desc').textContent = `${v.civs.length}つの文明が同じ地図を共有しています。${othersText(v)}${v.tickSeconds}秒ごとの「ティック」で、全員の命令が同時に解決されます。`;
-  if (v.chain) $('#help-mode').textContent = 'このシーズンはオンチェーンです（MagicBlock ER）。時計は止まりません。「次のティックへ」で手番を終えると、全員がそろった時点ですぐに解決されます。';
+  $('#help-desc').textContent = `${v.civs.length}つの国が同じ地図を共有しています。${othersText(v)}${v.tickSeconds}秒ごとの「ティック」で、全ての国の命令が同時に解決されます。`;
+  if (v.chain) $('#help-mode').textContent = 'このシーズンはオンチェーンです（MagicBlock ER）。時計は止まりません。「手番を終える」で担当の命令に署名して送ります。';
 }
 
 async function boot() {
@@ -96,15 +129,17 @@ async function boot() {
   if (params.has('spectate')) { location.replace('spectate.html'); return; }
   if (params.get('token')) { seatStore.set(params.get('token')); history.replaceState(null, '', location.pathname); }
   seatToken = seatStore.get();
+  // ?watch=N: read-only view through civ N's fog (for review; no seat needed).
+  if (params.has('watch')) { S.watch = +params.get('watch'); seatToken = null; }
   try {
-    const seats = await api.get('/api/seats');
-    if (seats.you === null) { seatStore.set(null); seatToken = null; seatToken = await pickSeat(seats); }
+    const lobby = await api.get('/api/lobby');
+    if (lobby.you === null && S.watch === undefined) { seatStore.set(null); seatToken = null; seatToken = await pickSeat(lobby); }
     S.map = await api.get('/api/map');
     map.setMap(S.map);
     await poll();
     describeSeats(S.view);
     $('#loading').hidden = true;
-    if (S.view.paused && S.view.tick === 0) $('#help').showModal();
+    if (S.view.phase === 'lobby' || (S.view.paused && S.view.tick === 0)) $('#help').showModal();
   } catch (e) {
     $('#loading-text').textContent = 'ゲームサーバーに接続できません。`cargo run --release --bin play` を起動してから再読み込みしてください。';
   }
@@ -114,14 +149,25 @@ async function boot() {
 
 async function poll() {
   let v;
-  try { v = await api.get('/api/state'); S.online = true; } catch { S.online = false; renderClock(); return; }
+  try { v = await api.get(`/api/state${S.watch !== undefined ? `?civ=${S.watch}` : ''}`); S.online = true; } catch { S.online = false; renderClock(); return; }
+  // The server no longer knows this browser's member token (it restarted):
+  // back to the lobby to claim or join again, instead of rendering a view
+  // that belongs to no nation.
+  if (seatToken && S.watch === undefined && v.viewer !== 'member') {
+    seatStore.set(null);
+    toast('サーバーが再起動したため、国民として入り直してください。', 'error');
+    setTimeout(() => location.reload(), 1200);
+    return;
+  }
   const newTick = S.lastTick !== null && v.tick !== S.lastTick;
   const prev = S.view;
-  S.view = v; S.me = v.me;
-  const seats = k => (v.seats || []).filter(x => x.kind === k).length;
-  $('.prototype-label').textContent = `${v.chain ? 'オンチェーン · MagicBlock ER' : 'ローカル'} · 人間${seats('human')}席 · ボット${seats('bot')}体${seats('external') ? ` · 外部エージェント${seats('external')}` : ''} · 同じ霧の中で判断 · USDCはテスト用`;
-  if (S.lastTick === null && v.committed?.length) { S.drafts = v.committed.map(describe); S.committedJson = JSON.stringify(v.committed); map.setDrafts(S.drafts); }
-  if (S.lastTick === null && v.decision?.rationale) { $('#rationale').value = v.decision.rationale; S.committedRationale = v.decision.rationale; }
+  S.view = v; S.me = v.me; S.member = v.member?.id ?? null;
+  const ms = v.members || [];
+  $('.prototype-label').textContent = `${v.chain ? 'オンチェーン · MagicBlock ER' : 'ローカル'} · 国民${ms.length}人（人間${ms.filter(m => m.host === 'human').length}） · 同じ霧の中で判断 · USDCはテスト用`;
+  if (S.lastTick === null && v.member?.committed) {
+    const orders = v.member.committed.flatMap(c => c.orders);
+    if (orders.length) { S.drafts = orders.map(describe); S.committedJson = JSON.stringify(orders); map.setDrafts(S.drafts); }
+  }
   if (newTick) onNewTick(v, prev);
   S.lastTick = v.tick;
   map.setView(v, v.me);
@@ -131,7 +177,13 @@ async function poll() {
 }
 
 function onNewTick(v, prev) {
-  S.drafts = []; S.committedJson = '[]'; map.setDrafts([]);
+  S.drafts = []; S.committedJson = '[]'; map.setDrafts([]); S.adopt = {};
+  if (!v.gov?.voteOpen) S.myVotes = {};
+  for (const k of v.skipped || []) toast(`見送られた命令：${ROLE_JA[k.role] || ''}${k.index === null ? 'の命令全体' : `の${k.index + 1}件目`}（${T.blockedText({ code: k.reason })}）`, 'error');
+  for (const line of v.lastSummary || []) {
+    const [kind, text] = T.chronicleText(line);
+    if ((kind === 'era' || kind === 'gov' || kind === 'recall') && text.includes(civN(v.me))) toast(text, kind === 'era' ? 'good' : '');
+  }
   $('#rationale').value = ''; S.committedRationale = ''; S.digest = null;
   if (S.drawer === 'decisions') loadDecisions();
   S.digest = prev ? digest(prev, v) : [];
@@ -158,8 +210,22 @@ const ownerOf = id => { const c = S.view.owners[tileIndex(id)]; return c && c !=
 // ================================================================== drafts
 const rationaleText = () => ($('#rationale')?.value || '').trim();
 function isDirty() { return JSON.stringify(S.drafts.map(d => d.dto)) !== S.committedJson || rationaleText() !== (S.committedRationale || ''); }
-function spendable() { return (S.view?.economy.budget ?? 0) + (S.view?.economy.bank ?? 0); }
-function used() { return S.drafts.reduce((a, d) => a + (d.dto.type === 'ExchangeOrder' ? 0 : 1), 0); }
+/** Offices this member holds (role names). */
+function held() { return (S.view?.gov?.offices || []).filter(o => o.holder && o.holder.id === S.member).map(o => o.role); }
+const FREE = new Set(['ExchangeOrder', 'RevealRationale', 'ConsentWar', 'ConsentSpend']);
+const costOf = dto => (FREE.has(dto.type) ? 0 : 1);
+/** The office an order belongs to (V5 §5.1); settlers are the steward's. */
+function officeOf(dto) {
+  if (dto.type === 'MoveUnit' || (dto.type === 'SetStanding' && dto.target.kind === 'Unit')) {
+    const id = dto.type === 'MoveUnit' ? dto.unit : dto.target.id;
+    return S.view?.units.find(u => u.id === id)?.type === 'Settler' ? 'Steward' : 'General';
+  }
+  return ({ Attack: 'General', Raze: 'General', FoundCity: 'Steward', SetQueue: 'Steward', SetFocus: 'Steward', Purchase: 'Steward', SetStanding: 'Steward',
+    SetResearch: 'Science', ConsentWar: 'General', ConsentSpend: 'General' })[dto.type] || 'Diplomat';
+}
+function officeInfo(role) { return (S.view?.economy.offices || []).find(o => o.role === role) || { budget: 0, bank: 0, spendable: 0 }; }
+function spendable(role) { return role ? officeInfo(role).spendable : held().reduce((a, r) => a + officeInfo(r).spendable, 0); }
+function used(role) { return S.drafts.filter(d => !role || d.office === role).reduce((a, d) => a + costOf(d.dto), 0); }
 
 /** Identity of the slot an order occupies: one order per unit, per city field, per diplomatic target. */
 function slotOf(dto) {
@@ -175,25 +241,33 @@ function slotOf(dto) {
   }
 }
 function addDraft(dto) {
+  if (S.watch !== undefined) { toast('観戦中は命令を出せません。', 'error'); return false; }
   const d = describe(dto);
   const slot = slotOf(dto);
   const others = S.drafts.filter(x => slotOf(x.dto) !== slot);
-  const cost = dto.type === 'ExchangeOrder' ? 0 : 1;
   const replacing = others.length !== S.drafts.length;
-  if (!replacing && used() + cost > spendable()) {
-    toast(`命令の枠が足りません（${used()}/${spendable()}）。先に他の命令を取り消してください。`, 'error'); return false;
+  const mine = held().includes(d.office);
+  if (mine && !replacing && used(d.office) + costOf(dto) > spendable(d.office)) {
+    toast(`${ROLE_JA[d.office]}の命令の枠が足りません（${used(d.office)}/${spendable(d.office)}）。先に他の命令を取り消してください。`, 'error'); return false;
   }
   S.drafts = [...others, d];
   renderDock(); renderTop(); map.setDrafts(S.drafts); renderNext();
-  if (!S.hintedDock) { S.hintedDock = true; toast('命令は下のドックに貯まります。「確定する」（Ctrl+Enter）で送信、締切3秒前には自動で確定します。'); }
+  if (!mine && !S.hintedPropose) { S.hintedPropose = true; toast(`${ROLE_JA[d.office]}はあなたの担当ではないので、この命令は「献策」になります。確定すると${ROLE_JA[d.office]}に提案され、採用されれば功績を半分ずつ分けます。`); }
+  else if (!S.hintedDock) { S.hintedDock = true; toast('命令は下のドックに貯まります。「確定する」（Ctrl+Enter）で封印して送信、締切3秒前には自動で確定します。'); }
   const chip = document.querySelector(`#chips [data-chip="${S.drafts.length - 1}"]`);
   if (chip) { chip.classList.add('pulse'); setTimeout(() => chip.classList.remove('pulse'), 900); }
   return true;
 }
 function removeDraft(i) { S.drafts.splice(i, 1); renderDock(); renderTop(); map.setDrafts(S.drafts); renderNext(); renderInspector(); }
 
-/** Human label, glyph and map hints for an order DTO. */
+/** Human label, glyph, office and map hints for an order DTO. */
 function describe(dto) {
+  const d = describeOrder(dto);
+  d.office = officeOf(dto);
+  d.proposal = S.view ? !held().includes(d.office) : false;
+  return d;
+}
+function describeOrder(dto) {
   const u = id => S.view?.units.find(x => x.id === id);
   const city = id => S.view?.cities.find(c => c.id === id);
   const at = x => x ? key(x.q, x.r) : null; const at_ = at;
@@ -228,25 +302,50 @@ function describe(dto) {
     case 'MarketTrade': return { dto, glyph: '⇄', label: `金の市場：${T.RESOURCE[dto.good.kind]}を${dto.amount}${dto.side === 'Buy' ? '購入' : '売却'}` };
     case 'ExchangeOrder': return { dto, glyph: '$', usdc: true, label: `USDC取引所：${goodName(dto.good)}${dto.amount}を${dto.side === 'Buy' ? '買い' : '売り'} @${(dto.price / 1e6).toFixed(2)}` };
     case 'Raze': return { dto, glyph: '✕', label: `${T.cityName(dto.city)}を破壊` };
+    case 'ConsentWar': return { dto, glyph: '⚖', label: `${civN(dto.civ)}への宣戦に同意` };
+    case 'ConsentSpend': return { dto, glyph: '⚖', label: `国庫から${usdc(dto.usdc)} USDCまでの支出に同意` };
     default: return { dto, glyph: '•', label: dto.type };
   }
 }
 const goodName = g => ({ Gold: '金', Iron: '鉄', Horses: '馬', Food: '食料', Production: '生産' })[g.kind];
 
+/**
+ * Seal and send the orders of the offices held, and turn the rest into
+ * proposals to their offices (one proposal per office, V5 §5.4).
+ */
 async function commit(auto = false) {
   if (S.committing) return;
   S.committing = true;
-  const orders = S.drafts.map(d => d.dto);
+  const mine = S.drafts.filter(d => !d.proposal), props = S.drafts.filter(d => d.proposal);
+  const orders = mine.map(d => d.dto);
   const rationale = rationaleText();
-  const res = await api.post('/api/orders', { orders, rationale }).catch(() => ({ ok: false, error: 'network' }));
+  const adopt = {};
+  for (const [role, ids] of Object.entries(S.adopt || {})) if (ids.length && held().includes(role)) adopt[role] = ids;
+  let ok = true, msg = [];
+  // Proposals first: once every office's batch is in, the tick closes and
+  // later governance actions wait for the next tick.
+  const byRole = {};
+  for (const d of props) (byRole[d.office] ||= []).push(d.dto);
+  for (const [role, list] of Object.entries(byRole)) {
+    for (let i = 0; i < list.length; i += 4) {
+      const res = await api.post('/api/gov', { action: { type: 'Propose', role, orders: list.slice(i, i + 4) } }).catch(() => ({ ok: false, error: 'network' }));
+      if (res.ok) msg.push(`${ROLE_JA[role]}に献策（${list.slice(i, i + 4).length}件）`);
+      else { ok = false; toast(`献策できませんでした：${translateError(res.error)}`, 'error'); }
+    }
+  }
+  if (held().length) {
+    const res = await api.post('/api/orders', { orders, rationale, adopt }).catch(() => ({ ok: false, error: 'network' }));
+    const nAdopt = Object.values(adopt).reduce((n, l) => n + l.length, 0);
+    if (res.ok) { S.digest = res.offices; msg.push(orders.length ? `命令${orders.length}件を封印して確定（${res.offices.map(o => ROLE_JA[o.role]).join('・')}）` : nAdopt ? '' : '担当の命令なしで確定'); if (nAdopt) msg.push(`献策${nAdopt}件の採用を確定`); msg = msg.filter(Boolean); }
+    else { ok = false; toast(`確定できませんでした：${translateError(res.error)}`, 'error'); }
+  }
   S.committing = false;
-  if (res.ok) {
-    S.committedJson = JSON.stringify(orders);
-    S.committedRationale = rationale; S.digest = res.digest;
-    if (!auto) toast(orders.length ? `命令を確定しました（${orders.length}件・枠${res.cost}）。締切まで変更できます。` : '命令なしで確定しました。未使用の枠は繰り越されます。');
-    else if (orders.length) toast('締切が近いため、下書きを自動で確定しました。');
-  } else {
-    toast(`確定できませんでした：${translateError(res.error)}`, 'error');
+  if (ok) {
+    S.committedJson = JSON.stringify(S.drafts.map(d => d.dto));
+    S.committedRationale = rationale;
+    if (props.length) { S.drafts = mine; S.committedJson = JSON.stringify(mine.map(d => d.dto)); map.setDrafts(S.drafts); }
+    if (!auto) toast(`${msg.join(' / ') || '確定しました'}。締切（全役職の確定）まで変更できます。`);
+    else if (S.drafts.length) toast('締切が近いため、下書きを自動で確定しました。');
   }
   renderDock();
 }
@@ -255,6 +354,7 @@ function translateError(e = '') {
   if ((m = e.match(/orders cost (\d+), only (\d+) spendable/))) return `命令の枠が足りません（必要${m[1]}・使える枠${m[2]}）`;
   if (e.includes('frozen')) return '終盤のため凍結中の命令が含まれています';
   if (e.includes('more than one manual order')) return '同じ部隊に2つの命令があります';
+  if (e.includes('TickFrozen') || e.includes('WrongTick')) return 'このティックは締め切られました。次のティックで出し直してください';
   if (e === 'network') return 'サーバーに届きませんでした';
   return e;
 }
@@ -316,7 +416,7 @@ async function selectUnit(id) {
   map.setOverlay({
     unit: id,
     reach: new Map(p.reach.map(([q, r, ticks]) => [key(q, r), ticks])),
-    attacks: p.attacks.map(a => ({ id: key(a.q, a.r), blocked: a.blocked })),
+    attacks: p.attacks.map(a => ({ id: key(a.q, a.r), blocked: a.blocked, forecast: a.forecast })),
     found: p.found !== null && p.found !== undefined ? { id: key(u.q, u.r), ok: !p.found } : null,
   });
   renderInspector();
@@ -358,12 +458,16 @@ async function loadMoveWhy(unit, id) {
 // ================================================================== render
 function renderAll() {
   renderTop(); renderPlate(); renderDock(); renderInspector(); renderNext(); renderSummary(); renderMinimap(); renderNavDots();
+  renderRibbon(); renderNextTurn(); renderNotifs(); renderChainBeat(); renderPool(); if (S.chainOpen) renderChainDrawer();
   if (S.drawer) renderDrawer();
 }
 
 function renderTop() {
   const v = S.view, e = v.economy, me = civ(S.me);
-  setHtml($('#civ-chip'), `<span class="swatch" style="background:${T.CIV_COLORS[S.me]}"></span><div><b>${esc(civN(S.me))}</b><div><span class="badge human">HUMAN</span></div></div>`);
+  const offices = held();
+  const badges = S.watch !== undefined ? '<span class="badge">観戦</span>'
+    : offices.length ? offices.map(r => `<span class="badge office">${ROLE_GLYPH[r]} ${ROLE_JA[r]}</span>`).join('') : '<span class="badge human">国民</span>';
+  setHtml($('#civ-chip'), `<span class="swatch" style="background:${T.CIV_COLORS[S.me]}"></span><div><b>${esc(v.member?.name ?? civN(S.me))}</b><small class="nation">${esc(civN(S.me))}</small><div>${badges}</div></div>`);
   const upkeep = e.upkeepUnits + e.upkeepCities;
   const net = e.goldIncome - upkeep;
   const draftTech = S.drafts.find(d => d.dto.type === 'SetResearch')?.dto.techs[0];
@@ -379,6 +483,8 @@ function renderTop() {
   ];
   setHtml($('#resources'), res.map(r => `<button class="res" type="button" style="--c:${r.c}" aria-label="${r.n}"><span class="glyph">${r.g}</span><span class="amount">${r.a}<span class="name">${r.n}</span></span><span class="rate ${r.neg ? 'negative' : ''}">${esc(r.rate)}</span>
     <span class="tip panel">${r.tip.map(([k, v, total]) => `<div class="tip-row ${total ? 'total' : ''}"><span>${k}</span><span>${esc(v)}</span></div>`).join('')}</span></button>`).join(''));
+  $('#pause-btn').hidden = !!v.chain;
+  $('#advance-btn').hidden = true;
   $('#pause-btn').classList.toggle('on', v.paused);
   $('#pause-btn').textContent = v.paused ? '▶' : '❚❚';
   $('#pause-btn').title = v.paused ? '時計を動かす' : '時計を止める（このPCだけの試作）';
@@ -402,43 +508,43 @@ function renderClock() {
   $('#live-dot').classList.toggle('off', !S.online);
 }
 
-function ranks() {
-  const cs = S.view.civs;
-  const order = (f) => cs.map(c => c.id).sort((a, b) => f(b) - f(a) || a - b);
-  const dom = order(id => cs[id].dominion), con = order(id => cs[id].concord);
-  const sci = cs.map(c => c.id).sort((a, b) => (cs[b].stages - cs[a].stages) || ((cs[a].stageTick ?? 1e9) - (cs[b].stageTick ?? 1e9)) || a - b); // science totals are private; the engine's tie-break is not shown
-  return { dom, sci, con };
-}
 function renderPlate() {
-  const v = S.view, me = civ(S.me), rk = ranks();
-  $('#civ-title').textContent = `${civN(S.me)}文明`;
-  setHtml($('#civ-sub'), `${me.cities}都市 · 人口${me.pop} · 兵${me.troops}${v.economy.protectionLost ? '' : ' · <span title="他の文明はあなたの保護区域に入れません">保護区域あり</span>'}`);
-  const pill = (label, order, value, extra = '') => `<button class="track-pill" type="button" data-drawer="victory"><span class="t">${label}</span><span class="v">#${order.indexOf(S.me) + 1}<small>${value}${extra}</small></span></button>`;
-  setHtml($('#tracks-mini'), pill('覇権', rk.dom, fmt(me.dominion)) + pill('科学', rk.sci, `${me.stages}/3段階`) + pill('協調', rk.con, fmt(me.concord), me.aggressor ? ' · 侵略中' : ''));
+  const v = S.view, me = civ(S.me);
+  const ach = v.achievements?.nations?.[S.me];
+  $('#civ-title').textContent = `${civN(S.me)}${ach ? ` · 第${ach.era}時代` : ''}`;
+  setHtml($('#civ-sub'), `${me.cities}都市 · 人口${me.pop ?? '?'} · 兵${me.troops ?? '?'} · 国民${(v.members || []).filter(m => m.civ === S.me).length}人${v.economy?.protectionLost ? '' : ' · <span title="他の国はあなたの保護区域に入れません">保護区域あり</span>'}`);
+  renderTracker();
 }
 
 function renderDock() {
-  if (!S.view) return;
-  const e = S.view.economy, u = used();
-  // This tick's budget as pips; the bank is a reservoir counter, not more pips.
-  let pips = '';
-  for (let i = 0; i < e.budget; i++) pips += `<span class="pip ${i < Math.min(u, e.budget) ? 'used' : ''}"></span>`;
-  const bankUsed = Math.max(0, u - e.budget);
-  const bankCap = 4 * e.budget;
-  const cities = S.view.civs[S.me].cities;
-  const bank = e.bank ? `<span class="bank-well ${bankUsed ? 'drawing' : ''}" title="繰越の枠"><i style="height:${Math.round(100 * (e.bank - bankUsed) / Math.max(1, bankCap))}%"></i><b>+${e.bank - bankUsed}</b></span>` : '';
-  setHtml($('#dock-budget'), `<div class="pips" aria-label="命令の枠">${pips}${bank}</div>
-    <div class="budget-text num">このティック ${Math.min(u, e.budget)}/${e.budget}${e.bank ? ` ・ 繰越 ${e.bank - bankUsed}/${bankCap}` : ''}</div>
-    <span class="tip panel"><div class="tip-row"><span>基本</span><span>3</span></div><div class="tip-row"><span>都市</span><span>+${cities}</span></div><div class="tip-row"><span>上限</span><span>8</span></div><div class="tip-row total"><span>このティック</span><span>${e.budget}</span></div><div class="tip-row"><span>繰越（最大4ティック分）</span><span>${e.bank}</span></div><div class="tip-row"><span>USDC取引所の注文</span><span>枠を使わない</span></div></span>`);
-  setHtml($('#chips'), S.drafts.length ? S.drafts.map((d, i) => `<span class="chip ${d.usdc ? 'usdc' : ''}" data-chip="${i}" title="${esc(d.label)}"><span>${d.glyph}</span><span class="t">${esc(d.label)}</span><button class="x" type="button" data-remove="${i}" aria-label="取り消す">×</button></span>`).join('')
-    : `<span class="empty">命令はまだありません。地図で部隊や都市を選んでください（Space＝次の判断）。</span>`);
-  const dirty = isDirty(), v = S.view;
+  if (!S.view || !S.view.economy) return;
+  const v = S.view, offices = held();
+  // Pips per office held; the bank is a reservoir counter, not more pips.
+  const pipsOf = role => {
+    const o = officeInfo(role), u = used(role);
+    let pips = '';
+    for (let i = 0; i < o.budget; i++) pips += `<span class="pip ${i < Math.min(u, o.budget) ? 'used' : ''}"></span>`;
+    const bankUsed = Math.max(0, u - o.budget);
+    const bank = o.bank ? `<span class="bank-well ${bankUsed ? 'drawing' : ''}" title="繰越の枠"><i style="height:${Math.round(100 * (o.bank - bankUsed) / Math.max(1, 4 * o.budget))}%"></i><b>+${o.bank - bankUsed}</b></span>` : '';
+    return `<span class="office-pips" title="${ROLE_JA[role]}：このティック ${o.budget}・繰越 ${o.bank}"><span class="og">${ROLE_GLYPH[role]}</span>${pips || '<span class="meta">枠0</span>'}${bank}</span>`;
+  };
+  const props = S.drafts.filter(d => d.proposal).length;
+  setHtml($('#dock-budget'), offices.length
+    ? `<div class="pips" aria-label="命令の枠">${offices.map(pipsOf).join('')}</div><div class="budget-text num">${offices.map(r => `${ROLE_JA[r]} ${used(r)}/${spendable(r)}`).join(' · ')}${props ? ` · 献策 ${props}件` : ''}</div>
+      <span class="tip panel"><div class="tip-row"><span>国の枠</span><span>3＋都市数（最大8）</span></div><div class="tip-row"><span>役職ごとの割り当て</span><span>将軍・内政官・科学官・外交官</span></div><div class="tip-row"><span>繰越</span><span>役職ごとに最大4ティック分</span></div><div class="tip-row"><span>取引所・同意</span><span>枠を使わない</span></div></span>`
+    : `<div class="budget-text">役職がないので、命令はすべて<b>献策</b>になります${props ? `（${props}件）` : ''}</div>`);
+  setHtml($('#chips'), S.drafts.length ? S.drafts.map((d, i) => `<span class="chip ${d.usdc ? 'usdc' : ''} ${d.proposal ? 'proposal' : ''}" data-chip="${i}" title="${esc(d.label)}${d.proposal ? `（${ROLE_JA[d.office]}への献策）` : ''}"><span>${d.proposal ? '✎' : d.glyph}</span><span class="t">${esc(d.label)}</span>${d.proposal ? `<span class="pt">献策→${ROLE_JA[d.office]}</span>` : ''}<button class="x" type="button" data-remove="${i}" aria-label="取り消す">×</button></span>`).join('')
+    : `<span class="empty">${offices.length ? '命令はまだありません。地図で部隊や都市を選んでください（Space＝次の判断）。担当外の命令は献策になります。' : 'あなたは役職についていません。地図で選んだ命令は、担当の役職者への献策になります。国の広場で投票・支持・リコールもできます。'}</span>`);
+  const dirty = isDirty();
   const resolving = !v.paused && v.secondsLeft < .6;
-  const state = resolving ? ['resolving', '解決中'] : dirty ? ['draft', `下書き · 未確定`] : S.drafts.length ? ['committed', '確定済み ✓'] : ['committed', v.resolvedTick !== null ? `ティック${v.resolvedTick}は解決済み` : '命令なし'];
-  const dg = v.decision?.digest;
-  setHtml($('#digest'), dg && !dirty ? `約束 <b>${dg.slice(0, 8)}…${dg.slice(-4)}</b>` : dirty ? '確定で約束' : '');
-  $('#digest').title = dg ? `decision_digest ${dg}\nobs_root ${v.decision.obsRoot}` : '';
-  setHtml($('#commit'), `<span class="commit-state ${state[0]}">${state[1]}</span><button class="btn ${dirty ? 'primary' : ''}" type="button" id="commit-btn" ${S.committing || v.over ? 'disabled' : ''}>${dirty ? '確定する' : '確定済み'}<span class="key" style="margin-left:4px">⌃↵</span></button>`);
+  // Nothing drafted and this tick's turn not ended yet: the button ends the turn (an empty sealed batch per office).
+  const idle = !dirty && offices.length && !v.member?.ready;
+  const state = v.phase === 'lobby' ? ['draft', '開幕前'] : resolving ? ['resolving', '解決中'] : dirty ? ['draft', `下書き · 未確定`] : idle ? ['draft', '命令なし · 未確定'] : S.drafts.length ? ['committed', '確定済み ✓'] : ['committed', '手番を終えました'];
+  const dg = (v.member?.committed || []).find(c => c.digest)?.digest;
+  // Commit-reveal as a sealed dispatch: sealed now, opened (and checked) after the tick.
+  setHtml($('#digest'), dg && !dirty ? `<span class="seal">🔒 封印 ${dg.slice(0, 6)}…</span>` : dirty && offices.length ? '<span class="seal">確定で封印</span>' : '');
+  $('#digest').title = dg ? `decision_digest ${dg}\nobs_root ${v.decision?.obsRoot}` : '';
+  setHtml($('#commit'), `<span class="commit-state ${state[0]}">${state[1]}</span><button class="btn ${dirty ? 'primary' : ''}" type="button" id="commit-btn" ${S.committing || v.over || v.phase === 'lobby' || S.watch !== undefined || (!dirty && !idle) ? 'disabled' : ''}>${dirty ? (offices.length ? '確定する' : '献策する') : idle ? '命令なしで手番を終える' : '確定済み'}<span class="key" style="margin-left:4px">⌃↵</span></button>`);
 }
 
 // ================================================================== inspector
@@ -464,8 +570,10 @@ const head = (eyebrow, title, desc = '') => `<button class="close-x" type="butto
 
 function introPanel() {
   const cap = S.view.cities.find(c => c.id === civ(S.me).capital);
-  return `${head('YOUR TURN · このティック', 'まず地図を選ぶ', '都市・部隊・土地をクリックすると、ここに詳細と「できること」が出ます。できないことには理由が表示されます。')}
-    <div class="explanation">${esc(othersText(S.view))}全員が同じ命令の枠を持ち、ティックの締切（または全員の手番終了）で同時に解決されます。</div>
+  const mine = held();
+  return `${head('YOUR TURN · このティック', mine.length ? `あなたは${mine.map(r => ROLE_JA[r]).join('・')}` : 'あなたは国民（役職なし）', '都市・部隊・土地をクリックすると、ここに詳細と「できること」が出ます。できないことには理由が表示されます。')}
+    <div class="explanation">${esc(othersText(S.view))}${mine.length ? '担当の役職の命令は封印して送り、担当外の命令は献策になります。' : 'あなたの命令は担当の役職者への献策になります。採用されると功績を半分ずつ分けます。'}</div>
+    <button class="btn wide" type="button" data-drawer="nation">⚖ 国の広場を開く（選挙・献策・リコール）</button>
     ${cap ? `<button class="btn primary wide" type="button" data-focus="${key(cap.q, cap.r)}">⌖ 首都 ${T.cityName(cap.id)} を見る</button>` : ''}`;
 }
 
@@ -558,7 +666,7 @@ function attackOption(u, a) {
   if (a.blocked) return `<div class="option" aria-disabled="true"><span class="ic">⚔</span><span><span class="name">${esc(name)}</span><div class="why">${esc(T.blockedText(a.blocked))}</div></span><span></span></div>`;
   const f = a.forecast;
   const detail = f.captureCivilian ? '非戦闘ユニットを捕獲します' : `予測：相手 −${(f.toDefender / 1000).toFixed(1)}（残り${((f.defenderTroops - f.toDefender) / 1000).toFixed(1)}）・自軍 −${(f.toAttacker / 1000).toFixed(1)}`;
-  const warn = f.neutral ? '<div class="why">中立への攻撃は侵略扱い：協調スコアが止まり、都市国家への影響力を失います</div>' : '';
+  const warn = f.neutral ? '<div class="why">中立への攻撃は侵略扱い：都市国家への影響力をすべて失います</div>' : '';
   return `<button class="option" type="button" data-order='${esc(JSON.stringify(dto))}'><span class="ic">⚔</span><span><span class="name">${esc(name)}</span><div class="meta">${detail}</div>${warn}<div class="meta">乱数±10%・他の文明も同時に動くため目安です</div></span><span class="cost">枠1</span></button>`;
 }
 
@@ -637,29 +745,48 @@ function cityStatePanel(cs) {
   html += `<div class="stats"><div class="stat"><div class="k">宗主</div><div class="v" style="font-size:14px">${cs.suzerain === null ? 'なし' : esc(civN(cs.suzerain))}</div></div><div class="stat"><div class="k">あなたの影響力</div><div class="v">${cs.myInfluence}</div></div><div class="stat"><div class="k">最多</div><div class="v">${cs.topInfluence}</div></div></div>`;
   html += `<div class="meter"><span>宗主になる条件：影響力60以上で最多（45ティックごとに見直し、全員の影響力が半分に）</span><div class="bar gold"><i style="width:${Math.min(100, cs.myInfluence / 60 * 100)}%"></i></div></div>`;
   html += `<div class="section-title">使節を送る（枠1・所持影響力 ${me}）</div><div class="row">${[10, 20, 40].map(n => `<button class="btn" type="button" ${me < n ? 'disabled title="影響力が足りません"' : ''} data-order='${JSON.stringify({ type: 'SendEnvoy', cityState: cs.id, influence: n })}'>影響力 ${n}</button>`).join('')}</div>`;
-  html += `<div class="explanation">都市国家への攻撃は侵略扱いです：12ティックの間 協調スコアが増えず、すべての都市国家への影響力を失います。</div>`;
+  html += `<div class="explanation">都市国家への攻撃は侵略扱いです：すべての都市国家への影響力を失います（協調の道の節目に響きます）。</div>`;
   return html;
+}
+
+/** Send one governance action (vote, support, stand, recall). */
+async function govAction(action, el) {
+  if (el) el.disabled = true;
+  const r = await api.post('/api/gov', { action }).catch(() => ({ ok: false, error: 'network' }));
+  const what = { Vote: '投票', Support: '支持', Stand: '立候補', Recall: 'リコールに賛成', Propose: '献策' }[action.type];
+  if (r.ok) {
+    if (action.type === 'Vote') { S.myVotes ??= {}; S.myVotes[action.role] = action.candidate; }
+    toast(`${what}しました。${S.view.chain ? 'チェーンに記録しました' : '次のティックで反映されます'}。`);
+  } else toast(`${what}できませんでした：${translateError(r.error)}`, 'error');
+  poll();
 }
 
 // ================================================================== next decision
 function nextItems() {
   const v = S.view; const items = [];
+  if (!v.economy) return [{ pri: 0, title: '観戦中', detail: '', none: true }];
+  const mine = held(), g = v.gov || {};
+  if (g.voteOpen && ROLES.some(r => g.candidates?.find(c => c.role === r)?.candidates.length && S.myVotes?.[r] === undefined)) items.push({ pri: 95, title: `選挙の投票受付中（ティック${g.nextElection}の任期）`, detail: '国の広場で各役職に投票できます。', drawer: 'nation' });
+  for (const r of g.recalls || []) items.push({ pri: 92, title: `${ROLE_JA[r.role]}のリコール投票`, detail: `賛成${r.yes}件 · ティック${r.closes}まで`, drawer: 'nation' });
+  const adoptable = (g.proposals || []).filter(p => mine.includes(p.role) && p.proposer?.id !== S.member && !(S.adopt?.[p.role] || []).includes(p.id));
+  if (adoptable.length) items.push({ pri: 88, title: `あなた宛ての献策 ${adoptable.length}件`, detail: '採用すると功績を献策者と半分ずつ分けます。', drawer: 'nation' });
   const draftUnits = new Set(S.drafts.map(d => d.dto.unit ?? d.dto.army ?? d.dto.settler).filter(x => x !== undefined));
-  for (const p of v.proposals.filter(p => p.to === S.me)) items.push({ pri: 100, title: `${civN(p.from)}の${({ Peace: '講和', Nap: '不可侵条約', Alliance: '同盟' })[p.kind]}の申し入れ`, detail: `ティック${p.expires}まで有効。外交パネルで受けるか決めてください。`, drawer: 'diplomacy' });
+  for (const p of v.proposals.filter(p => p.to === S.me && mine.includes('Diplomat'))) items.push({ pri: 100, title: `${civN(p.from)}の${({ Peace: '講和', Nap: '不可侵条約', Alliance: '同盟' })[p.kind]}の申し入れ`, detail: `ティック${p.expires}まで有効。外交パネルで受けるか決めてください。`, drawer: 'diplomacy' });
   for (const u of myUnits()) {
     if (u.path?.length || draftUnits.has(u.id)) continue;
+    if (!mine.includes(u.type === 'Settler' ? 'Steward' : 'General')) continue;
     if (u.standing && u.type !== 'Settler') continue; // a standing rule is looking after it
     if (u.type === 'Settler') items.push({ pri: 90, title: '開拓者が待機中', detail: '都市を建てられる土地へ移動するか、この場で建設します。', unit: u.id });
     else if (!u.civilian && Object.values(v.civs).some(c => c.relation === 'war') ) items.push({ pri: 70, title: `${T.UNIT[u.type]}が待機中（戦争中）`, detail: '攻撃できる相手がいないか確認するか、前線へ移動させます。', unit: u.id });
   }
-  for (const c of myCities()) {
+  for (const c of mine.includes('Steward') ? myCities() : []) {
     const qd = S.drafts.some(d => d.dto.type === 'SetQueue' && d.dto.city === c.id);
     if (!qd && !(c.queue || []).length) items.push({ pri: 80, title: `${T.cityName(c.id)}の生産予定が空です`, detail: '建物・部隊・開拓者から選びます。生産は蓄積されるので無駄にはなりません。', tile: key(c.q, c.r) });
   }
-  if (!v.economy.researchQueue.length && !S.drafts.some(d => d.dto.type === 'SetResearch')) items.push({ pri: 85, title: '研究が選ばれていません', detail: '科学は蓄積されますが、研究を選ぶと技術が解放されます。', drawer: 'research' });
+  if (mine.includes('Science') && !v.economy.researchQueue.length && !S.drafts.some(d => d.dto.type === 'SetResearch')) items.push({ pri: 85, title: '研究が選ばれていません', detail: '科学は蓄積されますが、研究を選ぶと技術が解放されます。', drawer: 'research' });
   const left = spendable() - used();
-  if (left > 0 && !v.paused && v.secondsLeft < v.tickSeconds * .25) items.push({ pri: 60, title: `命令の枠が${left}残っています`, detail: '使わない枠は繰り越されます（最大4ティック分）。', none: true });
-  if (!items.length) items.push({ pri: 0, title: '急ぎの判断はありません', detail: '地図を眺めて、拡大・研究・外交の次の一手を考えましょう。都市国家への使節や、近くの文明との不可侵条約も選択肢です。', none: true });
+  if (mine.length && left > 0 && !v.paused && v.secondsLeft < v.tickSeconds * .25) items.push({ pri: 60, title: `命令の枠が${left}残っています`, detail: '使わない枠は役職ごとに繰り越されます（最大4ティック分）。', none: true });
+  if (!items.length) items.push({ pri: 0, title: '急ぎの判断はありません', detail: mine.length ? '地図を眺めて、拡大・研究・外交の次の一手を考えましょう。' : '役職外の命令は献策として出せます。国の広場で他の国民の献策を支持しましょう。', none: true });
   return items.sort((a, b) => b.pri - a.pri);
 }
 function renderNext() {
@@ -742,7 +869,7 @@ async function loadDiplomacy() {
 }
 function renderDrawer() {
   const el = $('#drawer'); if (!S.drawer || !S.view) return;
-  const f = { cities: drawerCities, research: drawerResearch, diplomacy: drawerDiplomacy, market: drawerMarket, victory: drawerVictory, chronicle: drawerChronicle, decisions: drawerDecisions }[S.drawer];
+  const f = { nation: drawerNation, era: drawerEra, merit: drawerMerit, cities: drawerCities, research: drawerResearch, diplomacy: drawerDiplomacy, market: drawerMarket, chronicle: drawerChronicle, decisions: drawerDecisions }[S.drawer];
   setHtml(el, `<button class="close-x" type="button" data-drawer="${S.drawer}" aria-label="閉じる">×</button>` + f());
 }
 function drawerCities() {
@@ -778,11 +905,11 @@ function drawerResearch() {
 }
 function drawerDiplomacy() {
   const v = S.view;
-  let html = `<div class="eyebrow">DIPLOMACY · 外交</div><h2>外交</h2><p class="drawer-intro">申し入れは次のティック以降に相手が受ければ成立し、6ティックで失効します。講和すると12ティックの休戦になり、その間はどちらも宣戦できません。</p>`;
+  let html = `<div class="eyebrow">DIPLOMACY · 外交官の担当</div><h2>外交</h2><p class="drawer-intro">申し入れは次のティック以降に相手が受ければ成立し、6ティックで失効します。講和すると12ティックの休戦になります。<b>宣戦には、外交官とは別の人の将軍か内政官の同意（同じティック）が必要です。</b>${held().includes('Diplomat') ? '' : ' あなたは外交官ではないので、ここでの命令は外交官への献策になります。'}</p>`;
   const inbox = v.proposals.filter(p => p.to === S.me);
   html += `<div class="section-title">届いた申し入れ ${inbox.length}</div>` + (inbox.map(p => {
     const kind = { Peace: ['講和', 'AcceptPeace'], Nap: [`不可侵条約（保証金${p.bond}金ずつ・30ティック）`, 'AcceptNap'], Alliance: ['同盟', 'AcceptAlliance'] }[p.kind];
-    const dto = p.kind === 'Nap' ? { type: kind[1], civ: p.from, bond: 30 } : { type: kind[1], civ: p.from };
+    const dto = p.kind === 'Nap' ? { type: kind[1], civ: p.from, bond: p.bond } : { type: kind[1], civ: p.from };
     return `<div class="proposal"><div><span class="swatch-s" style="background:${T.CIV_COLORS[p.from]}"></span><b>${esc(civN(p.from))}</b>から${kind[0]}</div><div class="when">ティック${p.tick}に提案 · ティック${p.expires}で失効${p.kind === 'Nap' ? ' · 破った側の保証金は相手のものに' : ''}</div><div class="row" style="margin-top:6px"><button class="btn primary" type="button" data-order='${JSON.stringify(dto)}'>受け入れる（枠1）</button></div></div>`;
   }).join('') || '<p class="desc">ありません。</p>');
   html += `<div class="section-title">文明 · 行をクリックで操作</div>`;
@@ -796,14 +923,14 @@ function drawerDiplomacy() {
     const allowed = opts.filter(o => !o.action.startsWith('Accept'));
     const blocked = allowed.filter(o => o.blocked);
     html += `<details class="civ-row" data-civ-row="${c.id}" ${open ? 'open' : ''}>
-      <summary><span class="l1"><span class="swatch-s" style="background:${T.CIV_COLORS[c.id]}"></span><b>${esc(civN(c.id))}</b><span class="badge ${c.kind === 'Human' ? 'human' : 'agent'}">${c.kind === 'Human' ? 'HUMAN' : 'AGENT'}</span>${hasInbox ? '<span class="tag warning">申し入れ</span>' : ''}<span class="grow"></span>${relTag}</span><span class="l2 meta">${persona} · 確認済み${c.cities}都市 · 目視の兵${c.troopsSeen}</span></summary>
+      <summary><span class="l1"><span class="swatch-s" style="background:${T.CIV_COLORS[c.id]}"></span><b>${esc(civN(c.id))}</b><span class="badge">第${c.era}時代</span>${hasInbox ? '<span class="tag warning">申し入れ</span>' : ''}<span class="grow"></span>${relTag}</span><span class="l2 meta">国民${(v.members || []).filter(m => m.civ === c.id).length}人 · 確認済み${c.cities}都市 · 目視の兵${c.troopsSeen}</span></summary>
       <div class="civ-body">
-        <div class="when">覇権${c.dominion} · 協調${c.concord} · スターゲート${c.stages}/3${c.aggressor ? ' · <span style="color:var(--bad)">侵略中</span>' : ''}${c.truceUntil > v.tick ? ` · 休戦 ティック${c.truceUntil}まで` : ''}</div>
+        <div class="when">節目 ${c.tiers.map((t, i) => `${PATH_JA[i]}${t}`).join(' · ')} · スターゲート${c.stages}/3${c.aggressor ? ' · <span style="color:var(--bad)">侵略中</span>' : ''}${c.truceUntil > v.tick ? ` · 休戦 ティック${c.truceUntil}まで` : ''}</div>
         <div class="when">あなたの不満 ${c.myGrievanceAgainst ?? 0} · 相手の不満 ${c.grievanceAgainstMe ?? 0}（30以上で正当な開戦理由）</div>
         <div class="row" style="margin-top:6px">${allowed.map(o => {
           const dto = o.action === 'ProposeNap' ? { type: 'ProposeNap', civ: c.id, bond: 30 } : { type: o.action, civ: c.id };
           return o.blocked ? `<button class="btn" type="button" disabled title="${esc(T.blockedText(o.blocked))}">${T.DIPLO_ACTION[o.action]}</button>` : `<button class="btn ${o.action === 'DeclareWar' ? 'danger' : ''}" type="button" data-order='${JSON.stringify(dto)}'>${T.DIPLO_ACTION[o.action]}</button>`;
-        }).join('')}${c.relation === 'nap' ? `<button class="btn danger" type="button" data-order='${JSON.stringify({ type: 'BreakNap', civ: c.id })}'>条約を破棄（保証金を失い宣戦）</button>` : ''}</div>
+        }).join('')}${(held().includes('General') || held().includes('Steward')) && c.relation === 'peace' ? `<button class="btn" type="button" data-order='${JSON.stringify({ type: 'ConsentWar', civ: c.id })}' title="外交官の宣戦に、将軍・内政官として同意します（枠を使いません）">⚖ 宣戦に同意</button>` : ''}${c.relation === 'nap' ? `<button class="btn danger" type="button" data-order='${JSON.stringify({ type: 'BreakNap', civ: c.id })}'>条約を破棄（保証金を失い宣戦）</button>` : ''}</div>
         ${blocked.length ? `<div class="when" style="margin-top:4px">${blocked.map(o => `${T.DIPLO_ACTION[o.action].replace(/（.*）/, '')}：${T.blockedText(o.blocked)}`).join('<br>')}</div>` : ''}
       </div></details>`;
   }
@@ -828,29 +955,99 @@ function drawerMarket() {
       <span class="meta">同じティックの他の注文とまとめて約定するため、実際の価格は変わります。許容：見積もり±2%</span></div>
       <button class="btn primary" type="button" ${hasCurrency ? '' : 'disabled'} data-order='${JSON.stringify({ type: 'MarketTrade', good: { kind: q.good }, side: q.side, amount: q.amount, limitGold: q.side === 'Buy' ? Math.ceil(Math.abs(q.gold) * 1.02) : Math.floor(Math.abs(q.gold) * .98) })}'>命令に追加（枠1）</button>`;
   }
-  const cap = e.exchangeCap / 1e6, spent = e.exchangeSpent / 1e6;
-  html += `<div class="usdc-box"><div class="usdc-label">USDC取引所 · プレイヤー間 · テスト資金</div>
-    <p class="desc" style="margin:4px 0">原材料だけを取引できます（軍・研究・命令枠は買えません）。買い手が5%の手数料を払い、80%が賞金プールに入ります。1ティックの購入量は自分の産出量まで、シーズン合計は参加費と同額までです。</p>
-    <div class="meter"><span>残高 ${(e.usdc / 1e6).toFixed(2)} USDC · 今シーズンの購入 ${spent.toFixed(2)} / ${cap.toFixed(2)}</span><div class="bar"><i style="width:${Math.min(100, spent / cap * 100)}%;background:var(--usdc)"></i></div></div>
-    ${v.tick >= 120 ? '<div class="explanation">終盤（ティック120以降）のため凍結中です。</div>' : `
+  const se = v.season || {};
+  const tariff = e.tariffBps / 100;
+  const deliveries = e.deliveries || [];
+  html += `<div class="usdc-box"><div class="usdc-label">USDC 市場 · 国庫どうしの一括競売 · テスト資金</div>
+    <p class="desc" style="margin:4px 0">原材料だけを他の国と取引できます（ティックごとに1つの価格でまとめて約定）。買い手は手数料5%と<b>関税</b>を払い、どちらも80%が賞金プール・20%が運営に入ります。関税は国の累計支出とともに上がります。買った物資は${se.deliveryTicks ?? 3}ティック後に届き、富・交易量・功績には数えません。スターゲートを建てている都市には届きません。自国・交戦中の国とは取引できません。${usdc(se.spendConsentUsdc)} USDCを超える支出には、外交官とは別の役職者の同意が必要です。</p>
+    <div class="stats"><div class="stat"><div class="k">国庫</div><div class="v">${usdc(e.treasury)}<small> USDC</small></div></div><div class="stat"><div class="k">累計支出</div><div class="v">${usdc(e.marketSpent)}</div></div><div class="stat"><div class="k">いまの関税</div><div class="v">${tariff.toFixed(1)}<small>%</small></div></div></div>
+    ${deliveries.length ? `<div class="section-title">輸送中</div>${deliveries.map(d => `<div class="list-row" style="cursor:default"><div class="main"><div class="title">${goodName(d.good)} ${d.qty}</div></div><span class="meta">ティック${d.due}に到着</span></div>`).join('')}` : ''}
+    ${!se.market ? '<div class="explanation">このシーズンは市場がオフです。</div>' : v.tick >= (se.marketFreeze ?? 120) ? '<div class="explanation">終盤（ティック120以降）のため凍結中です。</div>' : `
     <div class="row"><label class="field">品目<select id="ex-good"><option value="Gold">金</option><option value="Iron">鉄</option><option value="Horses">馬</option><option value="Food">食料（首都へ）</option><option value="Production">生産（首都へ）</option></select></label>
     <label class="field">売買<select id="ex-side"><option value="Buy">買う</option><option value="Sell">売る</option></select></label></div>
     <div class="row"><label class="field">数量<input id="ex-amount" type="number" min="1" value="1" style="width:64px"></label><label class="field">単価 USDC<input id="ex-price" type="number" min="0.01" step="0.01" value="0.10" style="width:80px"></label></div>
-    ${S.exchangeStep === 1 ? `<div class="explanation" id="ex-confirm-text"></div><div class="row"><button class="btn" type="button" id="ex-cancel">戻る</button><button class="btn usdc" type="button" id="ex-confirm">USDCの注文を命令に追加</button></div>` : `<button class="btn usdc" type="button" id="ex-review">内容を確認する</button>`}`}
-    <p class="meta" style="margin:6px 0 0">取引所の注文は命令の枠を使いません。賞金プール（テスト）：${(v.vault / 1e6).toFixed(2)} USDC</p></div>`;
+    ${S.exchangeStep === 1 ? `<div class="explanation" id="ex-confirm-text"></div><div class="row"><button class="btn" type="button" id="ex-cancel">戻る</button><button class="btn usdc" type="button" id="ex-confirm">USDCの注文を命令に追加</button></div>` : `<button class="btn usdc" type="button" id="ex-review">内容を確認する</button>`}
+    ${(held().some(r => r !== 'Diplomat')) ? `<div class="row" style="margin-top:6px"><button class="btn" type="button" data-order='${JSON.stringify({ type: 'ConsentSpend', usdc: 20_000_000 })}'>⚖ 外交官の支出に同意（20 USDCまで）</button></div>` : ''}`}
+    <p class="meta" style="margin:6px 0 0">取引所の注文は命令の枠を使いません。賞金プール（テスト）：${usdc(v.projection?.pool)} USDC</p></div>`;
   return html;
 }
-function drawerVictory() {
-  const v = S.view, rk = ranks();
-  const row = c => `<tr class="${c.id === S.me ? 'me' : ''}"><td><span class="swatch-s" style="background:${T.CIV_COLORS[c.id]}"></span>${esc(civN(c.id))} <span class="badge ${c.kind === 'Human' ? 'human' : 'agent'}">${c.kind === 'Human' ? 'H' : 'A'}</span></td>
-    <td><span class="rank ${rk.dom[0] === c.id ? 'r1' : ''}">${rk.dom.indexOf(c.id) + 1}</span> ${fmt(c.dominion)}</td>
-    <td><span class="rank ${rk.sci[0] === c.id ? 'r1' : ''}">${rk.sci.indexOf(c.id) + 1}</span> ${c.stages}/3</td>
-    <td><span class="rank ${rk.con[0] === c.id ? 'r1' : ''}">${rk.con.indexOf(c.id) + 1}</span> ${fmt(c.concord)}${c.aggressor ? ' <span style="color:var(--bad)">⚔</span>' : ''}</td></tr>`;
-  return `<div class="eyebrow">VICTORY · 勝利</div><h2>3つの勝利トラック</h2><p class="drawer-intro">シーズンはティック${v.ticks}で終わり、各トラックの上位が賞金を分け合います（1文明が上位3位を取れるのは1トラックまで）。どれも「期間中の積み上げ」で決まるので、最終日の駆け込みは効きません。</p>
-    <table class="grid"><thead><tr><th>文明</th><th>覇権</th><th>科学</th><th>協調</th></tr></thead><tbody>${v.civs.map(row).join('')}</tbody></table>
-    <div class="section-title">覇権</div><p class="desc">毎ティック：領土の土地1点（資源あり2点）＋ 他の文明から奪って30ティック以上保持した都市は人口×5点。</p>
-    <div class="section-title">科学</div><p class="desc">天文学・物理学・天体力学で解放されるスターゲートを3段階。段階数→完成の早さ→累計科学の順。建設中の都市は占領されると全段階を失います。ティック120以降は建設費が下がります。</p>
-    <div class="section-title">協調</div><p class="desc">侵略していないティックの人口・人口の新記録・宗主の数。攻められても減りません。一度も同盟に入らなければ最後に ×1.25。</p>`;
+// ------------------------------------------------------------------ V5: nation, era, merit
+const who = m => (m ? `${esc(m.name)}${m.kind === 'agent' ? ' <span class="badge agent">AI</span>' : ''}${m.attested ? ' <span class="badge agent" title="登録の証明あり（ERC-8004 など）">証明済みAI</span>' : ''}` : '<span class="meta">代行（AI）</span>');
+
+/** The nation plaza (V5 §12): offices, election, proposals, recalls. */
+function drawerNation() {
+  const v = S.view, g = v.gov; if (!g) return '<p class="desc">読み込んでいます…</p>';
+  const me = S.member, mine = held();
+  const roster = v.roster || [];
+  const myVotes = S.myVotes || {};
+  let html = `<div class="eyebrow">NATION · 国の広場</div><h2>${esc(civN(S.me))}の政府</h2>
+    <p class="drawer-intro">国民は${g.members}人。役職者だけが担当の命令を出せます。国民は誰でも献策・支持・投票・リコールができます（すべてチェーンに記録されます）。</p>
+    <div class="section-title">役職者</div>`;
+  html += g.offices.map(o => `<div class="office-row ${o.holder?.id === me ? 'me' : ''}"><span class="og">${ROLE_GLYPH[o.role]}</span><div class="main"><div class="title">${ROLE_JA[o.role]} · ${who(o.holder)}${o.holder?.id === me ? ' <span class="tag positive">あなた</span>' : ''}</div>
+      <div class="meta">${o.holder ? `ティック${o.since}から · ${o.active ? '活動中' : `<span class="idle">最後の命令 ${o.lastAct ?? 'なし'}</span>`}` : '立候補がないため代行が務めます'}${o.runnerUp ? ` · 次点 ${esc(o.runnerUp.name)}` : ''}</div></div>
+      ${o.holder && o.holder.id !== me ? `<button class="btn" type="button" data-gov='${esc(JSON.stringify({ type: 'Recall', role: o.role }))}' title="直近10ティックに活動した国民の過半数が5ティック以内に賛成すると解任">リコール</button>` : ''}</div>`).join('');
+  if (g.recalls.length) html += `<div class="section-title">リコール投票中</div>` + g.recalls.map(r => `<div class="proposal"><b>${ROLE_JA[r.role]}</b>（${esc(r.holder?.name || '')}）のリコール${r.automatic ? '（30ティック命令なしのため自動）' : ''}<div class="when">賛成 ${r.yes} / 必要 ${Math.floor(g.electorate / 2) + 1}（活動中の国民${g.electorate}人の過半数） · ティック${r.closes}まで</div><div class="row" style="margin-top:6px"><button class="btn danger" type="button" data-gov='${esc(JSON.stringify({ type: 'Recall', role: r.role }))}'>賛成する</button></div></div>`).join('');
+  html += `<div class="section-title">選挙 · 次の任期はティック${g.nextElection ?? '—'}から${g.voteOpen ? ' · <span class="tag warning">投票受付中</span>' : ` · 投票はティック${g.voteFrom ?? '—'}から`}</div>`;
+  const standing = v.member?.standingFor || [];
+  html += `<div class="row">${ROLES.map(r => `<button class="btn ${standing.includes(r) ? 'primary' : ''}" type="button" data-stand="${r}">${ROLE_GLYPH[r]} ${ROLE_JA[r]}に${standing.includes(r) ? '立候補中' : '立候補'}</button>`).join('')}</div><p class="meta">1人が兼ねられる役職は2つまで。立候補はいつでも変えられます。</p>`;
+  html += g.candidates.map(c => `<div class="cand"><span class="og">${ROLE_GLYPH[c.role]}</span><b>${ROLE_JA[c.role]}</b> ${c.candidates.length ? c.candidates.map(x => `<span class="cand-pill">${who(x.member)} <small>${x.votes}票</small>${g.voteOpen ? `<button class="btn ${myVotes[c.role] === x.member.id ? 'primary' : ''}" type="button" data-gov='${esc(JSON.stringify({ type: 'Vote', role: c.role, candidate: x.member.id }))}' data-vote-role="${c.role}" data-vote-for="${x.member.id}">投票</button>` : ''}</span>`).join('') : '<span class="meta">立候補者なし（代行）</span>'}</div>`).join('');
+  html += `<div class="section-title">献策 · 支持の多い順</div>`;
+  const props = [...g.proposals].sort((a, b) => b.supporters - a.supporters);
+  html += props.length ? props.map(p => {
+    const canAdopt = mine.includes(p.role);
+    const adopted = (S.adopt?.[p.role] || []).includes(p.id);
+    const supported = (p.supportedBy || []).includes(me);
+    return `<div class="proposal"><div><span class="og">${ROLE_GLYPH[p.role]}</span> <b>${ROLE_JA[p.role]}へ</b> · ${who(p.proposer)} · 支持 ${p.supporters}</div>
+      <ul class="prop-orders">${p.orders.map(o => `<li>${esc(describeOrder(o).label)}</li>`).join('')}</ul>
+      <div class="when">ティック${p.tick}に提出 · ティック${p.expires}で失効 · 採用されると功績を献策者と役職者で半分ずつ</div>
+      <div class="row" style="margin-top:6px">${p.proposer?.id !== me ? `<button class="btn ${supported ? 'primary' : ''}" type="button" ${supported ? 'disabled' : `data-gov='${esc(JSON.stringify({ type: 'Support', proposal: p.id }))}'`}>${supported ? '支持済み' : '支持する'}</button>` : '<span class="meta">あなたの献策</span>'}
+      ${canAdopt ? `<button class="btn ${adopted ? 'primary' : ''}" type="button" data-adopt="${p.role}:${p.id}">${adopted ? '採用予定 ✓（確定で送信）' : '採用する'}</button>` : ''}</div></div>`;
+  }).join('') : '<p class="desc">献策はまだありません。地図で担当外の命令を選んで確定すると、その役職への献策になります。</p>';
+  html += `<div class="section-title">国民 ${roster.length}人</div>` + roster.map(m => `<div class="list-row" style="cursor:default"><div class="main"><div class="title">${who(m)}${m.id === me ? ' <span class="tag positive">あなた</span>' : ''}</div><div class="meta">功績 ${m.merit.toFixed(1)} · 活動 ${m.activeWindows}/18区間${m.active ? ' ✓' : ''}</div></div></div>`).join('');
+  return html;
+}
+
+/** Milestones of the four paths and the eras (V5 §6). */
+function drawerEra() {
+  const v = S.view, A = v.achievements; if (!A) return '';
+  const th = A.thresholds, mine = A.nations[S.me], f = v.facts || {};
+  const tierText = [
+    k => `領土 ${th.hegemonyTiles[k]}${th.hegemonyCities[k] ? (k === 2 ? ` または占領都市${th.hegemonyCities[k]}` : ` ＋ 占領都市${th.hegemonyCities[k]}`) : ''}`,
+    k => `人口 ${th.prosperityPop[k]}${th.prosperityWealth[k] ? ` ＋ 富 ${fmt(th.prosperityWealth[k])}` : ''}`,
+    k => (k < 3 ? `技術 ${th.scienceTechs[k]}` : k === 3 ? 'スターゲート I' : 'スターゲート III'),
+    k => ['条約相手1 または 使節', '条約相手1 ＋ 宗主経験', '宗主 ＋ 条約相手1', `宗主 ＋ 同盟 ＋ 交易 ${th.concordTrade[0]}`, `宗主2 ＋ 条約相手2 ＋ 交易 ${th.concordTrade[1]}`][k],
+  ];
+  const now = [`領土 ${f.tiles} · 占領都市 ${f.capturedHeld}`, `人口 ${f.pop} · 富 ${fmt(f.wealth)}`, `技術 ${f.techs} · スターゲート最高 ${f.starGateMax}`, `条約相手 ${f.partners} · 同盟 ${f.alliances} · 宗主 ${f.suzerainties}${f.everSuzerain ? '（経験あり）' : ''} · 交易 ${fmt(f.trade)}`];
+  let html = `<div class="eyebrow">ERAS · 4つの道と時代</div><h2>${esc(civN(S.me))} · 第${mine.era}時代 · ${mine.points}点</h2>
+    <p class="drawer-intro">節目を1つ達成するごとに点が入り、同じ段階の節目を2つの道（第5段階は3つ）で達成すると新しい時代に入ります。領土・人口・宗主・条約・占領都市は<b>シーズン終了時の状態</b>で判定するので、失えば取り消されます（下は「今終わったら」）。賞金プールは国民のいる国の点の比で分けます。</p>
+    <table class="grid era-grid"><thead><tr><th>段階</th>${PATH_JA.map(n => `<th>${n}</th>`).join('')}</tr></thead><tbody>`;
+  for (let k = 0; k < 5; k++) {
+    html += `<tr><td><b>${k + 1}</b><small> ${A.tierPoints[k]}点</small></td>${PATH_JA.map((_, p) => `<td class="${mine.tiers[p] > k ? 'met' : mine.tiers[p] === k ? 'next' : ''}">${mine.tiers[p] > k ? '✓ ' : ''}${esc(tierText[p](k))}</td>`).join('')}</tr>`;
+  }
+  html += `</tbody></table><div class="meta" style="margin:6px 0">いま：${now.map((t, i) => `<b>${PATH_JA[i]}</b> ${t}`).join(' · ')}</div>`;
+  const next = mine.era + 1;
+  if (next <= 5) html += `<div class="explanation">第${next}時代まで：段階${next}の節目を${next === 5 ? 3 : 2}つの道で（いま${mine.tiers.filter(t => t >= next).length}つ）。</div>`;
+  html += `<div class="section-title">国ごとの達成と賞金の見込み</div><table class="grid"><thead><tr><th>国</th><th>時代</th><th>節目</th><th>点</th><th>取り分</th></tr></thead><tbody>`;
+  const pr = v.projection;
+  html += A.nations.map(n => `<tr class="${n.civ === S.me ? 'me' : ''}"><td><span class="swatch-s" style="background:${T.CIV_COLORS[n.civ]}"></span>${esc(civN(n.civ))}${pr?.counted?.[n.civ] ? '' : ' <span class="meta" title="国民がいない・活動した国民がいない・都市がない国は配分の対象外">対象外</span>'}</td><td>${n.era}</td><td>${n.tiers.join('/')}</td><td>${n.points}</td><td>${pr ? usdc(pr.nationShare[n.civ]) : '—'}</td></tr>`).join('');
+  html += `</tbody></table>`;
+  return html;
+}
+
+/** My merit and the payout if the season ended now (V5 §7). */
+function drawerMerit() {
+  const v = S.view, m = v.member, pr = v.projection;
+  if (!m) return `<div class="eyebrow">MERIT</div><h2>功績</h2><p class="desc">観戦中は表示されません。</p>`;
+  const share = pr?.nationShare?.[S.me] ?? 0, eq = pr?.equalEach?.[S.me] ?? 0;
+  const bars = ['hegemony', 'prosperity', 'science', 'concord', 'common'];
+  const names = { hegemony: '覇権', prosperity: '繁栄', science: '科学', concord: '協調', common: '役職の務め' };
+  const max = Math.max(1, ...bars.map(b => m.merit[b]));
+  let html = `<div class="eyebrow">MERIT · 功績と見込み</div><h2>今終わったら ${usdc(m.projectedPayout)} USDC</h2>
+    <p class="drawer-intro">国の取り分は ${usdc(share)} USDC。その20%は活動した国民で均等（1人 ${usdc(eq)}・上限は参加費の半分）、残りは功績の比で、国が点を取った道の功績ほど重く分けます。活動した国民＝18区間のうち${m.windowsNeeded}区間以上で命令・献策・支持・投票をした人（あなた：${m.activeWindows}区間${m.active ? ' ✓' : ''}）。</p>
+    <div class="section-title">あなたの功績 · 合計 ${m.merit.total.toFixed(1)}</div>`;
+  html += bars.map(b => `<div class="meter"><span>${names[b]} ${m.merit[b].toFixed(1)}</span><div class="bar"><i style="width:${(100 * m.merit[b] / max).toFixed(0)}%"></i></div></div>`).join('');
+  html += `<div class="section-title">直前のティックで得た功績</div>` + (m.meritLog.length ? m.meritLog.map(e => `<div class="list-row" style="cursor:default"><div class="main"><div class="title">+${e.merit.toFixed(1)} ${names[e.path.toLowerCase()] || e.path}</div><div class="meta">${esc(T.MERIT_WHAT?.[e.what] || e.what)}</div></div></div>`).join('') : '<p class="desc">なし。都市の成長・建物の完成・研究・占領・条約・交易などで、命令を出した人（採用された献策は半分ずつ）に付きます。</p>');
+  return html;
 }
 function drawerChronicle() {
   const f = S.chronFilter || 'all';
@@ -927,8 +1124,10 @@ function renderNavDots() {
   const v = S.view;
   const inbox = v.proposals.filter(p => p.to === S.me).length;
   const idle = myCities().filter(c => !(c.queue || []).length).length;
-  const set = (id, n) => { const el = $(id); el.hidden = !n; el.textContent = n; };
-  set('#dot-diplomacy', inbox); set('#dot-cities', idle); set('#dot-research', v.economy.researchQueue.length ? 0 : 1);
+  const set = (id, n) => { const el = $(id); if (el) { el.hidden = !n; el.textContent = n; } };
+  const g = v.gov || {};
+  set('#dot-diplomacy', inbox); set('#dot-cities', idle); set('#dot-research', v.economy?.researchQueue.length ? 0 : 1);
+  set('#dot-nation', (g.recalls?.length || 0) + (g.voteOpen ? 1 : 0) + (g.proposals || []).filter(p => held().includes(p.role)).length);
 }
 function renderMinimap() {
   const v = S.view;
@@ -950,6 +1149,17 @@ document.addEventListener('click', async e => {
   const d = t.dataset;
   if (d.order) { try { if (addDraft(JSON.parse(d.order))) { renderInspector(); renderDrawer(); } } catch (err) { console.error(err); } return; }
   if (d.remove !== undefined) { removeDraft(+d.remove); return; }
+  if (d.gov) { await govAction(JSON.parse(d.gov), t); return; }
+  if (d.stand) {
+    const cur = S.view.member?.standingFor || [];
+    const roles = cur.includes(d.stand) ? cur.filter(r => r !== d.stand) : [...cur, d.stand];
+    await govAction({ type: 'Stand', roles }, t); return;
+  }
+  if (d.adopt) {
+    const [role, id] = d.adopt.split(':'); S.adopt ??= {}; const list = S.adopt[role] ||= [];
+    const i = list.indexOf(+id); if (i >= 0) list.splice(i, 1); else list.push(+id);
+    S.committedJson = ''; renderDrawer(); renderDock(); return;
+  }
   if (d.chip !== undefined) { const dr = S.drafts[+d.chip]; if (dr?.focus) map.focusTile(dr.focus); return; }
   if (d.drawer) { openDrawer(d.drawer); return; }
   if (d.close !== undefined) { S.tile = null; S.unit = null; map.setSelection(null); map.setOverlay({}); renderInspector(); return; }
@@ -963,9 +1173,15 @@ document.addEventListener('click', async e => {
   if (d.dec) { S.decFilter = d.dec; renderDrawer(); return; }
   if (d.patrolRemove !== undefined && S.patrol) { S.patrol.route.splice(+d.patrolRemove, 1); map.setPatrol(S.patrol); renderInspector(); return; }
   if (d.closeHelp !== undefined) { $('#help').close(); return; }
-  if (d.start !== undefined) { $('#help').close(); await api.post('/api/control', { paused: false }); poll(); return; }
+  if (d.start !== undefined) {
+    $('#help').close();
+    if (S.view?.phase === 'lobby') { const r = await api.post('/api/start', {}); if (!r.ok) toast(r.error || '開幕できませんでした', 'error'); }
+    else await api.post('/api/control', { paused: false });
+    poll(); return;
+  }
   switch (t.id) {
-    case 'commit-btn': commit(); break;
+    // Nothing drafted: the button ends the turn (empty sealed batches on chain).
+    case 'commit-btn': if (!isDirty() && held().length && !S.view.member?.ready) endTurn(); else commit(); break;
     case 'pause-btn': await api.post('/api/control', { paused: !S.view.paused }); poll(); break;
     case 'advance-btn': {
       if (isDirty()) await commit(true);
@@ -1028,7 +1244,7 @@ function renderLensLegend() {
     political: civs.map(c => `<span>${dot(T.CIV_COLORS[c.id])}${esc(civN(c.id))}${c.id === S.me ? '（あなた）' : ''}</span>`).join('') + '<span class="hint">斜線＝戦争中の相手</span>',
     yields: `<span>${dot('#7f9a3e')}食料</span><span>${dot('#9a6b3c')}生産</span><span>${dot('#c9a43f')}金</span><span class="hint">都市が使う土地の基本産出（川・資源込み）</span>`,
     military: `<span>${dot('rgba(172,98,81,.6)')}戦争中の敵軍・蛮族から2マス以内</span>`,
-    concord: `<span>${dot('#8a9a8a')}都市国家の周囲2マス（宗主の色）</span><span class="hint">協調勝利：侵略しない期間と宗主の数</span>`,
+    concord: `<span>${dot('#8a9a8a')}都市国家の周囲2マス（宗主の色）</span><span class="hint">協調の道：宗主・条約・交易</span>`,
   }[S.lens];
   el.hidden = !body; if (body) el.innerHTML = body;
 }
@@ -1045,7 +1261,145 @@ document.addEventListener('keydown', e => {
   else if (e.key === 'Escape' && S.patrol) { S.patrol = null; map.setPatrol(null); renderInspector(); }
   else if (e.key === 'Escape') { S.tile = null; S.unit = null; map.setSelection(null); map.setOverlay({}); if (S.drawer) openDrawer(S.drawer); renderInspector(); }
   else if (e.key.toLowerCase() === 'h') map.focusHome();
+  else if (e.key === '`') toggleChain();
 });
+$('#chain-beat').addEventListener('click', toggleChain);
+$('#next-turn').addEventListener('click', nextTurnClick);
+$('#tracker').addEventListener('click', () => openDrawer('era'));
+$('#notif-stack').addEventListener('click', e => { const b = e.target.closest('[data-n]'); if (b) { S.nextIndex = +b.dataset.n; renderNext(); goNext(false); } });
 setInterval(() => { if (S.view) renderMinimap(); }, 1000);
 
 boot();
+
+
+// ================================================================== V4.1 HUD (Civ benchmark + chain layer)
+const KIND_TAG = { human: ['人', ''], external: ['AI', 'ai'], bot: ['BOT', 'bot'] };
+const REL_ICON = { war: '⚔', alliance: '🤝', nap: '☮', peace: '' };
+const short = s => (s ? `${s.slice(0, 4)}…${s.slice(-4)}` : '');
+
+/** Leader ribbon, as in Civ's top-right: every nation, its era, members, officers. */
+function renderRibbon() {
+  const v = S.view, ms = v.members || [];
+  setHtml($('#ribbon'), v.civs.map(c => {
+    const me = c.id === S.me, rel = me ? '' : REL_ICON[c.relation] || '';
+    const members = ms.filter(m => m.civ === c.id);
+    const humans = members.filter(m => m.host === 'human').length;
+    const ach = v.achievements?.nations?.[c.id];
+    return `<button class="leader ${me ? 'me' : ''}" type="button" style="--c:${T.CIV_COLORS[c.id % T.CIV_COLORS.length]}" aria-label="${esc(civN(c.id))}">
+      ${esc(civN(c.id).slice(0, 1))}
+      ${rel ? `<span class="rel">${rel}</span>` : ''}<span class="era">${c.era}</span>
+      <span class="kind ${members.length ? (humans ? '' : 'ai') : 'bot'}">${members.length ? `${members.length}人` : '代行'}</span>
+      <span class="card"><b>${esc(civN(c.id))}</b>
+        <div class="row2"><span>第${c.era}時代${ach ? ` · ${ach.points}点` : ''}</span><span>${me ? 'あなたの国' : esc(T.RELATION[c.relation] || '')}</span></div>
+        <div class="row2"><span>国民 ${members.length}人（人間${humans}）</span><span>都市 ${c.cities}</span></div>
+        <div class="row2"><span>節目 ${c.tiers.map((t, i) => `${PATH_JA[i]}${t}`).join(' ')}</span></div>
+        ${v.projection && members.length ? `<div class="row2"><span>今の取り分</span><span>${usdc(v.projection.nationShare[c.id])} USDC（1人 ${usdc(v.projection.nationShare[c.id] / members.length)}）</span></div>` : ''}
+      </span></button>`;
+  }).join(''));
+}
+
+/** Four paths × five tiers for my nation, and the era (Civ VII legacy paths). */
+function renderTracker() {
+  const v = S.view, ach = v.achievements?.nations?.[S.me];
+  if (!ach) return;
+  const pool = poolUsdc();
+  setHtml($('#tracker'), `<div class="head"><span>4つの道 · 第${ach.era}時代 · ${ach.points}点</span>${pool ? `<b>賞金 ${fmt(pool)} USDC</b>` : ''}</div>` + ach.tiers.map((t, i) => `<div class="trk"><span class="n">${PATH_JA[i]}</span><span class="steps">${[1, 2, 3, 4, 5].map(k => `<i class="${t >= k ? 'on' : ''}"></i>`).join('')}</span><span class="rank">${t}/5</span></div>`).join(''));
+}
+
+/** Civ's Next Turn button: names what still needs a decision, or ends the turn. */
+function renderNextTurn() {
+  const v = S.view, el = $('#next-turn'); if (!v) return;
+  const items = nextItems().filter(i => !i.none);
+  const done = v.member?.ready;
+  const secs = Math.max(0, v.secondsLeft - (performance.now() - (S.clockAt || performance.now())) / 1000);
+  const frac = v.paused ? 1 : v.tickSeconds ? secs / v.tickSeconds : 1;
+  const C = 2 * Math.PI * 62;
+  const ring = `<svg viewBox="0 0 132 132" aria-hidden="true"><circle cx="66" cy="66" r="62" fill="none" stroke="#ffffff22" stroke-width="5"/><circle cx="66" cy="66" r="62" fill="none" stroke="${frac < .15 ? '#e0674f' : '#f0cf7a'}" stroke-width="5" stroke-linecap="round" stroke-dasharray="${C}" stroke-dashoffset="${C * (1 - frac)}"/></svg>`;
+  let cls = '', title, sub;
+  if (v.over) { title = 'シーズン終了'; sub = '結果を見る'; }
+  else if (v.phase === 'lobby') { title = '開幕する'; sub = '第1回選挙を行い、ティックを始める'; }
+  else if (done) { cls = 'done'; const waiting = (v.members || []).filter(s => s.host === 'human' && s.claimed && !s.ready).length; title = '手番を終えた'; sub = waiting ? `ほか${waiting}人を待っています` : '解決を待っています'; }
+  else if (items.length) { cls = 'blocker'; title = shortBlocker(items[0]); sub = items.length > 1 ? `ほか${items.length - 1}件 · クリックで移動` : 'クリックで移動'; }
+  else { title = '手番を終える'; sub = v.chain ? '署名してチェーンへ送信' : `${Math.ceil(secs)}秒後に自動で解決`; }
+  el.className = `next-turn ${cls}`;
+  setHtml(el, `${ring}<span class="lbl"><b>${esc(title)}</b><small>${esc(sub)}</small></span>`);
+}
+/** Civ-style blocker labels: a verb, not a sentence. */
+function shortBlocker(it) {
+  if (it.drawer === 'research') return '研究を選ぶ';
+  if (it.drawer === 'diplomacy') return '外交に返答';
+  if (it.tile) return '生産を選ぶ';
+  if (it.unit !== undefined) return S.view.units.find(u => u.id === it.unit)?.type === 'Settler' ? '開拓者に命令' : '部隊に命令';
+  return it.title;
+}
+/** End this member's turn now: every office held seals what it has (possibly nothing). */
+async function endTurn() {
+  const r = await api.post('/api/control', { advance: true }).catch(() => ({ error: 'network' }));
+  if (r.error) toast(`手番を終えられませんでした：${translateError(r.error)}`, 'error');
+  else toast('命令なしで手番を終えました。');
+  poll();
+}
+async function nextTurnClick() {
+  if (S.view.over) { openDrawer('era'); return; }
+  if (S.view.phase === 'lobby') { const r = await api.post('/api/start', {}); if (!r.ok) toast(r.error || '開幕できませんでした', 'error'); poll(); return; }
+  const items = nextItems().filter(i => !i.none);
+  if (items.length && !S.view.member?.ready) { S.nextIndex = 0; S.nextCurrent = items[0]; goNext(false); return; }
+  if (isDirty()) await commit(true);
+  const r = await api.post('/api/control', { advance: true });
+  if (r.error) toast(`送信できませんでした：${r.error}`, 'error');
+  poll();
+}
+/** Civ's notification stack: grouped, click to jump. */
+function renderNotifs() {
+  const items = nextItems().filter(i => !i.none);
+  const groups = new Map();
+  items.forEach((it, i) => {
+    const g = it.drawer === 'diplomacy' ? '✉' : it.drawer === 'research' ? '✧' : it.unit !== undefined ? '⚑' : it.tile ? '⌂' : '•';
+    if (!groups.has(g)) groups.set(g, { n: i, count: 0, title: it.title });
+    groups.get(g).count++;
+  });
+  setHtml($('#notif-stack'), [...groups].map(([g, x]) => `<button class="notif" type="button" data-n="${x.n}">${g}${x.count > 1 ? `<span class="count">${x.count}</span>` : ''}<span class="tipx">${esc(x.title)}</span></button>`).join(''));
+}
+
+// ------------------------------------------------------------------ chain layer
+function poolUsdc() {
+  return S.view?.projection ? Number(S.view.projection.pool) / 1e6 : 0;
+}
+async function loadChain() {
+  const g = S.view?.chain?.gateway; if (!g) return;
+  if (!S.season) S.season = await fetch(`${g}/season`).then(r => r.json()).catch(() => null);
+  const from = Math.max(0, S.view.tick - 14);
+  const t = await fetch(`${g}/ticks?from=${from}`).then(r => r.json()).catch(() => null);
+  if (t) S.ticks = t.records.slice(-14).reverse();
+  renderPool(); renderRibbon(); if (S.chainOpen) renderChainDrawer();
+}
+function renderPool() {
+  const p = poolUsdc();
+  setHtml($('#pool-chip'), `<span class="k">賞金プール</span><span class="v">${fmt(p)}<small>USDC</small></span>`);
+  $('#pool-chip').title = `参加費 ${usdc(S.view?.season?.entryFee)} USDC × 国民${(S.view?.members || []).length}人の80%、と市場の手数料・関税の80%${S.season ? `\nVault ${S.season.accounts?.vault}` : ''}`;
+}
+function renderChainBeat() {
+  const v = S.view, el = $('#chain-beat'), c = v.chain;
+  if (!c) { el.className = 'chain-beat local'; setHtml(el, `<span class="dot"></span><span class="l1">LOCAL</span><span class="l2">チェーンなし</span>`); return; }
+  const t = c.lastTick;
+  if (t && S.lastSealed !== t.tick) { S.lastSealed = t.tick; el.classList.remove('sealed'); void el.offsetWidth; el.classList.add('sealed'); loadChain(); }
+  el.className = `chain-beat ${el.classList.contains('sealed') ? 'sealed' : ''}`;
+  setHtml(el, `<span class="dot"></span><span class="l1">${t ? `T${t.tick} 封印 ✓` : '封印待ち'}</span><span class="l2">${c.layer === 'er' ? 'MagicBlock ER' : 'Solana'} · slot ${fmt(c.slot)}</span>`);
+}
+function toggleChain() { S.chainOpen = !S.chainOpen; $('#chain-drawer').hidden = !S.chainOpen; if (S.chainOpen) { renderChainDrawer(); loadChain(); } }
+function renderChainDrawer() {
+  const v = S.view, c = v.chain, el = $('#chain-drawer');
+  if (!c) { setHtml(el, `<header><b>⛓ CHAIN</b><button class="x" data-close-chain>✕</button></header><div class="sec">ローカルモードです。エンジンはこのプロセスで動いています。<br><span class="k">--chain で起動すると MagicBlock ER 上のシーズンを表示します</span></div>`); return; }
+  const er = c.endpoints?.er, x = sig => (er ? `https://explorer.solana.com/tx/${sig}?cluster=custom&customUrl=${encodeURIComponent(er)}` : '#');
+  const reg = (S.season?.members || []).find(m => m.index === S.member);
+  const ticks = (S.ticks || []).map((r, i) => `<div class="tk ${i === 0 ? 'new' : ''}"><span class="t">T${r.tick}</span><span><span class="m">${fmt(r.cu)} CU · ${r.submitted ?? '?'}/${4 * v.civs.length} offices · root ${r.root.slice(0, 8)}…</span><br><a href="${x(r.signature)}" target="_blank" rel="noopener">${short(r.signature)}</a></span><span class="ok">✓</span></div>`).join('');
+  const gov = (v.chronicle || []).filter(e => /^(gov|recall|era)\|/.test(e.text)).slice(0, 6).map(e => `<div class="tk"><span class="t">T${e.tick}</span><span class="m">${esc(T.chronicleText(e.text)[1])}</span></div>`).join('');
+  setHtml(el, `<header><b>⛓ CHAIN LENS</b><button class="x" data-close-chain>✕</button></header>
+    <div class="sec"><span class="k">SEASON</span>${esc(c.seasonId)} · ${esc(c.cluster || 'localnet')}<span class="k">LAYER</span>${c.layer === 'er' ? 'MagicBlock Ephemeral Rollup' : 'Solana base'} · slot ${fmt(c.slot)}</div>
+    <div class="sec"><span class="k">PRIZE VAULT</span>${fmt(poolUsdc())} USDC · ${short(c.accounts?.vault)}<span class="k">YOUR SESSION KEY</span>${reg ? `${short(reg.session)} · scope: orders & governance only · cannot move USDC` : '—'}</div>
+    <div class="sec"><span class="k">GOVERNANCE ON CHAIN</span></div><div class="ticker">${gov || '<span class="k" style="padding:6px">選挙・解任・時代の記録はまだありません</span>'}</div>
+    <div class="sec"><span class="k">SEALED TICKS</span></div><div class="ticker">${ticks || '<span class="k" style="padding:6px">読み込み中…</span>'}</div>
+    <div class="sec"><span class="k">VERIFY IT YOURSELF</span><pre>cargo run --release --bin verify -- \\\n  --gateway ${esc(c.gateway)} --base ${esc(c.endpoints?.base)} --er ${esc(er)}</pre></div>`);
+}
+document.addEventListener('click', e => { if (e.target.closest('[data-close-chain]')) toggleChain(); });
+setInterval(() => { if (S.view) renderNextTurn(); }, 500);

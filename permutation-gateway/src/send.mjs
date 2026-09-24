@@ -64,12 +64,15 @@ export async function confirm(connection, signature, lastValidBlockHeight, timeo
 
 async function fetchResult(connection, signature) {
   let t = null;
-  for (let i = 0; i < 20 && !t; i++) {
+  // A confirmed transaction can take a moment to become fetchable (the ER
+  // indexes its ledger asynchronously under load); callers that archive
+  // records need its logs, so wait up to ~15 s rather than return none.
+  for (let i = 0; i < 60 && !t; i++) {
     t = await connection.getTransaction(signature, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 }).catch(() => null);
-    if (!t) await new Promise(r => setTimeout(r, 150));
+    if (!t) await new Promise(r => setTimeout(r, 250));
   }
   const logs = t?.meta?.logMessages || [];
-  return { signature, logs, cu: t?.meta?.computeUnitsConsumed ?? null, records: records(logs) };
+  return { signature, logs, cu: t?.meta?.computeUnitsConsumed ?? null, records: records(logs), fetched: !!t };
 }
 
 /** Decode `Program data:` log lines (sol_log_data: base64 fields separated by spaces). */
@@ -78,5 +81,5 @@ export function records(logs) {
     .filter(l => l.startsWith('Program data: '))
     .map(l => l.slice('Program data: '.length).split(' ').map(f => new Uint8Array(Buffer.from(f, 'base64'))))
     .map(parseRecord)
-    .filter(r => r.tag === 'PS_TICK' || r.tag === 'PS_GENESIS');
+    .filter(r => ['PS_TICK', 'PS_INPUT', 'PS_GENESIS', 'PS_SEAT', 'PS_OPEN'].includes(r.tag));
 }

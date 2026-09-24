@@ -17,12 +17,22 @@ export function loadConfig(argv = process.argv) {
     baseRpc: arg('--base', 'http://127.0.0.1:18899'),
     erRpc: arg('--er', 'http://127.0.0.1:17799'),
     programId: arg('--program', 'J4aZxe3ynkS7kcvCpKbp6aFYw8d9vtrRDsgSEi1niU6n'),
-    port: Number(arg('--port', '4190')),
+    // Not 4190: browsers and Node's fetch refuse it (a "bad port" in the Fetch standard).
+    port: Number(arg('--port', '4191')),
     tickSeconds: Number(arg('--tick-seconds', '30')),
     // 180 ticks / 20 = 9 periodic commits, within the ER's 10 sponsored commits per account.
     commitEvery: Number(arg('--commit-every', '20')),
     erValidator: arg('--er-validator', 'mAGicPQYBMvcYveUZA5F5UNNwyHvfYh5xkLS2Fr1mev'),
     entryFee: BigInt(arg('--entry-fee', '10000000')), // 10 USDC (6 decimals)
+    // The USDC market (V5 §7.5) can be switched off per season.
+    market: arg('--market', 'on') !== 'off',
+    // Hosted members: claimable human members, and AI members per nation.
+    humans: Number(arg('--humans', '1')),
+    ai: Number(arg('--ai', '2')),
+    // Registration closes once this many outside members joined (x402), or
+    // after `registrationSeconds`, whichever comes first.
+    waitExternal: Number(arg('--wait-external', '0')),
+    registrationSeconds: Number(arg('--registration-seconds', '0')),
     // Several gateways (one per season) can share the stack and the keys.
     stateFile: path.resolve(LOCAL_DIR, arg('--state', 'season.json')),
   };

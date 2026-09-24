@@ -4,7 +4,7 @@ use permutation_rules::genesis::{new_season, Entry};
 use permutation_rules::hex::Hex;
 use permutation_rules::map::Terrain;
 use permutation_rules::rng::Seed;
-use permutation_rules::state::{DeclaredKind, Owner, Relation, WorldState};
+use permutation_rules::state::{Owner, Relation, WorldState};
 use permutation_rules::tech::Tech;
 use permutation_rules::vision::{belief, between, sees, visible, Memory};
 use permutation_rules::{Preset, Ruleset};
@@ -15,12 +15,7 @@ const SEASON: Seed = [41; 32];
 fn setup() -> (Ruleset, WorldState) {
     let rules = Ruleset::new(Preset::Blitz);
     let entries: Vec<Entry> = (0..6)
-        .map(|i| Entry {
-            name: format!("civ-{i}"),
-            declared_kind: DeclaredKind::Human,
-            payout_wallet: [i as u8; 32],
-            exchange_deposit: 0,
-        })
+        .map(|i| Entry { name: format!("civ-{i}"), treasury: 0 })
         .collect();
     let state = new_season(&rules, &WORLD, &SEASON, &entries).expect("genesis");
     (rules, state)

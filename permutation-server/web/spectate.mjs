@@ -68,23 +68,27 @@ function renderTop() {
   const [, ph, phEn] = T.phaseOf(v.tick);
   setHtml($('#clock'), `<b>ティック ${v.tick}</b>/ ${v.ticks} · ${ph} <small>${phEn}</small> · ${v.over ? 'シーズン終了' : v.paused ? '停止中' : `次の解決まで ${Math.ceil(v.secondsLeft)}秒`}`);
   setHtml($('#watch-chip'), S.watch === null
-    ? '<span class="badge">観戦</span><b>全体表示</b><span>霧なし・全文明</span>'
+    ? '<span class="badge">観戦</span><b>全体表示</b><span>霧なし・全ての国</span>'
     : `<span class="badge fog">視界</span><b>${esc(civName(S.watch))}</b><span>の霧の中から見ています</span>`);
 }
 
 function renderBoard() {
   const v = S.view;
-  const seats = new Map((v.seats || []).map(s => [s.civ, s]));
-  const kindLabel = { human: '人間', bot: 'ボット', external: 'エージェント' };
-  const rows = [...v.civs].sort((a, b) => b.dominion - a.dominion || a.id - b.id).map(c => {
-    const s = seats.get(c.id) || {};
+  const ms = v.members || [];
+  const ach = v.achievements?.nations || [];
+  const pr = v.projection;
+  const usdc = x => (Number(x ?? 0) / 1e6).toFixed(2);
+  const rows = [...v.civs].sort((a, b) => (ach[b.id]?.points ?? 0) - (ach[a.id]?.points ?? 0) || a.id - b.id).map(c => {
+    const members = ms.filter(m => m.civ === c.id);
+    const humans = members.filter(m => m.host === 'human').length;
+    const a = ach[c.id] || { tiers: [0, 0, 0, 0], era: 0, points: 0 };
     return `<tr class="civ-row ${S.watch === c.id ? 'watching' : ''}" data-civ="${c.id}">
       <td><span class="name"><span class="swatch-s" style="background:${color(c.id)}"></span><b>${esc(T.civName(c.name))}</b>
-        <span class="sub"><span class="kind ${s.kind || ''}">${kindLabel[s.kind] || ''}</span>${s.ready ? '<span class="ready" title="このティックの手番を終えた">✓ 手番終了</span>' : ''}</span></span></td>
+        <span class="sub"><span class="kind">${members.length ? `国民${members.length}（人間${humans}）` : '代行のみ'}</span></span></span></td>
       <td>${fmt(c.cities)}</td><td>${fmt(c.pop)}</td><td>${fmt(c.troops ?? c.troopsSeen)}</td>
-      <td>${fmt(c.dominion)}</td><td>${fmt(c.concord)}</td><td>${c.stages}/3</td></tr>`;
+      <td>第${a.era}時代</td><td title="覇権/繁栄/科学/協調">${a.tiers.join('/')}</td><td>${fmt(a.points)}</td><td>${pr ? usdc(pr.nationShare[c.id]) : '—'}</td></tr>`;
   }).join('');
-  setHtml($('#board'), `<tr><th>文明</th><th>都市</th><th>人口</th><th>兵</th><th>覇権</th><th>協調</th><th>科学</th></tr>${rows}`);
+  setHtml($('#board'), `<tr><th>国</th><th>都市</th><th>人口</th><th>兵</th><th>時代</th><th>節目</th><th>点</th><th>取り分 USDC</th></tr>${rows}`);
 }
 
 function renderChain() {

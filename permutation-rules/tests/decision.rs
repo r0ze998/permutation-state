@@ -6,9 +6,10 @@ use permutation_rules::decision::{
 };
 use permutation_rules::genesis::{new_season, Entry};
 use permutation_rules::map::Terrain;
+use permutation_rules::gov::{Role, NOBODY};
 use permutation_rules::orders::{validate_batch, Order, OrderBatch};
 use permutation_rules::rng::Seed;
-use permutation_rules::state::{DeclaredKind, Owner, WorldState};
+use permutation_rules::state::{Owner, WorldState};
 use permutation_rules::tick::{resolve_tick, TickInput};
 use permutation_rules::vision::{belief, visible, Memory};
 use permutation_rules::{Preset, RulesError, Ruleset};
@@ -16,12 +17,7 @@ use permutation_rules::{Preset, RulesError, Ruleset};
 fn setup() -> (Ruleset, WorldState) {
     let rules = Ruleset::new(Preset::Blitz);
     let entries: Vec<Entry> = (0..6)
-        .map(|i| Entry {
-            name: format!("civ-{i}"),
-            declared_kind: if i % 2 == 0 { DeclaredKind::Human } else { DeclaredKind::Agent },
-            payout_wallet: [i as u8; 32],
-            exchange_deposit: 0,
-        })
+        .map(|i| Entry { name: format!("civ-{i}"), treasury: 0 })
         .collect();
     let mut s = new_season(&rules, &[5; 32], &[6; 32], &entries).expect("genesis");
     for t in &mut s.map.tiles {
@@ -112,8 +108,8 @@ fn commitments_and_reveals_enter_the_event_chain() {
     let (rules, s0) = setup();
     let run = |digest: Hash| {
         let mut s = s0.clone();
-        let batch = OrderBatch { civ: 0, tick: 0, decision_digest: digest, orders: vec![] };
-        resolve_tick(&mut s, &rules, &TickInput { vrf: vrf(0), batches: vec![batch] }).unwrap();
+        let batch = OrderBatch { civ: 0, tick: 0, role: Role::General, member: NOBODY, adopt: vec![], decision_digest: digest, orders: vec![] };
+        resolve_tick(&mut s, &rules, &TickInput { vrf: vrf(0), batches: vec![batch], ..Default::default() }).unwrap();
         s
     };
     let (a, b) = (run([1; 32]), run([2; 32]));
@@ -121,12 +117,12 @@ fn commitments_and_reveals_enter_the_event_chain() {
 
     // A reveal for an unresolved tick is rejected; after it resolves it is recorded.
     let reveal = |tick| Order::RevealRationale { tick, policy: b"human".to_vec(), salt: [7; 16], text: b"why".to_vec() };
-    let early = OrderBatch { civ: 0, tick: 1, decision_digest: [0; 32], orders: vec![reveal(1)] };
+    let early = OrderBatch { civ: 0, tick: 1, role: Role::General, member: NOBODY, adopt: vec![], decision_digest: [0; 32], orders: vec![reveal(1)] };
     assert_eq!(validate_batch(&a, &rules, &early), Err(RulesError::RevealTooEarly { tick: 1 }));
-    let ok = OrderBatch { civ: 0, tick: 1, decision_digest: [0; 32], orders: vec![reveal(0)] };
+    let ok = OrderBatch { civ: 0, tick: 1, role: Role::General, member: NOBODY, adopt: vec![], decision_digest: [0; 32], orders: vec![reveal(0)] };
     assert_eq!(validate_batch(&a, &rules, &ok), Ok(0), "reveals are free");
     let (mut with, mut without) = (a.clone(), a.clone());
-    resolve_tick(&mut with, &rules, &TickInput { vrf: vrf(1), batches: vec![ok] }).unwrap();
-    resolve_tick(&mut without, &rules, &TickInput { vrf: vrf(1), batches: vec![OrderBatch { civ: 0, tick: 1, decision_digest: [0; 32], orders: vec![] }] }).unwrap();
+    resolve_tick(&mut with, &rules, &TickInput { vrf: vrf(1), batches: vec![ok], ..Default::default() }).unwrap();
+    resolve_tick(&mut without, &rules, &TickInput { vrf: vrf(1), batches: vec![OrderBatch { civ: 0, tick: 1, role: Role::General, member: NOBODY, adopt: vec![], decision_digest: [0; 32], orders: vec![] }], ..Default::default() }).unwrap();
     assert_ne!(with.event_head, without.event_head);
 }

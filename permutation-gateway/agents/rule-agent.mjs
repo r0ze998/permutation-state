@@ -1,14 +1,16 @@
 #!/usr/bin/env node
-// Reference agent 1: rule-based, no model. It sees only its fogged view and
-// uses the same previews a human sees, then signs its own batches.
+// Reference agent 1: rule-based, no model. A member of one nation: it sees
+// only its nation's fogged view, uses the same previews a human sees, signs
+// its own batches for the offices it holds, and proposes the rest.
 //
-//   node agents/rule-agent.mjs --name Gaia --server http://127.0.0.1:4186 --gateway http://127.0.0.1:4191
+//   node agents/rule-agent.mjs --name Gaia --server http://127.0.0.1:4185 --gateway http://127.0.0.1:4191 [--civ 5] [--stand Science,Diplomat]
 //
 // Priorities each tick: research → found cities → expand (settlers) →
 // scout the fog → take favourable fights → keep every city building →
 // accept peace. The rationale names what it did and why, and is revealed
 // after the tick.
 import { parseArgs, runAgent } from './runner.mjs';
+import { officeOf } from '../client/src/game.mjs';
 
 const TECH_PLAN = ['Agriculture', 'BronzeWorking', 'Writing', 'Masonry', 'Mysticism', 'Currency', 'Archery', 'Mathematics', 'Philosophy',
   'IronWorking', 'HorsebackRiding', 'Engineering', 'Astronomy', 'Physics', 'CelestialMechanics', 'Chivalry'];
@@ -23,7 +25,7 @@ const ja = k => JA[k] || k;
 
 const dist = (a, b) => (Math.abs(a.q - b.q) + Math.abs(a.r - b.r) + Math.abs(a.q + a.r - b.q - b.r)) / 2;
 
-async function decide({ game, view: v, map }) {
+async function decide({ game, view: v, map, held }) {
   const me = v.me;
   const tiles = map.tiles.map(([q, r, terrain, river, resource], i) => ({ q, r, terrain, river, resource, i }));
   const tileAt = new Map(tiles.map(t => [`${t.q},${t.r}`, t]));
@@ -117,16 +119,25 @@ async function decide({ game, view: v, map }) {
     if (pick) add(80, { type: 'SetQueue', city: c.id, items: [pick.item] }, `都市${c.id}: ${ja(pick.item.building || pick.item.unit || pick.item.kind)}（${why}）`);
   }
 
-  // Spend the budget on the most important orders.
-  const budget = v.economy.budget + v.economy.bank;
-  const chosen = wish.sort((a, b) => b.pri - a.pri).slice(0, budget);
+  // Spend each office's budget on its most important orders; for offices
+  // we do not hold, keep the best two as proposals.
+  const spendable = Object.fromEntries((v.economy.offices || []).map(o => [o.role, o.spendable]));
+  const used = {};
+  const chosen = [];
+  for (const w of wish.sort((a, b) => b.pri - a.pri)) {
+    const role = officeOf(w.order, v);
+    const cap = held.includes(role) ? spendable[role] ?? 0 : 2;
+    if ((used[role] ?? 0) >= cap) continue;
+    used[role] = (used[role] ?? 0) + 1;
+    chosen.push(w);
+  }
   const check = await game.validate(chosen.map(w => w.order));
   const skipped = new Set((check.warnings || []).map(w => w.index));
   const final = chosen.filter((_, i) => !skipped.has(i));
-  const notes = final.map(w => w.note);
-  const rationale = notes.length ? `${notes.join(' / ')}（残り枠${budget - final.length}）` : '動かす必要のある命令はありません。枠を繰り越します。';
+  const notes = final.filter(w => held.includes(officeOf(w.order, v))).map(w => w.note);
+  const rationale = notes.length ? `${notes.join(' / ')}（${held.join('・')}として）` : '担当の命令で急ぐものはありません。枠を繰り越します。';
   return { orders: final.map(w => w.order), rationale };
 }
 
 const args = parseArgs(process.argv, { name: 'Gaia' });
-runAgent({ name: args.name, policy: 'rule-agent/v1', decide, args }).catch(e => { console.error(e); process.exit(1); });
+runAgent({ name: args.name, policy: 'rule-agent/v2', decide, args }).catch(e => { console.error(e); process.exit(1); });

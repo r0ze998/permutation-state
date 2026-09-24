@@ -1,90 +1,85 @@
-// End-to-end season on a plain local validator (no ER): USDC entry, on-chain
-// genesis, every tick resolved on chain, payouts and claims.
+// Program regression check on the base layer alone (no ER), Game Design V5:
+// create a season, register AI members with test USDC, run genesis, seat the
+// members and hold the first election, then play every tick on base — each
+// office submits an (empty) sealed batch, the input is published
+// (LogTickInput) and the tick resolved (ResolveTick, in parts when a tick
+// exceeds one transaction) — and finally FinishSeason and the conservation
+// of the vault. Prints the compute used per tick.
 //
-//   node scripts/e2e-base.mjs --rpc http://127.0.0.1:8989 --program <id> [--ticks 180]
-import { Connection, Keypair, LAMPORTS_PER_SOL, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
+//   node scripts/e2e-base.mjs [--base http://127.0.0.1:18899] [--ticks 180] [--state e2e-base.json]
+//
+// Works against the local stack's base validator or a plain
+// solana-test-validator with the program loaded (`--bpf-program`).
+import { createHash } from 'node:crypto';
+import { Connection } from '@solana/web3.js';
 import { ChainClient } from '../client/src/chain.mjs';
-import { createMintIxs, createTokenAccountIxs, mintToIx, tokenBalance } from '../src/spl.mjs';
-import { decodeSeason, decodeWorldHeader, decodeOrdersHeader } from '../client/src/codec.mjs';
+import { decodeNationHeader, decodeSeason, decodeWorldHeader, NOBODY, ROLES } from '../client/src/codec.mjs';
+import { loadConfig, namedKey } from '../src/config.mjs';
+import { bootstrap, defaultRoster, startAndDelegate } from '../src/season.mjs';
+import { send } from '../src/send.mjs';
+import { tokenBalance } from '../src/spl.mjs';
 
-const arg = (k, d) => { const i = process.argv.indexOf(k); return i > 0 ? process.argv[i + 1] : d; };
-const rpc = arg('--rpc', 'http://127.0.0.1:8989');
-const programId = arg('--program', 'J4aZxe3ynkS7kcvCpKbp6aFYw8d9vtrRDsgSEi1niU6n');
-const maxTicks = Number(arg('--ticks', '180'));
-const conn = new Connection(rpc, 'confirmed');
-const USDC = 1_000_000n;
+const argv = process.argv.includes('--state') ? process.argv : [...process.argv, '--state', 'e2e-base.json'];
+const cfg = loadConfig(argv);
+const maxTicks = Number(argv[argv.indexOf('--ticks') + 1] ?? 180) || 180;
+const base = new Connection(cfg.baseRpc, 'confirmed');
+const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
+const PLANS = [[12], [5, 7, 12], [2, 4, 5, 6, 7, 9, 12]];
 
-async function send(ixs, signers, label) {
-  const tx = new Transaction().add(...ixs);
-  try {
-    const sig = await sendAndConfirmTransaction(conn, tx, signers, { commitment: 'confirmed', skipPreflight: true });
-    const t = await conn.getTransaction(sig, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 });
-    if (t?.meta?.err) throw Object.assign(new Error(`${label} failed ${JSON.stringify(t.meta.err)}`), { logs: t.meta.logMessages });
-    return t;
-  } catch (e) {
-    const logs = e.logs || (await e.getLogs?.(conn).catch(() => null));
-    console.error(label, 'FAILED', String(e).slice(0, 200), (logs || []).slice(-6).join('\n  '));
-    throw e;
-  }
-}
-const airdrop = async kp => conn.confirmTransaction(await conn.requestAirdrop(kp.publicKey, 20 * LAMPORTS_PER_SOL), 'confirmed');
-
-const admin = Keypair.generate(), crank = Keypair.generate(), mint = Keypair.generate();
-await airdrop(admin); await airdrop(crank);
-await send(await createMintIxs(conn, { payer: admin.publicKey, mint: mint.publicKey, authority: admin.publicKey }), [admin, mint], 'mint');
-
-const seasonId = BigInt(Date.now());
-const chain = new ChainClient(programId, seasonId);
-await send(chain.createSeason({ admin: admin.publicKey, mint: mint.publicKey, maxCivs: 6, entryFee: 10n * USDC, exchangeCredit: 20n * USDC, tickSeconds: 1, worldSeed: new Uint8Array(32).fill(7), crank: crank.publicKey }), [admin], 'createSeason');
-for (let k = 0; k < chain.worldChunks.length; k++) await send(chain.allocWorld({ payer: crank.publicKey, chunk: k }), [crank], `allocWorld ${k}`);
-
-const players = [];
-for (let i = 0; i < 6; i++) {
-  const p = { wallet: Keypair.generate(), session: Keypair.generate(), token: Keypair.generate() };
-  await airdrop(p.wallet);
-  await send([...await createTokenAccountIxs(conn, { payer: p.wallet.publicKey, account: p.token.publicKey, mint: mint.publicKey, owner: p.wallet.publicKey }),
-    mintToIx({ mint: mint.publicKey, dest: p.token.publicKey, authority: admin.publicKey, amount: 100n * USDC })], [p.wallet, p.token, admin], 'fund');
-  // Fee payer = the crank (like the x402 facilitator): players need no SOL for entry.
-  await send(chain.joinSeason({ player: p.wallet.publicKey, feePayer: crank.publicKey, civ: i, playerToken: p.token.publicKey, mint: mint.publicKey,
-    name: ['Aster', 'Borealis', 'Cinder', 'Dunmar', 'Ember', 'Fjordhal'][i], kind: i === 0 ? 0 : 1, session: p.session.publicKey, payout: p.wallet.publicKey }), [crank, p.wallet], `join ${i}`);
-  players.push(p);
-}
-const vault0 = await tokenBalance(conn, chain.vault);
-console.log('joined 6, vault', Number(vault0) / 1e6, 'USDC');
-
-await send(chain.startSeason({ authority: crank.publicKey }), [crank], 'startSeason');
-let steps = 0;
-for (;;) {
-  const s = decodeSeason((await conn.getAccountInfo(chain.season)).data);
-  if (s.status === 'Running') break;
-  await send(chain.genesisStep({ civs: 6, work: 50 }), [crank], 'genesis'); steps++;
-}
-const season = decodeSeason((await conn.getAccountInfo(chain.season)).data);
-console.log('genesis done in', steps, 'steps; season seed', Buffer.from(season.seasonSeed).toString('hex').slice(0, 16));
+let state = await bootstrap({ base, cfg, roster: defaultRoster({ humans: 0, ai: 2 }), log });
+state = await startAndDelegate({ base, er: null, cfg, state, log, delegate: false });
+const chain = new ChainClient(cfg.programId, BigInt(state.seasonId));
+const crank = namedKey('crank');
+const nations = state.nations.length;
+const sessionOf = new Map(state.members.map(m => [m.index, namedKey(`member${m.key}-session`)]));
 
 const cus = [];
-for (let t = 0; t < maxTicks; t++) {
-  const o0 = decodeOrdersHeader((await conn.getAccountInfo(chain.orders(0))).data);
-  await Promise.all(players.map((p, i) => send(chain.submitOrders({ signer: p.session.publicKey, civ: i, tick: o0.openTick, decisionDigest: new Uint8Array(32), orders: [] }), [crank, p.session], `submit ${i}`)));
-  const r = await send(chain.resolveTick({ civs: 6 }), [crank], `resolve ${t}`);
-  cus.push(r.meta.computeUnitsConsumed);
-  if (t % 30 === 0) console.log('tick', t, 'CU', r.meta.computeUnitsConsumed);
+for (;;) {
+  const accounts = await base.getMultipleAccountsInfo([...chain.worldChunks, ...chain.nations(nations)], 'confirmed');
+  const header = decodeWorldHeader(Buffer.concat(accounts.slice(0, chain.worldChunks.length).map(a => a.data)));
+  if (header.meta.finished) break;
+  const heads = accounts.slice(chain.worldChunks.length).map(a => decodeNationHeader(a.data));
+  const tick = heads[0].openTick;
+  if (tick >= maxTicks) break;
+  // Every office seals an empty batch (in parallel): the holder's session
+  // key, the crank for a vacant office.
+  await Promise.all(heads.flatMap(n => ROLES.map((role, i) => {
+    if (n.submitted[i] === tick) return null;
+    const signer = n.officers[i] === NOBODY ? crank : sessionOf.get(n.officers[i]);
+    const decisionDigest = createHash('sha256').update(`e2e-base/${state.seasonId}/${tick}/${n.civ}/${role}`).digest();
+    return send(base, chain.submitOrders({ signer: signer.publicKey, civ: n.civ, role, tick, decisionDigest, orders: [] }),
+      signer === crank ? [crank] : [crank, signer], `submit ${n.civ}/${role}`);
+  })));
+  // Publish the input (every chunk), then resolve.
+  for (let chunk = 0, total = 1; chunk < total; chunk++) {
+    const r = await send(base, chain.logTickInput({ nations, chunk }), [crank], `publish tick ${tick} input ${chunk}`);
+    total = r.records.find(x => x.tag === 'PS_INPUT')?.total ?? total;
+  }
+  let used = null;
+  for (const plan of PLANS) {
+    try {
+      used = [];
+      for (const to of plan) used.push((await send(base, chain.resolveTick({ nations, to }), [crank], `resolve tick ${tick} to ${to}`)).cu);
+      break;
+    } catch (e) {
+      if (!/exceeded CUs|ProgramFailedToComplete/.test(`${e.message} ${(e.logs || []).join(' ')}`) || plan === PLANS.at(-1)) throw e;
+    }
+  }
+  cus.push(used.reduce((a, b) => a + b, 0));
+  if (tick % 20 === 0) log(`tick ${tick} resolved on base (${used.join(' + ')} CU)`);
 }
-const header = decodeWorldHeader((await conn.getAccountInfo(chain.world)).data);
-console.log('ticks resolved', cus.length, 'max CU', Math.max(...cus), 'finished', header.meta.finished);
-if (!header.meta.finished) process.exit(0);
+const avg = cus.reduce((a, b) => a + b, 0) / cus.length;
+log(`${cus.length} ticks on base: ${Math.round(avg)} CU per tick on average, ${Math.max(...cus)} at most`);
 
-await send(chain.finishSeason(), [crank], 'finish');
-const done = decodeSeason((await conn.getAccountInfo(chain.season)).data);
-console.log('status', done.status, 'payouts', done.payouts.map(x => Number(x) / 1e6), 'rollover', Number(done.rollover) / 1e6);
-let paid = 0n;
-for (let i = 0; i < 6; i++) {
-  if (done.payouts[i] === 0n) continue;
-  await send(chain.claim({ owner: players[i].wallet.publicKey, civ: i, dest: players[i].token.publicKey, mint: mint.publicKey }), [crank, players[i].wallet], `claim ${i}`);
-  paid += done.payouts[i];
-}
-const vault1 = await tokenBalance(conn, chain.vault);
-console.log('claimed', Number(paid) / 1e6, 'vault left', Number(vault1) / 1e6, 'conserved', vault0 - paid === vault1);
-let double = false;
-try { await send(chain.claim({ owner: players[0].wallet.publicKey, civ: 0, dest: players[0].token.publicKey, mint: mint.publicKey }), [crank, players[0].wallet], 'double claim'); } catch { double = true; }
-console.log('second claim rejected', double);
+let s = decodeSeason((await base.getAccountInfo(chain.season, 'confirmed')).data);
+const header = decodeWorldHeader(Buffer.concat((await base.getMultipleAccountsInfo(chain.worldChunks, 'confirmed')).map(a => a.data)));
+if (header.meta.finished && s.status === 'Running') {
+  await send(base, chain.finishSeason(), [crank], 'finishSeason');
+  s = decodeSeason((await base.getAccountInfo(chain.season, 'confirmed')).data);
+  const paid = s.payouts.reduce((a, b) => a + b, 0n);
+  const vault = await tokenBalance(base, chain.vault);
+  const refunds = s.treasuryFinal.reduce((a, b) => a + b, 0n);
+  const ok = paid + s.ops + refunds === vault;
+  log(`season ${s.status}: pool ${s.pool}, payouts ${paid}, operations ${s.ops}, treasury refunds ${refunds}, vault ${vault} — conserved ${ok}`);
+  if (!ok) process.exit(1);
+} else log(`stopped at tick ${cus.length} (season ${s.status}); run with --ticks 180 to finish it`);

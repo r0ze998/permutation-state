@@ -96,15 +96,19 @@ pub fn check(state: &WorldState, rules: &Ruleset) -> Vec<Violation> {
             id: held,
         });
     }
-    // Exchange season spend cap (§11.3).
-    let cap = rules.entry_fee_usdc * rules.exchange_spend_cap_bps as u64 / 10_000;
-    for c in &state.civs {
-        if c.exchange_spent > cap {
-            v.push(Violation {
-                invariant: 1,
-                what: "Exchange spend cap exceeded",
-                id: c.id as u64,
-            });
+    // V5: offices are held by members of the nation, at most
+    // `max_offices_per_member` each (V5 §5.1, D12).
+    for (civ, n) in state.nations.iter().enumerate() {
+        for m in n.offices {
+            if m == crate::gov::NOBODY {
+                continue;
+            }
+            if !crate::gov::is_member_of(state, m, civ as u16) {
+                v.push(Violation { invariant: 12, what: "office held by a non-member", id: m as u64 });
+            }
+            if n.offices_held(m) > rules.max_offices_per_member as usize {
+                v.push(Violation { invariant: 12, what: "too many offices", id: m as u64 });
+            }
         }
     }
     // 11. Territory stays within the largest territory radius of its city (§5.4).
@@ -119,14 +123,23 @@ pub fn check(state: &WorldState, rules: &Ruleset) -> Vec<Violation> {
     v
 }
 
-/// Invariants 6 and 10 across a tick: scores and tech counts never decrease.
+/// Invariants 6 and 10 across a tick: achievement records, merit and tech
+/// counts never decrease.
 pub fn check_monotonic(before: &WorldState, after: &WorldState) -> Vec<Violation> {
     let mut v = Vec::new();
+    for (a, b) in before.members.iter().zip(after.members.iter()) {
+        if a.merit.iter().zip(b.merit.iter()).any(|(x, y)| y < x) || b.windows & a.windows != a.windows {
+            v.push(Violation { invariant: 6, what: "merit or activity decreased", id: 0 });
+        }
+    }
     for (a, b) in before.civs.iter().zip(after.civs.iter()) {
-        let (s0, s1) = (&a.scores, &b.scores);
-        if s1.dominion < s0.dominion
-            || s1.concord_raw < s0.concord_raw
-            || s1.science_total < s0.science_total
+        let (s0, s1) = (&a.achievements, &b.achievements);
+        if s1.wealth < s0.wealth
+            || s1.star_gate_max < s0.star_gate_max
+            || (s0.ever_suzerain && !s1.ever_suzerain)
+            || (s0.envoy_sent && !s1.envoy_sent)
+            || s1.trade.iter().zip(&s0.trade).any(|(y, x)| y < x)
+            || b.scores.science_total < a.scores.science_total
         {
             v.push(Violation {
                 invariant: 6,

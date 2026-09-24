@@ -20,15 +20,20 @@ pub enum ChainError {
     WrongTick,
     OverBudget,
     TooEarly,
-    MissingOrders,
+    MissingNation,
     WrongDelegationProgram,
     WrongMagicProgram,
     AlreadyClaimed,
     NothingToClaim,
     SeasonNotOver,
-    TooManyCivs,
+    WrongOffice,
     InvalidParams,
     WrongWorld,
+    InboxFull,
+    /// The open tick's input is being published; submissions wait for the next tick.
+    TickFrozen,
+    /// The open tick's input has not been published in full (`LogTickInput`).
+    InputNotPublished,
 }
 
 impl From<ChainError> for ProgramError {

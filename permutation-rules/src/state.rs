@@ -5,6 +5,7 @@
 
 use crate::buildings::{Building, BuildingSet};
 use crate::fixed::{Milli, MilliTroops};
+use crate::gov::{Credit, Member, MemberId, Nation};
 use crate::hex::Hex;
 use crate::map::Map;
 use crate::rng::Seed;
@@ -19,6 +20,7 @@ pub type CivId = u16;
 pub type CityId = u32;
 pub type UnitId = u32;
 
+/// Self-declared kind of a member (V5 D16). Cosmetic: no rule reads it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum DeclaredKind {
     Human,
@@ -28,22 +30,33 @@ pub enum DeclaredKind {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Scores {
-    pub dominion: u64,
-    pub concord_raw: u64,
     pub science_total: u64,
+    /// Stages standing now (lost with the city).
     pub star_gate_stages: u8,
     pub star_gate_tick: Option<u16>,
-    /// Highest total population reached so far (Concord new-high term).
-    pub max_pop: u32,
+}
+
+/// Progress a nation keeps for its milestones (V5 §6). Every field only grows.
+#[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct Achievements {
+    /// Gold earned by the nation's own economy this season, whole units ("富").
+    pub wealth: u64,
+    /// Trade volume in whole gold per counterparty: index = civ id, and the
+    /// last slot is the gold market (V5 §6.2 "交易量").
+    pub trade: Vec<u64>,
+    pub ever_suzerain: bool,
+    pub envoy_sent: bool,
+    /// Most Star Gate stages ever completed.
+    pub star_gate_max: u8,
+    /// Provisional tiers per path and era at the last scoring phase, for announcements.
+    pub tiers: [u8; 4],
+    pub era: u8,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Civ {
     pub id: CivId,
     pub name: String,
-    pub declared_kind: DeclaredKind,
-    pub payout_wallet: [u8; 32],
-    pub joined_tick: u16,
 
     pub gold: Milli,
     pub science_store: Milli,
@@ -53,9 +66,11 @@ pub struct Civ {
 
     pub techs: TechSet,
     pub research_queue: Vec<Tech>,
+    /// Who set the research queue (merit for completed techs, V5 §7.3).
+    pub research_credit: Credit,
 
-    pub order_bank: u16,
-    /// Budget fixed at the start of the current tick (§4.1: cities counted at tick start).
+    /// Nation budget `B` fixed at the start of the current tick (§4.1:
+    /// cities counted at tick start), split among the offices (V5 §5.2).
     pub tick_budget: u16,
     /// Gold went negative in phase 7 of this tick (§6.1); read by phase 8.
     pub deficit: bool,
@@ -69,17 +84,20 @@ pub struct Civ {
     pub capital: Option<CityId>,
     pub last_city_lost: Option<u16>,
     pub protection_lost: bool,
+    /// Tick of the last Star Gate stage completed (v0.2 C2 spacing).
+    pub last_star_gate: Option<u16>,
 
-    /// Ticks with at least one order since joining (Participation, §14.5).
-    pub active_ticks: u16,
-    /// USDC (6 decimals) spent on the Exchange this season, notional + fee (§11.3).
-    pub exchange_spent: u64,
-    /// USDC (6 decimals) delegated to the ER for this civ: deposit + sales − purchases.
+    /// The nation treasury on the ER, USDC base units: deposits + sales −
+    /// purchases (V5 §7.5).
     pub usdc: u64,
-    /// Whole units bought on the Exchange this season, by `GoodKind` (§11.3 re-sale rule).
+    /// USDC spent on the market this season, notional + fee + tariff: the
+    /// position on the tariff curve (V5 §7.5).
+    pub market_spent: u64,
+    /// Whole units bought on the market this season, by `GoodKind` (re-sale rule).
     pub exchange_bought: [u32; 5],
 
     pub scores: Scores,
+    pub achievements: Achievements,
 }
 
 impl Civ {
@@ -126,11 +144,14 @@ pub struct City {
     pub attacked_this_tick: bool,
     pub focus: Focus,
     pub queue: Vec<QueueItem>,
+    /// Last officer to set the queue (merit for completed items, V5 §7.3).
+    pub queue_credit: Credit,
+    /// Last officer to set the queue or the focus (merit for growth).
+    pub steward_credit: Credit,
     pub captured_tick: Option<u16>,
     pub captured_from: Option<CivId>,
-    /// Civs that have already scored a capture of this city this season (§14.1).
-    pub scored_by: Vec<CivId>,
-    /// Whether the current holding can earn Dominion capture points (§14.1).
+    /// Whether the current holding counts as a captured city held (V5 §6.2):
+    /// founded by another civ, and old enough when taken.
     pub capture_scores: bool,
     /// Remaining ticks of razing, if being razed (§8.3).
     pub razing: Option<u8>,
@@ -233,6 +254,8 @@ pub struct Proposal {
     pub from: CivId,
     pub to: CivId,
     pub tick: u16,
+    /// The proposing diplomat (treaty merit, V5 §7.3).
+    pub credit: Credit,
 }
 
 /// Previous tick's per-tick yields, in whole units. Transfer caps (§10.5)
@@ -271,6 +294,47 @@ pub struct CityState {
     pub influence: Vec<Milli>,
     pub suzerain: Option<CivId>,
     pub captured_by: Option<CivId>,
+    /// Influence sent, per (civ, officer): suzerain merit is shared by it (V5 §7.3).
+    pub envoys: Vec<EnvoyShare>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct EnvoyShare {
+    pub civ: CivId,
+    pub credit: Credit,
+    pub influence: u64,
+}
+
+/// An order that did not take effect in the tick just resolved (v0.2 C12).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct Skip {
+    pub civ: CivId,
+    pub role: u8,
+    /// Position in that office's batch (own orders, then adopted proposals);
+    /// `u16::MAX` = the whole batch.
+    pub index: u16,
+    /// `checks::Blocked::code`.
+    pub reason: u8,
+}
+
+/// Goods bought on the market, arriving at `due` (V5 §7.5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct Delivery {
+    pub civ: CivId,
+    pub good: crate::orders::Good,
+    pub qty: u32,
+    pub due: u16,
+}
+
+/// Merit credited during the current tick, for clients (not hashed: the
+/// totals are in `Member::merit`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MeritEntry {
+    pub member: MemberId,
+    pub path: crate::gov::Path,
+    pub milli: u32,
+    /// Event kind, e.g. `b"capture"`.
+    pub what: &'static [u8],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -307,6 +371,22 @@ pub struct WorldState {
     /// Orders compiled from standing rules in phase 3, consumed by phases 4–5
     /// and cleared at commit (§13). Kept in state so phases can resume.
     pub implicit: Vec<(CivId, crate::orders::Order)>,
+    /// Grievance added to each `grievance` entry during the current tick: it
+    /// does not decay in that tick (v0.2 C7). Cleared by the decay in phase 8.
+    pub grievance_fresh: Vec<u16>,
+
+    // --- V5 ---
+    pub members: Vec<Member>,
+    /// One government per civ.
+    pub nations: Vec<Nation>,
+    /// The orders accepted for this tick, merged per civ in phase 0 and
+    /// cleared at commit.
+    pub tick_orders: Vec<crate::orders::CivOrders>,
+    pub last_skipped: Vec<Skip>,
+    pub deliveries: Vec<Delivery>,
+    /// Not hashed; see `MeritEntry`.
+    #[borsh(skip)]
+    pub merit_log: Vec<MeritEntry>,
 }
 
 impl WorldState {
@@ -347,8 +427,14 @@ impl WorldState {
 
     pub fn add_grievance(&mut self, aggressor: CivId, victim: CivId, amount: u16) {
         let n = self.civs.len();
-        let g = &mut self.grievance[aggressor as usize * n + victim as usize];
-        *g = g.saturating_add(amount);
+        let i = aggressor as usize * n + victim as usize;
+        self.grievance[i] = self.grievance[i].saturating_add(amount);
+        self.grievance_fresh[i] = self.grievance_fresh[i].saturating_add(amount);
+    }
+
+    /// Record an order that did not take effect.
+    pub fn skip(&mut self, civ: CivId, origin: (u8, u16), reason: u8) {
+        self.last_skipped.push(Skip { civ, role: origin.0, index: origin.1, reason });
     }
 
     pub fn living_cities_of(&self, civ: CivId) -> impl Iterator<Item = &City> {

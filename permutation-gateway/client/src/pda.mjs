@@ -9,4 +9,7 @@ export const seasonPda = (programId, id) => PublicKey.findProgramAddressSync([Bu
 export const WORLD_CHUNKS = 8;
 export const worldChunkPda = (programId, id, k) => PublicKey.findProgramAddressSync([Buffer.from('world'), u64(id), Buffer.from([k])], programId)[0];
 export const vaultPda = (programId, id) => PublicKey.findProgramAddressSync([Buffer.from('vault'), u64(id)], programId)[0];
-export const ordersPda = (programId, id, civ) => PublicKey.findProgramAddressSync([Buffer.from('orders'), u64(id), u16(civ)], programId)[0];
+/** A nation's office batches and governance inbox (delegated to the ER during play). */
+export const nationPda = (programId, id, civ) => PublicKey.findProgramAddressSync([Buffer.from('nation'), u64(id), u16(civ)], programId)[0];
+/** One member per wallet per season (base layer). */
+export const memberPda = (programId, id, wallet) => PublicKey.findProgramAddressSync([Buffer.from('member'), u64(id), new PublicKey(wallet).toBuffer()], programId)[0];

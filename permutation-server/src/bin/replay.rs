@@ -7,16 +7,17 @@
 //!     cargo run --release --bin replay -- ../permutation-rules/viewer/replay.json
 
 use permutation_rules::buildings::Building;
-use permutation_rules::genesis::{new_season, Entry};
+use permutation_rules::genesis::{nation_entries, new_season};
 use permutation_rules::invariants;
-use permutation_rules::orders::OrderBatch;
 use permutation_rules::rng::Seed;
-use permutation_rules::state::{CivId, DeclaredKind, Owner, Relation, WorldState};
+use permutation_rules::state::{CivId, Owner, Relation, WorldState};
 use permutation_rules::tick::{resolve_tick, TickInput};
 use permutation_rules::{Preset, Ruleset};
-use permutation_server::bots::{city_count, troops_of, Bot, NAMES, PERSONAS};
-use permutation_server::fog::Fog;
+use permutation_server::bots::{city_count, troops_of, PERSONAS};
+use permutation_server::driver::{seat_ai_members, AllAi, Planner};
 use permutation_server::events::diff_events;
+use permutation_server::fog::Fog;
+use permutation_server::ledger::Ledger;
 use std::fmt::Write as _;
 
 // ------------------------------------------------------------------ recording
@@ -110,8 +111,8 @@ fn frame(s: &WorldState, events: &[String]) -> String {
                 "[{},{},{},{},{},{},{},{},{},{},{},{}]",
                 c.gold / 1000,
                 c.scores.science_total,
-                c.scores.dominion,
-                c.scores.concord_raw,
+                c.achievements.era,
+                c.achievements.tiers.iter().map(|t| *t as u32).sum::<u32>(),
                 c.scores.star_gate_stages,
                 c.techs.count(),
                 c.war_weariness,
@@ -164,26 +165,10 @@ fn main() {
     let rules = Ruleset::new(Preset::Blitz);
     let world: Seed = *b"permutation-state/world/blitz-01";
     let season: Seed = *b"permutation-state/season/demo-01";
-    let entries: Vec<Entry> = NAMES
-        .iter()
-        .enumerate()
-        .map(|(i, name)| Entry {
-            name: name.to_string(),
-            declared_kind: if i % 2 == 0 {
-                DeclaredKind::Agent
-            } else {
-                DeclaredKind::Human
-            },
-            payout_wallet: [i as u8 + 1; 32],
-            exchange_deposit: 0,
-        })
-        .collect();
-    let mut s = new_season(&rules, &world, &season, &entries).expect("genesis");
-    let mut bots: Vec<Bot> = PERSONAS
-        .iter()
-        .enumerate()
-        .map(|(i, p)| Bot::new(i as CivId, *p))
-        .collect();
+    let mut s = new_season(&rules, &world, &season, &nation_entries(6)).expect("genesis");
+    seat_ai_members(&mut s, &rules, &[3, 3, 2, 2, 1, 0]).expect("first election");
+    let mut planner = Planner::new(6);
+    let mut ledger = Ledger::new(b"replay");
 
     let mut out = String::new();
     out.push_str("{\"meta\":{");
@@ -207,9 +192,9 @@ fn main() {
             json_str(&mut e, &c.name);
             write!(
                 e,
-                ",\"persona\":\"{}\",\"kind\":\"{:?}\"}}",
+                ",\"persona\":\"{}\",\"members\":{}}}",
                 PERSONAS[c.id as usize].name(),
-                c.declared_kind
+                s.nations[c.id as usize].members
             )
             .unwrap();
             e
@@ -244,27 +229,19 @@ fn main() {
     out.push_str("],\"frames\":[");
     out.push_str(&frame(&s, &[]));
 
-    let names: Vec<&str> = NAMES.to_vec();
+    let names: Vec<String> = s.civs.iter().map(|c| c.name.clone()).collect();
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
     let mut roots = Vec::new();
     // Bots decide from their own fogged belief state, like any player (§7.4).
     let mut fog = Fog::new(&s);
     while s.tick < rules.ticks_per_season {
-        let batches: Vec<OrderBatch> = bots
-            .iter_mut()
-            .map(|b| {
-                let view = fog.belief(&s, b.civ);
-                OrderBatch {
-                    civ: b.civ,
-                    tick: s.tick,
-                    decision_digest: [0; 32],
-                    orders: b.orders(&view, &rules, &fog.memory(b.civ).explored),
-                }
-            })
-            .collect();
+        ledger.observe(&s, &fog);
+        let gov = planner.member_gov(&s, &rules, &fog, &AllAi);
+        let batches = planner.batches(&s, &rules, &fog, &mut ledger, &AllAi);
         let mut vrf = [0u8; 32];
         vrf[..2].copy_from_slice(&s.tick.to_le_bytes());
         let prev = s.clone();
-        let root = resolve_tick(&mut s, &rules, &TickInput { vrf, batches }).expect("tick");
+        let root = resolve_tick(&mut s, &rules, &TickInput { vrf, batches, gov, deposits: vec![] }).expect("tick");
         let v = invariants::check(&s, &rules);
         assert!(v.is_empty(), "invariant violated at tick {}: {v:?}", s.tick);
         roots.push(root);
@@ -287,15 +264,15 @@ fn main() {
     eprintln!("wrote {} ({} bytes, {} ticks)", out_path, out.len(), s.tick);
     for c in &s.civs {
         eprintln!(
-            "{:9} {:8} cities {} pop {:3} techs {:2} stages {} dom {:6} con {:6} sci {:5} troops {}",
+            "{:9} {:8} cities {} pop {:3} techs {:2} stages {} tiers {:?} era {} sci {:5} troops {}",
             c.name,
             PERSONAS[c.id as usize].name(),
             city_count(&s, c.id),
             s.living_cities_of(c.id).map(|x| x.pop).sum::<u32>(),
             c.techs.count(),
             c.scores.star_gate_stages,
-            c.scores.dominion,
-            c.scores.concord_raw,
+            c.achievements.tiers,
+            c.achievements.era,
             c.scores.science_total,
             troops_of(&s, c.id)
         );

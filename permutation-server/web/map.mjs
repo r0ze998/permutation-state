@@ -2,7 +2,7 @@
  *  Adapted from the /civilization/ prototype renderer (same geometry, painter
  *  and terrain art). Everything drawn comes from the server state; no
  *  decorative entities are invented. */
-import { CIV_COLORS, CIV_DASH, cityName } from './i18n.mjs';
+import { CIV_COLORS, cityName, itemGlyph, UNIT_GLYPH, STANDING_GLYPH } from './i18n.mjs';
 
 const SQRT3 = Math.sqrt(3);
 const RADIUS = 44;
@@ -227,9 +227,11 @@ export class WorldMap {
     this._drawSites(ctx);
     this._drawUnits(ctx, now);
     this._drawDraftPaths(ctx, now);
-    this._drawLabels(ctx);
     this._drawHoverEta(ctx);
     ctx.restore();
+    // Banners and flags are drawn in screen space so they stay readable at any
+    // zoom (Civ keeps its city banners and unit flags a constant size).
+    this._drawBanners(ctx, now);
     this._drawCompass(ctx);
   }
   _visible(t, pad = 120) {
@@ -250,7 +252,7 @@ export class WorldMap {
     // Lenses push the painted terrain back so the data reads first (Civ VI style).
     if (this.lens !== 'normal') for (const t of tiles) { const p = project(t.q, t.r); polygon(ctx, hexPoints(p.x, p.y, .65), 'rgba(238,234,218,.58)'); }
     for (const t of tiles) this._drawTerritory(ctx, t);
-    ctx.globalAlpha = this.lens === 'normal' ? 1 : .32;
+    ctx.globalAlpha = this.lens !== 'normal' ? .32 : this.zoom < .6 ? .55 : 1; // far zoom: banners, flags and borders first
     for (const t of tiles) this._drawDecor(ctx, t);
     ctx.globalAlpha = 1;
     for (const t of tiles) this._drawLens(ctx, t);
@@ -336,16 +338,20 @@ export class WorldMap {
   _drawBorders(ctx, t) {
     const o = this.owner(t); if (o === null) return;
     const p = project(t.q, t.r), pts = hexPoints(p.x, p.y, 3.2);
-    const width = (this.lens === 'political' ? 4 : 3) / Math.max(.8, this.zoom * .9);
+    const width = (this.lens === 'political' ? 3.6 : 2.8) / Math.max(.8, this.zoom * .9);
+    const ally = o !== this.me && this.view.civs[o]?.relation === 'alliance';
+    ctx.lineCap = 'round';
     for (let i = 0; i < 6; i++) {
       const [dq, dr] = EDGE_NEIGHBOR[i]; const n = this.tiles.get(key(t.q + dq, t.r + dr));
       if (n && this.owner(n) === o) continue;
       const a = pts[i], b = pts[(i + 1) % 6];
-      ctx.strokeStyle = shade(CIV_COLORS[o], -.08); ctx.lineWidth = width; ctx.lineCap = 'round';
-      ctx.setLineDash(CIV_DASH[o % CIV_DASH.length].map(v => v * 1.6));
+      // Civ-style border: a dark casing, then the solid civ colour on top.
+      ctx.strokeStyle = 'rgba(24,36,30,.42)'; ctx.lineWidth = width + 2.4;
       ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+      ctx.strokeStyle = CIV_COLORS[o]; ctx.lineWidth = width; ctx.stroke();
+      if (ally) { ctx.strokeStyle = 'rgba(255,248,226,.85)'; ctx.lineWidth = width * .35; ctx.stroke(); } // allies: a light inner line
     }
-    ctx.setLineDash([]); ctx.lineCap = 'butt';
+    ctx.lineCap = 'butt';
   }
   _drawDecor(ctx, t) {
     const p = project(t.q, t.r); const site = this.cityAt?.has(t.id) || this.csAt?.has(t.id);
@@ -504,8 +510,7 @@ export class WorldMap {
     for (const u of units) {
       const t = this.tiles.get(key(u.q, u.r)); if (!t || !this._visible(t)) continue;
       const pos = this._unitPos(u.id, now) || project(u.q, u.r);
-      const inSite = this.cityAt.has(t.id) || this.csAt.has(t.id);
-      const x = pos.x + (inSite ? (u.civilian ? -24 : 22) : 0), y = pos.y + (inSite ? 16 : 4);
+      const { x, y } = this._unitAnchor(u, t, pos);
       const col = u.owner === 'barbarian' ? '#5f5a52' : CIV_COLORS[u.owner];
       const mine = u.owner === this.me;
       const selected = this.overlay.unit === u.id;
@@ -526,22 +531,13 @@ export class WorldMap {
           if (mounted) { ctx.save(); ctx.translate(x + dx, y + dy + 2); this._horse(ctx, tier2 ? '#6e5a44' : '#a07a55', .9); ctx.restore(); }
           this._figure(ctx, x + dx, y + dy - (mounted ? 7 : 0), col, now, pos.moving, ranged ? 'bow' : 'spear', tier2);
         }
-        // banner and troop badge
-        ctx.fillStyle = '#5b4d3b'; ctx.fillRect(x + 15, y - 38, 1.5, 36);
-        polygon(ctx, [[x + 16.5, y - 38], [x + 30, y - 34], [x + 16.5, y - 29]], col, shade(col, -.35), .6);
-        const label = (u.troops / 10).toFixed(u.troops % 10 ? 1 : 0);
-        ctx.font = '600 9px system-ui, sans-serif'; const w = ctx.measureText(label).width + 10;
-        rounded(ctx, x - w / 2, y + 9, w, 13, 6); ctx.fillStyle = mine ? '#284d40' : 'rgba(250,247,236,.95)'; ctx.fill();
-        ctx.strokeStyle = alpha(col, .9); ctx.lineWidth = 1; ctx.stroke();
-        ctx.fillStyle = mine ? '#fff1cc' : '#3b4a43'; ctx.textAlign = 'center'; ctx.fillText(label, x, y + 19);
-      }
-      if (mine && u.standing) { // standing-rule badge
-        const g = { AutoDefend: '⛨', Retreat: '↩', Patrol: '⟳' }[u.standing.kind] || '⚙';
-        ctx.fillStyle = '#f7f1dc'; ctx.strokeStyle = '#284d40'; ctx.lineWidth = 1.2;
-        ctx.beginPath(); ctx.arc(x - 15, y - 24, 7, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-        ctx.fillStyle = '#284d40'; ctx.font = '700 9px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(g, x - 15, y - 23.5); ctx.textBaseline = 'alphabetic';
       }
     }
+  }
+  /** Where a unit stands on its tile (sites put civilians left, armies right). */
+  _unitAnchor(u, t, pos) {
+    const inSite = this.cityAt.has(t.id) || this.csAt.has(t.id);
+    return { x: pos.x + (inSite ? (u.civilian ? -24 : 22) : 0), y: pos.y + (inSite ? 16 : 4) };
   }
   _figure(ctx, x, y, col, now, moving, kind = 'spear', tier2 = false) {
     const bob = moving ? Math.sin(now / 115) * 1.1 : 0, stride = moving ? Math.sin(now / 100) * 2.3 : 0;
@@ -694,6 +690,19 @@ export class WorldMap {
       ctx.strokeStyle = 'rgba(46,58,50,.55)'; ctx.lineWidth = 5.5 / this.zoom; ctx.stroke(); // casing keeps it legible on any terrain
       ctx.strokeStyle = '#f6dc86'; ctx.lineWidth = 2.6 / this.zoom; ctx.setLineDash([7 / this.zoom, 6 / this.zoom]); ctx.lineDashOffset = -now / 60; ctx.stroke(); ctx.setLineDash([]);
       polygon(ctx, hexPoints(last.x, last.y, 7), 'rgba(246,220,134,.22)', '#f6dc86', 2 / this.zoom);
+      // ①②③: where each tick's movement ends (Civ's turn markers), when the reach is known
+      const reach = this.overlay.reach;
+      if (reach?.size && (d.dto?.unit ?? d.dto?.army) === this.overlay.unit) {
+        d.path.forEach(([q, r], i) => {
+          const tk = reach.get(key(q, r)), next = d.path[i + 1] ? reach.get(key(...d.path[i + 1])) : undefined;
+          if (tk === undefined || (next !== undefined && next === tk)) return;
+          const n = project(q, r); const rr = 9 / this.zoom;
+          ctx.fillStyle = '#1f3a30'; ctx.beginPath(); ctx.arc(n.x, n.y - 14 / this.zoom, rr, 0, Math.PI * 2); ctx.fill();
+          ctx.strokeStyle = '#f6dc86'; ctx.lineWidth = 1.5 / this.zoom; ctx.stroke();
+          ctx.fillStyle = '#f6dc86'; ctx.font = `800 ${11 / this.zoom}px system-ui`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          ctx.fillText(String(tk), n.x, n.y - 13.5 / this.zoom); ctx.textBaseline = 'alphabetic';
+        });
+      }
       ctx.fillStyle = '#2e3a32'; ctx.beginPath(); ctx.arc(last.x, last.y, 5.5 / this.zoom, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = '#f6dc86'; ctx.beginPath(); ctx.arc(last.x, last.y, 3.2 / this.zoom, 0, Math.PI * 2); ctx.fill();
     }
@@ -704,39 +713,155 @@ export class WorldMap {
       ctx.font = 'bold 14px Georgia, serif'; ctx.fillStyle = '#a8483c'; ctx.textAlign = 'center'; ctx.fillText('⚔', b.x, b.y - 22);
     }
   }
-  _drawLabels(ctx) {
-    if (this.zoom < .55) return;
-    const civs = this.view.civs;
-    for (const c of this.view.cities) {
-      const t = this.tiles.get(key(c.q, c.r)); if (!t || !this._visible(t)) continue;
-      const p = project(c.q, c.r);
-      const stale = c.seenTick !== null && c.seenTick !== undefined;
-      const name = `${c.capital ? '★ ' : ''}${cityName(c.id)}${stale ? ` · T${c.seenTick}` : ''}`;
-      ctx.globalAlpha = stale ? .75 : 1;
-      ctx.font = '500 10px Georgia, "Yu Mincho", serif';
-      const w = Math.max(64, ctx.measureText(name).width + 34), y = p.y + 22;
-      rounded(ctx, p.x - w / 2, y, w, 19, 5); ctx.fillStyle = c.owner === this.me ? 'rgba(43,74,60,.95)' : 'rgba(248,242,220,.95)'; ctx.fill();
-      ctx.strokeStyle = 'rgba(116,119,83,.25)'; ctx.lineWidth = .6; ctx.stroke();
-      const col = c.owner === null ? '#9a9a8c' : CIV_COLORS[c.owner];
-      rounded(ctx, p.x - w / 2 + 4, y + 4, 11, 11, 3); ctx.fillStyle = col; ctx.fill();
-      ctx.font = 'bold 8px system-ui'; ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.fillText(`${c.pop}`, p.x - w / 2 + 9.5, y + 12.5);
-      ctx.font = '500 10px Georgia, "Yu Mincho", serif'; ctx.fillStyle = c.owner === this.me ? '#f4e5b8' : '#425747'; ctx.fillText(name, p.x + 7, y + 13.5);
-      // defence bar under the banner
-      const frac = c.defenseMax ? clamp(c.defense / c.defenseMax, 0, 1) : 0;
-      rounded(ctx, p.x - w / 2 + 3, y + 21, w - 6, 3, 1.5); ctx.fillStyle = 'rgba(80,80,70,.25)'; ctx.fill();
-      if (frac > 0) { rounded(ctx, p.x - w / 2 + 3, y + 21, (w - 6) * frac, 3, 1.5); ctx.fillStyle = frac < .35 ? '#c0584a' : '#7f9a6a'; ctx.fill(); }
-      if (c.owner !== null && c.owner !== this.me && civs[c.owner]?.relation === 'war') { ctx.font = 'bold 11px Georgia'; ctx.fillStyle = '#a8483c'; ctx.fillText('⚔', p.x + w / 2 + 7, y + 13); }
-      ctx.globalAlpha = 1;
+  // ---------------------------------------------------------------- banners and flags (screen space)
+  _screen(p) { return { x: p.x * this.zoom + this.offset.x, y: p.y * this.zoom + this.offset.y }; }
+  _seatKind(civ) { return this.view.seats?.find(s => s.civ === civ)?.kind; }
+  _drawBanners(ctx, now) {
+    const s = clamp(this.zoom, .82, 1.12);
+    // attack forecasts on target hexes (the combat preview on the map)
+    for (const a of this.overlay.attacks || []) {
+      if (!a.forecast || a.blocked) continue;
+      const t = this.tiles.get(a.id); if (!t) continue;
+      const q = this._screen(project(t.q, t.r));
+      const f = a.forecast, win = (f.toDefender ?? 0) >= (f.toAttacker ?? 0) * 1.3;
+      const text = f.captureCivilian ? '捕獲' : `敵 −${((f.toDefender ?? 0) / 10).toFixed(0)} ／ 自 −${((f.toAttacker ?? 0) / 10).toFixed(0)}`;
+      this._chip(ctx, q.x, q.y - 34 * this.zoom, text, win ? '#2f5a45' : '#8e3b2f', '#fff6e0', 11);
     }
     for (const cs of this.view.cityStates) {
       if (cs.capturedBy !== null) continue;
       const t = this.tiles.get(key(cs.q, cs.r)); if (!t || !this._visible(t)) continue;
-      const p = project(cs.q, cs.r), text = `都市国家 ${cs.id + 1}`;
-      ctx.font = '500 9px system-ui, sans-serif'; const w = ctx.measureText(text).width + 14;
-      rounded(ctx, p.x - w / 2, p.y + 17, w, 16, 5); ctx.fillStyle = 'rgba(244,240,224,.94)'; ctx.fill();
-      ctx.strokeStyle = cs.suzerain !== null ? CIV_COLORS[cs.suzerain] : 'rgba(116,119,83,.3)'; ctx.lineWidth = 1; ctx.stroke();
-      ctx.fillStyle = '#4c5a50'; ctx.textAlign = 'center'; ctx.fillText(text, p.x, p.y + 28.5);
+      const q = this._screen(project(cs.q, cs.r));
+      this._cityStateBanner(ctx, q.x, q.y + 20 * this.zoom, cs, s);
     }
+    for (const c of this.view.cities) {
+      const t = this.tiles.get(key(c.q, c.r)); if (!t || !this._visible(t)) continue;
+      const q = this._screen(project(c.q, c.r));
+      this._cityBanner(ctx, q.x, q.y + 22 * this.zoom, c, s);
+    }
+    this._unitFlags(ctx, now, s);
+  }
+  _chip(ctx, x, y, text, bg, fg, size = 11) {
+    ctx.font = `700 ${size}px system-ui, sans-serif`;
+    const w = ctx.measureText(text).width + 14;
+    rounded(ctx, x - w / 2, y - 10, w, 20, 10); ctx.fillStyle = bg; ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.fillStyle = fg; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(text, x, y + .5); ctx.textBaseline = 'alphabetic';
+  }
+  /** Civ-style city banner: [pop] ★ Name [production | owner kind] with defence and wall bars. */
+  _cityBanner(ctx, x, y, c, s) {
+    const mine = c.owner === this.me;
+    const col = c.owner === null ? '#8d8a7c' : CIV_COLORS[c.owner];
+    const stale = c.seenTick !== null && c.seenTick !== undefined;
+    const name = `${cityName(c.id)}${stale ? ` · T${c.seenTick}` : ''}`;
+    ctx.save(); ctx.translate(x, y); ctx.scale(s, s); ctx.globalAlpha = stale ? .72 : 1;
+    ctx.font = '600 13px Georgia, "Yu Mincho", serif';
+    const nameW = ctx.measureText(name).width;
+    const star = c.capital ? 14 : 0;
+    // right slot: your production, or who owns it
+    let right = '', rightBg = 'rgba(255,255,255,.18)', rightFg = '#fff7df';
+    if (mine) {
+      const item = (c.queue || [])[0];
+      if (item) right = itemGlyph(item); else { right = '!'; rightBg = '#e8b04a'; rightFg = '#3a2a0c'; }
+    } else if (c.owner !== null) {
+      right = { human: '人', external: 'AI', bot: 'BOT' }[this._seatKind(c.owner)] || '';
+    }
+    ctx.font = '700 11px system-ui, sans-serif';
+    const rightW = right ? Math.max(20, ctx.measureText(right).width + 10) : 0;
+    const w = 30 + star + nameW + (rightW ? rightW + 8 : 10) + 4, h = 26, left = -w / 2;
+    // band
+    ctx.shadowColor = 'rgba(20,32,26,.35)'; ctx.shadowBlur = 6; ctx.shadowOffsetY = 2;
+    rounded(ctx, left, 0, w, h, 13);
+    const g = ctx.createLinearGradient(0, 0, 0, h); g.addColorStop(0, shade(col, -.05)); g.addColorStop(1, shade(col, -.32));
+    ctx.fillStyle = g; ctx.fill();
+    ctx.shadowColor = 'transparent';
+    ctx.strokeStyle = mine ? '#f0cf7a' : 'rgba(22,32,27,.55)'; ctx.lineWidth = mine ? 2 : 1.2; ctx.stroke();
+    // population medallion
+    ctx.beginPath(); ctx.arc(left + 13, h / 2, 11, 0, Math.PI * 2); ctx.fillStyle = '#fbf6e6'; ctx.fill();
+    ctx.strokeStyle = shade(col, -.4); ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.fillStyle = '#233a31'; ctx.font = '800 12px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(String(c.pop), left + 13, h / 2 + .5);
+    // capital star + name
+    let cx = left + 28;
+    if (star) { ctx.fillStyle = '#f3d27a'; ctx.font = '700 12px system-ui'; ctx.textAlign = 'left'; ctx.fillText('★', cx, h / 2 + .5); cx += star; }
+    ctx.fillStyle = '#fff8e6'; ctx.font = '600 13px Georgia, "Yu Mincho", serif'; ctx.textAlign = 'left'; ctx.fillText(name, cx, h / 2 + 1);
+    // right slot
+    if (rightW) {
+      const rx = left + w - rightW - 5;
+      rounded(ctx, rx, 4, rightW, h - 8, 9); ctx.fillStyle = rightBg; ctx.fill();
+      ctx.fillStyle = rightFg; ctx.font = '700 11px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.fillText(right, rx + rightW / 2, h / 2 + .5);
+    }
+    ctx.textBaseline = 'alphabetic';
+    // defence and walls under the band
+    const bw = w - 26, bx = left + 13;
+    const frac = c.defenseMax ? clamp(c.defense / c.defenseMax, 0, 1) : 0;
+    rounded(ctx, bx, h + 3, bw, 4, 2); ctx.fillStyle = 'rgba(30,40,34,.45)'; ctx.fill();
+    if (frac > 0) { rounded(ctx, bx, h + 3, bw * frac, 4, 2); ctx.fillStyle = frac < .35 ? '#d8604e' : frac < .7 ? '#e0b24a' : '#7fc06a'; ctx.fill(); }
+    if (c.walls) { rounded(ctx, bx, h + 9, bw, 3, 1.5); ctx.fillStyle = '#6fa3d8'; ctx.fill(); }
+    // Star Gate stages: public, so the race is visible to everyone
+    if (c.stages > 0) this._chip(ctx, left + w + 16, h / 2, `✦${c.stages}`, '#2d3c58', '#f5dd8c', 11);
+    if (c.owner !== null && c.owner !== this.me && this.view.civs[c.owner]?.relation === 'war') this._chip(ctx, left - 14, h / 2, '⚔', '#8e3b2f', '#fff', 11);
+    ctx.restore();
+  }
+  _cityStateBanner(ctx, x, y, cs, s) {
+    const glyph = { Scientific: '学', Mercantile: '商', Agrarian: '農' }[cs.specialty] || '◆';
+    const sz = cs.suzerain !== null && cs.suzerain !== undefined ? CIV_COLORS[cs.suzerain] : null;
+    const text = `都市国家 ${cs.id + 1}`;
+    const inf = cs.myInfluence || cs.topInfluence ? `影響 ${cs.myInfluence}/${cs.topInfluence}` : '';
+    ctx.save(); ctx.translate(x, y); ctx.scale(s, s);
+    ctx.font = '600 12px Georgia, "Yu Mincho", serif'; const tw = ctx.measureText(text).width;
+    ctx.font = '600 10px system-ui'; const iw = inf ? ctx.measureText(inf).width + 10 : 0;
+    const w = 34 + tw + iw + 10, h = 22, left = -w / 2;
+    rounded(ctx, left, 0, w, h, 5); ctx.fillStyle = 'rgba(247,242,226,.96)'; ctx.fill();
+    ctx.strokeStyle = sz || 'rgba(96,100,80,.5)'; ctx.lineWidth = sz ? 2 : 1; ctx.stroke();
+    // diamond emblem in the suzerain's colour
+    ctx.save(); ctx.translate(left + 13, h / 2); ctx.rotate(Math.PI / 4);
+    ctx.fillStyle = sz || '#cfc7aa'; ctx.fillRect(-8, -8, 16, 16); ctx.strokeStyle = '#4b4a3c'; ctx.lineWidth = 1; ctx.strokeRect(-8, -8, 16, 16); ctx.restore();
+    ctx.fillStyle = sz ? '#fff' : '#3d4a40'; ctx.font = '700 10px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(glyph, left + 13, h / 2 + .5);
+    ctx.fillStyle = '#34463c'; ctx.font = '600 12px Georgia, "Yu Mincho", serif'; ctx.textAlign = 'left'; ctx.fillText(text, left + 27, h / 2 + 1);
+    if (inf) { ctx.fillStyle = '#6a6f5a'; ctx.font = '600 10px system-ui'; ctx.fillText(inf, left + 27 + tw + 8, h / 2 + 1); }
+    ctx.textBaseline = 'alphabetic'; ctx.restore();
+  }
+  /** Unit flags: a shield (armies) or disc (civilians) in the civ colour with the
+   *  unit glyph, troops underneath, ×n when several share a tile, and a "z"
+   *  on your units that have no order this tick. */
+  _unitFlags(ctx, now, s) {
+    const drafted = new Set((this.drafts || []).map(d => d.dto?.unit ?? d.dto?.army ?? d.dto?.settler).filter(x => x !== undefined));
+    const byTile = new Map();
+    for (const u of this.view.units) { const k = key(u.q, u.r); if (!byTile.has(k)) byTile.set(k, []); byTile.get(k).push(u); }
+    for (const u of this.view.units) {
+      const t = this.tiles.get(key(u.q, u.r)); if (!t || !this._visible(t)) continue;
+      const pos = this._unitPos(u.id, now) || project(u.q, u.r);
+      const a = this._unitAnchor(u, t, pos);
+      const q = this._screen({ x: a.x, y: a.y - 44 });
+      const col = u.owner === 'barbarian' ? '#5f5a52' : CIV_COLORS[u.owner];
+      const mine = u.owner === this.me;
+      const sameSide = byTile.get(t.id).filter(v => v.civilian === u.civilian);
+      ctx.save(); ctx.translate(q.x, q.y); ctx.scale(s * 1.35, s * 1.35);
+      ctx.shadowColor = 'rgba(20,30,25,.35)'; ctx.shadowBlur = 4; ctx.shadowOffsetY = 1.5;
+      ctx.beginPath();
+      if (u.civilian) ctx.arc(0, 0, 10, 0, Math.PI * 2);
+      else { ctx.moveTo(-10, -11); ctx.lineTo(10, -11); ctx.lineTo(10, 2); ctx.quadraticCurveTo(10, 9, 0, 13); ctx.quadraticCurveTo(-10, 9, -10, 2); ctx.closePath(); }
+      ctx.fillStyle = col; ctx.fill(); ctx.shadowColor = 'transparent';
+      ctx.strokeStyle = mine && this.overlay.unit === u.id ? '#ffe39a' : 'rgba(22,30,26,.75)'; ctx.lineWidth = mine && this.overlay.unit === u.id ? 2.4 : 1.4; ctx.stroke();
+      ctx.fillStyle = '#fffaf0'; ctx.font = '700 12px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(UNIT_GLYPH[u.type] || '•', 0, u.civilian ? .5 : -1);
+      if (!u.civilian) { // troops under the shield
+        const label = (u.troops / 10).toFixed(u.troops % 10 ? 1 : 0);
+        ctx.font = '700 10px system-ui, sans-serif'; const w = ctx.measureText(label).width + 10;
+        rounded(ctx, -w / 2, 14, w, 14, 7); ctx.fillStyle = mine ? '#1f3a30' : 'rgba(250,246,234,.96)'; ctx.fill();
+        ctx.strokeStyle = col; ctx.lineWidth = 1.2; ctx.stroke();
+        ctx.fillStyle = mine ? '#fff0c4' : '#2b3a33'; ctx.fillText(label, 0, 21.5);
+      }
+      if (sameSide.length > 1 && sameSide[0].id === u.id) this._badge(ctx, 11, -11, `×${sameSide.length}`, '#f3d27a', '#3a2c0c');
+      if (mine && u.standing) this._badge(ctx, -12, -11, STANDING_GLYPH[u.standing.kind] || '⚙', '#f7f1dc', '#284d40');
+      else if (mine && !u.path?.length && !drafted.has(u.id)) this._badge(ctx, -12, -11, 'z', '#e8b04a', '#3a2a0c');
+      ctx.textBaseline = 'alphabetic'; ctx.restore();
+    }
+  }
+  _badge(ctx, x, y, text, bg, fg) {
+    ctx.font = '800 9px system-ui, sans-serif'; const w = Math.max(14, ctx.measureText(text).width + 7);
+    rounded(ctx, x - w / 2, y - 7, w, 14, 7); ctx.fillStyle = bg; ctx.fill(); ctx.strokeStyle = 'rgba(22,30,26,.7)'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.fillStyle = fg; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(text, x, y + .5);
   }
   _drawCompass(ctx) {
     if (this.width < 900 || this.height < 640) return;

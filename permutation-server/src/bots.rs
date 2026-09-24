@@ -248,7 +248,10 @@ impl Bot {
         let civ = self.civ;
         let me = &s.civs[civ as usize];
         let n = s.civs.len() as CivId;
-        let budget = (me.tick_budget + me.order_bank) as usize;
+        // Each office has its own budget and bank (V5 §5.2).
+        let budget: [usize; 4] = core::array::from_fn(|i| {
+            permutation_rules::orders::spendable(s, r, civ, permutation_rules::gov::Role::ALL[i]) as usize
+        });
         // (priority, order): lower number = more important.
         let mut wish: Vec<(u8, Order)> = Vec::new();
 
@@ -271,7 +274,7 @@ impl Bot {
                     ProposalKind::Peace => Order::AcceptPeace { civ: p.from },
                     ProposalKind::Nap { .. } => Order::AcceptNap {
                         civ: p.from,
-                        bond: 30,
+                        bond: r.nap_min_bond,
                     },
                     ProposalKind::Alliance => Order::AcceptAlliance { civ: p.from },
                 };
@@ -311,39 +314,21 @@ impl Bot {
                     }
                 }
             }
-            Persona::Diplomat => {
-                if s.tick == 6 || s.tick == 40 {
-                    for o in 0..n {
-                        if o != civ && persona_of(o) == Persona::Diplomat {
-                            wish.push((1, Order::ProposeAlliance { civ: o }));
-                        }
+            Persona::Diplomat | Persona::Builder | Persona::Scholar => {
+                // Keep up to three treaty partners: offer non-aggression pacts to
+                // the nearest civs at peace, and (diplomats) turn pacts into alliances.
+                let partners = (0..n)
+                    .filter(|o| *o != civ && matches!(s.relation(civ, *o), Relation::Nap { .. } | Relation::Alliance { .. }))
+                    .count();
+                let offered = |o: CivId| s.proposals.iter().any(|p| p.from == civ && p.to == o);
+                if s.tick % 5 == 0 && partners < 3 && me.gold >= 50_000 {
+                    if let Some(t) = nearest_civ(&|o| matches!(s.relation(civ, o), Relation::Peace) && !offered(o)) {
+                        wish.push((2, Order::ProposeNap { civ: t, bond: r.nap_min_bond }));
                     }
                 }
-                if me.influence >= 15_000 {
-                    if let Some(cap) = my_cap {
-                        if let Some(cs) = s
-                            .city_states
-                            .iter()
-                            .filter(|cs| cs.captured_by.is_none())
-                            .min_by_key(|cs| cs.hex.distance(cap))
-                        {
-                            let amount = (me.influence / 1000) as u32;
-                            wish.push((
-                                3,
-                                Order::SendEnvoy {
-                                    city_state: cs.id,
-                                    influence: amount,
-                                },
-                            ));
-                        }
-                    }
-                }
-            }
-            Persona::Builder | Persona::Scholar => {
-                if s.tick % 20 == 10 && me.gold >= 60_000 {
-                    if let Some(t) = nearest_civ(&|o| matches!(s.relation(civ, o), Relation::Peace))
-                    {
-                        wish.push((2, Order::ProposeNap { civ: t, bond: 30 }));
+                if self.persona == Persona::Diplomat && s.tick % 10 == 5 {
+                    if let Some(t) = nearest_civ(&|o| matches!(s.relation(civ, o), Relation::Nap { .. }) && !offered(o)) {
+                        wish.push((1, Order::ProposeAlliance { civ: t }));
                     }
                 }
             }
@@ -353,11 +338,35 @@ impl Bot {
                 wish.push((1, Order::ProposePeace { civ: o }));
             }
         }
+        // ---- envoys: every persona courts a city-state, diplomats earliest.
+        // The target is the free city-state where this civ is closest to
+        // (or already is) suzerain, then the nearest.
+        let envoy_at = match self.persona {
+            Persona::Diplomat => 15_000,
+            Persona::Warlord => 60_000,
+            _ => 30_000,
+        };
+        if me.influence >= envoy_at {
+            if let Some(cap) = my_cap {
+                if let Some(cs) = s
+                    .city_states
+                    .iter()
+                    .filter(|cs| cs.captured_by.is_none() && cs.suzerain.is_none_or(|z| z == civ))
+                    .min_by_key(|cs| (std::cmp::Reverse(cs.influence[civ as usize]), cs.hex.distance(cap)))
+                {
+                    let amount = (me.influence / 1000) as u32;
+                    wish.push((3, Order::SendEnvoy { city_state: cs.id, influence: amount }));
+                }
+            }
+        }
 
-        // ---- research
-        if me.research_queue.is_empty() {
+        // ---- research: keep three techs queued
+        if me.research_queue.len() < 3 {
             let mut plan = me.techs;
-            let mut q = Vec::new();
+            for t in &me.research_queue {
+                plan.insert(*t);
+            }
+            let mut q = me.research_queue.clone();
             let order = self
                 .persona
                 .research()
@@ -372,7 +381,7 @@ impl Bot {
                     q.push(*t);
                 }
             }
-            if !q.is_empty() {
+            if q.len() > me.research_queue.len() {
                 wish.push((2, Order::SetResearch { techs: q }));
             }
         }
@@ -621,22 +630,25 @@ impl Bot {
             }
         }
 
-        // Keep the most important orders that fit the budget, one per unit.
+        // Keep the most important orders that fit each office's budget, one per unit.
         wish.sort_by_key(|(p, _)| *p);
         let mut used_units = BTreeSet::new();
         let mut out = Vec::new();
-        let mut cost = 0usize;
+        let mut cost = [0usize; 4];
         for (_, o) in wish {
             if let Some(u) = o.commanded_unit() {
                 if !used_units.insert(u) {
                     continue;
                 }
             }
+            let Some(role) = permutation_rules::gov::Role::ALL.into_iter().find(|x| permutation_rules::orders::role_allows(s, *x, &o)) else {
+                continue;
+            };
             let c = o.cost() as usize;
-            if cost + c > budget {
+            if cost[role.index()] + c > budget[role.index()] {
                 continue;
             }
-            cost += c;
+            cost[role.index()] += c;
             out.push(o);
         }
         out

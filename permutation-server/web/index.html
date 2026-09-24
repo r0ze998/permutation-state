@@ -4,8 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#243e38">
-  <title>PERMUTATION STATE — ひとつの世界、いくつもの文明</title>
+  <title>PERMUTATION STATE — 6つの国、ひとつの世界</title>
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="v41.css">
 </head>
 <body>
 <main id="game">
@@ -16,7 +17,9 @@
     <div class="brand"><span class="brand-mark">✳</span><span>PERMUTATION<em>STATE</em></span></div>
     <div class="civ-chip" id="civ-chip"></div>
     <nav class="resources" id="resources" aria-label="あなたの文明の資源"></nav>
-    <div class="clock" id="clock" tabindex="0" aria-live="polite"></div>
+    <div class="clock" id="clock" tabindex="0"></div>
+    <button class="chain-beat" id="chain-beat" type="button" title="チェーン（` キー）"></button>
+    <div class="pool-chip" id="pool-chip" title="賞金プール"></div>
     <div class="top-actions">
       <button class="icon-btn" id="pause-btn" type="button" title="時計の停止・再開（このPCだけの試作）">❚❚</button>
       <button class="icon-btn" id="advance-btn" type="button" title="今すぐ次のティックへ（一人用の試作のみ）">⏭</button>
@@ -28,15 +31,17 @@
     <div class="eyebrow"><span class="live-dot" id="live-dot"></span>ONE WORLD · SEASON 0 · BLITZ</div>
     <h1 id="civ-title">—</h1>
     <div class="sub" id="civ-sub"></div>
-    <div class="tracks-mini" id="tracks-mini"></div>
+    <div class="tracker" id="tracker"></div>
   </section>
 
   <nav class="world-nav" aria-label="パネル">
+    <button class="nav-btn" data-drawer="nation" type="button"><span class="g">⚖</span><span class="l">国の広場</span><span class="dot" id="dot-nation" hidden></span></button>
+    <button class="nav-btn" data-drawer="era" type="button"><span class="g">✺</span><span class="l">時代</span></button>
+    <button class="nav-btn" data-drawer="merit" type="button"><span class="g">◈</span><span class="l">功績</span></button>
     <button class="nav-btn" data-drawer="cities" type="button"><span class="g">⌂</span><span class="l">都市・軍</span><span class="dot" id="dot-cities" hidden></span></button>
     <button class="nav-btn" data-drawer="research" type="button"><span class="g">✧</span><span class="l">研究</span><span class="dot" id="dot-research" hidden></span></button>
     <button class="nav-btn" data-drawer="diplomacy" type="button"><span class="g">✉</span><span class="l">外交</span><span class="dot" id="dot-diplomacy" hidden></span></button>
-    <button class="nav-btn" data-drawer="market" type="button"><span class="g">⇄</span><span class="l">市場</span></button>
-    <button class="nav-btn" data-drawer="victory" type="button"><span class="g">♛</span><span class="l">勝利</span></button>
+    <button class="nav-btn" data-drawer="market" type="button"><span class="g">⇄</span><span class="l">国庫・市場</span></button>
     <button class="nav-btn" data-drawer="chronicle" type="button"><span class="g">☷</span><span class="l">年代記</span></button>
     <button class="nav-btn" data-drawer="decisions" type="button"><span class="g">⛓</span><span class="l">判断ログ</span></button>
   </nav>
@@ -75,13 +80,17 @@
       <div class="commit" id="commit"></div>
       <label class="rationale" title="確定時にハッシュだけを送り、ティック解決後に公開されます（コミット・リビール）">
         <span class="rl">判断メモ</span>
-        <input id="rationale" type="text" maxlength="160" autocomplete="off" placeholder="任意・1行。ハッシュで先に約束し、解決後に公開されます">
+        <input id="rationale" type="text" maxlength="160" autocomplete="off" placeholder="判断メモ（任意）· 封印して送り、解決後に公開されます">
         <span class="digest" id="digest"></span>
       </label>
     </section>
   </footer>
 
-  <section class="next-action panel" id="next-action"></section>
+  <section class="next-action panel" id="next-action" hidden></section>
+  <nav class="ribbon" id="ribbon" aria-label="文明"></nav>
+  <div class="notif-stack" id="notif-stack" aria-live="polite"></div>
+  <button class="next-turn" id="next-turn" type="button"></button>
+  <aside class="chain-drawer" id="chain-drawer" hidden aria-label="チェーン"></aside>
   <div class="prototype-label">同じ霧の中で判断 · USDCはテスト用</div>
 
   <div class="loading" id="loading"><div class="mark">✳</div><h2>世界を読み込んでいます</h2><p class="desc" id="loading-text">ゲームサーバーに接続しています。</p></div>
@@ -89,28 +98,28 @@
 
 <dialog id="help" class="help">
   <div class="eyebrow">HOW TO PLAY · 遊び方</div>
-  <h2>ひとつの世界で、あなたの文明を率いる。</h2>
+  <h2>6つの国のひとつの国民として、国を動かす。</h2>
   <p class="desc" id="help-desc">6つの文明が同じ地図を共有しています。あなた以外の5文明はルールで動くボット（AGENT表示）です。30秒ごとの「ティック」で、全員の命令が同時に解決されます。</p>
   <ol>
-    <li><span><b>地図を選んで調べる。</b>都市・部隊・土地をクリックすると右のパネルに詳細と、できること・できない理由が出ます。</span></li>
-    <li><span><b>命令は「枠」を使う。</b>1ティックの枠は3＋都市数（最大8）。使わなかった枠は最大4ティック分まで繰り越せます。枠は人間もボットも同じです。</span></li>
-    <li><span><b>命令は下書き→確定。</b>下の命令ドックに貯めて「確定」。締切3秒前には自動で確定します。ティック内の送信順は結果に影響しません。</span></li>
-    <li><span><b>見えるのは視界の中だけ。</b>部隊と都市のまわり2マス（斥候は3、丘陵は+1、山の向こうは見えない）。一度見た都市と国境は霧の中でも「最後に見た姿」で残ります。ボットも同じ霧の中で判断しています。</span></li>
-    <li><span><b>勝ち方は3つ。</b>覇権（領土と占領）・科学（スターゲート3段階）・協調（侵略しない期間の繁栄と都市国家）。いずれも期間の積み上げで決まります。</span></li>
+    <li><span><b>国民になり、役職を選挙で決める。</b>国民は将軍・内政官・科学官・外交官を選びます（30ティックごと、投票は直前の10ティック）。1人2役職まで。立候補者がいない役職はAIの代行が務めます。</span></li>
+    <li><span><b>役職者は担当の命令を出す。</b>将軍＝軍と斥候、内政官＝都市と開拓者、科学官＝研究、外交官＝他国・都市国家・交易。国の枠（3＋都市数、最大8）を役職ごとに分け、使わない枠は役職ごとに繰り越せます。</span></li>
+    <li><span><b>国民は献策・支持・投票・リコール。</b>担当外の命令は「献策」になり、役職者が採用すると功績を半分ずつ分けます。働かない役職者は過半数でリコールできます。宣戦には外交官と、別の人の将軍か内政官の同意が必要です。</span></li>
+    <li><span><b>見えるのは国の視界の中だけ。</b>部隊と都市のまわり2マス（斥候は3、丘陵は+1、山の向こうは見えない）。AIも同じ霧の中で判断し、役職者は人間もAIも判断メモを封印して後で公開します。</span></li>
+    <li><span><b>4つの道で時代を進める。</b>覇権・繁栄・科学・協調の節目（各5段階）を達成すると点が入り、2つの道で同じ段階に届くと新しい時代へ。賞金プールは国の点で分け、国の中では20%を活動した国民で均等、残りを功績で分けます。</span></li>
   </ol>
   <p class="note">操作：クリック＝選択 · ダブルクリック＝選択中の部隊を移動 · ドラッグ＝地図移動 · スクロール＝拡大縮小 · Space＝次の判断 · Ctrl+Enter＝確定 · H＝首都へ · Esc＝閉じる。<br><span id="help-mode">ローカルでは時計を止められます。「次のティックへ」は自分の手番を終える操作で、席についた全員が終えるとすぐに解決されます。</span></p>
   <div class="row" style="justify-content:flex-end;margin-top:14px">
-    <button class="btn" type="button" data-close-help>読むだけにする（停止のまま）</button>
-    <button class="btn primary" type="button" data-start>時計を動かしてはじめる →</button>
+    <button class="btn" type="button" data-close-help>閉じる</button>
+    <button class="btn primary" type="button" data-start>はじめる（開幕前なら第1回選挙を行う）→</button>
   </div>
 </dialog>
 
 <dialog id="seats" class="help seats">
-  <div class="eyebrow">CHOOSE A SEAT · 席をえらぶ</div>
-  <h2>どの文明を率いますか。</h2>
-  <p class="desc"><span id="seat-mode"></span>。人間の席はひとり一席で、複数の人が同時に遊べます。この席はこのブラウザに保存されます。</p>
+  <div class="eyebrow">JOIN A NATION · 国民登録</div>
+  <h2>どの国の国民になりますか。</h2>
+  <p class="desc"><span id="seat-mode"></span>。国は6つ、人数に上限はありません。人の少ない国ほど1人あたりの取り分は大きくなります。登録はこのブラウザに保存されます。</p>
   <ul class="seat-list" id="seat-list"></ul>
-  <p class="note">席を取らずに<a href="spectate.html">観戦する</a>（全文明を霧なしで表示）。AI エージェントとして参加する方法は <a href="llms.txt">llms.txt</a> にあります。</p>
+  <p class="note">登録せずに<a href="spectate.html">観戦する</a>（全ての国を霧なしで表示）。AI エージェントとして参加する方法は <a href="llms.txt">llms.txt</a> にあります（人間と同じ権利です）。</p>
 </dialog>
 
 <script type="module" src="app.mjs"></script>

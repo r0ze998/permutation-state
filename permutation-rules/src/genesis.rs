@@ -6,8 +6,9 @@ use crate::fixed::milli;
 use crate::map::{generate, territory_radius};
 use crate::params::Ruleset;
 use crate::rng::{rand_id, Seed};
+use crate::gov::{Credit, Nation};
 use crate::state::{
-    City, CityState, Civ, DeclaredKind, Focus, Owner, Pool, Relation, Scores, Specialty,
+    Achievements, City, CityState, Civ, Focus, Owner, Pool, Relation, Scores, Specialty,
     StandingRule, Unit, WorldState,
 };
 use crate::tech::TechSet;
@@ -17,14 +18,21 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-/// One paid entry (§3.1).
+/// One nation of the season (V5 §4). Members join nations; nations are
+/// not players.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct Entry {
     pub name: String,
-    pub declared_kind: DeclaredKind,
-    pub payout_wallet: [u8; 32],
-    /// USDC (6 decimals) delegated to the ER for the Exchange at entry (§11.3).
-    pub exchange_deposit: u64,
+    /// USDC (6 decimals) in the nation's treasury at the start (deposits
+    /// made during registration, V5 §7.5).
+    pub treasury: u64,
+}
+
+/// The six nations of a V5 season (V5 §4).
+pub const NATIONS: [&str; 6] = ["Aster", "Borealis", "Cinder", "Dunmar", "Ember", "Fjordal"];
+
+pub fn nation_entries(n: usize) -> Vec<Entry> {
+    NATIONS.iter().take(n).map(|name| Entry { name: String::from(*name), treasury: 0 }).collect()
 }
 
 /// Build tick-0 state. `world_seed` drives terrain (first season only);
@@ -42,14 +50,8 @@ pub fn new_season(
 
 /// Entry rules checked before any generation work (§3.1).
 pub fn check_entries(rules: &Ruleset, entries: &[Entry]) -> Result<(), RulesError> {
-    for e in entries {
-        let same_wallet = entries
-            .iter()
-            .filter(|o| o.payout_wallet == e.payout_wallet)
-            .count();
-        if same_wallet > rules.max_civs_per_wallet as usize {
-            return Err(RulesError::WalletCap);
-        }
+    if entries.len() < 2 || entries.len() > rules.max_civs as usize {
+        return Err(RulesError::MapGeneration("a season needs 2..=max_civs nations"));
     }
     Ok(())
 }
@@ -93,9 +95,10 @@ pub fn season_from_map(
             attacked_this_tick: false,
             focus: Focus::Balanced,
             queue: Vec::new(),
+            queue_credit: Credit::NONE,
+            steward_credit: Credit::NONE,
             captured_tick: None,
             captured_from: None,
-            scored_by: Vec::new(),
             capture_scores: false,
             razing: None,
             heritage_until: None,
@@ -124,9 +127,6 @@ pub fn season_from_map(
         civs.push(Civ {
             id: civ_id,
             name: entry.name.clone(),
-            declared_kind: entry.declared_kind,
-            payout_wallet: entry.payout_wallet,
-            joined_tick: 0,
             gold: milli(rules.start_gold as i64),
             science_store: 0,
             influence: 0,
@@ -134,7 +134,7 @@ pub fn season_from_map(
             horses: 0,
             techs: TechSet::default(),
             research_queue: Vec::new(),
-            order_bank: 0,
+            research_credit: Credit::NONE,
             tick_budget: order_budget(rules, 1),
             deficit: false,
             troops_lost: 0,
@@ -145,14 +145,12 @@ pub fn season_from_map(
             capital: Some(city_id),
             last_city_lost: None,
             protection_lost: false,
-            active_ticks: 0,
-            exchange_spent: 0,
-            usdc: entry.exchange_deposit,
+            last_star_gate: None,
+            usdc: entry.treasury,
+            market_spent: 0,
             exchange_bought: [0; 5],
-            scores: Scores {
-                max_pop: 1,
-                ..Scores::default()
-            },
+            scores: Scores::default(),
+            achievements: Achievements { trade: vec![0; n + 1], ..Achievements::default() },
         });
     }
 
@@ -175,6 +173,7 @@ pub fn season_from_map(
                 influence: vec![0; n],
                 suzerain: None,
                 captured_by: None,
+                envoys: Vec::new(),
             }
         })
         .collect();
@@ -204,10 +203,17 @@ pub fn season_from_map(
             };
             2
         ],
-        usdc_deposited: entries.iter().map(|e| e.exchange_deposit).sum(),
+        usdc_deposited: entries.iter().map(|e| e.treasury).sum(),
         exchange_vault: 0,
         exchange_ops: 0,
         event_head: genesis,
         implicit: Vec::new(),
+        grievance_fresh: vec![0; n * n],
+        members: Vec::new(),
+        nations: vec![Nation::new(); n],
+        tick_orders: Vec::new(),
+        last_skipped: Vec::new(),
+        deliveries: Vec::new(),
+        merit_log: Vec::new(),
     })
 }

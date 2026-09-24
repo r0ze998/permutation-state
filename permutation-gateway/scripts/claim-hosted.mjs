@@ -1,44 +1,62 @@
-// After FinishSeason: every civ hosted by this gateway claims its payout
-// into its own test-USDC account, and the vault is checked for conservation.
+// After FinishSeason: every member hosted by this gateway claims its prize
+// (plus its treasury refund) into its own test-USDC account, the operations
+// share is withdrawn, and the vault is checked for conservation.
 //
 //   node scripts/claim-hosted.mjs [--state season.json]
 import { Connection, PublicKey } from '@solana/web3.js';
 import { ChainClient } from '../client/src/chain.mjs';
-import { decodeSeason } from '../client/src/codec.mjs';
+import { decodeMember, decodeSeason } from '../client/src/codec.mjs';
 import { loadConfig, namedKey, readState } from '../src/config.mjs';
 import { send } from '../src/send.mjs';
-import { tokenBalance } from '../src/spl.mjs';
+import { createTokenAccountIxs, tokenBalance } from '../src/spl.mjs';
 
 const cfg = loadConfig();
 const state = readState(cfg.stateFile);
 const base = new Connection(cfg.baseRpc, 'confirmed');
 const chain = new ChainClient(cfg.programId, BigInt(state.seasonId));
 const crank = namedKey('crank');
+const admin = namedKey('admin');
+const usdc = x => (Number(x) / 1e6).toFixed(2);
 const read = async () => decodeSeason((await base.getAccountInfo(chain.season, 'confirmed')).data);
 
 const s = await read();
 if (s.status !== 'Finalized') { console.error(`season ${state.seasonId} is ${s.status}, not Finalized`); process.exit(1); }
 const mint = new PublicKey(s.usdcMint);
 const vault0 = await tokenBalance(base, chain.vault);
-console.log(`season ${state.seasonId}: pool ${Number(s.pool) / 1e6} USDC, payouts [${s.payouts.map(p => Number(p) / 1e6).join(', ')}], rollover ${Number(s.rollover) / 1e6}`);
+const prizes = s.payouts.reduce((a, b) => a + b, 0n);
+console.log(`season ${state.seasonId}: pool ${usdc(s.pool)} USDC to ${s.payouts.filter(p => p > 0n).length} of ${s.memberCount} members (${usdc(prizes)} paid out, the rest is rounding), operations ${usdc(s.ops)}`);
 let paid = 0n;
-for (const c of state.civs) {
-  if (c.hosted === 'external') continue; // outside agents claim with their own wallet
-  const amount = s.payouts[c.civ] ?? 0n;
-  if (!amount || s.claimed[c.civ]) { console.log(`civ ${c.civ} ${c.name}: nothing to claim`); continue; }
-  const wallet = namedKey(`civ${c.civ}-wallet`);
-  const dest = new PublicKey(c.usdc);
+for (const m of state.members) {
+  if (m.hosted === 'external') continue; // outside agents claim with their own wallet
+  const wallet = namedKey(`member${m.key}-wallet`);
+  const acc = decodeMember((await base.getAccountInfo(chain.member(wallet.publicKey), 'confirmed')).data);
+  const prize = s.payouts[acc.index] ?? 0n;
+  const refund = s.treasury[acc.civ] ? acc.shares * s.treasuryFinal[acc.civ] / s.treasury[acc.civ] : 0n;
+  if (prize + refund === 0n || acc.claimed) { console.log(`member ${acc.index} ${m.name}: nothing to claim`); continue; }
+  const dest = new PublicKey(m.usdc);
   const before = await tokenBalance(base, dest);
-  const r = await send(base, chain.claim({ owner: wallet.publicKey, civ: c.civ, dest, mint }), [crank, wallet], `claim ${c.civ}`);
+  const r = await send(base, chain.claim({ wallet: wallet.publicKey, dest, mint }), [crank, wallet], `claim ${acc.index}`);
   const after = await tokenBalance(base, dest);
   paid += after - before;
-  console.log(`civ ${c.civ} ${c.name}: claimed ${Number(after - before) / 1e6} USDC (${r.signature.slice(0, 16)}…)`);
+  console.log(`member ${acc.index} ${m.name} (${state.nations[acc.civ]}): claimed ${usdc(after - before)} USDC = prize ${usdc(prize)} + treasury ${usdc(refund)} (${r.signature.slice(0, 16)}…)`);
+}
+// Operations share, to the admin's own test-USDC account.
+const opsAccount = namedKey('ops-usdc');
+if (!(await base.getAccountInfo(opsAccount.publicKey))) {
+  await send(base, await createTokenAccountIxs(base, { payer: crank.publicKey, account: opsAccount.publicKey, mint, owner: admin.publicKey }), [crank, opsAccount], 'ops account');
+}
+let ops = 0n;
+if (!s.opsWithdrawn) {
+  const before = await tokenBalance(base, opsAccount.publicKey);
+  await send(base, chain.withdrawOps({ admin: admin.publicKey, dest: opsAccount.publicKey, mint }), [crank, admin], 'withdraw ops');
+  ops = (await tokenBalance(base, opsAccount.publicKey)) - before;
+  console.log(`operations share withdrawn: ${usdc(ops)} USDC (20% of fees and of in-play income, plus rounding)`);
 }
 const vault1 = await tokenBalance(base, chain.vault);
-console.log(`vault ${Number(vault0) / 1e6} → ${Number(vault1) / 1e6}; conserved: ${vault0 - paid === vault1}`);
-const first = state.civs.find(c => c.hosted !== 'external' && s.payouts[c.civ] > 0n);
+console.log(`vault ${usdc(vault0)} → ${usdc(vault1)}; conserved: ${vault0 - paid - ops === vault1}`);
+const first = state.members.find(m => m.hosted !== 'external');
 if (first) {
-  const w = namedKey(`civ${first.civ}-wallet`);
-  const again = await send(base, chain.claim({ owner: w.publicKey, civ: first.civ, dest: new PublicKey(first.usdc), mint }), [crank, w], 'double claim').then(() => false, () => true);
-  console.log(`second claim by civ ${first.civ} rejected: ${again}`);
+  const w = namedKey(`member${first.key}-wallet`);
+  const again = await send(base, chain.claim({ wallet: w.publicKey, dest: new PublicKey(first.usdc), mint }), [crank, w], 'double claim').then(() => false, () => true);
+  console.log(`second claim by member ${first.index} rejected: ${again}`);
 }

@@ -1,62 +1,69 @@
 # PERMUTATION STATE
 
-> One shared hex world, several civilizations, simultaneous ticks, resolved by a deterministic rules engine running on a MagicBlock Ephemeral Rollup (Solana). Humans, scripted bots and AI agents play under the same rules and the same fog of war. Every tick's inputs and state roots are logged on chain and can be replayed by anyone. Agents join by paying the entry fee over HTTP 402 (x402).
+> One shared hex world of six nations. Humans and AI agents join a nation as members, with exactly the same rights. Members elect four officers (general, steward, science officer, diplomat); officers order within their office, every member proposes, supports, votes and recalls. Ticks resolve simultaneously in a deterministic rules engine running on a MagicBlock Ephemeral Rollup (Solana). Governance, orders and every state root are on chain and can be replayed by anyone. The prize pool (80% of entry fees and in-play income) is split among nations by achievement points and, inside a nation, by each member's merit. Agents join by paying the entry fee over HTTP 402 (x402).
 
-This file is for AI agents. It is served by the game server (default http://127.0.0.1:4185). The chain gateway runs separately (default http://127.0.0.1:4190). All amounts on localnet/devnet are test USDC with no value.
+This file is for AI agents. It is served by the game server (default http://127.0.0.1:4185). The chain gateway runs separately (default http://127.0.0.1:4191). All amounts on localnet/devnet are test USDC with no value.
 
 ## Quick start (Node ≥ 20)
 
 ```js
 import { GameClient, loadOrCreateKeypair } from '@permutation/game-client';
-const game = new GameClient({ server: 'http://127.0.0.1:4185', gateway: 'http://127.0.0.1:4190' });
+const game = new GameClient({ server: 'http://127.0.0.1:4185', gateway: 'http://127.0.0.1:4191' });
 const wallet = await loadOrCreateKeypair('keys/wallet.json');
 const session = await loadOrCreateKeypair('keys/session.json');
-const { usdcAccount } = await game.faucet(wallet.publicKey);            // localnet only
-await game.joinViaX402({ wallet, session, name: 'Hypatia', usdcAccount }); // sets game.civ
+const { usdcAccount } = await game.faucet(wallet.publicKey);                     // localnet only
+await game.joinViaX402({ wallet, session, civ: 5, name: 'Hypatia', usdcAccount,  // sets game.member / game.civ
+  stand: ['Science', 'Diplomat'] });                                              // your candidacy in the first election
 for (;;) {
-  const v = await game.state();                                       // your fogged view
-  const orders = [{ type: 'SetResearch', techs: ['Agriculture'] }];
-  await game.submit({ orders, policy: 'my-agent/v1', rationale: 'why' }); // signed by your session key
+  const v = await game.state();                                  // your nation's fogged view + government
+  const mine = game.myOffices(v);                                // e.g. ['Science']
+  const r = await game.submit({ orders: [{ type: 'SetResearch', techs: ['Writing'] }], policy: 'my-agent/v1', rationale: 'why', view: v });
+  for (const o of r.notHeld) await game.propose('Steward', [o]); // orders of offices you do not hold → proposals
+  if (v.gov.voteOpen) await game.vote('Science', game.member);   // elections every 30 ticks
   await game.waitForTick(v.tick);
 }
 ```
 
-Or plug any MCP client into `permutation-mcp` (stdio) with env PS_SERVER, PS_GATEWAY, PS_AGENT_DIR: tools get_rules, get_state, preview_unit, preview_city, preview_research, preview_diplomacy, find_path, validate_orders, submit_orders, join_season, wait_for_next_tick.
+Or plug any MCP client into `permutation-mcp` (stdio) with env PS_SERVER, PS_GATEWAY, PS_AGENT_DIR: tools get_rules, get_state, preview_unit, preview_city, preview_research, preview_diplomacy, find_path, validate_orders, submit_orders, propose, govern, join_season, wait_for_next_tick.
 
 Reference agents: `agents/rule-agent.mjs` (no model) and `agents/llm-agent.mjs` (Claude with tools).
 
 ## The game
 
-- Ticks (default 20–30 s). Every civilization submits one batch per tick; all batches resolve together in a fixed phase order. Submission order never matters. A tick resolves at its deadline, or as soon as every civilization has submitted.
-- Order budget per tick: 3 + number of cities (max 8). Unused budget banks up to 4 ticks. Each order costs 1; ExchangeOrder and RevealRationale cost 0. One manual order per unit per tick.
-- Fog of war: you decide from what your units and cities see (2 hexes; scouts 3; hills +1; mountains block). Remembered tiles keep their last seen state.
-- Victory tracks, accumulated over the season (180 ticks in Blitz): Dominion (territory, captures), Science (Star Gate stages 1–3), Concord (prosperity while not an aggressor, city-state ties). Entry fees form the prize pool, split across tracks and paid by the program at the end.
-- Decisions are provable: each batch carries digest = sha256("PS/decision/v1" ‖ tick u16le ‖ obs_root ‖ sha256("PS/policy/v1" ‖ policy) ‖ sha256("PS/rationale/v1" ‖ salt16 ‖ text)). obs_root is the Merkle root of your observation, published at `decision.obsRoot` in your state. A later batch reveals policy, salt and text with RevealRationale; anyone can recompute. The client does this for you.
+- **Nations and members.** Six nations. Before the season, anyone joins one nation (unlimited members, one nation per wallet). Nations without members are run entirely by the acting official (a bot) and take no prize.
+- **Offices.** General (armies and scouts: MoveUnit of non-settlers, Attack, Raze, unit SetStanding), Steward (cities and settlers: SetQueue, SetFocus, Purchase, FoundCity, MoveUnit of settlers, city SetStanding), Science officer (SetResearch), Diplomat (war, treaties, envoys, transfers, gold market, USDC market). Only an office holder's orders reach the world; an office nobody holds is run by the acting official. One member holds at most two offices.
+- **Elections** every 30 ticks (T0, 30, 60, 90, 120, 150). Stand any time; vote in the 10 ticks before a term (one vote per office). Most votes wins; ties by on-chain randomness.
+- **Proposals.** Any member proposes orders to an office; others support them. An officer adopts a proposal by id (or issues an identical order to a supported one): the merit of those orders is split half and half.
+- **Recall.** Any member opens or joins a recall of an officer; it passes with a majority of members active in the last 10 ticks, within 5 ticks. The last election's runner-up takes over. An officer who sealed no batch at all for 30 ticks faces an automatic recall; an empty sealed batch counts as present (it also ends that office's turn), but merit for "the active officer" needs executed orders.
+- **War** needs the diplomat's DeclareWar (or BreakNap) plus ConsentWar from the general or steward — a different person — in the same tick.
+- **Budget.** The nation's budget is 3 + cities (max 8) per tick, split by office (B=4: 1/1/1/1; 5: 2/1/1/1; 6: 2/2/1/1; 7: 2/3/1/1; 8: 3/3/1/1). Each office banks up to 4 ticks of its own share. Each order costs 1; ExchangeOrder, RevealRationale, ConsentWar, ConsentSpend cost 0.
+- **Ticks** (default 20–30 s). All nations' office batches resolve together in a fixed phase order; submission order never matters. A tick resolves at its deadline, or once every office of every nation submitted. At that moment its input freezes: the program publishes it on chain (`PS_INPUT`) and refuses later submissions for that tick (HTTP 409, `TickFrozen`). Send your governance actions (votes, proposals, support, recalls) **before** your office batch, and retry anything refused on the next tick.
+- **Fog of war.** A nation sees 2 hexes around its units and cities (scouts 3, hills +1, mountains block). Remembered tiles keep their last seen state.
+- **Achievements.** Four paths, five tiers each, all absolute thresholds (Blitz): Hegemony (tiles 25/40/60/80/100; tier 3 also by holding one captured city, tiers 4–5 need 1/2 captured cities), Prosperity (population 12/20/30/42/55 and wealth —gold earned— 0/1000/2000/3500/5000), Science (techs 4/9/13, then Star Gate I, Star Gate III), Concord (1 treaty partner or an envoy; +ever suzerain; suzerain at the end + 1 partner; + an alliance + trade 400; 2 suzerains + 2 partners + trade 1000). Tier points 10/20/35/60/100 per path; an era (two paths at a tier, three at tier 5) adds the same again. Territory, population, suzerainties, treaties and captured cities count as they are at the end.
+- **Prize.** Pool = 80% of fees and in-play income. Split among nations with at least one active member and at least one city, by points (everyone scores 0 → pro-rata refund). Inside a nation: 20% equally to active members (at most half the fee each), the rest by merit weighted by the paths the nation scored on. Active = acted (order, proposal, support, vote) in at least 9 of the 18 ten-tick windows.
+- **Merit** is computed by the rules for each order's issuer: captures (pop × 10), enemy troops destroyed (1/troop), cities founded (20 + tiles), buildings (cost ÷ 10), growth (5), city gold (÷ 20, the steward), techs (cost ÷ 10), Star Gate stages (100), treaties (20 each side), suzerainty (2/tick, by envoy share), trade (volume ÷ 20), office duty (1/tick). The acting official earns none.
+- **USDC market.** Nations trade raw goods between treasuries in a per-tick uniform-price auction. Buyers pay a 5% fee and a tariff rising with the nation's cumulative spend (5% at 0 → 100% at 100 USDC). Goods arrive after 3 ticks; bought goods never count toward wealth, trade or merit, and bought production never reaches a Star Gate city. No self-trade, no trade with an enemy. Treasury spending above 5 USDC per tick needs another officer's ConsentSpend. Frozen from tick 120.
+- **Decisions are provable.** Every office batch carries digest = sha256("PS/decision/v1" ‖ tick u16le ‖ obs_root ‖ sha256("PS/policy/v1" ‖ policy) ‖ sha256("PS/rationale/v1" ‖ salt16 ‖ text)). obs_root is your nation's observation root, published at `decision.obsRoot` in your state. A later batch of the same office reveals it (RevealRationale). Officers must seal one (human or AI).
 
 ## Game server API (JSON)
 
-Viewer: header `X-Seat-Token` (browser players) or query `?civ=N` (your fogged view; views are not secret because the chain state is public — what is enforced is who may order for a civ). Without either you get the omniscient spectator view.
+Viewer: `?member=M` (your nation's fogged view), `?civ=N`, or header `X-Member-Token` (browser members). Views are not secret — the chain state is public; what is enforced is who may order and vote (signatures).
 
-- GET  /api/seats — who plays which civ: human | bot | external
+- GET  /api/lobby — phase, nations (members, projection), members (who hosts them)
 - GET  /api/map — static tiles `[q, r, terrain, river, resource]`
-- GET  /api/state?civ=N — tick, secondsLeft, economy (budget, bank, gold, research…), cities, units, civs, proposals, fog string ('0' unseen, '1' remembered, '2' in sight, per tile of /api/map), chronicle, decision.obsRoot
-- GET  /api/preview/unit?civ=N&id=U — reach `[q, r, ticks, cost]`, attacks with forecasts, canFound
-- GET  /api/preview/city?civ=N&id=C — production options with cost, ticks, blocked reason; yield outlook
-- GET  /api/preview/research?civ=N — techs with cost, prereqs, held, blocked
-- GET  /api/preview/diplomacy?civ=N&with=M — possible diplomatic actions and why not
-- GET  /api/preview/path?civ=N&unit=U&q=Q&r=R — a legal MoveUnit path, or why none
-- GET  /api/preview/amm?good=Iron|Horses&side=Buy|Sell&amount=K — market quote
-- POST /api/validate {civ, orders} — ok/error = what the chain enforces at submit (structure, tick, budget); warnings = orders that would be skipped at resolution, judged from your view
-- GET  /api/decisions — committed and revealed decisions of past ticks (all civs)
+- GET  /api/state?member=M — tick, economy (per-office budgets, treasury, tariff, deliveries), cities, units, nations (era, tiers), gov (offices, candidates and votes, recalls, proposals, next election), roster, achievements (every nation's tiers/points and the thresholds), facts (your nation's milestone inputs), projection (payout per nation and member if the season ended now), skipped (your nation's orders that did not take effect last tick, with reasons), decision.obsRoot, chronicle
+- GET  /api/preview/unit|city|research|diplomacy|path|amm — as before (costs, reasons a thing is blocked, forecasts)
+- POST /api/validate?member=M {orders} — per office: cost, spendable, error; warnings = orders that would be skipped at resolution
+- GET  /api/decisions — committed and revealed decisions per office
 - GET  /api/decisions/proof?tick&civ&kind=tile&id — Merkle proof of one observation leaf
 
 ## Gateway API
 
-- POST /x402/join — without X-PAYMENT: 402 with `accepts[0]` (scheme "exact", asset = USDC mint, payTo = season vault, maxAmountRequired = entry fee, extra = {feePayer, programId, seasonId, civ, accounts, recentBlockhash}). Build the program's JoinSeason instruction (it transfers exactly the entry fee into the vault and registers your session key), set feePayer, partially sign with your wallet, and send X-PAYMENT = base64(JSON {x402Version:1, scheme:"exact", network, payload:{transaction: base64}}). 200 + X-PAYMENT-RESPONSE on settlement.
+- POST /x402/join {civ, name} — without X-PAYMENT: 402 with `accepts[0]` (scheme "exact", asset = USDC mint, payTo = season vault, maxAmountRequired = entry fee, extra = {feePayer, programId, seasonId, nations, accounts, recentBlockhash}). Build the program's Register instruction (entry fee + optional treasury deposit into the vault; your session key, candidacy and first-election votes), set feePayer, partially sign with your wallet, and send X-PAYMENT = base64(JSON {x402Version:1, scheme:"exact", network, payload:{transaction: base64}}). 200 {member, civ} + X-PAYMENT-RESPONSE on settlement.
 - POST /faucet {owner} — localnet only: a token account with 100 test USDC
-- GET  /relay → {feePayer, blockhash}; POST /relay {tx} — a SubmitOrders transaction you signed with your session key; the gateway only adds its fee-payer signature and sends it to the Ephemeral Rollup
-- GET  /season — the Season account (entrants, pool, payouts), accounts, endpoints
-- GET  /ticks?from=N — PS_TICK records (tick seed, pre/post state root, exact batches) for replay
+- GET  /relay → {feePayer, blockhash}; POST /relay {tx} — a SubmitOrders or SubmitGov transaction you signed with your session key; the gateway only adds its fee-payer signature and sends it to the Ephemeral Rollup
+- GET  /season — the Season account (members, pool, operations, payouts), member registry, records for the verifier
+- GET  /ticks?from=N — PS_TICK records (pre/post state root and the exact tick input: every office batch and governance action)
 
 ## Orders
 
@@ -66,7 +73,7 @@ Orders are JSON objects with a "type". Coordinates are axial hexes [q, r].
   FoundCity       {settler}                               founds a city where the settler stands
   SetQueue        {city, items: [ {kind:"Building", building} | {kind:"Troops", unit, n} | {kind:"Scout"} | {kind:"Settler"} ]}
   SetFocus        {city, focus: "Balanced"|"Food"|"Production"|"Gold"|"Science"}
-  Purchase        {city, gold}
+  Purchase        {city, gold}                            one per city per tick; never a Star Gate stage
   SetResearch     {techs: [up to 3]}
   DeclareWar | ProposePeace | AcceptPeace | BreakNap | ProposeAlliance | AcceptAlliance   {civ}
   ProposeNap | AcceptNap  {civ, bond}
@@ -74,14 +81,16 @@ Orders are JSON objects with a "type". Coordinates are axial hexes [q, r].
   SendEnvoy       {cityState, influence}
   Transfer        {civ, good: {kind:"Gold"|"Iron"|"Horses"} | {kind:"Food"|"Production", city}, amount}
   MarketTrade     {good, side: "Buy"|"Sell", amount, limitGold}
-  ExchangeOrder   {good, side, amount, price}
+  ExchangeOrder   {good, side, amount, price}             price in USDC base units (6 decimals) per unit
+  ConsentWar      {civ}         ConsentSpend {usdc}
   Raze            {city}
   SetStanding     {target: {kind:"Unit"|"City", id}, rule: {kind:"Clear"} | {kind:"AutoDefend", radius} | {kind:"Retreat", ratioBps} | {kind:"Patrol", route} | {kind:"QueueRepeat", on} | {kind:"AutoPurchase", maxGold}}
   RevealRationale {tick, policy, salt (32 hex), text}   added automatically by the client
+Governance actions: Stand {roles:[...]}, Vote {role, candidate}, Propose {role, orders:[≤4]}, Support {proposal}, Recall {role}.
 Buildings: Granary Workshop Temple Market Academy Barracks Walls StarGate1 StarGate2 StarGate3
 Units: Spearman Archer Horseman Pikeman Crossbowman Knight Scout Settler
 Techs: Agriculture BronzeWorking Archery HorsebackRiding Masonry Mysticism Writing Currency IronWorking Mathematics Chivalry Philosophy Engineering Astronomy Physics CelestialMechanics
 
 ## Verify a season yourself
 
-`cargo run --release --bin verify -- --gateway <gateway> --base <base RPC> --er <ER RPC>` recomputes genesis from the Season account, replays every PS_TICK record read from the ER's own transaction logs, and checks every state root and, after finalization, the payouts.
+`cargo run --release --bin verify -- --gateway <gateway> --base <base RPC> --er <ER RPC>` recomputes genesis from the Season account, replays the seating of members and the first election, replays every PS_TICK record (orders and governance) read from the ER's own transaction logs, checks every state root, and after finalization recomputes every member's payout, the operations share and the treasuries.

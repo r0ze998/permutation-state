@@ -2,12 +2,13 @@
 
 use permutation_rules::checks::{standing, Blocked};
 use permutation_rules::genesis::{new_season, Entry};
+use permutation_rules::gov::{Role, NOBODY};
 use permutation_rules::hex::Hex;
 use permutation_rules::invariants;
 use permutation_rules::map::Terrain;
-use permutation_rules::orders::{validate_batch, AttackTarget, Order, OrderBatch, StandingOrder, StandingTarget};
+use permutation_rules::orders::{office_batches, validate_batch, AttackTarget, Order, OrderBatch, StandingOrder, StandingTarget};
 use permutation_rules::rng::Seed;
-use permutation_rules::state::{CityStanding, DeclaredKind, Owner, QueueItem, StandingRule, Unit, WorldState};
+use permutation_rules::state::{CityStanding, Owner, QueueItem, StandingRule, Unit, WorldState};
 use permutation_rules::tick::{resolve_tick, TickInput};
 use permutation_rules::units::UnitType::{self, *};
 use permutation_rules::{Preset, RulesError, Ruleset};
@@ -15,12 +16,7 @@ use permutation_rules::{Preset, RulesError, Ruleset};
 fn setup() -> (Ruleset, WorldState) {
     let rules = Ruleset::new(Preset::Blitz);
     let entries: Vec<Entry> = (0..4)
-        .map(|i| Entry {
-            name: format!("civ-{i}"),
-            declared_kind: DeclaredKind::Undeclared,
-            payout_wallet: [i as u8; 32],
-            exchange_deposit: 0,
-        })
+        .map(|i| Entry { name: format!("civ-{i}"), treasury: 0 })
         .collect();
     let mut s = new_season(&rules, &[11; 32], &[22; 32], &entries).unwrap();
     for t in &mut s.map.tiles {
@@ -38,8 +34,11 @@ fn vrf(tick: u16) -> Seed {
 }
 
 fn step(s: &mut WorldState, rules: &Ruleset, orders: Vec<(u16, Vec<Order>)>) {
-    let batches = orders.into_iter().map(|(civ, orders)| OrderBatch { civ, tick: s.tick, decision_digest: [0; 32], orders }).collect();
-    resolve_tick(s, rules, &TickInput { vrf: vrf(s.tick), batches }).unwrap();
+    for n in &mut s.nations {
+        n.role_bank = [20; 4];
+    }
+    let batches = orders.into_iter().flat_map(|(civ, orders)| office_batches(s, civ, [0; 32], orders)).collect();
+    resolve_tick(s, rules, &TickInput { vrf: vrf(s.tick), batches, ..Default::default() }).unwrap();
     let v = invariants::check(s, rules);
     assert!(v.is_empty(), "{v:?}");
 }
@@ -91,9 +90,9 @@ fn setting_a_rule_costs_one_order_and_is_checked() {
     let spear = s.units.iter().find(|u| u.owner == Owner::Civ(0) && u.unit_type == Spearman).unwrap().id;
     let scout = s.units.iter().find(|u| u.owner == Owner::Civ(0) && u.unit_type == Scout).unwrap().id;
     let city = s.civs[0].capital.unwrap();
-    let batch = OrderBatch { civ: 0, tick: 0, decision_digest: [0; 32], orders: vec![set(StandingTarget::Unit(spear), StandingOrder::AutoDefend { radius: 2 })] };
+    let batch = OrderBatch { civ: 0, tick: 0, role: Role::General, member: NOBODY, adopt: vec![], decision_digest: [0; 32], orders: vec![set(StandingTarget::Unit(spear), StandingOrder::AutoDefend { radius: 2 })] };
     assert_eq!(validate_batch(&s, &rules, &batch), Ok(1));
-    let long = OrderBatch { civ: 0, tick: 0, decision_digest: [0; 32], orders: vec![set(StandingTarget::Unit(scout), StandingOrder::Patrol { route: vec![Hex::ORIGIN; 7] })] };
+    let long = OrderBatch { civ: 0, tick: 0, role: Role::General, member: NOBODY, adopt: vec![], decision_digest: [0; 32], orders: vec![set(StandingTarget::Unit(scout), StandingOrder::Patrol { route: vec![Hex::ORIGIN; 7] })] };
     assert_eq!(validate_batch(&s, &rules, &long), Err(RulesError::TooLong));
 
     use StandingTarget as T;

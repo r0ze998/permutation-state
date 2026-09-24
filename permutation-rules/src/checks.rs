@@ -69,6 +69,101 @@ pub enum Blocked {
     WrongStandingTarget,
     /// Radius or ratio outside its allowed range.
     OutOfBounds { min: u32, max: u32 },
+    // offices and V5 fixes
+    /// The office's whole batch was rejected at resolution (budget, office, adopted proposal).
+    BatchRejected,
+    /// The order belongs to another office (V5 §5.1).
+    WrongOffice,
+    /// War needs the general's or the steward's consent (V5 §5.6).
+    NeedsConsent,
+    /// One purchase per city per tick (v0.2 C3).
+    AlreadyPurchased,
+    /// Gold cannot buy a Star Gate stage (v0.2 C3).
+    CannotBuyStarGate,
+    NothingQueued,
+    NotEnoughInfluence,
+    /// Market: no trades with oneself or an enemy (v0.2 C8).
+    NoCounterparty,
+    /// Market: treasury spending above the threshold needs a second officer (V5 §7.5).
+    NeedsSpendConsent,
+    /// Market: not enough USDC in the treasury.
+    NotEnoughUsdc,
+}
+
+/// Names of `Blocked` codes, index = `Blocked::code()`, for clients.
+pub const BLOCKED_NAMES: [&str; 52] = [
+    "UnknownUnit", "UnknownCity", "UnknownCiv", "NotYours", "SameCiv",
+    "NotASettler", "Impassable", "ForeignTerritory", "TooCloseToCity", "TooCloseToCityState",
+    "InProtectedZone", "ProtectedCapital", "AlreadyBuilt", "AlreadyQueued", "NeedsTech",
+    "StarGateInAnotherCity", "NeedsPreviousStage", "InvalidTroopCount", "NeedsPop", "AlreadyResearched",
+    "NotAtPeace", "InTruce", "AlreadyAtWar", "NotAtWar", "UnderNap",
+    "Allied", "NoProposal", "BondTooSmall", "NotEnoughGold", "AllianceFull",
+    "AlreadyInAlliance", "AllianceLeaving", "CivilianCannotAttack", "OutOfRange", "TargetProtected",
+    "TargetNotHostile", "TargetGone", "Frozen", "NothingToSell", "OverCap",
+    "WrongStandingTarget", "OutOfBounds", "BatchRejected", "WrongOffice", "NeedsConsent",
+    "AlreadyPurchased", "CannotBuyStarGate", "NothingQueued", "NotEnoughInfluence", "NoCounterparty",
+    "NeedsSpendConsent", "NotEnoughUsdc",
+];
+
+impl Blocked {
+    /// Stable numeric code (the variant's position), recorded in `Skip`.
+    pub const fn code(&self) -> u8 {
+        use Blocked::*;
+        match self {
+            UnknownUnit => 0,
+            UnknownCity => 1,
+            UnknownCiv => 2,
+            NotYours => 3,
+            SameCiv => 4,
+            NotASettler => 5,
+            Impassable => 6,
+            ForeignTerritory => 7,
+            TooCloseToCity { .. } => 8,
+            TooCloseToCityState { .. } => 9,
+            InProtectedZone => 10,
+            ProtectedCapital { .. } => 11,
+            AlreadyBuilt => 12,
+            AlreadyQueued => 13,
+            NeedsTech(_) => 14,
+            StarGateInAnotherCity => 15,
+            NeedsPreviousStage => 16,
+            InvalidTroopCount => 17,
+            NeedsPop { .. } => 18,
+            AlreadyResearched => 19,
+            NotAtPeace => 20,
+            InTruce { .. } => 21,
+            AlreadyAtWar => 22,
+            NotAtWar => 23,
+            UnderNap => 24,
+            Allied => 25,
+            NoProposal => 26,
+            BondTooSmall { .. } => 27,
+            NotEnoughGold { .. } => 28,
+            AllianceFull { .. } => 29,
+            AlreadyInAlliance => 30,
+            AllianceLeaving => 31,
+            CivilianCannotAttack => 32,
+            OutOfRange { .. } => 33,
+            TargetProtected => 34,
+            TargetNotHostile => 35,
+            TargetGone => 36,
+            Frozen => 37,
+            NothingToSell => 38,
+            OverCap { .. } => 39,
+            WrongStandingTarget => 40,
+            OutOfBounds { .. } => 41,
+            BatchRejected => 42,
+            WrongOffice => 43,
+            NeedsConsent => 44,
+            AlreadyPurchased => 45,
+            CannotBuyStarGate => 46,
+            NothingQueued => 47,
+            NotEnoughInfluence => 48,
+            NoCounterparty => 49,
+            NeedsSpendConsent => 50,
+            NotEnoughUsdc => 51,
+        }
+    }
 }
 
 /// `FoundCity` (§4.2, §5.7). Returns the site on success.

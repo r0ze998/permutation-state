@@ -5,9 +5,9 @@ use permutation_rules::combat::{resolve_engagement, variance, Combatant, Situati
 use permutation_rules::genesis::{new_season, Entry};
 use permutation_rules::hex::Hex;
 use permutation_rules::invariants;
-use permutation_rules::orders::{AttackTarget, Order, OrderBatch};
+use permutation_rules::orders::{office_batches, AttackTarget, Order};
 use permutation_rules::rng::{tick_seed, Seed};
-use permutation_rules::state::{DeclaredKind, Owner, StandingRule, Unit, WorldState};
+use permutation_rules::state::{Owner, StandingRule, Unit, WorldState};
 use permutation_rules::tick::{resolve_tick, TickInput};
 use permutation_rules::units::UnitType::{self, *};
 use permutation_rules::{Preset, Ruleset};
@@ -18,12 +18,7 @@ const SEASON: Seed = [22; 32];
 fn setup() -> (Ruleset, WorldState) {
     let rules = Ruleset::new(Preset::Blitz);
     let entries: Vec<Entry> = (0..4)
-        .map(|i| Entry {
-            name: format!("civ-{i}"),
-            declared_kind: DeclaredKind::Undeclared,
-            payout_wallet: [i as u8; 32],
-            exchange_deposit: 0,
-        })
+        .map(|i| Entry { name: format!("civ-{i}"), treasury: 0 })
         .collect();
     let state = new_season(&rules, &WORLD, &SEASON, &entries).unwrap();
     (rules, state)
@@ -37,22 +32,20 @@ fn vrf(tick: u16) -> Seed {
 
 /// Resolve one tick with the given orders per civ; check invariants.
 fn step(s: &mut WorldState, rules: &Ruleset, orders: Vec<(u16, Vec<Order>)>) {
+    // Tests exercise mechanics, not office budgets (V5 §5.2 has its own tests).
+    for n in &mut s.nations {
+        n.role_bank = [20; 4];
+    }
     let batches = orders
         .into_iter()
-        .map(|(civ, orders)| OrderBatch {
-            civ,
-            tick: s.tick,
-            decision_digest: [0; 32],
-            orders,
-        })
+        .flat_map(|(civ, orders)| office_batches(s, civ, [0; 32], orders))
         .collect();
     resolve_tick(
         s,
         rules,
         &TickInput {
             vrf: vrf(s.tick),
-            batches,
-        },
+            batches, ..Default::default() },
     )
     .unwrap();
     let v = invariants::check(s, rules);
@@ -400,11 +393,40 @@ fn melee_captures_an_undefended_city() {
         .iter()
         .filter(|u| u.alive && u.hex == c.hex)
         .all(|u| u.owner == Owner::Civ(0)));
-    // Grievance: 30 (war) − 1 + 20 (capture) − 1.
-    assert_eq!(s.grievance(0, 1), 48);
+    // Grievance: 30 (war, not decayed the tick it was added, v0.2 C7) − 1 + 20 (capture).
+    assert_eq!(s.grievance(0, 1), 49);
     assert_eq!(s.civs[0].last_aggression, Some(1));
     assert_eq!(s.civs[1].capital, None, "government in exile");
     assert_eq!(s.civs[1].last_city_lost, Some(1));
+}
+
+#[test]
+fn a_third_civs_civilian_leaves_a_captured_city() {
+    // Found by the season sim (seed 20, tick 97): a third civ's settler stood
+    // in a city when it was captured, and stayed on the captor's army's tile.
+    let (rules, mut s) = setup();
+    war_between_0_and_1(&mut s, &rules);
+    let (a, ci) = besiege(&mut s, Spearman, 20_000);
+    remove_garrison(&mut s, ci);
+    s.cities[ci].defense = 0;
+    let hex = s.cities[ci].hex;
+    let settler = place(&mut s, Owner::Civ(2), Settler, 1000, hex);
+    step(
+        &mut s,
+        &rules,
+        vec![(
+            0,
+            vec![Order::Attack {
+                army: a,
+                target: AttackTarget::City(ci as u32),
+            }],
+        )],
+    );
+    assert_eq!(s.cities[ci].owner, Some(0));
+    let u = &s.units[settler as usize];
+    assert_eq!(u.owner, Owner::Civ(2), "only the old owner's civilians are captured");
+    assert!(!u.alive || u.hex != hex, "the third civ's settler left the tile (or was disbanded)");
+    // `step` already checked the occupancy invariant.
 }
 
 #[test]
@@ -569,7 +591,8 @@ fn lone_settlers_are_captured() {
         )],
     );
     assert_eq!(s.units[settler as usize].owner, Owner::Civ(0));
-    assert_eq!(s.grievance(0, 1), 29 + 5 - 1);
+    // 30 (war, not decayed the tick it was added, v0.2 C7) − 1 + 5 (captured settler).
+    assert_eq!(s.grievance(0, 1), 30 - 1 + 5);
 }
 
 #[test]
@@ -598,7 +621,7 @@ fn casualties_raise_war_weariness() {
 }
 
 #[test]
-fn captures_score_dominion_once_held() {
+fn a_capture_counts_as_a_city_held_and_earns_merit() {
     let (rules, mut s) = setup();
     for _ in 0..12 {
         step(&mut s, &rules, vec![]);
@@ -607,6 +630,7 @@ fn captures_score_dominion_once_held() {
     let (a, ci) = besiege(&mut s, Spearman, 20_000);
     remove_garrison(&mut s, ci);
     s.cities[ci].defense = 0;
+    let pop = s.cities[ci].pop;
     step(
         &mut s,
         &rules,
@@ -622,19 +646,10 @@ fn captures_score_dominion_once_held() {
         s.cities[ci].capture_scores,
         "founded ≥12 ticks before capture"
     );
-    let captured = s.cities[ci].captured_tick.unwrap();
-    while s.tick < captured + rules.capture_hold_ticks - 1 {
-        step(&mut s, &rules, vec![]);
-    }
-    assert!(s.cities[ci].scored_by.is_empty());
-    let before = s.civs[0].scores.dominion;
-    step(&mut s, &rules, vec![]);
-    let gained = s.civs[0].scores.dominion - before;
-    assert_eq!(s.cities[ci].scored_by, vec![0]);
-    assert!(
-        gained >= 5 * s.cities[ci].pop as u64,
-        "capture points start at the 30th tick"
-    );
+    assert_eq!(permutation_rules::scoring::captured_held(&s, 0), 1);
+    // The acting official issued the attack: the capture earns nobody merit.
+    assert!(s.merit_log.iter().all(|m| m.what != b"capture"));
+    let _ = pop;
 }
 
 #[test]

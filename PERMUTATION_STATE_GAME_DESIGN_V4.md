@@ -1,5 +1,7 @@
 # PERMUTATION STATE — Game Design V4
 
+> **2026-09-24 note — [Game Design V5](PERMUTATION_STATE_GAME_DESIGN_V5.md) supersedes parts of this document.** Participation becomes 6 nations with unlimited members, governed by elected offices. Prizes are split by achievement points and individual contribution, replacing §4.7 victory tracks and the track split and payout in §4.10. Everything else here still applies, as V5 §0 and §10 describe.
+
 **Civilization, one save for everyone.**
 
 Status: design review draft, 2026-09-24. It replaces the Game Constitution (Handoff design), the REBUILD (citizen-embodied `/civilization/`) and Design V3 (Proof of Consequence) as the **source of truth for the game design**. Those documents stay as historical records.

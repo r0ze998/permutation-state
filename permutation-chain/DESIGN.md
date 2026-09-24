@@ -1,70 +1,78 @@
 # permutation-chain — design
 
-The on-chain half of PERMUTATION STATE. One Solana program runs the same `permutation-rules` crate as the server, the replay verifier and the agents, so a tick resolved on chain is byte-identical to one resolved anywhere else. Play runs on a MagicBlock Ephemeral Rollup (ER); entry, prizes and the final world live on the Solana base layer.
+The on-chain half of PERMUTATION STATE (Game Design V5). One native Solana program runs the same `permutation-rules` crate as the game server, the AI members and the replay verifier, so a tick resolved on chain is byte-identical to one resolved anywhere else. Registration, the prize vault and the final world live on the Solana base layer; the world and the nations' accounts are delegated to a MagicBlock Ephemeral Rollup (ER) while the season plays.
 
 ## Accounts
 
 | Account | Seeds | Layer | Holds |
 |---|---|---|---|
-| Season | `["season", id]` | base | Entry fee, USDC mint, civ registry (wallet, session key, payout owner, name), status, pool, then payouts, claims and the final world root |
-| Vault | `["vault", id]` | base | SPL token account for the pool; its owner is the Season PDA |
-| World chunks | `["world", id, k]`, k = 0..8 | ER during play | One logical buffer split over 8 accounts of 10 KiB: header (magic, body length, `WorldMeta`: season id, preset, civ count, tick length, deadline, finished) + the borsh `WorldState` (a `GenesisJob` while genesis runs). 80 KiB in total |
-| Orders | `["orders", id, civ]` | ER during play | One civ's batch for the open tick, the civ's session key, and the cached budget, so order submission never decodes the world |
+| Season (`PSSEASN5`, 4 KiB) | `["season", id]` | base | Admin, crank, USDC mint, preset, nation count, entry fee, tick length, market flag, status, seeds; member count and members per nation, seated count; pool (80% of fees), operations (20%), treasury deposits and final treasuries per nation; after `FinishSeason`, the payout per member and the final world root |
+| Vault | `["vault", id]` | base | SPL token account holding fees and treasury deposits; its owner is the Season PDA |
+| Member (`PSMEMBR5`) | `["member", id, wallet]` | base | Member index (registration order), nation, wallet (pays and receives), session key (signs orders and governance, cannot move USDC), self-declared kind, optional attestation hash, pre-season candidacy and first-election votes, treasury shares, claimed flag |
+| World chunks | `["world", id, k]`, k = 0..8 | ER during play | One logical buffer over 8 accounts of 10 KiB: header (magic `PSWORLD5`, body length, `WorldMeta`: season id, preset, nation count, tick length, deadline, finished, market, and the frozen-input state: frozen flag, tick randomness, chunks published) + the borsh `WorldState` (a `GenesisJob` while genesis runs) |
+| Nation (`PSNATN06`, 8 KiB) | `["nation", id, civ]` | ER during play | The open tick; its officers and their session keys; each office's spendable budget; which offices submitted; up to 4 office batches for the open tick; the governance inbox (≤ 8 actions per signer per tick); the frozen flag. Submissions never decode the world |
 
 ## Season lifecycle
 
 ```
-base  CreateSeason ─ AllocWorld ×8 ─ JoinSeason ×N (USDC → vault; via x402 or directly) ─ StartSeason
-base  GenesisStep ×~20 (permissionless)  → tick 0 open
-base  Delegate the 8 world chunks + every Orders PDA to the ER
-ER    loop: SubmitOrders (session key) … ResolveTick (anyone, after the deadline or once all civs submitted)
-ER    Commit (every 20 ticks)  …  UndelegatePart × 5 once the last tick resolved
-base  FinishSeason (permissionless: payouts by §14.5 from the final world)  ─ Claim (each payout owner)
+base  CreateSeason ─ AllocWorld ×8 ─ AllocNation ×6
+base  Register ×N  (entry fee + optional treasury deposit → vault; wallet-signed, via x402 or directly)
+base  StartSeason ─ GenesisStep ×~21 (permissionless) ─ SeatMembers ×⌈N/10⌉ ─ OpenGovernment (first election)
+base  Delegate the 8 world chunks + 6 nation accounts to the ER
+ER    loop per tick:
+        SubmitGov (member's session key) … SubmitOrders (office holder's key, or the crank for a vacant office)
+        LogTickInput chunk 0..n   (after the deadline or once every office submitted; freezes the input)
+        ResolveTick { to } ×1..k  (the phases up to `to`; resumes at the phase cursor)
+ER    Commit (every 20 ticks) … UndelegatePart ×5 once the last tick resolved
+base  FinishSeason (permissionless: every member's payout from the final world) ─ Claim (each wallet) ─ WithdrawOps (admin)
 ```
 
+- **Registration.** `Register` moves exactly the entry fee (plus an optional treasury deposit) from the payer's USDC account into the vault and creates the Member PDA. The instruction is the same whether a wallet signs it directly or an agent pays over x402; the x402 facilitator only adds its fee-payer signature. Registration closes at `StartSeason`. There are at most 256 members per season, because the payout table lives in the Season account.
+- **Seating and the first election.** After genesis, `SeatMembers` adds members to the world in registration order, with their candidacy and first-election votes; each call logs `PS_SEAT ‖ root ‖ borsh(members seated)`. `OpenGovernment` holds the first election, opens tick 0 on the nation accounts, starts the clock and logs `PS_OPEN ‖ root`.
+- **Offices and submissions.** `SubmitOrders { role, tick, digest, orders, adopt }` must be signed by the office holder's session key, or by the crank for a vacant office (the acting official). An officer's batch must carry a non-zero decision digest. The program checks the order structure, the office's allowed orders and its spendable budget. `SubmitGov { member, action }` queues a vote, candidacy, proposal, support or recall. The engine checks the signer against the member's registered key when the tick resolves.
+- **Input publication (data availability).** A transaction's logs are capped at 10 KB, and a busy tick's input (every office's batch and every governance action) is bigger than that. So the input is not logged by `ResolveTick`:
+  - `LogTickInput { chunk }` rebuilds the pending input from the nation accounts and logs `PS_INPUT ‖ tick ‖ chunk ‖ total ‖ sha256(input) ‖ bytes`, 6,000 bytes per chunk.
+  - Chunk 0 is allowed once the deadline passed or every office submitted. It **freezes** the input: it draws the tick randomness `sha256("PS/tick-vrf/v2" ‖ world root ‖ slot ‖ unix time)` into the world header and marks every nation account frozen, so later `SubmitOrders`/`SubmitGov` fail with `TickFrozen`.
+  - Chunks are logged in order. `ResolveTick` fails with `InputNotPublished` until all of them are.
+  - `ResolveTick` logs `PS_TICK ‖ tick ‖ to ‖ pre_root ‖ post_root ‖ sha256(input)`.
+  - A verifier can therefore rebuild every tick from the ER's logs alone, whatever the size of the input.
+- **Split resolution.** `ResolveTick { to }` runs the phases from the engine's `phase_cursor` up to `to`; the tick completes when the cursor wraps. A split tick logs one `PS_TICK` per part, with the same input hash. Parts are needed when a tick exceeds the compute budget or the heap: the program's bump allocator never frees, so running many phases in one transaction can run out of the 256 KiB heap before it runs out of compute. The crank learns, per starting phase, the furthest stop that fit, and probes further every 10 ticks. Stops are 2, 4, 5, 6, 7, 9 and 12.
 - **Commits and undelegation (measured on the local MagicBlock stack).**
-  - MagicBlock sponsors 10 commits per delegated account when the payer is not delegated. The crank commits every 20 ticks and stops at 9, which keeps the 10th for the final undelegation. A delegated fee payer (an ephemeral balance) would lift the limit.
-  - On base, the finalize step of one intent runs every undelegation in one transaction. For all 14 accounts, that exceeded Solana's instruction-trace limit (`MaxInstructionTraceLengthExceeded`).
-  - `UndelegatePart` therefore sends groups of 3. World chunk 0 goes last, because it carries the "finished" header the program checks.
-- **Why chunks.** Accounts that a program creates or grows through CPI are limited to 10 KiB per step (`MAX_PERMITTED_DATA_INCREASE`). That limit also applies to the delegation program's buffer and to undelegation, so a single 96 KiB world could not be delegated or brought back. Eight 10 KiB PDAs avoid it; the program reads and writes them as one buffer (`state::Chunks`).
-- **Genesis is on chain.** Map generation is split into bounded steps (`map::MapJob`): terrain, start-candidate scanning in chunks, placing starts, balancing rounds, and sites. Running the steps back to back is exactly `generate`; a test checks equality for both presets.
-- **The season seed** is the latest slot hash, mixed with the season id and every entrant, and taken when entry closes. Limitation: the slot leader could grind it. MagicBlock VRF is the planned source.
-- **Tick randomness** is `sha256("PS/tick-vrf/v1" ‖ event_head ‖ slot ‖ unix time)`, taken at phase 0. Orders are fixed before this value exists. Same limitation and plan.
-- **Session keys.** A civ's orders may be signed by its registered session key or its wallet. The session key can only submit orders; it cannot move USDC.
-- **Order checks.** `SubmitOrders` runs the rules' `check_structure` (freezes, lengths, one order per unit, reveal timing) and checks the cached budget. Full validation happens again at resolution, inside the engine.
-- **Decision commitments** travel in each batch (`decision_digest`) and are appended to the world's event chain at phase 0. Reveals ride along later as `RevealRationale` orders (spec §4.3, §7.5).
-- **Replay record.** Every `ResolveTick` logs `PS_TICK ‖ tick ‖ to ‖ vrf ‖ pre_root ‖ post_root ‖ borsh(batches)` with `sol_log_data`, and genesis logs `PS_GENESIS ‖ root ‖ season_seed`. From these logs and the Season account, anyone can replay the season and check every root.
+  - MagicBlock sponsors 10 commits per delegated account when the payer is not delegated. The crank commits every 20 ticks and stops at 9, keeping the 10th for the final undelegation.
+  - On base, the finalize step of one intent runs every undelegation in one transaction, and 14 accounts exceed Solana's instruction-trace limit. `UndelegatePart` therefore sends groups of 3, with world chunk 0 (which carries the "finished" header) last.
+- **Why chunks.** Accounts that a program creates or grows through CPI are limited to 10 KiB per step. That limit also applies to the delegation program's buffer and to undelegation, so a single large world could not be delegated or brought back. Eight 10 KiB PDAs avoid it; the program reads and writes them as one buffer (`state::Chunks`).
+- **Genesis is on chain,** split into bounded steps (`map::MapJob`). Running the steps back to back is exactly `generate`; a test checks equality.
+- **The season seed** is the latest slot hash, mixed with the season id, the member count and the treasury deposits, taken when registration closes (`StartSeason`). The slot leader could grind it; MagicBlock VRF is the plan.
+- **Settlement.** `FinishSeason` needs every account back on base and the world finished. It computes the V5 payout from the final world (`permutation_rules::payout::settle`) and writes one payout per member into the Season account, together with the final treasuries and the final root. `Claim` pays the member's payout plus `shares × final treasury / deposits` of its nation's treasury, only into a token account owned by the member's wallet. Rounding dust goes to operations, so the vault ends at exactly zero once everyone has claimed and operations are withdrawn.
 
-## Compute (item 1 measurement)
+## Compute
 
-Measured on `solana-test-validator` (Agave 3.1.9) by replaying a full 6-civ Blitz bot match (180 ticks) whose orders and state roots were recorded natively (`permutation-server --bin ticklog`):
+Measured on the local MagicBlock stack. Each season has 6 nations, 13–15 members and 180 ticks.
 
 | Operation | CU | Transactions |
 |---|---|---|
-| One tick (decode + 12 phases + encode), peak | **862k** of 1.4M | 1 |
-| One tick, average | 634k | 1 |
-| Genesis, per step (50 candidates) | ≤ 1.16M | 18–19 in total, ~11.3M CU |
-| All 180 on-chain state roots vs native | identical | — |
+| Genesis step (`work = 50`) | sized to fit one transaction | ~21 in total |
+| One tick, average over a season | 0.84–0.96M of 1.4M | 1 |
+| One tick, peak | 1.35M | 1 |
+| A tick too heavy for one transaction (seen late in a season with an outside agent, on the earlier fixed split plan) | parts of 0.45–0.9M each | 2–7 |
+| `LogTickInput` | small | 1–2 per tick (inputs of 3.5 KB on average, 6.3 KB at most) |
+| All on-chain roots vs a native replay | identical | — |
 
-What it took to get there, with results byte-identical at every step:
+Most of a part's cost is fixed: decoding the world, re-encoding it and hashing it take roughly 0.4–0.45M CU late in a season (the cheapest parts measured). Splitting a tick therefore costs more in total than resolving it in one transaction, and the crank splits only as far as it has to.
 
-1. SHA-256 through the `sol_sha256` syscall (the `hash` module).
-2. Arithmetic tile indexing instead of binary search: the map is always a full hexagon.
-3. Neighbourhood-only scans for territory, city yields and start checks.
-4. Encoding the world into one buffer and copying it once, instead of writing field by field into the account.
+The earlier optimisations still apply:
 
-With the 256 KiB heap and an upward bump allocator (`heap.rs`), one tick uses well under the heap limit.
-
-Per-tick breakdown at peak: decode 125k · production 306k · movement 134k · encode 76k · scoring 50k · everything else below 60k each.
-
-If a tick ever exceeds the budget (the Season preset has 16 civs and a larger map), `ResolveTick { to }` runs a prefix of the phases; the engine's `phase_cursor` resumes exactly where it stopped.
+- SHA-256 goes through the `sol_sha256` syscall.
+- Tile indexing is arithmetic.
+- Territory and yield scans only look at the neighbourhood.
+- The world is encoded into one buffer and copied once.
 
 ## Trust model (what the chain guarantees)
 
-- **Rules.** Every rule is enforced by the program: the same crate, with no operator override. Anyone can resolve a tick after its deadline.
-- **Money.** Entry fees go into a vault that only the program controls. Payouts are computed on chain from the final world; each payout owner claims their own share.
-- **Fog.** Fog is enforced off chain. The world accounts are readable on the ER, so hidden information is hidden only by the clients: the game server serves each civ its fogged view (`?civ=N`) to anyone, because it is a subset of public data, and bots, the reference agents and the web client decide only from it. What is enforced is who may order for a civ (its session key or wallet). MagicBlock PER (TEE) is the upgrade path (V4 §7).
-- **Decisions.** The digest in each batch binds the decision to the observation root the server published before the tick (`obs_root`), a policy name and a salted rationale. The reveal comes in a later batch, so a player cannot rewrite its reasoning after seeing the outcome. It proves what was claimed and when, not that the claim is true.
-- **Entry (x402).** The payment is the program's own `JoinSeason`, signed by the payer. The facilitator (gateway) only adds its fee-payer signature after checking that the transaction contains exactly that instruction for this season and vault, and never signs as the payer; it cannot change the amount or the payee. `permutation-gateway/scripts/x402-check.mjs` tries tampered payments.
-- **Replay.** `permutation-server --bin verify` rebuilds genesis from the Season account and replays every tick from the `PS_TICK` records read from the ER's transaction logs, checking every root and the payouts.
-- **Operator.** The operator (the crank) can delay genesis steps, delegation and commits. It cannot change outcomes. Liveness steps are permissionless except delegation.
+- **Rules.** The program enforces every rule, with the same crate and no operator override. Governance counts too: elections, recalls, the consent needed for war and for large treasury spending, and adoption credit.
+- **Data availability.** No tick can resolve unless its complete input has been published on chain first. The replay verifier (`permutation-server --bin verify`) re-reads `PS_GENESIS`, `PS_SEAT`, `PS_OPEN`, `PS_INPUT` and `PS_TICK` from the base layer's and the ER's transaction logs. It checks every root and recomputes every payout, so the gateway is only an index. Tampering with the index makes verification fail.
+- **Money.** Fees and deposits go into a vault that only the program controls. The program computes payouts from the final world, and each member claims with their own wallet signature. A relayer may pay the fee but cannot redirect the funds.
+- **Fog** is enforced off chain. The world accounts are readable on the ER, so hidden information is hidden only by the clients. The game server serves each nation its fogged view, and the AI members, the reference agents and the web client decide only from it. MagicBlock PER (TEE) is the upgrade path.
+- **Decisions.** Each officer's batch binds the decision to the observation root the server published before the tick (`obs_root`), a policy name and a salted rationale, and a later batch of the same office reveals it. This proves what was claimed and when, not that the claim is true.
+- **Timing.** Batches are plaintext until the input freezes, so a late submitter can react to others; sealed orders are on the roadmap. Whoever sends the first `LogTickInput` fixes the slot and time in the tick randomness; MagicBlock VRF is the planned source.
+- **Operator.** The operator (the crank) can delay genesis steps, seating, delegation and commits. It cannot change outcomes. Publishing a tick's input and resolving it after the deadline are permissionless.

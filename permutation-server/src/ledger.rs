@@ -1,10 +1,12 @@
 //! Decision ledger: observations, commitments and reveals (§4.3, §7.5).
 //!
 //! At every tick opening the server records each civ's observation (the
-//! Merkle leaves of its belief state). A player's batch then carries
+//! Merkle leaves of its belief state). Each office's batch then carries
 //! `decision_digest(tick, obs_root, policy_id, rationale_hash)`; after the
-//! tick resolves the rationale is revealed with a `RevealRationale` order, so
-//! anyone can check it against the commitment in the event chain.
+//! tick resolves the rationale is revealed with a `RevealRationale` order in
+//! the same office's batch, so anyone can check it against the commitment in
+//! the event chain. Records are kept per (tick, civ, office): every officer,
+//! human or AI, seals its own decision (V5 D17).
 
 use std::collections::BTreeMap;
 
@@ -38,6 +40,8 @@ pub struct Observation {
 pub struct Record {
     pub tick: u16,
     pub civ: CivId,
+    /// Office (`Role::index`).
+    pub role: u8,
     pub policy: String,
     pub obs_root: Hash,
     pub digest: Hash,
@@ -57,10 +61,12 @@ impl Record {
     }
 }
 
+type Key = (u16, CivId, u8);
+
 pub struct Ledger {
     obs: BTreeMap<(u16, CivId), Observation>,
     roots: BTreeMap<(u16, CivId), Hash>,
-    records: BTreeMap<(u16, CivId), Record>,
+    records: BTreeMap<Key, Record>,
     secret: [u8; 32],
     counter: u64,
 }
@@ -112,15 +118,15 @@ impl Ledger {
         d[..16].try_into().unwrap()
     }
 
-    /// Commit `civ`'s decision for `tick` (replacing an earlier commit for
-    /// the same tick). Returns the digest to put in the batch.
-    pub fn commit(&mut self, tick: u16, civ: CivId, policy: &str, text: &str) -> Hash {
+    /// Commit the decision of `civ`'s office `role` for `tick` (replacing an
+    /// earlier commit for the same tick). Returns the digest for the batch.
+    pub fn commit(&mut self, tick: u16, civ: CivId, role: u8, policy: &str, text: &str) -> Hash {
         let policy = clip(policy, MAX_POLICY);
         let text = clip(text, MAX_RATIONALE);
         let obs_root = self.root(tick, civ).expect("observe() runs when a tick opens");
         let salt = self.salt(tick, civ);
         let digest = decision_digest(tick, &obs_root, &policy_id(policy.as_bytes()), &rationale_hash(&salt, text.as_bytes()));
-        self.records.insert((tick, civ), Record { tick, civ, policy, obs_root, digest, salt, text, revealed_at: None, external: false });
+        self.records.insert((tick, civ, role), Record { tick, civ, role, policy, obs_root, digest, salt, text, revealed_at: None, external: false });
         digest
     }
 
@@ -128,11 +134,13 @@ impl Ledger {
     /// it committed to (against the obs_root this server published for it)
     /// and the reveals it carries for earlier ticks.
     pub fn ingest_external(&mut self, batch: &OrderBatch) {
+        let role = batch.role as u8;
         if batch.decision_digest != [0; 32] {
             let obs_root = self.root(batch.tick, batch.civ).unwrap_or([0; 32]);
-            self.records.entry((batch.tick, batch.civ)).or_insert(Record {
+            self.records.entry((batch.tick, batch.civ, role)).or_insert(Record {
                 tick: batch.tick,
                 civ: batch.civ,
+                role,
                 policy: String::new(),
                 obs_root,
                 digest: batch.decision_digest,
@@ -144,7 +152,7 @@ impl Ledger {
         }
         for o in &batch.orders {
             if let Order::RevealRationale { tick, policy, salt, text } = o {
-                if let Some(r) = self.records.get_mut(&(*tick, batch.civ)).filter(|r| r.external && r.revealed_at.is_none()) {
+                if let Some(r) = self.records.get_mut(&(*tick, batch.civ, role)).filter(|r| r.external && r.revealed_at.is_none()) {
                     r.policy = String::from_utf8_lossy(policy).into_owned();
                     r.salt = *salt;
                     r.text = String::from_utf8_lossy(text).into_owned();
@@ -154,18 +162,19 @@ impl Ledger {
         }
     }
 
-    pub fn record(&self, tick: u16, civ: CivId) -> Option<&Record> {
-        self.records.get(&(tick, civ))
+    pub fn record(&self, tick: u16, civ: CivId, role: u8) -> Option<&Record> {
+        self.records.get(&(tick, civ, role))
     }
 
-    /// Reveal orders for `civ`'s resolved, not yet revealed decisions (oldest
-    /// first, at most 3) that fit next to `orders` in one Solana transaction
-    /// (`BATCH_BYTES` of encoded orders). Whatever does not fit waits for the
-    /// next batch; the oldest always goes first, so none is skipped.
-    pub fn reveals(&self, civ: CivId, open_tick: u16, orders: &[Order]) -> Vec<Order> {
+    /// Reveal orders for the office's resolved, not yet revealed decisions
+    /// (oldest first, at most 3) that fit next to `orders` in one Solana
+    /// transaction (`BATCH_BYTES` of encoded orders). Whatever does not fit
+    /// waits for the next batch; the oldest always goes first, so none is
+    /// skipped.
+    pub fn reveals(&self, civ: CivId, role: u8, open_tick: u16, orders: &[Order]) -> Vec<Order> {
         let mut used: usize = orders.iter().map(encoded_len).sum();
         let mut out = Vec::new();
-        for r in self.records.values().filter(|r| r.civ == civ && r.tick < open_tick && r.revealed_at.is_none()).take(3) {
+        for r in self.records.values().filter(|r| r.civ == civ && r.role == role && r.tick < open_tick && r.revealed_at.is_none()).take(3) {
             let o = Order::RevealRationale { tick: r.tick, policy: r.policy.as_bytes().to_vec(), salt: r.salt, text: r.text.as_bytes().to_vec() };
             let n = encoded_len(&o);
             if used + n > BATCH_BYTES {
@@ -178,10 +187,10 @@ impl Ledger {
     }
 
     /// Mark the reveals that were in an accepted batch of tick `at`.
-    pub fn mark_revealed(&mut self, civ: CivId, orders: &[Order], at: u16) {
+    pub fn mark_revealed(&mut self, civ: CivId, role: u8, orders: &[Order], at: u16) {
         for o in orders {
             if let Order::RevealRationale { tick, .. } = o {
-                if let Some(r) = self.records.get_mut(&(*tick, civ)) {
+                if let Some(r) = self.records.get_mut(&(*tick, civ, role)) {
                     r.revealed_at = Some(at);
                 }
             }

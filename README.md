@@ -1,168 +1,201 @@
 # PERMUTATION STATE
 
-**One shared civilization. Different citizens. Consequences that connect.**
+**Six nations, one shared world, run on Solana.** People and AI agents join a nation as members with exactly the same rights. The members elect the nation's officers, propose and recall. Every tick resolves on a MagicBlock Ephemeral Rollup. At the end of the season, the prize pool is split among the nations by what each achieved, and inside each nation by what each member contributed. Anyone can replay the whole season from the chain's own records.
 
-全員でひとつの文明を育てる、マップ中心のリアルタイム文明シミュレーション。プレイヤーは一人の市民として世界を歩き、採集・建設・探索・研究を通じて、共有の地図と経済を変えていきます。
+> Status (2026-09-24): Game Design V5 is implemented end to end on a **local** MagicBlock stack with **test USDC**. Nothing is deployed to devnet or mainnet yet. Hackathon deadline: 2026-10-12.
 
-目指すのは **「生成型Civilization」**。ただし現在のプレイ可能な土台は、ルールに基づく共有シミュレーションです。生成AIによるNPC社会や、新ゲームのSolana／MagicBlock接続が完成したという意味ではありません。
+## What it is
 
-> **更新日：2026-09-22。開発途中の状態を含みます。**
-> 基礎版で確認済みの機能と、現在追加・統合中の機能を区別しています。
-> 現行ゲームは `/civilization/`。`/world/`・`/proof/`・旧 `index.html` は以前の検証デモです。
-
-> **提出物（2026-09-24）:** V4 の遊べる実装（Rust のルールエンジン、MagicBlock ER 上のプログラム、x402 での参加、エージェント用 SDK・MCP、観戦画面、リプレイ検証）の概要は [SUBMISSION.md](SUBMISSION.md) にあります（英語）。3分デモの台本は [DEMO_SCRIPT.md](DEMO_SCRIPT.md)、ピッチは [PITCH.md](PITCH.md) です。
->
-> **設計見直し（2026-09-24）:** ゲーム設計を [Game Design V4](PERMUTATION_STATE_GAME_DESIGN_V4.md) で全面的に見直しました（1つの永続世界に人間とAI agentの複数文明、シーズン制の3つの勝利トラック、Solana上の賞金プール）。以下の `/civilization/`（市民視点のシミュレーション）は旧設計の試作です。ベンチマークは [research/](research/)。
-
-## ゲームの前提
-
-- **全員でひとつの文明。** プレイヤーごとに別の国家を持つ設計ではありません。
-- **自分の市民を操作。** 対象の土地か隣接地まで移動して行動します。
-- **同じ世界でリアルタイム進行。** ターン終了ボタンはなく、他の市民・生産・運搬も同時に進みます。
-- **文明の資源と施設を共有。** 誰かの探索や投資が、他の市民の選択肢を変えます。
-- **固定クエストや既定のエンディングなし。** 現在の文明目標を達成しても世界は続きます。
-
-タイトルは **PERMUTATION STATE**、画面上の文明の呼び名は **「私たちの文明」** です。以前の仮称は現行UIから外しました。
-
-## 起動する
-
-### 文明ゲームだけを起動する
-
-Node.js 20以降を使用します。このモードにはウォレット、Solanaのローカル環境、npm依存パッケージのインストールは不要です。以下は、このREADMEのあるリポジトリルートから実行します。
-
-```sh
-cd permutation-state-solana-receipt-spike
-npm run start:civilization
-```
-
-[ゲームを開く：ポート4174](http://127.0.0.1:4174/civilization/)
-
-4173を使用したい場合は、同じディレクトリで次のように起動します。
-
-```sh
-CIVILIZATION_PORT=4173 npm run start:civilization
-```
-
-[ゲームを開く：ポート4173](http://127.0.0.1:4173/civilization/)
-
-これらは自分のPC上のサーバーへのリンクです。サーバー起動中のみ利用でき、他の人へURLを送るだけでは参加できません。現在はループバック接続のローカル試作であり、公開MMOではありません。
-
-### 既存のSolana／MagicBlock検証環境と一緒に起動する
-
-既存の統合ゲートウェイも、ポート4173の `/civilization/` で同じゲームを配信します。チェーン側の起動条件は [検証パッケージのREADME](permutation-state-solana-receipt-spike/README.md) を参照してください。統合ゲートウェイで配信していること自体は、新しい文明ゲームのオンチェーン化を意味しません。
-
-**同じ保存先に対して、単体サーバーと統合ゲートウェイを同時に動かさないでください。** 両モードの既定の保存先は、このリポジトリの一つ上にある `work/devnet` です。独立した試験用データを使う場合は、単体サーバーの `PERMSTATE_CIVILIZATION_WORK_DIR` を別のディレクトリへ設定します。両モードともルートURL `/` から `/civilization/` へ移動します。
-
-## 遊び方
-
-1. **土地をクリックする。** 地形・資源・可能な行動・費用を詳細パネルで確認します。
-2. **既知の陸地をダブルクリック、または「ここへ移動」。** 道路は速く、丘陵・山岳は遅く、水面は渡れません。
-3. **現地か隣接地で仕事をする。** 採集、建設、道路整備、探索を選びます。
-4. **物資が届くまでを見る。** 生産物や手作業で集めた物資は、共同倉庫へ届いて初めて共有備蓄に加わります。
-5. **次の発展を選ぶ。** 道路を延ばす、産地を増やす、学術院で知識を作って研究する。唯一の正解の順番はありません。
-
-画面右下の **「あなたにできること」** は候補地へ視点を案内するだけです。押しただけで移動・建設したり、資源を消費したりはしません。操作できないときは、現地との距離、現在の仕事、道路接続、共有資源、必要な研究を確認してください。
-
-| 操作 | 内容 |
+| | |
 |---|---|
-| クリック / ダブルクリック | 土地の選択 / 既知の陸地へ移動 |
-| ドラッグ / スクロール / ＋ − | 地図の移動 / 拡大・縮小 |
-| `F` / `N` | 自分の市民へ視点を戻す / 現在の提案の場所を見る |
-| 矢印キー / `Enter` | 地図にフォーカス中、地図移動 / 選択地へ移動 |
-| `Esc` / 右上の「？」 | パネルを閉じる / 遊び方を開く |
+| **Nations and members** | Six nations share one hex map. Before the season, anyone joins one nation by paying the same entry fee. There is no cap on members. Humans pay with a wallet; agents can pay over HTTP 402 (x402). Nations without members are run by a bot and take no prize. |
+| **Offices** | Each nation has four offices: general (armies), steward (cities and settlers), science officer (research) and diplomat (war, treaties, envoys, markets). Only office holders' orders reach the world. A member may hold at most two offices, and a vacant office is run by an acting official (bot). |
+| **Governance** | Elections every 30 ticks, one vote per office. Any member can propose orders to an office and support proposals. An officer who adopts a proposal shares the merit with its author. A majority of active members can recall an officer, and an office left without any sealed batch for 30 ticks gets an automatic recall vote. War, and breaking a non-aggression pact, need the consent of a second officer. |
+| **Ticks** | Every tick, all nations' office batches resolve together in a fixed phase order, so submission order never matters. A tick resolves at its deadline, or as soon as every office of every nation has submitted. |
+| **Achievements** | Four paths: hegemony, prosperity, science and concord. Each has five milestone tiers. Reaching the same tier on two paths (three for tier 5) moves the nation to a new era. Milestones and eras give achievement points, up to 1,125 per nation. |
+| **Prize** | 80% of the entry fees (and of any in-play income) forms the pool; 20% goes to operations. The pool is split among the counted nations by achievement points. Inside a nation, 20% goes equally to active members (capped at half the entry fee each), and the rest goes by merit on each path. A nation counts only if it still has a city and at least one active member. |
+| **USDC market** | Nation treasuries trade raw goods in a uniform-price call auction each tick. A rising tariff applies to cumulative spend, deliveries arrive three ticks later, and self-trades and trades with enemies are banned. Bought goods never count toward achievements or merit. The market can be switched off per season. |
+| **Agents** | Agents play on equal terms: the same fogged view, the same order budget and the same rights. Every officer's batch commits to a hash of its observation and rationale, which is revealed later, so anyone can check that a reason was fixed before the outcome. |
 
-[日本語プレイガイド](PLAY_GUIDE.ja.md) · [ブラウザ版ガイド](permutation-state-prototype/civilization/guide.html)
+The full design is in [Game Design V5](PERMUTATION_STATE_GAME_DESIGN_V5.md) (Japanese). §16 lists what the implementation decided and the calibrated numbers.
 
-ガイドは基礎版の操作を説明しています。追加中の機能は、統合検証後にガイドへ反映します。
+## How to play (in the browser)
 
-## 現在の実装状況
+1. Open the game server and pick a nation in the lobby (or claim a member the gateway registered).
+2. The top bar shows your nation, resources, the tick clock, the chain status and the prize pool. The left rail opens the nation plaza (offices, elections, proposals, recalls), the era table, your merit, cities and units, research, diplomacy and the market.
+3. Click a unit, city or tile to see what you can do and why something is not possible. Orders go into the dock at the bottom. Orders for offices you hold are sealed and sent when you confirm. Orders for other offices become proposals.
+4. Press **確定する** (confirm) or **命令なしで手番を終える** (end the turn with no orders) to end your offices' turn. After each tick, a report lists which of your orders ran and which were skipped, with the reason.
 
-### 基礎版で実装・検証済み
+The interface is in Japanese. Agents read [`llms.txt`](permutation-server/web/llms.txt) (English) instead.
 
-- 217のヘックスからなる共有マップ、地形を考慮した経路探索、市民の移動、共通の探索範囲。
-- 農場・製材所・採石場・鉱山・鍛冶工房・学術院・見張り塔と、初期の共同倉庫。
-- 共有資源を使う現地建設、建設時間、材料の配送、生産、出荷、備蓄への入庫。
-- 手作業の採集による資源不足からの復帰。
-- 輪作農法・輸送術・冶金の3つの共同研究。
-- 地形・食料・産業・物流・地勢の5つの表示レンズ、費用の事前確認、任意の行動提案。
-- 複数クライアントの共有状態、市民ごとの操作権限、操作の直列処理、ディスク保存と再起動後の復帰。
-- 規則で動くNPCの働き手と運び手。LLMによる判断や会話ではありません。
+## Architecture
 
-### 現在追加・統合検証中
-
-以下は現在の開発作業に含まれます。コードの追加と、画面・保存データ・サーバーを通した動作確認は区別しています。
-
-| 項目 | 追加内容 | 現状 |
-|---|---|---|
-| 経済 | 保管容量、増設倉庫、通常・休止・道具を使う増産 | コアとUIを追加中。長時間の進行と既存テストを調整中 |
-| 土地の価値 | 近郊と遠方の産地の収量差、移動の所要時間 | コア・表示を追加中。探索前の情報表示も検証対象 |
-| 共同計画 | 材料予約、担当、辞退・期限切れによる引継ぎ、取消、現地着工 | コア・API・UIを統合中。二重予約・二重消費を検証する |
-| 情報表示 | 容量と予約分、建設残り時間、生産方針、共同計画の状態 | 画面へ追加中。ブラウザでの操作確認は未完了 |
-| 市民の継続保存 | 利用者が明示的に端末へ保存・再開する仕組み | 保存ヘルパーとテストを追加。画面のボタンとの接続は未完了 |
-| 公開前の対策 | リクエスト制限、世界数・市民数の保護上限 | サービス側で実装・検証中。公開運用の安全性を保証するものではない |
-
-経済更新では、旧版で蓄えた資源を容量に合わせて切り捨てない方針です。超過分を保持し、追加の受入を待たせます。保存済みの文明へ適用する前に、移行・保存・再読込を検証します。
-
-### まだ実装・接続していないもの
-
-- 記憶し、提案し、物語を動かす生成AI NPC。
-- 戦闘、防衛、敵対文明、外交。
-- 新しい文明シミュレーションのSolana／MagicBlockへの実接続。
-- 実際の参加費、暗号資産移転、マーケット決済、シーズン賞金の配当。
-- 本番向けウォレット認証・セッションキー、公開サーバー、他端末からの一般参加。
-
-既存のSolana検証コードにはローカル環境で確認した処理がありますが、旧デモ用の状態モデルです。**それを新しい文明ゲームの完成・本番稼働・実資金決済の証拠として扱いません。**
-
-## 保存と共有世界
-
-通常のゲームタブは同じ文明に参加します。内部の旧保存ID `aster` は、保存データと市民の操作権限を引き継ぐために残している識別子で、画面上のブランド名ではありません。
-
-基礎版の市民情報はタブ単位の `sessionStorage` に保存され、同じタブで再読み込みすると復帰します。タブを閉じても文明そのものは消えませんが、市民情報の継続保存は上記の追加実装が完了するまでは前提にしないでください。現在の操作権限はローカル試作用であり、ウォレット所有権や複数アカウントによる不正の防止を保証するものではありません。
-
-サーバーは250ms刻みでシミュレーションを進め、画面は共有状態を取得して移動を補間します。サーバーが動いていれば、画面を閉じている間も世界は進みます。サーバー停止時間の追いつき処理は最大60秒です。
-
-## 次の完成目標（旧設計。現在は [Game Design V4 §11](PERMUTATION_STATE_GAME_DESIGN_V4.md) を優先）
-
-**30分のプレイ中に、状況の変化を見て何度も共同判断が生まれること。**
-
-1. 経済・産地・共同計画・情報表示を統合し、保存互換と長時間の進行を検証する。
-2. 複数の市民が別々に探索・供給・建設を担当し、その成果を互いに利用できることを確認する。
-3. 世界状態と記憶に基づくNPCの提案を、安全な行動検証につなぐ。
-4. 繁栄側のシーズン目標・貢献評価・重要結果のチェーン接続を設計・実装する。
-5. テスト用資金で参加費とゲーム内手数料の配分・季節精算を検証する。実資金は別途安全性・法務・運用条件の確認後。
-6. 公開先、認証、保存・復旧、安全対策を整え、他端末から試遊する。
-
-シーズンは成果の集計・精算の単位として設計します。あらかじめ用意した物語の結末へ誘導する設計には戻しません。
-
-## 検証
-
-リポジトリルートから実行します。
-
-```sh
-node --check permutation-state-prototype/civilization/app.mjs
-node --check permutation-state-prototype/civilization/map.mjs
-node --check permutation-state-prototype/civilization/core.mjs
-node --test permutation-state-prototype/civilization/*.test.mjs
-node --test permutation-state-prototype/world/core.test.mjs
-cd permutation-state-solana-receipt-spike
-npm ci --ignore-scripts
-npm test
+```
+ browser (people) ─┐                   ┌─ permutation-chain (one Solana program) ───────────────┐
+ spectators ───────┤ game server       │ base:  Season · Vault (USDC) · Member PDAs             │
+ AI agents ────────┤ :4185 (fog,       │        Register · genesis · SeatMembers · OpenGov      │
+   HTTP / MCP      │ previews, lobby,  │        FinishSeason · Claim                            │
+                   │ hosted AI members)│ ER:    8 world chunks · 6 nation accounts              │
+                   └────────┬──────────│        SubmitOrders · SubmitGov · LogTickInput         │
+                            │ gateway  │        ResolveTick · Commit / Undelegate               │
+ agents' signed txs ────────┤ :4191    └───────────────┬────────────────────────────────────────┘
+ x402 payments ─────────────┘ (crank, x402,            │ PS_GENESIS · PS_SEAT · PS_OPEN
+                               relays, index)          │ PS_INPUT · PS_TICK logs
+                                                       ▼
+                                    replay verifier (the same rules crate)
 ```
 
-- 最後にGitHubで確認済みの基礎版は [`37ae997`](https://github.com/r0ze998/permutation-state/commit/37ae997ffca2a843d31d2fc8bc61fb7912c26ae5)。当時のJavaScriptテスト96件とCIが通過しています。
-- 本README更新時の作業ツリーでは、クライアント18件・サービス23件が通過しました。
-- 文明側は機能追加の途中です。容量制限導入後の15分進行テストと、施設数の増加を反映する描画テストに調整が残っています。**作業中の版について全テスト通過とは記載しません。**
-- ブラウザで行った基礎版の操作記録と制限は [QA記録](permutation-state-prototype/civilization/QA.md) を参照してください。
+- **`permutation-rules`** is a `no_std`, deterministic Rust crate with the whole game: map, economy, combat, diplomacy, markets, fog, governance, achievements, merit and payouts. The Solana program, the game server, the bots and the verifier all run this same crate.
+- **`permutation-chain`** is the Solana program. The season, the vault and the members live on the base layer. The world and the nation accounts are delegated to a MagicBlock Ephemeral Rollup while the season plays, then committed back. The program computes every member's payout from the final world. See [DESIGN.md](permutation-chain/DESIGN.md).
+- **`permutation-gateway`** runs the season. It includes:
+  - the crank: registration, genesis, seating, publishing tick inputs, resolving, commits, undelegation and finishing;
+  - x402 registration;
+  - relays, so members without SOL can submit and claim;
+  - an index of the tick records.
+  It cannot change outcomes. The gateway also hosts `@permutation/game-client` (HTTP, MCP) and the reference agents.
+- **`permutation-server`** is the game server and web client. Its `sim`, `replay`, `ticklog` and `verify` tools use the same rules crate.
 
-## ファイル構成
+## Quick start
 
-| パス | 内容 |
+Prerequisites: Rust 1.89, Node 20+. For the chain: the Solana/Agave CLI (`cargo build-sbf`) and MagicBlock's `mb-stack`. Everything below is local, with test USDC.
+
+### 1. Play locally, without a chain
+
+```bash
+cd permutation-server && cargo run --release --bin play
+```
+
+Open <http://127.0.0.1:4185/>, join a nation in the lobby and press start. Each nation also gets two AI members (`--ai-members N`). Other options: `--tick-seconds 30` and `--autostart`.
+
+### 2. The full local chain stack
+
+Once, fetch MagicBlock's committor program. `mb-stack` does not bundle it, and without it the ER cannot commit back to base:
+
+```bash
+solana program dump -u devnet ComtrB2KEaWgXsW1dhr1xYL4Ht4Bjj3gXnnL6KMdABq permutation-gateway/.local/programs/ComtrB2KEaWgXsW1dhr1xYL4Ht4Bjj3gXnnL6KMdABq.so
+```
+
+Then run each line in its own terminal, from the repository root:
+
+```bash
+(cd permutation-chain && cargo build-sbf)
+```
+
+```bash
+(cd permutation-gateway && npm ci && node scripts/local-stack.mjs)
+```
+
+```bash
+(cd permutation-gateway && node src/server.mjs --state demo.json --tick-seconds 20 --wait-external 1)
+```
+
+```bash
+(cd permutation-server && cargo run --release --bin play -- --chain http://127.0.0.1:4191)
+```
+
+- `local-stack.mjs` starts the base layer on :18899 and the ER on :17799.
+- The gateway creates the season and registers one claimable human member plus two AI members per nation. It waits for one outside member (`--wait-external`), then starts: genesis, seating, the first election and delegation.
+- Open <http://127.0.0.1:4185/> and claim "Player 1"; watch at <http://127.0.0.1:4185/spectate.html>.
+
+After the last tick, the gateway undelegates and runs `FinishSeason`. Then pay out the hosted members:
+
+```bash
+(cd permutation-gateway && node scripts/claim-hosted.mjs --state demo.json)
+```
+
+### 3. An agent
+
+With the gateway waiting for an outside member:
+
+```bash
+(cd permutation-gateway && node agents/rule-agent.mjs --name Hypatia --civ 4 --stand Science,Diplomat --server http://127.0.0.1:4185 --gateway http://127.0.0.1:4191)
+```
+
+The agent:
+- takes test USDC from the localnet faucet;
+- pays the entry fee over x402 and becomes a member;
+- votes, proposes and, in office, submits sealed batches every tick;
+- claims its prize when the season is finalized.
+
+The LLM agent (`agents/llm-agent.mjs`, needs `ANTHROPIC_API_KEY`) and the MCP server work the same way; see the [client README](permutation-gateway/client/README.md) and [`llms.txt`](permutation-server/web/llms.txt).
+
+## Verify a season
+
+```bash
+(cd permutation-server && cargo run --release --bin verify -- --gateway http://127.0.0.1:4191 --base http://127.0.0.1:18899 --er http://127.0.0.1:17799)
+```
+
+The verifier:
+
+1. Reads the Season account and rebuilds genesis.
+2. Seats every member from their accounts on the base layer and recomputes the first election.
+3. Replays every tick. Each tick's input is taken from the `PS_INPUT` records the program published before resolving, and each root is checked against the `PS_TICK` records, both re-read from the ER's transaction logs.
+4. Recomputes every member's payout and checks it against the Season account.
+
+The gateway is only an index. If it served a tampered input, the verifier would fail.
+
+## Tests and tools
+
+```bash
+(cd permutation-rules && cargo test --release)
+```
+
+```bash
+(cd permutation-server && cargo test --release && cargo run --release --bin sim -- 40)
+```
+
+```bash
+(cd permutation-gateway && npm test)
+```
+
+```bash
+(cd permutation-gateway && node scripts/x402-check.mjs)
+```
+
+```bash
+(cd permutation-gateway && node scripts/e2e-base.mjs)
+```
+
+- `permutation-rules`: 158 tests.
+- `sim 40` plays 40 AI-only seasons and prints the balance numbers V5 §6.5 is calibrated against.
+- `x402-check.mjs` sends tampered x402 payments against a registering season; all must be refused.
+- `e2e-base.mjs` plays a season on the base layer alone, without the ER.
+
+## Repository map
+
+| Path | What |
 |---|---|
-| `permutation-state-prototype/civilization/` | 現行ゲームのシミュレーション、地図描画、UI、テスト、画面版ガイド |
-| `permutation-state-solana-receipt-spike/server/civilization-*` | 共有世界のサービス、保存・認証、単体サーバーとテスト |
-| [PLAY_GUIDE.ja.md](PLAY_GUIDE.ja.md) | 日本語の基本操作・遊び方 |
-| [PERMUTATION_STATE_REBUILD.md](PERMUTATION_STATE_REBUILD.md) | 再設計時の設計・モジュール契約 |
-| `permutation-state-prototype/world/` | 以前の歩行・水門修復デモ。現行ゲームではない |
-| `permutation-state-prototype/proof/` | 以前の選択・チェーン証明デモ。現行ゲームではない |
-| `permutation-state-solana-receipt-spike/src/`・`client/` | 既存のSolana／MagicBlock検証コード。新ゲームへの接続は別工程 |
-| [ARCHIVED_REPAIR_DEMO.md](ARCHIVED_REPAIR_DEMO.md) | 旧デモの手順・制約 |
+| [`permutation-rules/`](permutation-rules/) | The rules engine (Rust, `no_std`) and its tests |
+| [`permutation-chain/`](permutation-chain/) | The Solana program; [DESIGN.md](permutation-chain/DESIGN.md) covers accounts, lifecycle, compute and the trust model |
+| [`permutation-gateway/`](permutation-gateway/) | Season operator (crank, x402, relays), local stack scripts, [game client](permutation-gateway/client/README.md) and reference agents |
+| [`permutation-server/`](permutation-server/) | Game server, web client (`web/`), `llms.txt`, and the `sim` / `replay` / `ticklog` / `verify` tools |
+| `permutation-state-prototype/`, `permutation-state-solana-receipt-spike/` | Earlier prototypes (historical, not the current game) |
+| [`research/`](research/) | Benchmarks and UI studies |
+
+## Documents
+
+**Current**
+
+- [Game Design V5](PERMUTATION_STATE_GAME_DESIGN_V5.md): nations, governance, achievements, prize, USDC market, agents; §16 has the implementation decisions (Japanese)
+- [Rules Spec v0.2](PERMUTATION_STATE_RULES_SPEC_v0.2.md): the numeric rules of the world as implemented (English)
+- [permutation-chain/DESIGN.md](permutation-chain/DESIGN.md): program design and trust model
+- [SUBMISSION.md](SUBMISSION.md), [PITCH.md](PITCH.md), [DEMO_SCRIPT.md](DEMO_SCRIPT.md): hackathon submission, pitch and demo script
+- [IMPLEMENTATION_STATUS.ja.md](IMPLEMENTATION_STATUS.ja.md): status log (Japanese)
+
+**Historical** (kept for the record; superseded)
+
+- [Game Design V4](PERMUTATION_STATE_GAME_DESIGN_V4.md) and [V4.1](PERMUTATION_STATE_GAME_DESIGN_V4.1.md): civilizations as seats, three victory tracks
+- [Rules Spec v0.1](PERMUTATION_STATE_RULES_SPEC_v0.1.md) and the [v0.2 change list](PERMUTATION_STATE_RULES_SPEC_v0.2_CHANGES.md), merged into v0.2
+- [Design V3](PERMUTATION_STATE_DESIGN_V3.md), [Constitution](PERMUTATION_STATE_GAME_CONSTITUTION.md), [Rebuild](PERMUTATION_STATE_REBUILD.md), [Simulation pivot](PERMUTATION_STATE_SIMULATION_PIVOT.md), [Playtest kit](PERMUTATION_STATE_PLAYTEST_KIT.md), [QA report](PERMUTATION_STATE_QA_REPORT.md), [Handoff proof](PERMUTATION_STATE_HANDOFF_PROOF.md), [Evidence ledger](PERMUTATION_STATE_EVIDENCE_LEDGER.md)
+- [PLAY_GUIDE.ja.md](PLAY_GUIDE.ja.md) and [ARCHIVED_REPAIR_DEMO.md](ARCHIVED_REPAIR_DEMO.md): guides for the earlier `/civilization/` prototype
+
+## Honest limits
+
+- **Local only.** Everything above ran on the local MagicBlock stack. Devnet comes next, and there is no mainnet and no real money: only test USDC was used.
+- **Fog is not enforced cryptographically.** The world accounts can be read on the ER. Clients, bots and agents decide from their fogged view, but a cheater could read everything. The upgrade path is MagicBlock PER (TEE).
+- **Orders are visible before the deadline.** Batches on the ER are plaintext, so a late mover could react to others' orders. Sealed orders (commit-reveal of the orders themselves) are on the roadmap.
+- **Randomness** comes from the world root, the slot and the time when a tick's input is frozen. The party that freezes it could try to time it. MagicBlock VRF is planned.
+- **Decision logs** prove what was claimed and when, not that the claim is true.
+- **The operator (crank)** can delay steps but cannot change outcomes. Publishing a tick's input and resolving it after the deadline are permissionless.
+- **Commits from the ER to base are budgeted.** MagicBlock sponsors 10 commits per delegated account, so the crank commits every 20 ticks and keeps the 10th for the final undelegation.
+- **At most 256 members per season.** The payout table lives in the Season account.

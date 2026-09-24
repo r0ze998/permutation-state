@@ -13,14 +13,14 @@ use crate::hex::Hex;
 use crate::orders::{AttackTarget, Order, StandingOrder, StandingTarget};
 use crate::params::Ruleset;
 use crate::state::{CityStanding, CivId, Owner, StandingRule, WorldState};
+use crate::checks::Blocked;
 use crate::tick::{accepted, TickInput};
 use crate::units::stats;
 
 /// Phase 2: apply a validated `SetStanding`.
-pub(crate) fn apply(state: &mut WorldState, civ: CivId, target: StandingTarget, rule: StandingOrder) {
-    if crate::checks::standing(state, civ, target, &rule).is_err() {
-        return; // invalid at resolution: dropped without refund (§4.1)
-    }
+pub(crate) fn apply(state: &mut WorldState, civ: CivId, target: StandingTarget, rule: StandingOrder) -> Result<(), Blocked> {
+    // Invalid at resolution: dropped without refund (§4.1).
+    crate::checks::standing(state, civ, target, &rule)?;
     match target {
         StandingTarget::Unit(id) => {
             let u = &mut state.units[id as usize];
@@ -44,6 +44,7 @@ pub(crate) fn apply(state: &mut WorldState, civ: CivId, target: StandingTarget, 
             }
         }
     }
+    Ok(())
 }
 
 /// Combat strength of a living army: troops × unit strength.
@@ -53,12 +54,12 @@ fn strength(state: &WorldState, id: usize) -> u64 {
 }
 
 /// Phase 3: compile every rule into implicit orders (and apply AutoPurchase).
-pub(crate) fn phase_standing(state: &mut WorldState, rules: &Ruleset, input: &TickInput) {
+pub(crate) fn phase_standing(state: &mut WorldState, rules: &Ruleset, _input: &TickInput) {
     state.implicit.clear();
     let mut manual: BTreeSet<u32> = BTreeSet::new();
     let mut manual_purchase: BTreeSet<u32> = BTreeSet::new();
-    for (_, _, orders) in accepted(state, rules, input) {
-        for o in &orders {
+    for a in accepted(state) {
+        for o in &a.orders {
             if let Some(u) = o.commanded_unit() {
                 manual.insert(u);
             }
@@ -146,7 +147,8 @@ pub(crate) fn phase_standing(state: &mut WorldState, rules: &Ruleset, input: &Ti
         let c = &state.cities[id as usize];
         let (Some(civ), gold) = (c.owner, c.standing.auto_purchase) else { continue };
         if c.alive && gold > 0 && !c.queue.is_empty() && !manual_purchase.contains(&id) {
-            crate::tick::purchase(state, rules, civ, id, gold);
+            // Same rules as a manual purchase: never a Star Gate stage (v0.2 C3).
+            let _ = crate::tick::purchase(state, rules, civ, id, gold);
         }
     }
 }

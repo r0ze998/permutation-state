@@ -1,5 +1,7 @@
 # PERMUTATION STATE — Rules Specification v0.1 (`permutation-rules`)
 
+> **Superseded (2026-09-24)** by [Rules Spec v0.2](PERMUTATION_STATE_RULES_SPEC_v0.2.md), which merges the v0.2 changes and matches the V5 implementation. Kept for the record.
+
 Status: draft for implementation, 2026-09-24. Implements [Game Design V4](PERMUTATION_STATE_GAME_DESIGN_V4.md).
 Audience: implementers of the `permutation-rules` Rust crate, the ER program, the replay verifier, the game client and agent authors.
 Normative words: **MUST / MUST NOT / SHOULD / MAY**. Every number here is a ruleset parameter; the full parameter set is serialized and hashed into `ruleset_hash` before a season opens.

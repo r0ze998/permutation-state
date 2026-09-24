@@ -2,7 +2,7 @@
 // Reference agent 2: a language model plays through tools.
 //
 //   ANTHROPIC_API_KEY=… node agents/llm-agent.mjs --name Hypatia \
-//     --server http://127.0.0.1:4186 --gateway http://127.0.0.1:4191 [--model claude-sonnet-5] [--lang en]
+//     --server http://127.0.0.1:4185 --gateway http://127.0.0.1:4191 [--model claude-sonnet-5] [--lang en]
 //
 // Each tick the model gets its fogged state summary and the same tools an
 // MCP client gets (previews, find_path, validate_orders) and must end with
@@ -24,15 +24,16 @@ if (!KEY) {
   process.exit(2);
 }
 
-const SYSTEM = `You are ${args.name}, an AI civilization leader in PERMUTATION STATE, playing one tick at a time.
+const SYSTEM = `You are ${args.name}, an AI member of one nation in PERMUTATION STATE, playing one tick at a time.
 ${RULES_BRIEF}
 
 ${ORDER_REFERENCE}
 
 How to play a tick:
-- Read the state you are given. Use previews (preview_city, preview_research, preview_unit, find_path) only when you need facts; do not guess ids or coordinates.
-- Spend your order budget on what matters most: keep research queued, keep every city producing, found cities with settlers, explore with scouts, defend, and take only fights the forecast favours.
-- Call validate_orders if unsure, then finish with exactly one submit_orders call. Its rationale is published after the tick: write ${args.lang === 'en' ? 'one or two plain English sentences' : '日本語で1〜2文'} on why, honestly.
+- Read the state you are given ("you.officesHeld" says which offices you hold). Use previews (preview_city, preview_research, preview_unit, find_path) only when you need facts; do not guess ids or coordinates.
+- If you hold offices: spend each office's budget on what matters most (research queued, cities producing, settlers founding, scouts exploring, defence, only fights the forecast favours). Adopt good proposals of other members (submit_orders.adopt).
+- For offices you do not hold, propose what you would do (propose), and support workable proposals (govern Support). In the vote window, vote (govern Vote).
+- Call validate_orders if unsure, then finish with exactly one submit_orders call (an empty one if you hold no office). Its rationale is published after the tick: write ${args.lang === 'en' ? 'one or two plain English sentences' : '日本語で1〜2文'} on why, honestly.
 - You have a few tool calls per tick; be decisive.`;
 
 async function messages(body) {
@@ -53,7 +54,7 @@ const tools = TOOLS.filter(t => t.name !== 'get_state').map(t => ({ name: t.name
 async function decide({ game, view, log }) {
   const ctx = { game, policy: `llm-agent/${args.model}`, view };
   const deadline = Date.now() + Math.max(5, (view.secondsLeft ?? 20) - 4) * 1000;
-  const msgs = [{ role: 'user', content: `Tick ${view.tick} of ${view.ticks}. ${Math.round(view.secondsLeft)} seconds left.\nYour state:\n${JSON.stringify(summarize(view))}` }];
+  const msgs = [{ role: 'user', content: `Tick ${view.tick} of ${view.ticks}. ${Math.round(view.secondsLeft)} seconds left.\nYour state:\n${JSON.stringify(summarize(view, { member: game.member }))}` }];
   for (let step = 0; step < Number(args.maxSteps) && Date.now() < deadline; step++) {
     const r = await messages({ model: args.model, max_tokens: 2048, system: SYSTEM, tools, messages: msgs });
     msgs.push({ role: 'assistant', content: r.content });
@@ -66,8 +67,10 @@ async function decide({ game, view, log }) {
       if (u.name === 'submit_orders') {
         const orders = Array.isArray(u.input.orders) ? u.input.orders : [];
         const check = await game.validate(orders).catch(e => ({ ok: false, error: e.message }));
-        if (check.ok) { batch = { orders, rationale: String(u.input.rationale || '') }; out = { ok: true, cost: check.cost, warnings: check.warnings }; }
-        else out = { ok: false, error: check.error, warnings: check.warnings, hint: 'fix the batch and call submit_orders again' };
+        const held = game.myOffices(view);
+        const bad = (check.offices || []).filter(o => held.includes(o.role) && o.error);
+        if (!bad.length) { batch = { orders, rationale: String(u.input.rationale || ''), adopt: u.input.adopt || {} }; out = { ok: true, offices: check.offices, warnings: check.warnings }; }
+        else out = { ok: false, error: bad.map(o => `${o.role}: ${o.error}`).join('; '), warnings: check.warnings, hint: 'fix the batch and call submit_orders again' };
       } else {
         out = await callTool(ctx, u.name, u.input || {});
       }

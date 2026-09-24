@@ -1,6 +1,7 @@
 //! Deterministic rules engine for PERMUTATION STATE.
 //!
-//! Implements `PERMUTATION_STATE_RULES_SPEC_v0.1.md`. The same crate is meant to
+//! Implements `PERMUTATION_STATE_RULES_SPEC_v0.1.md` with the v0.2 changes and
+//! Game Design V5 (nations, offices, merit, achievements, the USDC market). The same crate is meant to
 //! run inside the MagicBlock ER program, the replay verifier, and (via WASM) the
 //! browser client and agents, so it is `no_std`, allocation-only and free of
 //! floating point. Section references (`§x.y`) point into the spec.
@@ -20,13 +21,16 @@ pub mod economy;
 pub mod error;
 pub mod fixed;
 pub mod genesis;
+pub mod gov;
 pub mod hash;
 pub mod hex;
 pub mod invariants;
 pub mod map;
 pub mod markets;
+pub mod merit;
 pub mod orders;
 pub mod params;
+pub mod payout;
 pub mod preview;
 pub mod rng;
 pub mod scoring;

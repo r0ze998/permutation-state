@@ -11,12 +11,12 @@ use std::net::TcpStream;
 use std::time::Duration;
 
 use borsh::BorshDeserialize;
-use permutation_rules::orders::OrderBatch;
 use permutation_rules::state::WorldState;
+use permutation_rules::tick::TickInput;
 use serde_json::Value;
 
 /// Must match permutation-chain `state.rs`.
-pub const WORLD_MAGIC: &[u8; 8] = b"PSWORLD1";
+pub const WORLD_MAGIC: &[u8; 8] = b"PSWORLD5";
 pub const WORLD_HEADER: usize = 8 + 4 + 64;
 
 #[derive(Clone, Debug, Default)]
@@ -27,6 +27,7 @@ pub struct WorldMeta {
     pub tick_seconds: u32,
     pub deadline: i64,
     pub finished: bool,
+    pub market: bool,
 }
 
 pub struct Snapshot {
@@ -46,7 +47,7 @@ pub struct ChainLink {
 }
 
 impl ChainLink {
-    /// `url` like `http://127.0.0.1:4190`.
+    /// `url` like `http://127.0.0.1:4191`.
     pub fn new(url: &str) -> Result<ChainLink, String> {
         let rest = url.strip_prefix("http://").ok_or("gateway URL must start with http://")?;
         let (host, port) = rest.trim_end_matches('/').split_once(':').ok_or("gateway URL needs a port")?;
@@ -151,21 +152,23 @@ impl ChainLink {
             tick_seconds: u32::from_le_bytes(m[10..14].try_into().unwrap()),
             deadline: i64::from_le_bytes(m[14..22].try_into().unwrap()),
             finished: m[22] != 0,
+            market: m[23] != 0,
         };
         let body = data.get(WORLD_HEADER..WORLD_HEADER + len).ok_or("world body truncated")?;
         let state = WorldState::try_from_slice(body).map_err(|e| format!("world decode: {e}"))?;
         Ok(Some(Snapshot { state, meta, slot: h("x-slot").parse().unwrap_or(0), layer: h("x-layer"), phase: h("x-phase") }))
     }
 
-    /// Batches the program resolved for `tick`, from the PS_TICK record.
-    pub fn resolved_batches(&self, tick: u16) -> Result<Option<(Vec<OrderBatch>, Value)>, String> {
+    /// The input the program resolved `tick` with (every office's batch and
+    /// every governance action), from the PS_TICK record.
+    pub fn resolved_input(&self, tick: u16) -> Result<Option<(TickInput, Value)>, String> {
         let v = self.get_json(&format!("/ticks?from={tick}"))?;
         let Some(rec) = v["records"].as_array().and_then(|r| r.iter().find(|x| x["tick"].as_u64() == Some(tick as u64) && x["to"].as_u64() == Some(12))) else {
             return Ok(None);
         };
-        let bytes = from_hex(rec["batches"].as_str().unwrap_or(""));
-        let batches = Vec::<OrderBatch>::try_from_slice(&bytes).map_err(|e| e.to_string())?;
-        Ok(Some((batches, rec.clone())))
+        let bytes = from_hex(rec["input"].as_str().unwrap_or(""));
+        let input = TickInput::try_from_slice(&bytes).map_err(|e| e.to_string())?;
+        Ok(Some((input, rec.clone())))
     }
 }
 

@@ -1,0 +1,169 @@
+/* V4.1 prototype: Civ-benchmarked HUD + on-chain layer, on top of the existing look. */
+:root { --chain: #5ce1c6; --chain-2: #9b7bff; --chain-bg: #0f1a1d; --chain-ink: #d6f5ec; }
+
+/* Top bar additions ---------------------------------------------------- */
+.chain-beat { all: unset; cursor: pointer; display: grid; grid-template-columns: 16px auto; column-gap: 7px; align-items: center; padding: 6px 11px; border-radius: 8px; background: var(--chain-bg); color: var(--chain-ink); font: 600 11px/1.25 var(--mono); border: 1px solid #1f3b3a; box-shadow: inset 0 0 0 1px #ffffff08; }
+.chain-beat .dot { grid-row: span 2; width: 10px; height: 10px; border-radius: 50%; background: var(--chain); box-shadow: 0 0 0 0 #5ce1c680; }
+.chain-beat.sealed .dot { animation: seal 1.2s ease-out; }
+.chain-beat.local .dot { background: #8a948c; }
+.chain-beat .l1 { color: #fff; } .chain-beat .l2 { color: #8fb3aa; font-size: 10px; }
+@keyframes seal { 0% { box-shadow: 0 0 0 0 #5ce1c6cc; transform: scale(1.3); } 100% { box-shadow: 0 0 0 12px #5ce1c600; transform: scale(1); } }
+.pool-chip { display: grid; line-height: 1.15; padding: 6px 12px; border-radius: 8px; background: linear-gradient(135deg, #e5f0f6, #d7e8f1); border: 1px solid #c3dbe8; color: #1f5a7a; }
+.pool-chip .k { font: 700 9.5px/1.2 var(--sans); letter-spacing: .08em; color: #4b7890; }
+.pool-chip .v { font: 700 16px/1.15 var(--sans); font-variant-numeric: tabular-nums; }
+.pool-chip .v small { font-size: 11px; font-weight: 600; margin-left: 2px; }
+
+/* Leader ribbon (Civ top-right) --------------------------------------- */
+.ribbon { position: absolute; top: 76px; right: 20px; z-index: 8; display: flex; gap: 8px; }
+.leader { all: unset; cursor: pointer; position: relative; width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: radial-gradient(circle at 35% 30%, #fffdf3, #eee6cf); box-shadow: 0 3px 10px #1a2e2440, inset 0 0 0 3px var(--c), inset 0 0 0 5px #fffaf0; font: 400 18px/1 var(--serif); color: #2a3a33; }
+.leader.me { box-shadow: 0 3px 12px #1a2e2455, inset 0 0 0 3px var(--c), inset 0 0 0 5px #f3d27a; }
+.leader .kind { position: absolute; bottom: -7px; left: 50%; transform: translateX(-50%); font: 800 8.5px/1 var(--sans); letter-spacing: .04em; padding: 2px 5px; border-radius: 99px; background: #2b3a33; color: #fff; white-space: nowrap; }
+.leader .kind.ai { background: linear-gradient(90deg, var(--chain-2), #5b8cff); }
+.leader .kind.bot { background: #7a7f73; }
+.leader .rel { position: absolute; top: -5px; left: -5px; width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; font-size: 10px; background: #fffaf0; box-shadow: 0 1px 4px #0003; }
+.leader .ready { position: absolute; top: -5px; right: -5px; width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; font: 800 10px/1 var(--sans); background: #3f7a4a; color: #fff; box-shadow: 0 1px 4px #0003; }
+.leader .card { display: none; position: absolute; top: 54px; right: 0; width: 240px; padding: 12px 13px; border-radius: 10px; background: var(--paper); box-shadow: var(--shadow-lift); font: 400 12px/1.55 var(--sans); color: var(--ink); text-align: left; z-index: 20; }
+.leader:hover .card, .leader:focus-visible .card { display: block; }
+.leader .card b { font: 400 16px/1.3 var(--serif); }
+.leader .card .row2 { display: flex; justify-content: space-between; color: var(--ink-soft); }
+.leader .card .mono { font: 11px/1.4 var(--mono); color: #3d6f7f; }
+
+/* Tracks tracker (Civ VII Legacy Paths / World Rankings) ---------------- */
+.tracker { pointer-events: auto; margin-top: 12px; width: 280px; padding: 11px 13px 10px; border-radius: 10px; background: #faf8efe6; border: 1px solid #fffbe8; box-shadow: 0 4px 18px #1f392722; backdrop-filter: blur(10px); text-shadow: none; display: grid; gap: 9px; cursor: pointer; }
+.tracker .head { display: flex; justify-content: space-between; align-items: baseline; font: 700 10px/1 var(--sans); letter-spacing: .08em; color: var(--muted); }
+.tracker .head b { font: 700 13px/1 var(--sans); color: #1f5a7a; letter-spacing: 0; }
+.trk { display: grid; grid-template-columns: 44px 1fr 30px; gap: 8px; align-items: center; }
+.trk .n { font: 400 13px/1 var(--serif); }
+.trk .rank { font: 400 15px/1 var(--serif); text-align: right; }
+.trk .rail { position: relative; height: 16px; }
+.trk .rail::before { content: ''; position: absolute; left: 0; right: 0; top: 7px; height: 2px; border-radius: 2px; background: #ddd6c0; }
+.trk .m { position: absolute; top: 3px; width: 10px; height: 10px; margin-left: -5px; border-radius: 50%; background: var(--c); border: 1.5px solid #fffaf0; box-shadow: 0 1px 3px #0003; }
+.trk .m.me { top: 0; width: 16px; height: 16px; margin-left: -8px; border: 2.5px solid #f3d27a; z-index: 2; }
+.trk.best .n::after { content: ' ★'; color: var(--gold); }
+
+.civ-plate { width: 290px; }
+.world-nav { top: 318px; max-height: calc(100% - 318px - 16px); overflow-y: auto; scrollbar-width: none; padding: 2px; }
+.world-nav::-webkit-scrollbar { display: none; }
+.drawer { top: 318px; max-height: calc(100% - 318px - 150px); }
+.right-col { top: 138px; bottom: 210px; }
+.next-action { display: none; }
+
+/* Next turn button (Civ bottom-right) --------------------------------- */
+.next-turn { all: unset; cursor: pointer; position: absolute; right: 26px; bottom: 26px; z-index: 9; width: 132px; height: 132px; border-radius: 50%; display: grid; place-items: center; text-align: center; background: radial-gradient(circle at 40% 35%, #2f5a45, #1b3329); color: #f7eed2; box-shadow: 0 10px 30px #13281f66, inset 0 0 0 4px #1b3329, inset 0 0 0 6px #d8b865; }
+.next-turn svg { position: absolute; inset: 0; transform: rotate(-90deg); }
+.next-turn .lbl { position: relative; display: grid; gap: 3px; padding: 0 16px; }
+.next-turn .lbl b { font: 400 16px/1.2 var(--serif); }
+.next-turn .lbl small { font: 600 10px/1.3 var(--sans); color: #cfe0d4; }
+.next-turn.blocker { background: radial-gradient(circle at 40% 35%, #b98a33, #7b5a1c); }
+.next-turn.done { background: radial-gradient(circle at 40% 35%, #3f7a4a, #2a5232); }
+.next-turn.done .lbl b::before { content: '✓ '; }
+.next-turn:hover { filter: brightness(1.06); }
+
+.notif-stack { position: absolute; right: 172px; bottom: 30px; z-index: 9; display: flex; flex-direction: column-reverse; gap: 7px; }
+.notif { all: unset; cursor: pointer; position: relative; width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; font-size: 16px; background: var(--paper); box-shadow: 0 4px 14px #1a2e2433; border: 1px solid #fff; }
+.notif .count { position: absolute; top: -6px; right: -6px; min-width: 16px; height: 16px; border-radius: 99px; display: grid; place-items: center; padding: 0 4px; font: 800 9.5px/1 var(--sans); background: #b4543f; color: #fff; }
+.notif .tipx { display: none; position: absolute; right: 46px; top: 50%; transform: translateY(-50%); white-space: nowrap; padding: 6px 10px; border-radius: 8px; background: #1f332d; color: #f5eed9; font: 600 11.5px/1.3 var(--sans); }
+.notif:hover .tipx { display: block; }
+
+.minimap-card { bottom: 18px; left: 88px; } /* right of the world nav, which runs down the left edge */
+.civ-chip { flex: none; }
+.bottom-center { width: min(720px, calc(100% - 720px)); }
+
+/* Chain lens: the only "terminal" styling in the game ------------------ */
+.chain-drawer { position: absolute; top: 76px; right: 20px; bottom: 180px; width: 380px; z-index: 12; border-radius: 12px; background: linear-gradient(180deg, #0f1a1d, #101c24); color: var(--chain-ink); box-shadow: 0 20px 60px #0008; border: 1px solid #1f3b3a; display: flex; flex-direction: column; overflow: hidden; font: 12px/1.55 var(--mono); }
+.chain-drawer header { padding: 14px 16px 10px; border-bottom: 1px solid #1f3b3a; display: flex; justify-content: space-between; align-items: baseline; }
+.chain-drawer header b { font: 700 13px/1 var(--mono); letter-spacing: .06em; background: linear-gradient(90deg, var(--chain), var(--chain-2)); -webkit-background-clip: text; color: transparent; }
+.chain-drawer .x { all: unset; cursor: pointer; color: #8fb3aa; }
+.chain-drawer .sec { padding: 10px 16px; border-bottom: 1px solid #16282a; display: grid; gap: 4px; }
+.chain-drawer .k { color: #6f948b; font-size: 10.5px; letter-spacing: .06em; }
+.chain-drawer a { color: var(--chain); text-decoration: none; }
+.chain-drawer a:hover { text-decoration: underline; }
+.chain-drawer .ticker { flex: 1; overflow-y: auto; padding: 6px 10px 12px; display: grid; align-content: start; gap: 4px; }
+.tk { display: grid; grid-template-columns: 52px 1fr auto; gap: 8px; align-items: center; padding: 6px 8px; border-radius: 7px; background: #13232a; }
+.tk.new { animation: tknew 1.4s ease-out; }
+@keyframes tknew { from { background: #1f4a45; } to { background: #13232a; } }
+.tk .t { color: #fff; font-weight: 700; }
+.tk .m { color: #8fb3aa; font-size: 10.5px; }
+.tk .ok { color: var(--chain); font-weight: 700; }
+.chain-drawer pre { margin: 0; white-space: pre-wrap; word-break: break-all; font: 10.5px/1.5 var(--mono); color: #b8d9d0; background: #0b1417; padding: 8px 10px; border-radius: 7px; }
+
+/* Sealed dispatch (commit-reveal as a letter) -------------------------- */
+.rationale .seal { font: 600 11px/1 var(--sans); color: #8a5a2a; white-space: nowrap; }
+.rationale .seal.open { color: #3f7a4a; }
+
+.res .rate { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 120px; display: block; }
+.resources { gap: 2px; }
+
+/* V5: nations, offices, governance ------------------------------------ */
+.civ-chip small.nation { display: block; font: 600 10.5px/1.2 var(--sans); color: var(--muted); }
+.badge.office { background: #2b3a33; color: #f3d27a; margin-right: 3px; }
+.office-pips { display: inline-flex; align-items: center; gap: 3px; margin-right: 10px; }
+.office-pips .og { font-size: 12px; color: var(--muted); margin-right: 2px; }
+.chip.proposal { border-style: dashed; background: #f7f2e6; }
+.chip .pt { font: 700 9.5px/1 var(--sans); color: #8a6a2a; background: #f1e3bf; padding: 2px 5px; border-radius: 99px; margin-left: 4px; white-space: nowrap; }
+.office-row { display: grid; grid-template-columns: 26px 1fr auto; gap: 8px; align-items: center; padding: 8px 6px; border-bottom: 1px solid var(--line); }
+.office-row.me { background: #fbf4dc; border-radius: 6px; }
+.office-row .og, .cand .og, .proposal .og { font-size: 16px; color: #7a6a4a; }
+.cand { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 0; border-bottom: 1px dotted var(--line); }
+.cand-pill { display: inline-flex; gap: 5px; align-items: center; padding: 3px 6px; border: 1px solid var(--line); border-radius: 99px; background: #fffdf6; }
+.cand-pill .btn { padding: 2px 8px; font-size: 11px; }
+.prop-orders { margin: 4px 0 2px 18px; padding: 0; font-size: 12.5px; }
+.era-grid td { font-size: 11.5px; vertical-align: top; }
+.era-grid td.met { background: #e8f1dc; color: #2f5a2a; }
+.era-grid td.next { background: #fbf4dc; }
+.tracker .steps { display: inline-flex; gap: 3px; }
+.tracker .steps i { width: 14px; height: 8px; border-radius: 2px; background: #00000014; }
+.tracker .steps i.on { background: #c9a43f; }
+.leader .era { position: absolute; top: -5px; right: -5px; min-width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; font: 800 10px/1 var(--sans); background: #c9a43f; color: #fff; box-shadow: 0 1px 4px #0003; }
+.seat.nation { cursor: pointer; }
+.seat.nation.picked { outline: 2px solid #c9a43f; border-radius: 8px; }
+.seat-form { display: grid; gap: 8px; padding: 10px 4px; }
+.seat-form .field input { width: 100%; }
+.toast.good { background: #2f5a2a; color: #fff; }
+.seat-list .seat-form { display: grid; grid-template-columns: 1fr; list-style: none; border: 1px solid #d8d2bd; border-radius: 8px; background: #fffdf6; padding: 12px; }
+.seat-form .field { display: grid; gap: 4px; font: 600 12px/1.3 var(--sans); color: var(--ink-soft); }
+.seat-form .field input { font: 14px/1.4 var(--sans); padding: 7px 9px; border: 1px solid #d8d2bd; border-radius: 6px; background: #fff; }
+.seat-form .row { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* Responsive (after the V4.1 overrides above, which otherwise win over the
+   breakpoints in styles.css) ------------------------------------------- */
+@media (max-width: 1280px) {
+  /* Resources that do not fit scroll instead of spilling over the civ chip. */
+  .resources { justify-content: flex-start; overflow-x: auto; scrollbar-width: none; flex-wrap: nowrap; }
+  .resources::-webkit-scrollbar { display: none; }
+  .res { flex: none; }
+  /* The dock spans the space between the minimap and the next-turn button. */
+  .bottom-center { left: 296px; right: 184px; width: auto; min-width: 0; transform: none; }
+  .right-col { width: 300px; }
+}
+@media (max-width: 1180px) {
+  .brand { display: none; }
+  .topbar { gap: 12px; }
+}
+@media (max-width: 1080px) {
+  .chain-beat .l2 { display: none; }
+  .minimap-card { display: none; }
+  .civ-plate { width: 250px; }
+  .civ-plate h1 { font-size: 22px; }
+  .tracker { width: 250px; }
+  .ribbon { top: 74px; gap: 5px; }
+  .leader { width: 38px; height: 38px; font-size: 16px; }
+  .right-col { width: 280px; top: 128px; bottom: 200px; }
+  .bottom-center { left: 90px; right: 168px; bottom: 16px; }
+  .next-turn { width: 116px; height: 116px; right: 18px; bottom: 18px; }
+  .notif-stack { right: 144px; }
+  .drawer { max-height: calc(100% - 318px - 200px); }
+}
+@media (max-width: 760px) {
+  /* Phone: restate the styles.css phone layout over the V4.1 overrides. */
+  .world-nav { top: 128px; max-height: calc(100% - 128px - 150px); }
+  .drawer { top: 128px; bottom: 150px; max-height: none; }
+  .right-col { left: 8px; right: 8px; width: auto; top: auto; bottom: 150px; }
+  .bottom-center { left: 8px; right: 8px; bottom: 76px; }
+  .ribbon { display: none; }
+  .next-turn { width: 60px; height: 60px; right: 8px; bottom: 8px; }
+  .next-turn .lbl small { display: none; }
+  .next-turn .lbl b { font-size: 11px; }
+  .notif-stack { display: none; }
+  .pool-chip .k { display: none; }
+}

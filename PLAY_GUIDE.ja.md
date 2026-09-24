@@ -1,5 +1,7 @@
 # PERMUTATION STATE — プレイガイド
 
+> **履歴として残している文書です（2026-09-24）。** これは以前の試作 `/civilization/`（全員でひとつの文明を育てる市民視点のゲーム）の遊び方です。現在のゲーム（6つの国・選挙・達成と賞金、Game Design V5）の遊び方は [README の How to play](README.md#how-to-play-in-the-browser) と、ゲーム内の「？」ボタンにあります。
+
 ## ゲームを開く
 
 [http://127.0.0.1:4173/civilization/](http://127.0.0.1:4173/civilization/)

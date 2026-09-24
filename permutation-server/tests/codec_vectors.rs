@@ -1,10 +1,12 @@
 //! Byte-level vectors for the JS encoder in permutation-gateway: every order
-//! DTO variant and every program instruction, encoded by the Rust types.
+//! DTO variant, every governance action and every program instruction,
+//! encoded by the Rust types.
 //! `UPDATE_VECTORS=1 cargo test --test codec_vectors` rewrites the file;
 //! otherwise the file must match (so a Rust-side change fails loudly).
 
 use permutation_chain::instruction::ChainInstruction;
-use permutation_server::api::OrderDto;
+use permutation_rules::gov::Role;
+use permutation_server::api::{GovDto, OrderDto};
 use serde_json::{json, Value};
 
 fn hex(b: &[u8]) -> String {
@@ -44,7 +46,23 @@ fn vectors_match_the_js_encoder_fixture() {
         json!({"type":"SetStanding","target":{"kind":"City","id":0},"rule":{"kind":"AutoPurchase","maxGold":40}}),
         json!({"type":"SetStanding","target":{"kind":"Unit","id":0},"rule":{"kind":"Clear"}}),
         json!({"type":"RevealRationale","tick":3,"policy":"bot/warlord@1","salt":"00112233445566778899aabbccddeeff","text":"攻撃は最大の防御"}),
+        json!({"type":"ConsentWar","civ":2}),
+        json!({"type":"ConsentSpend","usdc":25000000}),
     ];
+    let govs: Vec<Value> = vec![
+        json!({"type":"Stand","roles":["General","Diplomat"]}),
+        json!({"type":"Vote","role":"Steward","candidate":7}),
+        json!({"type":"Propose","role":"Science","orders":[{"type":"SetResearch","techs":["Writing"]}]}),
+        json!({"type":"Support","proposal":12}),
+        json!({"type":"Recall","role":"General"}),
+    ];
+    let mut gov_vectors = Vec::new();
+    for g in &govs {
+        let dto: GovDto = serde_json::from_value(g.clone()).expect("gov dto parses");
+        let action = dto.to_action().expect("gov dto converts");
+        assert_eq!(GovDto::from_action(&action).to_action().unwrap(), action, "round trip {g}");
+        gov_vectors.push(json!({"dto": g, "hex": hex(&borsh::to_vec(&action).unwrap())}));
+    }
     let mut order_vectors = Vec::new();
     for o in &orders {
         let dto: OrderDto = serde_json::from_value(o.clone()).expect("dto parses");
@@ -54,23 +72,30 @@ fn vectors_match_the_js_encoder_fixture() {
     }
     let k = |b: u8| [b; 32];
     let all: Vec<_> = orders.iter().map(|o| serde_json::from_value::<OrderDto>(o.clone()).unwrap().to_order().unwrap()).collect();
+    let gov_action = serde_json::from_value::<GovDto>(govs[2].clone()).unwrap().to_action().unwrap();
     let ixs = vec![
-        ("createSeason", ChainInstruction::CreateSeason { season_id: 42, preset: 0, max_civs: 6, entry_fee: 10_000_000, exchange_credit: 20_000_000, tick_seconds: 30, world_seed: k(7), crank: k(9) }),
+        ("createSeason", ChainInstruction::CreateSeason { season_id: 42, preset: 0, nations: 6, entry_fee: 10_000_000, tick_seconds: 30, world_seed: k(7), crank: k(9), market: true }),
         ("allocWorld", ChainInstruction::AllocWorld { chunk: 3 }),
-        ("joinSeason", ChainInstruction::JoinSeason { name: "アステル".into(), kind: 1, session: k(1), payout: k(2) }),
+        ("register", ChainInstruction::Register { civ: 2, name: "アステル".into(), kind: 1, session: k(1), attestation: k(0), stand: 5, votes: [0, u32::MAX, 3, u32::MAX], deposit: 5_000_000 }),
         ("startSeason", ChainInstruction::StartSeason),
         ("genesisStep", ChainInstruction::GenesisStep { work: 50 }),
-        ("delegate", ChainInstruction::Delegate { target: 3 }),
-        ("submitOrders", ChainInstruction::SubmitOrders { tick: 17, decision_digest: k(5), orders: all[..6].to_vec() }),
+        ("delegate", ChainInstruction::Delegate { target: 1003 }),
+        ("submitOrders", ChainInstruction::SubmitOrders { role: Role::Steward, tick: 17, decision_digest: k(5), orders: all[..6].to_vec(), adopt: vec![4, 9] }),
         ("resolveTick", ChainInstruction::ResolveTick { to: 12 }),
         ("commit", ChainInstruction::Commit),
         ("commitAndUndelegate", ChainInstruction::CommitAndUndelegate),
         ("finishSeason", ChainInstruction::FinishSeason),
-        ("claim", ChainInstruction::Claim { civ: 4 }),
+        ("claim", ChainInstruction::Claim),
         ("undelegatePart", ChainInstruction::UndelegatePart { targets: vec![3, 1002, 0] }),
+        ("updateMember", ChainInstruction::UpdateMember { stand: 3, votes: [1, 1, u32::MAX, 2] }),
+        ("allocNation", ChainInstruction::AllocNation { civ: 5 }),
+        ("seatMembers", ChainInstruction::SeatMembers),
+        ("openGovernment", ChainInstruction::OpenGovernment),
+        ("submitGov", ChainInstruction::SubmitGov { member: 11, action: gov_action }),
+        ("withdrawOps", ChainInstruction::WithdrawOps),
     ];
     let ix_vectors: Vec<Value> = ixs.iter().map(|(name, ix)| json!({"name": name, "hex": hex(&borsh::to_vec(ix).unwrap())})).collect();
-    let doc = json!({"orders": order_vectors, "instructions": ix_vectors});
+    let doc = json!({"orders": order_vectors, "gov": gov_vectors, "instructions": ix_vectors});
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../permutation-gateway/test/vectors.json");
     let text = serde_json::to_string_pretty(&doc).unwrap() + "\n";
     if std::env::var("UPDATE_VECTORS").is_ok() {

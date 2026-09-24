@@ -8,14 +8,14 @@ import { GameClient, loadOrCreateKeypair } from './game.mjs';
 import { TOOLS, callTool, RULES_BRIEF } from './tools.mjs';
 
 const EXTRA = [
-  { name: 'join_season', description: 'Join the open season as a new civilization: pays the entry fee in (test) USDC over HTTP 402 and registers your session key. Needed once, unless PS_CIV is configured.', inputSchema: { type: 'object', properties: { name: { type: 'string', description: 'your civilization name (letters only, ≤16)' } }, required: ['name'] } },
+  { name: 'join_season', description: 'Become a member of a nation in the open season: pays the entry fee in (test) USDC over HTTP 402 and registers your session key. Needed once, unless PS_MEMBER is configured. Omit civ to join the smallest nation.', inputSchema: { type: 'object', properties: { name: { type: 'string', description: 'your display name (≤24)' }, civ: { type: 'integer', description: 'nation 0..5' }, stand: { type: 'array', items: { type: 'string' }, description: 'offices to stand for in the first election' } }, required: ['name'] } },
   { name: 'wait_for_next_tick', description: 'Block until the current tick resolves, then return the new state summary.', inputSchema: { type: 'object', properties: {} } },
 ];
 
 export async function runMcp({ env = process.env, input = process.stdin, output = process.stdout } = {}) {
   const dir = env.PS_AGENT_DIR || path.join(os.homedir(), '.permutation-agent');
-  const game = new GameClient({ server: env.PS_SERVER, gateway: env.PS_GATEWAY, civ: env.PS_CIV !== undefined ? Number(env.PS_CIV) : null });
-  if (game.civ !== null) game.session = await loadOrCreateKeypair(path.join(dir, 'session.json'));
+  const game = new GameClient({ server: env.PS_SERVER, gateway: env.PS_GATEWAY, member: env.PS_MEMBER !== undefined ? Number(env.PS_MEMBER) : null, civ: env.PS_CIV !== undefined ? Number(env.PS_CIV) : null });
+  if (game.member !== null) game.session = await loadOrCreateKeypair(path.join(dir, 'session.json'));
   const ctx = { game, policy: env.PS_POLICY || 'mcp-agent/v1' };
   const send = m => output.write(`${JSON.stringify(m)}\n`);
 
@@ -24,14 +24,14 @@ export async function runMcp({ env = process.env, input = process.stdin, output 
       const wallet = await loadOrCreateKeypair(path.join(dir, 'wallet.json'));
       const session = await loadOrCreateKeypair(path.join(dir, 'session.json'));
       const f = await game.faucet(wallet.publicKey);
-      return game.joinViaX402({ wallet, session, name: args.name, kind: 1, usdcAccount: f.usdcAccount });
+      return game.joinViaX402({ wallet, session, civ: args.civ, name: args.name, kind: 1, usdcAccount: f.usdcAccount, stand: args.stand || [] });
     }
     if (name === 'wait_for_next_tick') {
       const now = await game.state();
       await game.waitForTick(now.tick);
       return callTool(ctx, 'get_state', {});
     }
-    if (game.civ === null && name !== 'get_rules') return { error: 'no civilization yet: call join_season first' };
+    if (game.member === null && name !== 'get_rules') return { error: 'not a member yet: call join_season first' };
     return callTool(ctx, name, args);
   }
 
