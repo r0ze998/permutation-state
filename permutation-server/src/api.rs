@@ -9,7 +9,7 @@ use permutation_rules::battle::AttackForecast;
 use permutation_rules::buildings::{Building, BUILDINGS};
 use permutation_rules::checks::Blocked;
 use permutation_rules::hex::Hex;
-use permutation_rules::orders::{AttackTarget, Good, Order, Side};
+use permutation_rules::orders::{AttackTarget, Good, Order, Side, StandingOrder, StandingTarget};
 use permutation_rules::preview;
 use permutation_rules::state::{
     CivId, Focus, Owner, ProposalKind, QueueItem, Relation, StandingRule, WorldState,
@@ -102,7 +102,19 @@ pub enum OrderDto {
     MarketTrade { good: GoodDto, side: String, amount: u32, limit_gold: u32 },
     ExchangeOrder { good: GoodDto, side: String, amount: u32, price: u64 },
     Raze { city: u32 },
-    AutoDefend { unit: u32, radius: u8 },
+    SetStanding { target: TargetDto, rule: StandingDto },
+}
+
+/// Standing rules (§13) as the client sends them.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all_fields = "camelCase")]
+pub enum StandingDto {
+    Clear,
+    AutoDefend { radius: u8 },
+    Retreat { ratio_bps: u32 },
+    Patrol { route: Vec<[i32; 2]> },
+    QueueRepeat { on: bool },
+    AutoPurchase { max_gold: u32 },
 }
 
 fn good(g: &GoodDto) -> Good {
@@ -201,9 +213,22 @@ impl OrderDto {
                 price: *price,
             },
             D::Raze { city } => Order::Raze { city: *city },
-            D::AutoDefend { unit, radius } => Order::SetStanding {
-                unit: *unit,
-                rule: StandingRule::AutoDefend { radius: *radius },
+            D::SetStanding { target, rule } => Order::SetStanding {
+                target: match *target {
+                    TargetDto::Unit { id } => StandingTarget::Unit(id),
+                    TargetDto::City { id } => StandingTarget::City(id),
+                    TargetDto::CityState { .. } => return Err("city-states take no standing rules".into()),
+                },
+                rule: match rule {
+                    StandingDto::Clear => StandingOrder::Clear,
+                    StandingDto::AutoDefend { radius } => StandingOrder::AutoDefend { radius: *radius },
+                    StandingDto::Retreat { ratio_bps } => StandingOrder::Retreat { ratio_bps: *ratio_bps },
+                    StandingDto::Patrol { route } => {
+                        StandingOrder::Patrol { route: route.iter().map(|[q, r]| Hex::new(*q, *r)).collect() }
+                    }
+                    StandingDto::QueueRepeat { on } => StandingOrder::QueueRepeat { on: *on },
+                    StandingDto::AutoPurchase { max_gold } => StandingOrder::AutoPurchase { max_gold: *max_gold },
+                },
             },
         })
     }
@@ -225,6 +250,7 @@ pub fn blocked(b: Blocked) -> Value {
         B::OutOfRange { .. } => "OutOfRange",
         B::OverCap { .. } => "OverCap",
         B::ProtectedCapital { .. } => "ProtectedCapital",
+        B::OutOfBounds { .. } => "OutOfBounds",
         other => return json!({ "code": name(other) }),
     };
     let mut v = json!({ "code": code });
@@ -249,6 +275,10 @@ pub fn blocked(b: Blocked) -> Value {
         }
         B::AllianceFull { cap } | B::OverCap { cap } => {
             o.insert("cap".into(), json!(cap));
+        }
+        B::OutOfBounds { min, max } => {
+            o.insert("min".into(), json!(min));
+            o.insert("max".into(), json!(max));
         }
         B::ProtectedCapital { civ, until } => {
             o.insert("civ".into(), json!(civ));
@@ -474,6 +504,7 @@ pub fn world_view(s: &WorldState, rules: &Ruleset, me: CivId, fog: &Fog) -> Valu
                 "prod": if mine { json!(c.prod / 1000) } else { Value::Null },
                 "food": if mine { json!(c.food / 1000) } else { Value::Null },
                 "loyalty": if mine { json!(c.loyalty) } else { Value::Null },
+                "standing": if mine { json!({"repeatQueue": c.standing.repeat_queue, "autoPurchase": c.standing.auto_purchase}) } else { Value::Null },
             })
         })
         .collect();
@@ -491,6 +522,7 @@ pub fn world_view(s: &WorldState, rules: &Ruleset, me: CivId, fog: &Fog) -> Valu
                 "id": u.id, "q": u.hex.q, "r": u.hex.r, "owner": owner, "type": name(u.unit_type),
                 "troops": u.troops / 100, "civilian": u.unit_type.is_civilian(),
                 "path": if mine { json!(u.path.iter().map(|h| [h.q, h.r]).collect::<Vec<_>>()) } else { Value::Null },
+                "standing": if mine { standing_json(u.standing) } else { Value::Null },
                 "moved": u.last_moved == Some(s.tick.saturating_sub(1)),
             })
         })
@@ -557,4 +589,16 @@ pub fn world_view(s: &WorldState, rules: &Ruleset, me: CivId, fog: &Fog) -> Valu
         },
         "vault": s.exchange_vault,
     })
+}
+
+fn standing_json(r: StandingRule) -> Value {
+    match r {
+        StandingRule::None => Value::Null,
+        StandingRule::AutoDefend { radius, anchor } => json!({"kind": "AutoDefend", "radius": radius, "anchor": [anchor.q, anchor.r]}),
+        StandingRule::Retreat { ratio_bps } => json!({"kind": "Retreat", "ratioBps": ratio_bps}),
+        StandingRule::Patrol { route, len, next } => json!({
+            "kind": "Patrol", "next": next,
+            "route": route[..len as usize].iter().map(|h| [h.q, h.r]).collect::<Vec<_>>(),
+        }),
+    }
 }

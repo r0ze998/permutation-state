@@ -160,6 +160,8 @@ export class WorldMap {
   }
   setOverlay(o) { this.overlay = { reach: new Map(), attacks: [], found: null, unit: null, ...o }; this.renderNow(); }
   setDrafts(d) { this.drafts = d || []; this.renderNow(); }
+  /** Patrol being drawn: { from:[q,r], route:[[q,r]...] } or null. */
+  setPatrol(p) { this.patrol = p ? { ...p, route: [...p.route] } : null; this.renderNow(); }
   setSelection(id) { this.selection = this.tiles.has(id) ? id : null; this.renderNow(); }
   setLens(l) { this.lens = ['normal', 'political', 'yields', 'military', 'concord'].includes(l) ? l : 'normal'; this.dirty = true; this.renderNow(); }
   focusTile(id, instant = false) {
@@ -533,6 +535,12 @@ export class WorldMap {
         ctx.strokeStyle = alpha(col, .9); ctx.lineWidth = 1; ctx.stroke();
         ctx.fillStyle = mine ? '#fff1cc' : '#3b4a43'; ctx.textAlign = 'center'; ctx.fillText(label, x, y + 19);
       }
+      if (mine && u.standing) { // standing-rule badge
+        const g = { AutoDefend: '⛨', Retreat: '↩', Patrol: '⟳' }[u.standing.kind] || '⚙';
+        ctx.fillStyle = '#f7f1dc'; ctx.strokeStyle = '#284d40'; ctx.lineWidth = 1.2;
+        ctx.beginPath(); ctx.arc(x - 15, y - 24, 7, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = '#284d40'; ctx.font = '700 9px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(g, x - 15, y - 23.5); ctx.textBaseline = 'alphabetic';
+      }
     }
   }
   _figure(ctx, x, y, col, now, moving, kind = 'spear', tier2 = false) {
@@ -560,6 +568,45 @@ export class WorldMap {
   }
 
   // ---------------------------------------------------------------- overlays
+  // Standing rules of the selected unit, or the patrol being drawn (§13).
+  _drawStanding(ctx) {
+    const sel = this.view.units.find(u => u.id === this.overlay.unit);
+    const st = this.patrol ? { kind: 'Patrol', route: this.patrol.route, from: this.patrol.from, draft: true } : sel?.standing;
+    if (!st) return;
+    if (st.kind === 'AutoDefend') {
+      const [aq, ar] = st.anchor;
+      ctx.save(); ctx.lineCap = 'round'; ctx.beginPath();
+      for (const t of this.sortedTiles) {
+        if (hexDist(t, { q: aq, r: ar }) > st.radius) continue;
+        const p = project(t.q, t.r), pts = hexPoints(p.x, p.y, 2);
+        for (let i = 0; i < 6; i++) {
+          const [dq, dr] = EDGE_NEIGHBOR[i];
+          if (hexDist({ q: t.q + dq, r: t.r + dr }, { q: aq, r: ar }) <= st.radius) continue;
+          ctx.moveTo(pts[i][0], pts[i][1]); ctx.lineTo(pts[(i + 1) % 6][0], pts[(i + 1) % 6][1]);
+        }
+      }
+      ctx.strokeStyle = 'rgba(30,48,40,.55)'; ctx.lineWidth = 5 / this.zoom; ctx.stroke(); // casing
+      ctx.setLineDash([7 / this.zoom, 4 / this.zoom]); ctx.strokeStyle = '#9fd0bd'; ctx.lineWidth = 2.4 / this.zoom; ctx.stroke();
+      ctx.restore();
+      const p = project(aq, ar); ctx.font = `600 ${11 / Math.max(this.zoom, .8)}px system-ui`; ctx.fillStyle = 'rgba(70,112,86,.95)'; ctx.textAlign = 'center'; ctx.fillText('⛨', p.x, p.y - 26);
+    }
+    if (st.kind === 'Patrol' && st.route.length) {
+      const pts = st.route.map(([q, r]) => project(q, r));
+      const start = st.from ? project(st.from[0], st.from[1]) : null;
+      ctx.save(); ctx.lineJoin = ctx.lineCap = 'round';
+      ctx.beginPath(); if (start && st.draft) { ctx.moveTo(start.x, start.y); pts.forEach(p => ctx.lineTo(p.x, p.y)); } else { pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); }
+      if (pts.length > 1) ctx.lineTo(pts[0].x, pts[0].y); // the loop closes
+      ctx.strokeStyle = 'rgba(46,58,50,.5)'; ctx.lineWidth = 5 / this.zoom; ctx.stroke();
+      ctx.setLineDash([6 / this.zoom, 5 / this.zoom]); ctx.strokeStyle = '#9fd0bd'; ctx.lineWidth = 2.4 / this.zoom; ctx.stroke(); ctx.setLineDash([]);
+      pts.forEach((p, i) => {
+        const r = 8 / Math.max(this.zoom, .8);
+        ctx.fillStyle = '#284d40'; ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = '#9fd0bd'; ctx.lineWidth = 1.5 / this.zoom; ctx.stroke();
+        ctx.fillStyle = '#eaf6ef'; ctx.font = `700 ${9 / Math.max(this.zoom, .8)}px system-ui`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(`${i + 1}`, p.x, p.y + .5); ctx.textBaseline = 'alphabetic';
+      });
+      ctx.restore();
+    }
+  }
   _drawHoverEta(ctx) {
     const ticks = this.hover && this.overlay.reach.get(this.hover); if (!ticks) return;
     const t = this.tiles.get(this.hover); const p = project(t.q, t.r); const z = Math.max(this.zoom, .8);
@@ -587,9 +634,10 @@ export class WorldMap {
         }
       }
     }
+    this._drawStanding(ctx);
     // Reach in tiers (Civ-style): this tick is bright with a hard outline, 2–3 ticks
     // a faint wash with a dashed edge; farther tiles only show their ETA on hover.
-    const reach = this.overlay.reach;
+    const reach = this.patrol ? new Map() : this.overlay.reach; // drawing a patrol: keep the map calm
     for (const [id, ticks] of reach) {
       if (ticks > 3) continue;
       const t = this.tiles.get(id); if (!t) continue; const p = project(t.q, t.r);

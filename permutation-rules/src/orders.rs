@@ -8,7 +8,7 @@
 use crate::buildings::Building;
 use crate::hex::Hex;
 use crate::params::Ruleset;
-use crate::state::{CityId, CivId, Focus, QueueItem, StandingRule, UnitId, WorldState};
+use crate::state::{CityId, CivId, Focus, QueueItem, UnitId, WorldState};
 use crate::tech::Tech;
 use crate::RulesError;
 use alloc::vec::Vec;
@@ -118,9 +118,10 @@ pub enum Order {
     Raze {
         city: CityId,
     },
+    /// Set or clear a standing rule (§13). Costs 1; execution is free.
     SetStanding {
-        unit: UnitId,
-        rule: StandingRule,
+        target: StandingTarget,
+        rule: StandingOrder,
     },
     /// Opens the commitment made at `tick` (§4.3): anyone can then check
     /// `decision_digest == digest(tick, obs_root, policy_id(policy), rationale_hash(salt, text))`.
@@ -131,6 +132,28 @@ pub enum Order {
         text: Vec<u8>,
     },
 }
+
+/// What a `SetStanding` order applies to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum StandingTarget {
+    Unit(UnitId),
+    City(CityId),
+}
+
+/// The rule requested by `SetStanding` (§13). Unit rules: `Clear`,
+/// `AutoDefend`, `Retreat`, `Patrol`. City rules: `QueueRepeat`, `AutoPurchase`.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum StandingOrder {
+    Clear,
+    AutoDefend { radius: u8 },
+    Retreat { ratio_bps: u32 },
+    /// Waypoints, 1..=6.
+    Patrol { route: Vec<Hex> },
+    QueueRepeat { on: bool },
+    AutoPurchase { max_gold: u32 },
+}
+
+pub const MAX_PATROL: usize = 6;
 
 impl Order {
     /// Budget cost (§4.2).
@@ -144,7 +167,8 @@ impl Order {
     /// The unit this order commands, for the one-manual-order-per-unit rule.
     pub fn commanded_unit(&self) -> Option<UnitId> {
         match self {
-            Order::MoveUnit { unit, .. } | Order::SetStanding { unit, .. } => Some(*unit),
+            Order::MoveUnit { unit, .. } => Some(*unit),
+            Order::SetStanding { target: StandingTarget::Unit(unit), .. } => Some(*unit),
             Order::Attack { army, .. } => Some(*army),
             Order::FoundCity { settler } => Some(*settler),
             _ => None,
@@ -209,6 +233,9 @@ pub fn validate_batch(
                 return Err(RulesError::TooLong)
             }
             Order::MoveUnit { path, .. } if path.len() > rules.max_path_len as usize => {
+                return Err(RulesError::TooLong)
+            }
+            Order::SetStanding { rule: StandingOrder::Patrol { route }, .. } if route.len() > MAX_PATROL => {
                 return Err(RulesError::TooLong)
             }
             Order::RevealRationale { policy, text, .. }

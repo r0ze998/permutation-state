@@ -64,6 +64,11 @@ pub enum Blocked {
     Frozen,
     NothingToSell,
     OverCap { cap: u32 },
+    // standing rules (§13)
+    /// A unit rule sent to a city or a city rule sent to a unit.
+    WrongStandingTarget,
+    /// Radius or ratio outside its allowed range.
+    OutOfBounds { min: u32, max: u32 },
 }
 
 /// `FoundCity` (§4.2, §5.7). Returns the site on success.
@@ -353,4 +358,73 @@ pub fn enter(state: &WorldState, rules: &Ruleset, mover: Option<CivId>, hex: Hex
         _ => Ok(()),
     }
     // TODO(§7.3): city-state territory for suzerains once city-states own tiles.
+}
+
+// ------------------------------------------------------------------ standing rules
+
+/// Largest `AutoDefend` radius and `AutoPurchase` cap (§13).
+pub const MAX_DEFEND_RADIUS: u32 = 3;
+pub const MAX_AUTO_PURCHASE: u32 = 500;
+
+/// `SetStanding` (§13).
+pub fn standing(
+    state: &WorldState,
+    civ: CivId,
+    target: crate::orders::StandingTarget,
+    rule: &crate::orders::StandingOrder,
+) -> Result<(), Blocked> {
+    use crate::orders::{StandingOrder as R, StandingTarget as T};
+    match target {
+        T::Unit(id) => {
+            let u = state.units.get(id as usize).filter(|u| u.alive).ok_or(Blocked::UnknownUnit)?;
+            if u.owner != Owner::Civ(civ) {
+                return Err(Blocked::NotYours);
+            }
+            match rule {
+                R::Clear => Ok(()),
+                R::AutoDefend { radius } => {
+                    if u.unit_type.is_civilian() {
+                        return Err(Blocked::CivilianCannotAttack);
+                    }
+                    if *radius == 0 || *radius as u32 > MAX_DEFEND_RADIUS {
+                        return Err(Blocked::OutOfBounds { min: 1, max: MAX_DEFEND_RADIUS });
+                    }
+                    Ok(())
+                }
+                R::Retreat { ratio_bps } => {
+                    if u.unit_type.is_civilian() {
+                        return Err(Blocked::CivilianCannotAttack);
+                    }
+                    if !(1_000..=100_000).contains(ratio_bps) {
+                        return Err(Blocked::OutOfBounds { min: 1_000, max: 100_000 });
+                    }
+                    Ok(())
+                }
+                R::Patrol { route } => {
+                    if route.is_empty() || route.len() > crate::orders::MAX_PATROL {
+                        return Err(Blocked::OutOfBounds { min: 1, max: crate::orders::MAX_PATROL as u32 });
+                    }
+                    if route.iter().any(|h| state.map.tile(*h).is_none_or(|t| !t.terrain.is_passable())) {
+                        return Err(Blocked::Impassable);
+                    }
+                    Ok(())
+                }
+                R::QueueRepeat { .. } | R::AutoPurchase { .. } => Err(Blocked::WrongStandingTarget),
+            }
+        }
+        T::City(id) => {
+            let c = state.cities.get(id as usize).filter(|c| c.alive).ok_or(Blocked::UnknownCity)?;
+            if c.owner != Some(civ) {
+                return Err(Blocked::NotYours);
+            }
+            match rule {
+                R::Clear | R::QueueRepeat { .. } => Ok(()),
+                R::AutoPurchase { max_gold } if *max_gold > MAX_AUTO_PURCHASE => {
+                    Err(Blocked::OutOfBounds { min: 0, max: MAX_AUTO_PURCHASE })
+                }
+                R::AutoPurchase { .. } => Ok(()),
+                _ => Err(Blocked::WrongStandingTarget),
+            }
+        }
+    }
 }

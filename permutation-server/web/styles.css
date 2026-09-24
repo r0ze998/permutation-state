@@ -373,3 +373,11 @@ dialog::backdrop { background: #203c3266; backdrop-filter: blur(6px); }
 .dec-text { color: var(--ink); line-height: 1.55; }
 .dec-filter { gap: 4px; }
 .dec-filter .btn { padding: 3px 7px; font-size: 10.5px; min-height: 0; }
+
+/* standing rules */
+.standing-now { display: flex; gap: 6px; flex-wrap: wrap; margin: 2px 0 6px; }
+.standing-row { display: flex; align-items: center; gap: 5px; margin: 4px 0; flex-wrap: wrap; }
+.standing-row .sl { width: 108px; font-size: 11.5px; color: var(--ink-soft); }
+.standing-row .btn { padding: 3px 9px; font-size: 11px; min-height: 0; }
+.patrol-list { margin: 6px 0 10px; padding-left: 4px; list-style: none; display: grid; gap: 4px; font: 12px var(--mono); }
+.patrol-list li { display: flex; align-items: center; justify-content: space-between; background: #fdfbf4; border: 1px solid #ebe7d8; border-radius: 5px; padding: 3px 8px; }

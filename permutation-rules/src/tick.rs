@@ -53,9 +53,9 @@ pub fn resolve_tick(
 /// | 0 | Seed | done |
 /// | 1 | Diplomacy | done (see `diplomacy`): war, peace, NAPs with bonds, alliances, proposals |
 /// | 2 | Economy orders | queue, focus, research, purchase, found city, transfers, envoys. TODO: AMM, Exchange |
-/// | 3 | Standing rules | TODO |
+/// | 3 | Standing rules | done (see `standing`): AutoDefend, Retreat, Patrol, AutoPurchase |
 /// | 4 | Movement | done (paths, MP, occupancy, territory, protection, tie-break) |
-/// | 5 | Combat | done (see `battle`); barbarian and standing-rule attacks TODO |
+/// | 5 | Combat | done (see `battle`), incl. standing-rule attacks; barbarian AI TODO |
 /// | 6 | Production and growth | done |
 /// | 7 | Upkeep | done |
 /// | 8 | Society | done: war weariness (incl. casualties), loyalty, grievance decay, city regen |
@@ -81,7 +81,7 @@ pub fn run_phase(
         0 => phase_seed(state, rules, input),
         1 => crate::diplomacy::phase_diplomacy(state, rules, input),
         2 => phase_economy_orders(state, rules, input),
-        3 => {} // TODO(§13): compile standing rules into implicit orders.
+        3 => crate::standing::phase_standing(state, rules, input),
         4 => phase_movement(state, rules, input),
         5 => crate::battle::phase_combat(state, rules, input),
         6 => phase_production(state, rules),
@@ -171,6 +171,7 @@ fn phase_economy_orders(state: &mut WorldState, rules: &Ruleset, input: &TickInp
                 }
                 Order::SetResearch { techs } => set_research(state, civ, techs),
                 Order::Purchase { city, gold } => purchase(state, rules, civ, city, gold),
+                Order::SetStanding { target, rule } => crate::standing::apply(state, civ, target, rule),
                 Order::RevealRationale { tick, policy, salt, text } => {
                     // Recorded, never interpreted: verifiers check it against the
                     // `decision` event of `tick` (§4.3).
@@ -247,6 +248,7 @@ fn found_city(state: &mut WorldState, rules: &Ruleset, civ: CivId, settler: u32)
         razing: None,
         heritage_until,
         heritage_bonus,
+        standing: crate::state::CityStanding::DEFAULT,
         alive: true,
     });
     if let Some(t) = state.map.tile_mut(hex) {
@@ -326,7 +328,7 @@ fn item_cost(
     milli(prod)
 }
 
-fn purchase(state: &mut WorldState, rules: &Ruleset, civ: CivId, city: u32, gold: u32) {
+pub(crate) fn purchase(state: &mut WorldState, rules: &Ruleset, civ: CivId, city: u32, gold: u32) {
     let Some(c) = state
         .cities
         .get(city as usize)
@@ -382,9 +384,15 @@ pub(crate) fn tile_free_for(state: &WorldState, unit: &Unit, hex: Hex) -> bool {
 }
 
 fn phase_movement(state: &mut WorldState, rules: &Ruleset, input: &TickInput) {
-    // 1. Accept MoveUnit orders (paths continue on later ticks without orders).
+    // 1. Accept MoveUnit orders (paths continue on later ticks without orders),
+    //    manual first, then those compiled from standing rules (§13).
+    let mut all: Vec<(CivId, Order)> = Vec::new();
     for (civ, _, orders) in accepted(state, rules, input) {
-        for order in orders {
+        all.extend(orders.into_iter().map(|o| (civ, o)));
+    }
+    all.extend(state.implicit.iter().cloned());
+    {
+        for (civ, order) in all {
             if let Order::MoveUnit { unit, path } = order {
                 let Some(u) = state
                     .units
@@ -659,7 +667,7 @@ fn complete_queue(state: &mut WorldState, rules: &Ruleset, civ: CivId, i: usize)
         city.prod -= cost;
         city.queue.remove(0);
         // CityQueueRepeat (default on, §13): repeat the last unit item.
-        if city.queue.is_empty() && !matches!(item, QueueItem::Building(_)) {
+        if city.queue.is_empty() && city.standing.repeat_queue && !matches!(item, QueueItem::Building(_)) {
             city.queue.push(item);
         }
     }
@@ -810,6 +818,7 @@ fn phase_society(state: &mut WorldState, rules: &Ruleset) {
         }
         if city.loyalty == 0 {
             city.owner = None; // Free City
+            city.standing = crate::state::CityStanding::DEFAULT;
             let (id, hex) = (city.id, city.hex);
             state.push_event(b"free_city", &id.to_le_bytes());
             crate::battle::displace_civilians(state, hex);
@@ -895,6 +904,7 @@ fn phase_commit(state: &mut WorldState, rules: &Ruleset) {
         let cities = state.city_count(civ);
         state.civs[civ as usize].tick_budget = order_budget(rules, cities);
     }
+    state.implicit.clear();
     let tick = state.tick;
     state.push_event(b"tick", &tick.to_le_bytes());
 }

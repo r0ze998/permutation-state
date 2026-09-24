@@ -74,6 +74,12 @@ pub fn phase_combat(state: &mut WorldState, rules: &Ruleset, input: &TickInput) 
             }
         }
     }
+    // Attacks compiled from standing rules (§13) join the manual ones.
+    for (civ, order) in &state.implicit {
+        if let Order::Attack { army, target } = *order {
+            attacks.push((*civ, army, target));
+        }
+    }
     // Engagement ids are positions in this order: (civ, army) ascending.
     attacks.sort_by_key(|(civ, army, _)| (*civ, *army));
 
@@ -122,7 +128,7 @@ pub(crate) fn is_protected(
         })
 }
 
-fn hostile(state: &WorldState, civ: CivId, owner: Owner) -> bool {
+pub(crate) fn hostile(state: &WorldState, civ: CivId, owner: Owner) -> bool {
     match owner {
         Owner::Barbarian => true,
         Owner::Civ(o) => o != civ && state.at_war(civ, o),
@@ -412,6 +418,7 @@ fn capture_civilian(state: &mut WorldState, attacker: usize, civ: CivId, target:
     let t = &mut state.units[target];
     t.owner = Owner::Civ(civ);
     t.path.clear();
+    t.standing = crate::state::StandingRule::None;
     if let (Owner::Civ(v), UnitType::Settler) = (victim, t.unit_type) {
         state.add_grievance(civ, v, 5);
     }
@@ -471,6 +478,7 @@ fn capture_city(state: &mut WorldState, rules: &Ruleset, ci: usize, captor: CivI
     {
         let c = &mut state.cities[ci];
         c.owner = Some(captor);
+        c.standing = crate::state::CityStanding::DEFAULT; // the captor does not inherit automation
         c.captured_from = prev;
         c.captured_tick = Some(tick);
         c.pop = c.pop.saturating_sub(1).max(1);
@@ -525,6 +533,7 @@ fn capture_city(state: &mut WorldState, rules: &Ruleset, ci: usize, captor: CivI
         {
             u.owner = Owner::Civ(captor);
             u.path.clear();
+            u.standing = crate::state::StandingRule::None;
         }
     }
     let mut payload = [0u8; 6];
@@ -571,6 +580,7 @@ fn resolve_city_state_captures(state: &mut WorldState, engagements: &[Engagement
             razing: None,
             heritage_until: None,
             heritage_bonus: 0,
+            standing: crate::state::CityStanding::DEFAULT,
             alive: true,
         });
         state.map.claim_territory(id, hex, territory_radius(pop));

@@ -79,6 +79,7 @@ pub fn new_season(
             razing: None,
             heritage_until: None,
             heritage_bonus: 0,
+            standing: crate::state::CityStanding::DEFAULT,
             alive: true,
         });
         let new_unit = |id: usize, unit_type: UnitType, troops: u32| Unit {
@@ -189,5 +190,6 @@ pub fn new_season(
         exchange_vault: 0,
         exchange_ops: 0,
         event_head: genesis.finalize().into(),
+        implicit: Vec::new(),
     })
 }

@@ -110,6 +110,7 @@ function slotOf(dto) {
     case 'SetQueue': return `q${dto.city}`; case 'SetFocus': return `f${dto.city}`; case 'Purchase': return `p${dto.city}`;
     case 'SetResearch': return 'research';
     case 'SendEnvoy': return `e${dto.cityState}`;
+    case 'SetStanding': return dto.target.kind === 'Unit' ? `u${dto.target.id}` : `cs${dto.target.id}:${dto.rule.kind === 'Clear' ? 'all' : dto.rule.kind}`;
     case 'MarketTrade': case 'ExchangeOrder': return `m${Math.random()}`;
     default: return `${dto.type}${dto.civ ?? ''}`;
   }
@@ -136,7 +137,7 @@ function removeDraft(i) { S.drafts.splice(i, 1); renderDock(); renderTop(); map.
 function describe(dto) {
   const u = id => S.view?.units.find(x => x.id === id);
   const city = id => S.view?.cities.find(c => c.id === id);
-  const at = x => x ? key(x.q, x.r) : null;
+  const at = x => x ? key(x.q, x.r) : null; const at_ = at;
   switch (dto.type) {
     case 'MoveUnit': { const x = u(dto.unit); const last = dto.path[dto.path.length - 1];
       return { dto, glyph: '→', label: `${T.UNIT[x?.type] || '部隊'}を移動（${dto.path.length}マス）`, focus: key(last[0], last[1]), from: x, path: dto.path }; }
@@ -150,6 +151,11 @@ function describe(dto) {
     case 'SetFocus': return { dto, glyph: '◐', label: `${T.cityName(dto.city)}の方針：${T.FOCUS[dto.focus]}`, focus: at(city(dto.city)) };
     case 'Purchase': return { dto, glyph: '◆', label: `${T.cityName(dto.city)}で生産を購入（${dto.gold}金）`, focus: at(city(dto.city)) };
     case 'SetResearch': return { dto, glyph: '✧', label: `研究：${dto.techs.map(t => T.TECH[t]).join(' → ')}` };
+    case 'SetStanding': {
+      const who = dto.target.kind === 'Unit' ? `${T.UNIT[u(dto.target.id)?.type] || '部隊'}` : T.cityName(dto.target.id);
+      const at = dto.target.kind === 'Unit' ? at_(u(dto.target.id)) : at_(city(dto.target.id));
+      return { dto, glyph: T.STANDING_GLYPH[dto.rule.kind] || '⚙', label: `${who}：${T.standingText(dto.rule)}`, focus: at };
+    }
     case 'DeclareWar': return { dto, glyph: '⚔', label: `${civN(dto.civ)}に宣戦` };
     case 'ProposePeace': return { dto, glyph: '☮', label: `${civN(dto.civ)}に講和を申し入れ` };
     case 'AcceptPeace': return { dto, glyph: '☮', label: `${civN(dto.civ)}の講和を受諾` };
@@ -205,6 +211,13 @@ function hoverTile(id) {
 
 function unitsAt(id) { return S.view.units.filter(u => key(u.q, u.r) === id); }
 function selectTile(id) {
+  if (S.patrol) { // editing a patrol: clicks add waypoints
+    const t = map.tiles.get(id);
+    if (t && t.terrain !== 'Water' && t.terrain !== 'Mountain' && S.patrol.route.length < 6) { S.patrol.route.push([t.q, t.r]); map.setPatrol(S.patrol); renderInspector(); }
+    else if (S.patrol.route.length >= 6) toast('巡回の地点は6つまでです。', 'error');
+    else toast('水域や山岳は巡回の地点にできません。', 'error');
+    return;
+  }
   if (!S.summaryPinned && !S.summaryCollapsed) { S.summaryCollapsed = true; renderSummary(); }
   if (!S.view) return;
   // With one of my units selected, clicking a reachable tile or target acts on it.
@@ -373,7 +386,8 @@ function renderDock() {
 function renderInspector() {
   const el = $('#inspector');
   if (!S.view) return;
-  el.classList.toggle('idle', S.unit === null && !S.tile); // phones hide the idle intro to keep the map visible
+  el.classList.toggle('idle', S.unit === null && !S.tile && !S.patrol); // phones hide the idle intro to keep the map visible
+  if (S.patrol) return setHtml(el, patrolPanel());
   if (S.unit !== null) {
     const u = S.view.units.find(x => x.id === S.unit);
     if (u && S.tile && S.tile !== key(u.q, u.r)) return setHtml(el, targetPanel(u, S.tile));
@@ -417,7 +431,7 @@ function tilePanel(t, units) {
 function unitPanel(u) {
   const p = S.unitPreview;
   const draft = S.drafts.find(d => slotOf(d.dto) === `u${u.id}`);
-  const idle = !u.path?.length && !draft;
+  const idle = !u.path?.length && !draft && !u.standing;
   let html = head(`${u.civilian ? 'CIVILIAN' : 'ARMY'} · ${u.q}, ${u.r}`, `${T.UNIT[u.type]}${u.civilian ? '' : ` <span style="font-size:15px;color:var(--muted)">兵 ${(u.troops / 10).toFixed(1)}</span>`}`,
     u.type === 'Settler' ? '都市を建てられる場所（都市から3マス以上、他国の領土・保護区域の外）へ移動して建設します。' : u.type === 'Scout' ? '森や丘陵でも1ずつ進める偵察役です。戦闘はできません。' : '移動先の土地をクリックかダブルクリック。攻撃できる相手は赤い枠で示されます。');
   html += `<div class="tags">${idle ? '<span class="tag warning">待機中</span>' : u.path?.length ? `<span class="tag">移動中 · 残り${u.path.length}マス</span>` : ''}${draft ? `<span class="tag positive">命令あり：${esc(draft.label)}</span>` : ''}</div>`;
@@ -431,11 +445,50 @@ function unitPanel(u) {
     html += `<div class="section-title">攻撃できる相手</div>`;
     html += targets.length ? targets.map(a => attackOption(u, a)).join('') : '<p class="desc">射程内に相手はいません。戦争中の相手・蛮族・都市国家を攻撃できます（弓兵・弩兵は2マス、ほかは隣接）。</p>';
   }
+  html += standingSection(u);
   const now1 = p.reach.filter(r => r[2] <= 1).length, soon = p.reach.filter(r => r[2] > 1 && r[2] <= 3).length;
   html += `<div class="section-title">移動</div><div class="legend-row"><span><span class="sw sw-now"></span>このティック ${now1}マス</span><span><span class="sw sw-soon"></span>2〜3ティック ${soon}マス</span>${S.view.protectionRadius ? `<span><span class="sw sw-prot"></span>他国首都の保護区域（半径${S.view.protectionRadius}）</span>` : ''}</div>
     <p class="desc">行き先をダブルクリック（または選んで Enter）で下書きに入ります。遠い土地はカーソルを当てると到着ティックが出ます。移動は締切で全員同時に解決されます。</p>`;
   return html;
 }
+/** Standing rules for one of my units (§13): set once for 1 slot, then free every tick. */
+function standingSection(u) {
+  const cur = u.standing; const draft = S.drafts.find(d => d.dto.type === 'SetStanding' && d.dto.target.kind === 'Unit' && d.dto.target.id === u.id);
+  const order = rule => esc(JSON.stringify({ type: 'SetStanding', target: { kind: 'Unit', id: u.id }, rule }));
+  const btn = (rule, text, on) => `<button class="btn ${on ? 'primary' : ''}" type="button" data-order='${order(rule)}' ${on ? 'disabled' : ''}>${text}</button>`;
+  let html = `<div class="section-title">継続命令 · 毎ティック自動（設定に枠1・実行は無料）</div>`;
+  html += `<div class="standing-now">${cur ? `<span class="tag positive">${T.STANDING_GLYPH[cur.kind]} ${esc(T.standingText(cur))}</span>` : '<span class="tag">なし</span>'}${draft ? `<span class="tag warning">下書き：${esc(T.standingText(draft.dto.rule))}</span>` : ''}</div>`;
+  if (!u.civilian) {
+    const eff = draft ? (draft.dto.rule.kind === 'Clear' ? null : draft.dto.rule) : cur; // show what will be in force
+    const r = eff?.kind === 'AutoDefend' ? eff.radius : 0;
+    html += `<div class="standing-row"><span class="sl">${T.STANDING_GLYPH.AutoDefend} 自動防衛</span>${[1, 2, 3].map(n => btn({ kind: 'AutoDefend', radius: n }, `半径${n}`, r === n)).join('')}</div>`;
+    const q = eff?.kind === 'Retreat' ? eff.ratioBps : 0;
+    html += `<div class="standing-row"><span class="sl">${T.STANDING_GLYPH.Retreat} 撤退</span>${[[10000, '1倍'], [15000, '1.5倍'], [20000, '2倍']].map(([b, t]) => btn({ kind: 'Retreat', ratioBps: b }, t, q === b)).join('')}</div>`;
+  }
+  html += `<div class="standing-row"><span class="sl">${T.STANDING_GLYPH.Patrol} 巡回</span><button class="btn" type="button" id="patrol-start" data-unit="${u.id}">${cur?.kind === 'Patrol' ? '道筋を引き直す' : '地図で地点を選ぶ'}</button>${cur ? btn({ kind: 'Clear' }, '解除', false) : ''}</div>`;
+  html += `<p class="desc">${u.civilian ? '' : '自動防衛：基点から半径内に入った敵軍のうち最も弱いものを攻撃。撤退：隣の敵の強さが自軍の指定倍を超えたら自分の都市へ1マス下がる。'}巡回：最大6地点を順に回り続けます。手動の命令を出したティックはそちらが優先されます。</p>`;
+  return html;
+}
+function citySection(c) {
+  const st = c.standing || { repeatQueue: true, autoPurchase: 0 };
+  const order = rule => esc(JSON.stringify({ type: 'SetStanding', target: { kind: 'City', id: c.id }, rule }));
+  const pending = kind => S.drafts.find(d => d.dto.type === 'SetStanding' && d.dto.target.kind === 'City' && d.dto.target.id === c.id && d.dto.rule.kind === kind);
+  const rp = pending('QueueRepeat'), ap = pending('AutoPurchase');
+  const repeat = rp ? rp.dto.rule.on : st.repeatQueue, buy = ap ? ap.dto.rule.maxGold : st.autoPurchase;
+  return `<div class="section-title">継続命令 · 毎ティック自動${rp || ap ? ' · 下書きあり' : ''}</div>
+    <div class="standing-row"><span class="sl">${T.STANDING_GLYPH.QueueRepeat} 生産の繰り返し</span>${[[true, 'ON'], [false, 'OFF']].map(([on, t]) => `<button class="btn ${repeat === on ? 'primary' : ''}" type="button" data-order='${order({ kind: 'QueueRepeat', on })}' ${repeat === on ? 'disabled' : ''}>${t}</button>`).join('')}</div>
+    <div class="standing-row"><span class="sl">${T.STANDING_GLYPH.AutoPurchase} 自動購入</span>${[0, 20, 40, 80].map(g => `<button class="btn ${buy === g ? 'primary' : ''}" type="button" data-order='${order({ kind: 'AutoPurchase', maxGold: g })}' ${buy === g ? 'disabled' : ''}>${g ? `${g}金` : 'なし'}</button>`).join('')}</div>
+    <p class="desc">繰り返し：予定が空になったら最後の部隊をもう一度作ります。自動購入：毎ティック指定額まで金で生産を進めます（手動の購入をしたティックは除く）。</p>`;
+}
+function patrolPanel() {
+  const pt = S.patrol; const u = S.view.units.find(x => x.id === pt.unit);
+  let html = head(`PATROL · ${T.UNIT[u?.type] || ''}`, '巡回の道筋', '地図で回る地点を順にクリックしてください（最大6）。最後の地点のあとは最初に戻ります。');
+  html += `<ol class="patrol-list">${pt.route.map(([q, r], i) => `<li>${i + 1}. (${q}, ${r}) <button class="close-x" type="button" data-patrol-remove="${i}" aria-label="削除">×</button></li>`).join('') || '<li class="meta">まだ地点がありません</li>'}</ol>`;
+  const dto = { type: 'SetStanding', target: { kind: 'Unit', id: pt.unit }, rule: { kind: 'Patrol', route: pt.route } };
+  html += `<div class="row"><button class="btn primary" type="button" id="patrol-done" ${pt.route.length ? '' : 'disabled'} data-dto='${esc(JSON.stringify(dto))}'>この道筋で巡回（枠1）</button><button class="btn" type="button" id="patrol-cancel">やめる</button></div>`;
+  return html;
+}
+
 function attackOption(u, a) {
   const t = a.target;
   let name = '';
@@ -489,6 +542,7 @@ function myCityPanel(c) {
   const here = unitsAt(key(c.q, c.r)).filter(u => u.owner === S.me);
   if (here.length) html += `<div class="section-title">この都市の部隊（もう一度クリックでも選べます）</div><div class="row">${here.map(u => `<button class="btn" type="button" data-select-unit="${u.id}">${T.UNIT_GLYPH[u.type]} ${T.UNIT[u.type]}${u.civilian ? '' : ` 兵${(u.troops / 10).toFixed(1)}`}</button>`).join('')}</div>`;
   html += `<div class="section-title">方針（土地の割り当て）${fDraft ? ' · 命令あり' : ''}</div><div class="row">${Object.entries(T.FOCUS).map(([k, n]) => `<button class="btn ${k === focus ? 'primary' : ''}" type="button" data-order='${JSON.stringify({ type: 'SetFocus', city: c.id, focus: k })}' ${k === focus ? 'disabled' : ''}>${n}</button>`).join('')}</div>`;
+  html += citySection(c);
   html += `<div class="section-title">生産予定 ${qDraft ? '· 命令あり（確定で置き換わります）' : ''}</div>`;
   html += queue.length ? queue.map((it, i) => `<div class="option queued"><span class="ic">${T.itemGlyph(it)}</span><span><span class="name">${i + 1}. ${esc(T.itemName(it))}</span>${i === 0 ? `<div class="meta">蓄積 ${c.prod}${o ? ` · 毎ティック +${o.production}` : ''}</div>` : ''}</span><span></span></div>`).join('')
     + `<div class="row"><button class="btn" type="button" data-queue-clear="${c.id}">予定をクリア（枠1）</button>${queue.length ? `<button class="btn" type="button" data-order='${JSON.stringify({ type: 'Purchase', city: c.id, gold: 60 })}'>◆ 60金で生産を購入</button>` : ''}</div>`
@@ -535,6 +589,7 @@ function nextItems() {
   for (const p of v.proposals.filter(p => p.to === S.me)) items.push({ pri: 100, title: `${civN(p.from)}の${({ Peace: '講和', Nap: '不可侵条約', Alliance: '同盟' })[p.kind]}の申し入れ`, detail: `ティック${p.expires}まで有効。外交パネルで受けるか決めてください。`, drawer: 'diplomacy' });
   for (const u of myUnits()) {
     if (u.path?.length || draftUnits.has(u.id)) continue;
+    if (u.standing && u.type !== 'Settler') continue; // a standing rule is looking after it
     if (u.type === 'Settler') items.push({ pri: 90, title: '開拓者が待機中', detail: '都市を建てられる土地へ移動するか、この場で建設します。', unit: u.id });
     else if (!u.civilian && Object.values(v.civs).some(c => c.relation === 'war') ) items.push({ pri: 70, title: `${T.UNIT[u.type]}が待機中（戦争中）`, detail: '攻撃できる相手がいないか確認するか、前線へ移動させます。', unit: u.id });
   }
@@ -638,7 +693,7 @@ function drawerCities() {
     <div class="section-title">都市 ${cities.length}</div>
     ${cities.map(c => `<div class="list-row" data-focus-select="${key(c.q, c.r)}"><div class="main"><div class="title">${c.capital ? '★ ' : ''}${T.cityName(c.id)} <span class="meta">人口${c.pop}</span></div><div class="meta">${(c.queue || []).length ? '生産：' + esc(T.itemName(c.queue[0])) : '<span class="idle">生産予定なし</span>'}</div></div><span class="meta">防御 ${(c.defense / 10).toFixed(0)}/${(c.defenseMax / 10).toFixed(0)}</span></div>`).join('')}
     <div class="section-title">部隊 ${units.length}</div>
-    ${units.map(u => `<div class="list-row" data-unit-row="${u.id}"><div class="main"><div class="title">${T.UNIT_GLYPH[u.type]} ${T.UNIT[u.type]} ${u.civilian ? '' : `<span class="meta">兵${(u.troops / 10).toFixed(1)}</span>`}</div><div class="meta">${u.q}, ${u.r} ${u.path?.length ? `· 移動中（残り${u.path.length}）` : draftUnits.has(u.id) ? '· 命令あり' : '· <span class="idle">待機</span>'}</div></div></div>`).join('') || '<p class="desc">部隊はいません。</p>'}`;
+    ${units.map(u => `<div class="list-row" data-unit-row="${u.id}"><div class="main"><div class="title">${T.UNIT_GLYPH[u.type]} ${T.UNIT[u.type]} ${u.civilian ? '' : `<span class="meta">兵${(u.troops / 10).toFixed(1)}</span>`}</div><div class="meta">${u.q}, ${u.r} ${u.path?.length ? `· 移動中（残り${u.path.length}）` : draftUnits.has(u.id) ? '· 命令あり' : u.standing ? `· ${T.STANDING_GLYPH[u.standing.kind]} ${esc(T.standingText(u.standing))}` : '· <span class="idle">待機</span>'}</div></div></div>`).join('') || '<p class="desc">部隊はいません。</p>'}`;
 }
 function drawerResearch() {
   const r = S.research, e = S.view.economy;
@@ -847,6 +902,7 @@ document.addEventListener('click', async e => {
   if (d.queueClear) { addDraft({ type: 'SetQueue', city: +d.queueClear, items: [] }); renderInspector(); return; }
   if (d.chron) { S.chronFilter = d.chron; renderDrawer(); return; }
   if (d.dec) { S.decFilter = d.dec; renderDrawer(); return; }
+  if (d.patrolRemove !== undefined && S.patrol) { S.patrol.route.splice(+d.patrolRemove, 1); map.setPatrol(S.patrol); renderInspector(); return; }
   if (d.closeHelp !== undefined) { $('#help').close(); return; }
   if (d.start !== undefined) { $('#help').close(); await api.post('/api/control', { paused: false }); poll(); return; }
   switch (t.id) {
@@ -861,6 +917,9 @@ document.addEventListener('click', async e => {
     case 'next-go': goNext(false); break;
     case 'summary-close': S.summaryOpen = false; renderSummary(); break;
     case 'prove-tile': proveTile(); break;
+    case 'patrol-start': { const u = S.view.units.find(x => x.id === +t.dataset.unit); S.patrol = { unit: u.id, from: [u.q, u.r], route: [] }; map.setPatrol(S.patrol); renderInspector(); toast('地図で巡回する地点を順にクリックしてください（最大6）。'); break; }
+    case 'patrol-cancel': S.patrol = null; map.setPatrol(null); renderInspector(); break;
+    case 'patrol-done': { const dto = JSON.parse(t.dataset.dto); S.patrol = null; map.setPatrol(null); addDraft(dto); renderInspector(); break; }
     case 'summary-toggle': {
       const wasCollapsed = S.summaryCollapsed && (S.tile !== null || S.unit !== null);
       S.summaryCollapsed = !wasCollapsed; S.summaryPinned = wasCollapsed; renderSummary(); break;
@@ -919,6 +978,7 @@ document.addEventListener('keydown', e => {
   if (e.target.closest('input, select, textarea') || document.querySelector('dialog[open]')) return;
   if (e.key === ' ') { e.preventDefault(); goNext(true); renderNext(); }
   else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); commit(); }
+  else if (e.key === 'Escape' && S.patrol) { S.patrol = null; map.setPatrol(null); renderInspector(); }
   else if (e.key === 'Escape') { S.tile = null; S.unit = null; map.setSelection(null); map.setOverlay({}); if (S.drawer) openDrawer(S.drawer); renderInspector(); }
   else if (e.key.toLowerCase() === 'h') map.focusHome();
 });

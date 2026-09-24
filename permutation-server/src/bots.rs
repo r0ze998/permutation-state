@@ -5,8 +5,8 @@
 
 use permutation_rules::buildings::Building;
 use permutation_rules::hex::Hex;
-use permutation_rules::orders::{AttackTarget, Order};
-use permutation_rules::state::{CivId, Owner, ProposalKind, QueueItem, Relation, WorldState};
+use permutation_rules::orders::{AttackTarget, Order, StandingOrder, StandingTarget};
+use permutation_rules::state::{CivId, Owner, ProposalKind, QueueItem, Relation, StandingRule, WorldState};
 use permutation_rules::tech::{Tech, TECHS};
 use permutation_rules::tick::may_enter;
 use permutation_rules::units::{stats, UnitClass, UnitType};
@@ -599,6 +599,23 @@ impl Bot {
             }
         }
 
+        // ---- standing rules (§13): set once, then they run for free every tick
+        for u in my_units(s, civ).filter(|u| !u.unit_type.is_civilian() && u.standing == StandingRule::None) {
+            let rule = if Some(u.id) == garrison {
+                StandingOrder::AutoDefend { radius: 2 }
+            } else if self.persona != Persona::Warlord {
+                StandingOrder::Retreat { ratio_bps: 15_000 }
+            } else {
+                continue;
+            };
+            wish.push((4, Order::SetStanding { target: StandingTarget::Unit(u.id), rule }));
+        }
+        if matches!(self.persona, Persona::Builder | Persona::Scholar) && me.gold > 120_000 {
+            if let Some(cap) = me.capital.filter(|c| s.cities[*c as usize].standing.auto_purchase == 0) {
+                wish.push((4, Order::SetStanding { target: StandingTarget::City(cap), rule: StandingOrder::AutoPurchase { max_gold: 30 } }));
+            }
+        }
+
         // Keep the most important orders that fit the budget, one per unit.
         wish.sort_by_key(|(p, _)| *p);
         let mut used_units = BTreeSet::new();
@@ -690,6 +707,12 @@ impl Bot {
                 )),
                 Order::SendEnvoy { city_state, .. } => parts.push(format!("最寄りの都市国家{}へ使節", city_state + 1)),
                 Order::Purchase { .. } => parts.push("余った金で首都の生産を購入".to_string()),
+                Order::SetStanding { rule, .. } => parts.push(match rule {
+                    StandingOrder::AutoDefend { radius } => format!("首都の守備隊に自動防衛（半径{radius}）"),
+                    StandingOrder::Retreat { .. } => "野戦軍に撤退ルール：1.5倍の敵で後退".to_string(),
+                    StandingOrder::AutoPurchase { max_gold } => format!("首都で毎ティック{max_gold}金まで自動購入"),
+                    _ => "継続命令を更新".to_string(),
+                }),
                 Order::MoveUnit { unit, .. } => {
                     if s.units.get(*unit as usize).is_some_and(|u| u.unit_type == UnitType::Scout) {
                         scouting += 1;

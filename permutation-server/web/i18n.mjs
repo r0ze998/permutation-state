@@ -57,6 +57,7 @@ export function blockedText(b) {
     case 'AllianceFull': return `同盟は${b.cap}文明までです`;
     case 'OutOfRange': return `射程外です（距離${b.distance}・射程${b.range}）`;
     case 'OverCap': return `上限${b.cap}を超えています`;
+    case 'OutOfBounds': return `${b.min}〜${b.max}の範囲で指定してください`;
     case 'ProtectedCapital': return `首都の保護区域です${b.until !== null && b.until !== undefined ? `（ティック${b.until}まで）` : ''}`;
     default: return ({
       UnknownUnit: '部隊が見つかりません', UnknownCity: '都市が見つかりません', UnknownCiv: '文明が見つかりません',
@@ -70,6 +71,7 @@ export function blockedText(b) {
       CivilianCannotAttack: '非戦闘ユニットは攻撃できません', TargetProtected: '保護区域内の相手は攻撃できません',
       TargetNotHostile: '戦争中の相手ではありません。先に宣戦が必要です', TargetGone: '目標がもういません',
       Frozen: '終盤のため取引は凍結中です', NothingToSell: '売れる在庫がありません',
+      WrongStandingTarget: 'この対象には使えない継続命令です',
     })[b.code] || b.code;
   }
 }
@@ -109,3 +111,18 @@ export function chronicleText(line) {
   return [kind, text];
 }
 export const KIND_GLYPH = { war: '⚔', capture: '⚑', raze: '✕', peace: '☮', ally: '⚭', diplo: '✉', science: '✦', revolt: '!', found: '⌂', tech: '✧' };
+
+// Standing rules (§13)
+export const STANDING_GLYPH = { AutoDefend: '⛨', Retreat: '↩', Patrol: '⟳', QueueRepeat: '↻', AutoPurchase: '◆' };
+export function standingText(r) {
+  if (!r) return '';
+  switch (r.kind) {
+    case 'AutoDefend': return `自動防衛 · 半径${r.radius}`;
+    case 'Retreat': return `撤退 · 相手が${(r.ratioBps / 10000).toFixed(1)}倍を超えたら`;
+    case 'Patrol': return `巡回 · ${r.route.length}地点`;
+    case 'QueueRepeat': return r.on ? '生産の繰り返し ON' : '生産の繰り返し OFF';
+    case 'AutoPurchase': return r.maxGold ? `自動購入 · 毎ティック${r.maxGold}金まで` : '自動購入 OFF';
+    case 'Clear': return '継続命令を解除';
+    default: return r.kind;
+  }
+}

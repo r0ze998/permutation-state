@@ -29,6 +29,7 @@ pub mod params;
 pub mod preview;
 pub mod rng;
 pub mod scoring;
+pub mod standing;
 pub mod state;
 pub mod tech;
 pub mod tick;

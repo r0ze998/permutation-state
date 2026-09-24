@@ -628,17 +628,20 @@ A hub tile inside a city's territory makes that city the **hub holder**. The hol
 
 ## 13. Standing rules (first-party automation)
 
-Setting or changing a rule costs 1 order. Execution is free and deterministic, in phase 3 (§15).
+`SetStanding(target, rule)` costs 1 order and is applied in phase 2. The target is a unit or a city. Execution is free and deterministic, in phase 3 (§15): each rule is compiled into **implicit orders** kept in `WorldState::implicit`. Phases 4 and 5 treat those exactly like manual orders, and phase 11 clears them. A unit that received any manual order this tick (move, attack, found, set standing) skips its rule for that tick; the rule stays set.
 
-| Rule | Behaviour |
-|---|---|
-| `AutoDefend(radius r ≤ 3)` | attack the weakest adjacent hostile army (lowest troops, then id) if any is within `r` of the city or army's anchor |
-| `Retreat(ratio_bps)` | if adjacent hostile total strength × 10000 / own strength > ratio, move one tile toward the nearest own city |
-| `Patrol(path ≤ 6)` | loop the path |
-| `CityQueueRepeat` | when the queue empties, repeat the last item (default: on) |
-| `AutoPurchase(max_gold_per_tick)` | apply `Purchase` to the current item, up to the cap |
+| Rule | Target | Behaviour |
+|---|---|---|
+| `AutoDefend(r)`, 1 ≤ r ≤ 3 | army | The anchor is the army's hex when the rule is set. Attack the weakest hostile army (lowest troops, then id) that is within the army's attack range (1, or 2 for ranged) **and** within `r` of the anchor. |
+| `Retreat(ratio_bps)`, 1000–100000 | army | Strength = troops × unit strength. If Σ adjacent hostile strength × 10000 > own × `ratio_bps`, move one tile to the enterable, empty neighbour that most reduces the distance to the nearest own city (ties: lowest hex). Nothing happens inside a city. |
+| `Patrol(route)`, 1–6 waypoints | any unit | When the unit has no path left, head for the next waypoint using the engine's path (`preview::path_to`). On reaching a waypoint, advance to the next, looping. |
+| `QueueRepeat(on)` | city | When the queue empties after a unit item, repeat it (default: on). |
+| `AutoPurchase(max_gold)`, ≤ 500 | city | Apply `Purchase(max_gold)` to the current item, unless the city made a manual `Purchase` this tick. |
+| `Clear` | either | Remove the unit's rule, or reset the city to its defaults. |
 
-Agents and humans get exactly the same set.
+- "Hostile" means a barbarian or an army of a civilization at war with the owner.
+- A captured unit or city, or a city that revolts, loses its rules. The new owner does not inherit automation.
+- Agents and humans get exactly the same set.
 
 ---
 

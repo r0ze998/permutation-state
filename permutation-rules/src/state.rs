@@ -137,6 +137,7 @@ pub struct City {
     pub razing: Option<u8>,
     pub heritage_until: Option<u16>,
     pub heritage_bonus: u32,
+    pub standing: CityStanding,
     pub alive: bool,
 }
 
@@ -156,11 +157,30 @@ impl Owner {
     }
 }
 
+/// A unit's standing rule (§13), executed free in phase 3 on ticks without a
+/// manual order for that unit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum StandingRule {
     None,
-    AutoDefend { radius: u8 },
+    /// Attack the weakest hostile army in range while it is within `radius` of `anchor`.
+    AutoDefend { radius: u8, anchor: Hex },
+    /// Step toward the nearest own city when adjacent hostile strength exceeds `ratio_bps` of own.
     Retreat { ratio_bps: u32 },
+    /// Walk `route[..len]` in a loop; `next` is the waypoint being approached.
+    Patrol { route: [Hex; 6], len: u8, next: u8 },
+}
+
+/// A city's standing rules (§13).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct CityStanding {
+    /// `CityQueueRepeat`: when the queue empties, repeat the last unit item.
+    pub repeat_queue: bool,
+    /// `AutoPurchase`: gold per tick applied to the current item; 0 = off.
+    pub auto_purchase: u32,
+}
+
+impl CityStanding {
+    pub const DEFAULT: CityStanding = CityStanding { repeat_queue: true, auto_purchase: 0 };
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -285,6 +305,9 @@ pub struct WorldState {
     pub exchange_ops: u64,
     /// Head of the append-only event hash chain.
     pub event_head: [u8; 32],
+    /// Orders compiled from standing rules in phase 3, consumed by phases 4–5
+    /// and cleared at commit (§13). Kept in state so phases can resume.
+    pub implicit: Vec<(CivId, crate::orders::Order)>,
 }
 
 impl WorldState {
