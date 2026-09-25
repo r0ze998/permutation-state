@@ -93,7 +93,7 @@ Without a chain: `cargo run --release --bin play` in `permutation-server` runs t
 
 - **Devnet only.** The program runs on Solana devnet and MagicBlock's devnet ER, with the gateway's own test USDC. There is no mainnet and no real money.
 - **Committor limits.** On devnet, MagicBlock's committor drops or fails intents that are too large, leaving accounts stuck mid-undelegation ([magicblock-validator#1693](https://github.com/magicblock-labs/magicblock-validator/issues/1693), plus a compute limit on the finalize). The world is 20 accounts of 4 KiB and is committed in small intents. Three earlier devnet test seasons on the old layout remain stuck, holding only test USDC.
-- **Version 6 is not on devnet yet.** Sealed orders, salt randomness, symmetric maps, the caretaker and the history layer were verified on the local stack. The v6 program is ~1.60 MB; the devnet program data is 1,339,960 bytes, so a redeploy needs `solana program extend`. The devnet program (v5) still takes plaintext orders with randomness from the root, slot and time.
+- **Version 6 is on devnet** (2026-09-25): season 1790340445651 ran 180 ticks with sealed orders and salt randomness on MagicBlock's devnet ER and was VERIFIED. The reveal window is short (a sixth of the tick); the gateway sends hosted reveals in parallel, and on a public ER a few ticks still lost some reveals to latency.
 - **Perfect information, no fog.** Every account is public on chain, so every nation sees the whole world. A fog mode would be a separate, possible future mode on a private rollup.
 - **Balance is not final.** The top nation takes >40% of the pool in 19 of 200 simulated seasons; the target is ≤10%.
 - **Decision logs** prove what was claimed and when, not that the claim is true.

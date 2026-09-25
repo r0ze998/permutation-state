@@ -4,7 +4,7 @@
 
 > Status (2026-09-25): Game Design V5 is implemented end to end and **deployed to Solana devnet** (program [`J4aZxe3ynkS7kcvCpKbp6aFYw8d9vtrRDsgSEi1niU6n`](https://explorer.solana.com/address/J4aZxe3ynkS7kcvCpKbp6aFYw8d9vtrRDsgSEi1niU6n?cluster=devnet)), with play on MagicBlock's devnet Ephemeral Rollup. A full season ran there: an outside agent joined over x402, 180 ticks were played, payouts were settled on chain, every member claimed, and the season verified. Only test USDC was used; nothing is on mainnet. Hackathon deadline: 2026-10-12.
 >
-> Rules version 6 (2026-09-25, not yet committed or redeployed): perfect information, sealed orders (commit–reveal) on chain, tick randomness from the revealed salts, rotationally symmetric maps, a rules-run caretaker for vacant offices, and a history layer between seasons. The devnet program is still version 5; devnet seasons recorded earlier verify with a build of commit `a02862f` or earlier.
+> Rules version 6 (2026-09-25): perfect information, sealed orders (commit–reveal) on chain, tick randomness from the revealed salts, rotationally symmetric maps, a rules-run caretaker for vacant offices, and a history layer between seasons. **Deployed to devnet** on 2026-09-25 (slot 503993880); season 1790340445651 ran 180 ticks there (4,136 sealed batches revealed), was claimed and VERIFIED. Devnet seasons recorded before it verify with a build of commit `a02862f` or earlier.
 
 ## What it is
 
@@ -129,7 +129,7 @@ The LLM agent (`agents/llm-agent.mjs`; put an Anthropic API key in `permutation-
 
 ### 4. On devnet
 
-The program is deployed on devnet at `J4aZxe3ynkS7kcvCpKbp6aFYw8d9vtrRDsgSEi1niU6n` (rules version 5; version 6 is not deployed yet. The v6 program is ~1.60 MB and the devnet program data is 1,339,960 bytes, so a redeploy needs `solana program extend`). The gateway runs a season against Solana devnet and MagicBlock's devnet ER (Asia shown; `devnet-eu` and `devnet-us` also exist). Fund the gateway's `admin` and `crank` keys in `permutation-gateway/.local/keys/` with devnet SOL first; a season needs about 1.5 SOL for the crank.
+The program is deployed on devnet at `J4aZxe3ynkS7kcvCpKbp6aFYw8d9vtrRDsgSEi1niU6n` (rules version 6 since 2026-09-25; the program data was extended to 1,601,776 bytes for it). The gateway runs a season against Solana devnet and MagicBlock's devnet ER (Asia shown; `devnet-eu` and `devnet-us` also exist). Fund the gateway's `admin` and `crank` keys in `permutation-gateway/.local/keys/` with devnet SOL first; a season needs about 1.5 SOL for the crank.
 
 ```bash
 (cd permutation-gateway && node src/server.mjs --cluster devnet --base https://api.devnet.solana.com --er https://devnet-as.magicblock.app --er-validator MAS1Dt9qreoRMQ14YQuhg8UTZMMzDdKhmkZMECCzk57 --state devnet.json --tick-seconds 20 --wait-external 1)
@@ -230,7 +230,7 @@ The gateway is only an index. If it served a tampered input, the verifier would 
 - **Devnet, test USDC only.** The program runs on Solana devnet with MagicBlock's devnet ER. There is no mainnet deployment and no real money: the USDC is the gateway's own test token.
 - **MagicBlock committor limits on devnet.** A commit intent that is too large can be dropped on the base layer and leave accounts stuck mid-undelegation, with no recovery ([magicblock-validator#1693](https://github.com/magicblock-labs/magicblock-validator/issues/1693) and a compute limit on the finalize). The world is therefore 20 accounts of 4 KiB, committed and undelegated in small intents. Three earlier devnet test seasons on the larger layout stayed stuck; their vaults hold only test USDC.
 - **No fog of war.** The game is perfect-information by design, because every account is public on chain. A fog mode would be a separate, possible future mode on a private rollup (MagicBlock PER).
-- **Version 6 is not on devnet yet.** Sealed orders, salt randomness, symmetric maps, the caretaker and the history layer run on the local stack; the devnet program is still version 5 (plaintext orders; randomness from the root, slot and time).
+- **Reveals on a public ER.** An office's reveal must land within the reveal window (a sixth of the tick). The gateway sends a tick's hosted reveals in parallel; on devnet a few ticks still lost some reveals to latency spikes (those offices' orders did not run that tick, as the rules say).
 - **Reveals.** A batch not revealed in the reveal window does not run. The gateway reveals for the members it hosts, and the SDK and MCP server reveal automatically.
 - **Balance is not final.** The top nation took more than 40% of the pool in 19 of 200 simulated seasons, against a target of ≤10%.
 - **Decision logs** prove what was claimed and when, not that the claim is true.

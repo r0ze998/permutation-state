@@ -248,17 +248,17 @@ export class Crank {
    * forever (it is retried on the next snapshot while the window is open).
    */
   async revealHosted(tick, nations, headers) {
-    for (const b of this.sealed.forTick(tick)) {
+    // Only the kept batches whose commitment is the one on chain.
+    const due = this.sealed.forTick(tick).filter(b => {
       const h = headers[b.civ], i = roleIndex(b.role);
-      if (!h || h.submitted[i] === tick) continue;
-      // Only the kept batch whose commitment is the one on chain.
-      if (h.committed[i] !== tick || Buffer.from(h.commits[i]).toString('hex') !== b.commitment) continue;
-      try {
-        await send(this.er, this.chain.revealOrders({ signer: this.crank.publicKey, ...b }), [this.crank], `reveal ${b.civ} ${b.role} tick ${tick}`);
-      } catch (e) {
-        this.log(`reveal ${b.civ} ${b.role} tick ${tick}: ${chainError(e.message) ?? e.message}`);
-      }
-    }
+      return h && h.submitted[i] !== tick && h.committed[i] === tick && Buffer.from(h.commits[i]).toString('hex') === b.commitment;
+    });
+    // All at once: the window is a few seconds and each reveal is a round
+    // trip (~0.4 s to a public ER), so one after another the last nations
+    // would miss it.
+    await Promise.all(due.map(b =>
+      send(this.er, this.chain.revealOrders({ signer: this.crank.publicKey, ...b }), [this.crank], `reveal ${b.civ} ${b.role} tick ${tick}`)
+        .catch(e => this.log(`reveal ${b.civ} ${b.role} tick ${tick}: ${chainError(e.message) ?? e.message}`))));
   }
 
   /**
