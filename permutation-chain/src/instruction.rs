@@ -72,7 +72,7 @@ pub enum ChainInstruction {
     /// 0.. world chunks (w) · then nation PDAs of every civ, in civ order (w)
     ResolveTick { to: u8 },
     /// ER: commit every world and nation account to the base layer in one
-    /// intent. Local stacks only: on devnet one intent this large exceeds the
+    /// intent (the crank only, as `CommitPart`). Local stacks only: on devnet one intent this large exceeds the
     /// committor's limits (64 account keys, finalize compute); use `CommitPart`.
     /// 0 payer (s,w) · 1 magic program · 2 magic context (w) · 3.. world chunks (w) · then nations (w)
     Commit,
@@ -130,8 +130,12 @@ pub enum ChainInstruction {
     /// 0.. world chunks (w) · then nation PDAs of every civ, in civ order (w)
     LogTickInput { chunk: u16 },
     /// ER: commit some of the season's accounts to the base layer (during
-    /// play, for durability), in small intents like `UndelegatePart`.
-    /// Same accounts as `UndelegatePart`.
+    /// play, for durability), in small intents like `UndelegatePart`. Only
+    /// the season's crank may send it (MagicBlock sponsors a limited number
+    /// of commits per account; the last is kept for the undelegation).
+    /// 0 crank (s,w) · 1 magic program · 2 magic context (w) · 3 world chunk 0
+    /// · 4 any nation PDA of the season (it records the crank's key)
+    /// · 5.. the target accounts, in `targets` order, except chunk 0 which is account 3 (w)
     CommitPart {
         /// 0..WORLD_CHUNKS = that world chunk; 1000 + civ = that nation's account.
         targets: Vec<u16>,

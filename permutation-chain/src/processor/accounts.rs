@@ -198,6 +198,26 @@ pub(super) fn world_season_id(chunk0: &AccountInfo) -> Result<u64, ProgramError>
     ))
 }
 
+/// Only the season's crank may commit during play: MagicBlock sponsors a
+/// limited number of commits per delegated account, and the last one is
+/// kept for the final undelegation. Every nation account of the season
+/// records the crank's key, and they stay delegated for the whole of play.
+pub(super) fn require_crank(
+    program_id: &Pubkey,
+    nation_ai: &AccountInfo,
+    season_id: u64,
+    payer: &AccountInfo,
+) -> ProgramResult {
+    let n = load_nation_at(program_id, nation_ai)?;
+    if n.season_id != season_id {
+        return Err(ChainError::MissingNation.into());
+    }
+    if payer.key.as_ref() != n.crank {
+        return Err(ChainError::Unauthorized.into());
+    }
+    Ok(())
+}
+
 /// The season's admin or crank: they run genesis, seating and delegation.
 pub(super) fn require_operator(season: &Season, authority: &AccountInfo) -> ProgramResult {
     let key = authority.key.as_ref();
@@ -253,6 +273,45 @@ mod tests {
         let mut data = vec![0u8; NATION_SPACE];
         store(&mut data, &n).unwrap();
         data
+    }
+
+    #[test]
+    fn only_the_crank_commits() {
+        let program = Pubkey::new_unique();
+        let (pda, bump) = Pubkey::find_program_address(
+            &[NATION_SEED, &7u64.to_le_bytes(), &0u16.to_le_bytes()],
+            &program,
+        );
+        let crank = Pubkey::new_unique();
+        let mut n: NationAccount = load(&nation(7, 0, bump)).unwrap();
+        n.crank = crank.to_bytes();
+        let mut data = vec![0u8; NATION_SPACE];
+        store(&mut data, &n).unwrap();
+        let (mut l, mut l1, mut l2) = (0u64, 0u64, 0u64);
+        let nation_ai = AccountInfo::new(&pda, false, false, &mut l, &mut data, &program, false);
+        let mut none: [u8; 0] = [];
+        let mut none2: [u8; 0] = [];
+        let owner = Pubkey::default();
+        let stranger_key = Pubkey::new_unique();
+        let crank_ai = AccountInfo::new(&crank, true, true, &mut l1, &mut none, &owner, false);
+        let stranger = AccountInfo::new(
+            &stranger_key,
+            true,
+            true,
+            &mut l2,
+            &mut none2,
+            &owner,
+            false,
+        );
+        assert!(require_crank(&program, &nation_ai, 7, &crank_ai).is_ok());
+        assert_eq!(
+            require_crank(&program, &nation_ai, 7, &stranger).unwrap_err(),
+            ChainError::Unauthorized.into()
+        );
+        assert_eq!(
+            require_crank(&program, &nation_ai, 8, &crank_ai).unwrap_err(),
+            ChainError::MissingNation.into()
+        );
     }
 
     /// A program-owned account holding a well-formed nation is not a nation

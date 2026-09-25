@@ -55,7 +55,7 @@ base  FinishSeason (permissionless: every member's payout from the final world) 
   - **The instruction trace**, for large intents.
 
   That is why the world is 20 chunks of 4 KiB. The crank sends every commit round and the final undelegation as small intents: the nation accounts in threes and each world chunk alone, with chunk 0 last (its header says whether the season is over). `Commit`/`CommitAndUndelegate` (everything in one intent) remain for local stacks only.
-  - MagicBlock sponsors 10 commits per delegated account when the payer is not delegated. The crank commits every 20 ticks and stops at 9, keeping the 10th for the final undelegation.
+  - MagicBlock sponsors 10 commits per delegated account when the payer is not delegated. The crank commits every 20 ticks and stops at 9, keeping the 10th for the final undelegation. So that nobody else can use those commits up, only the crank may send `CommitPart` during play: the instruction carries a nation account, which records the crank's key, and the program refuses any other signer (`Unauthorized`). `UndelegatePart` stays open to anyone once the season is over, so a season can always be wound up.
 - **Why chunks.** Accounts that a program creates or grows through CPI are limited to 10 KiB per step, and the committor's finalize limits above apply per intent. So the world is spread over twenty 4 KiB PDAs, which the program reads and writes as one buffer (`state::Chunks`). Transactions that pass every chunk stay within the size limit: 26 world and nation accounts for a resolve, and 6 members per `SeatMembers`.
 - **Genesis is on chain,** split into bounded steps (`map::MapJob`). Running the steps back to back is exactly `generate`; a test checks equality.
 - **The season seed** is the latest slot hash, mixed with the season id, the member count and the treasury deposits, taken when registration closes (`StartSeason`). The slot leader could grind it; MagicBlock VRF is the plan.
@@ -74,7 +74,7 @@ Measured on the local MagicBlock stack and on devnet (program `J4aZxe3ynkS7kcvCp
 | 20 × 4 KiB layout, devnet (an outside agent playing) | 1.11M average per tick in total; 37 of 180 ticks split, every part under 1.4M | 1–3 |
 | A tick too heavy for one transaction | parts of 0.45–0.9M each | 2–7 |
 | After the phase optimisations below, local (four seasons) | 0.81–0.85M average, last 30 ticks 0.95–1.06M, peak 0.98–1.14M | 1 |
-| After the phase optimisations, devnet (season 1790312639004, an outside agent playing) | 0.80M average, last 30 ticks 0.97M, peak 1.04M; no tick split | 1 |
+| After the phase optimisations, devnet (seasons 1790312639004 and 1790317008509, an outside agent playing) | 0.80–0.89M average, peak 1.04–1.23M; no tick split | 1 |
 | `LogTickInput` | small | 1–2 per tick (inputs of 3.5 KB on average, 6.3 KB at most) |
 | All on-chain roots vs a native replay | identical | — |
 
@@ -101,4 +101,4 @@ To measure: `cargo build-sbf --features cu-trace` logs the compute units left af
 - **Fog** is enforced off chain. The world accounts are readable on the ER, so hidden information is hidden only by the clients. The game server serves each nation its fogged view, and the AI members, the reference agents and the web client decide only from it. MagicBlock PER (TEE) is the upgrade path.
 - **Decisions.** Each officer's batch binds the decision to the observation root the server published before the tick (`obs_root`), a policy name and a salted rationale, and a later batch of the same office reveals it. This proves what was claimed and when, not that the claim is true.
 - **Timing.** Batches are plaintext until the input freezes, so a late submitter can react to others; sealed orders are on the roadmap. Whoever sends the first `LogTickInput` fixes the slot and time in the tick randomness; MagicBlock VRF is the planned source.
-- **Operator.** The operator (the crank) can delay genesis steps, seating, delegation and commits. It cannot change outcomes. Publishing a tick's input and resolving it after the deadline are permissionless.
+- **Operator.** The operator (the crank) can delay genesis steps, seating, delegation and commits during play. It cannot change outcomes. Publishing a tick's input, resolving it after the deadline, and undelegating a finished season are permissionless.

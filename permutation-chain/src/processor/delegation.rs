@@ -145,6 +145,9 @@ pub(super) fn commit(
         load_nation(program_id, ai, meta.season_id, civ)?;
         list.push(ai.clone());
     }
+    if !undelegate {
+        require_crank(program_id, &list[WORLD_CHUNKS], meta.season_id, payer)?;
+    }
     let builder =
         MagicIntentBundleBuilder::new(payer.clone(), magic_context.clone(), magic_program.clone());
     if undelegate {
@@ -189,6 +192,11 @@ pub(super) fn commit_part(
     let meta = WorldMeta::from_chunk0(&chunk0.try_borrow_data()?)?;
     if undelegate && !meta.finished {
         return Err(ChainError::SeasonNotOver.into());
+    }
+    // Commits during play are the crank's; undelegating a finished season
+    // stays open to anyone, so a season can always be wound up.
+    if !undelegate {
+        require_crank(program_id, next_account_info(it)?, season_id, payer)?;
     }
     let mut list: Vec<AccountInfo> = Vec::with_capacity(targets.len());
     for (i, &t) in targets.iter().enumerate() {

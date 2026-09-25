@@ -96,17 +96,21 @@ export class ChainClient {
     return [...heavy(), this.ix([...this.chunkKeys(), ...this.nations(nations).map(k => W(k))], IX.resolveTick(to))];
   }
   /** Accounts of a `CommitPart` / `UndelegatePart` intent: chunk 0 (whose header the program reads) always, then the other targets. */
-  intentKeys(payer, targets) {
+  intentKeys(payer, targets, extra = []) {
     const keys = targets.filter(t => t !== 0).map(t => W(this.target(t)));
-    return [W(payer, true), R(MAGIC_PROGRAM_ID), W(MAGIC_CONTEXT_ID), W(this.worldChunks[0]), ...keys];
+    return [W(payer, true), R(MAGIC_PROGRAM_ID), W(MAGIC_CONTEXT_ID), W(this.worldChunks[0]), ...extra, ...keys];
   }
   /** Commit and undelegate `targets` (see `delegate`) in one small intent; chunk 0 must go in the last group. */
   undelegatePart({ payer, targets }) {
     return [this.ix(this.intentKeys(payer, targets), IX.undelegatePart(targets))];
   }
-  /** Commit `targets` to the base layer during play, in one small intent. */
+  /**
+   * Commit `targets` to the base layer during play, in one small intent.
+   * Only the season's crank may: nation 0's account, which records the
+   * crank's key, goes after world chunk 0.
+   */
   commitPart({ payer, targets }) {
-    return [this.ix(this.intentKeys(payer, targets), IX.commitPart(targets))];
+    return [this.ix(this.intentKeys(payer, targets, [R(this.nation(0))]), IX.commitPart(targets))];
   }
   finishSeason() {
     return [...heavy(), this.ix([W(this.season), ...this.worldChunks.map(k => R(k))], IX.finishSeason())];
