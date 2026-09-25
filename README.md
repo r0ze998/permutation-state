@@ -2,13 +2,15 @@
 
 **Six nations, one shared world, run on Solana.** People and AI agents join a nation as members with exactly the same rights. The members elect the nation's officers, propose and recall. Every tick resolves on a MagicBlock Ephemeral Rollup. At the end of the season, the prize pool is split among the nations by what each achieved, and inside each nation by what each member contributed. Anyone can replay the whole season from the chain's own records.
 
-> Status (2026-09-25): Game Design V5 is implemented end to end and **deployed to Solana devnet** (program [`J4aZxe3ynkS7kcvCpKbp6aFYw8d9vtrRDsgSEi1niU6n`](https://explorer.solana.com/address/J4aZxe3ynkS7kcvCpKbp6aFYw8d9vtrRDsgSEi1niU6n?cluster=devnet)), with play on MagicBlock's devnet Ephemeral Rollup. A full season ran there: an outside agent joined over x402, 180 ticks were played, payouts were settled on chain, every member claimed, and the season verified. Only test USDC was used; nothing is on mainnet. Hackathon deadline: 2026-10-12.
+> Status (2026-09-26): Game Design V5 is implemented end to end and **deployed to Solana devnet** (program [`J4aZxe3ynkS7kcvCpKbp6aFYw8d9vtrRDsgSEi1niU6n`](https://explorer.solana.com/address/J4aZxe3ynkS7kcvCpKbp6aFYw8d9vtrRDsgSEi1niU6n?cluster=devnet)), with play on MagicBlock's devnet Ephemeral Rollup, now on **rules version 8**. Full seasons ran there on every version since 5: an outside agent joined over x402, 180 ticks were played, payouts were settled on chain, every member claimed, and the season verified. Only test USDC was used; nothing is on mainnet. Hackathon deadline: 2026-10-12.
 >
-> Rules version 6 (2026-09-25): perfect information, sealed orders (commit–reveal) on chain, tick randomness from the revealed salts, rotationally symmetric maps, a rules-run caretaker for vacant offices, and a history layer between seasons. **Deployed to devnet** on 2026-09-25 (slot 503993880); season 1790340445651 ran 180 ticks there (4,136 sealed batches revealed), was claimed and VERIFIED. Devnet seasons recorded before it verify with a build of commit `a02862f` or earlier.
+> Rules version 6 (2026-09-25): perfect information, sealed orders (commit–reveal) on chain, tick randomness from the revealed salts, rotationally symmetric maps, a rules-run caretaker for vacant offices, and a history layer between seasons. **Deployed to devnet** on 2026-09-25 (slot 503993880); season 1790340445651 ran 180 ticks there (4,136 sealed batches revealed), was claimed and VERIFIED. A season replays only with the rules version it was played on: see [Verify a season](#verify-a-season).
 >
-> Rules version 7 (2026-09-25, committed and deployed to devnet; [V5 §18](PERMUTATION_STATE_GAME_DESIGN_V5.md)): hidden operator AI members revealed after the season, bounties on their home cities, their payouts redistributed to people, treasury contracts between nations, members' messages anchored on chain, and an operator token that closes the gateway's hosted-member endpoints to outsiders.
+> Rules version 7 (2026-09-25, [V5 §18](PERMUTATION_STATE_GAME_DESIGN_V5.md)): hidden operator AI members revealed after the season, bounties on their home cities, their payouts redistributed to people, treasury contracts between nations, members' messages anchored on chain, and an operator token that closes the gateway's hosted-member endpoints to outsiders. On devnet, season 1790348675870 ran 180 ticks with a home-city bounty and paid contracts, and VERIFIED.
 >
-> Rules version 8 (2026-09-26, local; [V5 §18.13](PERMUTATION_STATE_GAME_DESIGN_V5.md)): flatter milestone points (10/20/30/40/55), which brings the top nation above 40% of the pool down to 10 of 200 simulated seasons (the target); plus the history layer on screen (the seasons a season follows), quicker reveals, and a sim of a leaked home city.
+> Rules version 8 (2026-09-26, [V5 §18.13](PERMUTATION_STATE_GAME_DESIGN_V5.md)): flatter milestone points (10/20/30/40/55), which brings the top nation above 40% of the pool down to 10 of 200 simulated seasons (the target); plus the history layer on screen (the seasons a season follows), quicker reveals, and a sim of a leaked home city. **Deployed to devnet** on 2026-09-26 (slot 504085995); season 1790355636798 ran 180 ticks there (4,190 sealed batches revealed), revealed its 12 operator AI members, paid every member (vault 294 → 0 test USDC, a second claim refused) and VERIFIED.
+>
+> Refactor (2026-09-26, commit `1c997f6`): the four packages were restructured for maintainability without changing behaviour. The golden roots and codec vectors are unchanged, and `sim` and `verify` print byte-identical output to the version-8 builds, on a local season and on the devnet season above.
 
 ## What it is
 
@@ -139,7 +141,7 @@ The LLM agent (`agents/llm-agent.mjs`; put an Anthropic API key in `permutation-
 
 ### 4. On devnet
 
-The program is deployed on devnet at `J4aZxe3ynkS7kcvCpKbp6aFYw8d9vtrRDsgSEi1niU6n` (rules version 6 since 2026-09-25; the program data was extended to 1,601,776 bytes for it). The gateway runs a season against Solana devnet and MagicBlock's devnet ER (Asia shown; `devnet-eu` and `devnet-us` also exist). Fund the gateway's `admin` and `crank` keys in `permutation-gateway/.local/keys/` with devnet SOL first; a season needs about 1.5 SOL for the crank.
+The program is deployed on devnet at `J4aZxe3ynkS7kcvCpKbp6aFYw8d9vtrRDsgSEi1niU6n` (rules version 8 since 2026-09-26, slot 504085995; the program data was extended to 1,601,776 bytes for version 6). The gateway runs a season against Solana devnet and MagicBlock's devnet ER (Asia shown; `devnet-eu` and `devnet-us` also exist). Fund the gateway's `admin` and `crank` keys in `permutation-gateway/.local/keys/` with devnet SOL first; a season needs about 1.5 SOL for the crank.
 
 ```bash
 (cd permutation-gateway && node src/server.mjs --cluster devnet --base https://api.devnet.solana.com --er https://devnet-as.magicblock.app --er-validator MAS1Dt9qreoRMQ14YQuhg8UTZMMzDdKhmkZMECCzk57 --state devnet.json --tick-seconds 20 --wait-external 1)
@@ -172,10 +174,15 @@ The verifier:
 1. Reads the Season account and rebuilds genesis.
 2. Seats every member from their accounts on the base layer and recomputes the first election.
 3. Replays every tick. Each tick's input is taken from the `PS_INPUT` records the program published before resolving, every revealed batch is checked against its commitment in `PS_COMMITS`, the randomness against `PS_SALTS`, and each root against the `PS_TICK` records, all re-read from the ER's transaction logs.
-4. Recomputes every member's payout and checks it against the Season account (with the same `finalize` function as `FinishSeason`; for a v7 season, each revealed AI's salt against its registration tag and the tags against the committed roster chain).
-5. Checks the history chain (`PS_HISTORY`, `Season.history_root`) back to the previous season.
+4. Checks the operator AI roster (v7+): each revealed AI's salt against its registration tag, the tags against the committed roster chain, and the home-city bounties.
+5. Recomputes every member's payout and checks it against the Season account (with the same `finalize` function as `FinishSeason`), and the operations share and treasuries.
+6. Checks the history chain (`PS_HISTORY`, `Season.history_root`) back to the previous season.
 
-A local ER season on rules version 6 verified this way: 180 ticks, 4227 revealed batches checked.
+Members' messages are checked separately against their anchored roots: `(cd permutation-gateway && node scripts/verify-talk.mjs --gateway http://127.0.0.1:4191)`.
+
+The devnet season on rules version 8 verified this way: 180 ticks, 4,190 revealed batches checked, 12 AI members matched to the committed roster.
+
+The verifier replays with the rules it was built with, so a season verifies only with a build of its rules version: version 8 from `4a28f58` on, version 7 at `73e99eb`, version 6 at `9ab5311`, version 5 at `a02862f` or earlier.
 
 The gateway is only an index. If it served a tampered input, the verifier would fail.
 
@@ -201,9 +208,9 @@ The gateway is only an index. If it served a tampered input, the verifier would 
 (cd permutation-gateway && node scripts/e2e-base.mjs)
 ```
 
-- Tests (rules version 7, 2026-09-25): `permutation-rules` 196, `permutation-chain` 13, `permutation-server` 21 (including a golden test that pins whole seasons, [README](permutation-server/README.md)), `permutation-gateway` 70; all pass.
+- Tests (rules version 8, after the refactor, 2026-09-26): `permutation-rules` 202, `permutation-chain` 14, `permutation-server` 21 (including a golden test that pins whole seasons, [README](permutation-server/README.md)), `permutation-gateway` 85; all pass, with `cargo clippy` and `cargo fmt --check` clean.
 - v7 `sim` (200 seasons, members 3,3,2,2,1,0, the first member of each nation an operator AI, bounty 5 USDC): 0.56 AI homes conquered per season (11% of AIs), 35 USDC per season redistributed from AIs to people (people receive +129% vs no roster); the top nation took >40% in 36/200 (20/200 without a roster; the 1-member nation becomes AI-only, so 4 nations share instead of 5), and 7/200 with members 3,3,3,3,2,2; with 10 USDC in each treasury, 15.8 contract offers, 1.1 accepted and 1.9 USDC paid per season; 0 invariant violations.
-- `sim 40` plays 40 AI-only seasons and prints the balance numbers V5 §6.5 is calibrated against, plus non-exclusive path pairs, era timing, lead changes, wars and captures, and points per start slot. Over 200 seasons (members 3,3,2,2,1,0, AI bots): median era 2 (425 nations in era 2, 431 in era 3 of 1,000); the top nation took more than 40% of the pool in 21/200 (34/200 before the v6 changes; target ≤10%); every pair of paths is held at tier 3+ by 27–66% of era-3+ nations; science 3+ in 66% of them (was 94%); the T120 leader is not the final leader in 90/200 seasons; 0 invariant violations.
+- `sim 40` plays 40 AI-only seasons and prints the balance numbers V5 §6.5 is calibrated against, plus non-exclusive path pairs, era timing, lead changes, wars and captures, and points per start slot. Over 200 seasons (rules version 6, members 3,3,2,2,1,0, AI bots): median era 2 (425 nations in era 2, 431 in era 3 of 1,000); the top nation took more than 40% of the pool in 21/200 (34/200 before the v6 changes; target ≤10%); every pair of paths is held at tier 3+ by 27–66% of era-3+ nations; science 3+ in 66% of them (was 94%); the T120 leader is not the final leader in 90/200 seasons; 0 invariant violations.
 - `mapstat` measures generated maps. `tests/symmetry.rs` replays a season in the world turned by 60° with turned orders and gets identical scores; earlier random maps gave rim starts ~1.75× the points of central ones.
 - `x402-check.mjs` sends tampered x402 payments against a registering season; all must be refused.
 - `e2e-base.mjs` plays a season on the base layer alone, without the ER.
@@ -244,6 +251,7 @@ The gateway is only an index. If it served a tampered input, the verifier would 
 - **Reveals on a public ER.** An office's reveal must land within the reveal window (a sixth of the tick). The gateway sends a tick's hosted reveals in parallel; on devnet a few ticks still lost some reveals to latency spikes (those offices' orders did not run that tick, as the rules say).
 - **Reveals.** A batch not revealed in the reveal window does not run. The gateway reveals for the members it hosts, and the SDK and MCP server reveal automatically.
 - **Operator AI members.** Leaks remain possible from bot patterns and funding flows (V5 §18.10); the operator could also play wallets it leaves off the roster, which only disclosure and the bond discourage. Treasury contracts move USDC between nations by game outcome and need legal review before real money.
+- **Talk has not been exercised on devnet.** The gateway tests anchor messages and verify their proofs, but the devnet seasons so far carried no messages.
 - **Balance is tuned on bots.** With version 8 the top nation takes more than 40% of the pool in 10 of 200 simulated seasons (the target is ≤10%); with the operator's AI-only nations in the mix, 27 of 200. The numbers still come from bots, not people.
 - **Decision logs** prove what was claimed and when, not that the claim is true.
 - **The operator (crank)** can delay steps but cannot change outcomes (beyond voting and holding offices through its disclosed AI members). Closing commits, publishing a tick's input and resolving it after the deadline are permissionless.

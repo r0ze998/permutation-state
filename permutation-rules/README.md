@@ -1,6 +1,6 @@
 # permutation-rules
 
-Deterministic rules engine for PERMUTATION STATE. It implements [Rules Specification v0.2](../PERMUTATION_STATE_RULES_SPEC_v0.2.md) for [Game Design V5](../PERMUTATION_STATE_GAME_DESIGN_V5.md): six nations in one hex world, members who elect officers, four paths of achievements, merit and the prize settlement, the USDC market, and (rules version 7, V5 §18) treasury contracts and the operator's hidden AI members with home-city bounties.
+Deterministic rules engine for PERMUTATION STATE. It implements [Rules Specification v0.2](../PERMUTATION_STATE_RULES_SPEC_v0.2.md) for [Game Design V5](../PERMUTATION_STATE_GAME_DESIGN_V5.md): six nations in one hex world, members who elect officers, four paths of achievements, merit and the prize settlement, the USDC market, and (rules version 7, V5 §18) treasury contracts and the operator's hidden AI members with home-city bounties. The current rules version is 8 (flatter milestone points, V5 §18.13).
 
 One crate runs everywhere the rules run, so a tick resolved in one place is byte-identical to the same tick resolved in any other:
 
@@ -90,3 +90,4 @@ These are recorded here rather than fixed, because each one changes the state ro
 - `Civ.last_aggression` and `aggressor_window` are recorded but no rule reads them.
 - `Scores` duplicates achievement records (`star_gate_stages`, `star_gate_tick` vs `last_star_gate`).
 - Some `Blocked` reasons are reused for other cases; for example, `NothingToSell` also means "amount 0".
+- The Science focus gives `12_500` milli science per point (`SCIENCE_FOCUS_MILLI` in `tick/production.rs`), that is ×12.5, where 1.25× was probably meant (12,500 reads as basis points). Fixing it changes the balance, so it needs a new `sim` calibration as well.
