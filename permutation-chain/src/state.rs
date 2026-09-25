@@ -53,6 +53,12 @@ pub const MAX_NATIONS: usize = 8;
 pub const MAX_MEMBERS: u32 = 256;
 /// Governance actions one signer may queue per tick.
 pub const MAX_GOV_PER_SIGNER: usize = 8;
+/// Room kept free in a nation account for each office's reveal (a batch
+/// fits one transaction, so well under this): governance actions may not
+/// fill the account so far that an officer's reveal no longer fits.
+pub const REVEAL_ROOM: usize = 1100;
+/// Largest history record logged in `PS_HISTORY` (bytes before base64).
+pub const HISTORY_LOG_MAX: usize = 6000;
 
 // ------------------------------------------------------------------ season
 
@@ -77,8 +83,8 @@ pub struct Season {
     pub bump: u8,
     pub vault_bump: u8,
     pub admin: [u8; 32],
-    /// Runs genesis, seating, delegation and commits, and the acting
-    /// officials of vacant offices (any key can resolve ticks).
+    /// Runs genesis, seating, delegation and commits (any key can close,
+    /// publish and resolve ticks).
     pub crank: [u8; 32],
     pub usdc_mint: [u8; 32],
     pub usdc_decimals: u8,
@@ -111,9 +117,29 @@ pub struct Season {
     pub payouts: Vec<u64>,
     /// `state_root` of the final world the payouts were computed from.
     pub final_root: [u8; 32],
+    /// The history layer (2026-09-25, `permutation_rules::history`): the
+    /// season this one follows (0: none) and its history root, taken when
+    /// this season was created and mixed into the season seed; and this
+    /// season's own history root, set by FinishSeason.
+    pub prev_season_id: u64,
+    pub prev_history_root: [u8; 32],
+    pub history_root: [u8; 32],
 }
 
-pub const SEASON_MAGIC: [u8; 8] = *b"PSSEASN5";
+pub const SEASON_MAGIC: [u8; 8] = *b"PSSEASN6";
+
+/// A season's address (`["season", id]`), as base58, from the program id as
+/// base58; `None` if the program id is not a valid key. For tools (the
+/// verifier follows a season's history to the season before it).
+pub fn season_address(program_id: &str, season_id: u64) -> Option<String> {
+    use core::str::FromStr;
+    let program = solana_program::pubkey::Pubkey::from_str(program_id).ok()?;
+    let (pda, _) = solana_program::pubkey::Pubkey::find_program_address(
+        &[SEASON_SEED, &season_id.to_le_bytes()],
+        &program,
+    );
+    Some(pda.to_string())
+}
 
 // ------------------------------------------------------------------ member
 
@@ -154,7 +180,7 @@ pub struct NationAccount {
     pub bump: u8,
     pub preset: u8,
     pub market: bool,
-    /// Signs for the acting official of a vacant office.
+    /// The season's crank (only it may send `CommitPart`).
     pub crank: [u8; 32],
     /// Tick the batches must be for; set when the government opens and by every resolved tick.
     pub open_tick: u16,
@@ -163,17 +189,30 @@ pub struct NationAccount {
     pub keys: [[u8; 32]; 4],
     /// This tick's budget + bank per office, cached from the world.
     pub spendable: [u32; 4],
-    /// Tick of each office's stored batch (`u16::MAX` = none), so clients
-    /// can see who submitted without decoding the batches.
+    /// Tick of each office's revealed batch (`u16::MAX` = none), so clients
+    /// can see who revealed without decoding the batches.
     pub submitted: [u16; 4],
     /// The open tick's input is frozen (see `WorldMeta::frozen`).
     pub frozen: bool,
+    /// Commitments are closed and the reveal window is open (see
+    /// `WorldMeta::revealing`): commitments and governance are refused.
+    pub revealing: bool,
+    /// End of the reveal window (unix time): later reveals are refused, so
+    /// nobody can wait to reveal until it has seen everyone else's salt.
+    pub reveal_deadline: i64,
+    /// Tick of each office's sealed commitment (`u16::MAX` = none), and the
+    /// commitment (`permutation_rules::orders::order_commitment`).
+    pub committed: [u16; 4],
+    pub commits: [[u8; 32]; 4],
+    /// Each revealed batch's salt (part of the tick randomness).
+    pub salts: [[u8; 32]; 4],
+    /// Revealed batches (they match their commitments).
     pub batches: [Option<OrderBatch>; 4],
     /// Governance actions for the open tick, in arrival order.
     pub inbox: Vec<GovEntry>,
 }
 
-pub const NATION_MAGIC: [u8; 8] = *b"PSNATN06";
+pub const NATION_MAGIC: [u8; 8] = *b"PSNATN07";
 
 // ------------------------------------------------------------------ world
 
@@ -203,6 +242,21 @@ pub struct WorldMeta {
     /// Chunks the frozen input takes, and how many were logged (in order).
     pub input_chunks: u16,
     pub input_logged: u16,
+    /// Sealed orders (commit–reveal): commitments closed at the tick's
+    /// deadline (`CloseCommits`) and the reveal window is open until
+    /// `deadline` (now the reveal deadline). Governance is closed too.
+    pub revealing: bool,
+}
+
+/// Length of the reveal window after the commitments close: a sixth of the
+/// tick (5 s of a 30 s Blitz tick), at least 2 s.
+pub const fn reveal_seconds(tick_seconds: u32) -> i64 {
+    let s = tick_seconds as i64 / 6;
+    if s < 2 {
+        2
+    } else {
+        s
+    }
 }
 
 impl WorldMeta {
@@ -379,6 +433,9 @@ mod tests {
             treasury_final: vec![u64::MAX; nations],
             payouts: vec![u64::MAX; members],
             final_root: [6; 32],
+            prev_season_id: 0,
+            prev_history_root: [0; 32],
+            history_root: [0; 32],
         }
     }
 

@@ -22,7 +22,7 @@ pub struct MemberMeta {
 
 /// The government of `civ` (V5 §5): offices, the coming election, recalls
 /// and proposals. Everything here is recorded on chain, so it is public to
-/// the nation; other nations' proposals are hidden by the belief state.
+/// the nation; other nations' proposals are public too (perfect information).
 pub fn gov_view(s: &WorldState, rules: &Ruleset, civ: CivId, meta: &[MemberMeta]) -> Value {
     let n = &s.nations[civ as usize];
     let who = |m: MemberId| {

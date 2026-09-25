@@ -1,5 +1,5 @@
 //! What `/api/state` and `/api/lobby` answer. Everything a viewer sees of the
-//! world comes from its nation's fogged belief (spectators: the full state).
+//! world is the full state for everyone (perfect information, `fog`).
 
 use permutation_rules::gov::Role;
 use permutation_rules::state::CivId;
@@ -12,7 +12,6 @@ use super::game::{role_name, unix_now, Game, Host, Phase, Viewer};
 use crate::api;
 use crate::bots::persona_of;
 use crate::codec::hex;
-use crate::fog::line_is_public;
 
 /// Chronicle lines served per request.
 const CHRONICLE_SERVED: usize = 150;
@@ -128,14 +127,12 @@ impl Game {
         let belief = civ.map(|c| self.fog.belief(&self.state, c));
         let s = belief.as_ref().unwrap_or(&self.state);
         let mut v = api::world_view(s, &self.rules, civ, &self.fog);
-        let names = self.names();
-        let names: Vec<&str> = names.iter().map(String::as_str).collect();
-        let public = |e: &str| civ.is_none_or(|c| line_is_public(&self.state, c, e, &names));
+        // Perfect information: the whole chronicle is public (research too:
+        // it is on chain).
         let chronicle: Vec<Value> = self
             .chronicle
             .iter()
             .rev()
-            .filter(|(_, e)| public(e))
             .take(CHRONICLE_SERVED)
             .map(|(t, e)| json!({"tick": t, "text": e}))
             .collect();
@@ -159,11 +156,7 @@ impl Game {
         o.insert("chronicle".into(), json!(chronicle));
         o.insert(
             "lastSummary".into(),
-            json!(self
-                .last_events
-                .iter()
-                .filter(|e| public(e))
-                .collect::<Vec<_>>()),
+            json!(self.last_events.iter().collect::<Vec<_>>()),
         );
         o.insert("resolvedTick".into(), json!(self.resolved_tick));
         o.insert("members".into(), self.members_json());

@@ -337,12 +337,17 @@ export class WorldMap {
         ctx.strokeStyle = t.terrain === 'Plains' ? 'rgba(150,130,70,.3)' : 'rgba(83,117,65,.3)'; ctx.lineWidth = 1;
         for (let i = 0; i < 5; i++) { const x = p.x - 29 + seed(t.q, t.r, i + 91) * 58, y = p.y - 19 + seed(t.q, t.r, i + 112) * 38; ctx.beginPath(); ctx.moveTo(x - 2, y - 3); ctx.lineTo(x, y); ctx.lineTo(x + 1, y - 4); ctx.stroke(); }
       }
-      if (t.river) { // a river threads through the tile
-        ctx.strokeStyle = '#7fb0b4'; ctx.lineWidth = 3.2; ctx.lineCap = 'round';
-        const a = seed(t.q, t.r, 5) * Math.PI;
-        ctx.beginPath(); ctx.moveTo(p.x + Math.cos(a) * 44, p.y + Math.sin(a) * 30);
-        ctx.quadraticCurveTo(p.x + 8, p.y - 6, p.x - Math.cos(a) * 44, p.y - Math.sin(a) * 30); ctx.stroke();
-        ctx.strokeStyle = 'rgba(225,242,236,.7)'; ctx.lineWidth = 1; ctx.stroke(); ctx.lineCap = 'butt';
+      if (t.river) { // rivers run downhill (mapgen): join the neighbouring river tiles and the water they reach
+        const DIRS = [[1, 0], [1, -1], [0, -1], [-1, 0], [-1, 1], [0, 1]];
+        const ends = DIRS.map(([dq, dr]) => this.tiles.get(key(t.q + dq, t.r + dr)))
+          .filter(n => n && (n.river || n.terrain === 'Water'))
+          .map(n => { const q = project(n.q, n.r); return { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 }; });
+        if (!ends.length) { const a = seed(t.q, t.r, 5) * Math.PI; ends.push({ x: p.x + Math.cos(a) * 30, y: p.y + Math.sin(a) * 20 }); }
+        const stroke = (style, width) => {
+          ctx.strokeStyle = style; ctx.lineWidth = width; ctx.lineCap = 'round';
+          for (const e of ends) { ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.quadraticCurveTo((p.x + e.x) / 2 + 4, (p.y + e.y) / 2 - 3, e.x, e.y); ctx.stroke(); }
+        };
+        stroke('#7fb0b4', 3.4); stroke('rgba(225,242,236,.7)', 1); ctx.lineCap = 'butt';
       }
     }
     ctx.restore();

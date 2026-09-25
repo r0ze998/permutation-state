@@ -4,10 +4,13 @@
 //
 // * Registration: once the expected outside entrants joined (or at once),
 //   start the season: genesis, seating, the first election, delegation.
-// * Resolve the open tick on the ER once it is due (its deadline passed, or
-//   every office of every nation submitted): publish its input
-//   (`LogTickInput`), resolve it (`ResolveTick`, in parts when it does not
-//   fit one transaction) and archive every part's PS_TICK record.
+// * Move the open tick through its sealed-orders phases on the ER: after
+//   its deadline close the commitments (`CloseCommits`) and reveal the
+//   batches this gateway holds for its hosted members (`RevealOrders`);
+//   once every commitment is revealed or the reveal window ended, publish
+//   the input (`LogTickInput`; chunk 0 freezes it and draws the randomness
+//   from the revealed salts), resolve it (`ResolveTick`, in parts when it
+//   does not fit one transaction) and archive every part's PS_TICK record.
 // * Every `commitEvery` ticks, commit the ER state to the base layer in
 //   small `CommitPart` intents (`intentGroups`).
 // * After the last tick: `UndelegatePart` intents (commit and undelegate),
@@ -16,10 +19,11 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { PublicKey } from '@solana/web3.js';
 import { ChainClient } from '../client/src/chain.mjs';
-import { chainError, decodeNationHeader, decodeSeason, decodeWorldHeader, MAGIC, MAX_NATIONS, NATION_TARGET, WORLD_CHUNKS } from '../client/src/codec.mjs';
+import { chainError, decodeNationHeader, decodeSeason, decodeWorldHeader, MAGIC, MAX_NATIONS, NATION_TARGET, roleIndex, WORLD_CHUNKS } from '../client/src/codec.mjs';
 import { LOCAL_DIR, namedKey } from './config.mjs';
 import { startAndDelegate } from './season.mjs';
-import { send } from './send.mjs';
+import { records, send } from './send.mjs';
+import { SealedStore } from './sealed.mjs';
 import { appendTickLines, publishTickInput, readTickLines, resolveInParts, tickLinesOf } from './ticks.mjs';
 
 /** The program judges deadlines by the ER's clock, which can trail ours by a second. */
@@ -56,21 +60,31 @@ export function intentGroups({ nations, chunks = WORLD_CHUNKS, groupSize = INTEN
   return groups;
 }
 
-/** Offices (over all nations) whose batch for their nation's open tick is in. */
-export const countSubmitted = nationHeaders =>
-  nationHeaders.reduce((n, x) => n + (x ? x.submitted.filter(t => t === x.openTick).length : 0), 0);
+/** Offices (over all nations) that sealed orders for their nation's open tick, and how many of those were revealed. */
+export const countSeals = nationHeaders => nationHeaders.reduce((n, x) => {
+  if (!x) return n;
+  n.committed += x.committed.filter(t => t === x.openTick).length;
+  n.revealed += x.submitted.filter(t => t === x.openTick).length;
+  return n;
+}, { committed: 0, revealed: 0 });
 
 /**
- * Whether the open tick should be resolved now: its input is already
- * frozen, every office submitted, or its deadline (plus a grace second for
- * the ER's clock) passed. Tick 0's deadline was set on base when the
- * government opened and delegation takes a few seconds, so tick 0 gets one
- * full tick on the ER before its deadline counts.
+ * What the open tick needs next:
+ * - `close`: the commitments are open and the deadline (plus a grace second
+ *   for the ER's clock) passed. Tick 0's deadline was set on base when the
+ *   government opened and delegation takes a few seconds, so tick 0 gets one
+ *   full tick on the ER first. Closing never waits for the officers: members
+ *   without office use the whole tick for proposals, support and votes.
+ * - `publish`: in the reveal window, every commitment was revealed or the
+ *   reveal deadline passed; or the input is already frozen.
+ * - `null`: wait.
  */
-export function isDue({ meta, openTick, submitted, offices, now, delegatedAt = 0, tickSeconds }) {
-  if (meta.frozen || submitted >= offices) return true;
+export function nextStep({ meta, openTick, committed, revealed, now, delegatedAt = 0, tickSeconds }) {
+  if (meta.frozen) return 'publish';
+  const passed = now / 1000 >= meta.deadline + DEADLINE_GRACE_S;
+  if (meta.revealing) return revealed >= committed || passed ? 'publish' : null;
   const settling = openTick === 0 && now < delegatedAt + tickSeconds * 1000;
-  return !settling && now / 1000 >= meta.deadline + DEADLINE_GRACE_S;
+  return !settling && passed ? 'close' : null;
 }
 
 /** Whether to request a periodic commit after resolving tick `open`. */
@@ -96,6 +110,10 @@ export class Crank {
     this.reach = {};
     mkdirSync(ticksDir, { recursive: true });
     this.tickFile = path.join(ticksDir, `${this.state.seasonId}.jsonl`);
+    /** Hosted members' sealed batches, revealed after each tick's close. */
+    this.sealed = new SealedStore(path.join(ticksDir, `${this.state.seasonId}.sealed.json`));
+    /** The CloseCommits transaction of a tick: {tick, signature}. */
+    this.closed = null;
   }
 
   get state() { return this.store.state; }
@@ -175,18 +193,33 @@ export class Crank {
     const nations = await this.nationCount();
     if (meta.finished) return this.undelegate(nations);
     const open = snap.nations[0]?.openTick;
-    const submitted = countSubmitted(snap.nations);
-    const offices = OFFICES * nations;
-    if (!isDue({ meta, openTick: open, submitted, offices, now: Date.now(), delegatedAt: this.state.delegatedAt, tickSeconds: this.cfg.tickSeconds })) return;
+    const { committed, revealed } = countSeals(snap.nations);
+    const step = nextStep({ meta, openTick: open, committed, revealed, now: Date.now(), delegatedAt: this.state.delegatedAt, tickSeconds: this.cfg.tickSeconds });
+    if (meta.revealing && !meta.frozen) await this.revealHosted(open, nations, snap.nations);
+    if (!step) return;
+    if (step === 'close') {
+      try {
+        const r = await send(this.er, this.chain.closeCommits({ nations }), [this.crank], `close tick ${open} commitments`);
+        this.closed = { tick: open, signature: r.signature };
+      } catch (e) {
+        const code = chainError(e.message);
+        if (code === 'TooEarly') { this.retryAt = Date.now() + 500; return; } // the ER clock has not reached the deadline yet
+        if (code !== 'WrongPhase') throw e; // someone else closed it: go on from the next snapshot
+      }
+      this.retryAt = Date.now() + 300; // let the close land before revealing
+      return;
+    }
     // Publish the tick's input on chain first (PS_INPUT chunks; chunk 0
     // freezes it): the program resolves only a published input.
     let published;
     try {
       published = await this.publishInput(open, nations);
     } catch (e) {
-      if (chainError(e.message) === 'TooEarly') { this.retryAt = Date.now() + 500; return; } // the ER clock has not reached the deadline yet
+      if (chainError(e.message) === 'TooEarly') { this.retryAt = Date.now() + 500; return; } // the reveal window is still open on the ER's clock
       throw e;
     }
+    const commitSignature = this.closed?.tick === open ? this.closed.signature : await this.findClose(open);
+    const seals = { committed, revealed, commitSignature };
     // From each cursor try the furthest stop that worked last time, then
     // shorter ones; every 10 ticks probe further again, since cost depends
     // on the world. Every part is archived as soon as it lands.
@@ -194,9 +227,10 @@ export class Crank {
     const parts = await resolveInParts({
       reach: this.reach,
       resolve: to => send(this.er, this.chain.resolveTick({ nations, to }), [this.crank], `resolve tick ${open} to phase ${to}`),
-      onPart: r => appendTickLines(this.tickFile, tickLinesOf(r, published, submitted)),
+      onPart: r => appendTickLines(this.tickFile, tickLinesOf(r, published, seals)),
     });
-    this.log(`tick ${open} resolved on ER (${submitted}/${offices} offices submitted, ${parts.map(r => r.cu).join(' + ')} CU)`);
+    this.sealed.dropBefore(open + 1);
+    this.log(`tick ${open} resolved on ER (${revealed}/${committed} sealed batches revealed, ${OFFICES * nations} offices, ${parts.map(r => r.cu).join(' + ')} CU)`);
     if (commitDue({ open, commitEvery: this.cfg.commitEvery, commits: this.state.commits })) {
       for (const group of intentGroups({ nations })) {
         await send(this.er, this.chain.commitPart({ payer: this.crank.publicKey, targets: group }), [this.crank], `commit ${group.join(',')}`);
@@ -205,6 +239,54 @@ export class Crank {
       this.store.save();
       this.log(`requested an ER→base commit at tick ${open + 1} (the ER validator settles it on base)`);
     }
+  }
+
+  /**
+   * Reveal the batches this gateway sealed for its hosted members (the
+   * reveal window is open). Offices already revealed are skipped, so it is
+   * safe to call on every snapshot; a failed reveal is logged, not retried
+   * forever (it is retried on the next snapshot while the window is open).
+   */
+  async revealHosted(tick, nations, headers) {
+    for (const b of this.sealed.forTick(tick)) {
+      const h = headers[b.civ], i = roleIndex(b.role);
+      if (!h || h.submitted[i] === tick) continue;
+      // Only the kept batch whose commitment is the one on chain.
+      if (h.committed[i] !== tick || Buffer.from(h.commits[i]).toString('hex') !== b.commitment) continue;
+      try {
+        await send(this.er, this.chain.revealOrders({ signer: this.crank.publicKey, ...b }), [this.crank], `reveal ${b.civ} ${b.role} tick ${tick}`);
+      } catch (e) {
+        this.log(`reveal ${b.civ} ${b.role} tick ${tick}: ${chainError(e.message) ?? e.message}`);
+      }
+    }
+  }
+
+  /**
+   * The CloseCommits transaction of `tick` when someone else sent it: the
+   * latest transactions on world chunk 0 with a PS_COMMITS record for it.
+   */
+  async findClose(tick) {
+    const sigs = await this.er.getSignaturesForAddress(this.chain.worldChunks[0], { limit: 40 }, 'confirmed');
+    for (const { signature, err } of sigs) {
+      if (err) continue;
+      const t = await this.er.getTransaction(signature, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 });
+      if (records(t?.meta?.logMessages ?? []).some(r => r.tag === 'PS_COMMITS' && r.tick === tick)) return signature;
+    }
+    this.log(`tick ${tick}: its CloseCommits transaction was not found; the verifier cannot check its reveals`);
+    return null;
+  }
+
+  /** The season's `PS_HISTORY` record and its FinishSeason transaction on base, if found. */
+  async findHistory() {
+    const sigs = await this.base.getSignaturesForAddress(this.chain.season, { limit: 40 }, 'confirmed');
+    for (const { signature, err } of sigs) {
+      if (err) continue;
+      const t = await this.base.getTransaction(signature, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 });
+      const record = records(t?.meta?.logMessages ?? []).find(r => r.tag === 'PS_HISTORY');
+      if (record) return { record, signature };
+    }
+    this.log('the season\'s FinishSeason transaction was not found; GET /history has no record');
+    return null;
   }
 
   /** After the last tick: commit and undelegate every account, chunk 0 last; resumable. */
@@ -242,11 +324,31 @@ export class Crank {
     if (all.some(a => !a || !a.owner.equals(this.program))) return; // still undelegating
     const season = await this.season();
     if (season.status === 'Running') {
-      await send(this.base, this.chain.finishSeason(), [this.crank], 'finishSeason');
+      const r = await send(this.base, this.chain.finishSeason(), [this.crank], 'finishSeason');
       this.log('season finalized on base: every member\'s payout computed on chain');
+      // The history layer: keep the season's record for GET /history.
+      const h = r.records.find(x => x.tag === 'PS_HISTORY');
+      if (h) {
+        this.state.history = historyEntry(h, r.signature);
+        this.log(`history root ${this.state.history.historyRoot.slice(0, 16)}… (${h.record.cities.length} cities, ${h.record.ruins.length} ruins)`);
+      }
+    }
+    // A restart between FinishSeason and the save: read the record back.
+    if (season.status !== 'Running' && !this.state.history) {
+      const found = await this.findHistory();
+      if (found) this.state.history = historyEntry(found.record, found.signature);
     }
     this.phase = 'finalized';
     this.state.finalized = true;
     this.store.save();
   }
+}
+
+/**
+ * A `PS_HISTORY` record as kept in the state file, which is JSON: u64s as
+ * decimal strings, bytes as hex.
+ */
+export function historyEntry(h, signature) {
+  const json = v => JSON.parse(JSON.stringify(v, (_, x) => (typeof x === 'bigint' ? x.toString() : x instanceof Uint8Array ? Buffer.from(x).toString('hex') : x)));
+  return json({ prevHistoryRoot: h.prevHistoryRoot, historyRoot: h.historyRoot, record: h.record, signature });
 }

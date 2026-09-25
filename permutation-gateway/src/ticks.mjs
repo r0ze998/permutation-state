@@ -105,26 +105,30 @@ export async function publishTickInput({ tick, publishChunk }) {
 
 /**
  * One line of the tick index for a resolve part (a PS_TICK record) and the
- * input it resolved. `submitted` = offices that had submitted (null when
- * unknown, e.g. rebuilt from the chain).
+ * input it resolved. `seals` = {committed, revealed, commitSignature}: the
+ * offices that sealed orders, how many revealed them (`submitted`, kept for
+ * older readers), and the `CloseCommits` transaction whose PS_COMMITS record
+ * the verifier checks the reveals against (nulls when unknown, e.g. rebuilt
+ * from the chain).
  */
-export function tickLine({ rec, published, signature, cu, submitted = null }) {
+export function tickLine({ rec, published, signature, cu, seals = {} }) {
+  const { committed = null, revealed = null, commitSignature = null } = seals;
   return {
     tick: rec.tick, to: rec.to, preRoot: hex(rec.preRoot), root: hex(rec.root),
     input: published.input, inputHash: published.hash, inputSignatures: published.signatures,
-    signature, cu, submitted,
+    signature, cu, submitted: revealed, committed, revealed, commitSignature,
   };
 }
 
 /** The index lines of one landed resolve transaction; a missing record, or one for another input, is an error. */
-export function tickLinesOf(result, published, submitted) {
+export function tickLinesOf(result, published, seals) {
   const recs = result.records.filter(x => x.tag === 'PS_TICK');
   if (!recs.length) {
     throw new Error(`resolve ${result.signature}: landed, but its PS_TICK record could not be read (${result.fetched ? 'no record in the logs' : 'transaction not fetchable'}); run scripts/reindex-ticks.mjs`);
   }
   return recs.map(rec => {
     if (hex(rec.inputHash) !== published.hash) throw new Error(`resolve tick ${rec.tick}: the program resolved another input than the one published`);
-    return tickLine({ rec, published, signature: result.signature, cu: result.cu, submitted });
+    return tickLine({ rec, published, signature: result.signature, cu: result.cu, seals });
   });
 }
 

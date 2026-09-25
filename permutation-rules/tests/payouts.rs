@@ -50,9 +50,10 @@ fn nothing_achieved_refunds_the_pool_equally() {
 #[test]
 fn nations_share_by_points_and_members_by_merit() {
     let (rules, mut s) = season(&[2, 1, 0, 0, 0, 0]);
-    // Nation 0: science tier 1 (4 techs) → 10 points; nation 1: tier 2 (9 techs) → 30.
-    set_tiers(&mut s, 0, 0, 4);
-    set_tiers(&mut s, 1, 0, 9);
+    // Nation 0: science tier 1 → 10 points; nation 1: tier 2 → 30.
+    let techs = rules.science_techs;
+    set_tiers(&mut s, 0, 0, techs[0] as usize);
+    set_tiers(&mut s, 1, 0, techs[1] as usize);
     // Member 0 did all of nation 0's science; member 1 only served in office.
     s.members[0].merit[Path::Science as usize] = 50_000;
     s.members[1].merit[Path::Common as usize] = 10_000;
@@ -75,8 +76,8 @@ fn nations_share_by_points_and_members_by_merit() {
 #[test]
 fn nations_without_active_members_are_not_counted() {
     let (rules, mut s) = season(&[1, 1, 0, 0, 0, 0]);
-    set_tiers(&mut s, 0, 0, 4);
-    set_tiers(&mut s, 1, 0, 4);
+    set_tiers(&mut s, 0, 0, rules.science_techs[0] as usize);
+    set_tiers(&mut s, 1, 0, rules.science_techs[0] as usize);
     s.members[1].windows = 0b1; // one window: not active
     let p = settle(&s, &rules, 1_000_000, FEE);
     assert_eq!(p.counted, vec![true, false, false, false, false, false]);
@@ -86,7 +87,7 @@ fn nations_without_active_members_are_not_counted() {
 #[test]
 fn the_equal_share_is_capped_at_half_the_fee() {
     let (rules, mut s) = season(&[3, 0, 0, 0, 0, 0]);
-    set_tiers(&mut s, 0, 0, 4);
+    set_tiers(&mut s, 0, 0, rules.science_techs[0] as usize);
     s.members[0].merit[Path::Science as usize] = 1;
     let pool = 1_000_000_000;
     let p = settle(&s, &rules, pool, FEE);

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Writer } from '../client/src/borsh.mjs';
 import {
-  chainError, CHAIN_ERRORS, claimAmount, claimParts, decodeMember, decodeNationHeader, decodeSeason, decodeWorldHeader, encodeGov, encodeOrder, IX, IX_TAG, NOBODY,
+  chainError, CHAIN_ERRORS, claimAmount, claimParts, decodeMember, encodeBatch, orderCommitment, RETIRED_IX, decodeNationHeader, decodeSeason, decodeWorldHeader, encodeGov, encodeOrder, IX, IX_TAG, NOBODY,
 } from '../client/src/codec.mjs';
 import { fromHex, hex, plain, vectors } from './vectors.mjs';
 
@@ -26,13 +26,12 @@ const NOT_BUILT = ['commit', 'commitAndUndelegate'];
 test('every program instruction encodes exactly like ChainInstruction', () => {
   const orders = vectors.orders.slice(0, 6).map(v => v.dto);
   const built = {
-    createSeason: IX.createSeason({ seasonId: 42n, preset: 0, nations: 6, entryFee: 10_000_000n, tickSeconds: 30, worldSeed: k(7), crank: k(9), market: true }),
+    createSeason: IX.createSeason({ seasonId: 42n, preset: 0, nations: 6, entryFee: 10_000_000n, tickSeconds: 30, worldSeed: k(7), crank: k(9), market: true, prevSeasonId: 41n }),
     allocWorld: IX.allocWorld(3),
     register: IX.register({ civ: 2, name: 'アステル', kind: 1, session: k(1), attestation: k(0), stand: 5, votes: [0, NOBODY, 3, NOBODY], deposit: 5_000_000n }),
     startSeason: IX.startSeason(),
     genesisStep: IX.genesisStep(50),
     delegate: IX.delegate(1003),
-    submitOrders: IX.submitOrders({ role: 'Steward', tick: 17, decisionDigest: k(5), orders, adopt: [4, 9] }),
     resolveTick: IX.resolveTick(12),
     finishSeason: IX.finishSeason(),
     claim: IX.claim(),
@@ -45,12 +44,23 @@ test('every program instruction encodes exactly like ChainInstruction', () => {
     withdrawOps: IX.withdrawOps(),
     logTickInput: IX.logTickInput(2),
     commitPart: IX.commitPart([1000, 1001, 7]),
+    closeCommits: IX.closeCommits(),
+    commitOrders: IX.commitOrders({ role: 'Science', tick: 17, commitment: k(6) }),
+    revealOrders: IX.revealOrders({ role: 'Steward', tick: 17, decisionDigest: k(5), orders, adopt: [4, 9], salt: k(7) }),
   };
   for (const v of vectors.instructions) {
     if (NOT_BUILT.includes(v.name)) assert.equal(v.hex, hex([IX_TAG[v.name]]), `${v.name} carries no data`);
+    else if (RETIRED_IX.includes(v.name)) assert.equal(fromHex(v.hex)[0], IX_TAG[v.name], `${v.name} keeps its tag`);
     else assert.equal(hex(built[v.name]), v.hex, v.name);
   }
-  assert.deepEqual([...Object.keys(built), ...NOT_BUILT].sort(), vectors.instructions.map(v => v.name).sort(), 'every instruction is covered');
+  assert.deepEqual([...Object.keys(built), ...NOT_BUILT, ...RETIRED_IX].sort(), vectors.instructions.map(v => v.name).sort(), 'every instruction is covered');
+});
+
+test('sealed orders: the batch and its commitment match permutation_rules::orders::order_commitment', () => {
+  const c = vectors.commitment;
+  const b = { civ: c.civ, tick: c.tick, role: c.role, member: c.member, decisionDigest: fromHex(c.decisionDigest), orders: c.orders, adopt: c.adopt };
+  assert.equal(hex(encodeBatch(b)), c.batchHex);
+  assert.equal(hex(orderCommitment(b, fromHex(c.salt))), c.commitment);
 });
 
 test('IX_TAG is the first byte of every instruction vector, and covers exactly the Rust enum', () => {

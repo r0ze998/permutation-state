@@ -34,12 +34,20 @@ pub enum ChainError {
     TickFrozen,
     /// The open tick's input has not been published in full (`LogTickInput`).
     InputNotPublished,
+    /// Sealed orders: the commitments are closed (the reveal window is open),
+    /// or not yet closed for a reveal.
+    WrongPhase,
+    /// A reveal that does not hash to the office's commitment.
+    CommitMismatch,
+    /// `SubmitOrders` is retired: orders are sealed (`CommitOrders`,
+    /// `RevealOrders`).
+    Retired,
 }
 
 impl ChainError {
     /// Every error, in code order (`ALL[i]` has code `i + 1`). Clients (the JS
     /// codec) are checked against this list through the codec vectors.
-    pub const ALL: [ChainError; 28] = [
+    pub const ALL: [ChainError; 31] = [
         ChainError::InvalidInstruction,
         ChainError::MissingSignature,
         ChainError::WrongPda,
@@ -68,6 +76,9 @@ impl ChainError {
         ChainError::InboxFull,
         ChainError::TickFrozen,
         ChainError::InputNotPublished,
+        ChainError::WrongPhase,
+        ChainError::CommitMismatch,
+        ChainError::Retired,
     ];
 
     /// The error's name, as clients show it. Exhaustive, so a new variant
@@ -102,6 +113,9 @@ impl ChainError {
             ChainError::InboxFull => "InboxFull",
             ChainError::TickFrozen => "TickFrozen",
             ChainError::InputNotPublished => "InputNotPublished",
+            ChainError::WrongPhase => "WrongPhase",
+            ChainError::CommitMismatch => "CommitMismatch",
+            ChainError::Retired => "Retired",
         }
     }
 }
@@ -124,7 +138,7 @@ mod tests {
         }
         assert_eq!(
             ChainError::ALL.len() as u32,
-            ChainError::InputNotPublished as u32,
+            ChainError::Retired as u32,
             "the last variant closes the list"
         );
     }

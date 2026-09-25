@@ -61,7 +61,7 @@ pub(super) fn parse_side(s: &str) -> Option<Side> {
 
 // ------------------------------------------------------------------ V5: nations and governance
 
-/// A member id on the wire: `null` for nobody (the acting official).
+/// A member id on the wire: `null` for nobody (a vacant office's caretaker).
 pub fn member_ref(m: MemberId) -> Value {
     if m == NOBODY {
         Value::Null

@@ -179,21 +179,24 @@ pub(crate) fn phase_standing(state: &mut WorldState, rules: &Ruleset) {
 }
 
 /// One step toward the nearest own city: the enterable free neighbour that
-/// most reduces that distance (ties: lowest hex). `None` if no step helps.
+/// most reduces that distance (ties: lowest hex as seen from the unit's
+/// sextant, so the choice turns with a symmetric map). `None` if no step
+/// helps.
 fn retreat_step(state: &WorldState, rules: &Ruleset, civ: CivId, from: Hex) -> Option<Hex> {
     let home = |h: Hex| state.living_cities_of(civ).map(|c| c.hex.distance(h)).min();
     let now = home(from)?;
     if now == 0 {
         return None; // already inside a city
     }
+    let k = from.sextant();
     from.neighbors()
         .into_iter()
         .filter(|h| {
             crate::tick::may_enter(state, rules, Some(civ), *h)
                 && !state.units.iter().any(|x| x.alive && x.hex == *h)
         })
-        .filter_map(|h| home(h).map(|d| (d, h)))
-        .filter(|(d, _)| *d < now)
+        .filter_map(|h| home(h).map(|d| (d, h.turned(k), h)))
+        .filter(|(d, _, _)| *d < now)
         .min()
-        .map(|(_, h)| h)
+        .map(|(_, _, h)| h)
 }

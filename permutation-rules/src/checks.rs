@@ -118,10 +118,13 @@ pub enum Blocked {
     NeedsSpendConsent,
     /// Market: not enough USDC in the treasury.
     NotEnoughUsdc,
+    /// Another civ's city, a Free City or a city-state: a unit enters it only
+    /// by capturing it (§7.3).
+    ForeignCity,
 }
 
 /// Names of `Blocked` codes, index = `Blocked::code()`, for clients.
-pub const BLOCKED_NAMES: [&str; 52] = [
+pub const BLOCKED_NAMES: [&str; 53] = [
     "UnknownUnit",
     "UnknownCity",
     "UnknownCiv",
@@ -174,6 +177,7 @@ pub const BLOCKED_NAMES: [&str; 52] = [
     "NoCounterparty",
     "NeedsSpendConsent",
     "NotEnoughUsdc",
+    "ForeignCity",
 ];
 
 impl Blocked {
@@ -233,6 +237,7 @@ impl Blocked {
             NoCounterparty => 49,
             NeedsSpendConsent => 50,
             NotEnoughUsdc => 51,
+            ForeignCity => 52,
         }
     }
 }
@@ -556,6 +561,20 @@ pub fn enter(
     if !tile.terrain.is_passable() {
         return Err(Blocked::Impassable);
     }
+    // A city tile is entered only by capture (§7.3): walking into an
+    // ungarrisoned enemy city would leave an army inside it that the city's
+    // eventual captor then shares the tile with.
+    let foreign_city = state
+        .cities
+        .iter()
+        .any(|c| c.alive && c.hex == hex && (mover.is_none() || c.owner != mover))
+        || state
+            .city_states
+            .iter()
+            .any(|cs| cs.captured_by.is_none() && cs.hex == hex);
+    if foreign_city {
+        return Err(Blocked::ForeignCity);
+    }
     let radius = rules.protection_radius(state.tick) as u32;
     if radius > 0 {
         for civ in &state.civs {
@@ -762,6 +781,7 @@ mod blocked_codes {
             NoCounterparty,
             NeedsSpendConsent,
             NotEnoughUsdc,
+            ForeignCity,
         ]
     }
 
@@ -819,7 +839,8 @@ mod blocked_codes {
             | NotEnoughInfluence
             | NoCounterparty
             | NeedsSpendConsent
-            | NotEnoughUsdc => {}
+            | NotEnoughUsdc
+            | ForeignCity => {}
         }
     }
 
@@ -833,5 +854,30 @@ mod blocked_codes {
             let name = debug.split(['(', ' ', '{']).next().unwrap();
             assert_eq!(BLOCKED_NAMES[i], name);
         }
+    }
+}
+
+#[cfg(test)]
+mod city_entry {
+    use super::{enter, Blocked};
+    use crate::genesis::{nation_entries, new_season};
+    use crate::params::{Preset, Ruleset};
+
+    /// A city tile is entered only by capture (§7.3): not by another civ, even
+    /// at war and past protection, nor by anyone once it is a Free City.
+    #[test]
+    fn only_the_owner_enters_a_city_tile() {
+        let rules = Ruleset::new(Preset::Blitz);
+        let mut s = new_season(&rules, &[3; 32], &[4; 32], &nation_entries(6)).unwrap();
+        s.tick = 61; // protection over
+        let cap = s.civs[0].capital.unwrap() as usize;
+        let hex = s.cities[cap].hex;
+        assert_eq!(enter(&s, &rules, Some(0), hex), Ok(()));
+        assert_eq!(enter(&s, &rules, Some(1), hex), Err(Blocked::ForeignCity));
+        assert_eq!(enter(&s, &rules, None, hex), Err(Blocked::ForeignCity));
+        s.cities[cap].owner = None; // Free City
+        assert_eq!(enter(&s, &rules, Some(0), hex), Err(Blocked::ForeignCity));
+        let cs = s.city_states[0].hex;
+        assert_eq!(enter(&s, &rules, Some(0), cs), Err(Blocked::ForeignCity));
     }
 }

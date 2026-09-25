@@ -107,6 +107,76 @@ fn published_input(er: &ChainLink, sigs: Option<&Vec<Value>>, hash: &[u8]) -> Op
     (permutation_rules::hash::sha256(&[&bytes]).as_slice() == hash).then_some(bytes)
 }
 
+/// The sealed orders of one tick (commit–reveal): every revealed batch must
+/// hash to a commitment the chain logged when the commitments closed
+/// (`PS_COMMITS`), and the tick randomness must be `tick_vrf(pre_root,
+/// salts)` with the salts the chain logged when the input froze (`PS_SALTS`).
+/// Returns the number of batches checked.
+fn check_seals(
+    er: &ChainLink,
+    rec: &Value,
+    input: &TickInput,
+    pre_root: &[u8],
+) -> Result<usize, String> {
+    use permutation_rules::orders::order_commitment;
+    use permutation_rules::rng::{tick_vrf, Salt};
+    let tick = rec["tick"].as_u64().unwrap_or(0);
+    let commits_rec = fields(Some(er), rec["commitSignature"].as_str(), b"PS_COMMITS")?.ok_or(
+        format!("tick {tick}: no PS_COMMITS record (commitSignature)"),
+    )?;
+    let commits: Vec<(u16, u8, u32, [u8; 32])> =
+        BorshDeserialize::try_from_slice(commits_rec.get(2).ok_or("short PS_COMMITS")?)
+            .map_err(|e| format!("tick {tick}: PS_COMMITS: {e}"))?;
+    // Every chunk-0 transaction logs the salts with the root it saw; take the
+    // one made on this tick's pre-state root.
+    let mut salts_rec = None;
+    for sig in rec["inputSignatures"].as_array().into_iter().flatten() {
+        let Some(sig) = sig.as_str() else { continue };
+        if let Some(f) = er.log_records(sig)?.into_iter().find(|f| {
+            f.first().map(|t| t.as_slice()) == Some(b"PS_SALTS".as_slice())
+                && f.get(2).map(|r| r.as_slice()) == Some(pre_root)
+        }) {
+            salts_rec = Some(f);
+            break;
+        }
+    }
+    let salts_rec = salts_rec.ok_or(format!(
+        "tick {tick}: no PS_SALTS record on its pre-state root"
+    ))?;
+    let salts: Vec<Salt> =
+        BorshDeserialize::try_from_slice(salts_rec.get(3).ok_or("short PS_SALTS")?)
+            .map_err(|e| format!("tick {tick}: PS_SALTS: {e}"))?;
+    let root: [u8; 32] = pre_root.try_into().map_err(|_| "pre-root length")?;
+    if tick_vrf(&root, &salts) != input.vrf {
+        return Err(format!(
+            "tick {tick}: the randomness is not derived from the revealed salts"
+        ));
+    }
+    if salts.len() != input.batches.len() {
+        return Err(format!(
+            "tick {tick}: {} salts for {} batches",
+            salts.len(),
+            input.batches.len()
+        ));
+    }
+    for (b, (civ, role, salt)) in input.batches.iter().zip(&salts) {
+        if b.civ != *civ || b.role as u8 != *role {
+            return Err(format!("tick {tick}: salts and batches out of order"));
+        }
+        let c = order_commitment(b, salt);
+        if !commits
+            .iter()
+            .any(|(cc, rr, m, h)| *cc == b.civ && *rr == b.role as u8 && *m == b.member && *h == c)
+        {
+            return Err(format!(
+                "tick {tick}: nation {} office {:?}: revealed orders match no commitment",
+                b.civ, b.role
+            ));
+        }
+    }
+    Ok(input.batches.len())
+}
+
 /// Every Member account of the season on the base layer, in registration order.
 fn season_members(
     base: &ChainLink,
@@ -142,8 +212,23 @@ fn main() {
     let gateway =
         ChainLink::new(&arg(&args, "--gateway").unwrap_or_else(|| "http://127.0.0.1:4191".into()))
             .expect("--gateway URL");
-    let base = arg(&args, "--base").map(|u| ChainLink::new(&u).expect("--base URL"));
-    let er = arg(&args, "--er").map(|u| ChainLink::new(&u).expect("--er URL"));
+    // The program id comes from the gateway, which is only an index: the
+    // verifier checks below that the season account is its season PDA.
+    let program_id = gateway
+        .get_json("/season")
+        .ok()
+        .and_then(|v| v["programId"].as_str().map(String::from))
+        .unwrap_or_default();
+    let base = arg(&args, "--base").map(|u| {
+        ChainLink::new(&u)
+            .expect("--base URL")
+            .with_program(&program_id)
+    });
+    let er = arg(&args, "--er").map(|u| {
+        ChainLink::new(&u)
+            .expect("--er URL")
+            .with_program(&program_id)
+    });
     let mut r = Report {
         checks: Vec::new(),
         json: args.iter().any(|a| a == "--json"),
@@ -164,6 +249,14 @@ fn main() {
         .expect("base RPC")
         .expect("season account exists");
     let season = Season::deserialize(&mut &data[..]).expect("decode season");
+    // The program whose logs are read is the one that owns this season: its
+    // address is that program's PDA for the season id.
+    r.check(
+        "the season account is the program's season address (logs are read from that program only)",
+        permutation_chain::state::season_address(&program_id, season.season_id).as_deref()
+            == Some(season_addr.as_str()),
+        program_id.clone(),
+    );
     r.check(
         format!(
             "season {} read from the base layer ({})",
@@ -341,6 +434,7 @@ fn main() {
     let (mut gov_actions, mut batches_seen) = (0usize, 0usize);
     let mut first_bad: Option<String> = None;
     let mut published: std::collections::HashMap<Vec<u8>, Option<Vec<u8>>> = Default::default();
+    let (mut sealed, mut seal_bad): (usize, Option<String>) = (0, None);
     for rec in &records {
         let tick = rec["tick"].as_u64().unwrap_or(0) as u16;
         let to = rec["to"].as_u64().unwrap_or(12) as u8;
@@ -398,6 +492,14 @@ fn main() {
         if state.phase_cursor == 0 {
             gov_actions += input.gov.len();
             batches_seen += input.batches.len();
+            if let Some(er) = &er {
+                match check_seals(er, rec, &input, &pre) {
+                    Ok(n) => sealed += n,
+                    Err(e) => {
+                        seal_bad.get_or_insert(e);
+                    }
+                }
+            }
         }
         while state.phase_cursor < to.min(12) {
             let p = state.phase_cursor;
@@ -420,6 +522,15 @@ fn main() {
         first_bad.is_none() && replayed == records.len(),
         first_bad.clone().unwrap_or_else(|| format!("now at tick {}, {batches_seen} office batches and {gov_actions} governance actions", state.tick)),
     );
+    if er.is_some() {
+        r.check(
+            "sealed orders: every revealed batch matches its commitment, and each tick's randomness comes from the revealed salts",
+            seal_bad.is_none(),
+            seal_bad
+                .clone()
+                .unwrap_or_else(|| format!("{sealed} revealed batches checked against PS_COMMITS and PS_SALTS")),
+        );
+    }
     let adopted: u32 = state.nations.iter().map(|n| n.adopted).sum();
     r.check(
         "governance replayed with the orders",
@@ -470,7 +581,44 @@ fn main() {
             treasury == season.treasury_final,
             format!("{treasury:?}"),
         );
-    } else {
+        // The history layer: this season's record, recomputed from the final
+        // world, chained onto the root it took over from the season before.
+        let record = permutation_rules::history::season_record(&state, &p);
+        let root = permutation_rules::history::history_root(&season.prev_history_root, &record);
+        r.check(
+            "history root recomputed from the final world matches the Season account",
+            root == season.history_root,
+            format!(
+                "{} ({} cities, {} ruins){}",
+                &hex(&root)[..16],
+                record.cities.len(),
+                record.ruins.len(),
+                if season.prev_season_id == 0 {
+                    ", the first season of its line".to_string()
+                } else {
+                    format!(", after season {}", season.prev_season_id)
+                }
+            ),
+        );
+    }
+    // The season before, in the history layer: its root is the one this
+    // season took over (and mixed into its seed).
+    if season.prev_season_id != 0 {
+        let program = info["programId"].as_str().unwrap_or_default();
+        let prev = permutation_chain::state::season_address(program, season.prev_season_id)
+            .and_then(|a| b.account_data(&a).ok().flatten())
+            .and_then(|d| Season::deserialize(&mut &d[..]).ok());
+        r.check(
+            "the season it follows is finalized and its history root is the one taken over",
+            prev.as_ref().is_some_and(|x| {
+                x.status == permutation_chain::state::SeasonStatus::Finalized
+                    && x.history_root == season.prev_history_root
+                    && x.admin == season.admin
+            }),
+            format!("season {}", season.prev_season_id),
+        );
+    }
+    if season.status != permutation_chain::state::SeasonStatus::Finalized {
         r.check(
             "season not finalized yet: settlement not checked",
             true,

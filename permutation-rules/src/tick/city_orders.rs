@@ -105,7 +105,7 @@ fn found_city(
                 && t.ruin_peak_pop.is_some()
                 && t.hex.distance(hex) <= rules.heritage_radius as u32
         })
-        .min_by_key(|(i, t)| (t.hex.distance(hex), *i))
+        .min_by_key(|(_, t)| (t.hex.distance(hex), t.hex.turned(hex.sextant())))
         .map(|(i, t)| (i, t.ruin_peak_pop.unwrap_or(0) as u32 / 2));
     let (heritage_until, heritage_bonus) = match heritage {
         Some((i, bonus)) => {

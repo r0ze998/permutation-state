@@ -2,7 +2,7 @@
 //! tick, C1), Star Gate spacing (C2) and spawning units.
 
 use super::city_orders::item_cost;
-use crate::economy::{amenities, apply_amenities, city_yield, growth_threshold, tech_cost};
+use crate::economy::{amenities, apply_amenities, city_yield, growth_threshold};
 use crate::fixed::{apply_bps, milli, MILLI};
 use crate::gov::{active_officer, Credit, Path, Role};
 use crate::map::territory_radius;
@@ -171,7 +171,6 @@ pub(crate) fn phase_production(state: &mut WorldState, rules: &Ruleset) {
     crate::probe::probe("cu p6.merit");
     // Research (§6.2).
     for civ in 0..state.civs.len() {
-        let cities = state.city_count(civ as u16);
         loop {
             let c = &mut state.civs[civ];
             let Some(&tech) = c.research_queue.first() else {
@@ -181,7 +180,8 @@ pub(crate) fn phase_production(state: &mut WorldState, rules: &Ruleset) {
                 c.research_queue.remove(0);
                 continue;
             }
-            let cost = tech_cost(rules, tech, cities) as i64 * MILLI;
+            let cost = crate::economy::civ_tech_cost(state, rules, civ as u16, tech) as i64 * MILLI;
+            let c = &mut state.civs[civ];
             if c.science_store < cost {
                 break;
             }
@@ -325,7 +325,9 @@ fn spawn(
         standing: StandingRule::None,
         alive: true,
     };
-    let candidates = core::iter::once(center).chain(center.neighbors());
+    // The first free neighbour in §0.3 order turned to the city's sextant
+    // (so the choice turns with a symmetric map).
+    let candidates = core::iter::once(center).chain(center.neighbors_in(center.sextant()));
     for hex in candidates {
         let passable = state.map.tile(hex).is_some_and(|t| t.terrain.is_passable());
         if passable && tile_free_for(state, &probe, hex) {

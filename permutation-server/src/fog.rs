@@ -1,80 +1,74 @@
-//! Per-civilization fog of war for the server: memory and belief states.
+//! The information model for the server: **perfect information**.
 //!
-//! Every player — the human client and every bot — decides from
-//! `Fog::belief`, never from the full state. Orders are still validated and
-//! resolved on the full state by the engine.
+//! Every account of a season is public on chain (the world and nation
+//! accounts on the ER can be read by anyone), so a fog applied by the server
+//! would hide from people in the web client what an agent reading the chain
+//! sees anyway. Every player — the human client, hosted AI members and the
+//! scripted bots — therefore decides from the full state, and every view
+//! shows it. What stays hidden is what the chain hides: an officer's sealed
+//! orders until they are revealed.
+//!
+//! Vision (`vision::visible`) is kept for display only (`sight`): the map can
+//! show what a nation's units and cities overlook, but nothing is withheld.
+//! The rules crate still has the belief-state machinery (`vision::belief`)
+//! for a possible fog mode enforced by a private rollup; the server does not
+//! use it.
 
 use permutation_rules::state::{CivId, WorldState};
-use permutation_rules::vision::{belief, sharers, visible, Memory};
+use permutation_rules::vision::{visible, Memory};
 
 pub struct Fog {
-    seen: Vec<Vec<bool>>,
-    memory: Vec<Memory>,
+    /// Per civ, per tile: in sight of one of its (or its allies') units or
+    /// cities. Display only.
+    sight: Vec<Vec<bool>>,
+    /// Every tile known: all `true`.
+    all: Vec<bool>,
+    /// A memory that has explored everything (the decision-log leaves, V5 D17,
+    /// record the observation as the full state).
+    memory: Memory,
 }
 
 impl Fog {
-    /// Fog as of `state` (call right after genesis).
+    /// As of `state` (call right after genesis).
     pub fn new(state: &WorldState) -> Fog {
-        let n = state.civs.len();
+        let n = state.map.tiles.len();
+        let mut memory = Memory::new(state);
+        memory.explored = vec![true; n];
         let mut f = Fog {
-            seen: vec![Vec::new(); n],
-            memory: vec![Memory::new(state); n],
+            sight: vec![Vec::new(); state.civs.len()],
+            all: vec![true; n],
+            memory,
         };
         f.update(state);
         f
     }
 
-    /// Refresh vision and memory after a tick resolves.
+    /// Refresh the display sight after a tick resolves.
     pub fn update(&mut self, state: &WorldState) {
         for civ in 0..state.civs.len() {
-            let seen = visible(state, civ as CivId);
-            self.memory[civ].update(state, civ as CivId, &seen);
-            self.seen[civ] = seen;
+            self.sight[civ] = visible(state, civ as CivId);
         }
     }
 
-    pub fn seen(&self, civ: CivId) -> &[bool] {
-        &self.seen[civ as usize]
+    /// Tiles `civ` knows: all of them.
+    pub fn seen(&self, _civ: CivId) -> &[bool] {
+        &self.all
     }
 
-    pub fn memory(&self, civ: CivId) -> &Memory {
-        &self.memory[civ as usize]
+    pub fn memory(&self, _civ: CivId) -> &Memory {
+        &self.memory
     }
 
-    pub fn belief(&self, state: &WorldState, civ: CivId) -> WorldState {
-        belief(state, civ, self.seen(civ), self.memory(civ))
+    /// What `civ` decides from: the full state.
+    pub fn belief(&self, state: &WorldState, _civ: CivId) -> WorldState {
+        state.clone()
     }
 
-    /// Per tile: `0` never seen, `1` remembered, `2` in sight.
-    pub fn code(&self, civ: CivId) -> String {
-        let m = self.memory(civ);
-        self.seen(civ)
+    /// Per tile, for display: `2` in sight of `civ`, `1` known but out of sight.
+    pub fn sight_code(&self, civ: CivId) -> String {
+        self.sight[civ as usize]
             .iter()
-            .zip(&m.explored)
-            .map(|(s, e)| {
-                if *s {
-                    '2'
-                } else if *e {
-                    '1'
-                } else {
-                    '0'
-                }
-            })
+            .map(|s| if *s { '2' } else { '1' })
             .collect()
     }
-}
-
-/// Whether a chronicle line (`kind|text`) is public to `viewer`.
-/// Research is private to a civ and its allies; everything else in the
-/// chronicle is a public announcement (wars, treaties, captures, Star Gates).
-pub fn line_is_public(state: &WorldState, viewer: CivId, line: &str, names: &[&str]) -> bool {
-    let Some(text) = line.strip_prefix("tech|") else {
-        return true;
-    };
-    let team = sharers(state, viewer);
-    team.iter().any(|c| {
-        names
-            .get(*c as usize)
-            .is_some_and(|n| text.starts_with(&format!("{n} ")))
-    })
 }

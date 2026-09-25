@@ -28,12 +28,14 @@ fn entries(n: usize) -> Vec<Entry> {
 
 fn setup(n: usize) -> (Ruleset, WorldState) {
     let rules = Ruleset::new(Preset::Blitz);
-    let state = new_season(&rules, &WORLD, &SEASON, &entries(n)).expect("genesis");
+    let mut state = new_season(&rules, &WORLD, &SEASON, &entries(n)).expect("genesis");
+    // Officers to take the scripted orders (a vacant office takes none).
+    common::staff(&mut state);
     (rules, state)
 }
 
 fn batch(state: &WorldState, civ: u16, orders: Vec<Order>) -> Vec<OrderBatch> {
-    office_batches(state, civ, [0; 32], orders)
+    office_batches(state, civ, [9; 32], orders)
 }
 
 /// A simple scripted opening used by several tests.

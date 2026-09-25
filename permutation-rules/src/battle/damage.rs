@@ -85,6 +85,11 @@ pub(super) fn apply_damage(state: &mut WorldState, rules: &Ruleset, engagements:
         let lost = lost_by_unit[u] * dealt[id] / to_unit[u];
         let m = lost * rules.merit_per_troop as u64 / 1000;
         merit::credit(state, e.credit, Path::Hegemony, m, b"troops");
+        // Whole enemy troops destroyed, per attacking civ (a eureka trigger).
+        if let Owner::Civ(c) = state.units[e.attacker].owner {
+            let a = &mut state.civs[c as usize].achievements;
+            a.kills = a.kills.saturating_add((lost / 1000) as u32);
+        }
     }
     for (i, dmg) in to_city.into_iter().enumerate() {
         let c = &mut state.cities[i];

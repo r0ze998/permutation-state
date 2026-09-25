@@ -427,8 +427,13 @@ fn spending_above_the_threshold_needs_a_second_officer() {
     s.usdc_deposited += 80 * USDC;
     step(&mut s, &rules, vec![]);
     let cap = s.civs[0].last.gold as u64;
-    let price = 2 * USDC; // cap × 2 USDC is well above the 5 USDC threshold
-    assert!(cap * price > rules.spend_consent_usdc);
+    // A capital earns at least 2 gold a tick, so cap × 3 USDC exceeds the
+    // 5 USDC threshold on any map.
+    let price = 3 * USDC;
+    assert!(
+        cap >= 2 && cap * price > rules.spend_consent_usdc,
+        "cap {cap}"
+    );
     let trade = |consent: Option<u64>| {
         let mut orders = vec![Order::ExchangeOrder {
             good: Good::Gold,

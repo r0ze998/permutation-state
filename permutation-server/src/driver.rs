@@ -1,10 +1,10 @@
-//! Running what no person runs: the acting official of every vacant office
-//! (V5 §8, "代行") and the AI members this server hosts.
+//! Running the AI members this server hosts. (A vacant office is not run
+//! here: the rules' caretaker fills it, `gov::caretaker`.)
 //!
-//! One planner per nation (the scripted `Bot`, deciding from the nation's
-//! fogged belief state) plans the whole nation's orders; each office then
-//! takes the part in its domain, if the office is vacant or held by a hosted
-//! AI member. Offices held by people (or outside agents) are left to them.
+//! One planner per nation (the scripted `Bot`, deciding from the full
+//! state: perfect information, `fog`) plans the whole nation's orders; each
+//! office held by a hosted AI member then takes the part in its domain.
+//! Offices held by people (or outside agents) are left to them.
 //! Every office seals its own decision in the ledger and reveals it later
 //! (V5 D17), exactly like a human officer.
 //!
@@ -79,8 +79,9 @@ impl Planner {
         }
     }
 
-    /// Batches for every office run by the acting official or a hosted AI
-    /// member, with their decision digests and pending reveals.
+    /// Batches for every office held by a hosted AI member, with their
+    /// decision digests and pending reveals (a vacant office is filled by
+    /// the rules' caretaker, `gov::caretaker`).
     pub fn batches(
         &mut self,
         state: &WorldState,
@@ -93,7 +94,7 @@ impl Planner {
         let mut out = Vec::new();
         for civ in 0..state.civs.len() as CivId {
             let offices = state.nations[civ as usize].offices;
-            let auto = |m: MemberId| m == NOBODY || host.is_ai(m);
+            let auto = |m: MemberId| m != NOBODY && host.is_ai(m);
             if !offices.iter().any(|m| auto(*m)) {
                 continue;
             }
@@ -170,7 +171,7 @@ impl Planner {
         let tick = state.tick;
         let mut out = Vec::new();
         let vote_open = gov::vote_open(rules, tick);
-        // Each nation's fogged view, made when first needed: AI members
+        // Each nation's view (the full state), made when first needed: AI members
         // judge proposals and plan from what their nation can see.
         let mut views: Vec<Option<WorldState>> = vec![None; state.civs.len()];
         for (id, m) in state.members.iter().enumerate() {
@@ -223,6 +224,50 @@ impl Planner {
                     push(&mut out, GovAction::Recall { role: r.role });
                 }
             }
+            // Vacant offices are filled by the rules' caretaker from the
+            // members' top proposal (gov::caretaker): the nation's first
+            // hosted AI member proposes the plan's orders for every vacant
+            // office that has no open proposal yet.
+            let first_ai = state
+                .members
+                .iter()
+                .enumerate()
+                .find(|(x, mm)| mm.civ == m.civ && host.is_ai(*x as MemberId))
+                .map(|(x, _)| x as MemberId)
+                == Some(id);
+            let vacant: Vec<Role> = Role::ALL
+                .into_iter()
+                .filter(|r| {
+                    n.holder(*r) == NOBODY
+                        && !n.proposals.iter().any(|p| p.role == *r && !p.adopted)
+                })
+                .collect();
+            if first_ai && !vacant.is_empty() {
+                let view = views[m.civ as usize].get_or_insert_with(|| fog.belief(state, m.civ));
+                let plan = self.plan(m.civ, view, rules, fog);
+                let mut parts = split_by_office(view, plan);
+                // A war declared through a proposal needs a consent adopted
+                // in the same tick: propose it too when the general is vacant.
+                let wars: Vec<CivId> = parts[Role::Diplomat.index()]
+                    .iter()
+                    .filter_map(|o| match o {
+                        Order::DeclareWar { civ } | Order::BreakNap { civ } => Some(*civ),
+                        _ => None,
+                    })
+                    .collect();
+                parts[Role::General.index()]
+                    .extend(wars.into_iter().map(|c| Order::ConsentWar { civ: c }));
+                for r in vacant {
+                    let orders: Vec<Order> = parts[r.index()]
+                        .iter()
+                        .take(rules.max_proposal_orders as usize)
+                        .cloned()
+                        .collect();
+                    if !orders.is_empty() {
+                        push(&mut out, GovAction::Propose { role: r, orders });
+                    }
+                }
+            }
             let in_office = n.offices.contains(&id);
             let proposes = !in_office && (tick as u32 + id).is_multiple_of(10);
             let open: Vec<&gov::GovProposal> = n
@@ -262,6 +307,15 @@ impl Planner {
                 }
             }
         }
+        // At most `MAX_GOV_PER_SIGNER` actions per member and tick (the
+        // chain's inbox limit): the first ones (votes, then vacant offices'
+        // proposals) are kept.
+        let mut count: std::collections::BTreeMap<MemberId, usize> = Default::default();
+        out.retain(|e| {
+            let k = count.entry(e.member).or_default();
+            *k += 1;
+            *k <= permutation_chain::state::MAX_GOV_PER_SIGNER
+        });
         out
     }
 }
@@ -360,7 +414,7 @@ pub fn seat_ai_members(
 
 /// A season run entirely by this server's AI: the loop the simulation, the
 /// replay recorder, the tick logger and the golden test share. Each tick,
-/// every nation observes its fogged view, the AI members act in governance,
+/// every nation observes the world (perfect information), the AI members act in governance,
 /// every office plans and seals its decision, and the engine resolves.
 pub struct AiSeason {
     pub rules: Ruleset,

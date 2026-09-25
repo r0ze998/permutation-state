@@ -4,7 +4,7 @@
 //   node agents/llm-agent.mjs --name Hypatia --server http://127.0.0.1:4185 --gateway http://127.0.0.1:4191 \
 //     [--key-file .local/anthropic-key] [--model claude-sonnet-5] [--lang en] [--ticks N] [--max-input-tokens 2000000]
 //
-// Each tick the model gets its fogged state summary and the same tools an
+// Each tick the model gets its state summary (the whole world) and the same tools an
 // MCP client gets (previews, find_path, validate_orders) and must end with
 // submit_orders. The batch is validated before it is accepted; errors go
 // back to the model so it can fix them. The model's own rationale is

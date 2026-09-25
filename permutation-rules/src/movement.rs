@@ -281,8 +281,12 @@ fn search(
         Owner::Barbarian => None,
     };
     let mp = stats(u.unit_type).movement.max(1) as u32;
+    // Ties between equal paths are broken by hexes seen from the unit's
+    // sextant, and neighbours are tried in the order turned to it, so the
+    // chosen path turns with a symmetric map.
+    let k = u.hex.sextant();
     let mut heap = BinaryHeap::new();
-    heap.push(Reverse((0u32, 0u32, u.hex)));
+    heap.push(Reverse((0u32, 0u32, u.hex.turned(k), u.hex)));
     best.insert(
         u.hex,
         Reach {
@@ -292,11 +296,11 @@ fn search(
             steps: 0,
         },
     );
-    while let Some(Reverse((cost, steps, h))) = heap.pop() {
+    while let Some(Reverse((cost, steps, _, h))) = heap.pop() {
         if best.get(&h).is_some_and(|r| r.cost < cost) || steps >= rules.max_path_len as u32 {
             continue;
         }
-        for n in h.neighbors() {
+        for n in h.neighbors_in(k) {
             let Some(c) = step_cost(state, u.unit_type, n) else {
                 continue;
             };
@@ -322,7 +326,7 @@ fn search(
                     },
                 );
                 prev.insert(n, h);
-                heap.push(Reverse((nc, steps + 1, n)));
+                heap.push(Reverse((nc, steps + 1, n.turned(k), n)));
             }
         }
     }

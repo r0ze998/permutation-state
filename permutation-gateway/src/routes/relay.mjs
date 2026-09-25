@@ -1,21 +1,27 @@
 // Signing and relaying for members.
 //
-//   POST /submit       {civ, role, member|null, tick, digest, orders, adopt}: an office's batch,
-//                      signed with a hosted member's session key (or the crank for a vacant
-//                      office, the acting official)
-//   POST /gov          {member, action}: a hosted member's governance action
+//   POST /submit       {civ, role, member, tick, digest, orders, adopt}: an office's batch,
+//                      sealed (commit–reveal): the gateway draws a salt, sends the commitment
+//                      signed with the hosted member's session key, and keeps the batch; the
+//                      crank reveals it once the tick's commitments close. A vacant office
+//                      takes no batch from anyone (the rules' caretaker fills it)
+//   POST /gov          {member, action} or {member, actions: [...]}: a hosted member's
+//                      governance actions (at most MAX_GOV_PER_SIGNER), in as few
+//                      transactions as fit one packet each
 //   GET  /relay        {feePayer, blockhash, lastValidBlockHeight}: for members that sign their
 //                      own transactions
-//   POST /relay        {tx, lastValidBlockHeight?}: a member-signed SubmitOrders or SubmitGov; the
+//   POST /relay        {tx, lastValidBlockHeight?}: a member-signed CommitOrders, RevealOrders or SubmitGov; the
 //                      gateway only adds the fee payer
 //   GET  /claim-relay  {feePayer, blockhash, lastValidBlockHeight, mint, status}: for claims by
 //                      members without SOL
 //   POST /claim-relay  {tx, lastValidBlockHeight?}: a wallet-signed Claim on the base layer; the
 //                      gateway only adds the fee payer
 import { ComputeBudgetProgram, PublicKey, Transaction } from '@solana/web3.js';
-import { decodeSeason, IX_TAG, NATIONS, NOBODY } from '../../client/src/codec.mjs';
+import { decodeSeason, IX_TAG, MAX_GOV_PER_SIGNER, NATIONS, NOBODY } from '../../client/src/codec.mjs';
 import { send, sendSigned } from '../send.mjs';
 import { RouteError } from './errors.mjs';
+import { seal } from '../sealed.mjs';
+import { allowedOffices } from '../../client/src/offices.mjs';
 
 const fromHex = h => Uint8Array.from(Buffer.from(h || '', 'hex'));
 
@@ -41,19 +47,59 @@ export function onlyProgramInstruction(tx, { programId, tags, feePayer, allowBud
   return only && tx.feePayer?.equals(feePayer) ? program[0] : null;
 }
 
+/** A Solana transaction's size limit (one packet). */
+export const PACKET_BYTES = 1232;
+
+/** Serialized size of a transaction of `ixs`, paid by `feePayer`, with `signers` signatures. */
+export function txSize(ixs, feePayer, signers) {
+  const tx = new Transaction({ feePayer, recentBlockhash: PublicKey.default.toBase58() }).add(...ixs);
+  return tx.serializeMessage().length + 1 + 64 * signers;
+}
+
+/**
+ * Split `groups` (instruction lists that must stay together) into as few
+ * transactions as fit one packet each, in order. `prefix` (compute budget)
+ * goes in front of every transaction.
+ */
+export function packTransactions(groups, { prefix = [], feePayer, signers }) {
+  const out = [];
+  let cur = [];
+  for (const g of groups) {
+    if (cur.length && txSize([...prefix, ...cur, ...g], feePayer, signers) > PACKET_BYTES) {
+      out.push([...prefix, ...cur]);
+      cur = [];
+    }
+    cur.push(...g);
+  }
+  if (cur.length) out.push([...prefix, ...cur]);
+  return out;
+}
+
 const NOT_HOSTED = 'this member is not hosted by this gateway; sign it yourself and use /relay';
 
 export const relayRoutes = {
   'POST /submit': async ({ er, chain, crank, hostedKey }, req) => {
     const b = await req.json();
     const member = b.member ?? NOBODY;
-    // A vacant office is run by the acting official, which the crank signs for.
-    const signer = member === NOBODY ? crank.crank : hostedKey(member);
+    // A vacant office is filled by the rules' caretaker; nobody signs for it.
+    if (member === NOBODY) throw new RouteError(403, 'a vacant office takes no batch (the rules fill it)', 'VacantOffice');
+    const signer = hostedKey(member);
     if (!signer) throw new RouteError(403, NOT_HOSTED, 'NotHosted');
+    // What the program checks only at the reveal is checked now, while the
+    // batch can still be fixed: a sealed rationale and orders of this office.
     const digest = fromHex(b.digest);
-    const ixs = chain.submitOrders({ signer: signer.publicKey, civ: b.civ, role: b.role, tick: b.tick, decisionDigest: digest.length === 32 ? digest : new Uint8Array(32), orders: b.orders || [], adopt: b.adopt || [] });
-    const r = await send(er, ixs, signer === crank.crank ? [crank.crank] : [crank.crank, signer], `submit ${NATIONS[b.civ]} ${b.role}`);
-    return { body: { ok: true, signature: r.signature } };
+    if (digest.length !== 32 || digest.every(x => x === 0)) throw new RouteError(400, 'digest: 32 bytes, not all zero (officers seal a rationale)', 'MissingRationale');
+    const orders = b.orders || [];
+    const wrong = orders.find(o => !allowedOffices(o).includes(b.role));
+    if (wrong) throw new RouteError(400, `${wrong.type} is not an order of the ${b.role}`, 'WrongOffice');
+    const batch = { civ: b.civ, tick: b.tick, role: b.role, member, decisionDigest: digest, orders, adopt: b.adopt || [] };
+    const { salt, commitment } = seal(batch);
+    // Kept before it is sent (write-ahead): the crank reveals the kept batch
+    // whose commitment is the one that landed on chain.
+    crank.sealed.put(batch, salt, commitment);
+    const ixs = chain.commitOrders({ signer: signer.publicKey, civ: b.civ, role: b.role, tick: b.tick, commitment });
+    const r = await send(er, ixs, [crank.crank, signer], `commit ${NATIONS[b.civ]} ${b.role}`);
+    return { body: { ok: true, signature: r.signature, commitment: Buffer.from(commitment).toString('hex') } };
   },
 
   'POST /gov': async ({ er, chain, crank, hostedKey, registry }, req) => {
@@ -62,8 +108,20 @@ export const relayRoutes = {
     if (!signer) throw new RouteError(403, NOT_HOSTED, 'NotHosted');
     const civ = (await registry.list()).find(m => m.index === b.member)?.civ;
     if (civ === undefined) throw new RouteError(404, 'no such member', 'NoSuchMember');
-    const r = await send(er, chain.submitGov({ signer: signer.publicKey, civ, member: b.member, action: b.action }), [crank.crank, signer], `gov ${b.action?.type} by member ${b.member}`);
-    return { body: { ok: true, signature: r.signature } };
+    const actions = Array.isArray(b.actions) ? b.actions : [b.action];
+    if (!actions.length || actions.some(a => !a?.type)) throw new RouteError(400, 'action (or actions) required', 'InvalidAction');
+    if (actions.length > MAX_GOV_PER_SIGNER) throw new RouteError(400, `at most ${MAX_GOV_PER_SIGNER} actions per member and tick`, 'TooManyActions');
+    // One instruction per action; as many per transaction as fit, so a
+    // member's votes of a vote window go out in one transaction.
+    const all = chain.submitGovMany({ signer: signer.publicKey, civ, member: b.member, actions });
+    const prefix = all.slice(0, all.length - actions.length); // compute budget
+    const txs = packTransactions(all.slice(prefix.length).map(ix => [ix]), { prefix, feePayer: crank.crank.publicKey, signers: 2 });
+    const signatures = [];
+    for (const tx of txs) {
+      const r = await send(er, tx, [crank.crank, signer], `gov ${actions.map(a => a.type).join('+')} by member ${b.member}`);
+      signatures.push(r.signature);
+    }
+    return { body: { ok: true, signature: signatures[0], signatures } };
   },
 
   'GET /relay': async ({ cfg, crank, blockhashes }) => {
@@ -74,8 +132,8 @@ export const relayRoutes = {
   'POST /relay': async ({ er, chain, crank, blockhashes }, req) => {
     const b = await req.json();
     const tx = parseTransaction(b.tx);
-    const ix = onlyProgramInstruction(tx, { programId: chain.programId, tags: [IX_TAG.submitOrders, IX_TAG.submitGov], feePayer: crank.crank.publicKey });
-    if (!ix) throw new RouteError(400, 'relay accepts exactly one SubmitOrders or SubmitGov instruction with the gateway as fee payer', 'RelayRejected');
+    const ix = onlyProgramInstruction(tx, { programId: chain.programId, tags: [IX_TAG.commitOrders, IX_TAG.revealOrders, IX_TAG.submitGov], feePayer: crank.crank.publicKey });
+    if (!ix) throw new RouteError(400, 'relay accepts exactly one CommitOrders, RevealOrders or SubmitGov instruction with the gateway as fee payer', 'RelayRejected');
     tx.partialSign(crank.crank);
     const r = await sendSigned(er, tx, 'relay', { lastValidBlockHeight: await blockhashes.er.expiryOf(tx.recentBlockhash, b.lastValidBlockHeight) });
     return { body: { ok: true, signature: r.signature } };

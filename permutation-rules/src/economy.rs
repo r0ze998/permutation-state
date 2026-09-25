@@ -49,6 +49,33 @@ pub fn tech_cost(rules: &Ruleset, tech: Tech, cities: u32) -> u64 {
         / BPS_ONE as u64
 }
 
+/// What `civ` pays for `tech` now: `tech_cost`, cheaper after its eureka
+/// fired (`eureka_cost_bps`) and in a dark age (`dark_age_research_bps`).
+pub fn civ_tech_cost(
+    state: &crate::state::WorldState,
+    rules: &Ruleset,
+    civ: crate::state::CivId,
+    tech: Tech,
+) -> u64 {
+    let c = &state.civs[civ as usize];
+    let mut cost = tech_cost(rules, tech, state.city_count(civ));
+    if c.achievements.boosted.has(tech) {
+        cost = cost * rules.eureka_cost_bps as u64 / BPS_ONE as u64;
+    }
+    if in_dark_age(state, civ) {
+        cost = cost * rules.dark_age_research_bps as u64 / BPS_ONE as u64;
+    }
+    cost
+}
+
+/// Whether `civ` is in a dark age this tick (catch-up, revised 2026-09-25).
+pub fn in_dark_age(state: &crate::state::WorldState, civ: crate::state::CivId) -> bool {
+    state.civs[civ as usize]
+        .achievements
+        .dark_age_until
+        .is_some_and(|t| state.tick < t)
+}
+
 /// Star Gate stage cost multiplier from the stalemate breaker (§5.6).
 pub fn stalemate_multiplier(rules: &Ruleset, tick: u16) -> Bps {
     if tick < rules.crisis_start {
@@ -98,7 +125,8 @@ fn focus_weights(focus: Focus) -> (u32, u32, u32) {
 /// Governor tile assignment and yields (§5.1, §5.2).
 ///
 /// Works the centre plus the best `pop` tiles of the city's territory by
-/// `Σ yield × weight`; ties go to the lower tile index.
+/// `Σ yield × weight`; ties go to the lower hex as seen from the city's
+/// sextant (`Hex::turned`), so the choice turns with a symmetric map.
 pub fn city_yield(
     map: &Map,
     city: &City,
@@ -106,9 +134,10 @@ pub fn city_yield(
     has_philosophy: bool,
 ) -> (CityYield, Vec<usize>) {
     let (wf, wp, wg) = focus_weights(city.focus);
+    let k = city.hex.sextant();
     // A city only ever owns tiles within the largest territory radius (§5.4;
     // invariant 11), so only that neighbourhood is scanned.
-    let mut worked: Vec<(u32, usize)> = map
+    let mut worked: Vec<(u32, crate::hex::Hex, usize)> = map
         .indices_within(city.hex, crate::map::MAX_TERRITORY_RADIUS)
         .into_iter()
         .map(|i| (i, &map.tiles[i]))
@@ -117,10 +146,10 @@ pub fn city_yield(
         .filter(|(_, t)| t.terrain.is_land() || t.hex.distance(city.hex) == 1)
         .map(|(i, t)| {
             let (f, p, g) = t.yields();
-            (f * wf + p * wp + g * wg, i)
+            (f * wf + p * wp + g * wg, t.hex.turned(k), i)
         })
         .collect();
-    // Highest score first; lower index wins ties.
+    // Highest score first; the lower turned hex wins ties.
     worked.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
 
     let centre = map.tile(city.hex).map(|t| t.yields()).unwrap_or((0, 0, 0));
@@ -134,7 +163,7 @@ pub fn city_yield(
     let worked: Vec<usize> = worked
         .into_iter()
         .take(city.pop as usize)
-        .map(|(_, i)| i)
+        .map(|(_, _, i)| i)
         .collect();
     for &i in &worked {
         let (f, p, g) = map.tiles[i].yields();

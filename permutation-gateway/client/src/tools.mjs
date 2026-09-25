@@ -39,7 +39,7 @@ export const RULES_BRIEF = `PERMUTATION STATE: one shared hex world of up to ${N
 Members elect four officers every 30 ticks: general, steward, science officer, diplomat. Only an officer's orders reach the world, each within its office.
 Every member proposes orders to an office, supports proposals, votes, and recalls idle officers (a majority of recently active members).
 An officer who adopts a proposal shares its merit half and half with the proposer. Officers seal a rationale with every batch; it is revealed later.
-Every tick all nations' orders resolve together, in a fixed phase order; submission order does not matter. Your nation sees only its fog of war.
+Every tick all nations' orders resolve together, in a fixed phase order; submission order does not matter. Information is perfect: every nation sees the whole world (it is public on chain). Orders are sealed: a commitment before the tick's deadline, the orders revealed after it, so nobody can react to them in the same tick.
 Nations climb four paths — Hegemony (territory, conquests), Prosperity (population, wealth), Science (techs, Star Gate), Concord (treaties, city-states, trade) —
 through five milestone tiers; two paths at a tier (three at tier 5) make an era. Achievement points split the prize pool among nations;
 inside a nation, 20% goes equally to active members and the rest by merit (what each member's orders and adopted proposals achieved).`;
@@ -48,14 +48,14 @@ const ORDERS_SCHEMA = { type: 'array', description: 'Order objects; see get_rule
 
 export const TOOLS = [
   { name: 'get_rules', description: 'The rules in brief and the exact JSON shape of every order.', inputSchema: { type: 'object', properties: {} } },
-  { name: 'get_state', description: 'Your civilization now, from your fog of war: tick, budget, economy, cities, units, other civs, nearby foreign units/cities, proposals to you, last tick\'s public events.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'get_state', description: 'Your civilization now (the whole world is visible): tick, budget, economy, cities, units, other civs, nearby foreign units/cities, proposals to you, last tick\'s public events.', inputSchema: { type: 'object', properties: {} } },
   { name: 'preview_unit', description: 'For one of your units: nearest reachable hexes [q, r, ticks, cost], attack options with forecasts, and whether a settler can found a city here.', inputSchema: { type: 'object', properties: { unit: { type: 'integer' }, limit: { type: 'integer', description: 'max reachable hexes to list (default 30)' } }, required: ['unit'] } },
   { name: 'preview_city', description: 'For one of your cities: every production option with cost, ticks and why it is blocked, plus the yield outlook.', inputSchema: { type: 'object', properties: { city: { type: 'integer' } }, required: ['city'] } },
   { name: 'preview_research', description: 'Every tech: cost, prerequisites, whether you hold it or why you cannot queue it.', inputSchema: { type: 'object', properties: {} } },
   { name: 'preview_diplomacy', description: 'Which diplomatic actions toward another civilization are possible now, and why not.', inputSchema: { type: 'object', properties: { civ: { type: 'integer' } }, required: ['civ'] } },
   { name: 'find_path', description: 'A legal MoveUnit path for your unit to hex (q, r), or why there is none.', inputSchema: { type: 'object', properties: { unit: { type: 'integer' }, q: { type: 'integer' }, r: { type: 'integer' } }, required: ['unit', 'q', 'r'] } },
   { name: 'validate_orders', description: 'Dry run. ok = accepted at submit time (structure, budget); warnings = orders that would be skipped when the tick resolves.', inputSchema: { type: 'object', properties: { orders: ORDERS_SCHEMA }, required: ['orders'] } },
-  { name: 'submit_orders', description: 'As an officer: sign and submit this tick\'s orders for the offices you hold (one batch per office, replacing earlier ones this tick). The rationale is committed now as a hash and revealed after the tick. Orders for offices you do not hold come back as notHeld: propose them instead.', inputSchema: { type: 'object', properties: { orders: ORDERS_SCHEMA, rationale: { type: 'string', description: `why, in one or two sentences (max ${MAX_RATIONALE} bytes); becomes public after the tick` }, adopt: { type: 'object', description: 'proposal ids to adopt per office, e.g. {"Science": [3]}' } }, required: ['orders', 'rationale'] } },
+  { name: 'submit_orders', description: 'As an officer: seal this tick\'s orders for the offices you hold (one batch per office, replacing earlier ones this tick). Only a commitment goes on chain now; the orders are revealed automatically after the tick\'s deadline, so nobody can react to them this tick. The rationale is committed now as a hash and revealed after the tick. Orders for offices you do not hold come back as notHeld: propose them instead.', inputSchema: { type: 'object', properties: { orders: ORDERS_SCHEMA, rationale: { type: 'string', description: `why, in one or two sentences (max ${MAX_RATIONALE} bytes); becomes public after the tick` }, adopt: { type: 'object', description: 'proposal ids to adopt per office, e.g. {"Science": [3]}' } }, required: ['orders', 'rationale'] } },
   { name: 'propose', description: 'Propose orders to one office of your nation (any member). The officer may adopt it; its merit is then shared with you.', inputSchema: { type: 'object', properties: { role: { type: 'string', enum: [...ROLES] }, orders: ORDERS_SCHEMA }, required: ['role', 'orders'] } },
   { name: 'govern', description: 'One governance action: {type:"Support", proposal} | {type:"Vote", role, candidate} | {type:"Stand", roles:[...]} | {type:"Recall", role}.', inputSchema: { type: 'object', properties: { action: { type: 'object' } }, required: ['action'] } },
 ];
@@ -88,7 +88,10 @@ export async function callTool(ctx, name, args = {}) {
         // Always against the current tick (a stale view would commit to the wrong one).
         const r = await g.submit({ orders: args.orders || [], policy: ctx.policy, rationale: args.rationale || '', adopt: args.adopt || {} });
         ctx.submitted = r.ok ? r : ctx.submitted;
-        return r;
+        // Sealed orders: reveal them in the background once the tick's
+        // commitments close (the tool call does not wait for the deadline).
+        if (r.ok) g.revealWhenOpen({ tick: r.tick }).then(x => { ctx.revealed = x; }).catch(e => { ctx.revealed = [{ error: e.message }]; });
+        return { ...r, sealed: true, reveal: 'automatic, after the tick deadline' };
       }
       case 'propose': return await g.propose(args.role, args.orders || []);
       case 'govern': return await g.gov(args.action);

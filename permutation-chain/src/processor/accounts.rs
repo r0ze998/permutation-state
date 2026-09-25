@@ -267,6 +267,11 @@ mod tests {
             spendable: [0; 4],
             submitted: [u16::MAX; 4],
             frozen: false,
+            revealing: false,
+            reveal_deadline: 0,
+            committed: [u16::MAX; 4],
+            commits: [[0; 32]; 4],
+            salts: [[0; 32]; 4],
             batches: [None, None, None, None],
             inbox: Vec::new(),
         };

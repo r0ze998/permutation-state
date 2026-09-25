@@ -24,6 +24,7 @@ use alloc::vec::Vec;
 use borsh::{BorshDeserialize, BorshSerialize};
 
 mod actions;
+pub mod caretaker;
 mod terms;
 
 use actions::apply;

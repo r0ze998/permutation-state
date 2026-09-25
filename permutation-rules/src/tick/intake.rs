@@ -53,6 +53,15 @@ fn merge_orders(
     let tick = state.tick;
     let mut chosen: [Option<Chosen>; 4] = [None, None, None, None];
     for role in Role::ALL {
+        // A vacant office takes no batch from anyone: the caretaker fills it
+        // from the members' top proposal or a minimal default (gov::caretaker).
+        if state.nations[civ as usize].holder(role) == NOBODY {
+            if let Some((b, cost)) = crate::gov::caretaker::batch(state, rules, civ, role) {
+                let orders = batch_orders(state, &b).unwrap_or_default();
+                chosen[role.index()] = Some((b, orders, cost));
+            }
+            continue;
+        }
         let mut rejected = false;
         for b in input
             .batches

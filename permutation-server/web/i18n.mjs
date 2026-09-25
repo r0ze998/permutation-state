@@ -95,6 +95,7 @@ export function blockedText(b) {
       CannotBuyStarGate: 'スターゲートはお金で買えません', NothingQueued: '生産予定がありません', NotEnoughInfluence: '影響力が足りません',
       NoCounterparty: '自国・交戦中の国とは取引できません', NeedsSpendConsent: '一定額を超える支出には別の役職者の同意が必要です',
       NotEnoughUsdc: '国庫のUSDCが足りません',
+      ForeignCity: '他の国の都市には占領しないと入れません',
     })[b.code] || b.code;
   }
 }

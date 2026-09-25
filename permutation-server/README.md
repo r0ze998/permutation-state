@@ -1,6 +1,6 @@
 # permutation-server
 
-The game server, the hosted AI members, the web client and the tools around a season. Every view, preview and AI decision is made from a nation's fogged belief (`fog`); only validation and resolution see the full state.
+The game server, the hosted AI members, the web client and the tools around a season. The information model is perfect information (`fog`): every account is public on chain, so every view, preview and AI decision, for people, hosted AI members and bots alike, is made from the full world. Vision is kept only as a display-only "sight". What stays hidden is an officer's sealed batch until it is revealed.
 
 ## Layout
 
@@ -8,17 +8,18 @@ The game server, the hosted AI members, the web client and the tools around a se
 |---|---|
 | `play/` | the playable server (`bin/play`): `game` (members and who runs them, the lobby, resolving ticks), `chain` (chain mode: following the chain, sending batches through the gateway), `views` (`/api/state`, `/api/lobby`), `routes` (the JSON API), `http` |
 | `api/` | the JSON the clients and agents read: `dto` (orders and governance in), `blocked` (reasons), `previews` (options, forecasts, preflight), `world` (the per-viewer world view), `gov` (members, offices, achievements, payouts) |
-| `driver` | the acting officials and the hosted AI members (`Planner`), and `AiSeason`, the all-AI season loop the tools share |
+| `driver` | the hosted AI members (`Planner`) and `AiSeason`, the all-AI season loop the tools share. Vacant offices are not driven here: the rules' caretaker (`gov::caretaker`) fills them |
 | `bots` | the scripted personas behind the planner |
-| `fog`, `ledger` | per-nation vision and memory; observations, sealed decisions and their reveals |
+| `fog`, `ledger` | the information model (full state, display-only sight); observations, sealed decisions and their reveals |
 | `chainlink`, `codec` | the minimal HTTP client for the gateway and JSON-RPC; hex and base64 |
 | `events` | chronicle lines from the difference between two worlds |
 
 | Binary | Does |
 |---|---|
 | `play` | the server: `--port 4185 [--tick-seconds 30] [--ai-members 2] [--autostart]`, or `--chain http://127.0.0.1:4191` |
-| `verify` | replays an on-chain season from public data and checks every root and payout |
-| `sim` | many AI-only seasons, with the balance numbers of V5 §6.5 |
+| `verify` | replays an on-chain season from public data and checks every root and payout, every revealed batch against `PS_COMMITS`, every tick's randomness against `PS_SALTS`, and the history chain (`PS_HISTORY`). Seasons from the devnet program (rules version 5) verify with a build of commit `a02862f` or earlier |
+| `sim` | many AI-only seasons, with the balance numbers of V5 §6.5, non-exclusive path pairs, era timing, lead changes, wars and captures, and points per start slot. `SIM_SET` overrides rule numbers; `SIM_ROTATE` and `SIM_EQUIV` are rotation diagnostics |
+| `mapstat` | measures generated maps |
 | `replay` | one AI season as a JSON replay for the viewer |
 | `ticklog` | one AI season as tick inputs and roots, for on-chain replay |
 
@@ -36,7 +37,8 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-- `tests/golden.rs` plays four AI seasons and pins every tick's root, the payouts and the fogged views. The engine is deterministic, so any behaviour change fails it. A deliberate change regenerates it with `UPDATE_GOLDEN=1 cargo test --release --test golden`, and the diff is reviewed.
+- `tests/golden.rs` plays four AI seasons and pins every tick's root, the payouts and the views. The engine is deterministic, so any behaviour change fails it. A deliberate change regenerates it with `UPDATE_GOLDEN=1 cargo test --release --test golden`, and the diff is reviewed.
 - `tests/codec_vectors.rs` writes the vectors the gateway's JavaScript codec is tested against.
 - `tests/views.rs` checks what each kind of viewer may see.
+- `tests/symmetry.rs` replays a season in the world turned by 60° with turned orders and checks that the scores are identical (the maps are six-fold rotationally symmetric and the rules rotation-equivariant).
 - Unit tests in `play/` cover request parsing, the routes, and a person's turn from joining to the next tick.

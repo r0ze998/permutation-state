@@ -140,7 +140,7 @@ pub fn diff_gov_events(
     let mut ev = Vec::new();
     let who = |m: u32| {
         if m == NOBODY {
-            "the acting official".to_string()
+            "the caretaker".to_string()
         } else {
             members
                 .get(m as usize)

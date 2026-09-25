@@ -1,7 +1,7 @@
 //! Base layer, once registration closes: genesis, seating the members and
 //! opening the government (tick 0).
 
-use permutation_rules::genesis::{check_entries, nation_entries, season_from_map};
+use permutation_rules::genesis::{check_entries, map_seed, nation_entries, season_from_map};
 use permutation_rules::gov::{self, GovAction, GovEntry, Role, NOBODY};
 use permutation_rules::map::{MapJob, MapStep};
 use solana_program::{
@@ -46,7 +46,17 @@ pub(super) fn start_season(program_id: &Pubkey, accounts: &[AccountInfo]) -> Pro
     let id = season.season_id.to_le_bytes();
     let count = season.member_count.to_le_bytes();
     let treasury = borsh::to_vec(&season.treasury).map_err(|_| ChainError::InvalidParams)?;
-    season.season_seed = hashv(&[b"PS/season-seed/v5", &recent, &id, &count, &treasury]).to_bytes();
+    // The previous season's history root is part of it: this season's map
+    // and randomness are built on its predecessor's recorded history.
+    season.season_seed = hashv(&[
+        b"PS/season-seed/v6",
+        &recent,
+        &id,
+        &count,
+        &treasury,
+        &season.prev_history_root,
+    ])
+    .to_bytes();
     let rules = rules_for(season.preset, season.market)?;
     let mut entries = nation_entries(season.nations as usize);
     for (e, t) in entries.iter_mut().zip(&season.treasury) {
@@ -101,8 +111,10 @@ pub(super) fn genesis_step(
         entries,
         map,
     } = world.read_genesis()?;
+    // The map seed needs the season seed, fixed only when registration
+    // closed (§2.4): nobody could compute the map before choosing a nation.
     match map
-        .step(&rules, &world_seed, work)
+        .step(&rules, &map_seed(&world_seed, &season_seed), work)
         .map_err(|_| ChainError::Rules)?
     {
         MapStep::Working(map) => {

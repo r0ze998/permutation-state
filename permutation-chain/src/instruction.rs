@@ -1,6 +1,6 @@
 //! Instructions. Accounts are listed as (s) signer, (w) writable.
 //! The borsh enum tag is the variant index; never reorder or remove variants.
-//! Base layer: 0–5, 10, 11, 13–16, 18. Ephemeral Rollup: 6–9, 12, 17, 19, 20.
+//! Base layer: 0–5, 10, 11, 13–16, 18. Ephemeral Rollup: 6–9, 12, 17, 19–23.
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use permutation_rules::gov::{GovAction, Role};
@@ -8,8 +8,11 @@ use permutation_rules::orders::Order;
 
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
 pub enum ChainInstruction {
-    /// Create a season and its USDC vault.
+    /// Create a season and its USDC vault. With `prev_season_id` (≠ 0) it
+    /// follows that finalized season of the same admin in the history
+    /// layer: its history root is taken over (account 6).
     /// 0 admin (s,w) · 1 season PDA (w) · 2 vault PDA (w) · 3 USDC mint · 4 token program · 5 system
+    /// · 6 previous season PDA (only with `prev_season_id`)
     CreateSeason {
         season_id: u64,
         /// 0 Blitz, 1 Season.
@@ -21,6 +24,8 @@ pub enum ChainInstruction {
         crank: [u8; 32],
         /// Open the USDC market this season (V5 §7.5).
         market: bool,
+        /// The season this one follows in the history layer (0: none).
+        prev_season_id: u64,
     },
     /// Create one `CHUNK`-byte world chunk `["world", id, chunk]`. Anyone may pay.
     /// 0 payer (s,w) · 1 season · 2 world chunk PDA (w) · 3 system
@@ -56,9 +61,8 @@ pub enum ChainInstruction {
         /// 0..WORLD_CHUNKS = that world chunk; 1000 + civ = that nation's account.
         target: u16,
     },
-    /// ER: replace one office's batch for the open tick. The signer is the
-    /// office holder's session key, or the crank for a vacant office.
-    /// 0 signer (s) · 1 nation PDA (w)
+    /// Retired (always fails with `Retired`): orders are sealed now
+    /// (`CommitOrders`, `RevealOrders`). Kept so the tags never move.
     SubmitOrders {
         role: Role,
         tick: u16,
@@ -123,10 +127,12 @@ pub enum ChainInstruction {
     WithdrawOps,
     /// ER: publish the open tick's input, `INPUT_CHUNK` bytes per call, as
     /// `PS_INPUT` records, so every resolved tick can be replayed from the
-    /// chain alone. Chunk 0 is allowed once the deadline passed or every
-    /// office submitted: it freezes the input (submissions are refused until
-    /// the tick resolves) and draws the tick randomness. Chunks are logged in
-    /// order; ResolveTick needs them all. Permissionless.
+    /// chain alone. Chunk 0 is allowed in the reveal window once it closed
+    /// (its deadline passed, or every commitment was revealed): it freezes
+    /// the input, draws the tick randomness from the world root and the
+    /// revealed salts (`permutation_rules::rng::tick_vrf`) and logs them as
+    /// `PS_SALTS`. Chunks are logged in order; ResolveTick needs them all.
+    /// Permissionless.
     /// 0.. world chunks (w) · then nation PDAs of every civ, in civ order (w)
     LogTickInput { chunk: u16 },
     /// ER: commit some of the season's accounts to the base layer (during
@@ -139,6 +145,36 @@ pub enum ChainInstruction {
     CommitPart {
         /// 0..WORLD_CHUNKS = that world chunk; 1000 + civ = that nation's account.
         targets: Vec<u16>,
+    },
+    /// ER: close the open tick's commitments once its deadline passed and
+    /// open the reveal window (`state::reveal_seconds`). Governance closes
+    /// too. Logs `PS_COMMITS ‖ tick ‖ borsh(Vec<(civ, role, member,
+    /// commitment)>)`. Permissionless.
+    /// 0.. world chunks (w) · then nation PDAs of every civ, in civ order (w)
+    CloseCommits,
+    /// ER: seal one office's orders for the open tick, before its deadline:
+    /// `commitment = permutation_rules::orders::order_commitment(batch, salt)`.
+    /// Replaces an earlier commitment of the same tick. The signer is the
+    /// office holder's session key; a vacant office takes none (the rules'
+    /// caretaker fills it).
+    /// 0 signer (s) · 1 nation PDA (w)
+    CommitOrders {
+        role: Role,
+        tick: u16,
+        commitment: [u8; 32],
+    },
+    /// ER: reveal one office's sealed orders in the reveal window. They must
+    /// hash to the office's commitment with `salt`, and pass the same checks
+    /// a batch always had (office, structure, budget). Anyone holding the
+    /// plaintext may send it.
+    /// 0 signer (s) · 1 nation PDA (w)
+    RevealOrders {
+        role: Role,
+        tick: u16,
+        decision_digest: [u8; 32],
+        orders: Vec<Order>,
+        adopt: Vec<u32>,
+        salt: [u8; 32],
     },
 }
 
@@ -173,5 +209,25 @@ mod tests {
         assert_eq!(tag(I::WithdrawOps), 18);
         assert_eq!(tag(I::LogTickInput { chunk: 0 }), 19);
         assert_eq!(tag(I::CommitPart { targets: vec![] }), 20);
+        assert_eq!(tag(I::CloseCommits), 21);
+        assert_eq!(
+            tag(I::CommitOrders {
+                role: permutation_rules::gov::Role::General,
+                tick: 0,
+                commitment: [0; 32]
+            }),
+            22
+        );
+        assert_eq!(
+            tag(I::RevealOrders {
+                role: permutation_rules::gov::Role::General,
+                tick: 0,
+                decision_digest: [0; 32],
+                orders: vec![],
+                adopt: vec![],
+                salt: [0; 32]
+            }),
+            23
+        );
     }
 }

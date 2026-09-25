@@ -144,7 +144,7 @@ pub(crate) fn phase_society(state: &mut WorldState, rules: &Ruleset) {
             city.standing = crate::state::CityStanding::DEFAULT;
             let (id, hex) = (city.id, city.hex);
             state.push_event(b"free_city", &id.to_le_bytes());
-            crate::battle::displace_civilians(state, hex);
+            crate::battle::displace_all(state, hex);
         }
     }
 
@@ -181,5 +181,43 @@ pub(crate) fn phase_neutral(state: &mut WorldState, rules: &Ruleset) {
             }
         }
     }
-    // TODO(§12.2): Crisis waves at ticks 120, 126, …, 156.
+    crisis(state, rules);
+}
+
+/// The crisis (§12.2, revised 2026-09-25): from `crisis_start`, every
+/// `crisis_interval` ticks, the `crisis_targets` leading nations with
+/// members (by points; ties: lower id) each lose `crisis_pop` population
+/// and `crisis_loyalty` loyalty in their most populous city (ties: lower
+/// id). A city at 0 loyalty becomes a Free City (phase 8), so the leaders
+/// must keep their cities content (temples) or lose them.
+fn crisis(state: &mut WorldState, rules: &Ruleset) {
+    let t = state.tick;
+    if t < rules.crisis_start
+        || rules.crisis_interval == 0
+        || (t - rules.crisis_start) % rules.crisis_interval != 0
+    {
+        return;
+    }
+    let scores = crate::scoring::nation_scores(state, rules);
+    let mut leaders: Vec<(u64, usize)> = (0..scores.len())
+        .filter(|c| state.nations[*c].members > 0 && state.city_count(*c as u16) > 0)
+        .map(|c| (scores[c].total(), c))
+        .collect();
+    leaders.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    for (_, civ) in leaders.into_iter().take(rules.crisis_targets as usize) {
+        let Some(id) = state
+            .living_cities_of(civ as u16)
+            .max_by_key(|c| (c.pop, core::cmp::Reverse(c.id)))
+            .map(|c| c.id)
+        else {
+            continue;
+        };
+        let c = &mut state.cities[id as usize];
+        c.pop = c.pop.saturating_sub(rules.crisis_pop).max(1);
+        c.loyalty = (c.loyalty - rules.crisis_loyalty).max(0);
+        let mut payload = [0u8; 6];
+        payload[..2].copy_from_slice(&(civ as u16).to_le_bytes());
+        payload[2..].copy_from_slice(&id.to_le_bytes());
+        state.push_event(b"crisis", &payload);
+    }
 }

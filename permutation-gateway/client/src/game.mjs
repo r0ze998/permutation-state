@@ -1,8 +1,9 @@
 // GameClient: everything an outside member (an AI agent, a bot, a tool)
 // needs, over plain HTTP (Game Design V5).
 //
-//   game server (permutation-server `play`)   what your nation knows: its fogged
-//                                             view, government, previews, dry runs
+//   game server (permutation-server `play`)   the world (perfect information: the
+//                                             whole state, as on chain), government,
+//                                             previews, dry runs
 //   gateway     (permutation-gateway)          the chain: x402 registration, relay
 //                                             of transactions you signed yourself
 //
@@ -10,17 +11,21 @@
 // science, diplomat), you order within it; every member proposes, supports
 // proposals, votes and recalls. Nothing here holds authority: your session
 // key signs, the program on the MagicBlock ER checks that signature, and the
-// gateway only pays the fee. As an officer your reasoning is committed as a
-// digest with each office's batch and revealed in a later one
-// (decision.mjs), so anyone can check it afterwards (V5 D17).
+// gateway only pays the fee. Orders are sealed: `submit` sends only a
+// commitment before the tick's deadline, and `reveal` (or `revealWhenOpen`)
+// sends the orders after it, so nobody can react to them in the same tick.
+// As an officer your reasoning is committed as a digest with each office's
+// batch and revealed in a later one (decision.mjs), so anyone can check it
+// afterwards (V5 D17).
 //
 // This module is the facade; the parts live in http.mjs (transport and
 // errors), offices.mjs (which office gives which order), batch.mjs (packing
 // a batch), x402-client.mjs (registration) and keys.mjs (key files).
+import { randomBytes } from 'node:crypto';
 import { PublicKey, Transaction } from '@solana/web3.js';
 import { packBatch } from './batch.mjs';
 import { ChainClient } from './chain.mjs';
-import { BATCH_BYTES } from './codec.mjs';
+import { BATCH_BYTES, orderCommitment } from './codec.mjs';
 import { commit } from './decision.mjs';
 import { DEFAULT_GATEWAY, DEFAULT_SERVER, errorCode, GameError, HttpError, requestJson } from './http.mjs';
 import { splitByOffice } from './offices.mjs';
@@ -46,6 +51,7 @@ export class GameClient {
     this.civ = civ;
     this.session = session;
     this.decisions = new Map(); // "tick:role" -> commitment not yet known to be revealed
+    this.sealed = new Map(); // "tick:role" -> [{batch, salt}, …] newest first: orders committed, not yet revealed
     this.chain = null;
   }
 
@@ -60,7 +66,7 @@ export class GameClient {
   /** Static map: tiles `[q, r, terrain, river, resource]`, trade hubs. */
   map() { return this.get(this.server, '/api/map'); }
   /**
-   * Your nation's fogged view: world, government (`gov`: offices, candidates,
+   * Your nation's view: the whole world (perfect information), government (`gov`: offices, candidates,
    * recalls, proposals), achievements, the payout projection, and
    * `decision.obsRoot`, which an officer's commitment binds to.
    */
@@ -177,8 +183,17 @@ export class GameClient {
     const offices = [];
     for (const p of plans) {
       try {
-        const r = await this.relay(chain.submitOrders({ signer: this.session.publicKey, civ: this.civ, role: p.role, tick,
-          decisionDigest: Buffer.from(p.commitment.digest, 'hex'), orders: p.orders, adopt: adopt[p.role] ?? [] }));
+        // Sealed orders: only the commitment goes out now; the batch and
+        // its salt stay here until `reveal()` (after the tick's deadline).
+        const batch = { civ: this.civ, tick, role: p.role, member: this.member, decisionDigest: Buffer.from(p.commitment.digest, 'hex'), orders: p.orders, adopt: adopt[p.role] ?? [] };
+        const salt = new Uint8Array(randomBytes(32));
+        const commitment = orderCommitment(batch, salt);
+        // Kept before it is sent (a lost confirmation must not lose it); a
+        // later submit for the office adds another candidate, and `reveal`
+        // sends the one whose commitment is on chain.
+        const key = `${tick}:${p.role}`;
+        this.sealed.set(key, [{ batch, salt }, ...(this.sealed.get(key) ?? [])]);
+        const r = await this.relay(chain.commitOrders({ signer: this.session.publicKey, civ: this.civ, role: p.role, tick, commitment }));
         this.decisions.set(`${tick}:${p.role}`, p.commitment);
         for (const d of p.reveals) d.sentIn = tick;
         offices.push({ role: p.role, orders: p.own.length, digest: p.commitment.digest, revealed: p.reveals.map(d => d.tick), signature: r.signature });
@@ -191,6 +206,76 @@ export class GameClient {
     const failed = offices.filter(o => o.error);
     const failure = failed.length ? { error: failed.map(o => `${o.role}: ${o.error}`).join('; '), code: failed[0].code, status: failed[0].status } : {};
     return { ok: !failed.length, tick, offices, notHeld, warnings: check.warnings ?? [], validation: check.offices, ...failure };
+  }
+
+  /** The sealed batches not yet revealed, as JSON (keep them across a restart; `importSealed` restores them). */
+  exportSealed() {
+    const hex = b => Buffer.from(b).toString('hex');
+    return [...this.sealed].map(([k, list]) => [k, list.map(({ batch, salt }) => ({ batch: { ...batch, decisionDigest: hex(batch.decisionDigest) }, salt: hex(salt) }))]);
+  }
+  importSealed(saved = []) {
+    const bin = h => new Uint8Array(Buffer.from(h, 'hex'));
+    for (const [k, list] of saved) this.sealed.set(k, list.map(({ batch, salt }) => ({ batch: { ...batch, decisionDigest: bin(batch.decisionDigest) }, salt: bin(salt) })));
+  }
+
+  /** The open tick's sealed-orders phase from the gateway: {tick, phase: commit|reveal|frozen|finished, deadline}. */
+  tickPhase() { return this.get(this.gateway, '/tick'); }
+
+  /**
+   * Reveal the orders `submit` sealed for tick `tick` (default: every kept
+   * tick). Only possible in the reveal window, which opens after the tick's
+   * deadline: orders left unrevealed when it closes do not run. Returns one
+   * entry per office: its signature, or `error`/`code` (`WrongPhase`: the
+   * window is not open yet).
+   */
+  async reveal(tick = null) {
+    const chain = await this.chainClient();
+    const out = [];
+    for (const [k, candidates] of this.sealed) {
+      if (tick !== null && candidates[0].batch.tick !== tick) continue;
+      // Newest first; a candidate whose commitment is not the one on chain
+      // fails with CommitMismatch and the next is tried.
+      let last = null;
+      for (const { batch, salt } of candidates) {
+        try {
+          const r = await this.relay(chain.revealOrders({ signer: this.session.publicKey, civ: batch.civ, role: batch.role, tick: batch.tick,
+            decisionDigest: batch.decisionDigest, orders: batch.orders, adopt: batch.adopt, salt }));
+          last = { role: batch.role, tick: batch.tick, signature: r.signature };
+          this.sealed.delete(k);
+          break;
+        } catch (e) {
+          const code = errorCode(e);
+          last = { role: batch.role, tick: batch.tick, error: e.message, code };
+          // Too late (the tick froze or moved on): the orders are lost; forget them.
+          if (code === 'TickFrozen' || code === 'WrongTick') { this.sealed.delete(k); break; }
+          if (code !== 'CommitMismatch') break;
+        }
+      }
+      if (last) out.push(last);
+    }
+    return out;
+  }
+
+  /**
+   * Wait for the reveal window of `tick` and reveal its sealed orders. Polls
+   * `tickPhase` every `pollMs`; gives up after `timeoutMs` or once the tick
+   * is past its window. Returns what `reveal` returned (or [] if nothing was
+   * sealed or the window was missed).
+   */
+  async revealWhenOpen({ tick, pollMs = 400, timeoutMs = 120_000 } = {}) {
+    const want = tick ?? Math.max(-1, ...[...this.sealed.values()].map(s => s[0].batch.tick));
+    if (want < 0) return [];
+    const until = Date.now() + timeoutMs;
+    while (Date.now() < until) {
+      const p = await this.tickPhase().catch(() => null);
+      if (p && (p.tick > want || (p.tick === want && (p.phase === 'frozen' || p.phase === 'finished')))) {
+        for (const [k, s] of this.sealed) if (s[0].batch.tick <= want) this.sealed.delete(k);
+        return [];
+      }
+      if (p?.tick === want && p.phase === 'reveal') return this.reveal(want);
+      await new Promise(r => setTimeout(r, pollMs));
+    }
+    return [];
   }
 
   /**

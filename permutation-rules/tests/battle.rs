@@ -622,8 +622,12 @@ fn a_capture_counts_as_a_city_held_and_earns_merit() {
         "founded ≥12 ticks before capture"
     );
     assert_eq!(permutation_rules::scoring::captured_held(&s, 0), 1);
-    // The acting official issued the attack: the capture earns nobody merit.
-    assert!(s.merit_log.iter().all(|m| m.what != b"capture"));
+    // The general issued the attack: the capture earns it merit (V5 §7.3).
+    let general = s.nations[0].holder(permutation_rules::gov::Role::General);
+    assert!(s
+        .merit_log
+        .iter()
+        .any(|m| m.what == b"capture" && m.member == general));
     let _ = pop;
 }
 

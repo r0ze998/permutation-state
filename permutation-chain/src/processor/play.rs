@@ -1,9 +1,13 @@
-//! On the Ephemeral Rollup, during play: submissions, publishing the tick
-//! input, and resolving the tick.
+//! On the Ephemeral Rollup, during play: sealed orders (commit, close,
+//! reveal), governance submissions, publishing the tick input, and resolving
+//! the tick.
 
 use borsh::BorshDeserialize;
 use permutation_rules::gov::{GovAction, GovEntry, Role, NOBODY};
-use permutation_rules::orders::{check_structure, role_allows_static, Order, OrderBatch};
+use permutation_rules::orders::{
+    check_structure, order_commitment, role_allows_static, Order, OrderBatch,
+};
+use permutation_rules::rng::{tick_vrf, Salt};
 use permutation_rules::state::WorldState;
 use permutation_rules::tick::{run_phase, TickInput, PHASE_COUNT};
 use permutation_rules::Ruleset;
@@ -38,18 +42,23 @@ pub(super) fn open_nation(n: &mut NationAccount, state: &WorldState, rules: &Rul
     n.batches = [None, None, None, None];
     n.submitted = [u16::MAX; 4];
     n.frozen = false;
+    n.revealing = false;
+    n.reveal_deadline = 0;
+    n.committed = [u16::MAX; 4];
+    n.commits = [[0; 32]; 4];
+    n.salts = [[0; 32]; 4];
     n.inbox.clear();
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn submit_orders(
+/// Seal one office's orders for the open tick (commit–reveal): only the
+/// commitment is stored, so nobody can read or react to them before every
+/// office is locked in.
+pub(super) fn commit_orders(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
     role: Role,
     tick: u16,
-    decision_digest: [u8; 32],
-    orders: Vec<Order>,
-    adopt: Vec<u32>,
+    commitment: [u8; 32],
 ) -> ProgramResult {
     let it = &mut accounts.iter();
     let who = next_account_info(it)?;
@@ -57,10 +66,10 @@ pub(super) fn submit_orders(
     signer(who)?;
     let mut n = load_nation_at(program_id, nation_ai)?;
     let i = role.index();
-    let member = n.officers[i];
-    // The office holder's session key; the crank for a vacant office (the acting official).
-    let allowed = if member == NOBODY { n.crank } else { n.keys[i] };
-    if who.key.as_ref() != allowed {
+    // Only the office holder's session key. A vacant office takes no batch
+    // from anyone, the operator included: the rules' caretaker fills it
+    // (permutation_rules::gov::caretaker).
+    if n.officers[i] == NOBODY || who.key.as_ref() != n.keys[i] {
         return Err(ChainError::Unauthorized.into());
     }
     if tick != n.open_tick {
@@ -69,29 +78,116 @@ pub(super) fn submit_orders(
     if n.frozen {
         return Err(ChainError::TickFrozen.into());
     }
-    // Officers seal a rationale (V5 D17).
-    if member != NOBODY && decision_digest == [0; 32] {
-        return Err(ChainError::Rules.into());
+    if n.revealing {
+        return Err(ChainError::WrongPhase.into());
     }
-    if !orders.iter().all(|o| role_allows_static(role, o)) {
-        return Err(ChainError::WrongOffice.into());
+    if commitment == [0; 32] {
+        return Err(ChainError::InvalidParams.into());
     }
-    let rules = rules_for(n.preset, n.market)?;
-    let cost = check_structure(&rules, tick, &orders).map_err(|_| ChainError::Rules)?;
-    if cost > n.spendable[i] || adopt.len() > rules.max_open_proposals as usize {
-        return Err(ChainError::OverBudget.into());
+    n.commits[i] = commitment;
+    n.committed[i] = tick;
+    store(&mut nation_ai.try_borrow_mut_data()?, &n)
+}
+
+/// A revealed batch's fields besides its office and tick.
+pub(super) struct OrderBatchParts {
+    pub decision_digest: [u8; 32],
+    pub orders: Vec<Order>,
+    pub adopt: Vec<u32>,
+}
+
+/// Reveal one office's sealed orders in the reveal window.
+pub(super) fn reveal_orders(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    role: Role,
+    tick: u16,
+    parts: OrderBatchParts,
+    salt: [u8; 32],
+) -> ProgramResult {
+    let it = &mut accounts.iter();
+    let who = next_account_info(it)?;
+    let nation_ai = next_account_info(it)?;
+    signer(who)?;
+    let mut n = load_nation_at(program_id, nation_ai)?;
+    let i = role.index();
+    if tick != n.open_tick || n.committed[i] != tick {
+        return Err(ChainError::WrongTick.into());
     }
-    n.batches[i] = Some(OrderBatch {
+    if n.frozen {
+        return Err(ChainError::TickFrozen.into());
+    }
+    if !n.revealing {
+        return Err(ChainError::WrongPhase.into());
+    }
+    if Clock::get()?.unix_timestamp > n.reveal_deadline {
+        return Err(ChainError::TickFrozen.into()); // the reveal window is over
+    }
+    let batch = OrderBatch {
         civ: n.civ,
         tick,
         role,
-        member,
-        decision_digest,
-        orders,
-        adopt,
-    });
+        member: n.officers[i],
+        decision_digest: parts.decision_digest,
+        orders: parts.orders,
+        adopt: parts.adopt,
+    };
+    if order_commitment(&batch, &salt) != n.commits[i] {
+        return Err(ChainError::CommitMismatch.into());
+    }
+    // Officers seal a rationale (V5 D17).
+    if batch.decision_digest == [0; 32] {
+        return Err(ChainError::Rules.into());
+    }
+    if !batch.orders.iter().all(|o| role_allows_static(role, o)) {
+        return Err(ChainError::WrongOffice.into());
+    }
+    let rules = rules_for(n.preset, n.market)?;
+    let cost = check_structure(&rules, tick, &batch.orders).map_err(|_| ChainError::Rules)?;
+    if cost > n.spendable[i] || batch.adopt.len() > rules.max_open_proposals as usize {
+        return Err(ChainError::OverBudget.into());
+    }
+    n.batches[i] = Some(batch);
     n.submitted[i] = tick;
-    store(&mut nation_ai.try_borrow_mut_data()?, &n)?;
+    n.salts[i] = salt;
+    store(&mut nation_ai.try_borrow_mut_data()?, &n)
+}
+
+/// Close the open tick's commitments after its deadline and open the reveal
+/// window. Governance closes with them, so nobody acts on revealed orders.
+pub(super) fn close_commits(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
+    let chunk0 = accounts.first().ok_or(ProgramError::NotEnoughAccountKeys)?;
+    let world = world_chunks(program_id, accounts, world_season_id(chunk0)?)?;
+    let mut meta = world.meta()?;
+    if meta.finished || meta.frozen || meta.revealing {
+        return Err(ChainError::WrongPhase.into());
+    }
+    let clock = Clock::get()?;
+    if clock.unix_timestamp < meta.deadline {
+        return Err(ChainError::TooEarly.into());
+    }
+    let it = &mut accounts[WORLD_CHUNKS..].iter();
+    let mut commits: Vec<(u16, u8, u32, [u8; 32])> = Vec::new();
+    let mut tick = u16::MAX;
+    for civ in 0..meta.civs as u16 {
+        let ai = next_account_info(it)?;
+        let mut n = load_nation(program_id, ai, meta.season_id, civ)?;
+        tick = n.open_tick;
+        for role in Role::ALL {
+            let i = role.index();
+            if n.committed[i] == n.open_tick {
+                commits.push((civ, i as u8, n.officers[i], n.commits[i]));
+            }
+        }
+        n.revealing = true;
+        n.reveal_deadline = clock.unix_timestamp + reveal_seconds(meta.tick_seconds);
+        store(&mut ai.try_borrow_mut_data()?, &n)?;
+    }
+    meta.revealing = true;
+    meta.deadline = clock.unix_timestamp + reveal_seconds(meta.tick_seconds);
+    world.set_meta(&meta)?;
+    let record = borsh::to_vec(&commits).map_err(|_| ChainError::Rules)?;
+    solana_program::log::sol_log_data(&[b"PS_COMMITS", &tick.to_le_bytes(), &record]);
     Ok(())
 }
 
@@ -109,7 +205,7 @@ pub(super) fn submit_gov(
     if n.open_tick == u16::MAX {
         return Err(ChainError::WrongStatus.into());
     }
-    if n.frozen {
+    if n.frozen || n.revealing {
         return Err(ChainError::TickFrozen.into());
     }
     let signer_key = who.key.to_bytes();
@@ -121,45 +217,71 @@ pub(super) fn submit_gov(
         signer: signer_key,
         action,
     });
-    // Fails with AccountDataTooSmall when the inbox is full for this tick.
+    // Keep room for every office's reveal still to come: a flood of
+    // governance actions must not crowd out a nation's orders.
+    let unrevealed = (0..4).filter(|i| n.submitted[*i] != n.open_tick).count();
+    let len = borsh::to_vec(&n).map_err(|_| ChainError::Rules)?.len();
+    if len + unrevealed * REVEAL_ROOM > NATION_SPACE {
+        return Err(ChainError::InboxFull.into());
+    }
     store(&mut nation_ai.try_borrow_mut_data()?, &n)
 }
 
-/// The open tick's input as it stands in the nation accounts (batches for
-/// the open tick, governance inboxes), with `vrf` as its randomness.
+/// The open tick's input as it stands in the nation accounts, with `vrf`
+/// as its randomness.
+pub(super) struct Pending<'a, 'info> {
+    /// Revealed batches (in civ, then office order) and governance inboxes.
+    pub input: TickInput,
+    pub tick: u16,
+    /// Commitments of the open tick, and how many of them were revealed.
+    pub committed: usize,
+    pub revealed: usize,
+    /// Each revealed batch's salt, in the same order (the tick randomness).
+    pub salts: Vec<Salt>,
+    pub ais: Vec<&'a AccountInfo<'info>>,
+}
+
 pub(super) fn pending_input<'a, 'info>(
     program_id: &Pubkey,
     nations: &'a [AccountInfo<'info>],
     meta: &WorldMeta,
     vrf: [u8; 32],
-) -> Result<(TickInput, u16, usize, Vec<&'a AccountInfo<'info>>), ProgramError> {
+) -> Result<Pending<'a, 'info>, ProgramError> {
     let it = &mut nations.iter();
-    let mut ais = Vec::with_capacity(meta.civs as usize);
-    let (mut batches, mut gov, mut done, mut tick) = (Vec::new(), Vec::new(), 0, u16::MAX);
+    let mut p = Pending {
+        input: TickInput {
+            vrf,
+            batches: Vec::new(),
+            gov: Vec::new(),
+            deposits: Vec::new(),
+        },
+        tick: u16::MAX,
+        committed: 0,
+        revealed: 0,
+        salts: Vec::new(),
+        ais: Vec::with_capacity(meta.civs as usize),
+    };
     for civ in 0..meta.civs as u16 {
         let ai = next_account_info(it)?;
         let n = load_nation(program_id, ai, meta.season_id, civ)?;
-        if tick == u16::MAX {
-            tick = n.open_tick;
+        if p.tick == u16::MAX {
+            p.tick = n.open_tick;
         }
-        for b in n.batches.into_iter().flatten().filter(|b| b.tick == tick) {
-            batches.push(b);
-            done += 1;
+        for role in Role::ALL {
+            let i = role.index();
+            if n.committed[i] == n.open_tick {
+                p.committed += 1;
+            }
+            if let Some(b) = n.batches[i].clone().filter(|b| b.tick == n.open_tick) {
+                p.input.batches.push(b);
+                p.salts.push((civ, i as u8, n.salts[i]));
+                p.revealed += 1;
+            }
         }
-        gov.extend(n.inbox);
-        ais.push(ai);
+        p.input.gov.extend(n.inbox);
+        p.ais.push(ai);
     }
-    Ok((
-        TickInput {
-            vrf,
-            batches,
-            gov,
-            deposits: Vec::new(),
-        },
-        tick,
-        done,
-        ais,
-    ))
+    Ok(p)
 }
 
 pub(super) fn log_tick_input(
@@ -178,33 +300,43 @@ pub(super) fn log_tick_input(
         if chunk != 0 {
             return Err(ChainError::InputNotPublished.into());
         }
-        let (_, _, done, ais) = pending_input(program_id, nations, &meta, [0; 32])?;
+        if !meta.revealing {
+            return Err(ChainError::WrongPhase.into());
+        }
+        let p = pending_input(program_id, nations, &meta, [0; 32])?;
         let clock = Clock::get()?;
-        if clock.unix_timestamp < meta.deadline && done < 4 * meta.civs as usize {
+        if clock.unix_timestamp < meta.deadline && p.revealed < p.committed {
             return Err(ChainError::TooEarly.into());
         }
-        // Tick randomness (§0.2): the committed world plus this slot, fixed
-        // before anyone can see the input's effect. MagicBlock VRF is the
-        // planned replacement.
+        // Tick randomness (§0.2): the world root and every revealed salt.
+        // The salts were sealed before the commitments closed and only their
+        // officers knew them, so nobody (the crank choosing this slot
+        // included) can pick the outcome.
         let body = world.body(&WORLD_MAGIC)?;
         let root = hashv(&[&body]).to_bytes();
         drop(body);
-        meta.vrf = hashv(&[
-            b"PS/tick-vrf/v2",
-            &root,
-            &clock.slot.to_le_bytes(),
-            &clock.unix_timestamp.to_le_bytes(),
-        ])
-        .to_bytes();
+        meta.vrf = tick_vrf(&root, &p.salts);
         meta.frozen = true;
         meta.input_logged = 0;
-        for ai in ais {
+        for ai in p.ais {
             let mut n: NationAccount = load(&ai.try_borrow_data()?)?;
             n.frozen = true;
             store(&mut ai.try_borrow_mut_data()?, &n)?;
         }
     }
-    let (input, tick, _, _) = pending_input(program_id, nations, &meta, meta.vrf)?;
+    let Pending {
+        input, tick, salts, ..
+    } = pending_input(program_id, nations, &meta, meta.vrf)?;
+    // Every chunk-0 call logs the salts with the world root it sees, so the
+    // record is in whichever transaction the index keeps (the verifier takes
+    // the one whose root is the tick's pre-state root).
+    if chunk == 0 {
+        let body = world.body(&WORLD_MAGIC)?;
+        let root = hashv(&[&body]).to_bytes();
+        drop(body);
+        let bytes = borsh::to_vec(&salts).map_err(|_| ChainError::Rules)?;
+        solana_program::log::sol_log_data(&[b"PS_SALTS", &tick.to_le_bytes(), &root, &bytes]);
+    }
     let bytes = borsh::to_vec(&input).map_err(|_| ChainError::Rules)?;
     let total = bytes.len().div_ceil(INPUT_CHUNK).max(1) as u16;
     if chunk >= total || chunk > meta.input_logged {
@@ -260,8 +392,11 @@ pub(super) fn resolve_tick(program_id: &Pubkey, accounts: &[AccountInfo], to: u8
     cu!("cu decode");
     let rules = rules_for(meta.preset, meta.market)?;
     // Submissions are refused while frozen, so this is the input PS_INPUT published.
-    let (input, _, _, nation_ais) =
-        pending_input(program_id, &accounts[WORLD_CHUNKS..], &meta, meta.vrf)?;
+    let Pending {
+        input,
+        ais: nation_ais,
+        ..
+    } = pending_input(program_id, &accounts[WORLD_CHUNKS..], &meta, meta.vrf)?;
     cu!("cu input");
     let tick = state.tick;
     while state.phase_cursor < to.min(PHASE_COUNT) {
@@ -283,6 +418,7 @@ pub(super) fn resolve_tick(program_id: &Pubkey, accounts: &[AccountInfo], to: u8
         meta.deadline = clock.unix_timestamp + meta.tick_seconds as i64;
         meta.finished = state.tick >= rules.ticks_per_season;
         (meta.frozen, meta.vrf, meta.input_chunks, meta.input_logged) = (false, [0; 32], 0, 0);
+        meta.revealing = false;
     }
     cu!("cu nations");
     let root = world.write_world(&state)?;

@@ -20,9 +20,9 @@ use sha2::{Digest, Sha256};
 
 use crate::fog::Fog;
 
-/// Encoded orders that fit in one `SubmitOrders` transaction next to its
+/// Encoded orders that fit in one `RevealOrders` transaction next to its
 /// signatures, accounts, blockhash and header (the packet limit is 1232 bytes).
-pub const BATCH_BYTES: usize = 820;
+pub const BATCH_BYTES: usize = 800;
 
 fn encoded_len(o: &Order) -> usize {
     borsh::to_vec(o).map_or(usize::MAX / 4, |v| v.len())

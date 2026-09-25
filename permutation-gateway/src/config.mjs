@@ -98,6 +98,8 @@ export const OPTIONS = Object.freeze([
   ['registrationSeconds', '--registration-seconds', 'PS_REGISTRATION_SECONDS', int],
   // Several gateways (one per season) can share the stack and the keys.
   ['stateFile', '--state', 'PS_STATE', String],
+  // The finalized season a new season follows in the history layer.
+  ['prevSeason', '--prev-season', 'PS_PREV_SEASON', v => (v === undefined || v === null || v === '' ? null : String(v))],
 ].map(([key, flag, env, parse]) => Object.freeze({ key, flag, env, parse })));
 
 const flagKey = flag => flag.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase());

@@ -15,19 +15,34 @@ use crate::error::ChainError;
 use crate::state::*;
 use crate::token;
 
-#[allow(clippy::too_many_arguments)]
+/// `CreateSeason`'s parameters besides the id.
+pub(super) struct SeasonParams {
+    pub preset: u8,
+    pub nations: u8,
+    pub entry_fee: u64,
+    pub tick_seconds: u32,
+    pub world_seed: [u8; 32],
+    pub crank: [u8; 32],
+    pub market: bool,
+    pub prev_season_id: u64,
+}
+
 pub(super) fn create_season(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
     season_id: u64,
-    preset: u8,
-    nations: u8,
-    entry_fee: u64,
-    tick_seconds: u32,
-    world_seed: [u8; 32],
-    crank: [u8; 32],
-    market: bool,
+    p: SeasonParams,
 ) -> ProgramResult {
+    let SeasonParams {
+        preset,
+        nations,
+        entry_fee,
+        tick_seconds,
+        world_seed,
+        crank,
+        market,
+        prev_season_id,
+    } = p;
     let it = &mut accounts.iter();
     let admin = next_account_info(it)?;
     let season_ai = next_account_info(it)?;
@@ -36,6 +51,21 @@ pub(super) fn create_season(
     let token_program = next_account_info(it)?;
     let _system = next_account_info(it)?;
     signer(admin)?;
+    // The history layer: follow a finalized season of the same admin.
+    let prev_history_root = if prev_season_id == 0 {
+        [0; 32]
+    } else {
+        let prev_ai = next_account_info(it)?;
+        let prev = load_season(program_id, prev_ai)?;
+        if prev.season_id != prev_season_id
+            || prev.status != SeasonStatus::Finalized
+            || prev.admin != admin.key.to_bytes()
+            || prev_season_id == season_id
+        {
+            return Err(ChainError::InvalidParams.into());
+        }
+        prev.history_root
+    };
     let rules = rules_for(preset, market)?;
     let max = (rules.max_civs as usize)
         .min(MAX_NATIONS)
@@ -92,6 +122,9 @@ pub(super) fn create_season(
         treasury_final: Vec::new(),
         payouts: Vec::new(),
         final_root: [0; 32],
+        prev_season_id,
+        prev_history_root,
+        history_root: [0; 32],
     };
     store(&mut season_ai.try_borrow_mut_data()?, &season)?;
     msg!(
@@ -170,6 +203,11 @@ pub(super) fn alloc_nation(
         spendable: [0; 4],
         submitted: [u16::MAX; 4],
         frozen: false,
+        revealing: false,
+        reveal_deadline: 0,
+        committed: [u16::MAX; 4],
+        commits: [[0; 32]; 4],
+        salts: [[0; 32]; 4],
         batches: [None, None, None, None],
         inbox: Vec::new(),
     };

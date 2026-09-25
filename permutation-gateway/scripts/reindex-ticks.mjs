@@ -4,8 +4,9 @@
 // records of the LogTickInput transactions just before it. Use it when the
 // crank could not archive a record (the gateway index is a convenience; the
 // chain is the source). Lines have the crank's format (src/ticks.mjs
-// `tickLine`); `submitted` is kept from the old index where it had the
-// line, and is null otherwise (the chain does not record it).
+// `tickLine`): the CloseCommits transaction (its PS_COMMITS record, which
+// the verifier checks reveals against) and the counts of commitments and of
+// revealed batches (the PS_SALTS record) come from the chain too.
 //
 //   node scripts/reindex-ticks.mjs [--state season.json]
 import { copyFileSync, existsSync, writeFileSync } from 'node:fs';
@@ -14,7 +15,7 @@ import { Connection } from '@solana/web3.js';
 import { ChainClient } from '../client/src/chain.mjs';
 import { createStateStore, LOCAL_DIR, loadConfig } from '../src/config.mjs';
 import { records } from '../src/send.mjs';
-import { assembleInput, formatTickLines, readTickLines, tickLine } from '../src/ticks.mjs';
+import { assembleInput, formatTickLines, tickLine } from '../src/ticks.mjs';
 
 const cfg = loadConfig();
 const state = createStateStore(cfg.stateFile).load();
@@ -36,6 +37,8 @@ for (let before; ;) {
 sigs.reverse();
 const ticks = []; // { slot, rec, signature, cu }
 const inputs = new Map(); // hash → { parts, signatures }
+const closes = new Map(); // tick → { signature, committed } (the latest CloseCommits of that tick)
+const saltCount = new Map(); // tick → revealed batches
 for (const s of sigs) {
   const t = await er.getTransaction(s.signature, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 });
   for (const rec of records(t?.meta?.logMessages || [])) {
@@ -47,9 +50,10 @@ for (const s of sigs) {
       e.signatures.push(s.signature);
     }
     if (rec.tag === 'PS_TICK') ticks.push({ slot: s.slot, rec, signature: s.signature, cu: t.meta.computeUnitsConsumed ?? null });
+    if (rec.tag === 'PS_COMMITS') closes.set(rec.tick, { signature: s.signature, committed: rec.commits.length });
+    if (rec.tag === 'PS_SALTS') saltCount.set(rec.tick, rec.salts.length);
   }
 }
-const previous = new Map(readTickLines(file).map(l => [l.signature + ':' + l.to, l.submitted ?? null]));
 const lines = [];
 for (const { slot, rec, signature, cu } of ticks) {
   const e = inputs.get(hex(rec.inputHash));
@@ -61,7 +65,9 @@ for (const { slot, rec, signature, cu } of ticks) {
   } catch (err) {
     console.error(err.message);
   }
-  lines.push({ slot, line: tickLine({ rec, published, signature, cu, submitted: previous.get(signature + ':' + rec.to) ?? null }) });
+  const close = closes.get(rec.tick);
+  const seals = { committed: close?.committed ?? null, revealed: saltCount.get(rec.tick) ?? null, commitSignature: close?.signature ?? null };
+  lines.push({ slot, line: tickLine({ rec, published, signature, cu, seals }) });
 }
 // Same-slot order is not guaranteed by the listing: chain the records by root.
 lines.sort((a, b) => a.slot - b.slot);

@@ -40,9 +40,14 @@ export class ChainClient {
   ix(keys, data) { return new TransactionInstruction({ programId: this.programId, keys, data: Buffer.from(data) }); }
   chunkKeys() { return this.worldChunks.map(k => W(k)); }
 
-  createSeason({ admin, mint, preset = 0, nations = NATIONS.length, entryFee, tickSeconds = 30, worldSeed, crank, market = true }) {
-    return [this.ix([W(admin, true), W(this.season), W(this.vault), R(mint), R(TOKEN_PROGRAM_ID), R(SystemProgram.programId)],
-      IX.createSeason({ seasonId: this.seasonId, preset, nations, entryFee, tickSeconds, worldSeed, crank: crank.toBytes(), market }))];
+  /**
+   * Create this season. With `prevSeasonId` it follows that finalized season
+   * (same admin) in the history layer: its history root is taken over.
+   */
+  createSeason({ admin, mint, preset = 0, nations = NATIONS.length, entryFee, tickSeconds = 30, worldSeed, crank, market = true, prevSeasonId = null }) {
+    const prev = prevSeasonId ? [R(new ChainClient(this.programId, BigInt(prevSeasonId)).season)] : [];
+    return [this.ix([W(admin, true), W(this.season), W(this.vault), R(mint), R(TOKEN_PROGRAM_ID), R(SystemProgram.programId), ...prev],
+      IX.createSeason({ seasonId: this.seasonId, preset, nations, entryFee, tickSeconds, worldSeed, crank: crank.toBytes(), market, prevSeasonId: BigInt(prevSeasonId ?? 0) }))];
   }
   allocWorld({ payer, chunk }) {
     return [this.ix([W(payer, true), R(this.season), W(this.worldChunks[chunk]), R(SystemProgram.programId)], IX.allocWorld(chunk))];
@@ -80,15 +85,31 @@ export class ChainClient {
       R(DELEGATION_PROGRAM_ID), ...(validator ? [R(new PublicKey(validator))] : []),
     ], IX.delegate(target))];
   }
-  /** One office's batch for the open tick, signed by the office holder's session key (or the crank for a vacant office). */
-  submitOrders({ signer, civ, role, tick, decisionDigest, orders, adopt = [] }) {
-    return [...medium(), this.ix([R(signer, true), W(this.nation(civ))], IX.submitOrders({ role, tick, decisionDigest, orders, adopt }))];
+  /**
+   * Seal one office's orders for the open tick (commit–reveal): only
+   * `commitment` (`orderCommitment(batch, salt)`) goes on chain now. Signed
+   * by the office holder's session key; a vacant office takes none.
+   */
+  commitOrders({ signer, civ, role, tick, commitment }) {
+    return [...medium(), this.ix([R(signer, true), W(this.nation(civ))], IX.commitOrders({ role, tick, commitment }))];
+  }
+  /** Reveal sealed orders in the reveal window (anyone holding the plaintext and salt may send it). */
+  revealOrders({ signer, civ, role, tick, decisionDigest, orders, adopt = [], salt }) {
+    return [...medium(), this.ix([R(signer, true), W(this.nation(civ))], IX.revealOrders({ role, tick, decisionDigest, orders, adopt, salt }))];
+  }
+  /** Close the open tick's commitments after its deadline and open the reveal window. Permissionless. */
+  closeCommits({ nations }) {
+    return [...heavy(), this.ix([...this.chunkKeys(), ...this.nations(nations).map(k => W(k))], IX.closeCommits())];
   }
   /** A governance action queued for the open tick, signed by the member's session key. */
   submitGov({ signer, civ, member, action }) {
-    return [...medium(), this.ix([R(signer, true), W(this.nation(civ))], IX.submitGov({ member, action }))];
+    return this.submitGovMany({ signer, civ, member, actions: [action] });
   }
-  /** Publish chunk `chunk` of the open tick's input (chunk 0 freezes it). */
+  /** Several governance actions of one member in one transaction, one instruction each. */
+  submitGovMany({ signer, civ, member, actions }) {
+    return [...medium(), ...actions.map(action => this.ix([R(signer, true), W(this.nation(civ))], IX.submitGov({ member, action })))];
+  }
+  /** Publish chunk `chunk` of the open tick's input (chunk 0, once the reveal window closed, freezes it and draws the randomness from the revealed salts). */
   logTickInput({ nations, chunk }) {
     return [...heavy(), this.ix([...this.chunkKeys(), ...this.nations(nations).map(k => W(k))], IX.logTickInput(chunk))];
   }

@@ -59,7 +59,9 @@ pub fn elect(s: &WorldState, entries: &mut Vec<GovEntry>, m: MemberId, roles: &[
     }
 }
 
-/// One office's batch from a member (or the acting official).
+/// One office's batch from `member`; `NOBODY` means "whoever holds the
+/// office" (seat holders with `common::staff` first: a vacant office takes
+/// no batch).
 pub fn batch(
     s: &WorldState,
     civ: u16,
@@ -67,6 +69,11 @@ pub fn batch(
     member: MemberId,
     orders: Vec<Order>,
 ) -> OrderBatch {
+    let member = if member == gov::NOBODY {
+        s.nations[civ as usize].holder(role)
+    } else {
+        member
+    };
     OrderBatch {
         civ,
         tick: s.tick,

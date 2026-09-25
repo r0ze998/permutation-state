@@ -67,12 +67,15 @@ test('publishTickInput: publishes every chunk the first record announces', async
 test('tick index lines: one format for the crank and the reindexer', () => {
   const published = assembleInput(recs(), ['a', 'b', 'c']);
   const rec = { tag: 'PS_TICK', tick: 3, to: 12, preRoot: Buffer.alloc(32, 1), root: Buffer.alloc(32, 2), inputHash: sha(input) };
-  const line = tickLine({ rec, published, signature: 'sig', cu: 1000, submitted: 20 });
-  assert.deepEqual(Object.keys(line), ['tick', 'to', 'preRoot', 'root', 'input', 'inputHash', 'inputSignatures', 'signature', 'cu', 'submitted']);
-  assert.equal(tickLine({ rec, published, signature: 'sig', cu: 1 }).submitted, null);
-  assert.deepEqual(tickLinesOf({ signature: 'sig', cu: 1000, records: [rec] }, published, 20), [line]);
-  assert.throws(() => tickLinesOf({ signature: 'sig', records: [{ ...rec, inputHash: Buffer.alloc(32) }] }, published, 0), /another input/);
-  assert.throws(() => tickLinesOf({ signature: 'sig', records: [], fetched: false }, published, 0), /not fetchable/);
+  const seals = { committed: 22, revealed: 20, commitSignature: 'close' };
+  const line = tickLine({ rec, published, signature: 'sig', cu: 1000, seals });
+  assert.deepEqual(Object.keys(line), ['tick', 'to', 'preRoot', 'root', 'input', 'inputHash', 'inputSignatures', 'signature', 'cu', 'submitted', 'committed', 'revealed', 'commitSignature']);
+  assert.equal(line.submitted, 20, 'submitted = revealed, for older readers');
+  const unknown = tickLine({ rec, published, signature: 'sig', cu: 1 });
+  assert.deepEqual([unknown.submitted, unknown.committed, unknown.commitSignature], [null, null, null]);
+  assert.deepEqual(tickLinesOf({ signature: 'sig', cu: 1000, records: [rec] }, published, seals), [line]);
+  assert.throws(() => tickLinesOf({ signature: 'sig', records: [{ ...rec, inputHash: Buffer.alloc(32) }] }, published, {}), /another input/);
+  assert.throws(() => tickLinesOf({ signature: 'sig', records: [], fetched: false }, published, {}), /not fetchable/);
   const file = path.join(mkdtempSync(path.join(os.tmpdir(), 'ticks-')), 't.jsonl');
   appendTickLines(file, [line, { ...line, tick: 4 }]);
   assert.deepEqual(readTickLines(file, 4), [{ ...line, tick: 4 }]);

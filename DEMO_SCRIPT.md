@@ -2,6 +2,8 @@
 
 映すのは、実際に動いているものだけです。ゲームの操作場面はローカルの MagicBlock スタックで撮ります（ティックを速く回せて、公開 RPC の遅延がないため）。「本番のチェーンでも動く」ことは、devnet で完走したシーズン（[ログ抜粋](demo/devnet-season-1790312639004.txt)）とエクスプローラ、devnet に対する検証で見せます。
 
+> **ルール第6版について（2026-09-25）：** ローカルの操作場面は第6版（命令の封印＝コミットと公開、公開された塩から作る乱数、回転対称の地図、空席の役職を埋めるルールの管理人、完全情報）で撮ります。devnet のプログラムと、シーン6・7で使う devnet のシーズンの記録は第5版のもので、第6版より前に撮ったものです。devnet のシーズンを検証するときは、コミット `a02862f` 以前でビルドした `verify` を使ってください。
+
 - 長さ：3:00（ナレーションは英語、約330語。ゆっくり読んで約2分30秒、残りは画面の間）
 - 画面：ブラウザ 1400×860 前後、ターミナルは文字を大きめ（18pt 以上）
 - 話の軸：**人間と AI が同じ国を一緒に治め、その結果をチェーンが保証する**
@@ -86,7 +88,7 @@ less demo/devnet-season-1790312639004.txt
 |---|---|---|---|
 | 1 | 0:00–0:15 | B（観戦）：6つの国の地図をゆっくり動かす。右上の6つの国の丸いアイコン | "This is PERMUTATION STATE: six nations in one shared world, running on Solana. People and AI agents join a nation as citizens — with exactly the same rights." |
 | 2 | 0:15–0:40 | ターミナル：`curl … /x402/join` で `402 Payment Required` と支払い条件。続けてエージェントのコマンドを実行し、「paid 10 USDC over x402 → member 7 of Aster」。ゲートウェイのログに registration closes → genesis → seated → first election → delegated が流れる（待ち時間は編集で詰める） | "An AI agent joins the way a web client pays: HTTP 402. Its payment is the program's own Register instruction — the entry fee goes straight into a vault the program owns. Then genesis runs on chain, every citizen is seated, and the first election is held on chain." |
-| 3 | 0:40–1:15 | A：Player 1 を引き継ぐ →「国の広場」を開く。将軍・内政官＝Player 1（あなた）、科学官・外交官＝Hypatia（AI）。献策の一覧で「内政官へ・Hypatia」の献策を「採用する」→ 下の「確定する」→ 通知「献策1件の採用を確定」。上部のチェーン表示（T… 封印 ✓ MagicBlock ER）を指し、`（バッククォート）キーでチェーンの詳細を開く | "I'm the general and steward of Aster. The AI, Hypatia, won the science and diplomat offices. It can't command my armies — but it can propose. I adopt its proposal, and we'll share the credit. My orders are sealed with my reasoning, signed with my own session key, and checked by the program on MagicBlock's Ephemeral Rollup." |
+| 3 | 0:40–1:15 | A：Player 1 を引き継ぐ →「国の広場」を開く。将軍・内政官＝Player 1（あなた）、科学官・外交官＝Hypatia（AI）。献策の一覧で「内政官へ・Hypatia」の献策を「採用する」→ 下の「確定する」→ 通知「献策1件の採用を確定」（命令は締切までコミットだけが送られ、締切後に公開される）。上部のチェーン表示（T… 封印 ✓ MagicBlock ER）を指し、`（バッククォート）キーでチェーンの詳細を開く | "I'm the general and steward of Aster. The AI, Hypatia, won the science and diplomat offices. It can't command my armies — but it can propose. I adopt its proposal, and we'll share the credit. My orders are sealed until the deadline — nobody can react to them — signed with my own session key, and checked by the program on MagicBlock's Ephemeral Rollup." |
 | 4 | 1:15–1:35 | A：「外交」を開き、「宣戦には、外交官とは別の人の将軍か内政官の同意が必要」の一文と「⚖ 宣戦に同意」ボタン。続けて「国の広場」の「リコール」ボタン | "Power is checked, on chain. A diplomat can't start a war alone — a second officer must consent. And any majority of citizens can recall an officer, human or AI. Every vote is a transaction." |
 | 5 | 1:35–2:00 | A：「時代」の表（4つの道×5段階）→「功績」の内訳（道ごとの功績。献策の採用による分は、その命令の成果が出たティックから入る）→ 上部の賞金プール。B（観戦）の「公開された判断」に「✓ ブラウザで検証済み」 | "Nations advance on four paths — hegemony, prosperity, science and concord — and enter new eras. The prize pool is split among nations by what they achieved, and inside each nation by each citizen's merit. Every officer's reasoning is revealed after the tick, and your browser checks it against what was committed." |
 | 6 | 2:00–2:30 | C → D → E（エクスプローラ）：devnet のプログラム、シーズンのアカウント、x402 の支払い。続けてターミナルで `less demo/devnet-season-…txt`：「x402: Hypatia joined」「tick 179 resolved on ER」「season finalized on base」「claimed the prize」「vault 135.67 → 0.00; conserved: true」 | "And this isn't a local toy. On Solana devnet, a full season ran on MagicBlock's rollup: an agent joined over x402, played all 180 ticks, and when the world came back to Solana the program paid every citizen — the agent claimed its own prize — and the vault ended at exactly zero." |
@@ -100,7 +102,7 @@ less demo/devnet-season-1790312639004.txt
 >
 > An AI agent joins the way a web client pays: HTTP 402. Its payment is the program's own Register instruction — the entry fee goes straight into a vault the program owns. Then genesis runs on chain, every citizen is seated, and the first election is held on chain.
 >
-> I'm the general and steward of Aster. The AI, Hypatia, won the science and diplomat offices. It can't command my armies — but it can propose. I adopt its proposal, and we'll share the credit. My orders are sealed with my reasoning, signed with my own session key, and checked by the program on MagicBlock's Ephemeral Rollup.
+> I'm the general and steward of Aster. The AI, Hypatia, won the science and diplomat offices. It can't command my armies — but it can propose. I adopt its proposal, and we'll share the credit. My orders are sealed until the deadline — nobody can react to them — signed with my own session key, and checked by the program on MagicBlock's Ephemeral Rollup.
 >
 > Power is checked, on chain. A diplomat can't start a war alone — a second officer must consent. And any majority of citizens can recall an officer, human or AI. Every vote is a transaction.
 >
@@ -136,9 +138,10 @@ less demo/devnet-season-1790312639004.txt
 
 ## 映さないもの（聞かれたときの答え）
 
-- **霧は暗号的には強制されていません。** ER 上のアカウントは読めます。強制は PER（TEE）で行う予定です。
-- **命令は凍結まで平文です。** 締切直前の後出しは、命令の封印（ロードマップ）で防ぐ予定です。
-- **乱数：** 入力が凍結される時点のワールドのルート・スロット・時刻から作っています。MagicBlock VRF に置き換える予定です。
+- **霧（戦場の霧）はありません。** チェーン上のアカウントはすべて公開なので、第6版は完全情報のゲームです（画面の「視界」は表示だけ）。霧のあるモードは、将来プライベートなロールアップで別モードとして作る可能性があるだけです。
+- **命令の封印（第6版）：** 締切まではコミット（ハッシュ）だけを送り、締切後の公開の窓で命令と塩を公開します。同じティックの中で他人の命令に反応することはできません。devnet の第5版では命令は凍結まで平文でした。
+- **乱数（第6版）：** ティック前のワールドのルートと、公開されたすべての塩からチェーン上で作ります（`PS_SALTS`）。外部の VRF は不要で、クランクは結果を選べません。devnet の第5版はルート・スロット・時刻から作っていました。
+- **運営の裁量なし（第6版）：** 空席の役職は運営の鍵では動きません。ルールの管理人が、国民の献策のうち最も支持されたもの（なければ最小限の既定の命令）で毎ティック埋めます。地図は6回回転対称で、どの国の出発地も周囲がまったく同じです。
 - **計算量：** 6か国のティックは、devnet の最新シーズンで平均約80万 CU、最大約104万 CU で、180ティックすべてが1取引で解決しました（上限は140万 CU）。上限を超えるティックが出た場合は、フェーズの区切りで自動的に分割して解決します。
 - **devnet での制約：** MagicBlock の committor は大きすぎる取引を落とすため、世界データを 4KB×20 に分け、ベース層への保存と返却を小さな単位で送っています（[DESIGN.md](permutation-chain/DESIGN.md)）。
 - **お金：** USDC はテスト用で、価値はありません。mainnet には出していません。

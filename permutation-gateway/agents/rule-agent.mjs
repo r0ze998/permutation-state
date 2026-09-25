@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // Reference agent 1: rule-based, no model. A member of one nation: it sees
-// only its nation's fogged view, uses the same previews a human sees, signs
+// only the view every member has (the whole world), uses the same previews a human sees, signs
 // its own batches for the offices it holds, and proposes the rest.
 //
 //   node agents/rule-agent.mjs --name Gaia --server http://127.0.0.1:4185 --gateway http://127.0.0.1:4191 [--civ 5] [--stand Science,Diplomat]
 //
 // Priorities each tick: research → found cities → expand (settlers) →
-// scout the fog → take favourable fights → keep every city building →
+// scout → take favourable fights → keep every city building →
 // accept peace. The rationale names what it did and why, and is revealed
 // after the tick.
 import { parseArgs, runAgent } from './runner.mjs';

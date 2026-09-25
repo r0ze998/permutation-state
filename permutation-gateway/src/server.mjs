@@ -35,7 +35,9 @@ export async function main(argv = process.argv.slice(2)) {
   const log = (...a) => console.log(stamp(), ...a);
 
   const store = createStateStore(cfg.stateFile);
-  if (cfg.newSeason || !store.load()) {
+  // Load first: a new season follows the finalized one this file held.
+  const had = store.load();
+  if (cfg.newSeason || !had) {
     await bootstrap({ base, cfg, store, roster: defaultRoster({ humans: cfg.humans, ai: cfg.ai }), log });
   }
   const crank = new Crank({ base, er, cfg, store, log });

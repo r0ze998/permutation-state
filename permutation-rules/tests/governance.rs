@@ -7,7 +7,7 @@ use common::nations::*;
 use permutation_rules::buildings::Building;
 use permutation_rules::checks::Blocked;
 use permutation_rules::gov::{self, GovAction, GovEntry, Path, Role, NOBODY};
-use permutation_rules::orders::{validate_batch, Order};
+use permutation_rules::orders::{validate_batch, Order, OrderBatch};
 use permutation_rules::state::{Focus, QueueItem};
 use permutation_rules::tech::Tech;
 use permutation_rules::RulesError;
@@ -60,7 +60,10 @@ fn only_the_office_holder_can_order_and_must_seal_a_rationale() {
         validate_batch(&s, &rules, &not_holder),
         Err(RulesError::NotOfficer)
     );
-    let acting = batch(&s, 0, Role::Steward, NOBODY, vec![focus.clone()]);
+    let acting = OrderBatch {
+        member: NOBODY,
+        ..batch(&s, 0, Role::Steward, 0, vec![focus.clone()])
+    };
     assert_eq!(
         validate_batch(&s, &rules, &acting),
         Err(RulesError::NotOfficer),
@@ -100,6 +103,8 @@ fn only_the_office_holder_can_order_and_must_seal_a_rationale() {
 #[test]
 fn unit_orders_follow_the_unit_type() {
     let (rules, mut s) = world(&[]);
+    common::staff(&mut s);
+    let steward = s.nations[0].holder(Role::Steward);
     let spear = s
         .units
         .iter()
@@ -117,7 +122,7 @@ fn unit_orders_follow_the_unit_type() {
         &s,
         0,
         Role::Steward,
-        NOBODY,
+        steward,
         vec![Order::MoveUnit {
             unit: spear,
             path: vec![next],
@@ -134,6 +139,10 @@ fn unit_orders_follow_the_unit_type() {
 #[test]
 fn budgets_are_split_by_office_and_banked_per_office() {
     let (rules, mut s) = world(&[]);
+    // Held offices that stay idle bank their share (a vacant one's
+    // caretaker would spend it).
+    common::staff(&mut s);
+    let steward = s.nations[0].holder(Role::Steward);
     assert_eq!(s.civs[0].tick_budget, 4);
     idle(&mut s, &rules, 2);
     // Two idle ticks: each office banked its own share (1 each at B = 4).
@@ -153,7 +162,7 @@ fn budgets_are_split_by_office_and_banked_per_office() {
             focus: Focus::Production,
         },
     ];
-    let b = batch(&s, 0, Role::Steward, NOBODY, three);
+    let b = batch(&s, 0, Role::Steward, steward, three);
     assert_eq!(
         validate_batch(&s, &rules, &b),
         Ok(3),
@@ -509,14 +518,12 @@ fn growth_and_gold_earn_the_active_steward_merit() {
 #[test]
 fn milestones_and_eras_are_announced_and_scored() {
     let (rules, mut s) = world(&[]);
-    // Give civ 0 four techs and an envoy: science 1 and concord 1 = era 1.
-    for t in [
-        Tech::Agriculture,
-        Tech::BronzeWorking,
-        Tech::Writing,
-        Tech::Mysticism,
-    ] {
-        s.civs[0].techs.insert(t);
+    // Give civ 0 science tier 1's techs and an envoy: science 1 and concord 1 = era 1.
+    for t in permutation_rules::tech::TECHS
+        .iter()
+        .take(rules.science_techs[0] as usize)
+    {
+        s.civs[0].techs.insert(t.tech);
     }
     s.civs[0].achievements.envoy_sent = true;
     idle(&mut s, &rules, 1);

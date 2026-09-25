@@ -48,13 +48,17 @@ test('every commit and undelegate intent fits', () => {
   }
 });
 
-test('a full SubmitOrders batch fits, signed by the session key and the fee payer', () => {
+test('a full RevealOrders batch fits, signed by the session key and the fee payer', () => {
   const order = { type: 'SendEnvoy', cityState: 1, influence: 5 }; // 7 bytes
   const orders = Array.from({ length: Math.floor(BATCH_BYTES / 7) }, () => order);
   const batch = packBatch({ orders });
   assert.ok(batch.fits && batch.used > BATCH_BYTES - 7);
-  fits(`submitOrders (${batch.used} bytes of orders)`, chain.submitOrders({ signer: session.publicKey, civ: 5, role: 'Diplomat', tick: 179,
-    decisionDigest: new Uint8Array(32).fill(9), orders: batch.orders, adopt: [1, 2, 3] }), [crank, session]);
+  fits(`revealOrders (${batch.used} bytes of orders)`, chain.revealOrders({ signer: session.publicKey, civ: 5, role: 'Diplomat', tick: 179,
+    decisionDigest: new Uint8Array(32).fill(9), orders: batch.orders, adopt: [1, 2, 3], salt: new Uint8Array(32).fill(4) }), [crank, session]);
+});
+
+test('a CommitOrders fits, signed by the session key and the fee payer', () => {
+  fits('commitOrders', chain.commitOrders({ signer: session.publicKey, civ: 5, role: 'Diplomat', tick: 179, commitment: new Uint8Array(32).fill(3) }), [crank, session]);
 });
 
 test('an x402 Register with the longest name fits', () => {

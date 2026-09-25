@@ -4,7 +4,7 @@ mod common;
 use common::{free, vrf};
 use permutation_rules::checks::{standing, Blocked};
 use permutation_rules::genesis::{new_season, Entry};
-use permutation_rules::gov::{Role, NOBODY};
+use permutation_rules::gov::Role;
 use permutation_rules::hex::Hex;
 use permutation_rules::invariants;
 use permutation_rules::map::Terrain;
@@ -30,6 +30,8 @@ fn setup() -> (Ruleset, WorldState) {
             t.terrain = Terrain::Grassland;
         }
     }
+    // Officers to take the orders (a vacant office takes none).
+    common::staff(&mut s);
     (rules, s)
 }
 
@@ -39,7 +41,7 @@ fn step(s: &mut WorldState, rules: &Ruleset, orders: Vec<(u16, Vec<Order>)>) {
     }
     let batches = orders
         .into_iter()
-        .flat_map(|(civ, orders)| office_batches(s, civ, [0; 32], orders))
+        .flat_map(|(civ, orders)| office_batches(s, civ, [9; 32], orders))
         .collect();
     resolve_tick(
         s,
@@ -125,9 +127,9 @@ fn setting_a_rule_costs_one_order_and_is_checked() {
         civ: 0,
         tick: 0,
         role: Role::General,
-        member: NOBODY,
+        member: s.nations[0].holder(Role::General),
         adopt: vec![],
-        decision_digest: [0; 32],
+        decision_digest: [9; 32],
         orders: vec![set(
             StandingTarget::Unit(spear),
             StandingOrder::AutoDefend { radius: 2 },
@@ -138,9 +140,9 @@ fn setting_a_rule_costs_one_order_and_is_checked() {
         civ: 0,
         tick: 0,
         role: Role::General,
-        member: NOBODY,
+        member: s.nations[0].holder(Role::General),
         adopt: vec![],
-        decision_digest: [0; 32],
+        decision_digest: [9; 32],
         orders: vec![set(
             StandingTarget::Unit(scout),
             StandingOrder::Patrol {

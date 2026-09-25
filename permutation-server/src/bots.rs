@@ -1,11 +1,11 @@
 //! Scripted rule-based bots with four personalities (Warlord, Builder,
 //! Diplomat, Scholar). They play through the same order API as a human,
-//! decide from their own fogged belief state, and commit a short rationale
+//! decide from the full state like every player (perfect information), and commit a short rationale
 //! each tick (§4.3). They are a sparring partner, not the reference agent.
 
 use permutation_rules::buildings::Building;
 use permutation_rules::hex::Hex;
-use permutation_rules::orders::{AttackTarget, Order, StandingOrder, StandingTarget};
+use permutation_rules::orders::{AttackTarget, Good, Order, Side, StandingOrder, StandingTarget};
 use permutation_rules::state::{
     CivId, Owner, ProposalKind, QueueItem, Relation, StandingRule, WorldState,
 };
@@ -131,7 +131,7 @@ pub const PERSONAS: [Persona; 6] = [
     Persona::Diplomat,
 ];
 
-/// A scripted rule-based player. Reads the full state (no fog view yet).
+/// A scripted rule-based player. Reads the full state, like every player.
 pub struct Bot {
     pub civ: CivId,
     pub persona: Persona,
@@ -243,9 +243,8 @@ fn site_value(s: &WorldState, h: Hex) -> u32 {
 // ------------------------------------------------------------------ the bot
 
 impl Bot {
-    /// Orders for this tick. `s` must be this civ's **belief state** and
-    /// `explored` its memory of seen tiles (`vision`, §7.4): bots play under
-    /// the same fog as humans.
+    /// Orders for this tick, from the state `s` every player sees (perfect
+    /// information) and `explored`, the tiles it knows (all of them).
     pub fn orders(&mut self, s: &WorldState, r: &Ruleset, explored: &[bool]) -> Vec<Order> {
         let civ = self.civ;
         let me = &s.civs[civ as usize];
@@ -258,6 +257,39 @@ impl Bot {
         // (priority, order): lower number = more important.
         let mut wish: Vec<(u8, Order)> = Vec::new();
 
+        // Treaty partners (NAP or alliance) and capital distances, for the
+        // warlord's one pact with a civ it does not mean to attack.
+        let partners = (0..n)
+            .filter(|o| {
+                *o != civ
+                    && matches!(
+                        s.relation(civ, *o),
+                        Relation::Nap { .. } | Relation::Alliance { .. }
+                    )
+            })
+            .count();
+        let cap_distance = |o: CivId| -> Option<u32> {
+            let mine = s.cities.get(me.capital? as usize)?.hex;
+            let theirs = s
+                .cities
+                .get(s.civs[o as usize].capital? as usize)
+                .filter(|c| c.alive)?;
+            Some(theirs.hex.distance(mine))
+        };
+        // The warlord's next target is the nearest civ at peace; any other
+        // civ at peace is a pact candidate.
+        let not_target = |o: CivId| {
+            let Some(d) = cap_distance(o) else {
+                return false;
+            };
+            (0..n).any(|x| {
+                x != civ
+                    && x != o
+                    && matches!(s.relation(civ, x), Relation::Peace)
+                    && cap_distance(x).is_some_and(|dx| dx < d)
+            })
+        };
+
         // ---- diplomacy: answer proposals addressed to me
         for p in s
             .proposals
@@ -267,7 +299,9 @@ impl Bot {
             let accept = match (p.kind, self.persona) {
                 (ProposalKind::Peace, Persona::Warlord) => troops_of(s, civ) < troops_of(s, p.from),
                 (ProposalKind::Peace, _) => true,
-                (ProposalKind::Nap { .. }, Persona::Warlord) => false,
+                (ProposalKind::Nap { .. }, Persona::Warlord) => {
+                    partners == 0 && me.gold >= 40_000 && not_target(p.from)
+                }
                 (ProposalKind::Nap { .. }, _) => me.gold >= 40_000,
                 (ProposalKind::Alliance, Persona::Diplomat | Persona::Builder) => true,
                 (ProposalKind::Alliance, _) => false,
@@ -292,7 +326,7 @@ impl Bot {
             (0..n)
                 .filter(|o| *o != civ && filter(*o))
                 .filter_map(|o| {
-                    // Only capitals this civ has actually seen (fog, §7.4).
+                    // Living capitals only.
                     let oc = s.civs[o as usize].capital?;
                     let c = s.cities.get(oc as usize).filter(|c| c.alive)?;
                     Some((c.hex.distance(cap), o))
@@ -312,23 +346,44 @@ impl Bot {
                 }
                 for o in 0..n {
                     let since = self.war_started.get(&o).copied().unwrap_or(s.tick);
-                    if s.at_war(civ, o) && (s.tick - since >= 45 || troops_of(s, civ) < 4) {
+                    // Holding a city taken from them: make peace and keep it.
+                    let holds_theirs = s
+                        .cities
+                        .iter()
+                        .any(|c| c.alive && c.owner == Some(civ) && c.captured_from == Some(o));
+                    let long = s.tick - since >= if holds_theirs { 20 } else { 45 };
+                    if s.at_war(civ, o) && (long || troops_of(s, civ) < 4) {
                         wish.push((1, Order::ProposePeace { civ: o }));
+                    }
+                }
+                // One pact with the farthest civ at peace, to keep a treaty
+                // partner while fighting the nearest.
+                let offered = |o: CivId| s.proposals.iter().any(|p| p.from == civ && p.to == o);
+                if s.tick % 5 == 0 && partners == 0 && me.gold >= 50_000 {
+                    if let Some(t) = (0..n)
+                        .filter(|o| {
+                            *o != civ
+                                && matches!(s.relation(civ, *o), Relation::Peace)
+                                && !offered(*o)
+                                && not_target(*o)
+                        })
+                        .filter_map(|o| Some((cap_distance(o)?, o)))
+                        .max()
+                        .map(|(_, o)| o)
+                    {
+                        wish.push((
+                            2,
+                            Order::ProposeNap {
+                                civ: t,
+                                bond: r.nap_min_bond,
+                            },
+                        ));
                     }
                 }
             }
             Persona::Diplomat | Persona::Builder | Persona::Scholar => {
                 // Keep up to three treaty partners: offer non-aggression pacts to
                 // the nearest civs at peace, and (diplomats) turn pacts into alliances.
-                let partners = (0..n)
-                    .filter(|o| {
-                        *o != civ
-                            && matches!(
-                                s.relation(civ, *o),
-                                Relation::Nap { .. } | Relation::Alliance { .. }
-                            )
-                    })
-                    .count();
                 let offered = |o: CivId| s.proposals.iter().any(|p| p.from == civ && p.to == o);
                 if s.tick % 5 == 0 && partners < 3 && me.gold >= 50_000 {
                     if let Some(t) = nearest_civ(&|o| {
@@ -362,7 +417,7 @@ impl Bot {
         // (or already is) suzerain, then the nearest.
         let envoy_at = match self.persona {
             Persona::Diplomat => 15_000,
-            Persona::Warlord => 60_000,
+            Persona::Warlord => 30_000,
             _ => 30_000,
         };
         if me.influence >= envoy_at {
@@ -387,6 +442,57 @@ impl Bot {
                         },
                     ));
                 }
+            }
+        }
+
+        // ---- trade (concord): the gold market for surplus or missing iron
+        // and horses, and small gold gifts to treaty partners and allies.
+        if me.techs.has(permutation_rules::tech::Tech::Currency) && s.tick % 5 == 2 {
+            for (good, stock) in [(Good::Iron, me.iron), (Good::Horses, me.horses)] {
+                let whole = (stock / 1000) as u32;
+                if whole > 20 {
+                    wish.push((
+                        4,
+                        Order::MarketTrade {
+                            good,
+                            side: Side::Sell,
+                            amount: whole - 10,
+                            limit_gold: 0,
+                        },
+                    ));
+                } else if whole < 5 && me.gold > 150_000 {
+                    wish.push((
+                        4,
+                        Order::MarketTrade {
+                            good,
+                            side: Side::Buy,
+                            amount: 5,
+                            limit_gold: (me.gold / 1000 / 3) as u32,
+                        },
+                    ));
+                }
+            }
+        }
+        if s.tick % 10 == 7 && me.gold > 100_000 {
+            let friends: Vec<CivId> = (0..n)
+                .filter(|o| {
+                    *o != civ
+                        && matches!(
+                            s.relation(civ, *o),
+                            Relation::Nap { .. } | Relation::Alliance { .. }
+                        )
+                })
+                .collect();
+            let gift = (me.last.gold / 2).max(1);
+            for o in friends.into_iter().take(2) {
+                wish.push((
+                    4,
+                    Order::Transfer {
+                        civ: o,
+                        good: Good::Gold,
+                        amount: gift,
+                    },
+                ));
             }
         }
 
@@ -555,9 +661,19 @@ impl Bot {
                         && good_site(s, r, civ, t.hex)
                 })
                 .max_by_key(|t| {
+                    // Ties by a per-season random key, not the tile index:
+                    // index order depends on direction, which would favour
+                    // some positions of a symmetric map over others.
                     (
                         site_value(s, t.hex),
                         std::cmp::Reverse(t.hex.distance(u.hex)),
+                        permutation_rules::rng::rand_id(
+                            &s.season_seed,
+                            b"bot-site",
+                            ((t.hex.q as i64 as u64) << 32)
+                                ^ (t.hex.r as i64 as u64 & 0xffff_ffff)
+                                ^ ((civ as u64) << 48),
+                        ),
                     )
                 })
                 .map(|t| t.hex);

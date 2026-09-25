@@ -10,6 +10,7 @@
 import { PublicKey } from '@solana/web3.js';
 import { decodeSeason, NATIONS } from '../../client/src/codec.mjs';
 import { RouteError } from './errors.mjs';
+import { countSeals } from '../crank.mjs';
 
 const b58 = k => new PublicKey(k).toBase58();
 /** How old a world snapshot /world.bin may serve (ms). */
@@ -32,7 +33,28 @@ export const seasonRoutes = {
     };
   },
 
+  // The history layer: the season it follows and, once finalized, its
+  // record (PS_HISTORY) and history root, which the next season takes over.
+  'GET /history': async ({ base, chain, store }) => {
+    const s = decodeSeason((await base.getAccountInfo(chain.season, 'confirmed')).data);
+    const hex = b => Buffer.from(b).toString('hex');
+    return { body: { season: String(s.seasonId), prevSeasonId: String(s.prevSeasonId), prevHistoryRoot: hex(s.prevHistoryRoot),
+      historyRoot: s.status === 'Finalized' ? hex(s.historyRoot) : null, record: store.state.history?.record ?? null, signature: store.state.history?.signature ?? null } };
+  },
+
   'GET /ticks': async ({ crank }, req) => ({ body: { records: crank.tickRecords(Number(req.url.searchParams.get('from') || 0)) } }),
+
+  // The open tick's sealed-orders phase: `commit` (CommitOrders until
+  // `deadline`), `reveal` (RevealOrders until `deadline`), `frozen` (being
+  // published and resolved). Agents reveal when it says `reveal`.
+  'GET /tick': async ({ crank, now }) => {
+    const snap = now() - (crank.snapshot?.at ?? 0) < SNAPSHOT_MAX_AGE_MS ? crank.snapshot : await crank.refresh();
+    if (!snap) throw new RouteError(503, 'world not available', 'WorldUnavailable');
+    const { meta } = snap.header;
+    const { committed, revealed } = countSeals(snap.nations);
+    const phase = meta.finished ? 'finished' : meta.frozen ? 'frozen' : meta.revealing ? 'reveal' : 'commit';
+    return { body: { tick: snap.nations[0]?.openTick ?? null, phase, deadline: meta.deadline, committed, revealed, slot: snap.slot } };
+  },
 
   'GET /world.bin': async ({ crank, now }) => {
     const snap = now() - (crank.snapshot?.at ?? 0) < SNAPSHOT_MAX_AGE_MS ? crank.snapshot : await crank.refresh();

@@ -55,17 +55,21 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -> Pr
             world_seed,
             crank,
             market,
+            prev_season_id,
         } => create_season(
             program_id,
             accounts,
             season_id,
-            preset,
-            nations,
-            entry_fee,
-            tick_seconds,
-            world_seed,
-            crank,
-            market,
+            SeasonParams {
+                preset,
+                nations,
+                entry_fee,
+                tick_seconds,
+                world_seed,
+                crank,
+                market,
+                prev_season_id,
+            },
         ),
         ChainInstruction::AllocWorld { chunk } => alloc_world(program_id, accounts, chunk),
         ChainInstruction::Register {
@@ -92,21 +96,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -> Pr
         ChainInstruction::StartSeason => start_season(program_id, accounts),
         ChainInstruction::GenesisStep { work } => genesis_step(program_id, accounts, work),
         ChainInstruction::Delegate { target } => delegate(program_id, accounts, target),
-        ChainInstruction::SubmitOrders {
-            role,
-            tick,
-            decision_digest,
-            orders,
-            adopt,
-        } => submit_orders(
-            program_id,
-            accounts,
-            role,
-            tick,
-            decision_digest,
-            orders,
-            adopt,
-        ),
+        ChainInstruction::SubmitOrders { .. } => Err(ChainError::Retired.into()),
         ChainInstruction::ResolveTick { to } => resolve_tick(program_id, accounts, to),
         ChainInstruction::Commit => commit(program_id, accounts, false),
         ChainInstruction::CommitAndUndelegate => commit(program_id, accounts, true),
@@ -129,5 +119,30 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -> Pr
         ChainInstruction::CommitPart { targets } => {
             commit_part(program_id, accounts, targets, false)
         }
+        ChainInstruction::CloseCommits => close_commits(program_id, accounts),
+        ChainInstruction::CommitOrders {
+            role,
+            tick,
+            commitment,
+        } => commit_orders(program_id, accounts, role, tick, commitment),
+        ChainInstruction::RevealOrders {
+            role,
+            tick,
+            decision_digest,
+            orders,
+            adopt,
+            salt,
+        } => reveal_orders(
+            program_id,
+            accounts,
+            role,
+            tick,
+            OrderBatchParts {
+                decision_digest,
+                orders,
+                adopt,
+            },
+            salt,
+        ),
     }
 }

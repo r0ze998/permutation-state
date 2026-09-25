@@ -69,9 +69,34 @@ pub(super) fn advance_razing(state: &mut WorldState) {
     }
 }
 
+/// When a city becomes a Free City, no civ's unit may stay inside it (a
+/// city tile is entered only by capture, §7.3): each unit steps to the first
+/// free passable neighbour in §0.3 order (turned to the tile's sextant) that
+/// is not a city; with none free it is disbanded.
+pub(crate) fn displace_all(state: &mut WorldState, hex: crate::hex::Hex) {
+    for i in 0..state.units.len() {
+        if !(state.units[i].alive && state.units[i].hex == hex) {
+            continue;
+        }
+        let target = hex.neighbors_in(hex.sextant()).into_iter().find(|n| {
+            state.map.tile(*n).is_some_and(|t| t.terrain.is_passable())
+                && !state.units.iter().any(|o| o.alive && o.hex == *n)
+                && !state.cities.iter().any(|c| c.alive && c.hex == *n)
+                && !state.city_states.iter().any(|c| c.hex == *n)
+        });
+        let u = &mut state.units[i];
+        u.path.clear();
+        match target {
+            Some(n) => u.hex = n,
+            None => u.alive = false,
+        }
+    }
+}
+
 /// When a tile stops being an own city (ruin, Free City), an army and a
 /// civilian may no longer share it (§7.2). Each civilian steps to the first
-/// free passable neighbour in §0.3 order; with none free it is disbanded.
+/// free passable neighbour in §0.3 order (turned to the tile's sextant); with
+/// none free it is disbanded.
 pub(crate) fn displace_civilians(state: &mut WorldState, hex: crate::hex::Hex) {
     let has_army = state
         .units
@@ -93,7 +118,7 @@ pub(crate) fn displace_civilians(state: &mut WorldState, hex: crate::hex::Hex) {
         if own_city {
             continue;
         }
-        let target = hex.neighbors().into_iter().find(|n| {
+        let target = hex.neighbors_in(hex.sextant()).into_iter().find(|n| {
             state.map.tile(*n).is_some_and(|t| t.terrain.is_passable())
                 && !state.units.iter().any(|o| o.alive && o.hex == *n)
                 && !state.cities.iter().any(|c| c.alive && c.hex == *n)

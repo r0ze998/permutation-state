@@ -1,6 +1,6 @@
 # PERMUTATION STATE — Rules Specification v0.2 (`permutation-rules`)
 
-Status: implemented in `permutation-rules`, 2026-09-24. `RULES_VERSION = 5` (v0.1 + v0.2 changes + [Game Design V5](PERMUTATION_STATE_GAME_DESIGN_V5.md)).
+Status: implemented in `permutation-rules`, 2026-09-24; revised to `RULES_VERSION = 6` on 2026-09-25 (see "Version 6" below and [Game Design V5 §17](PERMUTATION_STATE_GAME_DESIGN_V5.md)). Seasons recorded under version 5, such as the devnet seasons, verify with a build of commit `a02862f` or earlier.
 Audience: implementers of the `permutation-rules` Rust crate, the ER program (`permutation-chain`), the replay verifier, the game client and agent authors.
 Normative words: **MUST / MUST NOT / SHOULD / MAY**. Every number here is a ruleset parameter (`params.rs`, `Ruleset::new`); the full parameter set and the static tables are serialized and hashed into `ruleset_hash` before a season opens.
 
@@ -21,6 +21,15 @@ Normative words: **MUST / MUST NOT / SHOULD / MAY**. Every number here is a rule
 - **C10 and C11 are superseded** by Game Design V5 and not merged. The v0.1 §14 scoring (Dominion / Science / Concord tracks, prize coalitions, §14.5 track payouts) is replaced by V5 achievements and payout (§14).
 - **V5 replacements:** nations of members instead of civs-as-seats; four offices with their own budgets; elections, proposals, recalls and consents (§3.1, §4, §14.6); four paths × five milestone tiers, eras and achievement points (max 1125); payout by points and merit (§14); the USDC market with nation treasuries, call auctions, a rising tariff and delivery (§11.3); on-chain input publication (§15.1–15.2).
 - **Corrections to v0.1 found in the code:** there is no late entry (§3.1); the order window ends when the input is frozen, not 2% before the boundary (§1); the Science focus multiplies the city's whole science, not only Academy output (§5.1); captured cities count as held from capture, with no hold period (§8.3.1); USDC-market sellers sell from stored food and production (§11.3); Star Gate records move to phase 6 and aggressor flags are set when the act happens (§15); no Crisis and no Season Law are implemented (§12.2, §16); the aggressor flag is recorded but no rule reads it (§9.2).
+
+**Version 6 (2026-09-25)** — good game and on-chain verifiability ([V5 §17](PERMUTATION_STATE_GAME_DESIGN_V5.md)):
+- **City tiles** (§7.3, §8.3 #10): a unit enters a city tile only if the city is its own (`ForeignCity` = 52); every unit leaves a city that becomes a Free City. (Fixes two units sharing a tile after a capture.)
+- **Map seed and starts** (§2.4): the map comes from `map_seed(world_seed, season_seed)`; nation `i` starts at `starts[start_order(season_seed)[i]]`.
+- **Symmetric maps** (§2.4): for 1, 2, 3 or 6 nations the map is six-fold rotationally symmetric (`mapgen`); rules that break ties by direction or tile index use the hex's sextant (`Hex::turned`, `Hex::neighbors_in`) so that play is identical under rotation.
+- **Sealed orders and randomness** (§0.2, §4.5, §15.2): `CommitOrders` / `CloseCommits` / `RevealOrders` replace `SubmitOrders`; `vrf_t = tick_vrf(pre_root, revealed salts)`.
+- **Caretaker** (§4.5): a vacant office takes no batch; the rules fill it from the members' top proposal or a minimal default.
+- **Information** (§7.4): the server and every view use the full state (perfect information).
+- **Paths and pacing** (§6.2, §10.2, §12.2, §14.1): science tiers 4–5 need the Star Gate held; hegemony tier 3 banks a conquest; peace after a war of ≥ 6 ticks is a pact; eurekas; the crisis on the leaders; the dark age. Thresholds recalibrated (V5 §6.2).
 
 ---
 
@@ -44,8 +53,7 @@ Normative words: **MUST / MUST NOT / SHOULD / MAY**. Every number here is a rule
 ### 0.2 Determinism
 - Iteration order is always by ascending ID (civ_id, then entity id). Hash maps MUST NOT determine iteration order.
 - **Tick seed:** `seed_t = sha256(season_seed ‖ vrf_t ‖ t)` (`rng::tick_seed`), set in phase 0. `vrf_t` is the tick's randomness, carried in the tick input (`TickInput.vrf`).
-  - **As implemented on chain:** `vrf_t` is drawn when the tick's input is frozen by the first `LogTickInput` call (§15.2): `vrf_t = sha256("PS/tick-vrf/v2" ‖ world_root ‖ slot ‖ unix_time)`, where `world_root` is the hash of the committed world before the tick. No order or governance action can be added after that point, so `seed_t` is unknown while orders are being submitted.
-  - **Known limit:** whoever freezes the input chooses the slot. MagicBlock VRF is the planned replacement (V5 §9).
+  - **As implemented on chain (version 6):** `vrf_t = tick_vrf(pre_root, salts) = sha256("permutation-rules/tick-vrf" ‖ pre_root ‖ for each revealed batch in (civ, office) order: civ u16le ‖ office u8 ‖ salt)`, drawn when the first `LogTickInput` freezes the input (§15.2) and logged as `PS_SALTS (tick, pre_root, salts)`. `pre_root` is the hash of the world before the tick. Each salt was sealed inside its office's commitment before the commitments closed and is known only to that officer until the reveal, so nobody — the crank that sends the transaction included — can choose `vrf_t`. An officer who withholds a reveal to steer it loses that office's orders for the tick. (Version 5 used the slot and time of the freezing transaction, which its sender could choose.)
 - `rand(seed_t, domain, id)` = the first 8 bytes (little-endian) of `sha256(seed_t ‖ len(domain) as u8 ‖ domain ‖ id)` as `u64`. Each random draw names its own `domain` string, so draws are independent and reproducible. The one-byte length prefix keeps domains from colliding (`"ab"‖"c"` ≠ `"a"‖"bc"`).
 - **Tie-break:** when two entities contend for the same thing (a tile, a capture, a trade fill, an election), priority is given by ascending `rand(seed_t, "tie", id)`.
 
@@ -114,7 +122,8 @@ Reserves persist across seasons (the "one save" world). Depletion is part of the
 - **Ruins** from the previous season: carried over from persistent state (§3.4).
 
 ### 2.4 Generation and fairness
-- Generation is deterministic from `world_seed` for the first season. After that the persistent map is reused; only city-states and hubs respawn, from `season_seed`.
+- **Seed (version 6):** every season generates a new map from `map_seed = sha256("permutation-rules/map-seed" ‖ world_seed ‖ season_seed)`. The season seed exists only once registration closes, so nobody can compute the map (or pick a world seed for one) before nations are chosen. Nation `i` starts at `starts[start_order(season_seed, n)[i]]`, a permutation drawn from the season seed. Terrain does not persist between seasons; only the history record does (§3.4, V5 §17.5).
+- **Symmetric maps (version 6, `mapgen`):** with 1, 2, 3 or 6 nations the map is six copies of the sextant `q > 0, r ≥ 0` turned by 60°: integer value noise in (ring, angle) for elevation and moisture, terrain by rank with the share table's counts per sextant, a ridge along each seam with two passes (a city-state in the outer one: six city-states), the hub on the centre tile with iron and horses fields around it, per start two wheat and a half-reserve iron and horses deposit, rivers downhill from hills next to mountains, cut-off land opened. Starts sit at ring `radius − 4` in the middle of each sextant (`k · 6/n` for `n` nations). It is generated in a few steps (terrain, connectivity, rivers and resources). The rules below apply to other nation counts.
 - **Start sites:** each lies ≥ **7** tiles from any other start and not on the map's outermost ring. Within radius 2 it must have ≥ 2 tiles with food ≥ 2 and ≥ 1 Forest or Hills. Within radius 5 it must have ≥ 1 Iron or Horses. A start tile carries no resource.
 - **Placement (farthest-point):** the first start is the valid site with the lowest `rand(…, "start", tile_index)`. Each next start is the valid site farthest from all chosen starts (ties: lowest random key). If the best remaining spacing is below 7, the attempt fails and the generator rerolls with the next attempt seed.
 - **Start value** `V = Σ over the radius-3 tiles of (2×food + 2×prod + gold) + 6 × strategic resources within radius 5`.
@@ -134,7 +143,7 @@ Reserves persist across seasons (the "one save" world). Depletion is part of the
 - `Register` also carries: the nation, a display name, a session key (signs governance actions and, in office, orders), the declared kind (`Human | Agent | Undeclared`, cosmetic only — no rule reads it), an optional agent attestation hash (for example ERC-8004, shown as "verified AI"), the offices the member stands for, the member's votes for the first election, and an optional treasury deposit (§11.3; only in seasons with the market on).
 - During registration a member may change its candidacy and votes (`UpdateMember`).
 - **Seating:** after genesis the operator adds members to the world in registration order (`SeatMembers`), then holds the first election (`OpenGovernment`, §14.6). Each step's state root is logged (`PS_SEAT`, `PS_OPEN`), so anyone can recompute it.
-- A nation with no members is run entirely by the acting official (§4.5). It plays normally but never shares the pool (§14.4).
+- A nation with no members is run entirely by the caretaker (§4.5, version 6; version 5: the operator's acting official). It never shares the pool (§14.4).
 - *Removed from v0.1:* the 2-civs-per-wallet and 2-per-ERC-8004-operator limits, and prize coalitions.
 
 ### 3.2 Starting state
@@ -216,7 +225,7 @@ Only **office holders** give orders (V5 §5.1). Each nation has four offices: **
 ### 4.3 Order commitments
 Every `SubmitOrders` transaction carries `decision_digest = sha256("PS/decision/v1" ‖ tick ‖ obs_root ‖ policy_id ‖ rationale_hash)` (§7.5). `obs_root` is the Merkle root of the fog-filtered view served to that civilization for tick `t`. In phase 0 the digest of each accepted batch is appended to the event chain as `decision(civ, office, member, digest)`, before anything resolves. It is never interpreted by the rules.
 
-- **A batch from an office holder MUST carry a non-zero digest** (V5 D17); otherwise it is refused on chain and rejected by the engine (`MissingRationale`). The acting official (§4.5) may send a zero digest.
+- **A batch from an office holder MUST carry a non-zero digest** (V5 D17); otherwise it is refused on chain and rejected by the engine (`MissingRationale`). (Version 5: the acting official could send a zero digest; version 6 has none, §4.5.)
 - The game server publishes each civ's `obs_root` for the open tick (`decision.obsRoot` in that civ's view). Hosted players and bots commit through the server's ledger; an outside agent computes the digest itself against the published root, and the server learns it from the published tick input (`PS_INPUT`, §15.2).
 - The reveal is a `RevealRationale { tick, policy, salt, text }` order in a later batch of the same office (cost 0; only for ticks already resolved: `tick < open_tick`). Anyone recomputes the digest; a mismatch is shown as unverified, never trusted.
 - A zero digest means "no commitment". The commitment proves what was claimed and when, not that the claim is true.
@@ -224,12 +233,13 @@ Every `SubmitOrders` transaction carries `decision_digest = sha256("PS/decision/
 ### 4.4 Skipped orders (C12)
 - `WorldState.last_skipped: Vec<Skip>` holds every order of the tick just resolved that did not take effect.
 - `Skip = (civ, office, index, reason)`. `index` is the order's position in that office's batch (own orders first, then adopted proposals); `u16::MAX` means the whole batch was rejected. `reason` is a `checks::Blocked` code (`BLOCKED_NAMES` gives the names), the same catalogue the client previews use.
-- Codes added for v0.2 and V5: `BatchRejected`, `WrongOffice`, `NeedsConsent`, `AlreadyPurchased`, `CannotBuyStarGate`, `NoCounterparty`, `NeedsSpendConsent`, `NotEnoughUsdc`.
+- Codes added for v0.2 and V5: `BatchRejected`, `WrongOffice`, `NeedsConsent`, `AlreadyPurchased`, `CannotBuyStarGate`, `NoCounterparty`, `NeedsSpendConsent`, `NotEnoughUsdc`, `ForeignCity` (added 2026-09-25, §7.3).
 - It is cleared in phase 0 and is part of the state root.
 
-### 4.5 Office batches, the acting official, adoption and consent
-- **One batch per office per tick.** On chain, a new `SubmitOrders` replaces the office's earlier batch for the open tick. The engine uses the first valid batch per office in the input.
-- **Signer:** the office holder's session key. For a vacant office, the operator's crank key signs as the **acting official** (`NOBODY`, V5 §8). The acting official's orders count normally but earn no merit.
+### 4.5 Office batches, the caretaker, adoption and consent
+- **One batch per office per tick, sealed (version 6).** On chain an office holder first sends `CommitOrders { commitment }` with `commitment = order_commitment(batch, salt) = sha256("permutation-rules/orders" ‖ borsh(OrderBatch) ‖ salt)` (a later commitment of the same tick replaces it). After the deadline anyone sends `CloseCommits`, which logs `PS_COMMITS (tick, [(civ, office, member, commitment)])` and closes governance for the tick; then `RevealOrders { digest, orders, adopt, salt }` must hash to the commitment and pass the batch checks. A batch not revealed before the reveal window closes does not run. `SubmitOrders` is retired. The engine uses the first valid batch per office in the input.
+- **Signer:** the office holder's session key.
+- **Vacant office: the caretaker (version 6, `gov::caretaker`).** A vacant office takes no batch from anyone (version 5 let the operator's crank sign as the "acting official"). In phase 0 the rules fill it: the open proposal for that office with the most supporters (made on an earlier tick; the proposer counts as one; ties: lowest id) is adopted; otherwise a minimal default — Science: the cheapest researchable tech if the queue is empty (ties: tech order); Steward: in each idle city, the first missing of Granary, Workshop, Walls, Market, Academy, Temple, else two Spearmen; Diplomat: accept peace offered to the nation; General: nothing. Everything goes through the normal validation and budget. The caretaker (`NOBODY`) earns no merit; an adopted proposal's proposer earns its half.
 - **Merge order:** in phase 0 the accepted batches are merged in office order General, Steward, Science, Diplomat. Each order carries a merit credit (§14.3).
 - **Adoption of proposals** (V5 §5.4):
   - by id: a batch lists proposal ids in `adopt`. Their orders run after the batch's own orders, count toward the office's budget, and credit merit half to the proposer and half to the officer. An unknown, already adopted or wrong-office id rejects the whole batch;
@@ -337,6 +347,8 @@ Reference values:
 
 ### 6.2 Science and technology
 - **Tech cost:** `base × (10000 + 1000 × (cities − 1)) / 10000`. Each city beyond the first adds 10%, so going wide does not buy science for free.
+- **Eurekas (version 6):** in phase 10 a tech's eureka fires once its trigger holds and stays: Agriculture pop ≥ 3; Bronze Working a Workshop or Barracks; Archery an enemy troop destroyed; Horseback Riding 5 horses; Iron Working 5 iron; Masonry 3 cities; Mysticism an envoy sent; Writing a treaty partner; Currency trade ≥ 100; Mathematics a Market; Chivalry a banked conquest; Philosophy ever suzerain; Engineering a captured city held or Walls; Astronomy pop ≥ 30. A boosted tech costs `eureka_cost_bps` = 7500 of its cost. No order is spent.
+- **Dark age (version 6):** at tick `dark_age_tick` = 90, a nation with members and cities whose points are below `dark_age_share_bps` = 2000 of the leader's researches at `dark_age_research_bps` = 7500 of the cost and has `dark_age_budget` = 1 extra order per tick until tick `dark_age_until` = 150.
 - Science goes to the first queued tech. Overflow carries over.
 - **Technology cannot be transferred.**
 
@@ -399,12 +411,15 @@ The minimum path to Celestial Mechanics costs **1,650 base**: Agriculture, Bronz
 - Each tick a unit gets its **movement points** and advances along its path, paying terrain costs.
 - A unit may always move one tile if it has full MP, even into a tile that costs more than its MP.
 - Entering an enemy-occupied tile is not movement. It requires `Attack`.
+- **City tiles:** a unit may enter a city tile only if the city is its own. Another civ's city (even at war and ungarrisoned), a Free City or a city-state is entered only by capturing it (§8.3); otherwise the step is blocked (`ForeignCity`). An army walking into an ungarrisoned enemy city would otherwise stay inside it, and the city's later captor would share the tile with it.
 - **Foreign territory:** units may enter foreign territory only when at war with its owner, allied with it, or if it is a city-state they are suzerain of.
 - **Vision:** radius 2 for units and cities, 3 for Scouts, +1 on Hills. Mountains block vision.
 - A civilization's fog view is the union of its own vision and its allies' vision (§10.4).
 
 ### 7.4 Fog of war and the belief state
-Rules resolve on the full state. Every player — human client or agent — decides from its **belief state**, built by one function for everyone (`vision::belief`), so no player sees more than another.
+> **Version 6: perfect information.** On-chain accounts are public, so a fog applied off chain only hid from people what agents reading the chain saw. The server and every view now use the full state for every player; `sight` (line of sight below) is display only. The belief-state machinery below stays in the crate for a possible fog mode enforced by a private rollup; it is not used, and `obs_root` (§4.3) is now the root of the full state.
+
+Rules resolve on the full state. (Version 5:) Every player — human client or agent — decided from its **belief state**, built by one function for everyone (`vision::belief`), so no player saw more than another.
 
 - **Line of sight:** a viewer at `a` with radius `R` sees `b` if `dist(a,b) ≤ R` and no Mountain lies on a hex strictly between them. A Mountain itself is seen. The hexes between are the cube lerp of `a→b` for `i = 1..n−1`, computed in integers scaled by `1000·n` and nudged by `(+1, +2, −3)` before cube rounding, so ties always break the same way.
 - **Vision sources:** every living unit (its `vision` stat) and city (radius 2) of the civilization and its allies; +1 when the source stands on Hills.
@@ -491,7 +506,7 @@ Applied in this order, each only when its condition holds.
   - Walls and Barracks are destroyed, other buildings are kept;
   - loyalty is set to 50;
   - the city's food and production stores are halved;
-  - a Star Gate in progress loses **all** completed stages. The victim's permanent Star Gate record for the Science path (§14.1) is not lost.
+  - a Star Gate in progress loses **all** completed stages. In version 6 the Science path's top tiers need a Star Gate standing in an own city (§14.1), so the victim loses them.
   - The capturing army moves into the city.
 - **Last-city protection:** a civilization's last remaining city cannot be captured within 12 ticks of that civilization losing its previous city. It can still be attacked.
 - **Raze:** `Raze` within one tick of capture destroys the city over 3 ticks. The city becomes a ruin and its tiles become unowned. Razing gives +60 grievance (§9.1).
@@ -509,7 +524,7 @@ These close gaps in §8.1–8.3. They are normative.
 7. **Neutrals.** Attacking a city-state or a Free City sets the attacker's aggressor flag and ends its protection. Attacking a city-state also zeroes the attacker's influence with every city-state.
 8. **Capture bookkeeping.** When a capital is captured, capital status passes to the victim's lowest-id remaining city (none means government in exile). A captured city's queue is cleared and its defence restarts at **50% of its new maximum** `(4 + pop) × 1000` (balance fix, see 12 below). The old owner's civilians on the tile are captured with it.
 9. **Captured cities held (V5).** At capture the rules decide whether the city counts as a *captured city held* for the Hegemony path (§14.1): the founder must differ from the captor, and the city must be at least `capture_min_founded_age` = 12 ticks old. It counts from the tick of capture for as long as the captor holds it. There is no hold period and no once-per-captor rule. (v0.1's 30-tick hold and once-per-season rule were Dominion rules, removed with it.)
-10. **Tiles that stop being cities.** When a city becomes a ruin (§8.3 Raze) or a Free City (§9.4), any civilian sharing that tile with an army moves to the first free passable neighbour, in §0.3 order. If there is none, the civilian is disbanded.
+10. **Tiles that stop being cities.** When a city becomes a ruin (§8.3 Raze), any civilian sharing that tile with an army moves to the first free passable neighbour, in §0.3 order. If there is none, the civilian is disbanded. When a city becomes a Free City (§9.4), **every** unit on its tile (army or civilian) steps out the same way, to a free passable neighbour that is not a city or city-state; with none free it is disbanded (§7.3: a Free City is entered only by capture).
 11. **Razing timeline.** `Raze` at tick t sets a 3-tick countdown. The countdown advances at the start of phase 5 in ticks t+1 and t+2, and the city becomes a ruin in phase 5 of tick t+3. A city being razed produces nothing.
 12. **Why captures restart at half defence (balance fix, 2026-09-24).** In a six-bot Blitz match with defence reset to 0, the same city changed hands after 1, 1 and 3 ticks: an adjacent army simply walked back in. At 50%, the shortest gap was 2 ticks, and it took a real fight; quick recaptures (≤ 10 ticks) fell from 5 to 2. No capture-immunity window was needed.
 13. **Merit from combat** (§14.3): a capture, enemy troops destroyed, and a city that was attacked and held.
@@ -596,6 +611,7 @@ The pairwise states are `Peace` (the default), `War`, `NAP` (a peace with bonds)
 - `DeclareWar` takes effect at the start of the next tick. Attacks are valid from then on.
 - Declaring war ends the declarer's protected zone (§3.3).
 - **Peace:** a proposal plus an acceptance ends the war at the start of the next tick. Each side's units inside the other's territory are teleported to the nearest own-territory free tile.
+- **Pact after war (version 6):** if the war was active for at least `peace_pact_min_war` = 6 ticks when peace takes effect, the two become bound by a non-aggression pact without bonds until `p + nap_ticks` (§10.3): each is the other's treaty partner (concord), and breaking it needs consent like any pact.
 - **Truce (balance fix, 2026-09-24):** when peace takes effect at tick p, neither side may declare war on the other before tick **p + 12**, even with casus belli. Without it, grievances from the war kept casus belli alive, and the bot match re-declared war within 12 ticks of peace 6 times. With it, war can only resume once the truce ends.
 
 ### 10.3 Non-aggression pact (NAP)
@@ -730,8 +746,10 @@ The v0.1 Exchange is replaced by a market between **nation treasuries**. Its goa
 - **Attacking a city-state** is allowed. It sets the aggressor flag and removes the attacker's influence with every city-state.
 - **Capturing a city-state** makes it the captor's city and ends that city-state's suzerainty. The captor counts as its founder, so it is **not** a captured city held for the Hegemony path (§14.1). Its tiles count as territory.
 
-### 12.2 Crisis (ticks 120–161) — not implemented (roadmap)
-The engine has no Crisis in v0.2 (`tick/society.rs`, phase 9: not implemented). No barbarian is ever spawned. The v0.1 design below is kept for the roadmap. V5 §10 retargets it: the waves go to the nations with the **most achievement points**, not to track leaders.
+### 12.2 Crisis (ticks 120–161)
+**Version 6 (implemented, `tick/society.rs`, phase 9):** from `crisis_start` = 120, every `crisis_interval` = 6 ticks, the `crisis_targets` = 2 nations with members and cities that lead by points (ties: lower id) each lose `crisis_pop` = 1 population (never below 1) and `crisis_loyalty` = 20 loyalty in their most populous city (ties: lower id), logged as a `crisis` event. A city at 0 loyalty becomes a Free City (§9.4). No barbarian is spawned.
+
+The v0.1 barbarian-wave design below stays on the roadmap.
 - **Targets:** every 6 ticks (at 120, 126, …, 156) the top civilizations by achievement points so far.
 - **Wave per target:** a barbarian army of `4 + (t − 120) / 6` troops.
   - Spearmen until tick 137, Pikemen after.
@@ -756,7 +774,7 @@ The engine has no Crisis in v0.2 (`tick/society.rs`, phase 9: not implemented). 
 
 - "Hostile" means a barbarian or an army of a civilization at war with the owner.
 - A captured unit or city, or a city that revolts, loses its rules. The new owner does not inherit automation.
-- Agents and humans get exactly the same set. The acting official (§4.5) relies on them first.
+- Agents and humans get exactly the same set.
 
 ---
 
@@ -769,13 +787,13 @@ Every milestone is an absolute threshold, so any number of nations can reach it.
 
 | Tier | Hegemony | Prosperity | Science | Concord |
 |---|---|---|---|---|
-| 1 | tiles ≥ 25 | pop ≥ 12 | techs ≥ 4 | partners ≥ 1, **or** an envoy sent |
-| 2 | tiles ≥ 40 | pop ≥ 20 and wealth ≥ 1,000 | techs ≥ 9 | partners ≥ 1 and suzerain for at least one tick |
-| 3 | tiles ≥ 60, **or** captured cities held ≥ 1 | pop ≥ 30 and wealth ≥ 2,000 | techs ≥ 13 | partners ≥ 1 and suzerainties ≥ 1 |
-| 4 | tiles ≥ 80 and captured cities held ≥ 1 | pop ≥ 42 and wealth ≥ 3,500 | Star Gate I completed | partners ≥ 1, suzerainties ≥ 1, alliances ≥ 1 and trade ≥ 400 |
-| 5 | tiles ≥ 100 and captured cities held ≥ 2 | pop ≥ 55 and wealth ≥ 5,000 | Star Gate III completed | partners ≥ 2, suzerainties ≥ 2 and trade ≥ 1,000 |
+| 1 | tiles ≥ 25 | pop ≥ 9 | techs ≥ 6 | partners ≥ 1, **or** an envoy sent |
+| 2 | tiles ≥ 40 | pop ≥ 15 and wealth ≥ 700 | techs ≥ 11 | partners ≥ 1 and suzerain for at least one tick |
+| 3 | tiles ≥ 60, **or** captured cities held ≥ 1, **or** conquests ≥ 1 | pop ≥ 22 and wealth ≥ 1,400 | techs ≥ 15 | partners ≥ 1 and suzerainties ≥ 1 |
+| 4 | tiles ≥ 80 and captured cities held ≥ 1 | pop ≥ 31 and wealth ≥ 2,400 | a Star Gate I standing in an own city | partners ≥ 1, suzerainties ≥ 1, alliances ≥ 1 and trade ≥ 400 |
+| 5 | tiles ≥ 100 and captured cities held ≥ 2 | pop ≥ 42 and wealth ≥ 3,600 | a Star Gate III standing in an own city | partners ≥ 2, suzerainties ≥ 1 and trade ≥ 1,000 |
 
-Parameters: `hegemony_tiles` [25, 40, 60, 80, 100], `hegemony_cities` [0, 0, 1, 1, 2], `prosperity_pop` [12, 20, 30, 42, 55], `prosperity_wealth` [0, 1000, 2000, 3500, 5000], `science_techs` [4, 9, 13], `concord_partners` [1, 1, 1, 1, 2], `concord_suzerains` [0, 0, 1, 1, 2], `concord_trade` [400, 1000].
+Parameters (version 6): `hegemony_tiles` [25, 40, 60, 80, 100], `hegemony_cities` [0, 0, 1, 1, 2], `prosperity_pop` [9, 15, 22, 31, 42], `prosperity_wealth` [0, 700, 1400, 2400, 3600], `science_techs` [6, 11, 15], `concord_partners` [1, 1, 1, 1, 2], `concord_suzerains` [0, 0, 1, 1, 1], `concord_trade` [400, 1000], `conquest_min_pop` 3. (Version 5: prosperity [12, 20, 30, 42, 55] / [0, 1000, 2000, 3500, 5000], science [4, 9, 13] and the Star Gate record, concord suzerainties at tier 5: 2, no conquest route.)
 
 **Definitions** (`scoring::Facts`)
 | Fact | Meaning | Kind |
@@ -785,7 +803,8 @@ Parameters: `hegemony_tiles` [25, 40, 60, 80, 100], `hegemony_cities` [0, 0, 1, 
 | pop | total population of the nation's living cities | state |
 | wealth | cumulative whole gold produced this season (§6.1) | permanent |
 | techs | technologies held | permanent (techs are never lost) |
-| Star Gate | the most stages the nation ever completed; losing the city does not lower it | permanent |
+| Star Gate (version 6) | the most stages standing now in a living city the nation owns; a capture removes them | state |
+| conquests (version 6) | cities of at least `conquest_min_pop` population it captured that counted as captures (§8.3.1 item 9) | permanent |
 | partners | nations with which it has a NAP or an alliance | state |
 | alliances | nations with which it is allied | state |
 | suzerainties | city-states (not captured) of which it is suzerain now | state |
@@ -813,7 +832,7 @@ Parameters: `hegemony_tiles` [25, 40, 60, 80, 100], `hegemony_cities` [0, 0, 1, 
 ### 14.3 Merit
 Merit records what each member did for the nation, per path (plus a `Common` slot for office duty). It is stored in **milli-merit** per member and per path, credited by the rules as events happen, and part of the state root. Only the members named in a credit are touched, so the cost does not grow with the number of members.
 
-**Who is credited.** Each order carries a credit: the officer who issued it, and the proposer if it came from an adopted proposal (§4.5). With a proposer, half goes to the proposer and the rest (including rounding) to the officer. The acting official (`NOBODY`) earns nothing. Some events credit "the active officer" of an office: the holder, if its office executed an order other than a reveal within the last `officer_active_ticks` = 10 ticks (`office_last_act`).
+**Who is credited.** Each order carries a credit: the officer who issued it, and the proposer if it came from an adopted proposal (§4.5). With a proposer, half goes to the proposer and the rest (including rounding) to the officer. The caretaker of a vacant office (`NOBODY`, §4.5) earns nothing. Some events credit "the active officer" of an office: the holder, if its office executed an order other than a reveal within the last `officer_active_ticks` = 10 ticks (`office_last_act`).
 
 | Path | Event | Merit | Credited to |
 |---|---|---|---|
@@ -872,14 +891,14 @@ Governance is part of the deterministic world. Every action arrives in a tick's 
 - A term lasts `term_ticks` = 30 ticks. Terms start at ticks 0, 30, 60, 90, 120 and 150.
 - **First election:** held by `OpenGovernment` before tick 0, from the candidacies and votes given at registration.
 - **Vote window:** votes for a term are accepted in the last `vote_window` = 10 ticks before it starts (ticks 20–29 for the term at 30, and so on).
-- **Election:** in phase 11 of the tick before a term starts. Offices are filled in the order General, Steward, Science, Diplomat. Only members standing for the office are candidates. Most votes wins; ties go to the lower `rand(e, "tie", civ ‖ office ‖ member)`, where `e = sha256("PS/election" ‖ season_seed ‖ seed_t ‖ start)`. A candidate with no votes can win an uncontested office. A member who already holds `max_offices_per_member` = 2 of the new offices is passed over. The next eligible candidate is recorded as **runner-up**. An office with no candidate goes to the acting official until the next election.
+- **Election:** in phase 11 of the tick before a term starts. Offices are filled in the order General, Steward, Science, Diplomat. Only members standing for the office are candidates. Most votes wins; ties go to the lower `rand(e, "tie", civ ‖ office ‖ member)`, where `e = sha256("PS/election" ‖ season_seed ‖ seed_t ‖ start)`. A candidate with no votes can win an uncontested office. A member who already holds `max_offices_per_member` = 2 of the new offices is passed over. The next eligible candidate is recorded as **runner-up**. An office with no candidate is vacant until the next election (the caretaker fills it, §4.5).
 - A re-elected holder keeps its tenure, its idle clock and any open recall. A new holder starts fresh. Votes are cleared after each election. Each result is an `elected` event.
 
 **Recalls**
 - Any member may open a recall of an office holder; other members vote yes with the same action.
 - **Electorate:** the nation's members active in the last `recall_electorate_ticks` = 10 ticks.
 - **Passes** when yes votes × 2 > electorate, checked in phase 11 of each tick. A recall stays open `recall_ticks` = 5 ticks. It lapses if the office changes hands.
-- **On success:** the holder is removed from tick t+1. The last election's runner-up succeeds if it is not the removed holder and holds fewer than 2 offices; otherwise the acting official takes the office until the next election. A `recalled` event is logged.
+- **On success:** the holder is removed from tick t+1. The last election's runner-up succeeds if it is not the removed holder and holds fewer than 2 offices; otherwise the office is vacant until the next election (the caretaker, §4.5). A `recalled` event is logged.
 - **Automatic idle recall:** in phase 11, if an office holder has not sealed **any** batch (even an empty one, `office_seen`) for `idle_recall_ticks` = 30 ticks since the later of its last batch and the start of its tenure, a recall of it is opened automatically. It passes only by the same majority. An officer with nothing to order is not idle as long as it seals a batch each tick; "active officer" merit (§14.3) still needs an executed order (`office_last_act`).
 
 **Proposals**
@@ -921,7 +940,8 @@ Governance is part of the deterministic world. Every action arrives in a tick's 
 If a tick exceeds the ER transaction compute limit, it MUST be split into consecutive transactions at phase boundaries. The next phase index is stored in state (`phase_cursor`), so the sequence can resume permissionlessly: `ResolveTick { to }` runs phases from `phase_cursor` up to `to` (12 = the rest of the tick). Every call uses the same frozen input. A tick is complete only when phase 11 is committed. Orders for tick t+1 are accepted only after that.
 
 ### 15.2 Input publication and permissionless liveness
-- **Freeze.** The first `LogTickInput { chunk: 0 }` freezes the tick's input. It is allowed once the deadline has passed, or as soon as every office of every nation has submitted. It draws `vrf_t` (§0.2). From then on `SubmitOrders` and `SubmitGov` are refused with `TickFrozen` until the tick resolves.
+- **Close and reveal (version 6).** `CloseCommits` is allowed once the tick's deadline has passed (never earlier: members without office use the whole tick for governance). It sets the reveal deadline `reveal_seconds = max(2, tick_seconds / 6)` later and refuses further commitments and governance; reveals after that deadline are refused. A governance action is refused (`InboxFull`) if it would leave less than `REVEAL_ROOM` = 1100 bytes per office still to reveal in the nation account, so no flood of governance can crowd out a nation's orders.
+- **Freeze.** The first `LogTickInput { chunk: 0 }` freezes the tick's input. It is allowed in the reveal window once every commitment was revealed or the reveal deadline passed. It draws `vrf_t` from the revealed salts (§0.2) and logs `PS_SALTS`. From then on reveals are refused with `TickFrozen` until the tick resolves.
 - **Publication.** The input (`TickInput`: `vrf`, office batches, governance actions, deposits) is Borsh-encoded and logged in `PS_INPUT` records of `INPUT_CHUNK` = 6000 bytes each, in order: `(tick, chunk, total, input hash, bytes)`.
 - **Resolution.** `ResolveTick` fails with `InputNotPublished` until every chunk has been logged. Each call logs `PS_TICK (tick, to, pre_root, root, input hash)`: only the input's hash, not the input. Every resolved tick can therefore be replayed from the chain alone, whatever the size of its input.
 - **Liveness.** `LogTickInput`, `ResolveTick` and `FinishSeason` are permissionless. If the operator stops, **any** signer may call them. The result is identical regardless of who calls it.

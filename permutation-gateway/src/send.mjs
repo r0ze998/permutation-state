@@ -22,15 +22,28 @@ const TX_OPTS = { commitment: 'confirmed', maxSupportedTransactionVersion: 0 };
  * The fee payer is `signers[0]` unless `feePayer` (a PublicKey) names
  * another; either way it must be one of `signers`.
  */
-export async function send(connection, ixs, signers, label, { feePayer = signers[0]?.publicKey } = {}) {
+export async function send(connection, ixs, signers, label, { feePayer = signers[0]?.publicKey, programRetries = PROGRAM_RETRIES } = {}) {
   if (!feePayer || !signers.some(s => s.publicKey.equals(feePayer))) throw new SendError(label, 'the fee payer must be one of the signers');
-  const tx = new Transaction().add(...ixs);
-  tx.feePayer = feePayer;
-  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
-  tx.recentBlockhash = blockhash;
-  tx.sign(...signers);
-  return submit(connection, tx.serialize(), label, lastValidBlockHeight);
+  for (let attempt = 0; ; attempt++) {
+    const tx = new Transaction().add(...ixs);
+    tx.feePayer = feePayer;
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+    tx.recentBlockhash = blockhash;
+    tx.sign(...signers);
+    try {
+      return await submit(connection, tx.serialize(), label, lastValidBlockHeight);
+    } catch (e) {
+      // An ER loads a program on first use: transactions that reach it at
+      // once before that fail with UnsupportedProgramId. Send again, fresh.
+      if (attempt >= programRetries || !/UnsupportedProgramId/.test(e.message)) throw e;
+      await sleep(PROGRAM_RETRY_MS * (attempt + 1));
+    }
+  }
 }
+
+/** Resends of a transaction the ER refused because it had not loaded the program yet. */
+const PROGRAM_RETRIES = 3;
+const PROGRAM_RETRY_MS = 400;
 
 /**
  * Send an already signed transaction (e.g. relayed for a member). Pass the

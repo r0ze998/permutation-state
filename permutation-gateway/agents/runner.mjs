@@ -1,5 +1,5 @@
 // Shared loop for the reference agents: take a seat (x402), then every tick
-// read the fogged view, decide, and submit a signed batch with a committed
+// read the view (the whole world), decide, and submit a signed batch with a committed
 // rationale. Keys, the seat and the commitments not yet revealed are kept in
 // --dir, so an agent can be restarted mid-season and still reveal.
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
@@ -18,7 +18,7 @@ const stamp = () => new Date().toISOString().slice(11, 19);
 const LATE = new Set(['TickFrozen', 'WrongTick']);
 
 /**
- * Join a nation (x402), then every tick: read the nation's fogged view,
+ * Join a nation (x402), then every tick: read the nation's view,
  * decide, submit the orders of the offices held (one sealed batch per
  * office), propose the rest to their offices, and take part in governance:
  * vote in the vote window, support workable proposals, stand for office.
@@ -69,6 +69,10 @@ export async function runAgent({ name, policy, decide, args }) {
   }
   const decisionsFile = path.join(dir, `decisions-${seasonId}.json`);
   if (existsSync(decisionsFile)) for (const d of JSON.parse(readFileSync(decisionsFile, 'utf8'))) game.decisions.set(`${d.tick}:${d.role}`, d);
+  // Sealed orders not yet revealed survive a restart too.
+  const sealedFile = path.join(dir, `sealed-${seasonId}.json`);
+  if (existsSync(sealedFile)) game.importSealed(JSON.parse(readFileSync(sealedFile, 'utf8')));
+  const saveSealed = () => writeFileSync(sealedFile, JSON.stringify(game.exportSealed()));
   log(`member ${game.member} of nation ${game.civ}, season ${seasonId} (session key ${session.publicKey.toBase58().slice(0, 8)}…)`);
 
   // ---- ticks
@@ -89,8 +93,8 @@ export async function runAgent({ name, policy, decide, args }) {
       decision = { orders: [], rationale: `判断に失敗: ${e.message}`.slice(0, 200) };
     }
     // Governance first (proposals of the orders for offices we do not hold,
-    // support, votes): once every office's batch is in, the tick's input is
-    // frozen and later actions wait for the next tick.
+    // support, votes): it closes with the commitments at the tick's deadline,
+    // and later actions wait for the next tick.
     const notHeld = splitByOffice(decision.orders || [], held, v).notHeld.filter(o => officeOf(o, v));
     await govern({ game, view: v, proposals: notHeld, stand, proposedAt, log });
     if (held.length) {
@@ -107,6 +111,16 @@ export async function runAgent({ name, policy, decide, args }) {
         .catch(e => e.result);
       if (r.ok) log(`tick ${r.tick}: as ${held.join('+')}: ${r.offices.map(o => `${o.role} ${o.orders}${o.revealed.length ? ` (revealed ${o.revealed.join(',')})` : ''}`).join(', ') || 'nothing to send'}${r.warnings.length ? `, ${r.warnings.length} warnings` : ''} — ${decision.rationale}`);
       else log(`tick ${v.tick}: not submitted: ${r.error}`);
+      // Orders are sealed: reveal them once the tick's commitments close
+      // (orders left unrevealed when the reveal window ends do not run).
+      saveSealed();
+      if (r.ok && r.offices.some(o => o.signature)) {
+        const revealed = await game.revealWhenOpen({ tick: r.tick }).catch(e => [{ error: e.message }]);
+        saveSealed();
+        const bad = revealed.filter(x => x.error);
+        if (bad.length) log(`tick ${r.tick}: reveal failed: ${bad.map(x => `${x.role ?? ''} ${x.code ?? x.error}`).join(', ')}`);
+        else log(`tick ${r.tick}: revealed ${revealed.map(x => x.role).join('+') || 'nothing (window missed)'}`);
+      }
       // Offices that did go through (even if another failed) must reveal later, also after a restart.
       writeFileSync(decisionsFile, JSON.stringify([...game.decisions.values()], null, 1));
     }

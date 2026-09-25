@@ -122,6 +122,7 @@ pub(super) fn capture_city(
     let tick = state.tick;
     let prev = state.cities[ci].owner;
     let hex = state.cities[ci].hex;
+    let pop_before = state.cities[ci].pop;
     let had_star_gate = state.cities[ci].buildings.star_gate_stages() > 0;
     {
         let c = &mut state.cities[ci];
@@ -152,6 +153,12 @@ pub(super) fn capture_city(
         c.razing = None;
         c.capture_scores = c.founder != captor
             && tick >= c.founded_tick.saturating_add(rules.capture_min_founded_age);
+    }
+    // A conquest is banked for hegemony tier 3 when the city was taken from
+    // another nation (not a Free City), counts as a capture and was a real
+    // city (not an outpost founded to be handed over).
+    if prev.is_some() && state.cities[ci].capture_scores && pop_before >= rules.conquest_min_pop {
+        state.civs[captor as usize].achievements.conquests += 1;
     }
 
     if let Some(v) = prev {

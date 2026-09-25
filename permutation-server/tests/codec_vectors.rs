@@ -72,6 +72,9 @@ fn sample_season() -> Season {
         treasury_final: vec![4_000_000, 0, 0, 0, 0, 0],
         payouts: vec![12_000_000, 0, u64::MAX / 3],
         final_root: [6; 32],
+        prev_season_id: 1_789_999_999_999,
+        prev_history_root: [14; 32],
+        history_root: [15; 32],
     }
 }
 
@@ -109,6 +112,11 @@ fn sample_nation() -> NationAccount {
         spendable: [3, 0, 8, 2],
         submitted: [17, u16::MAX, 16, 17],
         frozen: true,
+        revealing: true,
+        reveal_deadline: 1_790_000_140,
+        committed: [17, u16::MAX, 17, 16],
+        commits: [[20; 32], [0; 32], [21; 32], [22; 32]],
+        salts: [[23; 32], [0; 32], [24; 32], [25; 32]],
         batches: [None, None, None, None],
         inbox: vec![],
     }
@@ -127,6 +135,7 @@ fn sample_meta() -> WorldMeta {
         vrf: [13; 32],
         input_chunks: 2,
         input_logged: 1,
+        revealing: true,
     }
 }
 
@@ -160,6 +169,7 @@ fn account_vectors() -> Value {
                 "nationMembers": s.nation_members, "seated": s.seated, "pool": s.pool.to_string(), "ops": s.ops.to_string(),
                 "opsWithdrawn": s.ops_withdrawn, "treasury": u64s(&s.treasury), "treasuryFinal": u64s(&s.treasury_final),
                 "payouts": u64s(&s.payouts), "finalRoot": hex(&s.final_root),
+                "prevSeasonId": s.prev_season_id.to_string(), "prevHistoryRoot": hex(&s.prev_history_root), "historyRoot": hex(&s.history_root),
             },
         },
         "member": {
@@ -176,7 +186,9 @@ fn account_vectors() -> Value {
                 "seasonId": n.season_id.to_string(), "civ": n.civ, "bump": n.bump, "preset": n.preset, "market": n.market,
                 "crank": hex(&n.crank), "openTick": n.open_tick, "officers": n.officers,
                 "keys": n.keys.iter().map(|k| hex(k)).collect::<Vec<_>>(), "spendable": n.spendable, "submitted": n.submitted,
-                "frozen": n.frozen,
+                "frozen": n.frozen, "revealing": n.revealing, "revealDeadline": n.reveal_deadline, "committed": n.committed,
+                "commits": n.commits.iter().map(|k| hex(k)).collect::<Vec<_>>(),
+                "salts": n.salts.iter().map(|k| hex(k)).collect::<Vec<_>>(),
             },
         },
         "worldHeader": {
@@ -187,6 +199,7 @@ fn account_vectors() -> Value {
                     "seasonId": meta.season_id.to_string(), "preset": meta.preset, "civs": meta.civs, "tickSeconds": meta.tick_seconds,
                     "deadline": meta.deadline, "finished": meta.finished, "market": meta.market, "frozen": meta.frozen,
                     "vrf": hex(&meta.vrf), "inputChunks": meta.input_chunks, "inputLogged": meta.input_logged,
+                    "revealing": meta.revealing,
                 },
             },
         },
@@ -358,6 +371,7 @@ fn vectors_match_the_js_encoder_fixture() {
                 world_seed: k(7),
                 crank: k(9),
                 market: true,
+                prev_season_id: 41,
             },
         ),
         ("allocWorld", ChainInstruction::AllocWorld { chunk: 3 }),
@@ -423,7 +437,45 @@ fn vectors_match_the_js_encoder_fixture() {
                 targets: vec![1000, 1001, 7],
             },
         ),
+        ("closeCommits", ChainInstruction::CloseCommits),
+        (
+            "commitOrders",
+            ChainInstruction::CommitOrders {
+                role: Role::Science,
+                tick: 17,
+                commitment: k(6),
+            },
+        ),
+        (
+            "revealOrders",
+            ChainInstruction::RevealOrders {
+                role: Role::Steward,
+                tick: 17,
+                decision_digest: k(5),
+                orders: all[..6].to_vec(),
+                adopt: vec![4, 9],
+                salt: k(7),
+            },
+        ),
     ];
+    // Sealed orders (commit–reveal): the commitment of a batch and a salt,
+    // which the JS client computes before `CommitOrders`.
+    let sealed = permutation_rules::orders::OrderBatch {
+        civ: 3,
+        tick: 17,
+        role: Role::Steward,
+        member: 9,
+        decision_digest: k(5),
+        orders: all[..6].to_vec(),
+        adopt: vec![4, 9],
+    };
+    let commitment = json!({
+        "civ": sealed.civ, "tick": sealed.tick, "role": "Steward", "member": sealed.member,
+        "decisionDigest": hex(&sealed.decision_digest), "orders": orders[..6].to_vec(), "adopt": sealed.adopt,
+        "salt": hex(&k(7)),
+        "batchHex": hex(&borsh::to_vec(&sealed).unwrap()),
+        "commitment": hex(&permutation_rules::orders::order_commitment(&sealed, &k(7))),
+    });
     let ix_vectors: Vec<Value> = ixs
         .iter()
         .map(|(name, ix)| json!({"name": name, "hex": hex(&borsh::to_vec(ix).unwrap())}))
@@ -447,7 +499,7 @@ fn vectors_match_the_js_encoder_fixture() {
     let doc = json!({
         "orders": order_vectors, "gov": gov_vectors, "instructions": ix_vectors,
         "accounts": account_vectors(), "errors": errors, "constants": constant_vectors(),
-        "offices": office_vectors, "claims": claim_vectors(),
+        "offices": office_vectors, "claims": claim_vectors(), "commitment": commitment,
     });
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../permutation-gateway/test/vectors.json");

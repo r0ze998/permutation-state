@@ -5,7 +5,7 @@ use permutation_rules::decision::{
     rationale_hash, verify_proof, verify_reveal, Hash,
 };
 use permutation_rules::genesis::{new_season, Entry};
-use permutation_rules::gov::{Role, NOBODY};
+use permutation_rules::gov::Role;
 use permutation_rules::map::Terrain;
 use permutation_rules::orders::{validate_batch, Order, OrderBatch};
 use permutation_rules::rng::Seed;
@@ -13,6 +13,8 @@ use permutation_rules::state::{Owner, WorldState};
 use permutation_rules::tick::{resolve_tick, TickInput};
 use permutation_rules::vision::{belief, visible, Memory};
 use permutation_rules::{Preset, RulesError, Ruleset};
+
+mod common;
 
 fn setup() -> (Ruleset, WorldState) {
     let rules = Ruleset::new(Preset::Blitz);
@@ -144,14 +146,16 @@ fn reveals_open_the_commitment_and_nothing_else_does() {
 
 #[test]
 fn commitments_and_reveals_enter_the_event_chain() {
-    let (rules, s0) = setup();
+    let (rules, mut s0) = setup();
+    common::staff(&mut s0);
+    let general = s0.nations[0].holder(Role::General);
     let run = |digest: Hash| {
         let mut s = s0.clone();
         let batch = OrderBatch {
             civ: 0,
             tick: 0,
             role: Role::General,
-            member: NOBODY,
+            member: general,
             adopt: vec![],
             decision_digest: digest,
             orders: vec![],
@@ -185,9 +189,9 @@ fn commitments_and_reveals_enter_the_event_chain() {
         civ: 0,
         tick: 1,
         role: Role::General,
-        member: NOBODY,
+        member: general,
         adopt: vec![],
-        decision_digest: [0; 32],
+        decision_digest: [3; 32],
         orders: vec![reveal(1)],
     };
     assert_eq!(
@@ -198,9 +202,9 @@ fn commitments_and_reveals_enter_the_event_chain() {
         civ: 0,
         tick: 1,
         role: Role::General,
-        member: NOBODY,
+        member: general,
         adopt: vec![],
-        decision_digest: [0; 32],
+        decision_digest: [3; 32],
         orders: vec![reveal(0)],
     };
     assert_eq!(validate_batch(&a, &rules, &ok), Ok(0), "reveals are free");
@@ -224,9 +228,9 @@ fn commitments_and_reveals_enter_the_event_chain() {
                 civ: 0,
                 tick: 1,
                 role: Role::General,
-                member: NOBODY,
+                member: general,
                 adopt: vec![],
-                decision_digest: [0; 32],
+                decision_digest: [3; 32],
                 orders: vec![],
             }],
             ..Default::default()

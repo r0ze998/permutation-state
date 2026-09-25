@@ -1,4 +1,4 @@
-// Packing one office's batch for a SubmitOrders transaction: its own orders
+// Packing one office's batch for a RevealOrders transaction: its own orders
 // and as many reveals of the office's earlier decisions as fit (pure).
 import { Writer } from './borsh.mjs';
 import { BATCH_BYTES, encodeOrder } from './codec.mjs';

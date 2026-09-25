@@ -1,8 +1,8 @@
 //! The playable server for Game Design V5 (`bin/play`): nations, members, offices.
 //!
 //! Serves the web client from `web/`, `llms.txt` for agents, and a JSON API.
-//! Every view, preview and AI decision is made from a nation's fogged belief
-//! state (`vision`, §7.4); only validation and resolution see the full state.
+//! Every view, preview and AI decision is made from the full state (perfect
+//! information, `fog`): everything is public on chain anyway.
 //!
 //! People and agents are **members** of one of the season's nations (V5 §4).
 //! Members elect four officers; an officer orders within its office, every
@@ -16,7 +16,8 @@
 //!   its nation's view here (`?member=M` or `?civ=N`), dry-runs with
 //!   `/api/validate` and signs its own transactions.
 //!
-//! Vacant offices are run by the acting official (V5 §8).
+//! Vacant offices are filled by the rules' caretaker (`gov::caretaker`):
+//! the members' top proposal for the office, else a minimal default.
 //!
 //! Two modes:
 //! * local (default): the engine runs in this process. The season opens in

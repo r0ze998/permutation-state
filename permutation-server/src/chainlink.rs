@@ -34,6 +34,8 @@ type Response = (u16, Vec<(String, String)>, Vec<u8>);
 pub struct ChainLink {
     host: String,
     port: u16,
+    /// When set, `log_records` keeps only records this program emitted.
+    program: Option<String>,
 }
 
 impl ChainLink {
@@ -47,6 +49,7 @@ impl ChainLink {
             .split_once(':')
             .ok_or("gateway URL needs a port")?;
         Ok(ChainLink {
+            program: None,
             host: host.to_string(),
             port: port.parse().map_err(|_| "bad port")?,
         })
@@ -151,16 +154,50 @@ impl ChainLink {
         Ok(Some(base64(r["value"]["data"][0].as_str().unwrap_or(""))?))
     }
 
-    /// `Program data:` log records (sol_log_data) of a transaction.
+    /// Keep only the log records of `program` (base58) from now on.
+    pub fn with_program(mut self, program: &str) -> ChainLink {
+        self.program = Some(program.to_string());
+        self
+    }
+
+    /// `Program data:` log records (sol_log_data) of a transaction. A failed
+    /// transaction has none. With `with_program`, only records emitted while
+    /// that program was the one executing (the innermost invocation) count,
+    /// so no other program can forge them.
     pub fn log_records(&self, signature: &str) -> Result<Vec<Vec<Vec<u8>>>, String> {
         let r = self.rpc("getTransaction", serde_json::json!([signature, {"encoding": "json", "commitment": "confirmed", "maxSupportedTransactionVersion": 0}]))?;
+        if !r["meta"]["err"].is_null() {
+            return Ok(Vec::new());
+        }
         let logs = r["meta"]["logMessages"]
             .as_array()
             .ok_or("transaction not found")?;
-        logs.iter()
-            .filter_map(|l| l.as_str()?.strip_prefix("Program data: "))
-            .map(|l| l.split(' ').map(base64).collect::<Result<Vec<_>, _>>())
-            .collect()
+        let mut stack: Vec<&str> = Vec::new();
+        let mut out = Vec::new();
+        for l in logs.iter().filter_map(|l| l.as_str()) {
+            if let Some(rest) = l.strip_prefix("Program ") {
+                let mut words = rest.split(' ');
+                let (id, what) = (words.next().unwrap_or(""), words.next().unwrap_or(""));
+                if what == "invoke" {
+                    stack.push(id);
+                    continue;
+                }
+                if (what == "success" || what == "failed:") && stack.last() == Some(&id) {
+                    stack.pop();
+                    continue;
+                }
+            }
+            let Some(data) = l.strip_prefix("Program data: ") else {
+                continue;
+            };
+            if let Some(p) = &self.program {
+                if stack.last().copied() != Some(p.as_str()) {
+                    continue;
+                }
+            }
+            out.push(data.split(' ').map(base64).collect::<Result<Vec<_>, _>>()?);
+        }
+        Ok(out)
     }
 
     /// The world as the program stores it, or `None` while genesis runs.

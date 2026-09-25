@@ -74,8 +74,12 @@ export async function bootstrap({ base, cfg, store, roster = defaultRoster(), lo
   }
   const seasonId = BigInt(Date.now());
   const chain = new ChainClient(cfg.programId, seasonId);
+  // The history layer: follow --prev-season, else the finalized season this
+  // state file held before (the same world's previous season).
+  const prevSeasonId = cfg.prevSeason ? BigInt(cfg.prevSeason) : (store.state?.finalized && store.state?.programId === cfg.programId ? BigInt(store.state.seasonId) : null);
   await send(base, chain.createSeason({ admin: admin.publicKey, mint: mint.publicKey, nations: NATIONS.length, entryFee: cfg.entryFee,
-    tickSeconds: cfg.tickSeconds, worldSeed: worldSeedFor(seasonId), crank: crank.publicKey, market: cfg.market }), [admin], 'createSeason');
+    tickSeconds: cfg.tickSeconds, worldSeed: worldSeedFor(seasonId), crank: crank.publicKey, market: cfg.market, prevSeasonId }), [admin], 'createSeason');
+  if (prevSeasonId) log(`season ${seasonId} follows season ${prevSeasonId} (history layer)`);
   for (let k = 0; k < chain.worldChunks.length; k++) await send(base, chain.allocWorld({ payer: crank.publicKey, chunk: k }), [crank], `allocWorld ${k}`);
   for (let c = 0; c < NATIONS.length; c++) await send(base, chain.allocNation({ payer: crank.publicKey, civ: c }), [crank], `allocNation ${c}`);
   log(`season ${seasonId} created: world and ${NATIONS.length} nation accounts allocated`);

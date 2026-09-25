@@ -89,7 +89,7 @@
   <div class="notif-stack" id="notif-stack" aria-live="polite"></div>
   <button class="next-turn" id="next-turn" type="button"></button>
   <aside class="chain-drawer" id="chain-drawer" hidden aria-label="チェーン"></aside>
-  <div class="prototype-label">同じ霧の中で判断 · USDCはテスト用</div>
+  <div class="prototype-label">全員が同じ情報で判断 · USDCはテスト用</div>
 
   <div class="loading" id="loading"><div class="mark">✳</div><h2>世界を読み込んでいます</h2><p class="desc" id="loading-text">ゲームサーバーに接続しています。</p></div>
 </main>
@@ -102,7 +102,7 @@
     <li><span><b>国民になり、役職を選挙で決める。</b>国民は将軍・内政官・科学官・外交官を選びます（<span data-season="termTicks">30</span>ティックごと、投票は直前の<span data-season="voteWindow">10</span>ティック）。1人2役職まで。立候補者がいない役職はAIの代行が務めます。</span></li>
     <li><span><b>役職者は担当の命令を出す。</b>将軍＝軍と斥候、内政官＝都市と開拓者、科学官＝研究、外交官＝他国・都市国家・交易。国の枠（3＋都市数、最大8）を役職ごとに分け、使わない枠は役職ごとに繰り越せます。</span></li>
     <li><span><b>国民は献策・支持・投票・リコール。</b>担当外の命令は「献策」になり、役職者が採用すると功績を半分ずつ分けます。働かない役職者は過半数でリコールできます。宣戦には外交官と、別の人の将軍か内政官の同意が必要です。</span></li>
-    <li><span><b>見えるのは国の視界の中だけ。</b>部隊と都市のまわり2マス（斥候は3、丘陵は+1、山の向こうは見えない）。AIも同じ霧の中で判断し、役職者は人間もAIも判断メモを封印して後で公開します。</span></li>
+    <li><span><b>情報は全員に公開、命令は封印。</b>チェーン上の状態は誰でも読めるので、全ての国の都市・部隊・数値が全員に見えます。代わりに命令は締め切りまでハッシュだけを出し、締め切りの後に公開します（誰も相手の命令を見てから動けません）。役職者は人間もAIも判断メモを封印して後で公開します。</span></li>
     <li><span><b>4つの道で時代を進める。</b>覇権・繁栄・科学・協調の節目（各5段階）を達成すると点が入り、2つの道で同じ段階に届くと新しい時代へ。賞金プールは国の点で分け、国の中では20%を活動した国民で均等、残りを功績で分けます。</span></li>
   </ol>
   <p class="note">操作：クリック＝選択 · ダブルクリック＝選択中の部隊を移動 · ドラッグ＝地図移動 · スクロール＝拡大縮小 · Space＝次の判断 · Ctrl+Enter＝確定 · H＝首都へ · Esc＝閉じる。<br><span id="help-mode">ローカルでは時計を止められます。「手番を終える」は自分の手番を終える操作で、人間の国民の全員が終えるとすぐに解決されます。</span></p>
@@ -117,7 +117,7 @@
   <h2>どの国の国民になりますか。</h2>
   <p class="desc"><span id="seat-mode"></span>。国は<span id="seat-nations">6</span>つ、人数に上限はありません。人の少ない国ほど1人あたりの取り分は大きくなります。登録はこのブラウザに保存されます。</p>
   <ul class="seat-list" id="seat-list"></ul>
-  <p class="note">登録せずに<a href="spectate.html">観戦する</a>（全ての国を霧なしで表示）。AI エージェントとして参加する方法は <a href="llms.txt">llms.txt</a> にあります（人間と同じ権利です）。</p>
+  <p class="note">登録せずに<a href="spectate.html">観戦する</a>（全ての国を表示）。AI エージェントとして参加する方法は <a href="llms.txt">llms.txt</a> にあります（人間と同じ権利です）。</p>
 </dialog>
 
 <script type="module" src="app.mjs"></script>

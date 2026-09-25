@@ -213,6 +213,9 @@ pub struct Generated {
     pub starts: Vec<Hex>,
     pub city_states: Vec<Hex>,
     pub hubs: Vec<Hex>,
+    /// A six-fold symmetric map (`mapgen`): the city-states are in sextant
+    /// order, one per border.
+    pub symmetric: bool,
 }
 
 /// Deterministic generation (§2.4). Rerolls (new `attempt` in the domain)
@@ -244,6 +247,8 @@ pub struct MapJob {
     /// Balancing rounds that changed a tile so far (at most `BALANCE_ROUNDS`).
     pub rounds: u16,
     pub balanced: bool,
+    /// A symmetric map in progress (nation counts that divide 6, `mapgen`).
+    pub sym: Option<crate::mapgen::SymJob>,
 }
 
 /// Cap on start-balancing rounds (§2.4).
@@ -271,6 +276,7 @@ impl MapJob {
             starts: Vec::new(),
             rounds: 0,
             balanced: false,
+            sym: None,
         })
     }
 
@@ -283,6 +289,29 @@ impl MapJob {
         world_seed: &Seed,
         work: u32,
     ) -> Result<MapStep, RulesError> {
+        // Nations that divide six get a rotationally symmetric map (`mapgen`,
+        // a few steps); other counts use the per-tile generator with start
+        // balancing below.
+        if crate::mapgen::symmetric_for(self.civs as usize) {
+            let job = self.sym.take().unwrap_or_default();
+            return Ok(
+                match crate::mapgen::step_symmetric(rules, world_seed, self.civs as usize, job) {
+                    crate::mapgen::SymStep::Working(j) => {
+                        self.sym = Some(j);
+                        MapStep::Working(self)
+                    }
+                    crate::mapgen::SymStep::Done(map, starts, city_states, hubs) => {
+                        MapStep::Done(Generated {
+                            map,
+                            starts,
+                            city_states,
+                            hubs,
+                            symmetric: true,
+                        })
+                    }
+                },
+            );
+        }
         if self.attempt >= rules.start_generation_attempts as u64 {
             return Err(RulesError::MapGeneration(
                 "no fair start layout within attempt limit",
@@ -356,6 +385,7 @@ impl MapJob {
                     starts: self.starts,
                     city_states,
                     hubs,
+                    symmetric: false,
                 }),
                 _ => MapStep::Working(self.next_attempt()),
             });
@@ -374,6 +404,7 @@ impl MapJob {
             starts: Vec::new(),
             rounds: 0,
             balanced: false,
+            sym: None,
         }
     }
 }
@@ -681,7 +712,13 @@ mod tests {
 
     #[test]
     fn stepped_generation_equals_generate() {
-        for (preset, civs) in [(Preset::Blitz, 6), (Preset::Season, 16)] {
+        // Both generators are split into steps (the chain runs one per
+        // transaction).
+        for (preset, civs, split) in [
+            (Preset::Blitz, 4, true),
+            (Preset::Season, 16, true),
+            (Preset::Blitz, 6, true),
+        ] {
             let rules = Ruleset::new(preset);
             let seed = [9u8; 32];
             let whole = generate(&rules, &seed, civs).expect("map");
@@ -697,7 +734,11 @@ mod tests {
                 }
             };
             assert_eq!(stepped, whole);
-            assert!(steps > 3, "work was actually split ({steps} steps)");
+            if split {
+                assert!(steps > 3, "work was actually split ({steps} steps)");
+            } else {
+                assert_eq!(steps, 1);
+            }
         }
     }
 
@@ -738,11 +779,12 @@ mod tests {
                 assert!(a.distance(*b) >= rules.start_min_distance as u32);
             }
         }
+        // Six nations: a symmetric map, so every start is worth exactly the same.
+        assert!(g.symmetric);
         let v: Vec<u64> = g.starts.iter().map(|s| start_value(&g.map, *s)).collect();
-        let (mn, mx) = (*v.iter().min().unwrap(), *v.iter().max().unwrap());
-        assert!(mx * 10_000 / mn <= 11_000);
-        assert_eq!(g.city_states.len(), 2);
-        assert_eq!(g.hubs.len(), 2);
+        assert!(v.iter().all(|x| *x == v[0]), "{v:?}");
+        assert_eq!(g.city_states.len(), 6);
+        assert_eq!(g.hubs, alloc::vec![Hex::ORIGIN]);
     }
 
     #[test]

@@ -25,39 +25,39 @@ fn season() -> (Ruleset, WorldState) {
     (rules, state)
 }
 
+/// Perfect information: a nation's view shows the whole world, as the
+/// spectator's does, and adds only its own economy, relations and sight.
 #[test]
-fn spectator_sees_everything_a_civ_only_its_own() {
+fn every_view_shows_the_whole_world() {
     let (rules, state) = season();
     let fog = Fog::new(&state);
     let spec = world_view(&state, &rules, None, &fog);
     assert_eq!(spec["spectator"], true);
-    assert!(spec["me"].is_null() && spec["economy"].is_null());
+    assert!(spec["me"].is_null() && spec["economy"].is_null() && spec["sight"].is_null());
     assert!(spec["fog"].as_str().unwrap().chars().all(|c| c == '2'));
-    assert!(spec["civs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .all(|c| !c["pop"].is_null()));
-    assert_eq!(
-        spec["units"].as_array().unwrap().len(),
-        state.units.iter().filter(|u| u.alive).count()
-    );
+    let alive = state.units.iter().filter(|u| u.alive).count();
+    assert_eq!(spec["units"].as_array().unwrap().len(), alive);
 
     let me: CivId = 2;
     let view = world_view(&fog.belief(&state, me), &rules, Some(me), &fog);
     assert_eq!(view["me"], 2);
     assert!(!view["economy"].is_null());
+    assert!(view["fog"].as_str().unwrap().chars().all(|c| c == '2'));
+    assert_eq!(view["units"].as_array().unwrap().len(), alive);
     for c in view["civs"].as_array().unwrap() {
-        assert_eq!(
-            c["pop"].is_null(),
-            c["id"] != 2,
-            "only its own population is known"
-        );
+        assert!(!c["pop"].is_null() && !c["techs"].is_null(), "{c}");
     }
-    assert!(
-        view["fog"].as_str().unwrap().contains('0'),
-        "a civ does not see the whole map at genesis"
+    for c in view["cities"].as_array().unwrap() {
+        assert!(c["queue"].is_array(), "every city's queue is public: {c}");
+    }
+    assert_eq!(
+        view["cityStates"].as_array().unwrap().len(),
+        state.city_states.len()
     );
+    // Sight is display only: at genesis a nation overlooks part of the map.
+    let sight = view["sight"].as_str().unwrap();
+    assert_eq!(sight.len(), state.map.tiles.len());
+    assert!(sight.contains('1') && sight.contains('2'));
 }
 
 #[test]

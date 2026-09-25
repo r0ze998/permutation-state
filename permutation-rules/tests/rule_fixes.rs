@@ -18,6 +18,7 @@ use permutation_rules::{Preset, Ruleset};
 #[test]
 fn a_city_completes_one_item_per_tick_and_banks_no_production() {
     let (rules, mut s) = world(&[]);
+    common::staff(&mut s);
     let capital = s.civs[0].capital.unwrap() as usize;
     s.cities[capital].queue = vec![QueueItem::Scout, QueueItem::Scout, QueueItem::Scout];
     s.cities[capital].prod = 500 * MILLI;
@@ -36,6 +37,7 @@ fn a_city_completes_one_item_per_tick_and_banks_no_production() {
 #[test]
 fn star_gate_stages_are_spaced_and_never_bought() {
     let (rules, mut s) = world(&[]);
+    common::staff(&mut s);
     let capital = s.civs[0].capital.unwrap();
     for t in permutation_rules::tech::TECHS {
         s.civs[0].techs.insert(t.tech);
@@ -87,6 +89,7 @@ fn star_gate_stages_are_spaced_and_never_bought() {
 #[test]
 fn one_purchase_per_city_per_tick() {
     let (rules, mut s) = world(&[]);
+    common::staff(&mut s);
     let capital = s.civs[0].capital.unwrap();
     s.cities[capital as usize].queue = vec![QueueItem::Building(Building::Granary)];
     s.civs[0].gold = 1_000 * MILLI;
@@ -112,6 +115,7 @@ fn one_purchase_per_city_per_tick() {
 #[test]
 fn transfer_caps_apply_per_pair_per_tick() {
     let (rules, mut s) = world(&[]);
+    common::staff(&mut s);
     idle(&mut s, &rules, 1);
     let cap = s.civs[0].last.gold.max(10);
     s.civs[0].gold = 1_000 * MILLI;
@@ -174,6 +178,7 @@ fn a_city_strikes_back_at_archers() {
 #[test]
 fn the_science_focus_raises_science() {
     let (rules, mut s) = world(&[]);
+    common::staff(&mut s);
     let capital = s.civs[0].capital.unwrap() as usize;
     let mut science = s.clone();
     science.cities[capital].focus = Focus::Science;
@@ -208,31 +213,34 @@ fn a_reveal_alone_does_not_make_an_officer_active() {
 }
 
 #[test]
-fn bot_nations_run_every_office_through_the_acting_official() {
+fn a_memberless_nation_is_run_only_by_the_caretaker() {
     let (rules, mut s) = world(&[]);
     let capital = s.civs[0].capital.unwrap();
+    // Batches for vacant offices (the old acting official's) are ignored:
+    // no settler, no war, whatever anyone submits.
     let orders = vec![
         Order::SetQueue {
             city: capital,
             items: vec![QueueItem::Settler],
         },
         Order::SetResearch {
-            techs: vec![Tech::Agriculture],
+            techs: vec![Tech::HorsebackRiding],
         },
         Order::DeclareWar { civ: 1 },
     ];
-    let batches = office_batches(&s, 0, [0; 32], orders);
-    assert_eq!(
-        batches.iter().map(|b| b.role).collect::<Vec<_>>(),
-        vec![Role::General, Role::Steward, Role::Science, Role::Diplomat]
-    );
+    let batches = office_batches(&s, 0, [9; 32], orders);
+    assert!(batches.iter().all(|b| b.member == NOBODY));
+    let before = s.units.len();
     step(&mut s, &rules, batches, vec![]);
-    assert!(
-        matches!(
-            s.relation(0, 1),
-            permutation_rules::state::Relation::War { .. }
-        ),
-        "the acting official consents to itself"
+    assert!(matches!(
+        s.relation(0, 1),
+        permutation_rules::state::Relation::Peace
+    ));
+    assert_eq!(s.units.len(), before);
+    // The caretaker's default: the first basic building, the cheapest tech.
+    assert_eq!(
+        s.cities[capital as usize].queue,
+        vec![QueueItem::Building(Building::Granary)]
     );
     assert_eq!(s.civs[0].research_queue, vec![Tech::Agriculture]);
 }

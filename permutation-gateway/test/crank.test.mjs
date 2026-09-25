@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { countSubmitted, commitDue, DEADLINE_GRACE_S, INTENT_GROUP, intentGroups, isDue, MAX_INTENT_TARGETS, SPONSORED_COMMITS } from '../src/crank.mjs';
+import { countSeals, commitDue, DEADLINE_GRACE_S, historyEntry, INTENT_GROUP, intentGroups, MAX_INTENT_TARGETS, nextStep, SPONSORED_COMMITS } from '../src/crank.mjs';
 import { MAX_NATIONS, NATION_TARGET, WORLD_CHUNKS } from '../client/src/codec.mjs';
 
 test('intentGroups: every target once, chunk 0 last, each group small and within the program limit', () => {
@@ -19,21 +19,25 @@ test('intentGroups: every target once, chunk 0 last, each group small and within
   assert.deepEqual(intentGroups({ nations: 2, chunks: 3, groupSize: 5 }), [[1000, 1001], [1], [2], [0]]);
 });
 
-test('countSubmitted counts only batches for each nation\'s open tick', () => {
-  assert.equal(countSubmitted([{ openTick: 4, submitted: [4, 3, 4, 65535] }, null, { openTick: 4, submitted: [4, 4, 4, 4] }]), 6);
+test('countSeals counts commitments and reveals for each nation\'s open tick only', () => {
+  const x = (openTick, committed, submitted) => ({ openTick, committed, submitted });
+  assert.deepEqual(countSeals([x(4, [4, 3, 4, 65535], [4, 65535, 65535, 65535]), null, x(4, [4, 4, 4, 4], [4, 4, 3, 4])]), { committed: 6, revealed: 4 });
 });
 
-test('isDue: frozen, everyone in, or the deadline plus grace; tick 0 waits one tick after delegation', () => {
-  const meta = { frozen: false, deadline: 1000 };
-  const base = { meta, openTick: 3, submitted: 5, offices: 24, delegatedAt: 0, tickSeconds: 30 };
-  assert.equal(isDue({ ...base, now: 1000_000 }), false, 'at the deadline, within the grace');
-  assert.equal(isDue({ ...base, now: (1000 + DEADLINE_GRACE_S) * 1000 }), true);
-  assert.equal(isDue({ ...base, now: 0, meta: { ...meta, frozen: true } }), true);
-  assert.equal(isDue({ ...base, now: 0, submitted: 24 }), true);
+test('nextStep: close after the deadline plus grace (never early); publish once every commitment is revealed or the reveal window ended', () => {
+  const commit = { frozen: false, revealing: false, deadline: 1000 };
+  const base = { meta: commit, openTick: 3, committed: 5, revealed: 0, delegatedAt: 0, tickSeconds: 30 };
+  assert.equal(nextStep({ ...base, now: 1000_000 }), null, 'at the deadline, within the grace');
+  assert.equal(nextStep({ ...base, now: (1000 + DEADLINE_GRACE_S) * 1000 }), 'close');
+  assert.equal(nextStep({ ...base, committed: 24, now: 0 }), null, 'every office committed: members without office still have the tick');
+  const reveal = { ...commit, revealing: true, deadline: 2000 };
+  assert.equal(nextStep({ ...base, meta: reveal, committed: 5, revealed: 3, now: 1500_000 }), null, 'reveals outstanding');
+  assert.equal(nextStep({ ...base, meta: reveal, committed: 5, revealed: 5, now: 1500_000 }), 'publish', 'everything revealed');
+  assert.equal(nextStep({ ...base, meta: reveal, committed: 5, revealed: 3, now: (2000 + DEADLINE_GRACE_S) * 1000 }), 'publish', 'window over');
+  assert.equal(nextStep({ ...base, meta: { ...commit, frozen: true }, now: 0 }), 'publish');
   const delegatedAt = 2000_000;
-  assert.equal(isDue({ ...base, openTick: 0, delegatedAt, now: delegatedAt + 29_000 }), false, 'tick 0: deadline passed, but delegation was just now');
-  assert.equal(isDue({ ...base, openTick: 0, delegatedAt, now: delegatedAt + 30_000 }), true);
-  assert.equal(isDue({ ...base, openTick: 0, delegatedAt, now: delegatedAt, submitted: 24 }), true, 'everyone in: no need to wait');
+  assert.equal(nextStep({ ...base, openTick: 0, delegatedAt, now: delegatedAt + 29_000 }), null, 'tick 0: deadline passed, but delegation was just now');
+  assert.equal(nextStep({ ...base, openTick: 0, delegatedAt, now: delegatedAt + 30_000 }), 'close');
 });
 
 test('commitDue: every commitEvery ticks, keeping one sponsored commit for undelegation', () => {
@@ -42,4 +46,17 @@ test('commitDue: every commitEvery ticks, keeping one sponsored commit for undel
   assert.equal(commitDue({ open: 19, commitEvery: 0 }), false);
   assert.equal(commitDue({ open: 19, commitEvery: 20, commits: SPONSORED_COMMITS - 1 }), false);
   assert.equal(commitDue({ open: 19, commitEvery: 20, commits: SPONSORED_COMMITS - 2 }), true);
+});
+
+test('a PS_HISTORY record is kept as JSON (u64s and bytes survive the state file)', () => {
+  const h = {
+    prevHistoryRoot: new Uint8Array(32), historyRoot: new Uint8Array(32).fill(0xab),
+    record: { finalRoot: new Uint8Array(32).fill(1), nations: [{ points: 2n ** 60n, era: 3, tiers: [1, 2, 3, 4], share: 5n, cities: 2, members: 1 }], cities: [], ruins: [] },
+  };
+  const e = historyEntry(h, 'sig');
+  assert.deepEqual(JSON.parse(JSON.stringify(e)), e);
+  assert.equal(e.historyRoot, 'ab'.repeat(32));
+  assert.equal(e.record.nations[0].points, (2n ** 60n).toString());
+  assert.equal(e.record.finalRoot, '01'.repeat(32));
+  assert.equal(e.signature, 'sig');
 });

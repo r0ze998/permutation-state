@@ -20,7 +20,7 @@ export const CHAIN_ERROR_STATUS = Object.freeze({
   TickFrozen: 409, WrongTick: 409,
   // The season or account is not in a state that allows it (now, or ever).
   AlreadyInitialized: 409, WrongStatus: 409, SeasonFull: 409, TooEarly: 409, AlreadyClaimed: 409, NothingToClaim: 409,
-  SeasonNotOver: 409, InboxFull: 409, InputNotPublished: 409,
+  SeasonNotOver: 409, InboxFull: 409, InputNotPublished: 409, WrongPhase: 409, CommitMismatch: 400, Retired: 410,
   // The signer may not do this.
   MissingSignature: 403, Unauthorized: 403, WrongOffice: 403,
   // The request itself is wrong.

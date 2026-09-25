@@ -13,7 +13,7 @@ export function renderTop() {
     : offices.length ? offices.map(r => html`<span class="badge office">${T.ROLE_GLYPH[r]} ${T.ROLE_JA[r]}</span>`) : html`<span class="badge human">国民</span>`;
   setHtml($('#civ-chip'), html`<span class="swatch" style="background:${T.CIV_COLORS[S.myCiv]}"></span><div><b>${v.member?.name ?? civN(S.myCiv)}</b><small class="nation">${civN(S.myCiv)}</small><div>${badges}</div></div>`);
   const ms = v.members || [];
-  $('.prototype-label').textContent = `${v.chain ? 'オンチェーン · MagicBlock ER' : 'ローカル'} · 国民${ms.length}人（人間${ms.filter(m => m.host === 'human').length}） · 同じ霧の中で判断 · USDCはテスト用`;
+  $('.prototype-label').textContent = `${v.chain ? 'オンチェーン · MagicBlock ER' : 'ローカル'} · 国民${ms.length}人（人間${ms.filter(m => m.host === 'human').length}） · 全員が同じ情報で判断 · 命令は締め切りまで封印 · USDCはテスト用`;
   $('#season-label').textContent = `ONE WORLD · SEASON ${v.chain?.seasonId ?? 0} · ${String(v.season?.preset ?? 'Blitz').toUpperCase()}`;
   if (e) renderResources(e);
   const pause = $('#pause-btn');

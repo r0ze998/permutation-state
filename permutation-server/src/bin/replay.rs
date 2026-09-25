@@ -228,7 +228,7 @@ fn main() {
     let names: Vec<String> = s.civs.iter().map(|c| c.name.clone()).collect();
     let names: Vec<&str> = names.iter().map(String::as_str).collect();
     let mut roots = Vec::new();
-    // Bots decide from their own fogged belief state, like any player (§7.4).
+    // Bots decide from the full state, like any player (perfect information).
     let mut season = AiSeason::new(rules, s, Planner::new(6), Ledger::seeded(b"replay"));
     while !season.over() {
         let mut vrf = [0u8; 32];

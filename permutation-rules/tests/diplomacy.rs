@@ -601,3 +601,68 @@ fn peace_starts_a_truce_that_blocks_war_even_with_casus_belli() {
         }
     ));
 }
+
+/// Peace after a real war (≥ `peace_pact_min_war` ticks) is a pact: a
+/// non-aggression treaty without bonds, so the former enemies are treaty
+/// partners (concord). A war ended at once is plain peace.
+#[test]
+fn peace_after_a_real_war_is_a_pact() {
+    let (rules, mut s) = setup(4);
+    step(
+        &mut s,
+        &rules,
+        vec![(0, vec![Order::DeclareWar { civ: 1 }])],
+    ); // t0, active from t1
+    for _ in 0..rules.peace_pact_min_war {
+        step(&mut s, &rules, vec![]);
+    }
+    step(
+        &mut s,
+        &rules,
+        vec![(0, vec![Order::ProposePeace { civ: 1 }])],
+    );
+    step(
+        &mut s,
+        &rules,
+        vec![(1, vec![Order::AcceptPeace { civ: 0 }])],
+    );
+    step(&mut s, &rules, vec![]);
+    let Relation::Nap {
+        until,
+        bond_low,
+        bond_high,
+    } = s.relation(0, 1)
+    else {
+        panic!("expected a pact, got {:?}", s.relation(0, 1));
+    };
+    assert_eq!((bond_low, bond_high), (0, 0));
+    assert!(until > s.tick);
+    assert_eq!(permutation_rules::scoring::treaty_partners(&s, 0), 1);
+    // The pact keeps the truce: it cannot be broken before the truce ends.
+    step(&mut s, &rules, vec![(1, vec![Order::BreakNap { civ: 0 }])]);
+    assert!(
+        matches!(s.relation(0, 1), Relation::Nap { .. }),
+        "{:?}",
+        s.relation(0, 1)
+    );
+
+    // A war that ends before it lasted is plain peace.
+    let (rules, mut s) = setup(4);
+    step(
+        &mut s,
+        &rules,
+        vec![(0, vec![Order::DeclareWar { civ: 1 }])],
+    );
+    step(
+        &mut s,
+        &rules,
+        vec![(0, vec![Order::ProposePeace { civ: 1 }])],
+    );
+    step(
+        &mut s,
+        &rules,
+        vec![(1, vec![Order::AcceptPeace { civ: 0 }])],
+    );
+    step(&mut s, &rules, vec![]);
+    assert_eq!(s.relation(0, 1), Relation::Peace);
+}

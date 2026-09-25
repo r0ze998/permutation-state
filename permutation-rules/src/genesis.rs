@@ -42,8 +42,9 @@ pub fn nation_entries(n: usize) -> Vec<Entry> {
         .collect()
 }
 
-/// Build tick-0 state. `world_seed` drives terrain (first season only);
-/// `season_seed` drives everything random inside the season.
+/// Build tick-0 state. The map comes from `map_seed(world_seed,
+/// season_seed)`; `season_seed` also drives everything random inside the
+/// season.
 pub fn new_season(
     rules: &Ruleset,
     world_seed: &Seed,
@@ -51,8 +52,29 @@ pub fn new_season(
     entries: &[Entry],
 ) -> Result<WorldState, RulesError> {
     check_entries(rules, entries)?;
-    let generated = generate(rules, world_seed, entries.len())?;
+    let generated = generate(rules, &map_seed(world_seed, season_seed), entries.len())?;
     season_from_map(rules, world_seed, season_seed, entries, generated)
+}
+
+/// The seed the map is generated from (§2.4): the operator's public
+/// `world_seed` mixed with the season seed, which only exists once
+/// registration has closed. So nobody can compute the map before the nations
+/// are chosen, and a world seed cannot be picked for one. Limit: the season
+/// seed mixes a recent slot hash when `StartSeason` runs, so whoever sends
+/// it could try slots (on a symmetric map every start is alike; this only
+/// moves which nation neighbours which). A VRF would close it.
+pub fn map_seed(world_seed: &Seed, season_seed: &Seed) -> Seed {
+    crate::hash::sha256(&[b"permutation-rules/map-seed", world_seed, season_seed])
+}
+
+/// Which generated start each nation gets (§2.4): nation `i` starts at
+/// `starts[start_order(..)[i]]`. The permutation is drawn from the season
+/// seed, so the order in which generation placed the starts (the first one
+/// at random, later ones pushed outwards) is not tied to any nation.
+pub fn start_order(season_seed: &Seed, n: usize) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by_key(|i| (rand_id(season_seed, b"start-order", *i as u64), *i));
+    order
 }
 
 /// Entry rules checked before any generation work (§3.1).
@@ -87,7 +109,9 @@ pub fn season_from_map(
     let mut cities = Vec::with_capacity(n);
     let mut units = Vec::with_capacity(2 * n);
 
-    for (i, (entry, start)) in entries.iter().zip(generated.starts.iter()).enumerate() {
+    let order = start_order(season_seed, n);
+    for (i, entry) in entries.iter().enumerate() {
+        let start = &generated.starts[order[i]];
         let civ_id = i as u16;
         let city_id = cities.len() as u32;
         map.claim_territory(city_id, *start, territory_radius(1));
@@ -173,7 +197,16 @@ pub fn season_from_map(
         .iter()
         .enumerate()
         .map(|(i, hex)| {
-            let specialty = match rand_id(season_seed, b"specialty", i as u64) % 3 {
+            // On a symmetric map the specialties repeat around the borders
+            // (one rotating offset per season), so every nation's two
+            // neighbouring city-states differ and all nations get the same
+            // mix up to rotation; otherwise each is drawn on its own.
+            let draw = if generated.symmetric {
+                rand_id(season_seed, b"specialty", 0) + i as u64
+            } else {
+                rand_id(season_seed, b"specialty", i as u64)
+            };
+            let specialty = match draw % 3 {
                 0 => Specialty::Scientific,
                 1 => Specialty::Mercantile,
                 _ => Specialty::Agrarian,
@@ -230,4 +263,39 @@ pub fn season_from_map(
         deliveries: Vec::new(),
         merit_log: Vec::new(),
     })
+}
+
+#[cfg(test)]
+mod seeds {
+    use super::*;
+    use crate::params::Preset;
+
+    #[test]
+    fn start_order_is_a_permutation_drawn_from_the_season_seed() {
+        for n in 2..=8 {
+            let mut o = start_order(&[7; 32], n);
+            o.sort();
+            assert_eq!(o, (0..n).collect::<Vec<_>>());
+        }
+        let orders: alloc::collections::BTreeSet<Vec<usize>> =
+            (0..20u8).map(|k| start_order(&[k; 32], 6)).collect();
+        assert!(orders.len() > 10, "the order depends on the season seed");
+    }
+
+    /// The same public world seed gives a different map for another season
+    /// seed: the map is unknown until registration closes (§2.4).
+    #[test]
+    fn the_map_depends_on_the_season_seed() {
+        let rules = Ruleset::new(Preset::Blitz);
+        let a = new_season(&rules, &[1; 32], &[2; 32], &nation_entries(6)).unwrap();
+        let b = new_season(&rules, &[1; 32], &[3; 32], &nation_entries(6)).unwrap();
+        assert_ne!(a.map.tiles, b.map.tiles);
+        // Nation i's capital is generated start order[i].
+        let g = generate(&rules, &map_seed(&[1; 32], &[2; 32]), 6).unwrap();
+        let order = start_order(&[2; 32], 6);
+        for (i, civ) in a.civs.iter().enumerate() {
+            let cap = a.cities[civ.capital.unwrap() as usize].hex;
+            assert_eq!(cap, g.starts[order[i]]);
+        }
+    }
 }

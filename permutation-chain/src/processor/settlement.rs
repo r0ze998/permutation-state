@@ -35,9 +35,28 @@ pub(super) fn finish_season(program_id: &Pubkey, accounts: &[AccountInfo]) -> Pr
     let s = permutation_rules::payout::settle(&state, &rules, pool, season.entry_fee);
     season.pool = pool;
     season.ops += state.exchange_ops + s.dust;
-    season.payouts = s.per_member;
+    season.payouts = s.per_member.clone();
     season.treasury_final = state.civs.iter().map(|c| c.usdc).collect();
     season.final_root = state.state_root().map_err(|_| ChainError::Rules)?;
+    // The history layer: this season's record, chained onto the one it
+    // follows, and logged in full for the next season and the verifier.
+    let record = permutation_rules::history::season_record(&state, &s);
+    season.history_root =
+        permutation_rules::history::history_root(&season.prev_history_root, &record);
+    let mut bytes = borsh::to_vec(&record).map_err(|_| ChainError::Rules)?;
+    // A transaction's logs are capped at 10 KB (base64): a record too large
+    // to log is left out (the root is still stored, and the verifier
+    // recomputes the record from the final world).
+    if bytes.len() > HISTORY_LOG_MAX {
+        bytes.clear();
+    }
+    solana_program::log::sol_log_data(&[
+        b"PS_HISTORY",
+        &season.season_id.to_le_bytes(),
+        &season.prev_history_root,
+        &season.history_root,
+        &bytes,
+    ]);
     season.status = SeasonStatus::Finalized;
     store(&mut season_ai.try_borrow_mut_data()?, &season)?;
     msg!(
@@ -215,6 +234,9 @@ mod tests {
             treasury_final: vec![100, 0],
             payouts: vec![5, 6, 7],
             final_root: [0; 32],
+            prev_season_id: 0,
+            prev_history_root: [0; 32],
+            history_root: [0; 32],
         };
         let (a, b, c) = (member(0, 0, 200), member(1, 0, 100), member(2, 1, 0));
         assert_eq!(claim_amount(&season, &a), 5 + 66);

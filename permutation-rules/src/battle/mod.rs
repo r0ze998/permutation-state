@@ -35,8 +35,8 @@ use damage::*;
 use plan::*;
 pub use plan::{forecast_attack, AttackForecast};
 pub(crate) use plan::{hostile, is_protected};
-pub(crate) use raze::displace_civilians;
 use raze::*;
+pub(crate) use raze::{displace_all, displace_civilians};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Defender {

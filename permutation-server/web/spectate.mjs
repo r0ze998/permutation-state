@@ -69,8 +69,8 @@ function renderTop() {
   const [, ph, phEn] = T.phaseOf(v.tick, v.season?.phases);
   setHtml($('#clock'), html`<b>ティック ${v.tick}</b>/ ${v.ticks} · ${ph} <small>${phEn}</small> · ${v.over ? 'シーズン終了' : v.paused ? '停止中' : `次の解決まで ${Math.ceil(v.secondsLeft)}秒`}`);
   setHtml($('#watch-chip'), S.watch === null
-    ? html`<span class="badge">観戦</span><b>全体表示</b><span>霧なし・全ての国</span>`
-    : html`<span class="badge fog">視界</span><b>${civName(S.watch)}</b><span>の霧の中から見ています</span>`);
+    ? html`<span class="badge">観戦</span><b>全体表示</b><span>全ての国</span>`
+    : html`<span class="badge fog">国</span><b>${civName(S.watch)}</b><span>の立場から見ています（情報は全員に同じです）</span>`);
 }
 
 function renderBoard() {

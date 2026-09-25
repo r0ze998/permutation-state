@@ -1,5 +1,5 @@
 //! Chain mode: the world is the on-chain program's, read through the
-//! gateway; the AI members' and acting officials' batches, and the people's,
+//! gateway; the AI members' batches, and the people's,
 //! go back through it.
 //!
 //! Every gateway call happens without the game lock: the follower fetches
@@ -7,11 +7,14 @@
 //! and a person's submission is prepared under the lock, sent without it
 //! (`Submission::send`), and its outcome recorded under it again.
 
-use permutation_rules::gov::{MemberId, NOBODY};
+use permutation_chain::state::MAX_GOV_PER_SIGNER;
+use permutation_rules::gov::{GovEntry, MemberId, NOBODY};
 use permutation_rules::orders::OrderBatch;
 use permutation_rules::tick::TickInput;
 use permutation_rules::{Preset, Ruleset};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -30,7 +33,7 @@ pub struct ChainMode {
     /// The gateway's /season answer: accounts, program id, member registry, pool.
     pub info: Value,
     pub last_record: Option<Value>,
-    /// Tick the AI members and acting officials already submitted for.
+    /// Tick the AI members already submitted for.
     pub ai_submitted: Option<u16>,
     pub error: Option<String>,
 }
@@ -141,9 +144,9 @@ impl Game {
     }
 
     /// Apply a snapshot and what `Poll::fetch` learned with it. Returns what
-    /// to send to the gateway (`(path, body)`) once the lock is released:
-    /// the AI members' governance, then every AI-run office's batch.
-    pub fn on_chain(&mut self, poll: Poll) -> Vec<(&'static str, Value)> {
+    /// to send to the gateway once the lock is released: the AI members'
+    /// governance, then every AI-run office's batch.
+    pub fn on_chain(&mut self, poll: Poll) -> Sends {
         let Poll {
             snap,
             resolved,
@@ -186,7 +189,7 @@ impl Game {
         }
         let tick = self.state.tick;
         let Some(c) = self.chain.as_mut() else {
-            return Vec::new();
+            return Sends::default();
         };
         c.meta = snap.meta;
         c.slot = snap.slot;
@@ -202,32 +205,26 @@ impl Game {
             || tick >= self.rules.ticks_per_season
             || c.ai_submitted == Some(tick)
         {
-            return Vec::new();
+            return Sends::default();
         }
         c.ai_submitted = Some(tick);
         let hosts = self.hosts();
         // Governance first: once every office's batch is in, the crank freezes
         // the tick's input and later actions wait for the next tick (TickFrozen).
-        let mut out = Vec::new();
-        for e in self
+        let gov = self
             .planner
-            .member_gov(&self.state, &self.rules, &self.fog, &hosts)
-        {
-            out.push((
-                "/gov",
-                json!({"member": e.member, "action": GovDto::from_action(&e.action)}),
-            ));
-        }
-        for b in self.planner.batches(
+            .member_gov(&self.state, &self.rules, &self.fog, &hosts);
+        let batches = self.planner.batches(
             &self.state,
             &self.rules,
             &self.fog,
             &mut self.ledger,
             &hosts,
-        ) {
-            out.push(("/submit", batch_body(&b)));
+        );
+        Sends {
+            gov: gov_bodies(&gov),
+            batches: batches.iter().map(batch_body).collect(),
         }
-        out
     }
 
     /// Chain mode: `m`'s batches for the open tick, ready to send.
@@ -277,7 +274,7 @@ impl Poll {
     }
 }
 
-/// Follow the chain: new ticks, then the AI members' and acting officials'
+/// Follow the chain: new ticks, then the AI members'
 /// submissions. Only this thread changes the world in chain mode.
 pub fn follow(game: Shared) {
     loop {
@@ -296,12 +293,68 @@ pub fn follow(game: Shared) {
             }
         };
         let sends = lock(&game).on_chain(poll);
-        for (path, body) in sends {
-            if let Err(e) = link.post_json(path, &body) {
-                eprintln!("{path} for nation {} failed: {e}", body["civ"]);
-            }
-        }
+        // Governance first: once every office's batch is in, the crank
+        // freezes the tick's input and later actions wait (TickFrozen).
+        post_all(&link, "/gov", &sends.gov);
+        post_all(&link, "/submit", &sends.batches);
     }
+}
+
+/// What the AI members send for the open tick.
+#[derive(Default)]
+pub struct Sends {
+    /// `/gov` bodies: one per member, with its actions for the tick.
+    pub gov: Vec<Value>,
+    /// `/submit` bodies: one per office.
+    pub batches: Vec<Value>,
+}
+
+/// Governance actions as `/gov` bodies: a member's actions go together (at
+/// most `MAX_GOV_PER_SIGNER` per body, the program's limit per signer and
+/// tick), so a vote window's votes take one transaction per member, not one
+/// per vote.
+fn gov_bodies(entries: &[GovEntry]) -> Vec<Value> {
+    let mut by_member: BTreeMap<MemberId, Vec<GovDto>> = BTreeMap::new();
+    for e in entries {
+        by_member
+            .entry(e.member)
+            .or_default()
+            .push(GovDto::from_action(&e.action));
+    }
+    by_member
+        .into_iter()
+        .flat_map(|(member, actions)| {
+            actions
+                .chunks(MAX_GOV_PER_SIGNER)
+                .map(|a| json!({"member": member, "actions": a}))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// Requests in flight at once: each is a transaction the gateway confirms
+/// on the ER, which takes about a second on devnet.
+const PARALLEL_SENDS: usize = 8;
+
+/// POST every body to `path`, `PARALLEL_SENDS` at a time; failures are logged.
+fn post_all(link: &ChainLink, path: &str, bodies: &[Value]) {
+    let next = AtomicUsize::new(0);
+    std::thread::scope(|s| {
+        for _ in 0..PARALLEL_SENDS.min(bodies.len()) {
+            s.spawn(|| loop {
+                let i = next.fetch_add(1, Ordering::Relaxed);
+                let Some(body) = bodies.get(i) else { break };
+                if let Err(e) = link.post_json(path, body) {
+                    let who = if body["civ"].is_null() {
+                        format!("member {}", body["member"])
+                    } else {
+                        format!("nation {}", body["civ"])
+                    };
+                    eprintln!("{path} for {who} failed: {e}");
+                }
+            });
+        }
+    });
 }
 
 /// A person's batches on their way to the chain (signed by the gateway with
@@ -339,5 +392,53 @@ impl Submission {
             c.error = error.clone();
         }
         error.map_or(Ok(sigs), Err)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use permutation_rules::gov::{GovAction, Role};
+
+    fn vote(member: MemberId, role: Role) -> GovEntry {
+        GovEntry {
+            member,
+            signer: [0; 32],
+            action: GovAction::Vote {
+                role,
+                candidate: member,
+            },
+        }
+    }
+
+    /// A vote window's votes go out as one request per member, in the
+    /// order the member cast them, never more than the program takes.
+    #[test]
+    fn governance_goes_out_per_member() {
+        let mut entries = Vec::new();
+        for m in [3, 1] {
+            for r in Role::ALL {
+                entries.push(vote(m, r));
+            }
+        }
+        entries.extend((0..9).map(|_| vote(2, Role::General)));
+        let bodies = gov_bodies(&entries);
+        let shape: Vec<(u64, usize)> = bodies
+            .iter()
+            .map(|b| {
+                (
+                    b["member"].as_u64().unwrap(),
+                    b["actions"].as_array().unwrap().len(),
+                )
+            })
+            .collect();
+        assert_eq!(shape, vec![(1, 4), (2, MAX_GOV_PER_SIGNER), (2, 1), (3, 4)]);
+        let roles: Vec<&str> = bodies[0]["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a["role"].as_str().unwrap())
+            .collect();
+        assert_eq!(roles, ["General", "Steward", "Science", "Diplomat"]);
     }
 }

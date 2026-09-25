@@ -13,8 +13,9 @@ People and AI agents join a nation with the same rights. They elect its officers
 ## What we built
 
 - **A nation is a small on-chain state.** Members elect a general, a steward, a science officer and a diplomat every 30 ticks. Anyone can propose orders to an office; an officer who adopts a proposal shares the credit with its author. A majority can recall an officer. War needs the consent of two different officers. Every vote, proposal and order is a transaction.
-- **A deep 4X engine on chain.** Cities, units, combat, diplomacy, markets and fog of war, with four paths to progress (hegemony, prosperity, science, concord) and eras. It is one deterministic Rust crate, and every tick of a season runs on a MagicBlock Ephemeral Rollup. Before a tick resolves, its whole input is published on chain.
+- **A deep 4X engine on chain.** Cities, units, combat, diplomacy and markets, with four paths to progress (hegemony, prosperity, science, concord) and eras. It is one deterministic Rust crate, and every tick of a season runs on a MagicBlock Ephemeral Rollup. Before a tick resolves, its whole input is published on chain. Every account is public, so everyone, human or agent, plays with perfect information.
 - **Agents as equal citizens.** Agents join over **x402** (HTTP 402, pay in USDC), play through HTTP, **MCP** or `llms.txt`, sign their own transactions, and can win elections. Every officer's decision is committed with its rationale and revealed later, so people can judge their officers — human or AI — and recall them.
+- **Fairness anyone can check.** Maps are six-fold rotationally symmetric, so every nation starts with exactly the same surroundings, and the map cannot be computed before nations are chosen. Orders are sealed (commit, then reveal), so nobody can react to anyone else's move. Each tick's randomness comes from everyone's revealed salts, so nobody, not even the crank, picks it. The operator never gives orders: a vacant office is filled by the rules, from the members' own top proposal.
 - **A prize nobody can steer.** Entry fees go into a USDC vault the program owns. The program splits the pool among nations by achievement points and inside each nation by merit, from the final world. A replay verifier recomputes every root and every payout from the chain's logs.
 
 ## Why Solana + MagicBlock
@@ -36,11 +37,11 @@ People and AI agents join a nation with the same rights. They elect its officers
 
 - **Full seasons on chain, on devnet:** registration, genesis, seating and the first election; 180 ticks on MagicBlock's devnet ER with elections, proposals and recalls; grouped commits back to base, undelegation, payouts computed on chain and claimed. The verifier reports VERIFIED, and the vault is conserved to the last unit.
 - **Agents in play:** x402 entry is tested against tampered payments. A rule-based agent joined, won office, governed, played a full season and claimed its prize.
+- **Rules version 6 (local, 2026-09-25):** sealed orders, randomness from revealed salts, symmetric maps, the rules' caretaker for vacant offices and a history chain between seasons. A local ER season verified: 180 ticks, 4227 sealed batches checked. The devnet program is still version 5.
 - **Next:**
+  - redeploy version 6 to devnet
   - a mixed human/agent playtest
-  - MagicBlock VRF
-  - PER-enforced fog
-  - sealed orders
+  - possibly a separate fog mode on a private rollup
 
 Links:
 

@@ -8,6 +8,7 @@
 // byte for byte, decoders value for value, instruction tags, error codes,
 // constants, magics and names (test/codec.test.mjs, test/constants.test.mjs).
 
+import { createHash } from 'node:crypto';
 import { Writer, Reader } from './borsh.mjs';
 
 // ------------------------------------------------------------------ constants
@@ -29,12 +30,12 @@ export const MAX_NAME = 24;
 export const MAX_MEMBERS = 256;
 /** Governance actions one signer may queue per tick. */
 export const MAX_GOV_PER_SIGNER = 8;
-/** Encoded orders that fit in one SubmitOrders transaction (packet limit 1232 bytes); the server's `BATCH_BYTES`. */
-export const BATCH_BYTES = 820;
+/** Encoded orders that fit in one RevealOrders transaction (packet limit 1232 bytes); the server's `BATCH_BYTES`. */
+export const BATCH_BYTES = 800;
 /** PDA seeds (first component). */
 export const SEEDS = Object.freeze({ season: 'season', world: 'world', nation: 'nation', member: 'member', vault: 'vault' });
 /** Account magics (first 8 bytes). `genesis` marks a world whose genesis is still being built. */
-export const MAGIC = Object.freeze({ season: 'PSSEASN5', member: 'PSMEMBR5', nation: 'PSNATN06', world: 'PSWORLD5', genesis: 'PSGENJB1' });
+export const MAGIC = Object.freeze({ season: 'PSSEASN6', member: 'PSMEMBR5', nation: 'PSNATN07', world: 'PSWORLD5', genesis: 'PSGENJB1' });
 /** Nation names, in civ order (`permutation_rules::genesis::NATIONS`). */
 export const NATIONS = Object.freeze(['Aster', 'Borealis', 'Cinder', 'Dunmar', 'Ember', 'Fjordal']);
 /** Offices (V5 §5.1), in `Role` order. */
@@ -149,7 +150,11 @@ export const IX_TAG = Object.freeze({
   createSeason: 0, allocWorld: 1, register: 2, startSeason: 3, genesisStep: 4, delegate: 5, submitOrders: 6, resolveTick: 7,
   commit: 8, commitAndUndelegate: 9, finishSeason: 10, claim: 11, undelegatePart: 12, updateMember: 13, allocNation: 14,
   seatMembers: 15, openGovernment: 16, submitGov: 17, withdrawOps: 18, logTickInput: 19, commitPart: 20,
+  closeCommits: 21, commitOrders: 22, revealOrders: 23,
 });
+
+/** Instructions the program still decodes but always refuses (`Retired`); the client builds none. */
+export const RETIRED_IX = Object.freeze(['submitOrders']);
 
 /** Program instruction data (enum `ChainInstruction`). Keys are 32-byte arrays. */
 const votes4 = (w, v) => { for (let i = 0; i < 4; i++) w.u32(v?.[i] ?? NOBODY); return w; };
@@ -157,14 +162,13 @@ const ixWriter = name => { if (!(name in IX_TAG)) throw new Error(`unknown instr
 const targets = (w, list) => w.vec(list, (x, t) => x.u16(t));
 export const IX = {
   createSeason: a => ixWriter('createSeason').u64(a.seasonId).u8(a.preset).u8(a.nations).u64(a.entryFee)
-    .u32(a.tickSeconds).fixed(a.worldSeed, 32).fixed(a.crank, 32).bool(a.market ?? true).toBytes(),
+    .u32(a.tickSeconds).fixed(a.worldSeed, 32).fixed(a.crank, 32).bool(a.market ?? true).u64(a.prevSeasonId ?? 0n).toBytes(),
   allocWorld: chunk => ixWriter('allocWorld').u8(chunk).toBytes(),
   register: a => votes4(ixWriter('register').u16(a.civ).string(a.name).u8(a.kind).fixed(a.session, 32).fixed(a.attestation ?? new Uint8Array(32), 32)
     .u8(a.stand ?? 0), a.votes).u64(a.deposit ?? 0n).toBytes(),
   startSeason: () => ixWriter('startSeason').toBytes(),
   genesisStep: work => ixWriter('genesisStep').u32(work).toBytes(),
   delegate: target => ixWriter('delegate').u16(target).toBytes(),
-  submitOrders: a => ixWriter('submitOrders').u8(roleIndex(a.role)).u16(a.tick).fixed(a.decisionDigest, 32).vec(a.orders, encodeOrder).vec(a.adopt ?? [], (w, id) => w.u32(id)).toBytes(),
   resolveTick: (to = 12) => ixWriter('resolveTick').u8(to).toBytes(),
   finishSeason: () => ixWriter('finishSeason').toBytes(),
   claim: () => ixWriter('claim').toBytes(),
@@ -177,7 +181,22 @@ export const IX = {
   withdrawOps: () => ixWriter('withdrawOps').toBytes(),
   logTickInput: chunk => ixWriter('logTickInput').u16(chunk).toBytes(),
   commitPart: list => targets(ixWriter('commitPart'), list).toBytes(),
+  closeCommits: () => ixWriter('closeCommits').toBytes(),
+  commitOrders: a => ixWriter('commitOrders').u8(roleIndex(a.role)).u16(a.tick).fixed(a.commitment, 32).toBytes(),
+  revealOrders: a => ixWriter('revealOrders').u8(roleIndex(a.role)).u16(a.tick).fixed(a.decisionDigest, 32).vec(a.orders, encodeOrder)
+    .vec(a.adopt ?? [], (w, id) => w.u32(id)).fixed(a.salt, 32).toBytes(),
 };
+
+/**
+ * Sealed orders (commit–reveal): borsh `OrderBatch` and its commitment
+ * `sha256("permutation-rules/orders" ‖ borsh(batch) ‖ salt)`, exactly as
+ * `permutation_rules::orders::order_commitment`. `b` = {civ, tick, role,
+ * member, decisionDigest, orders (DTOs), adopt}; `salt` 32 bytes.
+ */
+export const encodeBatch = b => new Writer().u16(b.civ).u16(b.tick).u8(roleIndex(b.role)).u32(b.member).fixed(b.decisionDigest, 32)
+  .vec(b.orders, encodeOrder).vec(b.adopt ?? [], (w, id) => w.u32(id)).toBytes();
+const sha256 = (...parts) => { const h = createHash('sha256'); for (const p of parts) h.update(p); return new Uint8Array(h.digest()); };
+export const orderCommitment = (b, salt) => sha256(new TextEncoder().encode('permutation-rules/orders'), encodeBatch(b), salt);
 
 // ------------------------------------------------------------------ accounts
 
@@ -191,6 +210,7 @@ export function decodeSeason(data) {
     worldSeed: r.fixed(32), seasonSeed: r.fixed(32), memberCount: r.u32() };
   s.nationMembers = r.vec(x => x.u32()); s.seated = r.u32(); s.pool = r.u64(); s.ops = r.u64(); s.opsWithdrawn = r.bool();
   s.treasury = r.vec(x => x.u64()); s.treasuryFinal = r.vec(x => x.u64()); s.payouts = r.vec(x => x.u64()); s.finalRoot = r.fixed(32);
+  s.prevSeasonId = r.u64(); s.prevHistoryRoot = r.fixed(32); s.historyRoot = r.fixed(32);
   return s;
 }
 
@@ -214,6 +234,11 @@ export function decodeNationHeader(data) {
   n.spendable = [r.u32(), r.u32(), r.u32(), r.u32()];
   n.submitted = [r.u16(), r.u16(), r.u16(), r.u16()];
   n.frozen = r.bool();
+  n.revealing = r.bool();
+  n.revealDeadline = Number(r.i64());
+  n.committed = [r.u16(), r.u16(), r.u16(), r.u16()];
+  n.commits = [r.fixed(32), r.fixed(32), r.fixed(32), r.fixed(32)];
+  n.salts = [r.fixed(32), r.fixed(32), r.fixed(32), r.fixed(32)];
   return n;
 }
 
@@ -223,12 +248,12 @@ export function decodeWorldHeader(data) {
   const magic = magicOf(r);
   const len = r.u32();
   const meta = { seasonId: r.u64(), preset: r.u8(), civs: r.u8(), tickSeconds: r.u32(), deadline: Number(r.i64()), finished: r.bool(), market: r.bool(),
-    frozen: r.bool(), vrf: r.fixed(32), inputChunks: r.u16(), inputLogged: r.u16() };
+    frozen: r.bool(), vrf: r.fixed(32), inputChunks: r.u16(), inputLogged: r.u16(), revealing: r.bool() };
   return { magic, len, meta, bodyOffset: WORLD_HEADER };
 }
 
 /** The program's log records (`sol_log_data`, logged as `Program data:`). */
-export const RECORD_TAGS = Object.freeze(['PS_TICK', 'PS_INPUT', 'PS_GENESIS', 'PS_SEAT', 'PS_OPEN']);
+export const RECORD_TAGS = Object.freeze(['PS_TICK', 'PS_INPUT', 'PS_GENESIS', 'PS_SEAT', 'PS_OPEN', 'PS_COMMITS', 'PS_SALTS', 'PS_HISTORY']);
 
 /** Parse a `Program data:` log of one of the `RECORD_TAGS` records (fields already base64-decoded). */
 export function parseRecord(fields) {
@@ -242,6 +267,27 @@ export function parseRecord(fields) {
   if (tag === 'PS_GENESIS') return { tag, root: fields[1], seasonSeed: fields[2] };
   if (tag === 'PS_SEAT') return { tag, root: fields[1], members: fields[2] };
   if (tag === 'PS_OPEN') return { tag, root: fields[1] };
+  // Commitments closed: borsh Vec<(civ u16, role u8, member u32, commitment [32])>.
+  if (tag === 'PS_COMMITS') {
+    const r = new Reader(fields[2]);
+    return { tag, tick: u16(fields[1]), commits: r.vec(x => ({ civ: x.u16(), role: ROLES[x.u8()], member: x.u32(), commitment: x.fixed(32) })) };
+  }
+  // Input frozen: the pre-state root and the revealed salts, borsh Vec<(civ u16, role u8, salt [32])>.
+  if (tag === 'PS_SALTS') {
+    const r = new Reader(fields[3]);
+    return { tag, tick: u16(fields[1]), preRoot: fields[2], salts: r.vec(x => ({ civ: x.u16(), role: ROLES[x.u8()], salt: x.fixed(32) })) };
+  }
+  // A finalized season's history (permutation_rules::history): its record, borsh SeasonRecord.
+  if (tag === 'PS_HISTORY') {
+    const r = new Reader(fields[4]);
+    const hex32 = () => Buffer.from(r.fixed(32)).toString('hex');
+    const finalRoot = hex32();
+    const nations = r.vec(x => ({ points: x.u64(), era: x.u8(), tiers: [x.u8(), x.u8(), x.u8(), x.u8()], share: x.u64(), cities: x.u32(), members: x.u32() }));
+    const opt = (x, f) => (x.u8() ? f(x) : null);
+    const cities = r.vec(x => ({ q: x.i32(), r: x.i32(), founder: x.u16(), foundedTick: x.u16(), owner: opt(x, y => y.u16()), capturedFrom: opt(x, y => y.u16()), pop: x.u32(), alive: x.bool() }));
+    const ruins = r.vec(x => ({ q: x.i32(), r: x.i32(), peak: x.u16() }));
+    return { tag, seasonId: new DataView(fields[1].buffer, fields[1].byteOffset).getBigUint64(0, true), prevHistoryRoot: fields[2], historyRoot: fields[3], record: { finalRoot, nations, cities, ruins } };
+  }
   return { tag };
 }
 
@@ -263,7 +309,7 @@ export const claimAmount = (season, member) => claimParts(season, member).total;
 export const CHAIN_ERRORS = Object.freeze(['InvalidInstruction', 'MissingSignature', 'WrongPda', 'AlreadyInitialized', 'NotInitialized', 'WrongStatus',
   'Unauthorized', 'SeasonFull', 'InvalidName', 'WrongMint', 'WrongTokenAccount', 'WorldTooSmall', 'Rules', 'WrongTick', 'OverBudget', 'TooEarly',
   'MissingNation', 'WrongDelegationProgram', 'WrongMagicProgram', 'AlreadyClaimed', 'NothingToClaim', 'SeasonNotOver', 'WrongOffice',
-  'InvalidParams', 'WrongWorld', 'InboxFull', 'TickFrozen', 'InputNotPublished']);
+  'InvalidParams', 'WrongWorld', 'InboxFull', 'TickFrozen', 'InputNotPublished', 'WrongPhase', 'CommitMismatch', 'Retired']);
 
 /**
  * The program error named in a transaction error message, or null. Reads

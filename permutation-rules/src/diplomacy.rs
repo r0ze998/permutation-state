@@ -268,6 +268,12 @@ fn break_nap(state: &mut WorldState, civ: CivId, other: CivId) -> Result<(), Blo
     let Some((mine, theirs)) = bonds(state, civ, other) else {
         return Err(Blocked::NotAtPeace);
     };
+    // A pact made by peace keeps the truce: it cannot be broken before the
+    // truce ends (like a declaration of war, §10.2).
+    let until = state.truce_until[state.pair_index(civ, other)];
+    if state.tick < until {
+        return Err(Blocked::InTruce { until });
+    }
     // The breaker's bond goes to the other party, whose own bond is returned (§10.3).
     state.civs[other as usize].gold += (mine as i64 + theirs as i64) * MILLI;
     state.add_grievance(civ, other, 40);
@@ -351,9 +357,25 @@ fn scheduled_transitions(state: &mut WorldState, rules: &Ruleset) {
         for b in a + 1..n {
             match state.relation(a, b) {
                 Relation::War {
-                    peace_at: Some(p), ..
+                    peace_at: Some(p),
+                    active_from,
+                    ..
                 } if now >= p => {
-                    state.set_relation(a, b, Relation::Peace);
+                    // Peace after a real war is a pact (revised 2026-09-25):
+                    // a non-aggression treaty without bonds for `nap_ticks`,
+                    // so ending a war well counts for concord (treaty
+                    // partners). Breaking it needs consent like any pact.
+                    let fought = p.saturating_sub(active_from) >= rules.peace_pact_min_war;
+                    let after = if fought {
+                        Relation::Nap {
+                            until: p + rules.nap_ticks,
+                            bond_low: 0,
+                            bond_high: 0,
+                        }
+                    } else {
+                        Relation::Peace
+                    };
+                    state.set_relation(a, b, after);
                     let i = state.pair_index(a, b);
                     state.truce_until[i] = p + rules.truce_ticks;
                     withdraw(state, a, b);
@@ -377,7 +399,8 @@ fn scheduled_transitions(state: &mut WorldState, rules: &Ruleset) {
 }
 
 /// Units of `civ` inside `other`'s territory go to the nearest free tile of
-/// their own territory (distance, then tile index). With none free they stay.
+/// their own territory (distance, then hex as seen from the unit's sextant,
+/// so the choice turns with a symmetric map). With none free they stay.
 fn withdraw(state: &mut WorldState, civ: CivId, other: CivId) {
     for i in 0..state.units.len() {
         let u = &state.units[i];
@@ -392,7 +415,7 @@ fn withdraw(state: &mut WorldState, civ: CivId, other: CivId) {
             .iter()
             .filter(|t| t.terrain.is_passable() && state.territory_owner(t.hex) == Some(civ))
             .filter(|t| crate::tick::tile_free_for(state, &unit, t.hex))
-            .min_by_key(|t| (t.hex.distance(from), t.hex))
+            .min_by_key(|t| (t.hex.distance(from), t.hex.turned(from.sextant())))
             .map(|t| t.hex);
         if let Some(h) = target {
             let u = &mut state.units[i];

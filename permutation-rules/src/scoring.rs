@@ -4,10 +4,12 @@
 //! Every milestone is an absolute threshold, so any number of nations can
 //! reach it. A path's tier is the highest `k` such that milestones `1..=k`
 //! all hold (a ladder). Milestones built only on quantities that never
-//! decrease (wealth, techs, the Star Gate record, trade, "was suzerain",
-//! "sent an envoy") are permanent once reached; the others (territory,
-//! population, suzerainties, treaties, captured cities held) are judged on
-//! the state at the end of the season and shown provisionally until then.
+//! decrease (wealth, techs, trade, conquests, "was suzerain", "sent an
+//! envoy") are permanent once reached; the others (territory, population,
+//! suzerainties, treaties, captured cities held, the Star Gate standing in
+//! an own city) are judged on the state at the end of the season and shown
+//! provisionally until then (revised 2026-09-25: the Star Gate and a first
+//! conquest).
 
 use crate::params::Ruleset;
 use crate::state::{CivId, Relation, WorldState};
@@ -71,6 +73,10 @@ pub struct Facts {
     pub wealth: u64,
     pub techs: u32,
     pub star_gate_max: u8,
+    /// Star Gate stages standing now in a city the civ owns.
+    pub star_gate_now: u8,
+    /// Banked conquests (hegemony tier 3).
+    pub conquests: u32,
     pub partners: u32,
     pub alliances: u32,
     pub suzerainties: u32,
@@ -99,6 +105,12 @@ pub fn facts_all(state: &WorldState, rules: &Ruleset) -> alloc::vec::Vec<Facts> 
                 wealth: a.wealth,
                 techs: c.techs.count(),
                 star_gate_max: a.star_gate_max,
+                star_gate_now: state
+                    .living_cities_of(civ)
+                    .map(|c| c.buildings.star_gate_stages())
+                    .max()
+                    .unwrap_or(0),
+                conquests: a.conquests,
                 partners: treaty_partners(state, civ),
                 alliances: alliances(state, civ),
                 suzerainties: suzerainties(state, civ),
@@ -117,9 +129,11 @@ pub fn milestone(rules: &Ruleset, f: &Facts, path: usize, tier: usize) -> bool {
         0 => {
             let tiles_ok = f.tiles >= rules.hegemony_tiles[k];
             let held_ok = f.captured_held >= rules.hegemony_cities[k];
-            // Tier 3 is reached by territory *or* by holding a conquest; the others need both.
+            // Tier 3 is reached by territory *or* by a conquest, banked once
+            // made (a city of at least `conquest_min_pop` taken, even if lost
+            // again); the others need both, and 4–5 need captured cities held.
             if tier == 3 {
-                tiles_ok || (rules.hegemony_cities[k] > 0 && held_ok)
+                tiles_ok || (rules.hegemony_cities[k] > 0 && (held_ok || f.conquests >= 1))
             } else {
                 tiles_ok && held_ok
             }
@@ -127,8 +141,11 @@ pub fn milestone(rules: &Ruleset, f: &Facts, path: usize, tier: usize) -> bool {
         1 => f.pop >= rules.prosperity_pop[k] && f.wealth >= rules.prosperity_wealth[k] as u64,
         2 => match tier {
             1..=3 => f.techs >= rules.science_techs[k],
-            4 => f.star_gate_max >= 1,
-            _ => f.star_gate_max >= 3,
+            // The Star Gate counts only while the civ holds it: it can be
+            // taken (captures remove its stages), so science's top tiers
+            // are contested like territory.
+            4 => f.star_gate_now >= 1,
+            _ => f.star_gate_now >= 3,
         },
         _ => {
             let partners = f.partners >= rules.concord_partners[k];
@@ -247,5 +264,40 @@ mod tests {
         assert_eq!(trade_effective(&r, &[300, 300, 400]), 1000);
         assert_eq!(trade_effective(&r, &[800, 100, 100]), 600);
         assert_eq!(trade_effective(&r, &[]), 0);
+    }
+}
+
+#[cfg(test)]
+mod paths_2026_09_25 {
+    use super::*;
+    use crate::params::Preset;
+
+    /// Science's top tiers need the Star Gate standing in an own city now
+    /// (a captured one no longer counts), and hegemony tier 3 banks a
+    /// conquest even after the city is lost again.
+    #[test]
+    fn star_gate_held_and_conquest_banked() {
+        let rules = Ruleset::new(Preset::Blitz);
+        let mut f = Facts {
+            techs: 16,
+            star_gate_max: 3,
+            star_gate_now: 3,
+            ..Facts::default()
+        };
+        assert_eq!(tiers(&rules, &f)[2], 5);
+        f.star_gate_now = 0; // taken
+        assert_eq!(tiers(&rules, &f)[2], 3);
+
+        let mut h = Facts {
+            tiles: rules.hegemony_tiles[1],
+            ..Facts::default()
+        };
+        assert_eq!(tiers(&rules, &h)[0], 2);
+        h.conquests = 1;
+        assert_eq!(tiers(&rules, &h)[0], 3, "a banked conquest reaches tier 3");
+        h.tiles = rules.hegemony_tiles[3];
+        assert_eq!(tiers(&rules, &h)[0], 3, "tier 4 needs a captured city held");
+        h.captured_held = 1;
+        assert_eq!(tiers(&rules, &h)[0], 4);
     }
 }

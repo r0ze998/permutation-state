@@ -177,6 +177,19 @@ pub enum StandingOrder {
 pub const MAX_PATROL: usize = 6;
 
 impl Order {
+    /// This order in a world turned by `k` × 60° (`mapgen::rotate_world`):
+    /// its hexes (move paths, patrol routes) turned the same way.
+    pub fn rotate(&mut self, k: u8) {
+        match self {
+            Order::MoveUnit { path, .. } => path.iter_mut().for_each(|h| *h = h.rotate_by(k)),
+            Order::SetStanding {
+                rule: StandingOrder::Patrol { route },
+                ..
+            } => route.iter_mut().for_each(|h| *h = h.rotate_by(k)),
+            _ => {}
+        }
+    }
+
     /// Budget cost (§4.2).
     pub const fn cost(&self) -> u32 {
         match self {
@@ -224,6 +237,17 @@ pub struct OrderBatch {
     /// Proposals adopted (V5 §5.4): their orders run after `orders`, with
     /// the merit shared with the proposer.
     pub adopt: Vec<u32>,
+}
+
+/// An officer's sealed orders (commit–reveal, 2026-09-25): the commitment
+/// sent before the tick's deadline is `sha256("permutation-rules/orders" ‖
+/// borsh(batch) ‖ salt)`; the batch and the salt are revealed after the
+/// deadline and must hash to it. The batch names the civ, tick, office,
+/// member, decision digest, orders and adopted proposals, so a commitment
+/// binds all of them.
+pub fn order_commitment(batch: &OrderBatch, salt: &[u8; 32]) -> [u8; 32] {
+    let bytes = borsh::to_vec(batch).expect("borsh into a Vec cannot fail");
+    crate::hash::sha256(&[b"permutation-rules/orders", &bytes, salt])
 }
 
 /// One civ's accepted orders for the current tick, all offices merged in

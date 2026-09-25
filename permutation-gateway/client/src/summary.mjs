@@ -1,4 +1,4 @@
-// A compact, token-cheap summary of a nation's fogged view for language
+// A compact, token-cheap summary of a nation's view (the whole world) for language
 // models. Everything in it comes from `GET /api/state?member=M`; nothing is
 // invented.
 
@@ -24,7 +24,7 @@ export function summarize(v, { near = 6, member = null } = {}) {
   return {
     tick: v.tick, ticks: v.ticks, secondsLeft: Math.round(v.secondsLeft), nation: v.civs[civ]?.name, civ,
     you: { member, name: me?.name, officesHeld: held, note: held.length ? 'you order only within your offices; propose the rest' : 'you hold no office: propose orders, support, vote, recall' },
-    offices: (gov.offices ?? []).map(o => ({ role: o.role, holder: o.holder ? `${o.holder.name} (#${o.holder.id}, ${o.holder.kind})` : 'acting official (bot)', active: o.active,
+    offices: (gov.offices ?? []).map(o => ({ role: o.role, holder: o.holder ? `${o.holder.name} (#${o.holder.id}, ${o.holder.kind})` : 'vacant (the rules\' caretaker: top proposal, else a minimal default)', active: o.active,
       spendable: e?.offices?.find(x => x.role === o.role)?.spendable })),
     election: { next: gov.nextElection, voteOpen: gov.voteOpen, candidates: (gov.candidates ?? []).map(c => ({ role: c.role, candidates: c.candidates.map(x => ({ id: x.member?.id, name: x.member?.name, votes: x.votes })) })) },
     proposals: (gov.proposals ?? []).slice(0, 6).map(p => ({ id: p.id, role: p.role, by: p.proposer?.name, supporters: p.supporters, orders: p.orders })),

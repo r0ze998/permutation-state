@@ -76,4 +76,73 @@ pub(crate) fn phase_scoring(state: &mut WorldState, rules: &Ruleset) {
         a.tiers = score.tiers;
         a.era = score.era;
     }
+    eurekas(state, &facts);
+    dark_age(state, rules);
+}
+
+/// Eurekas (revised 2026-09-25): doing something related makes a tech 40%
+/// cheaper (`eureka_cost_bps`), with no order spent — so what a nation
+/// does (fighting, trading, befriending) shapes what it researches. A fired
+/// eureka stays; the Star Gate techs have none.
+fn eurekas(state: &mut WorldState, facts: &[crate::scoring::Facts]) {
+    use crate::buildings::Building;
+    use crate::tech::Tech::*;
+    for (civ, f) in facts.iter().enumerate() {
+        let c = &state.civs[civ];
+        let owns = |b: Building| {
+            state
+                .living_cities_of(civ as u16)
+                .any(|x| x.buildings.has(b))
+        };
+        let fired = [
+            (Agriculture, f.pop >= 3),
+            (
+                BronzeWorking,
+                owns(Building::Workshop) || owns(Building::Barracks),
+            ),
+            (Archery, c.achievements.kills >= 1),
+            (HorsebackRiding, c.horses >= 5_000),
+            (IronWorking, c.iron >= 5_000),
+            (Masonry, state.city_count(civ as u16) >= 3),
+            (Mysticism, f.envoy_sent),
+            (Writing, f.partners >= 1),
+            (Currency, f.trade >= 100),
+            (Mathematics, owns(Building::Market)),
+            (Chivalry, f.conquests >= 1),
+            (Philosophy, f.ever_suzerain),
+            (Engineering, f.captured_held >= 1 || owns(Building::Walls)),
+            (Astronomy, f.pop >= 30),
+        ];
+        let boosted = &mut state.civs[civ].achievements.boosted;
+        for (tech, now) in fired {
+            if now {
+                boosted.insert(tech);
+            }
+        }
+    }
+}
+
+/// Dark age (catch-up, revised 2026-09-25): at `dark_age_tick`, a nation
+/// with members whose points are below `dark_age_share_bps` of the leader's
+/// researches cheaper and orders more until `dark_age_until`.
+fn dark_age(state: &mut WorldState, rules: &Ruleset) {
+    if state.tick != rules.dark_age_tick {
+        return;
+    }
+    let scores = crate::scoring::nation_scores(state, rules);
+    let counted = |c: usize| state.nations[c].members > 0 && state.city_count(c as u16) > 0;
+    let lead = (0..scores.len())
+        .filter(|c| counted(*c))
+        .map(|c| scores[c].total())
+        .max()
+        .unwrap_or(0);
+    let behind: Vec<usize> = (0..scores.len())
+        .filter(|c| {
+            counted(*c) && scores[*c].total() * 10_000 < lead * rules.dark_age_share_bps as u64
+        })
+        .collect();
+    for c in behind {
+        state.civs[c].achievements.dark_age_until = Some(rules.dark_age_until);
+        state.push_event(b"dark_age", &[c as u8]);
+    }
 }

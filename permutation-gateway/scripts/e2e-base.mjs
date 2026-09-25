@@ -1,19 +1,21 @@
 // Program regression check on the base layer alone (no ER), Game Design V5:
 // create a season, register AI members with test USDC, run genesis, seat the
 // members and hold the first election, then play every tick on base — each
-// office submits an (empty) sealed batch, the input is published
-// (LogTickInput) and the tick resolved (ResolveTick, in parts when a tick
+// held office seals an (empty) batch (CommitOrders), the commitments close
+// after the deadline (CloseCommits), every batch is revealed (RevealOrders),
+// the input is published (LogTickInput: the randomness comes from the
+// revealed salts) and the tick resolved (ResolveTick, in parts when a tick
 // exceeds one transaction, as the crank does) — and finally FinishSeason and
 // the conservation of the vault. Prints the compute used per tick.
 //
-//   node scripts/e2e-base.mjs [--base http://127.0.0.1:18899] [--ticks 180] [--state e2e-base.json]
+//   node scripts/e2e-base.mjs [--base http://127.0.0.1:18899] [--ticks 180] [--tick-seconds 2] [--state e2e-base.json]
 //
 // Works against the local stack's base validator or a plain
 // solana-test-validator with the program loaded (`--bpf-program`).
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { Connection } from '@solana/web3.js';
 import { ChainClient } from '../client/src/chain.mjs';
-import { decodeNationHeader, decodeSeason, decodeWorldHeader, NOBODY, ROLES } from '../client/src/codec.mjs';
+import { chainError, decodeNationHeader, decodeSeason, decodeWorldHeader, NOBODY, orderCommitment, ROLES } from '../client/src/codec.mjs';
 import { createStateStore, loadConfig, namedKey, parseArgs } from '../src/config.mjs';
 import { bootstrap, defaultRoster, startAndDelegate } from '../src/season.mjs';
 import { send } from '../src/send.mjs';
@@ -24,7 +26,7 @@ const TICKS = 180;
 const args = parseArgs(process.argv.slice(2), { ticks: String(TICKS) });
 const maxTicks = Number(args.ticks);
 if (!Number.isInteger(maxTicks) || maxTicks < 1) throw new Error(`--ticks must be a positive integer, got ${args.ticks}`);
-const cfg = loadConfig({ defaults: { stateFile: 'e2e-base.json' } });
+const cfg = loadConfig({ defaults: { stateFile: 'e2e-base.json', tickSeconds: 2 } });
 const base = new Connection(cfg.baseRpc, 'confirmed');
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 
@@ -46,15 +48,27 @@ for (;;) {
   const heads = accounts.slice(chain.worldChunks.length).map(a => decodeNationHeader(a.data));
   const tick = heads[0].openTick;
   if (tick >= maxTicks) break;
-  // Every office seals an empty batch (in parallel): the holder's session
-  // key, the crank for a vacant office.
+  // Every held office seals an empty batch (in parallel), signed by the
+  // holder's session key; a vacant office takes none (the caretaker fills it).
+  const sealed = [];
   await Promise.all(heads.flatMap(n => ROLES.map((role, i) => {
-    if (n.submitted[i] === tick) return null;
-    const signer = n.officers[i] === NOBODY ? crank : sessionOf.get(n.officers[i]);
+    if (n.officers[i] === NOBODY || n.committed[i] === tick) return null;
+    const signer = sessionOf.get(n.officers[i]);
     const decisionDigest = createHash('sha256').update(`e2e-base/${state.seasonId}/${tick}/${n.civ}/${role}`).digest();
-    return send(base, chain.submitOrders({ signer: signer.publicKey, civ: n.civ, role, tick, decisionDigest, orders: [] }),
-      signer === crank ? [crank] : [crank, signer], `submit ${n.civ}/${role}`);
+    const batch = { civ: n.civ, tick, role, member: n.officers[i], decisionDigest, orders: [], adopt: [] };
+    const salt = new Uint8Array(randomBytes(32));
+    sealed.push({ ...batch, salt });
+    return send(base, chain.commitOrders({ signer: signer.publicKey, civ: n.civ, role, tick, commitment: orderCommitment(batch, salt) }),
+      [crank, signer], `commit ${n.civ}/${role}`);
   })));
+  // Close the commitments once the deadline passed (on the validator's clock), then reveal.
+  for (;;) {
+    try { await send(base, chain.closeCommits({ nations }), [crank], `close tick ${tick}`); break; } catch (e) {
+      if (chainError(e.message) !== 'TooEarly') throw e;
+      await new Promise(r => setTimeout(r, 400));
+    }
+  }
+  await Promise.all(sealed.map(b => send(base, chain.revealOrders({ signer: crank.publicKey, ...b }), [crank], `reveal ${b.civ}/${b.role}`)));
   // Publish the input (every chunk, checked against its hash), then resolve.
   await publishTickInput({ tick, publishChunk: chunk => send(base, chain.logTickInput({ nations, chunk }), [crank], `publish tick ${tick} input ${chunk}`) });
   if (tick % 10 === 0) for (const k of Object.keys(reach)) delete reach[k];

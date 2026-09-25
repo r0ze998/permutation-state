@@ -36,7 +36,8 @@ pub struct Scores {
     pub star_gate_tick: Option<u16>,
 }
 
-/// Progress a nation keeps for its milestones (V5 §6). Every field only grows.
+/// Progress a nation keeps for its milestones (V5 §6). Every field only
+/// grows, except the dark-age mark.
 #[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Achievements {
     /// Gold earned by the nation's own economy this season, whole units ("富").
@@ -48,6 +49,15 @@ pub struct Achievements {
     pub envoy_sent: bool,
     /// Most Star Gate stages ever completed.
     pub star_gate_max: u8,
+    /// Cities of at least `conquest_min_pop` taken from another nation
+    /// (banked: hegemony tier 3).
+    pub conquests: u32,
+    /// Enemy troops destroyed, whole troops (a eureka trigger).
+    pub kills: u32,
+    /// Techs whose eureka fired (cheaper to research).
+    pub boosted: crate::tech::TechSet,
+    /// Dark age (catch-up) until this tick, if the nation fell far behind.
+    pub dark_age_until: Option<u16>,
     /// Provisional tiers per path and era at the last scoring phase, for announcements.
     pub tiers: [u8; 4],
     pub era: u8,

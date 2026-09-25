@@ -9,7 +9,7 @@ use crate::fixed::Bps;
 use crate::{buildings, map, tech, units};
 use borsh::{BorshDeserialize, BorshSerialize};
 
-pub const RULES_VERSION: u16 = 5; // Rules Specification v0.2 (Game Design V5)
+pub const RULES_VERSION: u16 = 6; // v0.2 + V5, plus: city tiles are entered only by capture (§7.3)
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Preset {
@@ -192,6 +192,32 @@ pub struct Ruleset {
     /// Tariff in bps at cumulative spend 0, 10%, …, 100% of `tariff_full_usdc`.
     pub tariff_table_bps: [u32; 11],
     pub tariff_full_usdc: u64,
+
+    // --- paths and pacing (2026-09-25) ---
+    /// A conquest counts for hegemony tier 3 once (banked) when the city had
+    /// at least this population when taken.
+    pub conquest_min_pop: u32,
+    /// Peace after a war of at least this many ticks becomes a pact
+    /// (non-aggression, no bond) for `nap_ticks`: a treaty partner.
+    pub peace_pact_min_war: u16,
+    /// Eureka (a triggered tech boost): research cost in bps.
+    pub eureka_cost_bps: Bps,
+    /// Crisis (§12.2, revised): from `crisis_start`, every `crisis_interval`
+    /// ticks, the `crisis_targets` leading nations by points each lose
+    /// `crisis_pop` population and `crisis_loyalty` loyalty in their most
+    /// populous city.
+    pub crisis_targets: u8,
+    pub crisis_pop: u32,
+    pub crisis_loyalty: i32,
+    /// Dark age: at `dark_age_tick`, a nation with members and points below
+    /// `dark_age_share_bps` of the leader's researches at
+    /// `dark_age_research_bps` of the cost and has `dark_age_budget` extra
+    /// orders per tick, until `dark_age_until`.
+    pub dark_age_tick: u16,
+    pub dark_age_until: u16,
+    pub dark_age_share_bps: Bps,
+    pub dark_age_research_bps: Bps,
+    pub dark_age_budget: u16,
 }
 
 impl Ruleset {
@@ -307,11 +333,11 @@ impl Ruleset {
             tier_points: [10, 20, 35, 60, 100],
             hegemony_tiles: [25, 40, 60, 80, 100],
             hegemony_cities: [0, 0, 1, 1, 2],
-            prosperity_pop: [12, 20, 30, 42, 55],
-            prosperity_wealth: [0, 1_000, 2_000, 3_500, 5_000],
-            science_techs: [4, 9, 13],
+            prosperity_pop: [9, 15, 22, 31, 42],
+            prosperity_wealth: [0, 700, 1_400, 2_400, 3_600],
+            science_techs: [6, 11, 15],
             concord_partners: [1, 1, 1, 1, 2],
-            concord_suzerains: [0, 0, 1, 1, 2],
+            concord_suzerains: [0, 0, 1, 1, 1],
             concord_trade: [400, 1_000],
             trade_counterparty_bps: 4_000,
 
@@ -343,6 +369,18 @@ impl Ruleset {
                 500, 976, 1_672, 2_486, 3_387, 4_358, 5_391, 6_475, 7_608, 8_784, 10_000,
             ],
             tariff_full_usdc: 100_000_000,
+
+            conquest_min_pop: 3,
+            peace_pact_min_war: 6,
+            eureka_cost_bps: 7_500,
+            crisis_targets: 2,
+            crisis_pop: 1,
+            crisis_loyalty: 20,
+            dark_age_tick: 90,
+            dark_age_until: 150,
+            dark_age_share_bps: 2_000,
+            dark_age_research_bps: 7_500,
+            dark_age_budget: 1,
         }
     }
 

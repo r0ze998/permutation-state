@@ -99,7 +99,7 @@ impl Member {
 pub enum Viewer {
     /// Holds this member's token: may act for it.
     Member(MemberId),
-    /// Reads this nation's fogged view.
+    /// Reads this nation's view (the full state).
     Watch(CivId),
     Spectator,
 }
@@ -387,7 +387,7 @@ impl Game {
                 .zip(["general", "steward", "science officer", "diplomat"])
                 .map(|(m, r)| match self.members.get(*m as usize) {
                     Some(x) if *m != NOBODY => format!("{r} {}", x.meta.name),
-                    _ => format!("{r} the acting official"),
+                    _ => format!("{r} vacant (caretaker)"),
                 })
                 .collect();
             self.chronicle.push((

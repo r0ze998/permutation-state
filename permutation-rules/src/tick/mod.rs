@@ -145,7 +145,12 @@ pub(crate) fn accepted(state: &WorldState, pick: impl Fn(&Order) -> bool) -> Vec
 fn phase_commit(state: &mut WorldState, rules: &Ruleset) {
     for civ in 0..state.civs.len() as u16 {
         let cities = state.city_count(civ);
-        state.civs[civ as usize].tick_budget = order_budget(rules, cities);
+        let dark = if crate::economy::in_dark_age(state, civ) {
+            rules.dark_age_budget
+        } else {
+            0
+        };
+        state.civs[civ as usize].tick_budget = order_budget(rules, cities) + dark;
     }
     // Recalls, idle recalls and elections take effect next tick (V5 §5.3–§5.5).
     crate::gov::end_of_tick(state, rules);

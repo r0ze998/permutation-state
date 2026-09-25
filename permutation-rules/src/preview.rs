@@ -9,9 +9,7 @@
 use crate::battle::{forecast_attack, AttackForecast};
 use crate::buildings::BUILDINGS;
 use crate::checks::{self, Blocked};
-use crate::economy::{
-    amenities, apply_amenities, city_yield, growth_threshold, tech_cost, CityYield,
-};
+use crate::economy::{amenities, apply_amenities, city_yield, growth_threshold, CityYield};
 use crate::fixed::{apply_bps, MILLI};
 use crate::hex::Hex;
 use crate::orders::AttackTarget;
@@ -212,12 +210,11 @@ pub struct ResearchOption {
 
 pub fn research_options(state: &WorldState, rules: &Ruleset, civ: CivId) -> Vec<ResearchOption> {
     let c = &state.civs[civ as usize];
-    let cities = state.city_count(civ);
     TECHS
         .iter()
         .map(|t| ResearchOption {
             tech: t.tech,
-            cost: tech_cost(rules, t.tech, cities),
+            cost: crate::economy::civ_tech_cost(state, rules, civ, t.tech),
             result: checks::research(c.techs, t.tech),
         })
         .collect()
