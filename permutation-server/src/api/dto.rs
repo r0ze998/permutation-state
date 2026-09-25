@@ -1,5 +1,6 @@
 //! Orders and governance actions as clients send them, and back.
 
+use permutation_rules::contracts::ContractTerm;
 use permutation_rules::gov::{GovAction, MemberId, Role};
 use permutation_rules::hex::Hex;
 use permutation_rules::orders::{AttackTarget, Good, Order, Side, StandingOrder, StandingTarget};
@@ -134,6 +135,63 @@ pub enum OrderDto {
     ConsentSpend {
         usdc: u64,
     },
+    /// Escrow treasury USDC for a contract (V5 §18.6). `to` is omitted for
+    /// an open `Capture` offer.
+    OfferContract {
+        #[serde(default)]
+        to: Option<CivId>,
+        term: TermDto,
+        usdc: u64,
+        deadline: u16,
+    },
+    AcceptContract {
+        id: u32,
+    },
+    CancelContract {
+        id: u32,
+    },
+}
+
+/// A contract's condition (V5 §18.6) as clients send it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all_fields = "camelCase")]
+pub enum TermDto {
+    Peace,
+    LeaveAlliance { with: CivId },
+    KeepNap { every: u16, installments: u8 },
+    Capture { city: u32 },
+}
+
+impl TermDto {
+    pub fn term(self) -> ContractTerm {
+        match self {
+            TermDto::Peace => ContractTerm::Peace,
+            TermDto::LeaveAlliance { with } => ContractTerm::LeaveAlliance { with },
+            TermDto::KeepNap {
+                every,
+                installments,
+            } => ContractTerm::KeepNap {
+                every,
+                installments,
+            },
+            TermDto::Capture { city } => ContractTerm::Capture { city },
+        }
+    }
+
+    pub fn of(t: ContractTerm) -> TermDto {
+        match t {
+            ContractTerm::Peace => TermDto::Peace,
+            ContractTerm::LeaveAlliance { with } => TermDto::LeaveAlliance { with },
+            ContractTerm::KeepNap {
+                every,
+                installments,
+            } => TermDto::KeepNap {
+                every,
+                installments,
+            },
+            ContractTerm::Capture { city } => TermDto::Capture { city },
+        }
+    }
 }
 
 /// Standing rules (§13) as the client sends them.
@@ -329,6 +387,19 @@ impl OrderDto {
             },
             Order::ConsentWar { civ } => D::ConsentWar { civ: *civ },
             Order::ConsentSpend { usdc } => D::ConsentSpend { usdc: *usdc },
+            Order::OfferContract {
+                to,
+                term,
+                usdc,
+                deadline,
+            } => D::OfferContract {
+                to: *to,
+                term: TermDto::of(*term),
+                usdc: *usdc,
+                deadline: *deadline,
+            },
+            Order::AcceptContract { id } => D::AcceptContract { id: *id },
+            Order::CancelContract { id } => D::CancelContract { id: *id },
         }
     }
 
@@ -422,6 +493,19 @@ impl OrderDto {
             D::Raze { city } => Order::Raze { city: *city },
             D::ConsentWar { civ } => Order::ConsentWar { civ: *civ },
             D::ConsentSpend { usdc } => Order::ConsentSpend { usdc: *usdc },
+            D::OfferContract {
+                to,
+                term,
+                usdc,
+                deadline,
+            } => Order::OfferContract {
+                to: *to,
+                term: term.term(),
+                usdc: *usdc,
+                deadline: *deadline,
+            },
+            D::AcceptContract { id } => Order::AcceptContract { id: *id },
+            D::CancelContract { id } => Order::CancelContract { id: *id },
             D::RevealRationale {
                 tick,
                 policy,

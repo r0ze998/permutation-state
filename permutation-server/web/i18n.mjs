@@ -96,6 +96,8 @@ export function blockedText(b) {
       NoCounterparty: '自国・交戦中の国とは取引できません', NeedsSpendConsent: '一定額を超える支出には別の役職者の同意が必要です',
       NotEnoughUsdc: '国庫のUSDCが足りません',
       ForeignCity: '他の国の都市には占領しないと入れません',
+      TooManyContracts: '出している契約が上限に達しています', UnknownContract: 'その契約はありません（受け入れ済み・期限切れ・相手違い）',
+      BadContract: '契約の条件が今の世界に合いません（戦争中か・条約があるか・期限・金額を確認）',
     })[b.code] || b.code;
   }
 }
@@ -138,9 +140,11 @@ export function chronicleText(line) {
   if ((m = text.match(/^(\w+) reaches (\w+) (\d)$/))) return [kind, `${n(m[1])}が${PATH_NAME[m[2]]}の第${m[3]}段階に到達`];
   if ((m = text.match(/^(\w+) loses (\w+) (\d)$/))) return [kind, `${n(m[1])}が${PATH_NAME[m[2]]}の第${m[3]}段階を失った`];
   if ((m = text.match(/^(\w+) enters era (\d)$/))) return [kind, `${n(m[1])}が第${m[2]}時代に入った`];
+  if ((m = text.match(/^(\w+) conquers the home of (.+) of (\w+), an operator AI member: bounty (\d+) USDC$/))) return [kind, `${n(m[1])}が${n(m[3])}の${m[2]}（運営のAI国民）の住む都市を落とした：懸賞金 ${m[4]} USDC`];
+  if ((m = text.match(/^(\w+) conquers the home of (.+) of (\w+), an operator AI member: no bounty/))) return [kind, `${n(m[1])}が${n(m[3])}の${m[2]}（運営のAI国民）の住む都市を落とした：直前に条約があったため懸賞金なし`];
   return [kind, text];
 }
-export const KIND_GLYPH = { war: '⚔', capture: '⚑', raze: '✕', peace: '☮', ally: '⚭', diplo: '✉', science: '✦', revolt: '!', found: '⌂', tech: '✧', gov: '⚖', recall: '⚠', milestone: '◆', era: '✺' };
+export const KIND_GLYPH = { bounty: '◎', war: '⚔', capture: '⚑', raze: '✕', peace: '☮', ally: '⚭', diplo: '✉', science: '✦', revolt: '!', found: '⌂', tech: '✧', gov: '⚖', recall: '⚠', milestone: '◆', era: '✺' };
 // Chronicle lines name offices and paths in English.
 const ROLE_NAME = { general: ROLE_JA.General, steward: ROLE_JA.Steward, 'science officer': ROLE_JA.Science, diplomat: ROLE_JA.Diplomat };
 const PATH_NAME = Object.fromEntries(PATHS.map((p, i) => [p, PATH_JA[i]]));

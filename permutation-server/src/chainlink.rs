@@ -36,6 +36,9 @@ pub struct ChainLink {
     port: u16,
     /// When set, `log_records` keeps only records this program emitted.
     program: Option<String>,
+    /// The operator token (V5 §18.2): sent as `Authorization: Bearer …` so
+    /// the gateway lets this server act for hosted members.
+    token: Option<String>,
 }
 
 impl ChainLink {
@@ -50,9 +53,33 @@ impl ChainLink {
             .ok_or("gateway URL needs a port")?;
         Ok(ChainLink {
             program: None,
+            token: None,
             host: host.to_string(),
             port: port.parse().map_err(|_| "bad port")?,
         })
+    }
+
+    /// Present the operator token on every request.
+    pub fn with_token(mut self, token: Option<String>) -> ChainLink {
+        self.token = token.filter(|t| !t.is_empty());
+        self
+    }
+
+    pub fn has_token(&self) -> bool {
+        self.token.is_some()
+    }
+
+    /// A secret derived from the operator token (seeds the AI temperaments).
+    pub fn secret(&self) -> Option<[u8; 32]> {
+        use sha2::{Digest, Sha256};
+        let t = self.token.as_ref()?;
+        Some(
+            Sha256::new()
+                .chain_update(b"PS/operator-secret")
+                .chain_update(t.as_bytes())
+                .finalize()
+                .into(),
+        )
     }
 
     pub fn url(&self) -> String {
@@ -64,8 +91,13 @@ impl ChainLink {
             .map_err(|e| format!("gateway unreachable: {e}"))?;
         s.set_read_timeout(Some(Duration::from_secs(90))).ok();
         let body = body.unwrap_or("");
+        let auth = self
+            .token
+            .as_ref()
+            .map(|t| format!("Authorization: Bearer {t}\r\n"))
+            .unwrap_or_default();
         let req = format!(
-            "{method} {path} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            "{method} {path} HTTP/1.1\r\nHost: {}\r\n{auth}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             self.host,
             body.len()
         );

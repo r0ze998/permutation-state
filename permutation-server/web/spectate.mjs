@@ -80,11 +80,10 @@ function renderBoard() {
   const pr = v.projection;
   const rows = [...v.civs].sort((a, b) => (ach[b.id]?.points ?? 0) - (ach[a.id]?.points ?? 0) || a.id - b.id).map(c => {
     const members = ms.filter(m => m.civ === c.id);
-    const humans = members.filter(m => m.host === 'human').length;
     const a = ach[c.id] || { tiers: [0, 0, 0, 0], era: 0, points: 0 };
     return html`<tr class="civ-row ${S.watch === c.id ? 'watching' : ''}" data-civ="${c.id}">
       <td><span class="name"><span class="swatch-s" style="background:${color(c.id)}"></span><b>${T.civName(c.name)}</b>
-        <span class="sub"><span class="kind">${members.length ? `国民${members.length}（人間${humans}）` : '代行のみ'}</span></span></span></td>
+        <span class="sub"><span class="kind">${members.length ? `国民${members.length}` : '代行のみ'}</span></span></span></td>
       <td>${fmtOr(c.cities)}</td><td>${fmtOr(c.pop)}</td><td>${fmtOr(c.troops ?? c.troopsSeen)}</td>
       <td>第${a.era}時代</td><td title="覇権/繁栄/科学/協調">${a.tiers.join('/')}</td><td>${fmtOr(a.points)}</td><td>${pr ? usdcFixed(pr.nationShare[c.id]) : '—'}</td></tr>`;
   });

@@ -4,6 +4,7 @@
 //
 // Keys live under .local/keys (git-ignored). They are disposable
 // localnet/devnet keys; the gateway never creates or funds mainnet keys.
+import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -43,6 +44,13 @@ export const DEFAULTS = Object.freeze({
   market: 'on',
   humans: 1,
   ai: 2,
+  // Operator AI members (V5 §18): bounty per AI (USDC base units) and the
+  // bond (null: AI members × entry fee × 2), escrowed at creation.
+  bounty: 5_000_000n,
+  bond: null,
+  // USDC each hosted member deposits into its nation's treasury (market,
+  // contracts), refunded to it at the end.
+  deposit: 0n,
   waitExternal: 0,
   registrationSeconds: 0,
   stateFile: 'season.json',
@@ -92,6 +100,9 @@ export const OPTIONS = Object.freeze([
   // Hosted members: claimable human members, and AI members per nation.
   ['humans', '--humans', 'PS_HUMANS', int],
   ['ai', '--ai', 'PS_AI', int],
+  ['bounty', '--bounty', 'PS_BOUNTY', BigInt],
+  ['deposit', '--deposit', 'PS_DEPOSIT', BigInt],
+  ['bond', '--bond', 'PS_BOND', v => (v === undefined || v === null || v === '' ? null : BigInt(v))],
   // Registration closes once this many outside members joined (x402), or
   // after `registrationSeconds` if that is set (0 = no time limit).
   ['waitExternal', '--wait-external', 'PS_WAIT_EXTERNAL', int],
@@ -123,6 +134,20 @@ export function loadConfig({ argv = process.argv.slice(2), env = process.env, de
 }
 
 /** A named keypair persisted under .local/keys/<name>.json (created on first use). */
+/**
+ * The operator token: the game server presents it to act for hosted
+ * members and to read the AI roster. From PS_OPERATOR_TOKEN, else
+ * .local/operator-token (created on first use).
+ */
+export function operatorToken({ env = process.env, file = path.join(LOCAL_DIR, 'operator-token') } = {}) {
+  if (env.PS_OPERATOR_TOKEN) return env.PS_OPERATOR_TOKEN;
+  if (existsSync(file)) return readFileSync(file, 'utf8').trim();
+  mkdirSync(path.dirname(file), { recursive: true });
+  const t = randomBytes(24).toString('hex');
+  writeFileSync(file, t + '\n', { mode: 0o600 });
+  return t;
+}
+
 export function namedKey(name, dir = KEYS_DIR) {
   return loadOrCreateKeypairSync(path.join(dir, `${name}.json`));
 }

@@ -168,6 +168,27 @@ pub(super) fn load_member(
     Ok(m)
 }
 
+/// The roster account `["roster", season]` (V5 §18.2).
+pub(super) fn load_roster(
+    program_id: &Pubkey,
+    account: &AccountInfo,
+    season_id: u64,
+) -> Result<RosterAccount, ProgramError> {
+    if account.owner != program_id {
+        return Err(ChainError::NotInitialized.into());
+    }
+    let r: RosterAccount = load(&account.try_borrow_data()?)?;
+    if r.magic != ROSTER_MAGIC || r.season_id != season_id {
+        return Err(ChainError::NotInitialized.into());
+    }
+    expect_pda(
+        program_id,
+        account,
+        &[ROSTER_SEED, &season_id.to_le_bytes()],
+    )?;
+    Ok(r)
+}
+
 /// The `WORLD_CHUNKS` world accounts at the front of `accounts`, checked.
 pub(super) fn world_chunks<'a, 'info>(
     program_id: &Pubkey,

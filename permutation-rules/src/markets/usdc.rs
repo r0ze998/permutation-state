@@ -184,7 +184,7 @@ fn unit_cost(rules: &Ruleset, price: u64, tariff_bps: u32) -> u64 {
 
 /// Most the diplomat may spend from the treasury this tick: the threshold,
 /// or more with another officer's `ConsentSpend` (V5 §7.5).
-fn spend_limit(state: &WorldState, rules: &Ruleset, civ: CivId) -> u64 {
+pub fn spend_limit(state: &WorldState, rules: &Ruleset, civ: CivId) -> u64 {
     let diplomat = state
         .nations
         .get(civ as usize)
@@ -252,7 +252,7 @@ pub fn deliver(state: &mut WorldState) {
 /// Phase 2: run one call auction per good between treasuries and settle in
 /// USDC (V5 §7.5). Submission rejects market orders from tick 120 on and in
 /// seasons without a market.
-pub fn apply_exchange(state: &mut WorldState, rules: &Ruleset) {
+pub fn apply_exchange(state: &mut WorldState, rules: &Ruleset, escrowed: &[u64]) {
     let n = state.civs.len();
     let tariff: Vec<u32> = state
         .civs
@@ -260,7 +260,14 @@ pub fn apply_exchange(state: &mut WorldState, rules: &Ruleset) {
         .map(|c| rules.tariff_bps(c.market_spent))
         .collect();
     let limit: Vec<u64> = (0..n as CivId)
-        .map(|c| spend_limit(state, rules, c).min(state.civs[c as usize].usdc))
+        .map(|c| {
+            // Contract escrow placed this tick shares the limit, and USDC
+            // received from contracts is never spent here (V5 §18.6).
+            let civ = &state.civs[c as usize];
+            spend_limit(state, rules, c)
+                .saturating_sub(escrowed.get(c as usize).copied().unwrap_or(0))
+                .min(civ.usdc.saturating_sub(civ.contract_income))
+        })
         .collect();
     let mut reserved = vec![0u64; n];
     let mut orders: Vec<(bool, ExOrder)> = Vec::new(); // (is_buy, order)
@@ -300,7 +307,8 @@ pub fn apply_exchange(state: &mut WorldState, rules: &Ruleset) {
                 let affordable = (room / unit.max(1)).min(u32::MAX as u64) as u32;
                 let q = amount.min(cap).min(affordable);
                 if q == 0 {
-                    let why = if limit[civ as usize] < state.civs[civ as usize].usdc {
+                    let c = &state.civs[civ as usize];
+                    let why = if limit[civ as usize] < c.usdc.saturating_sub(c.contract_income) {
                         Blocked::NeedsSpendConsent
                     } else {
                         Blocked::NotEnoughUsdc

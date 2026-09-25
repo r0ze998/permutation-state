@@ -15,6 +15,8 @@ import { proveTile, setProofCiv, setProofTick } from './drawers/decisions.mjs';
 import { goNext, goToBlocker, nextTurnClick, toggleSummary, closeSummary } from './next.mjs';
 import { toggleChain } from './chain.mjs';
 import { pickCiv, pickStand, join, claim, startSeason } from './lobby.mjs';
+import { offerContract } from './drawers/diplomacy.mjs';
+import { sendTalk } from './drawers/talk.mjs';
 import { poll } from './app.mjs';
 
 // ================================================================== click registry
@@ -43,9 +45,11 @@ const BY_DATA = {
   closeChain: () => toggleChain(),
   pickCiv: v => pickCiv(+v),
   pickStand: v => pickStand(v),
-  claimMember: v => claim(+v),
+  claimCiv: v => claim(+v),
+  offerContract: v => offerContract(+v),
 };
 const BY_ID = {
+  'talk-send': () => sendTalk(),
   'commit-btn': () => commitOrEndTurn(),
   'pause-btn': async () => { await api.post('/api/control', { paused: !S.view.paused }); poll(); },
   'help-btn': () => $('#help').showModal(),
@@ -118,6 +122,7 @@ function onKey(e) {
 function onChange(e) {
   if (e.target.id === 'proof-civ') setProofCiv(+e.target.value);
   if (e.target.id === 'proof-tick') setProofTick(+e.target.value);
+  if (e.target.id === 'talk-to') S.talkTo = e.target.value;
 }
 
 /** Diplomacy rows remember whether they are open across re-renders. */

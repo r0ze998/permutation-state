@@ -131,10 +131,78 @@ pub const PERSONAS: [Persona; 6] = [
     Persona::Diplomat,
 ];
 
+/// An AI's temperament (V5 §18.8), 0..=100 each, drawn per season on the
+/// operator's server and never put on chain.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Traits {
+    /// Willingness to fight and to pay others to fight.
+    pub aggression: u8,
+    /// How much USDC a deal must bring before it is taken.
+    pub greed: u8,
+    /// Keeps its word (pacts, alliances) rather than selling it.
+    pub loyalty: u8,
+    /// Answers offers and talk at all.
+    pub openness: u8,
+}
+
+impl Traits {
+    /// The traits a persona has when nothing was drawn (sim, local tests).
+    pub fn of(p: Persona) -> Traits {
+        let (aggression, greed, loyalty, openness) = match p {
+            Persona::Warlord => (80, 60, 40, 40),
+            Persona::Builder => (30, 50, 60, 60),
+            Persona::Diplomat => (20, 40, 70, 90),
+            Persona::Scholar => (25, 45, 60, 50),
+        };
+        Traits {
+            aggression,
+            greed,
+            loyalty,
+            openness,
+        }
+    }
+
+    /// Traits drawn from `seed` for nation `civ`.
+    pub fn draw(seed: &[u8], civ: CivId) -> Traits {
+        use sha2::{Digest, Sha256};
+        let h: [u8; 32] = Sha256::new()
+            .chain_update(b"PS/traits")
+            .chain_update(seed)
+            .chain_update(civ.to_le_bytes())
+            .finalize()
+            .into();
+        Traits {
+            aggression: h[0] % 101,
+            greed: h[1] % 101,
+            loyalty: h[2] % 101,
+            openness: h[3] % 101,
+        }
+    }
+
+    /// The persona that plays these traits.
+    pub fn persona(self) -> Persona {
+        if self.aggression >= 60 {
+            Persona::Warlord
+        } else if self.openness >= 60 {
+            Persona::Diplomat
+        } else if self.greed >= 55 {
+            Persona::Builder
+        } else {
+            Persona::Scholar
+        }
+    }
+
+    /// Least USDC (base units) a contract must pay before this AI takes it.
+    pub fn price(self) -> u64 {
+        500_000 + self.greed as u64 * 40_000
+    }
+}
+
 /// A scripted rule-based player. Reads the full state, like every player.
 pub struct Bot {
     pub civ: CivId,
     pub persona: Persona,
+    pub traits: Traits,
     pub war_started: HashMap<CivId, u16>,
 }
 
@@ -143,7 +211,137 @@ impl Bot {
         Bot {
             civ,
             persona,
+            traits: Traits::of(persona),
             war_started: HashMap::new(),
+        }
+    }
+
+    /// A bot whose persona and traits were drawn for the season.
+    pub fn with_traits(civ: CivId, traits: Traits) -> Self {
+        Bot {
+            civ,
+            persona: traits.persona(),
+            traits,
+            war_started: HashMap::new(),
+        }
+    }
+}
+
+// ------------------------------------------------------------------ contracts
+
+impl Bot {
+    /// Treasury contracts (V5 §18.6): answer the offers made to this nation,
+    /// and offer some, by temperament. Words bind nothing; only escrowed
+    /// USDC moves anyone.
+    fn contracts(&self, s: &WorldState, r: &Ruleset, wish: &mut Vec<(u8, Order)>) {
+        use permutation_rules::contracts::ContractTerm;
+        if !r.market_enabled {
+            return;
+        }
+        let civ = self.civ;
+        let t = self.traits;
+        let me = &s.civs[civ as usize];
+        let n = s.civs.len() as CivId;
+        // Answer offers: take them when they pay enough and the term suits.
+        for c in s
+            .contracts
+            .iter()
+            .filter(|c| c.to == Some(civ) && c.accepted.is_none() && c.offered < s.tick)
+        {
+            if t.openness < 20 || c.total < t.price() {
+                continue;
+            }
+            let suits = match c.term {
+                ContractTerm::Peace => {
+                    t.aggression < 70 || troops_of(s, civ) <= troops_of(s, c.from)
+                }
+                ContractTerm::KeepNap { .. } => t.aggression < 60,
+                ContractTerm::LeaveAlliance { .. } => t.loyalty < 50 && c.total >= t.price() * 2,
+                ContractTerm::Capture { .. } => false,
+            };
+            if suits {
+                wish.push((0, Order::AcceptContract { id: c.id }));
+            }
+        }
+        // What the treasury may still put in escrow (not contract income).
+        let spendable = me.usdc.saturating_sub(me.contract_income);
+        let open = permutation_rules::contracts::open_offers(s, civ);
+        if spendable < 1_000_000
+            || open >= r.contract_max_open as usize
+            || s.tick >= r.exchange_freeze_tick
+        {
+            return;
+        }
+        let last = r.ticks_per_season.saturating_sub(1);
+        let offered_to = |o: CivId| s.contracts.iter().any(|c| c.from == civ && c.to == Some(o));
+        // Losing a war: buy peace.
+        for o in 0..n {
+            if o != civ
+                && s.at_war(civ, o)
+                && troops_of(s, civ) < troops_of(s, o)
+                && !offered_to(o)
+                && t.aggression < 85
+            {
+                wish.push((
+                    1,
+                    Order::OfferContract {
+                        to: Some(o),
+                        term: ContractTerm::Peace,
+                        usdc: (spendable / 2).min(3_000_000),
+                        deadline: (s.tick + 20).min(last),
+                    },
+                ));
+                return;
+            }
+        }
+        // Aggressive and well funded: a bounty on the leader's capital.
+        if t.aggression >= 60 && s.tick >= 40 && s.tick % 15 == 3 {
+            let leader = (0..n).filter(|o| *o != civ).max_by_key(|o| {
+                s.civs[*o as usize]
+                    .achievements
+                    .tiers
+                    .iter()
+                    .map(|x| *x as u32)
+                    .sum::<u32>()
+            });
+            let capital = leader
+                .and_then(|o| s.civs[o as usize].capital)
+                .filter(|c| s.cities.get(*c as usize).is_some_and(|x| x.alive));
+            let already = s.contracts.iter().any(|c| {
+                c.from == civ
+                    && matches!(c.term, ContractTerm::Capture { city } if Some(city) == capital)
+            });
+            if let (Some(city), false) = (capital, already) {
+                wish.push((
+                    2,
+                    Order::OfferContract {
+                        to: None,
+                        term: ContractTerm::Capture { city },
+                        usdc: (spendable / 3).min(2_000_000),
+                        deadline: (s.tick + 40).min(last),
+                    },
+                ));
+                return;
+            }
+        }
+        // Loyal and open: pay a pact partner to keep it.
+        if t.loyalty >= 60 && t.openness >= 50 && s.tick % 20 == 11 {
+            if let Some(o) = (0..n).find(|o| {
+                *o != civ && matches!(s.relation(civ, *o), Relation::Nap { .. }) && !offered_to(*o)
+            }) {
+                wish.push((
+                    3,
+                    Order::OfferContract {
+                        to: Some(o),
+                        term: ContractTerm::KeepNap {
+                            every: 5,
+                            installments: 4,
+                        },
+                        usdc: (spendable / 4).min(2_000_000),
+                        deadline: (s.tick + 5).min(last),
+                    },
+                ));
+            }
         }
     }
 }
@@ -412,6 +610,8 @@ impl Bot {
                 wish.push((1, Order::ProposePeace { civ: o }));
             }
         }
+        self.contracts(s, r, &mut wish);
+
         // ---- envoys: every persona courts a city-state, diplomats earliest.
         // The target is the free city-state where this civ is closest to
         // (or already is) suzerain, then the nearest.

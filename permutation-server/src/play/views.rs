@@ -1,8 +1,7 @@
 //! What `/api/state` and `/api/lobby` answer. Everything a viewer sees of the
 //! world is the full state for everyone (perfect information, `fog`).
 
-use permutation_rules::gov::Role;
-use permutation_rules::state::CivId;
+use permutation_rules::gov::{MemberId, Role};
 use permutation_rules::tech::TECHS;
 use permutation_rules::Ruleset;
 use serde_json::{json, Value};
@@ -10,7 +9,6 @@ use std::time::Instant;
 
 use super::game::{role_name, unix_now, Game, Host, Phase, Viewer};
 use crate::api;
-use crate::bots::persona_of;
 use crate::codec::hex;
 
 /// Chronicle lines served per request.
@@ -38,10 +36,11 @@ impl Game {
             .members
             .iter()
             .enumerate()
+            // Never who hosts a member: that would tell observers who the
+            // operator's AI members are (V5 §18.2).
             .map(|(i, m)| json!({
                 "id": i, "civ": m.civ, "name": m.meta.name, "kind": m.meta.kind, "attested": m.meta.attested,
-                "host": m.host.name(), "claimed": m.here(), "ready": m.ready == Some(tick),
-                "claimable": m.host == Host::Human && !m.here(),
+                "ready": m.ready == Some(tick),
             }))
             .collect::<Vec<_>>())
     }
@@ -55,8 +54,14 @@ impl Game {
             .enumerate()
             .map(|(c, x)| {
                 let members = self.members.iter().filter(|m| m.civ as usize == c).count();
+                // Seats a person can take in this nation (not which ones).
+                let seats = self
+                    .members
+                    .iter()
+                    .filter(|m| m.civ as usize == c && m.host == Host::Human && !m.here())
+                    .count();
                 let share = p.nation_share.get(c).copied();
-                json!({"civ": c, "name": x.name, "members": members, "persona": persona_of(c as CivId).name(),
+                json!({"civ": c, "name": x.name, "members": members, "seats": seats,
                        "era": x.achievements.era, "points": p.scores.get(c).map(|s| s.total()),
                        "share": share, "perMember": if members == 0 { Value::Null } else { json!(share.unwrap_or(0) / members as u64) }})
             })
@@ -77,7 +82,21 @@ impl Game {
             "entryFee": self.entry_fee, "pool": self.pool(), "market": self.rules.market_enabled,
             "opsShareBps": self.rules.ops_share_bps, "maxOfficesPerMember": self.rules.max_offices_per_member,
             "offices": Role::ALL.iter().map(|r| role_name(*r)).collect::<Vec<_>>(),
+            "roster": self.roster_json(),
         })
+    }
+
+    /// The operator's AI members as far as they are public (V5 §18.2).
+    pub fn roster_json(&self) -> Value {
+        let names = |m: MemberId| {
+            self.members
+                .get(m as usize)
+                .map_or_else(|| format!("member {m}"), |x| x.meta.name.clone())
+        };
+        let over = self.state.tick >= self.rules.ticks_per_season;
+        let mut v = self.roster.public_json(over, &names);
+        v["homeTick"] = json!(self.rules.ai_home_tick);
+        v
     }
 
     /// Seconds left in the open tick.
@@ -154,6 +173,10 @@ impl Game {
         o.insert("paused".into(), json!(self.paused));
         o.insert("over".into(), json!(self.over()));
         o.insert("chronicle".into(), json!(chronicle));
+        o.insert("roster".into(), self.roster_json());
+        // Members' messages, public (V5 §18.7): the latest 100.
+        let from = self.talk.len().saturating_sub(100);
+        o.insert("talk".into(), json!(self.talk[from..]));
         o.insert(
             "lastSummary".into(),
             json!(self.last_events.iter().collect::<Vec<_>>()),
@@ -191,6 +214,16 @@ impl Game {
             mv["ready"] = json!(x.ready == Some(t));
             mv["host"] = json!(x.host.name());
             o.insert("member".into(), mv);
+            // People still playing this tick (a count, never who).
+            let waiting = self
+                .members
+                .iter()
+                .enumerate()
+                .filter(|(i, y)| {
+                    *i != m as usize && y.host == Host::Human && y.here() && y.ready != Some(t)
+                })
+                .count();
+            o.insert("waiting".into(), json!(waiting));
         }
         if let Some(chain) = self.chain_json() {
             o.insert("chain".into(), chain);

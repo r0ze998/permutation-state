@@ -5,15 +5,17 @@
 // a plain Node request handler, so it is testable without a socket.
 import { ChainClient } from '../client/src/chain.mjs';
 import { namedKey } from './config.mjs';
+import { memberKeyName } from './season.mjs';
 import { createMemberRegistry } from './registry.mjs';
 import { errorResponse, RouteError } from './routes/errors.mjs';
 import { FaucetLimiter, faucetRoutes } from './routes/faucet.mjs';
 import { relayRoutes } from './routes/relay.mjs';
+import { rosterRoutes } from './routes/roster.mjs';
 import { seasonRoutes } from './routes/season.mjs';
 import { x402Routes } from './routes/x402.mjs';
 import { BlockhashBook } from './send.mjs';
 
-export const ROUTES = Object.freeze({ ...seasonRoutes, ...relayRoutes, ...x402Routes, ...faucetRoutes });
+export const ROUTES = Object.freeze({ ...seasonRoutes, ...relayRoutes, ...x402Routes, ...faucetRoutes, ...rosterRoutes });
 export const MAX_BODY_BYTES = 1 << 20;
 const CORS = { 'Access-Control-Allow-Origin': '*' };
 
@@ -46,17 +48,17 @@ function readJson(req) {
  * @param {object} o.crank   the Crank (its key pays fees; phase, snapshots, tick index)
  * @param {Function} [o.keys] named key loader (config.mjs namedKey)
  */
-export function createApp({ cfg, base, er, store, crank, keys = namedKey, log = console.log, now = Date.now, routes = ROUTES, registry }) {
+export function createApp({ cfg, base, er, store, crank, keys = namedKey, log = console.log, now = Date.now, routes = ROUTES, registry, advisor = null }) {
   const chain = new ChainClient(cfg.programId, BigInt(store.state.seasonId));
   const ctx = {
-    cfg, base, er, store, crank, keys, log, now, chain,
+    cfg, base, er, store, crank, keys, log, now, chain, advisor,
     registry: registry ?? createMemberRegistry({ base, chain, store, now }),
     blockhashes: { base: new BlockhashBook(base), er: new BlockhashBook(er) },
     faucet: new FaucetLimiter({ now }),
     /** The session key of a member this gateway hosts, or null. */
     hostedKey(member) {
       const h = store.state.members.find(x => x.index === member);
-      return h && h.hosted !== 'external' ? keys(`member${h.key}-session`) : null;
+      return h && h.hosted !== 'external' ? keys(memberKeyName(h, 'session')) : null;
     },
   };
 

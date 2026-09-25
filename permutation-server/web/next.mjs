@@ -81,7 +81,7 @@ export function renderNextTurn() {
   let cls = '', title, sub;
   if (v.over) { title = 'シーズン終了'; sub = '結果を見る'; }
   else if (v.phase === 'lobby') { title = '開幕する'; sub = '第1回選挙を行い、ティックを始める'; }
-  else if (v.member?.ready) { cls = 'done'; const waiting = (v.members || []).filter(s => s.host === 'human' && s.claimed && !s.ready).length; title = '手番を終えた'; sub = waiting ? `ほか${waiting}人を待っています` : '解決を待っています'; }
+  else if (v.member?.ready) { cls = 'done'; const waiting = v.waiting ?? 0; title = '手番を終えた'; sub = waiting ? `ほか${waiting}人を待っています` : '解決を待っています'; }
   else if (items.length) { cls = 'blocker'; title = shortBlocker(items[0]); sub = items.length > 1 ? `ほか${items.length - 1}件 · クリックで移動` : 'クリックで移動'; }
   else { title = '手番を終える'; sub = v.chain ? '署名してチェーンへ送信' : `${Math.ceil(secs)}秒後に自動で解決`; }
   el.className = `next-turn ${cls}`;

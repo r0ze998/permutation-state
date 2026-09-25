@@ -13,7 +13,7 @@ export function renderTop() {
     : offices.length ? offices.map(r => html`<span class="badge office">${T.ROLE_GLYPH[r]} ${T.ROLE_JA[r]}</span>`) : html`<span class="badge human">国民</span>`;
   setHtml($('#civ-chip'), html`<span class="swatch" style="background:${T.CIV_COLORS[S.myCiv]}"></span><div><b>${v.member?.name ?? civN(S.myCiv)}</b><small class="nation">${civN(S.myCiv)}</small><div>${badges}</div></div>`);
   const ms = v.members || [];
-  $('.prototype-label').textContent = `${v.chain ? 'オンチェーン · MagicBlock ER' : 'ローカル'} · 国民${ms.length}人（人間${ms.filter(m => m.host === 'human').length}） · 全員が同じ情報で判断 · 命令は締め切りまで封印 · USDCはテスト用`;
+  $('.prototype-label').textContent = `${v.chain ? 'オンチェーン · MagicBlock ER' : 'ローカル'} · 国民${ms.length}人${v.roster?.aiCount ? `（うち運営のAI ${v.roster.aiCount}人）` : ''} · 全員が同じ情報で判断 · 命令は締め切りまで封印 · USDCはテスト用`;
   $('#season-label').textContent = `ONE WORLD · SEASON ${v.chain?.seasonId ?? 0} · ${String(v.season?.preset ?? 'Blitz').toUpperCase()}`;
   if (e) renderResources(e);
   const pause = $('#pause-btn');
@@ -81,16 +81,15 @@ export function renderRibbon() {
   setHtml($('#ribbon'), v.civs.map(c => {
     const me = c.id === S.myCiv, rel = me ? '' : REL_ICON[c.relation] || '';
     const members = membersOf(c.id);
-    const humans = members.filter(m => m.host === 'human').length;
     const ach = v.achievements?.nations?.[c.id];
     const name = civN(c.id);
     return html`<button class="leader ${me ? 'me' : ''}" type="button" style="--c:${T.CIV_COLORS[c.id % T.CIV_COLORS.length]}" aria-label="${name}">
       ${name.slice(0, 1)}
       ${rel ? html`<span class="rel">${rel}</span>` : ''}<span class="era">${c.era}</span>
-      <span class="kind ${members.length ? (humans ? '' : 'ai') : 'bot'}">${members.length ? `${members.length}人` : '代行'}</span>
+      <span class="kind ${members.length ? '' : 'bot'}">${members.length ? `${members.length}人` : '代行'}</span>
       <span class="card"><b>${name}</b>
         <div class="row2"><span>第${c.era}時代${ach ? ` · ${ach.points}点` : ''}</span><span>${me ? 'あなたの国' : T.RELATION[c.relation] || ''}</span></div>
-        <div class="row2"><span>国民 ${members.length}人（人間${humans}）</span><span>都市 ${c.cities}</span></div>
+        <div class="row2"><span>国民 ${members.length}人</span><span>都市 ${c.cities}</span></div>
         <div class="row2"><span>節目 ${c.tiers.map((t, i) => `${T.PATH_JA[i]}${t}`).join(' ')}</span></div>
         ${v.projection && members.length ? html`<div class="row2"><span>今の取り分</span><span>${usdc(v.projection.nationShare[c.id])} USDC（1人 ${usdc(v.projection.nationShare[c.id] / members.length)}）</span></div>` : ''}
       </span></button>`;

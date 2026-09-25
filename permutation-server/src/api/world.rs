@@ -215,7 +215,7 @@ pub fn world_view(s: &WorldState, rules: &Ruleset, viewer: Option<CivId>, fog: &
             "bank": s.nations[me as usize].role_bank[r.index()],
             "spendable": permutation_rules::orders::spendable(s, rules, me, *r),
         })).collect::<Vec<_>>(),
-        "treasury": m.usdc, "marketSpent": m.market_spent,
+        "treasury": m.usdc, "marketSpent": m.market_spent, "contractIncome": m.contract_income,
         "tariffBps": rules.tariff_bps(m.market_spent),
         "deliveries": s.deliveries.iter().filter(|d| d.civ == me).map(|d| json!({"good": good_dto(d.good), "qty": d.qty, "due": d.due})).collect::<Vec<_>>(),
         "protectionLost": m.protection_lost,
@@ -231,6 +231,12 @@ pub fn world_view(s: &WorldState, rules: &Ruleset, viewer: Option<CivId>, fog: &
         "me": viewer, "spectator": omni, "civs": civs, "owners": owners, "ruins": ruins,
         "cities": cities, "units": units, "cityStates": city_states,
         "proposals": proposals, "pools": pools,
+        // Treasury contracts (V5 §18.6): public, like every treaty.
+        "contracts": s.contracts.iter().map(|c| json!({
+            "id": c.id, "from": c.from, "to": c.to, "term": super::dto::TermDto::of(c.term),
+            "escrow": c.escrow, "total": c.total, "offered": c.offered, "deadline": c.deadline,
+            "accepted": c.accepted, "paid": c.paid,
+        })).collect::<Vec<_>>(),
         "economy": if omni { Value::Null } else { economy },
         "vault": s.exchange_vault,
     })

@@ -32,10 +32,14 @@ export const MAX_MEMBERS = 256;
 export const MAX_GOV_PER_SIGNER = 8;
 /** Encoded orders that fit in one RevealOrders transaction (packet limit 1232 bytes); the server's `BATCH_BYTES`. */
 export const BATCH_BYTES = 800;
+/** Operator AI members per season (V5 §18.2). */
+export const MAX_AI = 64;
+/** Seconds after the last tick the operator has to reveal its roster (V5 §18.2). */
+export const ROSTER_GRACE_SECONDS = 3600;
 /** PDA seeds (first component). */
-export const SEEDS = Object.freeze({ season: 'season', world: 'world', nation: 'nation', member: 'member', vault: 'vault' });
+export const SEEDS = Object.freeze({ season: 'season', world: 'world', nation: 'nation', member: 'member', vault: 'vault', roster: 'roster' });
 /** Account magics (first 8 bytes). `genesis` marks a world whose genesis is still being built. */
-export const MAGIC = Object.freeze({ season: 'PSSEASN6', member: 'PSMEMBR5', nation: 'PSNATN07', world: 'PSWORLD5', genesis: 'PSGENJB1' });
+export const MAGIC = Object.freeze({ season: 'PSSEASN7', member: 'PSMEMBR6', nation: 'PSNATN07', world: 'PSWORLD5', genesis: 'PSGENJB1', roster: 'PSROSTR1' });
 /** Nation names, in civ order (`permutation_rules::genesis::NATIONS`). */
 export const NATIONS = Object.freeze(['Aster', 'Borealis', 'Cinder', 'Dunmar', 'Ember', 'Fjordal']);
 /** Offices (V5 §5.1), in `Role` order. */
@@ -54,7 +58,10 @@ const UNITS = ['Spearman', 'Archer', 'Horseman', 'Pikeman', 'Crossbowman', 'Knig
 const FOCUS = ['Balanced', 'Food', 'Production', 'Gold', 'Science'];
 const ORDER = ['MoveUnit', 'Attack', 'FoundCity', 'SetQueue', 'SetFocus', 'Purchase', 'SetResearch', 'DeclareWar', 'ProposePeace',
   'AcceptPeace', 'ProposeNap', 'AcceptNap', 'BreakNap', 'ProposeAlliance', 'AcceptAlliance', 'LeaveAlliance', 'SendEnvoy',
-  'Transfer', 'MarketTrade', 'ExchangeOrder', 'Raze', 'SetStanding', 'RevealRationale', 'ConsentWar', 'ConsentSpend'];
+  'Transfer', 'MarketTrade', 'ExchangeOrder', 'Raze', 'SetStanding', 'RevealRationale', 'ConsentWar', 'ConsentSpend',
+  'OfferContract', 'AcceptContract', 'CancelContract'];
+/** `ContractTerm` (V5 §18.6), in tag order. */
+export const CONTRACT_TERMS = Object.freeze(['Peace', 'LeaveAlliance', 'KeepNap', 'Capture']);
 const GOV = ['Stand', 'Vote', 'Propose', 'Support', 'Recall'];
 const STANDING = ['Clear', 'AutoDefend', 'Retreat', 'Patrol', 'QueueRepeat', 'AutoPurchase'];
 
@@ -96,6 +103,17 @@ function standing(w, r) {
   }
 }
 
+function contractTerm(w, t) {
+  w.u8(index(CONTRACT_TERMS, t.kind, 'contract term'));
+  switch (t.kind) {
+    case 'Peace': return w;
+    case 'LeaveAlliance': return w.u16(t.with);
+    case 'KeepNap': return w.u16(t.every).u8(t.installments);
+    case 'Capture': return w.u32(t.city);
+    default: return w;
+  }
+}
+
 /** Encode one order DTO (as the server's /api/orders accepts it). */
 export function encodeOrder(w, o) {
   w.u8(index(ORDER, o.type, 'order'));
@@ -119,6 +137,8 @@ export function encodeOrder(w, o) {
     case 'RevealRationale': return w.u16(o.tick).bytes(new TextEncoder().encode(o.policy)).fixed(fromHex(o.salt), 16).bytes(new TextEncoder().encode(o.text));
     case 'ConsentWar': return w.u16(o.civ);
     case 'ConsentSpend': return w.u64(o.usdc);
+    case 'OfferContract': contractTerm(w.option(o.to, (x, c) => x.u16(c)), o.term); return w.u64(o.usdc).u16(o.deadline);
+    case 'AcceptContract': case 'CancelContract': return w.u32(o.id);
     default: throw new Error(`unknown order ${o.type}`);
   }
 }
@@ -150,7 +170,7 @@ export const IX_TAG = Object.freeze({
   createSeason: 0, allocWorld: 1, register: 2, startSeason: 3, genesisStep: 4, delegate: 5, submitOrders: 6, resolveTick: 7,
   commit: 8, commitAndUndelegate: 9, finishSeason: 10, claim: 11, undelegatePart: 12, updateMember: 13, allocNation: 14,
   seatMembers: 15, openGovernment: 16, submitGov: 17, withdrawOps: 18, logTickInput: 19, commitPart: 20,
-  closeCommits: 21, commitOrders: 22, revealOrders: 23,
+  closeCommits: 21, commitOrders: 22, revealOrders: 23, revealRoster: 24, anchorTalk: 25,
 });
 
 /** Instructions the program still decodes but always refuses (`Retired`); the client builds none. */
@@ -162,10 +182,11 @@ const ixWriter = name => { if (!(name in IX_TAG)) throw new Error(`unknown instr
 const targets = (w, list) => w.vec(list, (x, t) => x.u16(t));
 export const IX = {
   createSeason: a => ixWriter('createSeason').u64(a.seasonId).u8(a.preset).u8(a.nations).u64(a.entryFee)
-    .u32(a.tickSeconds).fixed(a.worldSeed, 32).fixed(a.crank, 32).bool(a.market ?? true).u64(a.prevSeasonId ?? 0n).toBytes(),
+    .u32(a.tickSeconds).fixed(a.worldSeed, 32).fixed(a.crank, 32).bool(a.market ?? true).u64(a.prevSeasonId ?? 0n)
+    .u16(a.aiCount ?? 0).fixed(a.rosterChain ?? new Uint8Array(32), 32).u64(a.bountyEach ?? 0n).u64(a.bond ?? 0n).toBytes(),
   allocWorld: chunk => ixWriter('allocWorld').u8(chunk).toBytes(),
   register: a => votes4(ixWriter('register').u16(a.civ).string(a.name).u8(a.kind).fixed(a.session, 32).fixed(a.attestation ?? new Uint8Array(32), 32)
-    .u8(a.stand ?? 0), a.votes).u64(a.deposit ?? 0n).toBytes(),
+    .u8(a.stand ?? 0), a.votes).u64(a.deposit ?? 0n).fixed(a.tag, 32).toBytes(),
   startSeason: () => ixWriter('startSeason').toBytes(),
   genesisStep: work => ixWriter('genesisStep').u32(work).toBytes(),
   delegate: target => ixWriter('delegate').u16(target).toBytes(),
@@ -185,6 +206,8 @@ export const IX = {
   commitOrders: a => ixWriter('commitOrders').u8(roleIndex(a.role)).u16(a.tick).fixed(a.commitment, 32).toBytes(),
   revealOrders: a => ixWriter('revealOrders').u8(roleIndex(a.role)).u16(a.tick).fixed(a.decisionDigest, 32).vec(a.orders, encodeOrder)
     .vec(a.adopt ?? [], (w, id) => w.u32(id)).fixed(a.salt, 32).toBytes(),
+  revealRoster: salts => ixWriter('revealRoster').vec(salts, (w, x) => w.fixed(x, 32)).toBytes(),
+  anchorTalk: a => ixWriter('anchorTalk').u16(a.tick).u32(a.count).fixed(a.root, 32).toBytes(),
 };
 
 /**
@@ -197,6 +220,15 @@ export const encodeBatch = b => new Writer().u16(b.civ).u16(b.tick).u8(roleIndex
   .vec(b.orders, encodeOrder).vec(b.adopt ?? [], (w, id) => w.u32(id)).toBytes();
 const sha256 = (...parts) => { const h = createHash('sha256'); for (const p of parts) h.update(p); return new Uint8Array(h.digest()); };
 export const orderCommitment = (b, salt) => sha256(new TextEncoder().encode('permutation-rules/orders'), encodeBatch(b), salt);
+
+/**
+ * Operator AI members (V5 §18.2), as `permutation_rules::roster`: the tag an
+ * AI registers with, and the chain over the tags committed at creation.
+ */
+const u64le = v => { const b = new Uint8Array(8); new DataView(b.buffer).setBigUint64(0, BigInt(v), true); return b; };
+export const rosterTag = (seasonId, wallet, salt) => sha256(new TextEncoder().encode('permutation-rules/ai'), u64le(seasonId), wallet, salt);
+export const rosterLink = (prev, tag) => sha256(new TextEncoder().encode('permutation-rules/roster'), prev, tag);
+export const rosterChain = tags => tags.reduce((acc, t) => rosterLink(acc, t), new Uint8Array(32));
 
 // ------------------------------------------------------------------ accounts
 
@@ -211,6 +243,8 @@ export function decodeSeason(data) {
   s.nationMembers = r.vec(x => x.u32()); s.seated = r.u32(); s.pool = r.u64(); s.ops = r.u64(); s.opsWithdrawn = r.bool();
   s.treasury = r.vec(x => x.u64()); s.treasuryFinal = r.vec(x => x.u64()); s.payouts = r.vec(x => x.u64()); s.finalRoot = r.fixed(32);
   s.prevSeasonId = r.u64(); s.prevHistoryRoot = r.fixed(32); s.historyRoot = r.fixed(32);
+  s.aiCount = r.u16(); s.rosterChain = r.fixed(32); s.bountyEach = r.u64(); s.bond = r.u64();
+  s.rosterAcc = r.fixed(32); s.rosterRevealed = r.u16(); s.rosterOutcome = ['none', 'revealed', 'forfeited'][r.u8()]; s.bountyPaid = r.vec(x => x.u64());
   return s;
 }
 
@@ -220,8 +254,15 @@ export function decodeMember(data) {
   const m = { seasonId: r.u64(), bump: r.u8(), index: r.u32(), civ: r.u16(), wallet: r.fixed(32), session: r.fixed(32), kind: r.u8(), name: r.string(),
     attestation: r.fixed(32), stand: r.u8() };
   m.votes = [r.u32(), r.u32(), r.u32(), r.u32()];
-  m.shares = r.u64(); m.claimed = r.bool();
+  m.shares = r.u64(); m.claimed = r.bool(); m.tag = r.fixed(32);
   return m;
+}
+
+/** The operator's revealed AI roster (V5 §18.2). */
+export function decodeRoster(data) {
+  const r = new Reader(data);
+  if (magicOf(r) !== MAGIC.roster) throw new Error('not a roster account');
+  return { seasonId: r.u64(), bump: r.u8(), entries: r.vec(x => ({ member: x.u32(), civ: x.u16(), salt: x.fixed(32) })) };
 }
 
 /** The fixed front of a nation account: office holders, keys, budgets, who submitted. */
@@ -253,7 +294,7 @@ export function decodeWorldHeader(data) {
 }
 
 /** The program's log records (`sol_log_data`, logged as `Program data:`). */
-export const RECORD_TAGS = Object.freeze(['PS_TICK', 'PS_INPUT', 'PS_GENESIS', 'PS_SEAT', 'PS_OPEN', 'PS_COMMITS', 'PS_SALTS', 'PS_HISTORY']);
+export const RECORD_TAGS = Object.freeze(['PS_TICK', 'PS_INPUT', 'PS_GENESIS', 'PS_SEAT', 'PS_OPEN', 'PS_COMMITS', 'PS_SALTS', 'PS_HISTORY', 'PS_TALK']);
 
 /** Parse a `Program data:` log of one of the `RECORD_TAGS` records (fields already base64-decoded). */
 export function parseRecord(fields) {
@@ -288,6 +329,11 @@ export function parseRecord(fields) {
     const ruins = r.vec(x => ({ q: x.i32(), r: x.i32(), peak: x.u16() }));
     return { tag, seasonId: new DataView(fields[1].buffer, fields[1].byteOffset).getBigUint64(0, true), prevHistoryRoot: fields[2], historyRoot: fields[3], record: { finalRoot, nations, cities, ruins } };
   }
+  // A tick's relayed messages (V5 §18.7): season, tick, count, Merkle root.
+  if (tag === 'PS_TALK') {
+    return { tag, seasonId: new DataView(fields[1].buffer, fields[1].byteOffset).getBigUint64(0, true), tick: u16(fields[2]),
+      count: new DataView(fields[3].buffer, fields[3].byteOffset).getUint32(0, true), root: fields[4] };
+  }
   return { tag };
 }
 
@@ -309,7 +355,8 @@ export const claimAmount = (season, member) => claimParts(season, member).total;
 export const CHAIN_ERRORS = Object.freeze(['InvalidInstruction', 'MissingSignature', 'WrongPda', 'AlreadyInitialized', 'NotInitialized', 'WrongStatus',
   'Unauthorized', 'SeasonFull', 'InvalidName', 'WrongMint', 'WrongTokenAccount', 'WorldTooSmall', 'Rules', 'WrongTick', 'OverBudget', 'TooEarly',
   'MissingNation', 'WrongDelegationProgram', 'WrongMagicProgram', 'AlreadyClaimed', 'NothingToClaim', 'SeasonNotOver', 'WrongOffice',
-  'InvalidParams', 'WrongWorld', 'InboxFull', 'TickFrozen', 'InputNotPublished', 'WrongPhase', 'CommitMismatch', 'Retired']);
+  'InvalidParams', 'WrongWorld', 'InboxFull', 'TickFrozen', 'InputNotPublished', 'WrongPhase', 'CommitMismatch', 'Retired',
+  'RosterPending', 'RosterMismatch']);
 
 /**
  * The program error named in a transaction error message, or null. Reads

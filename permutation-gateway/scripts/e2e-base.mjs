@@ -17,7 +17,7 @@ import { Connection } from '@solana/web3.js';
 import { ChainClient } from '../client/src/chain.mjs';
 import { chainError, decodeNationHeader, decodeSeason, decodeWorldHeader, NOBODY, orderCommitment, ROLES } from '../client/src/codec.mjs';
 import { createStateStore, loadConfig, namedKey, parseArgs } from '../src/config.mjs';
-import { bootstrap, defaultRoster, startAndDelegate } from '../src/season.mjs';
+import { bootstrap, defaultRoster, memberKeyName, startAndDelegate } from '../src/season.mjs';
 import { send } from '../src/send.mjs';
 import { tokenBalance } from '../src/spl.mjs';
 import { publishTickInput, resolveInParts } from '../src/ticks.mjs';
@@ -37,7 +37,7 @@ const chain = new ChainClient(cfg.programId, BigInt(state.seasonId));
 const crank = namedKey('crank');
 const readSeason = async () => decodeSeason((await base.getAccountInfo(chain.season, 'confirmed')).data);
 const nations = (await readSeason()).nations;
-const sessionOf = new Map(state.members.map(m => [m.index, namedKey(`member${m.key}-session`)]));
+const sessionOf = new Map(state.members.map(m => [m.index, namedKey(memberKeyName(m, 'session'))]));
 
 const cus = [];
 const reach = {};

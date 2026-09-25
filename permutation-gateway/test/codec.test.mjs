@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Writer } from '../client/src/borsh.mjs';
 import {
-  chainError, CHAIN_ERRORS, claimAmount, claimParts, decodeMember, encodeBatch, orderCommitment, RETIRED_IX, decodeNationHeader, decodeSeason, decodeWorldHeader, encodeGov, encodeOrder, IX, IX_TAG, NOBODY,
+  chainError, CHAIN_ERRORS, claimAmount, claimParts, decodeMember, decodeRoster, parseRecord, rosterChain, rosterTag, encodeBatch, orderCommitment, RETIRED_IX, decodeNationHeader, decodeSeason, decodeWorldHeader, encodeGov, encodeOrder, IX, IX_TAG, NOBODY,
 } from '../client/src/codec.mjs';
 import { fromHex, hex, plain, vectors } from './vectors.mjs';
 
@@ -26,9 +26,10 @@ const NOT_BUILT = ['commit', 'commitAndUndelegate'];
 test('every program instruction encodes exactly like ChainInstruction', () => {
   const orders = vectors.orders.slice(0, 6).map(v => v.dto);
   const built = {
-    createSeason: IX.createSeason({ seasonId: 42n, preset: 0, nations: 6, entryFee: 10_000_000n, tickSeconds: 30, worldSeed: k(7), crank: k(9), market: true, prevSeasonId: 41n }),
+    createSeason: IX.createSeason({ seasonId: 42n, preset: 0, nations: 6, entryFee: 10_000_000n, tickSeconds: 30, worldSeed: k(7), crank: k(9), market: true, prevSeasonId: 41n,
+      aiCount: 3, rosterChain: k(12), bountyEach: 5_000_000n, bond: 60_000_000n }),
     allocWorld: IX.allocWorld(3),
-    register: IX.register({ civ: 2, name: 'アステル', kind: 1, session: k(1), attestation: k(0), stand: 5, votes: [0, NOBODY, 3, NOBODY], deposit: 5_000_000n }),
+    register: IX.register({ civ: 2, name: 'アステル', kind: 1, session: k(1), attestation: k(0), stand: 5, votes: [0, NOBODY, 3, NOBODY], deposit: 5_000_000n, tag: k(13) }),
     startSeason: IX.startSeason(),
     genesisStep: IX.genesisStep(50),
     delegate: IX.delegate(1003),
@@ -47,6 +48,8 @@ test('every program instruction encodes exactly like ChainInstruction', () => {
     closeCommits: IX.closeCommits(),
     commitOrders: IX.commitOrders({ role: 'Science', tick: 17, commitment: k(6) }),
     revealOrders: IX.revealOrders({ role: 'Steward', tick: 17, decisionDigest: k(5), orders, adopt: [4, 9], salt: k(7) }),
+    revealRoster: IX.revealRoster([k(14), k(15)]),
+    anchorTalk: IX.anchorTalk({ tick: 33, count: 12, root: k(16) }),
   };
   for (const v of vectors.instructions) {
     if (NOT_BUILT.includes(v.name)) assert.equal(v.hex, hex([IX_TAG[v.name]]), `${v.name} carries no data`);
@@ -69,8 +72,9 @@ test('IX_TAG is the first byte of every instruction vector, and covers exactly t
 });
 
 test('account decoders return what the Rust accounts hold', () => {
-  const { season, member, nation, worldHeader } = vectors.accounts;
+  const { season, member, nation, worldHeader, roster } = vectors.accounts;
   assert.deepEqual(plain(decodeSeason(fromHex(season.hex))), season.decoded);
+  assert.deepEqual(plain(decodeRoster(fromHex(roster.hex))), roster.decoded);
   assert.deepEqual(plain(decodeMember(fromHex(member.hex))), member.decoded);
   assert.deepEqual(plain(decodeNationHeader(fromHex(nation.hex))), nation.decoded);
   assert.deepEqual(plain(decodeWorldHeader(fromHex(worldHeader.hex))), worldHeader.decoded);
@@ -104,4 +108,19 @@ test('claimAmount equals the program\'s claim_amount', () => {
     const { prize, refund, total } = claimParts(season, member);
     assert.equal(prize + refund, total);
   }
+});
+
+test('operator AI roster: tags and their chain match permutation_rules::roster', () => {
+  const tags = vectors.roster.tags.map(v => {
+    const t = rosterTag(BigInt(v.seasonId), fromHex(v.wallet), fromHex(v.salt));
+    assert.equal(hex(t), v.tag);
+    return t;
+  });
+  assert.equal(hex(rosterChain(tags)), vectors.roster.chain);
+});
+
+test('PS_TALK records parse (season, tick, count, root)', () => {
+  const le = (n, v) => { const b = new Uint8Array(n); const d = new DataView(b.buffer); if (n === 8) d.setBigUint64(0, BigInt(v), true); else if (n === 4) d.setUint32(0, v, true); else d.setUint16(0, v, true); return b; };
+  const r = parseRecord([new TextEncoder().encode('PS_TALK'), le(8, 77), le(2, 33), le(4, 12), k(16)]);
+  assert.deepEqual({ ...r, root: hex(r.root) }, { tag: 'PS_TALK', seasonId: 77n, tick: 33, count: 12, root: hex(k(16)) });
 });

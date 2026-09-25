@@ -8,6 +8,7 @@
 #![allow(unexpected_cfgs)]
 
 pub mod error;
+pub mod finalize;
 pub mod heap;
 pub mod instruction;
 pub mod processor;

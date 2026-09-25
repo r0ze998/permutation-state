@@ -9,9 +9,11 @@ import {
   delegateBufferPdaFromDelegatedAccountAndOwnerProgram, delegationMetadataPdaFromDelegatedAccount, delegationRecordPdaFromDelegatedAccount,
 } from '@magicblock-labs/ephemeral-rollups-sdk';
 import { IX, NATIONS, NATION_TARGET, WORLD_CHUNKS } from './codec.mjs';
-import { memberPda, nationPda, seasonPda, TOKEN_PROGRAM_ID, vaultPda, worldChunkPda } from './pda.mjs';
+import { memberPda, nationPda, rosterPda, seasonPda, TOKEN_PROGRAM_ID, vaultPda, worldChunkPda } from './pda.mjs';
 
 export const HEAP_BYTES = 256 * 1024;
+/** A member's registration tag when it is not an operator AI: 32 random bytes. */
+export const randomTag = () => globalThis.crypto.getRandomValues(new Uint8Array(32));
 export { NATION_TARGET, WORLD_CHUNKS };
 export const heavy = () => [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }), ComputeBudgetProgram.requestHeapFrame({ bytes: HEAP_BYTES })];
 /**
@@ -32,6 +34,7 @@ export class ChainClient {
     this.worldChunks = Array.from({ length: WORLD_CHUNKS }, (_, k) => worldChunkPda(this.programId, this.seasonId, k));
     this.world = this.worldChunks[0];
     this.vault = vaultPda(this.programId, this.seasonId);
+    this.roster = rosterPda(this.programId, this.seasonId);
   }
   nation(civ) { return nationPda(this.programId, this.seasonId, civ); }
   nations(n) { return Array.from({ length: n }, (_, i) => this.nation(i)); }
@@ -42,12 +45,17 @@ export class ChainClient {
 
   /**
    * Create this season. With `prevSeasonId` it follows that finalized season
-   * (same admin) in the history layer: its history root is taken over.
+   * (same admin) in the history layer: its history root is taken over. With
+   * `aiCount` operator AI members (V5 §18) the admin escrows their bounties
+   * and the bond from `adminToken`, and commits `rosterChain`.
    */
-  createSeason({ admin, mint, preset = 0, nations = NATIONS.length, entryFee, tickSeconds = 30, worldSeed, crank, market = true, prevSeasonId = null }) {
+  createSeason({ admin, mint, preset = 0, nations = NATIONS.length, entryFee, tickSeconds = 30, worldSeed, crank, market = true, prevSeasonId = null,
+    aiCount = 0, rosterChain, bountyEach = 0n, bond = 0n, adminToken }) {
     const prev = prevSeasonId ? [R(new ChainClient(this.programId, BigInt(prevSeasonId)).season)] : [];
-    return [this.ix([W(admin, true), W(this.season), W(this.vault), R(mint), R(TOKEN_PROGRAM_ID), R(SystemProgram.programId), ...prev],
-      IX.createSeason({ seasonId: this.seasonId, preset, nations, entryFee, tickSeconds, worldSeed, crank: crank.toBytes(), market, prevSeasonId: BigInt(prevSeasonId ?? 0) }))];
+    const ai = aiCount > 0 ? [W(adminToken), W(this.roster)] : [];
+    return [this.ix([W(admin, true), W(this.season), W(this.vault), R(mint), R(TOKEN_PROGRAM_ID), R(SystemProgram.programId), ...prev, ...ai],
+      IX.createSeason({ seasonId: this.seasonId, preset, nations, entryFee, tickSeconds, worldSeed, crank: crank.toBytes(), market, prevSeasonId: BigInt(prevSeasonId ?? 0),
+        aiCount, rosterChain, bountyEach: BigInt(bountyEach), bond: BigInt(bond) }))];
   }
   allocWorld({ payer, chunk }) {
     return [this.ix([W(payer, true), R(this.season), W(this.worldChunks[chunk]), R(SystemProgram.programId)], IX.allocWorld(chunk))];
@@ -55,10 +63,14 @@ export class ChainClient {
   allocNation({ payer, civ }) {
     return [this.ix([W(payer, true), R(this.season), W(this.nation(civ)), R(SystemProgram.programId)], IX.allocNation(civ))];
   }
-  /** Become a member of nation `civ`: the wallet signs; the entry fee (and any deposit) moves from `walletToken`. */
-  register({ wallet, feePayer, civ, walletToken, mint, name, kind = 0, session, attestation, stand = 0, votes, deposit = 0n }) {
+  /**
+   * Become a member of nation `civ`: the wallet signs; the entry fee (and any
+   * deposit) moves from `walletToken`. `tag` is 32 random bytes unless the
+   * member is an operator AI (`rosterTag`, V5 §18.2).
+   */
+  register({ wallet, feePayer, civ, walletToken, mint, name, kind = 0, session, attestation, stand = 0, votes, deposit = 0n, tag = randomTag() }) {
     return [this.ix([R(wallet, true), W(feePayer, true), W(this.season), W(this.member(wallet)), W(walletToken), W(this.vault), R(mint), R(TOKEN_PROGRAM_ID), R(SystemProgram.programId)],
-      IX.register({ civ, name, kind, session: session.toBytes(), attestation, stand, votes, deposit: BigInt(deposit) }))];
+      IX.register({ civ, name, kind, session: session.toBytes(), attestation, stand, votes, deposit: BigInt(deposit), tag }))];
   }
   updateMember({ signer, wallet, stand, votes }) {
     return [this.ix([R(signer, true), R(this.season), W(this.member(wallet))], IX.updateMember({ stand, votes }))];
@@ -133,8 +145,17 @@ export class ChainClient {
   commitPart({ payer, targets }) {
     return [this.ix(this.intentKeys(payer, targets, [R(this.nation(0))]), IX.commitPart(targets))];
   }
-  finishSeason() {
-    return [...heavy(), this.ix([W(this.season), ...this.worldChunks.map(k => R(k))], IX.finishSeason())];
+  /** Compute the payouts. With operator AI members the roster account goes after the world. */
+  finishSeason({ roster = false } = {}) {
+    return [...heavy(), this.ix([W(this.season), ...this.worldChunks.map(k => R(k)), ...(roster ? [R(this.roster)] : [])], IX.finishSeason())];
+  }
+  /** Reveal the next operator AI members, in roster order: their member accounts and salts (V5 §18.2). */
+  revealRoster({ members, salts }) {
+    return [this.ix([W(this.season), W(this.roster), ...members.map(m => R(this.member(m)))], IX.revealRoster(salts))];
+  }
+  /** Anchor a tick's relayed messages (the crank only, V5 §18.7). */
+  anchorTalk({ crank, tick, count, root }) {
+    return [this.ix([R(crank, true), R(this.nation(0))], IX.anchorTalk({ tick, count, root }))];
   }
   /** A member's prize plus its treasury refund, to the wallet's own token account. */
   claim({ wallet, dest, mint }) {

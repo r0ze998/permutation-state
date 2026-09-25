@@ -42,6 +42,7 @@
 mod chain;
 mod game;
 mod http;
+mod roster;
 mod routes;
 mod views;
 
@@ -74,13 +75,19 @@ pub struct Config {
     pub web: PathBuf,
     /// The gateway (chain mode), e.g. `http://127.0.0.1:4191`.
     pub chain: Option<String>,
+    /// The gateway's operator token (chain mode): lets this server act for
+    /// the members the gateway hosts and read the AI roster (V5 §18.2).
+    pub operator_token: Option<String>,
 }
 
 /// Run the server until the process ends.
 pub fn serve(cfg: Config) -> Result<(), String> {
     let game: Shared = match &cfg.chain {
         Some(url) => {
-            let link = Arc::new(ChainLink::new(url)?);
+            let link = Arc::new(ChainLink::new(url)?.with_token(cfg.operator_token.clone()));
+            if !link.has_token() {
+                eprintln!("no operator token: hosted members cannot act (set PS_OPERATOR_TOKEN or --operator-token-file)");
+            }
             let game = Arc::new(Mutex::new(Game::from_chain(link)));
             let follower = game.clone();
             std::thread::spawn(move || chain::follow(follower));

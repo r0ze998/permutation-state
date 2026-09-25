@@ -287,7 +287,11 @@ mod census {
             tick_orders: _,
             last_skipped: _,
             deliveries: _,
-            merit_log: _, // own nation only
+            home_snapshot: _,
+            pact_last: _,
+            contracts: _,
+            next_contract: _, // public (V5 §18)
+            merit_log: _,     // own nation only
         } = s;
     }
 
@@ -320,6 +324,7 @@ mod census {
             usdc: _, // private
             market_spent: _,
             exchange_bought: _, // private
+            contract_income: _,
         } = c;
     }
 
@@ -344,7 +349,8 @@ mod census {
             heritage_until: _,
             heritage_bonus: _,
             standing: _,
-            alive: _, // public when seen
+            alive: _,          // public when seen
+            first_conquest: _, // public
             food: _,
             prod: _,
             queue: _,

@@ -54,6 +54,26 @@ async function decide({ game, view: v, map, held }) {
     if (p.kind === 'Nap' && v.economy.gold >= p.bond) add(70, { type: 'AcceptNap', civ: p.from, bond: p.bond }, `${v.civs[p.from].name}と不可侵`);
   }
 
+  // Treasury contracts (V5 §18.6): a peaceful nation takes money to keep the
+  // peace, and pays others to check the leader: once, from tick 50, an open
+  // bounty on the leading nation's capital.
+  for (const c of (v.contracts || []).filter(c => c.to === me && c.accepted == null && c.offered < v.tick)) {
+    if ((c.term.kind === 'Peace' || c.term.kind === 'KeepNap') && c.total >= 1_000_000) {
+      add(96, { type: 'AcceptContract', id: c.id }, `${v.civs[c.from].name}の契約（${(c.total / 1e6).toFixed(1)} USDC）を受諾`);
+    }
+  }
+  const usdcFree = (v.economy.treasury ?? 0) - (v.economy.contractIncome ?? 0);
+  const posted = (v.contracts || []).some(c => c.from === me && c.term.kind === 'Capture');
+  if (v.tick >= 50 && v.tick < 120 && usdcFree >= 1_000_000 && !posted && !game.bountyPosted) {
+    const leader = v.civs.filter(c => c.id !== me).sort((a, b) => (b.points ?? 0) - (a.points ?? 0) || b.cities - a.cities)[0];
+    const capital = leader && v.cities.find(c => c.owner === leader.id && c.capital);
+    if (capital) {
+      game.bountyPosted = true;
+      add(60, { type: 'OfferContract', term: { kind: 'Capture', city: capital.id }, usdc: 1_000_000, deadline: Math.min(v.tick + 60, v.ticks - 1) },
+        `首位の${leader.name}の首都（都市${capital.id}）に 1 USDC の懸賞`);
+    }
+  }
+
   // Units.
   const knownCities = [...v.cities, ...v.cityStates];
   for (const u of myUnits) {

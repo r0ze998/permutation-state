@@ -16,5 +16,7 @@ export const worldChunkPda = (programId, id, k) => pda(programId, [Buffer.from(S
 export const vaultPda = (programId, id) => pda(programId, [Buffer.from(SEEDS.vault), u64(id)]);
 /** A nation's office batches and governance inbox (delegated to the ER during play). */
 export const nationPda = (programId, id, civ) => pda(programId, [Buffer.from(SEEDS.nation), u64(id), u16(civ)]);
+/** The operator's AI roster, revealed after the season (V5 §18.2). */
+export const rosterPda = (programId, id) => pda(programId, [Buffer.from(SEEDS.roster), u64(id)]);
 /** One member per wallet per season (base layer). */
 export const memberPda = (programId, id, wallet) => pda(programId, [Buffer.from(SEEDS.member), u64(id), new PublicKey(wallet).toBuffer()]);

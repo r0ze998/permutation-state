@@ -6,6 +6,7 @@
 //! | `genesis` | base | StartSeason, GenesisStep, SeatMembers, OpenGovernment |
 //! | `delegation` | base / ER | Delegate, the undelegation callback, Commit, CommitAndUndelegate, CommitPart, UndelegatePart |
 //! | `play` | ER | SubmitOrders, SubmitGov, LogTickInput, ResolveTick |
+//! | `roster` | base / ER | RevealRoster, AnchorTalk |
 //! | `settlement` | base | FinishSeason, Claim, WithdrawOps |
 //!
 //! `accounts` holds the checks and loaders they share.
@@ -21,12 +22,14 @@ mod delegation;
 mod genesis;
 mod play;
 mod registration;
+mod roster;
 mod settlement;
 
 use delegation::*;
 use genesis::*;
 use play::*;
 use registration::*;
+use roster::*;
 use settlement::*;
 
 pub use settlement::claim_amount;
@@ -56,6 +59,10 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -> Pr
             crank,
             market,
             prev_season_id,
+            ai_count,
+            roster_chain,
+            bounty_each,
+            bond,
         } => create_season(
             program_id,
             accounts,
@@ -69,6 +76,10 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -> Pr
                 crank,
                 market,
                 prev_season_id,
+                ai_count,
+                roster_chain,
+                bounty_each,
+                bond,
             },
         ),
         ChainInstruction::AllocWorld { chunk } => alloc_world(program_id, accounts, chunk),
@@ -81,6 +92,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -> Pr
             stand,
             votes,
             deposit,
+            tag,
         } => register(
             program_id,
             accounts,
@@ -92,6 +104,7 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -> Pr
             stand,
             votes,
             deposit,
+            tag,
         ),
         ChainInstruction::StartSeason => start_season(program_id, accounts),
         ChainInstruction::GenesisStep { work } => genesis_step(program_id, accounts, work),
@@ -144,5 +157,9 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -> Pr
             },
             salt,
         ),
+        ChainInstruction::RevealRoster { salts } => reveal_roster(program_id, accounts, salts),
+        ChainInstruction::AnchorTalk { tick, count, root } => {
+            anchor_talk(program_id, accounts, tick, count, root)
+        }
     }
 }

@@ -28,6 +28,10 @@ Each order costs 1 (ExchangeOrder, RevealRationale, ConsentWar, ConsentSpend cos
   MarketTrade     {good, side: "Buy"|"Sell", amount, limitGold}
   ExchangeOrder   {good, side, amount, price}             USDC market between treasuries: batch auction, rising tariff, 3-tick delivery
   ConsentWar      {civ}      ConsentSpend {usdc}          the second officer's consent
+  OfferContract   {to?, term, usdc, deadline}             escrow treasury USDC; paid by the program when the world shows the term by the deadline, else returned.
+                  term: {kind:"Peace"} (to makes peace with you) | {kind:"LeaveAlliance", with} | {kind:"KeepNap", every, installments} (paid in parts while your NAP with to stands)
+                        | {kind:"Capture", city} (no "to": whichever nation takes that city is paid). Counts as treasury spending; received USDC cannot be spent on the market.
+  AcceptContract | CancelContract  {id}                  accept an offer made to you on an earlier tick; withdraw your own offer before it is accepted
   Raze            {city}
   SetStanding     {target: {kind:"Unit"|"City", id}, rule: {kind:"Clear"} | {kind:"AutoDefend", radius} | {kind:"Retreat", ratioBps} | {kind:"Patrol", route:[[q,r],...]} | {kind:"QueueRepeat", on} | {kind:"AutoPurchase", maxGold}}
 Governance actions (any member): Stand {roles}, Vote {role, candidate} (in the 10 ticks before a term), Propose {role, orders}, Support {proposal}, Recall {role}.
@@ -42,7 +46,10 @@ An officer who adopts a proposal shares its merit half and half with the propose
 Every tick all nations' orders resolve together, in a fixed phase order; submission order does not matter. Information is perfect: every nation sees the whole world (it is public on chain). Orders are sealed: a commitment before the tick's deadline, the orders revealed after it, so nobody can react to them in the same tick.
 Nations climb four paths — Hegemony (territory, conquests), Prosperity (population, wealth), Science (techs, Star Gate), Concord (treaties, city-states, trade) —
 through five milestone tiers; two paths at a tier (three at tier 5) make an era. Achievement points split the prize pool among nations;
-inside a nation, 20% goes equally to active members and the rest by merit (what each member's orders and adopted proposals achieved).`;
+inside a nation, 20% goes equally to active members and the rest by merit (what each member's orders and adopted proposals achieved).
+Some members are the operator's AI members; who they are is revealed only after the season, and their prize goes to the other members of their nation.
+Each lives in one of its nation's cities (fixed at tick 45, secret): the first nation to conquer that city afterwards earns its bounty.
+Nations can bind promises with treasury USDC (OfferContract); words alone bind nothing.`;
 
 const ORDERS_SCHEMA = { type: 'array', description: 'Order objects; see get_rules for every shape.', items: { type: 'object', properties: { type: { type: 'string' } }, required: ['type'] } };
 
@@ -57,6 +64,9 @@ export const TOOLS = [
   { name: 'validate_orders', description: 'Dry run. ok = accepted at submit time (structure, budget); warnings = orders that would be skipped when the tick resolves.', inputSchema: { type: 'object', properties: { orders: ORDERS_SCHEMA }, required: ['orders'] } },
   { name: 'submit_orders', description: 'As an officer: seal this tick\'s orders for the offices you hold (one batch per office, replacing earlier ones this tick). Only a commitment goes on chain now; the orders are revealed automatically after the tick\'s deadline, so nobody can react to them this tick. The rationale is committed now as a hash and revealed after the tick. Orders for offices you do not hold come back as notHeld: propose them instead.', inputSchema: { type: 'object', properties: { orders: ORDERS_SCHEMA, rationale: { type: 'string', description: `why, in one or two sentences (max ${MAX_RATIONALE} bytes); becomes public after the tick` }, adopt: { type: 'object', description: 'proposal ids to adopt per office, e.g. {"Science": [3]}' } }, required: ['orders', 'rationale'] } },
   { name: 'propose', description: 'Propose orders to one office of your nation (any member). The officer may adopt it; its merit is then shared with you.', inputSchema: { type: 'object', properties: { role: { type: 'string', enum: [...ROLES] }, orders: ORDERS_SCHEMA }, required: ['role', 'orders'] } },
+  { name: 'talk', description: 'Send a public message (signed, anchored on chain): to everyone, a nation {civ} or a member {member}. Words bind nothing; contracts do.', inputSchema: { type: 'object', properties: { to: { type: 'object', description: '{civ} or {member}; omit for everyone' }, text: { type: 'string', description: 'up to 280 characters' } }, required: ['text'] } },
+  { name: 'read_talk', description: 'Recent public messages (from id `since`).', inputSchema: { type: 'object', properties: { since: { type: 'integer' } } } },
+  { name: 'get_roster', description: 'How many operator AI members this season has, the bounty for conquering one\'s home city, and those revealed so far.', inputSchema: { type: 'object', properties: {} } },
   { name: 'govern', description: 'One governance action: {type:"Support", proposal} | {type:"Vote", role, candidate} | {type:"Stand", roles:[...]} | {type:"Recall", role}.', inputSchema: { type: 'object', properties: { action: { type: 'object' } }, required: ['action'] } },
 ];
 
@@ -95,6 +105,9 @@ export async function callTool(ctx, name, args = {}) {
       }
       case 'propose': return await g.propose(args.role, args.orders || []);
       case 'govern': return await g.gov(args.action);
+      case 'talk': return await g.talk({ to: args.to ?? null, text: args.text });
+      case 'read_talk': return (await g.messages(args.since ?? 0)).messages?.slice(-40) ?? [];
+      case 'get_roster': return await g.roster();
       default: return { error: `unknown tool ${name}` };
     }
   } catch (e) {

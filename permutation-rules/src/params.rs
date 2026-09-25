@@ -9,7 +9,7 @@ use crate::fixed::Bps;
 use crate::{buildings, map, tech, units};
 use borsh::{BorshDeserialize, BorshSerialize};
 
-pub const RULES_VERSION: u16 = 6; // v0.2 + V5, plus: city tiles are entered only by capture (§7.3)
+pub const RULES_VERSION: u16 = 7; // v6 + operator AI members, bounties and treasury contracts (V5 §18)
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Preset {
@@ -218,6 +218,21 @@ pub struct Ruleset {
     pub dark_age_share_bps: Bps,
     pub dark_age_research_bps: Bps,
     pub dark_age_budget: u16,
+
+    // --- operator AI members, bounties, contracts (V5 §18) ---
+    /// At the end of this tick every nation's cities are recorded; an
+    /// operator AI's home city is drawn among its nation's (V5 §18.3), and
+    /// only captures after it count toward a bounty.
+    pub ai_home_tick: u16,
+    /// No bounty when the captor and the victim had a NAP or an alliance
+    /// within this many ticks before the capture (V5 §18.4).
+    pub bounty_pact_window: u16,
+    /// Contracts a nation may have offered and not yet settled (V5 §18.6).
+    pub contract_max_open: u8,
+    /// Latest deadline of a contract, in ticks after it is offered.
+    pub contract_max_ticks: u16,
+    /// A "keep the NAP" contract pays in at most this many installments.
+    pub contract_max_installments: u8,
 }
 
 impl Ruleset {
@@ -381,6 +396,12 @@ impl Ruleset {
             dark_age_share_bps: 2_000,
             dark_age_research_bps: 7_500,
             dark_age_budget: 1,
+
+            ai_home_tick: 45,
+            bounty_pact_window: 10,
+            contract_max_open: 4,
+            contract_max_ticks: 60,
+            contract_max_installments: 10,
         }
     }
 

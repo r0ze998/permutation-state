@@ -6,6 +6,7 @@ use solana_program::{
     msg,
     program_error::ProgramError,
     pubkey::Pubkey,
+    sysvar::Sysvar,
 };
 
 use super::accounts::*;
@@ -29,18 +30,39 @@ pub(super) fn finish_season(program_id: &Pubkey, accounts: &[AccountInfo]) -> Pr
     if state.tick < rules.ticks_per_season {
         return Err(ChainError::SeasonNotOver.into());
     }
+    // Operator AI members (V5 §18.2): the roster must be revealed in full,
+    // unless the grace period after the last tick has passed.
+    let roster_account;
+    let roster = if season.ai_count == 0 {
+        crate::finalize::Roster::None
+    } else if season.roster_revealed == season.ai_count && season.roster_acc == season.roster_chain
+    {
+        let roster_ai = accounts
+            .get(1 + WORLD_CHUNKS)
+            .ok_or(ProgramError::NotEnoughAccountKeys)?;
+        roster_account = load_roster(program_id, roster_ai, season.season_id)?;
+        crate::finalize::Roster::Revealed(&roster_account.entries)
+    } else {
+        let ended = world.meta()?.deadline;
+        if solana_program::clock::Clock::get()?.unix_timestamp < ended + ROSTER_GRACE_SECONDS {
+            return Err(ChainError::RosterPending.into());
+        }
+        crate::finalize::Roster::Forfeited
+    };
     // In-play income (market fees and tariffs) joins the pool and operations
     // in the same 80/20 split as the fees (V5 D11).
-    let pool = season.pool + state.exchange_vault;
-    let s = permutation_rules::payout::settle(&state, &rules, pool, season.entry_fee);
-    season.pool = pool;
-    season.ops += state.exchange_ops + s.dust;
+    let f = crate::finalize::finalize(&season, &state, &rules, roster);
+    let s = &f.settlement;
+    season.pool = f.pool;
+    season.ops += f.ops_add;
     season.payouts = s.per_member.clone();
-    season.treasury_final = state.civs.iter().map(|c| c.usdc).collect();
+    season.treasury_final = f.treasury_final.clone();
+    season.roster_outcome = roster.outcome();
+    season.bounty_paid = f.bounty_paid.clone();
     season.final_root = state.state_root().map_err(|_| ChainError::Rules)?;
     // The history layer: this season's record, chained onto the one it
     // follows, and logged in full for the next season and the verifier.
-    let record = permutation_rules::history::season_record(&state, &s);
+    let record = permutation_rules::history::season_record(&state, s);
     season.history_root =
         permutation_rules::history::history_root(&season.prev_history_root, &record);
     let mut bytes = borsh::to_vec(&record).map_err(|_| ChainError::Rules)?;
@@ -200,6 +222,7 @@ mod tests {
             votes: [0; 4],
             shares,
             claimed: false,
+            tag: [0; 32],
         }
     }
 
@@ -237,6 +260,14 @@ mod tests {
             prev_season_id: 0,
             prev_history_root: [0; 32],
             history_root: [0; 32],
+            ai_count: 0,
+            roster_chain: [0; 32],
+            bounty_each: 0,
+            bond: 0,
+            roster_acc: [0; 32],
+            roster_revealed: 0,
+            roster_outcome: 0,
+            bounty_paid: Vec::new(),
         };
         let (a, b, c) = (member(0, 0, 200), member(1, 0, 100), member(2, 1, 0));
         assert_eq!(claim_amount(&season, &a), 5 + 66);

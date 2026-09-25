@@ -18,9 +18,10 @@ use permutation_chain::error::ChainError;
 use permutation_chain::instruction::ChainInstruction;
 use permutation_chain::processor::{claim_amount, NATION_TARGET};
 use permutation_chain::state::{
-    MemberAccount, NationAccount, Season, SeasonStatus, WorldMeta, CHUNK, GENESIS_MAGIC,
-    INPUT_CHUNK, MAX_GOV_PER_SIGNER, MAX_MEMBERS, MAX_NAME, MAX_NATIONS, MEMBER_MAGIC, MEMBER_SEED,
-    NATION_MAGIC, NATION_SEED, SEASON_MAGIC, SEASON_SEED, VAULT_SEED, WORLD_CHUNKS, WORLD_HEADER,
+    MemberAccount, NationAccount, RosterAccount, RosterEntry, Season, SeasonStatus, WorldMeta,
+    CHUNK, GENESIS_MAGIC, INPUT_CHUNK, MAX_AI, MAX_GOV_PER_SIGNER, MAX_MEMBERS, MAX_NAME,
+    MAX_NATIONS, MEMBER_MAGIC, MEMBER_SEED, NATION_MAGIC, NATION_SEED, ROSTER_GRACE_SECONDS,
+    ROSTER_MAGIC, ROSTER_SEED, SEASON_MAGIC, SEASON_SEED, VAULT_SEED, WORLD_CHUNKS, WORLD_HEADER,
     WORLD_MAGIC, WORLD_SEED,
 };
 use permutation_rules::decision::{MAX_POLICY, MAX_RATIONALE};
@@ -75,6 +76,34 @@ fn sample_season() -> Season {
         prev_season_id: 1_789_999_999_999,
         prev_history_root: [14; 32],
         history_root: [15; 32],
+        ai_count: 3,
+        roster_chain: [16; 32],
+        bounty_each: 5_000_000,
+        bond: 60_000_000,
+        roster_acc: [16; 32],
+        roster_revealed: 3,
+        roster_outcome: 1,
+        bounty_paid: vec![0, 5_000_000, 0, 0, 0, 0],
+    }
+}
+
+fn sample_roster() -> RosterAccount {
+    RosterAccount {
+        magic: ROSTER_MAGIC,
+        season_id: 1_790_000_000_123,
+        bump: 249,
+        entries: vec![
+            RosterEntry {
+                member: 1,
+                civ: 0,
+                salt: [17; 32],
+            },
+            RosterEntry {
+                member: 2,
+                civ: 1,
+                salt: [18; 32],
+            },
+        ],
     }
 }
 
@@ -94,6 +123,7 @@ fn sample_member() -> MemberAccount {
         votes: [2, u32::MAX, 0, 1],
         shares: 2_500_000,
         claimed: false,
+        tag: [19; 32],
     }
 }
 
@@ -155,6 +185,7 @@ fn status_name(s: SeasonStatus) -> String {
 
 fn account_vectors() -> Value {
     let s = sample_season();
+    let ro = sample_roster();
     let m = sample_member();
     let n = sample_nation();
     let meta = sample_meta();
@@ -170,6 +201,15 @@ fn account_vectors() -> Value {
                 "opsWithdrawn": s.ops_withdrawn, "treasury": u64s(&s.treasury), "treasuryFinal": u64s(&s.treasury_final),
                 "payouts": u64s(&s.payouts), "finalRoot": hex(&s.final_root),
                 "prevSeasonId": s.prev_season_id.to_string(), "prevHistoryRoot": hex(&s.prev_history_root), "historyRoot": hex(&s.history_root),
+                "aiCount": s.ai_count, "rosterChain": hex(&s.roster_chain), "bountyEach": s.bounty_each.to_string(), "bond": s.bond.to_string(),
+                "rosterAcc": hex(&s.roster_acc), "rosterRevealed": s.roster_revealed, "rosterOutcome": "revealed", "bountyPaid": u64s(&s.bounty_paid),
+            },
+        },
+        "roster": {
+            "hex": hex(&borsh::to_vec(&ro).unwrap()),
+            "decoded": {
+                "seasonId": ro.season_id.to_string(), "bump": ro.bump,
+                "entries": ro.entries.iter().map(|e| json!({"member": e.member, "civ": e.civ, "salt": hex(&e.salt)})).collect::<Vec<_>>(),
             },
         },
         "member": {
@@ -177,7 +217,7 @@ fn account_vectors() -> Value {
             "decoded": {
                 "seasonId": m.season_id.to_string(), "bump": m.bump, "index": m.index, "civ": m.civ, "wallet": hex(&m.wallet),
                 "session": hex(&m.session), "kind": m.kind, "name": m.name, "attestation": hex(&m.attestation), "stand": m.stand,
-                "votes": m.votes, "shares": m.shares.to_string(), "claimed": m.claimed,
+                "votes": m.votes, "shares": m.shares.to_string(), "claimed": m.claimed, "tag": hex(&m.tag),
             },
         },
         "nation": {
@@ -216,11 +256,29 @@ fn constant_vectors() -> Value {
         "WORLD_CHUNKS": WORLD_CHUNKS, "CHUNK": CHUNK, "WORLD_HEADER": WORLD_HEADER, "NATION_TARGET": NATION_TARGET,
         "INPUT_CHUNK": INPUT_CHUNK, "MAX_NATIONS": MAX_NATIONS, "MAX_NAME": MAX_NAME, "MAX_MEMBERS": MAX_MEMBERS,
         "MAX_GOV_PER_SIGNER": MAX_GOV_PER_SIGNER, "MAX_POLICY": MAX_POLICY, "MAX_RATIONALE": MAX_RATIONALE, "BATCH_BYTES": BATCH_BYTES,
-        "SEEDS": { "season": text(SEASON_SEED), "world": text(WORLD_SEED), "nation": text(NATION_SEED), "member": text(MEMBER_SEED), "vault": text(VAULT_SEED) },
-        "MAGIC": { "season": text(&SEASON_MAGIC), "member": text(&MEMBER_MAGIC), "nation": text(&NATION_MAGIC), "world": text(&WORLD_MAGIC), "genesis": text(&GENESIS_MAGIC) },
+        "MAX_AI": MAX_AI, "ROSTER_GRACE_SECONDS": ROSTER_GRACE_SECONDS,
+        "SEEDS": { "season": text(SEASON_SEED), "world": text(WORLD_SEED), "nation": text(NATION_SEED), "member": text(MEMBER_SEED), "vault": text(VAULT_SEED), "roster": text(ROSTER_SEED) },
+        "MAGIC": { "season": text(&SEASON_MAGIC), "member": text(&MEMBER_MAGIC), "nation": text(&NATION_MAGIC), "world": text(&WORLD_MAGIC), "genesis": text(&GENESIS_MAGIC), "roster": text(&ROSTER_MAGIC) },
         "NATIONS": NATIONS,
         "ROLES": Role::ALL.iter().map(|r| format!("{r:?}")).collect::<Vec<_>>(),
         "SEASON_STATUS": statuses,
+    })
+}
+
+/// Operator AI roster tags and their chain (V5 §18.2), as the gateway computes them.
+fn roster_vectors() -> Value {
+    use permutation_rules::roster::{roster_chain, roster_tag};
+    let cases: Vec<(u64, [u8; 32], [u8; 32])> = vec![
+        (1_790_000_000_123, [7; 32], [17; 32]),
+        (1_790_000_000_123, [8; 32], [18; 32]),
+        (42, [1; 32], [0; 32]),
+    ];
+    let tags: Vec<[u8; 32]> = cases.iter().map(|(s, w, x)| roster_tag(*s, w, x)).collect();
+    json!({
+        "tags": cases.iter().zip(&tags).map(|((s, w, x), t)| json!({
+            "seasonId": s.to_string(), "wallet": hex(w), "salt": hex(x), "tag": hex(t),
+        })).collect::<Vec<_>>(),
+        "chain": hex(&roster_chain(&tags)),
     })
 }
 
@@ -315,6 +373,12 @@ fn vectors_match_the_js_encoder_fixture() {
         json!({"type":"RevealRationale","tick":3,"policy":"bot/warlord@1","salt":"00112233445566778899aabbccddeeff","text":"攻撃は最大の防御"}),
         json!({"type":"ConsentWar","civ":2}),
         json!({"type":"ConsentSpend","usdc":25000000}),
+        json!({"type":"OfferContract","to":3,"term":{"kind":"Peace"},"usdc":4000000,"deadline":60}),
+        json!({"type":"OfferContract","to":2,"term":{"kind":"LeaveAlliance","with":5},"usdc":2500000,"deadline":40}),
+        json!({"type":"OfferContract","to":1,"term":{"kind":"KeepNap","every":5,"installments":4},"usdc":8000000,"deadline":30}),
+        json!({"type":"OfferContract","term":{"kind":"Capture","city":11},"usdc":3000000,"deadline":90}),
+        json!({"type":"AcceptContract","id":7}),
+        json!({"type":"CancelContract","id":8}),
     ];
     let govs: Vec<Value> = vec![
         json!({"type":"Stand","roles":["General","Diplomat"]}),
@@ -372,6 +436,10 @@ fn vectors_match_the_js_encoder_fixture() {
                 crank: k(9),
                 market: true,
                 prev_season_id: 41,
+                ai_count: 3,
+                roster_chain: k(12),
+                bounty_each: 5_000_000,
+                bond: 60_000_000,
             },
         ),
         ("allocWorld", ChainInstruction::AllocWorld { chunk: 3 }),
@@ -386,6 +454,7 @@ fn vectors_match_the_js_encoder_fixture() {
                 stand: 5,
                 votes: [0, u32::MAX, 3, u32::MAX],
                 deposit: 5_000_000,
+                tag: k(13),
             },
         ),
         ("startSeason", ChainInstruction::StartSeason),
@@ -457,6 +526,20 @@ fn vectors_match_the_js_encoder_fixture() {
                 salt: k(7),
             },
         ),
+        (
+            "revealRoster",
+            ChainInstruction::RevealRoster {
+                salts: vec![k(14), k(15)],
+            },
+        ),
+        (
+            "anchorTalk",
+            ChainInstruction::AnchorTalk {
+                tick: 33,
+                count: 12,
+                root: k(16),
+            },
+        ),
     ];
     // Sealed orders (commit–reveal): the commitment of a batch and a salt,
     // which the JS client computes before `CommitOrders`.
@@ -499,7 +582,7 @@ fn vectors_match_the_js_encoder_fixture() {
     let doc = json!({
         "orders": order_vectors, "gov": gov_vectors, "instructions": ix_vectors,
         "accounts": account_vectors(), "errors": errors, "constants": constant_vectors(),
-        "offices": office_vectors, "claims": claim_vectors(), "commitment": commitment,
+        "offices": office_vectors, "claims": claim_vectors(), "commitment": commitment, "roster": roster_vectors(),
     });
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../permutation-gateway/test/vectors.json");

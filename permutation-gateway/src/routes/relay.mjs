@@ -1,11 +1,11 @@
 // Signing and relaying for members.
 //
-//   POST /submit       {civ, role, member, tick, digest, orders, adopt}: an office's batch,
+//   POST /submit       (operator only) {civ, role, member, tick, digest, orders, adopt}: an office's batch,
 //                      sealed (commit–reveal): the gateway draws a salt, sends the commitment
 //                      signed with the hosted member's session key, and keeps the batch; the
 //                      crank reveals it once the tick's commitments close. A vacant office
 //                      takes no batch from anyone (the rules' caretaker fills it)
-//   POST /gov          {member, action} or {member, actions: [...]}: a hosted member's
+//   POST /gov          (operator only) {member, action} or {member, actions: [...]}: a hosted member's
 //                      governance actions (at most MAX_GOV_PER_SIGNER), in as few
 //                      transactions as fit one packet each
 //   GET  /relay        {feePayer, blockhash, lastValidBlockHeight}: for members that sign their
@@ -22,6 +22,7 @@ import { send, sendSigned } from '../send.mjs';
 import { RouteError } from './errors.mjs';
 import { seal } from '../sealed.mjs';
 import { allowedOffices } from '../../client/src/offices.mjs';
+import { requireOperator } from './roster.mjs';
 
 const fromHex = h => Uint8Array.from(Buffer.from(h || '', 'hex'));
 
@@ -78,7 +79,11 @@ export function packTransactions(groups, { prefix = [], feePayer, signers }) {
 const NOT_HOSTED = 'this member is not hosted by this gateway; sign it yourself and use /relay';
 
 export const relayRoutes = {
-  'POST /submit': async ({ er, chain, crank, hostedKey }, req) => {
+  // Only the operator's game server may act for hosted members (it runs
+  // their AI and relays the people who claimed a seat).
+  'POST /submit': async (ctx, req) => {
+    requireOperator(ctx, req);
+    const { er, chain, crank, hostedKey } = ctx;
     const b = await req.json();
     const member = b.member ?? NOBODY;
     // A vacant office is filled by the rules' caretaker; nobody signs for it.
@@ -102,7 +107,9 @@ export const relayRoutes = {
     return { body: { ok: true, signature: r.signature, commitment: Buffer.from(commitment).toString('hex') } };
   },
 
-  'POST /gov': async ({ er, chain, crank, hostedKey, registry }, req) => {
+  'POST /gov': async (ctx, req) => {
+    requireOperator(ctx, req);
+    const { er, chain, crank, hostedKey, registry } = ctx;
     const b = await req.json();
     const signer = hostedKey(b.member);
     if (!signer) throw new RouteError(403, NOT_HOSTED, 'NotHosted');

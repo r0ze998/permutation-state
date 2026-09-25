@@ -105,6 +105,9 @@ pub struct Civ {
     pub market_spent: u64,
     /// Whole units bought on the market this season, by `GoodKind` (re-sale rule).
     pub exchange_bought: [u32; 5],
+    /// USDC received from contracts (V5 §18.6), part of `usdc`: it may not
+    /// be spent on the market, only refunded to depositors at the end.
+    pub contract_income: u64,
 
     pub scores: Scores,
     pub achievements: Achievements,
@@ -169,6 +172,19 @@ pub struct City {
     pub heritage_bonus: u32,
     pub standing: CityStanding,
     pub alive: bool,
+    /// The first conquest of this city after `ai_home_tick` (V5 §18.3): an
+    /// operator AI's home city pays its bounty to that nation.
+    pub first_conquest: Option<Conquest>,
+}
+
+/// A city's first conquest after the home cities were drawn (V5 §18.3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct Conquest {
+    pub by: CivId,
+    pub tick: u16,
+    /// False when the captor and the victim had a NAP or an alliance within
+    /// `bounty_pact_window` ticks: a bounty is not paid (V5 §18.4).
+    pub bounty: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -406,6 +422,17 @@ pub struct WorldState {
     pub tick_orders: Vec<crate::orders::CivOrders>,
     pub last_skipped: Vec<Skip>,
     pub deliveries: Vec<Delivery>,
+
+    // --- V5 §18 ---
+    /// Living cities of each nation at the end of `ai_home_tick`, by id
+    /// (empty before): operator AI home cities are drawn from them.
+    pub home_snapshot: Vec<Vec<CityId>>,
+    /// Per pair (see `pair_index`): the last tick the pair had a NAP or an
+    /// alliance.
+    pub pact_last: Vec<Option<u16>>,
+    /// Contracts escrowed from nation treasuries (V5 §18.6), by ascending id.
+    pub contracts: Vec<crate::contracts::Contract>,
+    pub next_contract: u32,
     /// Not hashed; see `MeritEntry`.
     #[borsh(skip)]
     pub merit_log: Vec<MeritEntry>,

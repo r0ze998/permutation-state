@@ -5,6 +5,8 @@
 > Status (2026-09-25): Game Design V5 is implemented end to end and **deployed to Solana devnet** (program [`J4aZxe3ynkS7kcvCpKbp6aFYw8d9vtrRDsgSEi1niU6n`](https://explorer.solana.com/address/J4aZxe3ynkS7kcvCpKbp6aFYw8d9vtrRDsgSEi1niU6n?cluster=devnet)), with play on MagicBlock's devnet Ephemeral Rollup. A full season ran there: an outside agent joined over x402, 180 ticks were played, payouts were settled on chain, every member claimed, and the season verified. Only test USDC was used; nothing is on mainnet. Hackathon deadline: 2026-10-12.
 >
 > Rules version 6 (2026-09-25): perfect information, sealed orders (commit–reveal) on chain, tick randomness from the revealed salts, rotationally symmetric maps, a rules-run caretaker for vacant offices, and a history layer between seasons. **Deployed to devnet** on 2026-09-25 (slot 503993880); season 1790340445651 ran 180 ticks there (4,136 sealed batches revealed), was claimed and VERIFIED. Devnet seasons recorded before it verify with a build of commit `a02862f` or earlier.
+>
+> Rules version 7 (2026-09-25, implemented and tested locally, not on devnet; [V5 §18](PERMUTATION_STATE_GAME_DESIGN_V5.md)): hidden operator AI members revealed after the season, bounties on their home cities, their payouts redistributed to people, treasury contracts between nations, members' messages anchored on chain, and an operator token that closes the gateway's hosted-member endpoints to outsiders.
 
 ## What it is
 
@@ -21,6 +23,9 @@
 | **History** | Terrain never carries over. A finalized season writes a record (final root; each nation's points, era, tiers, share and cities; every city's founder, final holder and captor; ruins) and a history root chained onto the previous season's (`PS_HISTORY`, `Season.history_root`). A new season may follow a finalized one of the same admin and mixes that root into its seed. |
 | **Prize** | 80% of the entry fees (and of any in-play income) forms the pool; 20% goes to operations. The pool is split among the counted nations by achievement points. Inside a nation, 20% goes equally to active members (capped at half the entry fee each), and the rest goes by merit on each path. A nation counts only if it still has a city and at least one active member. |
 | **USDC market** | Nation treasuries trade raw goods in a uniform-price call auction each tick. A rising tariff applies to cumulative spend, deliveries arrive three ticks later, and self-trades and trades with enemies are banned. Bought goods never count toward achievements or merit. The market can be switched off per season. |
+| **Operator AI members** (v7) | Some members are the operator's AI members, and nobody can tell which while the season is played. The number is public, and the operator commits to the chain of their registration tags before registration. After the season the roster is revealed on chain; their prize goes to the people of their nations (by merit), never back to the operator. Conquering an AI's home city (drawn at T45 from its nation's cities) first earns its bounty, unless the two nations had a pact within 10 ticks. If the operator does not reveal within an hour of the last tick, anyone may settle without the roster and the bounties and the operator's bond join the pool. |
+| **Treasury contracts** (v7) | The diplomat can escrow treasury USDC for another nation, paid only when the world shows the condition: peace by a deadline, leaving an alliance, keeping a NAP (in installments), or capturing a city (open to anyone). Otherwise it returns. Words bind nothing; money moves only on these conditions. |
+| **Talk** (v7) | Members can message anyone through the gateway, signed with their session key; each tick's messages are anchored on chain as a Merkle root (`AnchorTalk`, `PS_TALK`). The operator's AI members reply by rule, phrased by a language model only if the operator configured a key, and never claim to be a person. |
 | **Agents** | Agents play on equal terms: the same full view, the same sealed orders, the same order budget and the same rights. Every officer's batch commits to a hash of its observation and rationale, which is revealed later, so anyone can check that a reason was fixed before the outcome. |
 
 The full design is in [Game Design V5](PERMUTATION_STATE_GAME_DESIGN_V5.md) (Japanese). §16 lists what the implementation decided and the calibrated numbers.
@@ -38,13 +43,13 @@ The interface is in Japanese. Agents read [`llms.txt`](permutation-server/web/ll
 
 ```
  browser (people) ─┐                   ┌─ permutation-chain (one Solana program) ───────────────┐
- spectators ───────┤ game server       │ base:  Season · Vault (USDC) · Member PDAs             │
+ spectators ───────┤ game server       │ base:  Season · Vault (USDC) · Member PDAs · Roster    │
  AI agents ────────┤ :4185 (views,     │        Register · genesis · SeatMembers · OpenGov      │
-   HTTP / MCP      │ previews, lobby,  │        FinishSeason · Claim                            │
+   HTTP / MCP      │ previews, lobby,  │        RevealRoster · FinishSeason · Claim             │
                    │ hosted AI members)│ ER:    20 world chunks · 6 nation accounts             │
                    └────────┬──────────│        CommitOrders · CloseCommits · RevealOrders      │
                             │          │        SubmitGov · LogTickInput · ResolveTick          │
-                            │ gateway  │        Commit / Undelegate                             │
+                            │ gateway  │        AnchorTalk · Commit / Undelegate                │
  agents' signed txs ────────┤ :4191    └───────────────┬────────────────────────────────────────┘
  x402 payments ─────────────┘ (crank, x402, reveals,   │ PS_GENESIS · PS_SEAT · PS_OPEN · PS_COMMITS
                                relays, index)          │ PS_SALTS · PS_INPUT · PS_TICK · PS_HISTORY logs
@@ -58,6 +63,7 @@ The interface is in Japanese. Agents read [`llms.txt`](permutation-server/web/ll
   - the crank: registration, genesis, seating, closing commits, publishing tick inputs, resolving, commits, undelegation and finishing;
   - reveals for the members it hosts (`GET /tick` shows the phase: commit, reveal or frozen) and the season history (`GET /history`; `--prev-season`, or automatically with `--new-season` on the same state file);
   - x402 registration;
+  - the operator AI roster (`GET /roster`; the operator-only `GET /operator/roster` and `POST /roster/announce`), revealed with `RevealRoster` before `FinishSeason`, and members' messages (`POST /talk`, `GET /talk`, anchored per tick);
   - relays, so members without SOL can submit and claim;
   - an index of the tick records.
   It cannot change outcomes. The gateway also hosts `@permutation/game-client` (HTTP, MCP) and the reference agents.
@@ -102,10 +108,12 @@ Then run each line in its own terminal, from the repository root:
 ```
 
 - `local-stack.mjs` starts the base layer on :18899 and the ER on :17799.
-- The gateway creates the season and registers one claimable human member plus two AI members per nation. It waits for one outside member (`--wait-external`), then starts: genesis, seating, the first election and delegation.
-- Open <http://127.0.0.1:4185/> and claim "Player 1"; watch at <http://127.0.0.1:4185/spectate.html>.
+- The gateway creates the season and registers one claimable human seat plus two operator AI members per nation (fresh wallets, names from one pool, random registration order, so seats cannot be told apart). It escrows a bounty per AI (`--bounty`, base units, default 5 USDC) and a bond (`--bond`, default AI members × entry fee × 2). It waits for one outside member (`--wait-external`), then starts: genesis, seating, the first election and delegation.
+- The game server acts for hosted members with the gateway's **operator token**: `PS_OPERATOR_TOKEN`, else `permutation-gateway/.local/operator-token` (created on first use; `play --operator-token-file F` reads another file). Without it `POST /submit` and `POST /gov` are refused.
+- Optional: with an Anthropic API key (`ANTHROPIC_API_KEY` or `permutation-gateway/.local/anthropic-key`), the gateway phrases the AI members' replies with Claude Haiku 4.5 (at most 200 per run); without it they use the game server's sentences.
+- Open <http://127.0.0.1:4185/> and claim a seat in a nation; watch at <http://127.0.0.1:4185/spectate.html>.
 
-After the last tick, the gateway undelegates and runs `FinishSeason`. Then pay out the hosted members:
+After the last tick, the gateway undelegates, reveals the AI roster and runs `FinishSeason`. Then pay out the hosted members:
 
 ```bash
 (cd permutation-gateway && node scripts/claim-hosted.mjs --state demo.json)
@@ -162,7 +170,7 @@ The verifier:
 1. Reads the Season account and rebuilds genesis.
 2. Seats every member from their accounts on the base layer and recomputes the first election.
 3. Replays every tick. Each tick's input is taken from the `PS_INPUT` records the program published before resolving, every revealed batch is checked against its commitment in `PS_COMMITS`, the randomness against `PS_SALTS`, and each root against the `PS_TICK` records, all re-read from the ER's transaction logs.
-4. Recomputes every member's payout and checks it against the Season account.
+4. Recomputes every member's payout and checks it against the Season account (with the same `finalize` function as `FinishSeason`; for a v7 season, each revealed AI's salt against its registration tag and the tags against the committed roster chain).
 5. Checks the history chain (`PS_HISTORY`, `Season.history_root`) back to the previous season.
 
 A local ER season on rules version 6 verified this way: 180 ticks, 4227 revealed batches checked.
@@ -191,7 +199,8 @@ The gateway is only an index. If it served a tampered input, the verifier would 
 (cd permutation-gateway && node scripts/e2e-base.mjs)
 ```
 
-- `permutation-rules`: 180 tests. `permutation-server` pins whole seasons with a golden test ([README](permutation-server/README.md)).
+- Tests (rules version 7, 2026-09-25): `permutation-rules` 196, `permutation-chain` 13, `permutation-server` 21 (including a golden test that pins whole seasons, [README](permutation-server/README.md)), `permutation-gateway` 70; all pass.
+- v7 `sim` (200 seasons, members 3,3,2,2,1,0, the first member of each nation an operator AI, bounty 5 USDC): 0.56 AI homes conquered per season (11% of AIs), 35 USDC per season redistributed from AIs to people (people receive +129% vs no roster); the top nation took >40% in 36/200 (20/200 without a roster; the 1-member nation becomes AI-only, so 4 nations share instead of 5), and 7/200 with members 3,3,3,3,2,2; with 10 USDC in each treasury, 15.8 contract offers, 1.1 accepted and 1.9 USDC paid per season; 0 invariant violations.
 - `sim 40` plays 40 AI-only seasons and prints the balance numbers V5 §6.5 is calibrated against, plus non-exclusive path pairs, era timing, lead changes, wars and captures, and points per start slot. Over 200 seasons (members 3,3,2,2,1,0, AI bots): median era 2 (425 nations in era 2, 431 in era 3 of 1,000); the top nation took more than 40% of the pool in 21/200 (34/200 before the v6 changes; target ≤10%); every pair of paths is held at tier 3+ by 27–66% of era-3+ nations; science 3+ in 66% of them (was 94%); the T120 leader is not the final leader in 90/200 seasons; 0 invariant violations.
 - `mapstat` measures generated maps. `tests/symmetry.rs` replays a season in the world turned by 60° with turned orders and gets identical scores; earlier random maps gave rim starts ~1.75× the points of central ones.
 - `x402-check.mjs` sends tampered x402 payments against a registering season; all must be refused.
@@ -232,8 +241,9 @@ The gateway is only an index. If it served a tampered input, the verifier would 
 - **No fog of war.** The game is perfect-information by design, because every account is public on chain. A fog mode would be a separate, possible future mode on a private rollup (MagicBlock PER).
 - **Reveals on a public ER.** An office's reveal must land within the reveal window (a sixth of the tick). The gateway sends a tick's hosted reveals in parallel; on devnet a few ticks still lost some reveals to latency spikes (those offices' orders did not run that tick, as the rules say).
 - **Reveals.** A batch not revealed in the reveal window does not run. The gateway reveals for the members it hosts, and the SDK and MCP server reveal automatically.
-- **Balance is not final.** The top nation took more than 40% of the pool in 19 of 200 simulated seasons, against a target of ≤10%.
+- **Version 7 is not on devnet yet.** Operator AI members, bounties, treasury contracts and talk run on the local stack only. Leaks remain possible from bot patterns and funding flows (V5 §18.10); the operator could also play wallets it leaves off the roster, which only disclosure and the bond discourage. Treasury contracts move USDC between nations by game outcome and need legal review before real money.
+- **Balance is not final.** The top nation took more than 40% of the pool in 21 of 200 simulated seasons, against a target of ≤10%.
 - **Decision logs** prove what was claimed and when, not that the claim is true.
-- **The operator (crank)** can delay steps but cannot change outcomes. Closing commits, publishing a tick's input and resolving it after the deadline are permissionless.
+- **The operator (crank)** can delay steps but cannot change outcomes (beyond voting and holding offices through its disclosed AI members). Closing commits, publishing a tick's input and resolving it after the deadline are permissionless.
 - **Commits from the ER to base are budgeted.** MagicBlock sponsors 10 commits per delegated account, so the crank commits every 20 ticks and keeps the 10th for the final undelegation.
 - **At most 256 members per season.** The payout table lives in the Season account.

@@ -9,8 +9,9 @@
 //! (V5 D17), exactly like a human officer.
 //!
 //! Hosted AI members also take part in governance: they vote in the vote
-//! window (the incumbent if active, else a human candidate, else the
-//! candidate with the most merit), join open recalls of idle officers,
+//! window (the incumbent if active, else the candidate with the most merit;
+//! never by whether a candidate is a person, which would tell observers who
+//! the operator's AI members are, V5 §18.2), join open recalls of idle officers,
 //! support people's proposals, and propose orders from their nation's plan
 //! (which an officer adopts when it issues the same order, V5 §5.4).
 
@@ -45,14 +46,23 @@ pub struct Planner {
 pub trait Hosting {
     /// Orders and governance of this member are made by this server's AI.
     fn is_ai(&self, m: MemberId) -> bool;
-    /// A person (for AI deference in votes).
-    fn is_human(&self, m: MemberId) -> bool;
     fn key(&self, m: MemberId) -> [u8; 32];
 }
 
 impl Planner {
     pub fn new(civs: usize) -> Planner {
         Planner::with_personas(&(0..civs as CivId).map(persona_of).collect::<Vec<_>>())
+    }
+
+    /// Temperaments drawn per nation from `seed` (V5 §18.8); the persona
+    /// follows from them.
+    pub fn seeded(civs: usize, seed: &[u8]) -> Planner {
+        Planner {
+            bots: (0..civs as CivId)
+                .map(|c| Bot::with_traits(c, crate::bots::Traits::draw(seed, c)))
+                .collect(),
+            plans: vec![None; civs],
+        }
     }
 
     pub fn with_personas(personas: &[crate::bots::Persona]) -> Planner {
@@ -132,7 +142,7 @@ impl Planner {
                     continue;
                 }
                 let mut orders = std::mem::take(&mut parts[role.index()]);
-                let adopt = adopt_one(&view, rules, civ, role, &mut orders, host);
+                let adopt = adopt_one(&view, rules, civ, role, &mut orders);
                 let policy = format!(
                     "{}/{}@2",
                     if member == NOBODY { "acting" } else { "agent" },
@@ -204,8 +214,6 @@ impl Planner {
                         && gov::active_officer(state, rules, m.civ, role).is_some();
                     let pick = if incumbent {
                         Some(holder)
-                    } else if let Some(h) = candidates.iter().copied().find(|c| host.is_human(*c)) {
-                        Some(h)
                     } else {
                         candidates.iter().copied().max_by_key(|c| {
                             (
@@ -321,7 +329,8 @@ impl Planner {
 }
 
 /// An office run here adopts the best open proposal for it (most support,
-/// people's first), if its orders would still work and fit the budget next
+/// then the oldest; never by who proposed it, which would tell observers
+/// who the operator's AI members are), if its orders would still work and fit the budget next
 /// to the office's own plan; the plan yields the lowest-priority orders to
 /// make room. Returns the ids to put in the batch (V5 §5.4).
 fn adopt_one(
@@ -330,7 +339,6 @@ fn adopt_one(
     civ: CivId,
     role: Role,
     orders: &mut Vec<Order>,
-    host: &dyn Hosting,
 ) -> Vec<u32> {
     let n = &view.nations[civ as usize];
     let budget = permutation_rules::orders::spendable(view, rules, civ, role) as usize;
@@ -338,16 +346,9 @@ fn adopt_one(
         .proposals
         .iter()
         .filter(|p| p.role == role && !p.adopted && p.tick < view.tick)
-        .filter(|p| !p.supporters.is_empty() || host.is_human(p.proposer))
         .filter(|p| crate::api::preflight(view, rules, civ, &p.orders).is_empty())
         .filter(|p| p.orders.iter().map(|o| o.cost() as usize).sum::<usize>() <= budget)
-        .max_by_key(|p| {
-            (
-                host.is_human(p.proposer),
-                p.supporters.len(),
-                std::cmp::Reverse(p.id),
-            )
-        });
+        .max_by_key(|p| (p.supporters.len(), std::cmp::Reverse(p.id)));
     let Some(p) = best else { return Vec::new() };
     let units: Vec<u32> = p.orders.iter().filter_map(Order::commanded_unit).collect();
     orders.retain(|o| {
@@ -366,9 +367,6 @@ pub struct AllAi;
 impl Hosting for AllAi {
     fn is_ai(&self, _: MemberId) -> bool {
         true
-    }
-    fn is_human(&self, _: MemberId) -> bool {
-        false
     }
     fn key(&self, m: MemberId) -> [u8; 32] {
         local_key(m)

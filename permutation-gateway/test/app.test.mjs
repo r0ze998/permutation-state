@@ -31,12 +31,15 @@ function connection(overrides = {}) {
   };
 }
 
-function app({ base = connection(), er = connection(), cluster = 'localnet', members = [] } = {}) {
+/** The operator token header (the game server's). */
+const OP = { authorization: 'Bearer op-token' };
+
+function app({ base = connection(), er = connection(), cluster = 'localnet', members = [], registryMembers = [], roster } = {}) {
   const logs = [];
-  const store = { state: { seasonId: seasonId.toString(), members, mint: Keypair.generate().publicKey.toBase58() }, save() {} };
+  const store = { state: { seasonId: seasonId.toString(), members, mint: Keypair.generate().publicKey.toBase58(), ...(roster ? { roster } : {}) }, save() {} };
   const crank = { crank: crankKey, phase: 'registering', snapshot: null, refresh: async () => null, tickRecords: from => [{ tick: from }], sealed: new SealedStore() };
-  const cfg = { programId: DEFAULTS.programId, cluster, port: 4191, baseRpc: 'b', erRpc: 'e' };
-  const handle = createApp({ cfg, base, er, store, crank, keys, log: m => logs.push(m), registry: { list: async () => [], invalidate() {} } });
+  const cfg = { programId: DEFAULTS.programId, cluster, port: 4191, baseRpc: 'b', erRpc: 'e', operatorToken: 'op-token' };
+  const handle = createApp({ cfg, base, er, store, crank, keys, log: m => logs.push(m), registry: { list: async () => registryMembers, invalidate() {} } });
   return { handle, logs };
 }
 
@@ -78,31 +81,70 @@ test('routing: health, CORS preflight, 404, ticks', async () => {
 test('a body that is not JSON is a 400, not a 500', async () => {
   const { handle } = app();
   for (const path of ['/submit', '/gov', '/relay', '/claim-relay', '/faucet']) {
-    const r = await call(handle, 'POST', path, { body: '{not json' });
+    const r = await call(handle, 'POST', path, { body: '{not json', headers: OP });
     assert.deepEqual([r.status, r.json.code], [400, 'InvalidJson'], path);
   }
 });
 
-test('/submit and /gov only for hosted members', async () => {
-  const { handle } = app({ members: [{ index: 4, hosted: 'external' }] });
-  const r = await call(handle, 'POST', '/submit', { body: { member: 4, civ: 0, role: 'General', tick: 1 } });
+test('/submit and /gov: only the operator, and only for hosted members', async () => {
+  const { handle } = app({ members: [{ index: 4, hosted: 'external' }, { index: 5, hosted: 'ai', key: 5 }] });
+  // Without the operator token nobody learns anything about a member.
+  for (const member of [4, 5, 9]) {
+    const r = await call(handle, 'POST', '/submit', { body: { member, civ: 0, role: 'General', tick: 1 } });
+    assert.deepEqual([r.status, r.json.code], [403, 'OperatorOnly']);
+    assert.deepEqual((await call(handle, 'POST', '/gov', { body: { member } })).json.code, 'OperatorOnly');
+  }
+  const r = await call(handle, 'POST', '/submit', { body: { member: 4, civ: 0, role: 'General', tick: 1 }, headers: OP });
   assert.deepEqual([r.status, r.json.code], [403, 'NotHosted']);
-  assert.equal((await call(handle, 'POST', '/gov', { body: { member: 9 } })).status, 403);
+  assert.equal((await call(handle, 'POST', '/gov', { body: { member: 9 }, headers: OP })).status, 403);
+});
+
+test('/roster shows only announced AI members until the roster is revealed; /operator/roster needs the token', async () => {
+  const members = [{ index: 0, civ: 0, hosted: 'human' }, { index: 1, civ: 0, hosted: 'ai', salt: 'aa'.repeat(32) }, { index: 2, civ: 1, hosted: 'ai', salt: 'bb'.repeat(32) }];
+  const { handle } = app({ members, roster: { aiCount: 2, bountyEach: '5000000', bond: '40000000', revealed: false } });
+  const pub = await call(handle, 'GET', '/roster');
+  assert.deepEqual([pub.json.aiCount, pub.json.ai], [2, []]);
+  assert.equal((await call(handle, 'GET', '/operator/roster')).status, 403);
+  const op = await call(handle, 'GET', '/operator/roster', { headers: OP });
+  assert.deepEqual(op.json.members.map(m => m.hosted), ['human', 'ai', 'ai']);
+  assert.deepEqual(op.json.ai.map(m => m.member), [1, 2]);
+  assert.equal((await call(handle, 'POST', '/roster/announce', { body: { member: 0 }, headers: OP })).status, 404, 'not an AI');
+  assert.equal((await call(handle, 'POST', '/roster/announce', { body: { member: 2 } })).status, 403);
+  assert.equal((await call(handle, 'POST', '/roster/announce', { body: { member: 2 }, headers: OP })).status, 200);
+  assert.deepEqual((await call(handle, 'GET', '/roster')).json.ai, [{ member: 2, civ: 1, salt: 'bb'.repeat(32) }]);
+});
+
+test('/talk: a member-signed message is kept and public; a forged one is refused; hosted members sign through the operator', async () => {
+  const { talkBytes, signTalk } = await import('../src/talk.mjs');
+  const session = Keypair.generate();
+  const hostedSession = keys('member7-session');
+  const registryMembers = [{ index: 3, civ: 1, session: session.publicKey.toBase58() }, { index: 7, civ: 2, session: hostedSession.publicKey.toBase58() }];
+  const { handle } = app({ registryMembers, members: [{ index: 7, civ: 2, hosted: 'ai', key: 7 }] });
+  const text = 'Peace for 4 USDC?';
+  const sig = Buffer.from(signTalk(talkBytes({ season: seasonId, tick: 0, member: 3, to: { civ: 2 }, text }), session)).toString('hex');
+  const ok = await call(handle, 'POST', '/talk', { body: { member: 3, to: { civ: 2 }, text, signature: sig } });
+  assert.deepEqual([ok.status, ok.json.id], [200, 0]);
+  const forged = await call(handle, 'POST', '/talk', { body: { member: 3, to: { civ: 2 }, text: 'something else', signature: sig } });
+  assert.deepEqual([forged.status, forged.json.code], [400, 'TalkRefused']);
+  assert.equal((await call(handle, 'POST', '/talk', { body: { member: 7, text: 'hi' } })).status, 403, 'unsigned needs the operator');
+  assert.equal((await call(handle, 'POST', '/talk', { body: { member: 7, text: 'Deal.' }, headers: OP })).status, 200);
+  const all = await call(handle, 'GET', '/talk');
+  assert.deepEqual(all.json.messages.map(m => [m.member, m.text]), [[3, text], [7, 'Deal.']]);
 });
 
 test('program errors map to 4xx by class; late ones are 409 and not logged', async () => {
   const refuse = code => connection({ sendRawTransaction: async () => { throw new Error(`{"InstructionError":[1,{"Custom":${code}}]}`); } });
   for (const [code, status, name] of [[7, 403, 'Unauthorized'], [27, 409, 'TickFrozen'], [14, 409, 'WrongTick'], [24, 400, 'InvalidParams'], [21, 409, 'NothingToClaim']]) {
     const { handle, logs } = app({ er: refuse(code), members: [{ index: 0, hosted: 'ai', key: 0 }] });
-    const r = await call(handle, 'POST', '/submit', { body: { member: 0, civ: 0, role: 'General', tick: 1, orders: [], digest: '09'.repeat(32) } });
+    const r = await call(handle, 'POST', '/submit', { body: { member: 0, civ: 0, role: 'General', tick: 1, orders: [], digest: '09'.repeat(32) }, headers: OP });
     assert.deepEqual([r.status, r.json.code], [status, name], name);
     assert.equal(logs.length, name === 'TickFrozen' || name === 'WrongTick' ? 0 : 1, name);
   }
   // Checked before anything is sealed: a rationale, and orders of the office.
   const { handle } = app({ members: [{ index: 0, hosted: 'ai', key: 0 }] });
-  const noDigest = await call(handle, 'POST', '/submit', { body: { member: 0, civ: 0, role: 'General', tick: 1, orders: [] } });
+  const noDigest = await call(handle, 'POST', '/submit', { body: { member: 0, civ: 0, role: 'General', tick: 1, orders: [] }, headers: OP });
   assert.deepEqual([noDigest.status, noDigest.json.code], [400, 'MissingRationale']);
-  const research = await call(handle, 'POST', '/submit', { body: { member: 0, civ: 0, role: 'General', tick: 1, digest: '09'.repeat(32), orders: [{ type: 'SetResearch', techs: ['Writing'] }] } });
+  const research = await call(handle, 'POST', '/submit', { body: { member: 0, civ: 0, role: 'General', tick: 1, digest: '09'.repeat(32), orders: [{ type: 'SetResearch', techs: ['Writing'] }] }, headers: OP });
   assert.deepEqual([research.status, research.json.code], [400, 'WrongOffice']);
   assert.equal(errorResponse(new SendError('x', 'confirmation timed out')).status, 500);
   assert.equal(errorResponse(new Error('custom program error: 0x1b')).status, 409);
@@ -231,13 +273,13 @@ test('/gov sends a member\'s actions in as few packet-sized transactions as fit'
   });
   const store = { state: { seasonId: seasonId.toString(), members: [{ index: 0, civ: 2, hosted: 'ai', key: 0 }], mint: '' }, save() {} };
   const crank = { crank: crankKey, phase: 'playing', snapshot: null, refresh: async () => null, tickRecords: () => [] };
-  const handle = createApp({ cfg: { programId: DEFAULTS.programId, cluster: 'localnet', port: 4191 }, base: connection(), er, store, crank, keys, log: () => {},
+  const handle = createApp({ cfg: { programId: DEFAULTS.programId, cluster: 'localnet', port: 4191, operatorToken: 'op-token' }, base: connection(), er, store, crank, keys, log: () => {},
     registry: { list: async () => [{ index: 0, civ: 2 }], invalidate() {} } });
   const program = t => t.instructions.filter(i => i.programId.toBase58() === DEFAULTS.programId).length;
 
   // A vote window: four votes, one transaction.
   const votes = ['General', 'Steward', 'Science', 'Diplomat'].map(role => ({ type: 'Vote', role, candidate: 0 }));
-  const r = await call(handle, 'POST', '/gov', { body: { member: 0, actions: votes } });
+  const r = await call(handle, 'POST', '/gov', { body: { member: 0, actions: votes }, headers: OP });
   assert.equal(r.status, 200, JSON.stringify(r.json));
   assert.deepEqual([sent.length, program(sent[0]), r.json.signatures.length], [1, 4, 1]);
 
@@ -245,13 +287,13 @@ test('/gov sends a member\'s actions in as few packet-sized transactions as fit'
   sent.length = 0;
   const orders = Array.from({ length: 6 }, () => ({ type: 'MoveUnit', unit: 1, path: Array.from({ length: 8 }, (_, i) => [i, -i]) }));
   const proposals = Array.from({ length: 4 }, () => ({ type: 'Propose', role: 'General', orders }));
-  const p = await call(handle, 'POST', '/gov', { body: { member: 0, actions: proposals } });
+  const p = await call(handle, 'POST', '/gov', { body: { member: 0, actions: proposals }, headers: OP });
   assert.equal(p.status, 200, JSON.stringify(p.json));
   assert.ok(sent.length > 1, `${sent.length} transactions`);
   assert.equal(sent.reduce((n, t) => n + program(t), 0), 4);
   for (const t of sent) assert.ok(t.serialize({ requireAllSignatures: false }).length <= 1232);
 
   const tooMany = Array.from({ length: 9 }, () => votes[0]);
-  const x = await call(handle, 'POST', '/gov', { body: { member: 0, actions: tooMany } });
+  const x = await call(handle, 'POST', '/gov', { body: { member: 0, actions: tooMany }, headers: OP });
   assert.deepEqual([x.status, x.json.code], [400, 'TooManyActions']);
 });

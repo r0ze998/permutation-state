@@ -9,10 +9,11 @@ import { drawerDiplomacy, loadDiplomacy } from './diplomacy.mjs';
 import { drawerMarket } from './market.mjs';
 import { drawerChronicle } from './chronicle.mjs';
 import { drawerDecisions, loadDecisions } from './decisions.mjs';
+import { drawerTalk } from './talk.mjs';
 
 const DRAWERS = {
   nation: drawerNation, era: drawerEra, merit: drawerMerit, cities: drawerCities, research: drawerResearch,
-  diplomacy: drawerDiplomacy, market: drawerMarket, chronicle: drawerChronicle, decisions: drawerDecisions,
+  diplomacy: drawerDiplomacy, market: drawerMarket, chronicle: drawerChronicle, decisions: drawerDecisions, talk: drawerTalk,
 };
 const LOADERS = { research: loadResearch, diplomacy: loadDiplomacy, decisions: loadDecisions };
 

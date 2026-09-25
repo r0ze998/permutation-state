@@ -7,6 +7,7 @@ import { Connection, PublicKey } from '@solana/web3.js';
 import { ChainClient } from '../client/src/chain.mjs';
 import { claimParts, decodeMember, decodeSeason, NATIONS } from '../client/src/codec.mjs';
 import { createStateStore, loadConfig, namedKey } from '../src/config.mjs';
+import { memberKeyName } from '../src/season.mjs';
 import { send } from '../src/send.mjs';
 import { createTokenAccountIxs, tokenBalance } from '../src/spl.mjs';
 
@@ -29,7 +30,7 @@ console.log(`season ${state.seasonId}: pool ${usdc(s.pool)} USDC to ${s.payouts.
 let paid = 0n;
 for (const m of state.members) {
   if (m.hosted === 'external') continue; // outside agents claim with their own wallet
-  const wallet = namedKey(`member${m.key}-wallet`);
+  const wallet = namedKey(memberKeyName(m, 'wallet'));
   const acc = decodeMember((await base.getAccountInfo(chain.member(wallet.publicKey), 'confirmed')).data);
   const { prize, refund, total } = claimParts(s, acc); // what the program pays (claim_amount)
   if (total === 0n || acc.claimed) { console.log(`member ${acc.index} ${m.name}: nothing to claim`); continue; }
@@ -56,7 +57,7 @@ const vault1 = await tokenBalance(base, chain.vault);
 console.log(`vault ${usdc(vault0)} → ${usdc(vault1)}; conserved: ${vault0 - paid - ops === vault1}`);
 const first = state.members.find(m => m.hosted !== 'external');
 if (first) {
-  const w = namedKey(`member${first.key}-wallet`);
+  const w = namedKey(memberKeyName(first, 'wallet'));
   const again = await send(base, chain.claim({ wallet: w.publicKey, dest: new PublicKey(first.usdc), mint }), [crank, w], 'double claim').then(() => false, () => true);
   console.log(`second claim by member ${first.index} rejected: ${again}`);
 }

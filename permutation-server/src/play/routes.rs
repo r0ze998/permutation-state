@@ -70,6 +70,11 @@ pub enum Outcome {
         link: Arc<ChainLink>,
         body: Value,
     },
+    /// Relay a person's message through the gateway (V5 §18.7).
+    Talk {
+        link: Arc<ChainLink>,
+        body: Value,
+    },
 }
 
 impl From<Response> for Outcome {
@@ -100,6 +105,10 @@ impl Outcome {
             Outcome::Gov { link, body } => match link.post_json("/gov", &body) {
                 Ok(res) => Response::ok(&json!({"ok": true, "signature": res["signature"]})),
                 Err(e) => Response::ok(&json!({"ok": false, "error": format!("chain: {e}")})),
+            },
+            Outcome::Talk { link, body } => match link.post_json("/talk", &body) {
+                Ok(res) => Response::ok(&json!({"ok": true, "id": res["id"], "tick": res["tick"]})),
+                Err(e) => Response::ok(&json!({"ok": false, "error": format!("gateway: {e}")})),
             },
         }
     }
@@ -137,6 +146,9 @@ fn route(g: &mut Game, req: &Request) -> Outcome {
         ("GET", "/api/decisions") => decisions(g, viewer, civ, req),
         ("GET", "/api/decisions/proof") => proof(g, civ, req),
         ("POST", "/api/control") => control(g, viewer, req),
+        ("GET", "/api/talk") => Response::ok(&json!({"messages": g.talk})).into(),
+        ("POST", "/api/talk") => talk(g, viewer, req),
+        ("GET", "/api/roster") => Response::ok(&g.roster_json()).into(),
         _ => Response::error("404 Not Found", "no such endpoint; see /llms.txt").into(),
     }
 }
@@ -212,23 +224,68 @@ fn join(g: &mut Game, req: &Request) -> Outcome {
     }
 }
 
-/// Chain mode: take over a human member the gateway registered.
+/// Chain mode: take over a seat for a person the gateway registered, in
+/// nation `civ`. Seats are given by nation, never picked by member: which
+/// members are seats for people must not be learnt by trying (V5 §18.2).
 fn claim(g: &mut Game, req: &Request) -> Outcome {
-    let Some(m) = req.json()["member"]
-        .as_u64()
-        .map(|m| m as usize)
-        .filter(|m| *m < g.members.len())
-    else {
-        return Response::error("400 Bad Request", "member required").into();
+    let Some(civ) = req.json()["civ"].as_u64() else {
+        return Response::error("400 Bad Request", "civ (nation) required").into();
     };
-    if g.members[m].host != Host::Human || g.members[m].here() {
-        return Response::error("409 Conflict", "this member is not claimable").into();
-    }
+    let Some(m) = (0..g.members.len()).find(|i| {
+        g.members[*i].civ as u64 == civ
+            && g.members[*i].host == Host::Human
+            && !g.members[*i].here()
+    }) else {
+        return Response::error("409 Conflict", "no free seat in this nation").into();
+    };
     let token = g.token(m as u64);
     let x = &mut g.members[m];
     x.token = Some(token.clone());
     x.last_seen = Some(Instant::now());
     Response::ok(&json!({"ok": true, "member": m, "civ": x.civ, "token": token})).into()
+}
+
+/// A message from the member this browser holds (V5 §18.7): public,
+/// relayed and signed by the gateway in chain mode.
+fn talk(g: &mut Game, viewer: Viewer, req: &Request) -> Outcome {
+    let Viewer::Member(m) = viewer else {
+        return Response::error("403 Forbidden", "join first").into();
+    };
+    let b = req.json();
+    let text: String = b["text"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .chars()
+        .take(280)
+        .collect();
+    if text.is_empty() {
+        return refused("text required");
+    }
+    let to = if let Some(c) = b["to"]["civ"].as_u64() {
+        json!({"civ": c})
+    } else if let Some(x) = b["to"]["member"].as_u64() {
+        json!({"member": x})
+    } else {
+        Value::Null
+    };
+    if let Some(link) = g.chain.as_ref().map(|c| c.link.clone()) {
+        return Outcome::Talk {
+            link,
+            body: json!({"member": m, "to": to, "text": text}),
+        };
+    }
+    // Local mode: kept here; the AI members answer at once.
+    let id = g.talk_next;
+    g.talk
+        .push(json!({"id": id, "tick": g.state.tick, "member": m, "to": to, "text": text}));
+    g.talk_next += 1;
+    for r in g.ai_replies() {
+        let id = g.talk_next;
+        g.talk.push(json!({"id": id, "tick": g.state.tick, "member": r["member"], "to": r["to"], "text": r["text"]}));
+        g.talk_next += 1;
+    }
+    Response::ok(&json!({"ok": true, "id": id})).into()
 }
 
 /// Pre-season candidacy and votes (local mode).
@@ -713,11 +770,57 @@ mod tests {
             call(&game, "GET", "/api/nothing", None, json!({})).0,
             "404 Not Found"
         );
+        // Seats are claimed by nation, never by member: asking for a member
+        // tells nothing about who is an AI (V5 §18.2).
         assert_eq!(
             call(&game, "POST", "/api/claim", None, json!({"member": 0})).0,
-            "409 Conflict",
-            "AI members are not claimable"
+            "400 Bad Request"
         );
+        assert_eq!(
+            call(&game, "POST", "/api/claim", None, json!({"civ": 0})).0,
+            "409 Conflict",
+            "a local season has no seats for people to claim"
+        );
+    }
+
+    #[test]
+    fn members_never_say_who_hosts_them_and_ai_answer_talk() {
+        let game = server();
+        let (_, lobby) = call(&game, "GET", "/api/lobby", None, json!({}));
+        for m in lobby["members"].as_array().unwrap() {
+            assert!(
+                m.get("host").is_none() && m.get("claimable").is_none(),
+                "{m}"
+            );
+            assert_ne!(m["kind"], "agent");
+            assert!(!m["name"].as_str().unwrap().contains("AI"), "{m}");
+        }
+        assert_eq!(
+            lobby["roster"]["aiCount"],
+            lobby["members"].as_array().unwrap().len()
+        );
+        assert_eq!(lobby["roster"]["fallen"], json!([]));
+        let (_, join) = call(
+            &game,
+            "POST",
+            "/api/join",
+            None,
+            json!({"civ": 1, "name": "Hypatia"}),
+        );
+        let token = join["token"].as_str().unwrap().to_string();
+        let (_, sent) = call(
+            &game,
+            "POST",
+            "/api/talk",
+            Some(&token),
+            json!({"to": {"civ": 0}, "text": "Peace?"}),
+        );
+        assert_eq!(sent["ok"], true);
+        let (_, talk) = call(&game, "GET", "/api/talk", None, json!({}));
+        let msgs = talk["messages"].as_array().unwrap();
+        assert_eq!(msgs[0]["text"], "Peace?");
+        // Nation 0's AI answers (unless its temperament keeps it silent).
+        assert!(msgs.len() <= 2);
     }
 
     #[test]

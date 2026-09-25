@@ -38,12 +38,14 @@ function renderLobby(error = '') {
   // take over a person's member that nobody is playing, or watch.
   if (info.mode === 'chain' || info.phase !== 'lobby') {
     const chain = info.mode === 'chain';
-    const claimable = info.members.filter(m => m.claimable);
-    const origin = chain ? '（ゲートウェイが登録済み）' : '（いま誰も操作していません）';
+    // Seats are offered by nation, never by member: which members are seats
+    // for people must not show who the operator's AI members are (V5 §18.2).
+    const open = info.nations.filter(n => n.seats > 0);
+    const origin = chain ? '（ゲートウェイが登録済みの席）' : '（いま誰も操作していない席）';
     const none = chain
-      ? 'いま引き継げる国民はいません。AI エージェントは x402 で参加できます（llms.txt）。'
-      : 'シーズンは始まっていて、新しく参加することはできません。引き継げる国民もいません。';
-    setHtml($('#seat-list'), html`${claimable.length ? claimable.map(m => html`<li class="seat human"><span class="swatch" style="background:${T.CIV_COLORS[m.civ]}"></span><span class="who"><b>${m.name}</b><small>${T.civName(info.nations[m.civ]?.name)}の国民${origin}</small></span><button class="btn primary" type="button" data-claim-member="${m.id}">この国民で遊ぶ</button></li>`)
+      ? 'いま空いている席はありません。AI エージェントは x402 で参加できます（llms.txt）。'
+      : 'シーズンは始まっていて、新しく参加することはできません。空いている席もありません。';
+    setHtml($('#seat-list'), html`${open.length ? open.map(n => html`<li class="seat human"><span class="swatch" style="background:${T.CIV_COLORS[n.civ]}"></span><span class="who"><b>${T.civName(n.name)}</b><small>空いている席 ${n.seats}${origin}</small></span><button class="btn primary" type="button" data-claim-civ="${n.civ}">この国で遊ぶ</button></li>`)
       : html`<li class="seat-none">${none}<a class="btn primary" href="spectate.html">観戦する →</a></li>`}${err}`);
     return;
   }
@@ -67,7 +69,7 @@ export function pickStand(role) {
   renderLobby();
 }
 export const join = () => finish(api.post('/api/join', { civ: S.lobbyPick.civ, name: $('#join-name').value, kind: 'human', stand: S.lobbyPick.stand }));
-export const claim = member => finish(api.post('/api/claim', { member }));
+export const claim = civ => finish(api.post('/api/claim', { civ }));
 
 async function finish(request) {
   if (!pending) return;
@@ -93,8 +95,8 @@ async function finish(request) {
 /** Who else is in this season, from the member list. */
 export function othersText(v) {
   const ms = v?.members || [];
-  const n = h => ms.filter(x => x.host === h).length;
-  return `この季節の国民は${ms.length}人（人間${n('human')}・AI${n('ai') + n('external')}）。国民のいない役職はAIの代行が務めます。`;
+  const ai = v?.roster?.aiCount ?? 0;
+  return `この季節の国民は${ms.length}人。${ai ? `うち${ai}人は運営のAI国民です（誰かは、住む都市が落ちたときとシーズンの終わりに公開）。` : ''}国民のいない役職はルールの代行が務めます。`;
 }
 
 /** Help texts and titles that match this season (nations, members, clock, terms). */

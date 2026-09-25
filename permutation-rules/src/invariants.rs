@@ -89,8 +89,10 @@ pub fn check(state: &WorldState, rules: &Ruleset) -> Vec<Violation> {
     }
 
     // 1. USDC conservation on the ER: balances + Vault + operations = deposits.
-    let held: u64 =
-        state.civs.iter().map(|c| c.usdc).sum::<u64>() + state.exchange_vault + state.exchange_ops;
+    let held: u64 = state.civs.iter().map(|c| c.usdc).sum::<u64>()
+        + crate::contracts::escrowed(state)
+        + state.exchange_vault
+        + state.exchange_ops;
     if held != state.usdc_deposited {
         v.push(Violation {
             invariant: 1,

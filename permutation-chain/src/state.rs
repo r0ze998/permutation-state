@@ -17,7 +17,10 @@
 //!   office batches for the open tick, its governance inbox, and a cache of
 //!   the office holders' keys and budgets so submissions never decode the world.
 //! * **Vault** `["vault", id]` — an SPL token account owned by the Season PDA:
-//!   entry fees (pool and operations) and nation treasuries.
+//!   entry fees (pool and operations), nation treasuries, and the operator's
+//!   AI bounties and bond (V5 §18).
+//! * **Roster** `["roster", id]` — base layer, only with operator AI
+//!   members: their salts, revealed after the season (`RevealRoster`).
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use permutation_rules::genesis::Entry;
@@ -34,6 +37,7 @@ pub const WORLD_SEED: &[u8] = b"world";
 pub const NATION_SEED: &[u8] = b"nation";
 pub const MEMBER_SEED: &[u8] = b"member";
 pub const VAULT_SEED: &[u8] = b"vault";
+pub const ROSTER_SEED: &[u8] = b"roster";
 
 pub const SEASON_SPACE: usize = 4 * 1024;
 pub const MEMBER_SPACE: usize = 320;
@@ -59,6 +63,12 @@ pub const MAX_GOV_PER_SIGNER: usize = 8;
 pub const REVEAL_ROOM: usize = 1100;
 /// Largest history record logged in `PS_HISTORY` (bytes before base64).
 pub const HISTORY_LOG_MAX: usize = 6000;
+/// Operator AI members per season (V5 §18.2).
+pub const MAX_AI: u16 = 64;
+/// After the last tick, how long the operator has to reveal its roster
+/// before anyone may finish the season without it (the bounties and the
+/// bond then join the pool, V5 §18.2).
+pub const ROSTER_GRACE_SECONDS: i64 = 3600;
 
 // ------------------------------------------------------------------ season
 
@@ -124,9 +134,27 @@ pub struct Season {
     pub prev_season_id: u64,
     pub prev_history_root: [u8; 32],
     pub history_root: [u8; 32],
+    /// Operator AI members (V5 §18.2): how many, and the chain of their
+    /// registration tags (`permutation_rules::roster::roster_chain`),
+    /// committed before registration opens.
+    pub ai_count: u16,
+    pub roster_chain: [u8; 32],
+    /// Bounty per AI and the operator's bond, both escrowed in the vault at
+    /// creation (V5 §18.4).
+    pub bounty_each: u64,
+    pub bond: u64,
+    /// The roster as revealed so far: the chain over the revealed tags, and
+    /// how many.
+    pub roster_acc: [u8; 32],
+    pub roster_revealed: u16,
+    /// Set by FinishSeason: 0 no AI, 1 roster revealed, 2 not revealed in
+    /// time (bounties and bond joined the pool).
+    pub roster_outcome: u8,
+    /// Bounty paid into each nation's share (FinishSeason).
+    pub bounty_paid: Vec<u64>,
 }
 
-pub const SEASON_MAGIC: [u8; 8] = *b"PSSEASN6";
+pub const SEASON_MAGIC: [u8; 8] = *b"PSSEASN7";
 
 /// A season's address (`["season", id]`), as base58, from the program id as
 /// base58; `None` if the program id is not a valid key. For tools (the
@@ -136,6 +164,17 @@ pub fn season_address(program_id: &str, season_id: u64) -> Option<String> {
     let program = solana_program::pubkey::Pubkey::from_str(program_id).ok()?;
     let (pda, _) = solana_program::pubkey::Pubkey::find_program_address(
         &[SEASON_SEED, &season_id.to_le_bytes()],
+        &program,
+    );
+    Some(pda.to_string())
+}
+
+/// A season's roster address (`["roster", id]`), as `season_address`.
+pub fn roster_address(program_id: &str, season_id: u64) -> Option<String> {
+    use core::str::FromStr;
+    let program = solana_program::pubkey::Pubkey::from_str(program_id).ok()?;
+    let (pda, _) = solana_program::pubkey::Pubkey::find_program_address(
+        &[ROSTER_SEED, &season_id.to_le_bytes()],
         &program,
     );
     Some(pda.to_string())
@@ -166,9 +205,38 @@ pub struct MemberAccount {
     /// Treasury shares: USDC deposited into the nation treasury.
     pub shares: u64,
     pub claimed: bool,
+    /// Random bytes, or for an operator AI `roster_tag(season, wallet,
+    /// salt)` (V5 §18.2): the wallet signed it at registration.
+    pub tag: [u8; 32],
 }
 
-pub const MEMBER_MAGIC: [u8; 8] = *b"PSMEMBR5";
+pub const MEMBER_MAGIC: [u8; 8] = *b"PSMEMBR6";
+
+// ------------------------------------------------------------------ roster
+
+/// The operator's AI members, revealed after the season (V5 §18.2).
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct RosterAccount {
+    pub magic: [u8; 8],
+    pub season_id: u64,
+    pub bump: u8,
+    /// In roster order.
+    pub entries: Vec<RosterEntry>,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RosterEntry {
+    pub member: u32,
+    pub civ: u16,
+    pub salt: [u8; 32],
+}
+
+pub const ROSTER_MAGIC: [u8; 8] = *b"PSROSTR1";
+
+/// Space for a roster of `n` AIs.
+pub const fn roster_space(n: u16) -> usize {
+    8 + 8 + 1 + 4 + n as usize * (4 + 2 + 32)
+}
 
 // ------------------------------------------------------------------ nation
 
@@ -436,7 +504,33 @@ mod tests {
             prev_season_id: 0,
             prev_history_root: [0; 32],
             history_root: [0; 32],
+            ai_count: 0,
+            roster_chain: [0; 32],
+            bounty_each: 0,
+            bond: 0,
+            roster_acc: [0; 32],
+            roster_revealed: 0,
+            roster_outcome: 0,
+            bounty_paid: vec![u64::MAX; nations],
         }
+    }
+
+    #[test]
+    fn a_full_roster_fits_its_account() {
+        let r = RosterAccount {
+            magic: ROSTER_MAGIC,
+            season_id: u64::MAX,
+            bump: 255,
+            entries: vec![
+                RosterEntry {
+                    member: u32::MAX,
+                    civ: u16::MAX,
+                    salt: [7; 32],
+                };
+                MAX_AI as usize
+            ],
+        };
+        assert_eq!(borsh::to_vec(&r).unwrap().len(), roster_space(MAX_AI));
     }
 
     #[test]
@@ -467,6 +561,7 @@ mod tests {
             votes: [u32::MAX; 4],
             shares: u64::MAX,
             claimed: true,
+            tag: [0; 32],
         };
         assert!(borsh::to_vec(&m).unwrap().len() <= MEMBER_SPACE);
     }

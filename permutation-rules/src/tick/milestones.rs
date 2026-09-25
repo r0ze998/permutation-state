@@ -10,6 +10,9 @@ use crate::state::WorldState;
 use alloc::vec::Vec;
 
 pub(crate) fn phase_scoring(state: &mut WorldState, rules: &Ruleset) {
+    // Contracts first: what diplomacy and combat did this tick decides them
+    // (V5 §18.6).
+    crate::contracts::settle_contracts(state, rules);
     let n = state.civs.len();
     // Suzerainty: the milestone record and merit for the envoys (V5 §7.3).
     for cs in 0..state.city_states.len() {

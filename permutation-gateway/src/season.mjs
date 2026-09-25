@@ -3,10 +3,11 @@
 // registering (hosted ones here, outside agents through x402), on-chain
 // genesis, seating the members in the world, the first election, and
 // delegation of the world chunks and the nation accounts to the ER.
+import { randomBytes, randomInt } from 'node:crypto';
 import { LAMPORTS_PER_SOL, PublicKey } from '@solana/web3.js';
 import { DELEGATION_PROGRAM_ID } from '@magicblock-labs/ephemeral-rollups-sdk';
-import { ChainClient } from '../client/src/chain.mjs';
-import { decodeMember, decodeSeason, MAGIC, NATION_TARGET, NATIONS, NOBODY, ROLES, roleMask } from '../client/src/codec.mjs';
+import { ChainClient, randomTag } from '../client/src/chain.mjs';
+import { decodeMember, decodeSeason, MAGIC, NATION_TARGET, NATIONS, NOBODY, ROLES, roleMask, rosterChain, rosterTag } from '../client/src/codec.mjs';
 import { poll } from '../client/src/retry.mjs';
 import { createMintIxs, createTokenAccountIxs, mintToIx, tokenBalance } from './spl.mjs';
 import { namedKey } from './config.mjs';
@@ -39,6 +40,24 @@ export function defaultRoster({ humans = 1, ai = 2, nations = NATIONS.length } =
     }
   }
   return roster;
+}
+
+/**
+ * Names for the members this gateway hosts, people and AI alike: while the
+ * season is played nobody should tell them apart by name (V5 §18.2).
+ */
+export const SEAT_NAMES = Object.freeze(['Aoi', 'Ren', 'Mika', 'Sora', 'Yuki', 'Haru', 'Kai', 'Nao', 'Rin', 'Toma', 'Lina', 'Mateo',
+  'Ines', 'Otto', 'Freya', 'Iris', 'Lucas', 'Nora', 'Theo', 'Zara', 'Emil', 'Selin', 'Kofi', 'Ada', 'Hugo', 'Maya', 'Omar', 'Lea',
+  'Ivan', 'Noor', 'Sami', 'Tess', 'Arlo', 'Wren', 'Jin', 'Suri', 'Pablo', 'Elif', 'Rui', 'Kaia', 'Leon', 'Mira', 'Tomo', 'Yara']);
+
+/** `list` in a random order (crypto randomness: the order must not reveal who is an AI). */
+export function shuffled(list) {
+  const out = [...list];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = randomInt(i + 1);
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
 }
 
 /**
@@ -77,28 +96,71 @@ export async function bootstrap({ base, cfg, store, roster = defaultRoster(), lo
   // The history layer: follow --prev-season, else the finalized season this
   // state file held before (the same world's previous season).
   const prevSeasonId = cfg.prevSeason ? BigInt(cfg.prevSeason) : (store.state?.finalized && store.state?.programId === cfg.programId ? BigInt(store.state.seasonId) : null);
+  // The hosted seats, people and operator AI members alike (V5 §18.2): in
+  // a random order, with fresh wallets every season, names from one pool
+  // and no self-declared kind, so nothing but play tells them apart. Each
+  // AI registers with the tag of a secret salt; the chain of those tags is
+  // committed now and revealed after the season.
+  const names = shuffled(SEAT_NAMES);
+  const seats = shuffled(roster).map((m, i) => {
+    const keys = { wallet: namedKey(`s${seasonId}-m${i}-wallet`), session: namedKey(`s${seasonId}-m${i}-session`), token: namedKey(`s${seasonId}-m${i}-usdc`) };
+    const salt = m.hosted === 'ai' ? new Uint8Array(randomBytes(32)) : null;
+    const tag = salt ? rosterTag(seasonId, keys.wallet.publicKey.toBytes(), salt) : randomTag();
+    return { ...m, name: names[i % names.length] + (i >= names.length ? ` ${Math.floor(i / names.length) + 1}` : ''), kind: 2, keys, salt, tag };
+  });
+  const ais = seats.filter(s => s.salt);
+  const aiCount = ais.length;
+  const bountyEach = aiCount ? cfg.bounty : 0n;
+  const bond = aiCount ? (cfg.bond ?? BigInt(aiCount) * cfg.entryFee * 2n) : 0n;
+  let adminToken;
+  if (aiCount) {
+    // The operator escrows the bounties and its bond (test USDC here).
+    const t = namedKey('admin-usdc');
+    adminToken = t.publicKey;
+    if (!(await base.getAccountInfo(adminToken))) {
+      await send(base, await createTokenAccountIxs(base, { payer: admin.publicKey, account: adminToken, mint: mint.publicKey, owner: admin.publicKey }), [admin, t], 'create admin USDC account');
+    }
+    const need = bountyEach * BigInt(aiCount) + bond;
+    const have = await tokenBalance(base, adminToken);
+    if (have < need) await send(base, [mintToIx({ mint: mint.publicKey, dest: adminToken, authority: admin.publicKey, amount: need - have })], [admin], 'mint bounty and bond');
+  }
   await send(base, chain.createSeason({ admin: admin.publicKey, mint: mint.publicKey, nations: NATIONS.length, entryFee: cfg.entryFee,
-    tickSeconds: cfg.tickSeconds, worldSeed: worldSeedFor(seasonId), crank: crank.publicKey, market: cfg.market, prevSeasonId }), [admin], 'createSeason');
+    tickSeconds: cfg.tickSeconds, worldSeed: worldSeedFor(seasonId), crank: crank.publicKey, market: cfg.market, prevSeasonId,
+    aiCount, rosterChain: rosterChain(ais.map(s => s.tag)), bountyEach, bond, adminToken }), [admin], 'createSeason');
+  if (aiCount) log(`season ${seasonId}: ${aiCount} operator AI members committed (bounty ${bountyEach} each, bond ${bond}); revealed after the season`);
   if (prevSeasonId) log(`season ${seasonId} follows season ${prevSeasonId} (history layer)`);
   for (let k = 0; k < chain.worldChunks.length; k++) await send(base, chain.allocWorld({ payer: crank.publicKey, chunk: k }), [crank], `allocWorld ${k}`);
   for (let c = 0; c < NATIONS.length; c++) await send(base, chain.allocNation({ payer: crank.publicKey, civ: c }), [crank], `allocNation ${c}`);
   log(`season ${seasonId} created: world and ${NATIONS.length} nation accounts allocated`);
 
   const state = store.save({ seasonId: seasonId.toString(), programId: cfg.programId, mint: mint.publicKey.toBase58(), cluster: cfg.cluster,
-    nations: [...NATIONS], members: [], ticks: [], seating: [] });
-  for (const [i, m] of roster.entries()) {
-    const wallet = namedKey(`member${i}-wallet`), session = namedKey(`member${i}-session`), token = namedKey(`member${i}-usdc`);
+    nations: [...NATIONS], members: [], ticks: [], seating: [],
+    roster: { aiCount, bountyEach: bountyEach.toString(), bond: bond.toString(), revealed: false } });
+  for (const [i, m] of seats.entries()) {
+    const { wallet, session, token } = m.keys;
     const index = await registerWithUsdc({ base, chain, cfg, admin, crank, mint, wallet, session, token, civ: m.civ, name: m.name, kind: m.kind,
-      stand: roleMask(m.stand), votes: firstVotes(roster, i), deposit: m.deposit ?? 0n });
-    state.members.push({ index, civ: m.civ, name: m.name, kind: m.kind, hosted: m.hosted, key: i, wallet: wallet.publicKey.toBase58(), session: session.publicKey.toBase58(), usdc: token.publicKey.toBase58() });
+      stand: roleMask(m.stand), votes: firstVotes(seats, i), deposit: m.deposit ?? 0n, tag: m.tag });
+    // `hosted` and the salt stay in this (private) state file.
+    state.members.push({ index, civ: m.civ, name: m.name, kind: m.kind, hosted: m.hosted, key: `s${seasonId}-m${i}`, wallet: wallet.publicKey.toBase58(),
+      session: session.publicKey.toBase58(), usdc: token.publicKey.toBase58(), ...(m.salt ? { salt: Buffer.from(m.salt).toString('hex') } : {}) });
     store.save();
-    log(`member ${index} ${m.name} joined ${NATIONS[m.civ]} (${m.hosted})`);
+    log(`member ${index} ${m.name} joined ${NATIONS[m.civ]}`);
   }
   return state;
 }
 
+/**
+ * The key file of a hosted member's `part` ('wallet', 'session', 'usdc').
+ * Seasons before v7 numbered them `member<i>-…`; now each season has its
+ * own (`s<season>-m<i>-…`).
+ */
+export const memberKeyName = (m, part) => (typeof m.key === 'number' ? `member${m.key}-${part}` : `${m.key}-${part}`);
+
+/** The operator AI members of this gateway's season, in roster (registration) order, with their salts. */
+export const aiMembers = state => (state.members ?? []).filter(m => m.salt).sort((a, b) => a.index - b.index);
+
 /** Fund a local member with test USDC and register it. The crank pays SOL fees. Returns the member index. */
-export async function registerWithUsdc({ base, chain, cfg, admin, crank, mint, wallet, session, token, civ, name, kind, stand = 0, votes, deposit = 0n }) {
+export async function registerWithUsdc({ base, chain, cfg, admin, crank, mint, wallet, session, token, civ, name, kind, stand = 0, votes, deposit = 0n, tag }) {
   if (!(await base.getAccountInfo(token.publicKey))) {
     await send(base, await createTokenAccountIxs(base, { payer: crank.publicKey, account: token.publicKey, mint: mint.publicKey, owner: wallet.publicKey }), [crank, token], 'create USDC account');
   }
@@ -106,7 +168,7 @@ export async function registerWithUsdc({ base, chain, cfg, admin, crank, mint, w
     await send(base, [mintToIx({ mint: mint.publicKey, dest: token.publicKey, authority: admin.publicKey, amount: 100n * USDC })], [crank, admin], 'mint test USDC');
   }
   await send(base, chain.register({ wallet: wallet.publicKey, feePayer: crank.publicKey, civ, walletToken: token.publicKey, mint: mint.publicKey,
-    name, kind, session: session.publicKey, stand, votes, deposit }), [crank, wallet], `register ${name}`);
+    name, kind, session: session.publicKey, stand, votes, deposit, tag }), [crank, wallet], `register ${name}`);
   return decodeMember((await base.getAccountInfo(chain.member(wallet.publicKey), 'confirmed')).data).index;
 }
 

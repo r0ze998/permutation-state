@@ -140,6 +140,7 @@ pub fn season_from_map(
             heritage_bonus: 0,
             standing: crate::state::CityStanding::DEFAULT,
             alive: true,
+            first_conquest: None,
         });
         let new_unit = |id: usize, unit_type: UnitType, troops: u32| Unit {
             id: id as u32,
@@ -184,6 +185,7 @@ pub fn season_from_map(
             usdc: entry.treasury,
             market_spent: 0,
             exchange_bought: [0; 5],
+            contract_income: 0,
             scores: Scores::default(),
             achievements: Achievements {
                 trade: vec![0; n + 1],
@@ -261,6 +263,10 @@ pub fn season_from_map(
         tick_orders: Vec::new(),
         last_skipped: Vec::new(),
         deliveries: Vec::new(),
+        home_snapshot: Vec::new(),
+        pact_last: vec![None; n * n.saturating_sub(1) / 2],
+        contracts: Vec::new(),
+        next_contract: 0,
         merit_log: Vec::new(),
     })
 }

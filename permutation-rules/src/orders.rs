@@ -142,6 +142,23 @@ pub enum Order {
     ConsentSpend {
         usdc: u64,
     },
+    /// Escrow `usdc` from the treasury for `term`, paid to `to` (or, for a
+    /// `Capture` offer, to whichever nation captures the city) if the world
+    /// shows it by `deadline`, else returned (V5 §18.6).
+    OfferContract {
+        to: Option<CivId>,
+        term: crate::contracts::ContractTerm,
+        usdc: u64,
+        deadline: u16,
+    },
+    /// Accept a contract offered to this nation on an earlier tick.
+    AcceptContract {
+        id: u32,
+    },
+    /// Withdraw an offer not yet accepted (not a `Capture` offer).
+    CancelContract {
+        id: u32,
+    },
 }
 
 /// What a `SetStanding` order applies to.
@@ -390,7 +407,10 @@ pub fn role_allows_static(role: Role, order: &Order) -> bool {
         | Order::SendEnvoy { .. }
         | Order::Transfer { .. }
         | Order::MarketTrade { .. }
-        | Order::ExchangeOrder { .. } => role == Diplomat,
+        | Order::ExchangeOrder { .. }
+        | Order::OfferContract { .. }
+        | Order::AcceptContract { .. }
+        | Order::CancelContract { .. } => role == Diplomat,
         Order::ConsentWar { .. } => matches!(role, General | Steward),
         Order::ConsentSpend { .. } => role != Diplomat,
         Order::RevealRationale { .. } => true,
@@ -505,7 +525,9 @@ pub fn check_structure(
             Order::Transfer { .. } if open_tick >= rules.transfer_freeze_tick => {
                 return Err(RulesError::Frozen)
             }
-            Order::ExchangeOrder { .. } | Order::ConsentSpend { .. }
+            Order::ExchangeOrder { .. }
+            | Order::ConsentSpend { .. }
+            | Order::OfferContract { .. }
                 if open_tick >= rules.exchange_freeze_tick || !rules.market_enabled =>
             {
                 return Err(RulesError::Frozen)

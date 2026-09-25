@@ -121,10 +121,18 @@ pub enum Blocked {
     /// Another civ's city, a Free City or a city-state: a unit enters it only
     /// by capturing it (§7.3).
     ForeignCity,
+    // contracts (V5 §18.6)
+    /// The nation already has `contract_max_open` contracts it offered.
+    TooManyContracts,
+    /// No open contract with that id for this nation.
+    UnknownContract,
+    /// The contract's terms do not fit the world (not at war, no NAP, no
+    /// such alliance, own city, deadline out of range, zero amount).
+    BadContract,
 }
 
 /// Names of `Blocked` codes, index = `Blocked::code()`, for clients.
-pub const BLOCKED_NAMES: [&str; 53] = [
+pub const BLOCKED_NAMES: [&str; 56] = [
     "UnknownUnit",
     "UnknownCity",
     "UnknownCiv",
@@ -178,6 +186,9 @@ pub const BLOCKED_NAMES: [&str; 53] = [
     "NeedsSpendConsent",
     "NotEnoughUsdc",
     "ForeignCity",
+    "TooManyContracts",
+    "UnknownContract",
+    "BadContract",
 ];
 
 impl Blocked {
@@ -238,6 +249,9 @@ impl Blocked {
             NeedsSpendConsent => 50,
             NotEnoughUsdc => 51,
             ForeignCity => 52,
+            TooManyContracts => 53,
+            UnknownContract => 54,
+            BadContract => 55,
         }
     }
 }
@@ -782,6 +796,9 @@ mod blocked_codes {
             NeedsSpendConsent,
             NotEnoughUsdc,
             ForeignCity,
+            TooManyContracts,
+            UnknownContract,
+            BadContract,
         ]
     }
 
@@ -840,7 +857,10 @@ mod blocked_codes {
             | NoCounterparty
             | NeedsSpendConsent
             | NotEnoughUsdc
-            | ForeignCity => {}
+            | ForeignCity
+            | TooManyContracts
+            | UnknownContract
+            | BadContract => {}
         }
     }
 

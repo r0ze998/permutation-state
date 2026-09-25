@@ -1,157 +1,157 @@
 {
   "0": {
-    "dust": 28,
-    "final_root": "736ad2e745c0a6fe6f35e0083b25646bdb23cf6af7248f30e2c40e9a1e2933c7",
+    "dust": 27,
+    "final_root": "4ea0492da337091dd1853249c0c0752ba9d223fc45e349efa387c40cfdbe03d7",
     "payouts": [
-      4592728,
-      6178661,
-      815792,
-      1696220,
-      15765501,
-      4146813,
-      3863229,
-      14613635,
-      11400846,
-      16784203,
-      8142344
+      4942931,
+      6638121,
+      894036,
+      1408589,
+      10988169,
+      4124308,
+      4206566,
+      15686151,
+      12302313,
+      18042510,
+      8766279
     ],
-    "roots_chain": "8a2e4eedbcc866106da77f0af9f5b86be1aaba329c29da9926f8a67f8e83d24b",
-    "settlement_view": "d8ff0b20cfb2678a",
+    "roots_chain": "11e2bc76fd68872660ff8f15f77a40b4c548b91d506746576c6d31f19875fb80",
+    "settlement_view": "f0257921965c98b7",
     "views": {
       "tick180": [
-        "1eaebbad168280b7",
-        "a39df002779f9fa4",
-        "15f236b97d50dca1",
-        "2ea7ec05e80dfad9",
-        "d6210f98fa4715ed",
-        "fd42f6e84759abb3",
-        "fb9fa449ddd04c95"
+        "a6e4fc2dc173825e",
+        "6327291c35ebeee8",
+        "658ab4b77c764e8d",
+        "fb6fc4b08643582f",
+        "fd0fe920434027a6",
+        "daa3be7584f9fa3f",
+        "785ac5bdcb0ec31a"
       ],
       "tick60": [
-        "ed77dd31ea42893f",
-        "6dcf620d75aacaed",
-        "4c5fa7424af080c3",
-        "44999d4287da0557",
-        "5a31663fd9588b00",
-        "330172dd4e7393a7",
-        "f77749134a880835"
+        "d74ea857f3cfc96f",
+        "57d159bb361ecd46",
+        "a7c18b2c65fedbfc",
+        "ce9cb6242caf74c9",
+        "d10f7337735ec570",
+        "6548595ae39aafe2",
+        "ad748f1ae5396b1a"
       ]
     }
   },
   "1": {
-    "dust": 24,
-    "final_root": "45d659582ff5129ce80b384174a81e57b0e11b99bd73f5128cfaf1422ac154d7",
-    "payouts": [
-      7110259,
-      6962504,
-      1140791,
-      1615272,
-      15027541,
-      3940230,
-      3722777,
-      13877219,
-      10887229,
-      15960224,
-      7755930
-    ],
-    "roots_chain": "51b5721d1910cea4c82d1627310fe0f7b0ec4b83aca89b7c52a9a9745a3ef85b",
-    "settlement_view": "1d75890c3b1bb3c5",
-    "views": {
-      "tick180": [
-        "869e030a2fc66637",
-        "71de4a92f1776105",
-        "f66145574ea65680",
-        "48fee632fa9f4662",
-        "0b97aa3bc23d4c90",
-        "0293799ecfd84fb4",
-        "28460d9adc9dbbab"
-      ],
-      "tick60": [
-        "27e26ae0284a3cb6",
-        "63dfd339d0b847a1",
-        "ad6ea0963a66286b",
-        "d779750df790098d",
-        "1c9ca298443ff6ce",
-        "2c9ab7d0c5991fc7",
-        "8cf63289de0a970f"
-      ]
-    }
-  },
-  "2": {
     "dust": 22,
-    "final_root": "1802f52d433641922b7031d0d1cdd53fb22308643a34a34422f361f793010bee",
+    "final_root": "f20c5a918803fd5d3aa8987c382cb4936deaba1042c02232dfc51c1a7c0dc86e",
     "payouts": [
-      7033872,
-      6906836,
-      1069320,
-      1593582,
-      14828331,
-      3885772,
-      4776019,
-      13765784,
+      7055986,
+      6900549,
+      1053494,
+      1609998,
+      14837599,
+      3860087,
+      4775915,
+      13765888,
       10715128,
       15773161,
       7652173
     ],
-    "roots_chain": "b6b30665d84b75bf8d6f846a028f192989ae0296afa8132cda29ad3abc8dff1d",
-    "settlement_view": "743c4275b34d67c0",
+    "roots_chain": "b59d126973068ecf58558dadb537edab61ec7d9f26f3ff8d931546e69898bbfa",
+    "settlement_view": "81db1f5ff94048b9",
     "views": {
       "tick180": [
-        "a02649ab8fa1f235",
-        "1aa46eea0ade1cdd",
-        "5357b39ab82e5d89",
-        "d0bce0983637c655",
-        "2992c95db7110ea5",
-        "072ec780315138cc",
-        "89619b66ccce9dea"
+        "56acd0ef409ba11f",
+        "ef66e3351f80b5d8",
+        "329772efd2b83a42",
+        "d74f42744372916a",
+        "e1619e073a18142b",
+        "8e3bf8e979e746f4",
+        "96e479fab2c323aa"
       ],
       "tick60": [
-        "edc732c8b9d9a103",
-        "58fcec4964762dfb",
-        "fe6111ebb00d7a1f",
-        "df596ece42af7033",
-        "4b97ab6d55c3128a",
-        "b496e935b5efe277",
-        "55d0c3fda85e8c52"
+        "07a1f4c3085cf7ff",
+        "a5f7dd8e552f0e5f",
+        "c8fe2806f0ac14b3",
+        "ecfdac69e36fe373",
+        "88dfdf5e3b9638b9",
+        "d1236da401e01d28",
+        "8f0753dc82bc5da0"
+      ]
+    }
+  },
+  "2": {
+    "dust": 21,
+    "final_root": "b6f58ca51a1c7840ab607f72e03e14af759daec54edd1d8bdd7c5383f33f2223",
+    "payouts": [
+      7056353,
+      6879362,
+      1074314,
+      1610462,
+      14828287,
+      3868936,
+      4775967,
+      13765836,
+      10715128,
+      15773161,
+      7652173
+    ],
+    "roots_chain": "8a81833d60ac11eadad78aba351516ee92965c5d0df34c8f4064bee515f0f542",
+    "settlement_view": "a6d34516974a44f6",
+    "views": {
+      "tick180": [
+        "1e28bada73353892",
+        "9045675eee422cb9",
+        "50667fcfa60d9df5",
+        "de67ff77d3fb74f5",
+        "9594c63634a313d8",
+        "d66e58dc19ec9387",
+        "2df66f1c505c9009"
+      ],
+      "tick60": [
+        "4cf89db344baec1a",
+        "7309d56dd60f0b3c",
+        "7347b3f2f73758f2",
+        "ce5ef1a03cf96fd4",
+        "3fb26678a35e0a11",
+        "f1ac6dc4772a79c6",
+        "0cbed76598bc2b84"
       ]
     }
   },
   "3": {
     "dust": 21,
-    "final_root": "87863ebb9171032f1f748e59047ff8ab0ac4037c5116a7172c13b79c38114334",
+    "final_root": "8f92a4d5037bc2c01f871d85308bfe7d694dbeb4096380ec4ce6afbae6a8a437",
     "payouts": [
-      7075051,
-      6898259,
-      1036719,
-      1593582,
-      14828331,
-      3885772,
-      4776019,
-      13765784,
+      7067304,
+      6889643,
+      1053082,
+      1610462,
+      14828287,
+      3868936,
+      4775967,
+      13765836,
       10715128,
       15773161,
       7652173
     ],
-    "roots_chain": "01ff9a238a40f8c53bc718067bbf6fbfe1495341fcbbaadd949f7097ea748ba4",
-    "settlement_view": "7118adc8d0b10f68",
+    "roots_chain": "c95d1c572929405e0f99e3c9faeb2ba965524fd4caa13bbd712b1af6752e08fb",
+    "settlement_view": "3f6e32c24b71f7ef",
     "views": {
       "tick180": [
-        "cb8a11f6441eccd0",
-        "11180aad8c3a8e34",
-        "89e461b6ed89d1fd",
-        "2c70c663688278ad",
-        "e0ee0fefc0cab642",
-        "3e6425328b208683",
-        "c05be108aaf0acf5"
+        "8eb806077cff1462",
+        "1192d7330fe39175",
+        "c50d48fa60fa0c84",
+        "764451c0a103ae6a",
+        "de3a86c393da85aa",
+        "29262f2b86ece228",
+        "074665d4939ee944"
       ],
       "tick60": [
-        "ab36bc0685e8ced8",
-        "9195c2d1990961e4",
-        "501ea561a5ac7821",
-        "34c67f4e4f759cf0",
-        "bb95f060b109b1aa",
-        "45fb5d01b39e47a7",
-        "b8d2caf8c856319e"
+        "8ca382a77fcbd6a7",
+        "fc9ae4db5814f62a",
+        "8860a1920d8a16e2",
+        "5bc2d2c1f44795d6",
+        "2fb6b39889984865",
+        "70bd4b098f6846e6",
+        "039c9070cda43259"
       ]
     }
   }

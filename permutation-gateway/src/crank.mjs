@@ -21,7 +21,8 @@ import { PublicKey } from '@solana/web3.js';
 import { ChainClient } from '../client/src/chain.mjs';
 import { chainError, decodeNationHeader, decodeSeason, decodeWorldHeader, MAGIC, MAX_NATIONS, NATION_TARGET, roleIndex, WORLD_CHUNKS } from '../client/src/codec.mjs';
 import { LOCAL_DIR, namedKey } from './config.mjs';
-import { startAndDelegate } from './season.mjs';
+import { aiMembers, startAndDelegate } from './season.mjs';
+import { TalkBook } from './talk.mjs';
 import { records, send } from './send.mjs';
 import { SealedStore } from './sealed.mjs';
 import { appendTickLines, publishTickInput, readTickLines, resolveInParts, tickLinesOf } from './ticks.mjs';
@@ -231,6 +232,9 @@ export class Crank {
     });
     this.sealed.dropBefore(open + 1);
     this.log(`tick ${open} resolved on ER (${revealed}/${committed} sealed batches revealed, ${OFFICES * nations} offices, ${parts.map(r => r.cu).join(' + ')} CU)`);
+    if ((this.state.talk ?? []).some(m => !m.anchored)) {
+      await this.anchorTalk(open + 1).catch(e => this.log(`talk anchor: ${e.message}`));
+    }
     if (commitDue({ open, commitEvery: this.cfg.commitEvery, commits: this.state.commits })) {
       for (const group of intentGroups({ nations })) {
         await send(this.er, this.chain.commitPart({ payer: this.crank.publicKey, targets: group }), [this.crank], `commit ${group.join(',')}`);
@@ -324,7 +328,10 @@ export class Crank {
     if (all.some(a => !a || !a.owner.equals(this.program))) return; // still undelegating
     const season = await this.season();
     if (season.status === 'Running') {
-      const r = await send(this.base, this.chain.finishSeason(), [this.crank], 'finishSeason');
+      // Operator AI members (V5 §18.2): reveal the roster first, in the
+      // committed order, a few members per transaction.
+      if (season.aiCount > 0 && season.rosterRevealed < season.aiCount) await this.revealRoster(season.rosterRevealed);
+      const r = await send(this.base, this.chain.finishSeason({ roster: season.aiCount > 0 }), [this.crank], 'finishSeason');
       this.log('season finalized on base: every member\'s payout computed on chain');
       // The history layer: keep the season's record for GET /history.
       const h = r.records.find(x => x.tag === 'PS_HISTORY');
@@ -338,11 +345,40 @@ export class Crank {
       const found = await this.findHistory();
       if (found) this.state.history = historyEntry(found.record, found.signature);
     }
+    if (this.state.roster) this.state.roster.revealed = season.aiCount > 0;
     this.phase = 'finalized';
     this.state.finalized = true;
     this.store.save();
   }
+
+  /** Reveal the operator AI members from position `from` of the roster (V5 §18.2). */
+  async revealRoster(from) {
+    const ais = aiMembers(this.state);
+    for (let i = from; i < ais.length; i += ROSTER_BATCH) {
+      const group = ais.slice(i, i + ROSTER_BATCH);
+      await send(this.base, this.chain.revealRoster({ members: group.map(m => new PublicKey(m.wallet)), salts: group.map(m => Uint8Array.from(Buffer.from(m.salt, 'hex'))) }),
+        [this.crank], `reveal roster ${i}..${i + group.length - 1}`);
+    }
+    this.log(`operator AI roster revealed: ${ais.length} members (${ais.map(m => m.index).join(', ')})`);
+  }
+
+  /**
+   * Anchor the members' messages of every tick before `open` not anchored
+   * yet (V5 §18.7): one `AnchorTalk` per tick with messages.
+   */
+  async anchorTalk(open) {
+    const book = new TalkBook(this.state);
+    for (const [tick, messages] of book.pending(open)) {
+      const root = TalkBook.root(messages);
+      const r = await send(this.er, this.chain.anchorTalk({ crank: this.crank.publicKey, tick, count: messages.length, root }), [this.crank], `anchor tick ${tick} talk`);
+      for (const m of messages) m.anchored = { signature: r.signature, root: Buffer.from(root).toString('hex') };
+    }
+    this.store.save();
+  }
 }
+
+/** Operator AI members revealed per `RevealRoster` transaction (a member account each). */
+export const ROSTER_BATCH = 8;
 
 /**
  * A `PS_HISTORY` record as kept in the state file, which is JSON: u64s as

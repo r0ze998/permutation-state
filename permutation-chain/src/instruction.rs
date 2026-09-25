@@ -1,6 +1,6 @@
 //! Instructions. Accounts are listed as (s) signer, (w) writable.
 //! The borsh enum tag is the variant index; never reorder or remove variants.
-//! Base layer: 0–5, 10, 11, 13–16, 18. Ephemeral Rollup: 6–9, 12, 17, 19–23.
+//! Base layer: 0–5, 10, 11, 13–16, 18, 24. Ephemeral Rollup: 6–9, 12, 17, 19–23, 25.
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use permutation_rules::gov::{GovAction, Role};
@@ -11,8 +11,12 @@ pub enum ChainInstruction {
     /// Create a season and its USDC vault. With `prev_season_id` (≠ 0) it
     /// follows that finalized season of the same admin in the history
     /// layer: its history root is taken over (account 6).
+    /// With operator AI members (`ai_count` > 0, V5 §18) the admin escrows
+    /// `ai_count × bounty_each + bond` into the vault and the roster account
+    /// is created.
     /// 0 admin (s,w) · 1 season PDA (w) · 2 vault PDA (w) · 3 USDC mint · 4 token program · 5 system
     /// · 6 previous season PDA (only with `prev_season_id`)
+    /// · then, with AIs: admin USDC account (w) · roster PDA `["roster", id]` (w)
     CreateSeason {
         season_id: u64,
         /// 0 Blitz, 1 Season.
@@ -26,6 +30,12 @@ pub enum ChainInstruction {
         market: bool,
         /// The season this one follows in the history layer (0: none).
         prev_season_id: u64,
+        /// Operator AI members, the chain of their tags, the bounty per AI
+        /// and the bond (V5 §18.2–§18.4).
+        ai_count: u16,
+        roster_chain: [u8; 32],
+        bounty_each: u64,
+        bond: u64,
     },
     /// Create one `CHUNK`-byte world chunk `["world", id, chunk]`. Anyone may pay.
     /// 0 payer (s,w) · 1 season · 2 world chunk PDA (w) · 3 system
@@ -46,6 +56,8 @@ pub enum ChainInstruction {
         stand: u8,
         votes: [u32; 4],
         deposit: u64,
+        /// 32 random bytes, or an operator AI's roster tag (V5 §18.2).
+        tag: [u8; 32],
     },
     /// Close registration and begin genesis (admin or crank).
     /// 0 authority (s) · 1 season (w) · 2 SlotHashes sysvar · 3.. world chunks (w)
@@ -176,6 +188,22 @@ pub enum ChainInstruction {
         adopt: Vec<u32>,
         salt: [u8; 32],
     },
+    /// Base: reveal the next operator AI members of the roster, in the order
+    /// committed: each salt must turn that member's wallet into its
+    /// registration tag, and once all are revealed the tags must chain to
+    /// `roster_chain` (V5 §18.2). Anyone holding the salts may send it.
+    /// 0 season (w) · 1 roster PDA (w) · 2.. member PDAs, one per salt
+    RevealRoster { salts: Vec<[u8; 32]> },
+    /// ER: anchor the members' messages of a tick (V5 §18.7): logs
+    /// `PS_TALK ‖ tick ‖ count ‖ root`, the Merkle root of the signed
+    /// messages the gateway relayed, so anyone can later prove a message was
+    /// sent by then. The season's crank only.
+    /// 0 crank (s) · 1 any nation PDA of the season (it records the crank's key)
+    AnchorTalk {
+        tick: u16,
+        count: u32,
+        root: [u8; 32],
+    },
 }
 
 #[cfg(test)]
@@ -228,6 +256,15 @@ mod tests {
                 salt: [0; 32]
             }),
             23
+        );
+        assert_eq!(tag(I::RevealRoster { salts: vec![] }), 24);
+        assert_eq!(
+            tag(I::AnchorTalk {
+                tick: 0,
+                count: 0,
+                root: [0; 32]
+            }),
+            25
         );
     }
 }

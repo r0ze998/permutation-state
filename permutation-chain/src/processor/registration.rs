@@ -25,6 +25,10 @@ pub(super) struct SeasonParams {
     pub crank: [u8; 32],
     pub market: bool,
     pub prev_season_id: u64,
+    pub ai_count: u16,
+    pub roster_chain: [u8; 32],
+    pub bounty_each: u64,
+    pub bond: u64,
 }
 
 pub(super) fn create_season(
@@ -42,6 +46,10 @@ pub(super) fn create_season(
         crank,
         market,
         prev_season_id,
+        ai_count,
+        roster_chain,
+        bounty_each,
+        bond,
     } = p;
     let it = &mut accounts.iter();
     let admin = next_account_info(it)?;
@@ -95,6 +103,39 @@ pub(super) fn create_season(
         &[VAULT_SEED, &id, &[vault_bump]],
     )?;
     token::initialize_account3(vault, mint, season_ai.key)?;
+    // Operator AI members (V5 §18): escrow their bounties and the bond, and
+    // create the roster their salts are revealed into after the season.
+    if ai_count > MAX_AI {
+        return Err(ChainError::InvalidParams.into());
+    }
+    if ai_count > 0 {
+        let admin_token = next_account_info(it)?;
+        let roster_ai = next_account_info(it)?;
+        let escrow = bounty_each
+            .checked_mul(ai_count as u64)
+            .and_then(|x| x.checked_add(bond))
+            .ok_or(ChainError::InvalidParams)?;
+        if escrow > 0 {
+            token::transfer_checked(admin_token, mint, vault, admin, escrow, decimals, None)?;
+        }
+        let roster_bump = expect_pda(program_id, roster_ai, &[ROSTER_SEED, &id])?;
+        init_pda(
+            admin,
+            roster_ai,
+            roster_space(ai_count),
+            program_id,
+            &[ROSTER_SEED, &id, &[roster_bump]],
+        )?;
+        let roster = RosterAccount {
+            magic: ROSTER_MAGIC,
+            season_id,
+            bump: roster_bump,
+            entries: Vec::new(),
+        };
+        store(&mut roster_ai.try_borrow_mut_data()?, &roster)?;
+    } else if bounty_each != 0 || bond != 0 || roster_chain != [0; 32] {
+        return Err(ChainError::InvalidParams.into());
+    }
     let season = Season {
         magic: SEASON_MAGIC,
         season_id,
@@ -125,6 +166,14 @@ pub(super) fn create_season(
         prev_season_id,
         prev_history_root,
         history_root: [0; 32],
+        ai_count,
+        roster_chain,
+        bounty_each,
+        bond,
+        roster_acc: [0; 32],
+        roster_revealed: 0,
+        roster_outcome: 0,
+        bounty_paid: Vec::new(),
     };
     store(&mut season_ai.try_borrow_mut_data()?, &season)?;
     msg!(
@@ -226,6 +275,7 @@ pub(super) fn register(
     stand: u8,
     votes: [u32; 4],
     deposit: u64,
+    tag: [u8; 32],
 ) -> ProgramResult {
     let it = &mut accounts.iter();
     let wallet = next_account_info(it)?;
@@ -290,6 +340,7 @@ pub(super) fn register(
         votes,
         shares: deposit,
         claimed: false,
+        tag,
     };
     store(&mut member_ai.try_borrow_mut_data()?, &member)?;
     let total = season

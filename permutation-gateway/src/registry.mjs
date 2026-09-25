@@ -1,5 +1,6 @@
-// The member registry: every Member PDA of the season on chain, with who
-// hosts it (this gateway's human/AI members, or 'external'). Cached briefly.
+// The member registry: every Member PDA of the season on chain. Public: it
+// never says which members this gateway hosts or which are the operator's
+// AI members (V5 §18.2; the game server asks /operator/roster). Cached briefly.
 import { PublicKey } from '@solana/web3.js';
 import { MEMBER_KINDS } from '../client/src/codec.mjs';
 import { seasonMembers } from './season.mjs';
@@ -15,10 +16,9 @@ export function createMemberRegistry({ base, chain, store, ttlMs = 2000, now = D
       cache = {
         at: now(),
         members: onChain.map(m => {
-          const hosted = store.state.members.find(x => x.index === m.index);
           return { index: m.index, civ: m.civ, name: m.name, kind: MEMBER_KINDS[m.kind] ?? 'undeclared',
-            attested: m.attestation.some(b => b !== 0), hosted: hosted?.hosted ?? 'external', wallet: b58(m.wallet), session: b58(m.session),
-            stand: m.stand, shares: m.shares, claimed: m.claimed };
+            attested: m.attestation.some(b => b !== 0), wallet: b58(m.wallet), session: b58(m.session),
+            stand: m.stand, shares: m.shares, claimed: m.claimed, tag: Buffer.from(m.tag).toString('hex') };
         }),
       };
       return cache.members;

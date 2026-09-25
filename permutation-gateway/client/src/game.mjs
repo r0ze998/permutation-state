@@ -21,6 +21,7 @@
 // This module is the facade; the parts live in http.mjs (transport and
 // errors), offices.mjs (which office gives which order), batch.mjs (packing
 // a batch), x402-client.mjs (registration) and keys.mjs (key files).
+import { signTalk, talkBytes } from './talk.mjs';
 import { randomBytes } from 'node:crypto';
 import { PublicKey, Transaction } from '@solana/web3.js';
 import { packBatch } from './batch.mjs';
@@ -302,6 +303,23 @@ export class GameClient {
     const r = await this.relay(chain.submitGov({ signer: this.session.publicKey, civ: this.civ, member: this.member, action }));
     return { ok: true, signature: r.signature };
   }
+  /**
+   * A public message (V5 §18.7), signed with the session key: to everyone
+   * (`to` null), a nation ({civ}) or a member ({member}). Anchored on chain
+   * with its tick. Words bind nothing; `OfferContract` does.
+   */
+  async talk({ to = null, text }) {
+    if (this.member === null || !this.session) throw new GameError('NotAMember', 'not a member: join first');
+    const { tick } = await this.get(this.gateway, '/tick');
+    const season = BigInt((await this.season()).season.seasonId);
+    const bytes = talkBytes({ season, tick, member: this.member, to, text });
+    const signature = Buffer.from(signTalk(bytes, this.session)).toString('hex');
+    return this.post(this.gateway, '/talk', { member: this.member, to, text, tick, signature });
+  }
+  /** Every public message since id `since`. */
+  messages(since = 0) { return this.get(this.gateway, `/talk?since=${since}`); }
+  /** The operator's AI members as far as they are public, and the bounty. */
+  roster() { return this.get(this.gateway, '/roster'); }
   propose(role, orders) { return this.gov({ type: 'Propose', role, orders }); }
   support(proposal) { return this.gov({ type: 'Support', proposal }); }
   vote(role, candidate) { return this.gov({ type: 'Vote', role, candidate }); }

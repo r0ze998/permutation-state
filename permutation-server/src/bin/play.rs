@@ -2,7 +2,11 @@
 //! `permutation_server::play`.
 //!
 //!     cargo run --release --bin play -- --port 4185 [--tick-seconds 30] [--ai-members 2] [--autostart]
-//!     cargo run --release --bin play -- --port 4185 --chain http://127.0.0.1:4191
+//!     cargo run --release --bin play -- --port 4185 --chain http://127.0.0.1:4191 [--operator-token-file F]
+//!
+//! In chain mode the gateway's operator token (PS_OPERATOR_TOKEN, else the
+//! file, by default the gateway's `.local/operator-token`) lets this server
+//! act for the members the gateway hosts (V5 §18.2).
 
 use permutation_server::play::{serve, Config};
 use std::path::{Path, PathBuf};
@@ -27,6 +31,17 @@ fn main() {
         web: arg("--web")
             .map(PathBuf::from)
             .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("web")),
+        operator_token: std::env::var("PS_OPERATOR_TOKEN").ok().or_else(|| {
+            let file = arg("--operator-token-file")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("../permutation-gateway/.local/operator-token")
+                });
+            std::fs::read_to_string(file)
+                .ok()
+                .map(|t| t.trim().to_string())
+        }),
         chain: arg("--chain"),
     };
     if let Err(e) = serve(cfg) {

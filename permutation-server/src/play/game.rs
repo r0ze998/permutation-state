@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 
 use super::chain::ChainMode;
 use super::http::Request;
+use super::roster::{AiEntry, AiRoster};
 use crate::api::{self, MemberMeta, OrderDto};
 use crate::codec::hex;
 use crate::driver::{local_key, Hosting, Planner};
@@ -128,9 +129,6 @@ impl Hosting for Hosts {
     fn is_ai(&self, m: MemberId) -> bool {
         self.hosts.get(m as usize) == Some(&Host::Ai)
     }
-    fn is_human(&self, m: MemberId) -> bool {
-        self.hosts.get(m as usize) == Some(&Host::Human)
-    }
     fn key(&self, m: MemberId) -> [u8; 32] {
         local_key(m)
     }
@@ -167,7 +165,24 @@ pub struct Game {
     pub chain: Option<ChainMode>,
     pub token_counter: u64,
     pub entry_fee: u64,
+    /// The operator's AI members (V5 §18.2): only this server knows them.
+    pub roster: AiRoster,
+    /// AI members whose home city fell since the last send (chain mode:
+    /// announced to the gateway, which makes their salts public).
+    pub announce: Vec<MemberId>,
+    /// Members' messages (V5 §18.7), newest last, and the next id to fetch.
+    pub talk: Vec<serde_json::Value>,
+    pub talk_next: u64,
+    /// Messages already answered by this server's AI members.
+    pub talk_answered: std::collections::BTreeSet<u64>,
 }
+
+/// Names of the members this server hosts, people and AI alike (V5 §18.2).
+pub const SEAT_NAMES: [&str; 24] = [
+    "Aoi", "Ren", "Mika", "Sora", "Yuki", "Haru", "Kai", "Nao", "Rin", "Toma", "Lina", "Mateo",
+    "Ines", "Otto", "Freya", "Iris", "Lucas", "Nora", "Theo", "Zara", "Emil", "Selin", "Kofi",
+    "Ada",
+];
 
 impl Game {
     /// Local season: the world exists at tick 0; members join in the lobby.
@@ -181,10 +196,12 @@ impl Game {
         let mut g = Game::assemble(rules, state, &world, tick_seconds, None);
         for civ in 0..g.state.civs.len() as CivId {
             for k in 0..ai_members {
-                let name = format!("{}-AI{}", g.state.civs[civ as usize].name, k + 1);
+                // Named like anyone else: the operator's AI members are not
+                // told apart while the season is played (V5 §18.2).
+                let name = SEAT_NAMES[g.members.len() % SEAT_NAMES.len()].to_string();
                 let meta = MemberMeta {
                     name,
-                    kind: "agent".into(),
+                    kind: "undeclared".into(),
                     attested: false,
                 };
                 let id = match g.join_local(civ, meta, Host::Ai) {
@@ -198,6 +215,16 @@ impl Game {
                         break;
                     }
                 };
+                g.roster.entries.push(AiEntry {
+                    member: id,
+                    civ,
+                    salt: Sha256::new()
+                        .chain_update(b"PS/local-ai")
+                        .chain_update(id.to_le_bytes())
+                        .finalize()
+                        .into(),
+                    fallen: None,
+                });
                 // AI members stand for two offices (rotating) and vote for themselves.
                 let roles = [Role::ALL[(2 * k) % 4], Role::ALL[(2 * k + 1) % 4]];
                 let m = &mut g.members[id as usize];
@@ -221,7 +248,14 @@ impl Game {
         let mut ledger = Ledger::new(seed);
         ledger.observe(&state, &fog);
         let local = chain.is_none();
-        let planner = Planner::new(state.civs.len());
+        // The AIs' temperaments are drawn per season from a secret (the
+        // operator token in chain mode), so nobody can predict them (V5 §18.8).
+        let secret: Vec<u8> = chain
+            .as_ref()
+            .and_then(|c| c.link.secret())
+            .map(|s| s.to_vec())
+            .unwrap_or_else(|| seed.to_vec());
+        let planner = Planner::seeded(state.civs.len(), &[&secret[..], seed].concat());
         Game {
             rules,
             state,
@@ -240,6 +274,11 @@ impl Game {
             chain,
             token_counter: 0,
             entry_fee: LOCAL_FEE,
+            roster: AiRoster::default(),
+            announce: Vec::new(),
+            talk: Vec::new(),
+            talk_next: 0,
+            talk_answered: Default::default(),
         }
     }
 
@@ -481,6 +520,33 @@ impl Game {
         if self.chronicle.len() > CHRONICLE {
             let cut = self.chronicle.len() - CHRONICLE;
             self.chronicle.drain(..cut);
+        }
+        // Operator AI members whose home city was just conquered (V5 §18.3).
+        for e in self.roster.check(&self.state) {
+            let (_, by, _, bounty) = e.fallen.unwrap_or_default();
+            let who = self
+                .members
+                .get(e.member as usize)
+                .map_or("?".into(), |m| m.meta.name.clone());
+            let line = if bounty {
+                format!(
+                    "bounty|{} conquers the home of {} of {}, an operator AI member: bounty {} USDC",
+                    names.get(by as usize).unwrap_or(&"?"),
+                    who,
+                    names.get(e.civ as usize).unwrap_or(&"?"),
+                    self.roster.bounty_each / 1_000_000
+                )
+            } else {
+                format!(
+                    "bounty|{} conquers the home of {} of {}, an operator AI member: no bounty (a recent pact)",
+                    names.get(by as usize).unwrap_or(&"?"),
+                    who,
+                    names.get(e.civ as usize).unwrap_or(&"?")
+                )
+            };
+            self.chronicle.push((prev.tick, line.clone()));
+            ev.push(line);
+            self.announce.push(e.member);
         }
         self.last_events = ev;
         self.fog.update(&self.state);

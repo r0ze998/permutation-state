@@ -1,6 +1,6 @@
 # permutation-rules
 
-Deterministic rules engine for PERMUTATION STATE. It implements [Rules Specification v0.2](../PERMUTATION_STATE_RULES_SPEC_v0.2.md) for [Game Design V5](../PERMUTATION_STATE_GAME_DESIGN_V5.md): six nations in one hex world, members who elect officers, four paths of achievements, merit and the prize settlement, and the USDC market.
+Deterministic rules engine for PERMUTATION STATE. It implements [Rules Specification v0.2](../PERMUTATION_STATE_RULES_SPEC_v0.2.md) for [Game Design V5](../PERMUTATION_STATE_GAME_DESIGN_V5.md): six nations in one hex world, members who elect officers, four paths of achievements, merit and the prize settlement, the USDC market, and (rules version 7, V5 §18) treasury contracts and the operator's hidden AI members with home-city bounties.
 
 One crate runs everywhere the rules run, so a tick resolved in one place is byte-identical to the same tick resolved in any other:
 
@@ -46,7 +46,9 @@ One crate runs everywhere the rules run, so a tick resolved in one place is byte
 | `tech`, `buildings`, `units` | §5.6, §6.2, §7 | static tables |
 | `scoring` | §14.1–14.2 | facts, milestone tiers, eras, achievement points |
 | `merit` | §14.3 | merit credited per path |
-| `payout` | §14.4 | `settle`: nation shares, the equal share, merit components, refunds, dust |
+| `payout` | §14.4 | `settle`: nation shares, the equal share, merit components, refunds, dust; `settle_with`: the same with the revealed AI roster and bounties (AI payouts redistributed to people, AI-only nations' shares split equally among counted nations) |
+| `contracts` | §4.2 (v7) | treasury contracts: `OfferContract` / `AcceptContract` / `CancelContract` (phase 2, escrow within the spend limit), conditions checked and paid or returned in phase 10, `contract_income` locked out of the market |
+| `roster` | V5 §18.2–§18.4 | operator AI tags (`roster_tag`), the roster chain, home cities (`home_city`, from `home_snapshot` at `ai_home_tick`) and where bounties go (`bounties`) |
 | `vision` | §7.4 | line of sight (shown as a display-only "sight"), memory, and the `belief` machinery kept for a possible fog mode on a private rollup; nothing uses it to hide state |
 | `decision` | §4.3, §7.5 | decision commitments, observation roots and Merkle proofs |
 | `preview` | — | legal actions with costs, forecasts and blocked reasons, from the same checks and formulas the engine uses |
@@ -62,6 +64,7 @@ One crate runs everywhere the rules run, so a tick resolved in one place is byte
 | `tests/rule_fixes.rs` | the spec v0.2 fixes C1–C9 |
 | `tests/battle.rs`, `tests/diplomacy.rs`, `tests/markets.rs`, `tests/standing.rs`, `tests/vision.rs`, `tests/decision.rs`, `tests/payouts.rs` | one area each |
 | `tests/pacing.rs` | eurekas, the crisis on the leaders, the dark age |
+| `tests/ai_members.rs` | version 7: treasury contracts, home cities, first conquests and bounties, settlement with the roster |
 | `tests/spec_vectors.rs` | the combat test vectors of spec §8.4 |
 | `tests/common/` | shared helpers (`vrf`, `step`, `free`, and `nations` for member/office setups) |
 

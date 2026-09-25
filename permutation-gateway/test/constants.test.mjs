@@ -12,7 +12,7 @@ import { vectors } from './vectors.mjs';
 const c = vectors.constants;
 
 test('layout sizes and limits match permutation-chain and permutation-server', () => {
-  for (const name of ['WORLD_CHUNKS', 'CHUNK', 'WORLD_HEADER', 'NATION_TARGET', 'INPUT_CHUNK', 'MAX_NATIONS', 'MAX_NAME', 'MAX_MEMBERS', 'MAX_GOV_PER_SIGNER', 'BATCH_BYTES']) {
+  for (const name of ['WORLD_CHUNKS', 'CHUNK', 'WORLD_HEADER', 'NATION_TARGET', 'INPUT_CHUNK', 'MAX_NATIONS', 'MAX_NAME', 'MAX_MEMBERS', 'MAX_GOV_PER_SIGNER', 'BATCH_BYTES', 'MAX_AI', 'ROSTER_GRACE_SECONDS']) {
     assert.equal(codec[name], c[name], name);
   }
   assert.equal(MAX_POLICY, c.MAX_POLICY);

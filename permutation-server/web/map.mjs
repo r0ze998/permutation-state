@@ -742,11 +742,11 @@ export class WorldMap {
   }
   // ---------------------------------------------------------------- banners and flags (screen space)
   _screen(p) { return { x: p.x * this.zoom + this.offset.x, y: p.y * this.zoom + this.offset.y }; }
-  /** Who plays a nation, from its members: '人' (a human among them), 'AI', or '代行' (acting officials only). */
+  /** A nation's members as a banner tag: how many, or '代行' (the rules' caretaker only). Never who is an AI (V5 §18.2). */
   _nationKind(civ) {
     if (!this.view.members) return '';
-    const ms = this.view.members.filter(m => m.civ === civ);
-    return ms.some(m => m.host === 'human') ? '人' : ms.length ? 'AI' : '代行';
+    const n = this.view.members.filter(m => m.civ === civ).length;
+    return n ? `${n}人` : '代行';
   }
   _drawBanners(ctx, now) {
     const s = clamp(this.zoom, .82, 1.12);

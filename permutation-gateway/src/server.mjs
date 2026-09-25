@@ -15,14 +15,16 @@
 //   routes/relay.mjs    POST /submit, /gov; GET+POST /relay, /claim-relay
 //   routes/x402.mjs     POST /x402/join
 //   routes/faucet.mjs   POST /faucet
+//   routes/roster.mjs   GET /roster, /talk; operator: GET /operator/roster, POST /roster/announce; POST /talk
 // Failures: routes/errors.mjs (a late submission is 409, a refused signer
 // 403, a bad request 400).
 import http from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { Connection } from '@solana/web3.js';
 import { createApp } from './app.mjs';
-import { createStateStore, loadConfig } from './config.mjs';
+import { createStateStore, loadConfig, operatorToken } from './config.mjs';
 import { Crank } from './crank.mjs';
+import { Advisor, ADVISOR_MODEL } from './advisor.mjs';
 import { bootstrap, defaultRoster } from './season.mjs';
 
 const CRANK_INTERVAL_MS = 400;
@@ -30,6 +32,8 @@ const stamp = () => new Date().toISOString().slice(11, 19);
 
 export async function main(argv = process.argv.slice(2)) {
   const cfg = loadConfig({ argv });
+  // The game server presents this token to act for hosted members (V5 §18.2).
+  cfg.operatorToken ??= operatorToken();
   const base = new Connection(cfg.baseRpc, 'confirmed');
   const er = new Connection(cfg.erRpc, 'confirmed');
   const log = (...a) => console.log(stamp(), ...a);
@@ -38,11 +42,14 @@ export async function main(argv = process.argv.slice(2)) {
   // Load first: a new season follows the finalized one this file held.
   const had = store.load();
   if (cfg.newSeason || !had) {
-    await bootstrap({ base, cfg, store, roster: defaultRoster({ humans: cfg.humans, ai: cfg.ai }), log });
+    const roster = defaultRoster({ humans: cfg.humans, ai: cfg.ai }).map(m => ({ ...m, deposit: cfg.deposit }));
+    await bootstrap({ base, cfg, store, roster, log });
   }
   const crank = new Crank({ base, er, cfg, store, log });
   const timer = setInterval(() => crank.step(), CRANK_INTERVAL_MS);
-  const server = http.createServer(createApp({ cfg, base, er, store, crank, log }));
+  const advisor = new Advisor();
+  if (advisor.available) log(`AI members' answers phrased by ${ADVISOR_MODEL} (operator's key, at most ${advisor.budget} per run)`);
+  const server = http.createServer(createApp({ cfg, base, er, store, crank, log, advisor }));
   server.on('close', () => clearInterval(timer));
   await new Promise(resolve => server.listen(cfg.port, '127.0.0.1', resolve));
   log(`gateway on http://127.0.0.1:${cfg.port} season ${store.state.seasonId} (${crank.phase})`);

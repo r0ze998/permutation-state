@@ -6,7 +6,7 @@ The game server, the hosted AI members, the web client and the tools around a se
 
 | Module | Contents |
 |---|---|
-| `play/` | the playable server (`bin/play`): `game` (members and who runs them, the lobby, resolving ticks), `chain` (chain mode: following the chain, sending batches through the gateway), `views` (`/api/state`, `/api/lobby`), `routes` (the JSON API), `http` |
+| `play/` | the playable server (`bin/play`): `game` (members and who runs them, the lobby, resolving ticks), `chain` (chain mode: following the chain, sending batches through the gateway), `roster` (the operator's AI members and their salts, known only to this server; announces an AI whose home city fell), `views` (`/api/state`, `/api/lobby`), `routes` (the JSON API, including `GET`/`POST /api/talk` and `GET /api/roster`), `http` |
 | `api/` | the JSON the clients and agents read: `dto` (orders and governance in), `blocked` (reasons), `previews` (options, forecasts, preflight), `world` (the per-viewer world view), `gov` (members, offices, achievements, payouts) |
 | `driver` | the hosted AI members (`Planner`) and `AiSeason`, the all-AI season loop the tools share. Vacant offices are not driven here: the rules' caretaker (`gov::caretaker`) fills them |
 | `bots` | the scripted personas behind the planner |
@@ -16,9 +16,9 @@ The game server, the hosted AI members, the web client and the tools around a se
 
 | Binary | Does |
 |---|---|
-| `play` | the server: `--port 4185 [--tick-seconds 30] [--ai-members 2] [--autostart]`, or `--chain http://127.0.0.1:4191` |
-| `verify` | replays an on-chain season from public data and checks every root and payout, every revealed batch against `PS_COMMITS`, every tick's randomness against `PS_SALTS`, and the history chain (`PS_HISTORY`). Seasons from the devnet program (rules version 5) verify with a build of commit `a02862f` or earlier |
-| `sim` | many AI-only seasons, with the balance numbers of V5 §6.5, non-exclusive path pairs, era timing, lead changes, wars and captures, and points per start slot. `SIM_SET` overrides rule numbers; `SIM_ROTATE` and `SIM_EQUIV` are rotation diagnostics |
+| `play` | the server: `--port 4185 [--tick-seconds 30] [--ai-members 2] [--autostart]`, or `--chain http://127.0.0.1:4191 [--operator-token-file F]`. In chain mode the gateway's operator token (`PS_OPERATOR_TOKEN`, else the file, by default `../permutation-gateway/.local/operator-token`) lets it act for hosted members and read the AI roster (V5 §18.2) |
+| `verify` | replays an on-chain season from public data and checks every root and payout, every revealed batch against `PS_COMMITS`, every tick's randomness against `PS_SALTS`, and the history chain (`PS_HISTORY`). With operator AI members (rules version 7) it checks each revealed salt against the member's registration tag and the tags against the committed roster chain, and recomputes the settlement with `permutation_chain::finalize`, the function `FinishSeason` runs. Seasons from the devnet program (rules version 5) verify with a build of commit `a02862f` or earlier |
+| `sim` | many AI-only seasons, with the balance numbers of V5 §6.5, non-exclusive path pairs, era timing, lead changes, wars and captures, and points per start slot. `SIM_SET` overrides rule numbers; `SIM_AI` (default 1) makes the first members of each nation operator AI members with `SIM_BOUNTY` (default 5 USDC) each, and `SIM_TREASURY` gives every nation a starting treasury (contracts, V5 §18.12); `SIM_ROTATE` and `SIM_EQUIV` are rotation diagnostics |
 | `mapstat` | measures generated maps |
 | `replay` | one AI season as a JSON replay for the viewer |
 | `ticklog` | one AI season as tick inputs and roots, for on-chain replay |

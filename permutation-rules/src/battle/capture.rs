@@ -157,8 +157,24 @@ pub(super) fn capture_city(
     // A conquest is banked for hegemony tier 3 when the city was taken from
     // another nation (not a Free City), counts as a capture and was a real
     // city (not an outpost founded to be handed over).
-    if prev.is_some() && state.cities[ci].capture_scores && pop_before >= rules.conquest_min_pop {
+    let conquest =
+        prev.is_some() && state.cities[ci].capture_scores && pop_before >= rules.conquest_min_pop;
+    if conquest {
         state.civs[captor as usize].achievements.conquests += 1;
+    }
+    // The first conquest after the home cities were drawn decides an
+    // operator AI's bounty (V5 §18.3–§18.4); later ones never change it.
+    if let (true, Some(v)) = (conquest && tick > rules.ai_home_tick, prev) {
+        if state.cities[ci].first_conquest.is_none() {
+            let i = state.pair_index(v, captor);
+            let pact = state.pact_last[i]
+                .is_some_and(|t| tick.saturating_sub(t) <= rules.bounty_pact_window);
+            state.cities[ci].first_conquest = Some(crate::state::Conquest {
+                by: captor,
+                tick,
+                bounty: !pact,
+            });
+        }
     }
 
     if let Some(v) = prev {
@@ -243,6 +259,7 @@ pub(super) fn resolve_city_state_captures(state: &mut WorldState, engagements: &
             heritage_bonus: 0,
             standing: crate::state::CityStanding::DEFAULT,
             alive: true,
+            first_conquest: None,
         });
         state.map.claim_territory(id, hex, territory_radius(pop));
         let cs = &mut state.city_states[csi];

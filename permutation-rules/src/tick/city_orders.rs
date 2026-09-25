@@ -81,7 +81,8 @@ pub(crate) fn phase_economy_orders(state: &mut WorldState, rules: &Ruleset) {
     crate::trade::apply_transfers(state, rules);
     crate::envoys::apply_envoys(state, rules);
     crate::markets::apply_amm(state, rules);
-    crate::markets::apply_exchange(state, rules);
+    let escrowed = crate::contracts::apply_contract_orders(state, rules);
+    crate::markets::apply_exchange(state, rules, &escrowed);
 }
 
 /// `FoundCity` (§4.2, §5.7): the settler founds a city where it stands.
@@ -139,6 +140,7 @@ fn found_city(
         heritage_bonus,
         standing: crate::state::CityStanding::DEFAULT,
         alive: true,
+        first_conquest: None,
     });
     if let Some(t) = state.map.tile_mut(hex) {
         t.owner_city = Some(id); // the centre always belongs to the new city

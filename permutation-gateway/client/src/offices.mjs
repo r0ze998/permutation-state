@@ -6,7 +6,7 @@ import { ROLES } from './codec.mjs';
 const [GENERAL, STEWARD, SCIENCE, DIPLOMAT] = ROLES;
 const STEWARD_ORDERS = new Set(['FoundCity', 'SetQueue', 'SetFocus', 'Purchase']);
 const DIPLOMAT_ORDERS = new Set(['DeclareWar', 'ProposePeace', 'AcceptPeace', 'ProposeNap', 'AcceptNap', 'BreakNap', 'ProposeAlliance',
-  'AcceptAlliance', 'LeaveAlliance', 'SendEnvoy', 'Transfer', 'MarketTrade', 'ExchangeOrder']);
+  'AcceptAlliance', 'LeaveAlliance', 'SendEnvoy', 'Transfer', 'MarketTrade', 'ExchangeOrder', 'OfferContract', 'AcceptContract', 'CancelContract']);
 
 /** Orders whose office depends on the unit they move or rule (settlers: steward, others: general). */
 const unitOf = o => (o.type === 'MoveUnit' ? o.unit : o.type === 'SetStanding' && o.target?.kind === 'Unit' ? o.target.id : undefined);

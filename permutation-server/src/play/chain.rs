@@ -101,6 +101,9 @@ impl Game {
             .and_then(|x| x.parse().ok())
             .unwrap_or(LOCAL_FEE);
         g.sync_registry(&info);
+        if let Ok(op) = g.chain_link().unwrap().get_json("/operator/roster") {
+            g.sync_operator(&op);
+        }
         let started = g.state.tick > 0
             || !g.state.members.is_empty()
             || g.state
@@ -119,14 +122,31 @@ impl Game {
         self.chain.as_ref().map(|c| c.link.clone())
     }
 
-    /// The gateway's member registry (names, kinds, who hosts whom).
-    pub fn sync_registry(&mut self, info: &Value) {
-        for (i, m) in info["members"].as_array().into_iter().flatten().enumerate() {
+    /// Which members the gateway hosts, and the operator's AI roster (V5
+    /// §18.2), from its operator-only `/operator/roster`.
+    pub fn sync_operator(&mut self, op: &Value) {
+        for m in op["members"].as_array().into_iter().flatten() {
+            let Some(i) = m["member"].as_u64().map(|x| x as usize) else {
+                continue;
+            };
             let host = match m["hosted"].as_str() {
                 Some("human") => Host::Human,
                 Some("ai") => Host::Ai,
                 _ => Host::External,
             };
+            if let Some(x) = self.members.get_mut(i) {
+                x.host = host;
+            }
+        }
+        self.roster
+            .merge(super::roster::AiRoster::from_operator(op));
+    }
+
+    /// The gateway's public member registry (names, kinds). Who is hosted
+    /// comes from `sync_operator`; a member not known there is external.
+    pub fn sync_registry(&mut self, info: &Value) {
+        for (i, m) in info["members"].as_array().into_iter().flatten().enumerate() {
+            let host = self.members.get(i).map_or(Host::External, |x| x.host);
             let meta = MemberMeta {
                 name: m["name"].as_str().unwrap_or("member").to_string(),
                 kind: m["kind"].as_str().unwrap_or("undeclared").to_string(),
@@ -151,7 +171,19 @@ impl Game {
             snap,
             resolved,
             info,
+            operator,
+            talk,
         } = poll;
+        if !talk.is_empty() {
+            self.talk_next = talk
+                .iter()
+                .filter_map(|m| m["id"].as_u64())
+                .max()
+                .map_or(self.talk_next, |x| x + 1);
+            self.talk.extend(talk);
+            let cut = self.talk.len().saturating_sub(500);
+            self.talk.drain(..cut);
+        }
         let changed = snap.state.tick != self.state.tick
             || snap.state.members.len() != self.state.members.len();
         let prev = std::mem::replace(&mut self.state, snap.state);
@@ -186,7 +218,12 @@ impl Game {
                     c.info = info;
                 }
             }
+            if let Some(op) = operator {
+                self.sync_operator(&op);
+            }
         }
+        let announce = std::mem::take(&mut self.announce);
+        let replies = self.ai_replies();
         let tick = self.state.tick;
         let Some(c) = self.chain.as_mut() else {
             return Sends::default();
@@ -205,7 +242,11 @@ impl Game {
             || tick >= self.rules.ticks_per_season
             || c.ai_submitted == Some(tick)
         {
-            return Sends::default();
+            return Sends {
+                announce,
+                talk: replies,
+                ..Sends::default()
+            };
         }
         c.ai_submitted = Some(tick);
         let hosts = self.hosts();
@@ -224,6 +265,8 @@ impl Game {
         Sends {
             gov: gov_bodies(&gov),
             batches: batches.iter().map(batch_body).collect(),
+            announce,
+            talk: replies,
         }
     }
 
@@ -247,11 +290,20 @@ pub struct Poll {
     pub resolved: Option<(TickInput, Value)>,
     /// The season (member registry, pool), when members or the tick changed.
     pub info: Option<Value>,
+    /// The operator's roster (who is hosted, AI salts), fetched with `info`.
+    pub operator: Option<Value>,
+    /// Members' messages since the last poll.
+    pub talk: Vec<Value>,
 }
 
 impl Poll {
     /// `tick` and `members` are the game's before the snapshot.
-    fn fetch(link: &ChainLink, tick: u16, members: usize) -> Result<Option<Poll>, String> {
+    fn fetch(
+        link: &ChainLink,
+        tick: u16,
+        members: usize,
+        talk_next: u64,
+    ) -> Result<Option<Poll>, String> {
         let Some(snap) = link.world()? else {
             return Ok(None);
         };
@@ -266,10 +318,22 @@ impl Poll {
         } else {
             None
         };
+        let operator = if changed && link.has_token() {
+            link.get_json("/operator/roster").ok()
+        } else {
+            None
+        };
+        let talk = link
+            .get_json(&format!("/talk?since={talk_next}"))
+            .ok()
+            .and_then(|v| v["messages"].as_array().cloned())
+            .unwrap_or_default();
         Ok(Some(Poll {
             snap,
             resolved,
             info,
+            operator,
+            talk,
         }))
     }
 }
@@ -279,12 +343,12 @@ impl Poll {
 pub fn follow(game: Shared) {
     loop {
         std::thread::sleep(Duration::from_millis(400));
-        let (link, tick, members) = {
+        let (link, tick, members, talk_next) = {
             let g = lock(&game);
             let Some(link) = g.chain_link() else { return };
-            (link, g.state.tick, g.state.members.len())
+            (link, g.state.tick, g.state.members.len(), g.talk_next)
         };
-        let poll = match Poll::fetch(&link, tick, members) {
+        let poll = match Poll::fetch(&link, tick, members, talk_next) {
             Ok(Some(p)) => p,
             Ok(None) => continue,
             Err(e) => {
@@ -297,6 +361,14 @@ pub fn follow(game: Shared) {
         // freezes the tick's input and later actions wait (TickFrozen).
         post_all(&link, "/gov", &sends.gov);
         post_all(&link, "/submit", &sends.batches);
+        // An AI member's home city fell: the gateway makes its salt public.
+        let announce: Vec<Value> = sends
+            .announce
+            .iter()
+            .map(|m| json!({"member": m}))
+            .collect();
+        post_all(&link, "/roster/announce", &announce);
+        post_all(&link, "/talk", &sends.talk);
     }
 }
 
@@ -307,6 +379,10 @@ pub struct Sends {
     pub gov: Vec<Value>,
     /// `/submit` bodies: one per office.
     pub batches: Vec<Value>,
+    /// AI members whose home city fell (V5 §18.3).
+    pub announce: Vec<MemberId>,
+    /// AI members' answers (`/talk` bodies, signed by the gateway).
+    pub talk: Vec<Value>,
 }
 
 /// Governance actions as `/gov` bodies: a member's actions go together (at

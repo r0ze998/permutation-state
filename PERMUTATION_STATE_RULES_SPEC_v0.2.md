@@ -1,6 +1,6 @@
 # PERMUTATION STATE — Rules Specification v0.2 (`permutation-rules`)
 
-Status: implemented in `permutation-rules`, 2026-09-24; revised to `RULES_VERSION = 6` on 2026-09-25 (see "Version 6" below and [Game Design V5 §17](PERMUTATION_STATE_GAME_DESIGN_V5.md)). Seasons recorded under version 5, such as the devnet seasons, verify with a build of commit `a02862f` or earlier.
+Status: implemented in `permutation-rules`, 2026-09-24; revised to `RULES_VERSION = 6` on 2026-09-25 (see "Version 6" below and [Game Design V5 §17](PERMUTATION_STATE_GAME_DESIGN_V5.md)), then to `RULES_VERSION = 7` the same day (see "Version 7" below and [V5 §18](PERMUTATION_STATE_GAME_DESIGN_V5.md)); version 7 is implemented locally and not yet deployed to devnet. Seasons recorded under version 5, such as the devnet seasons, verify with a build of commit `a02862f` or earlier.
 Audience: implementers of the `permutation-rules` Rust crate, the ER program (`permutation-chain`), the replay verifier, the game client and agent authors.
 Normative words: **MUST / MUST NOT / SHOULD / MAY**. Every number here is a ruleset parameter (`params.rs`, `Ruleset::new`); the full parameter set and the static tables are serialized and hashed into `ruleset_hash` before a season opens.
 
@@ -30,6 +30,14 @@ Normative words: **MUST / MUST NOT / SHOULD / MAY**. Every number here is a rule
 - **Caretaker** (§4.5): a vacant office takes no batch; the rules fill it from the members' top proposal or a minimal default.
 - **Information** (§7.4): the server and every view use the full state (perfect information).
 - **Paths and pacing** (§6.2, §10.2, §12.2, §14.1): science tiers 4–5 need the Star Gate held; hegemony tier 3 banks a conquest; peace after a war of ≥ 6 ticks is a pact; eurekas; the crisis on the leaders; the dark age. Thresholds recalibrated (V5 §6.2).
+
+**Version 7 (2026-09-25)** — hidden operator AI members, home-city bounties and treasury contracts ([V5 §18](PERMUTATION_STATE_GAME_DESIGN_V5.md)):
+- **Treasury contracts** (`contracts.rs`, §4.2): the Diplomat's `OfferContract { to, term, usdc, deadline }`, `AcceptContract { id }` and `CancelContract { id }` (cost 1 each). Terms: `Peace` (the counterparty makes peace with the offerer), `LeaveAlliance { with }`, `KeepNap { every, installments }` (paid in parts while the NAP stands; the rest returns if it breaks) and `Capture { city }` (open to every nation, `to = None`, cannot be cancelled). The offer escrows USDC from the treasury in phase 2, before the market, and counts against the same spend limit (over 5 USDC per tick needs `ConsentSpend`); none from tick `exchange_freeze_tick` = 120 or with the market off. An offer is accepted on a later tick, by its deadline. Conditions are checked at the start of phase 10: met → paid to the counterparty's treasury; expired, broken, or the last tick → returned to the offerer. What a nation receives (`Civ::contract_income`) cannot be spent on the market and is refunded to depositors at the end; contracts never count as trade, wealth or merit. Limits: `contract_max_open` = 4 open offers per nation, a deadline at most `contract_max_ticks` = 60 ticks ahead, at most `contract_max_installments` = 10 installments.
+- **Blocked codes:** `TooManyContracts` = 53, `UnknownContract` = 54, `BadContract` = 55.
+- **Roster and home cities** (`roster.rs`): every registration carries a 32-byte `tag`; an operator AI's is `roster_tag = sha256("permutation-rules/ai" ‖ season ‖ wallet ‖ salt)`, and `roster_chain` links the tags in order. At the end of tick `ai_home_tick` = 45 the world records each nation's cities (`WorldState.home_snapshot`); an AI's home is `home_snapshot[civ][H(salt ‖ season_seed) mod len]`.
+- **Bounties:** a city records its `first_conquest` (nation, tick) after tick 45, under the conquest conditions (a nation's city, population ≥ 3). It earns the AI's bounty unless captor and victim had a NAP or alliance within `bounty_pact_window` = 10 ticks before (`WorldState.pact_last`, the last tick each pair had one). Unpaid bounties join the pool.
+- **Settlement with the roster** (`payout::settle_with`, §14): a nation counts only with an active member not on the roster. Each AI's payout goes to the people of its nation by merit; with no merit, equally, up to `equal_cap_bps` of the fee each; what is left to other nations' people by points, then to every person in proportion to what they receive. Nothing returns to the operator. A nation of AI members only (active, with a city) earns a share by its points that is **split equally among the counted nations**, not by points (by points it fed the leader). `settle` is `settle_with` with no roster.
+- **USDC conservation** (§17): treasuries + USDC escrowed in open contracts + the market's pool and operations shares = USDC deposited.
 
 ---
 
@@ -216,6 +224,7 @@ Only **office holders** give orders (V5 §5.1). Each nation has four offices: **
 | `Raze(city)` | 1 | General | the city was captured this tick or the previous one |
 | `SetStanding(unit|city, rule)` | 1 | unit: as `MoveUnit`; city: Steward | §13. **Execution** of standing rules is free |
 | `ConsentWar(civ)` | **0** | General or Steward | agrees to this tick's `DeclareWar` or `BreakNAP` against `civ` (§4.5) |
+| `OfferContract(to, term, usdc, deadline)` / `AcceptContract(id)` / `CancelContract(id)` | 1 each | Diplomat | treasury contracts (version 7): market on and tick < 120 to offer; escrow within the spend limit; ≤ 4 open offers; deadline ≤ 60 ticks ahead; accepted on a later tick; `Capture` offers cannot be cancelled |
 | `ConsentSpend(usdc)` | **0** | any office but Diplomat | allows the diplomat to spend up to `usdc` from the treasury this tick (§11.3); market on and tick < 120 |
 | `RevealRationale(tick, policy, salt, text)` | 0 | any | opens the commitment of a resolved `tick` (§7.5), not a game action |
 
@@ -969,7 +978,7 @@ No Season Law is implemented in v0.2: no code reads or applies a law. The v0.1 s
 
 Checked by `invariants::check` (state) and `invariants::check_monotonic` (across a tick), or enforced where noted.
 
-1. Sum of all nations' treasuries + `exchange_vault` + `exchange_ops` = USDC deposited (no creation or loss).
+1. Sum of all nations' treasuries + USDC escrowed in open contracts (version 7) + `exchange_vault` + `exchange_ops` = USDC deposited (no creation or loss).
 2. No tile holds more than one army or civilian unit, except a city tile of the units' owner (1 army + 1 civilian).
 3. Every army holds 500–20,000 milli-troops.
 4. Orders applied this tick per office ≤ that office's spendable budget (enforced by `SubmitOrders` and `validate_batch`).

@@ -14,7 +14,7 @@
 use permutation_rules::genesis::{nation_entries, new_season, start_order};
 use permutation_rules::gov::MemberId;
 use permutation_rules::invariants;
-use permutation_rules::payout::settle;
+use permutation_rules::payout::{settle, settle_with, Extras};
 use permutation_rules::rng::Seed;
 use permutation_rules::scoring::{nation_scores, PATH_NAMES};
 use permutation_rules::state::{CivId, WorldState};
@@ -58,6 +58,28 @@ struct Season {
     chivalry_t150: Vec<bool>,
     /// Skipped orders per civ, by `Blocked` code.
     skips: Vec<[u32; 64]>,
+    s18: Sec18,
+}
+
+/// V5 §18: operator AI members (the first `SIM_AI` members of every nation),
+/// their bounties, the redistribution of their payouts, and contracts.
+#[derive(Default)]
+struct Sec18 {
+    ais: u32,
+    /// AIs whose home city was conquered (bounty paid), and conquered by a
+    /// recent pact partner (no bounty).
+    homes_paid: u32,
+    homes_voided: u32,
+    bounty_total: u64,
+    redistributed: u64,
+    /// Nation shares with bounties added (fractions of what was paid).
+    share: Vec<f64>,
+    /// People's payout with and without the AI roster.
+    people_with: u64,
+    people_without: u64,
+    contracts_offered: u32,
+    contracts_accepted: u32,
+    contract_paid: u64,
 }
 
 /// Leader by points among nations with members (ties: lowest id).
@@ -109,6 +131,8 @@ fn rules() -> Ruleset {
             "stalemate_floor_bps" => r.stalemate_floor_bps = v[0],
             "tech_cost_per_city_bps" => r.tech_cost_per_city_bps = v[0],
             "suzerain_lock_ticks" => r.suzerain_lock_ticks = v[0] as u16,
+            "ai_home_tick" => r.ai_home_tick = v[0] as u16,
+            "bounty_pact_window" => r.bounty_pact_window = v[0] as u16,
             other => panic!("unknown SIM_SET key {other}"),
         }
     }
@@ -128,11 +152,20 @@ fn play(i: u32, members: &[usize]) -> Season {
                 .unwrap_or(PERSONAS[(c + i as usize) % PERSONAS.len()])
         })
         .collect();
+    // SIM_TREASURY=usdc: every nation starts with this treasury (contracts).
+    let treasury: u64 = std::env::var("SIM_TREASURY")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let mut entries = nation_entries(n);
+    for e in &mut entries {
+        e.treasury = treasury;
+    }
     let mut s: WorldState = new_season(
         &rules,
         &seed_bytes("world", i),
         &seed_bytes("season", i),
-        &nation_entries(n),
+        &entries,
     )
     .expect("genesis");
     // SIM_ROTATE=k (diagnostic): turn the whole genesis world by k × 60°. The
@@ -160,6 +193,7 @@ fn play(i: u32, members: &[usize]) -> Season {
     let mut hub_ticks = vec![vec![0u32; n]; hubs];
     let mut ticks = 0u32;
     let mut skips = vec![[0u32; 64]; n];
+    let mut accepted_ids = std::collections::BTreeSet::new();
     // SIM_DEBUG="seed:tick": check the invariants after every phase of that tick.
     let debug = std::env::var("SIM_DEBUG").ok().and_then(|d| {
         let (a, b) = d.split_once(':')?;
@@ -213,6 +247,9 @@ fn play(i: u32, members: &[usize]) -> Season {
         for k in &s.last_skipped {
             skips[k.civ as usize][k.reason as usize % 64] += 1;
         }
+        for c in s.contracts.iter().filter(|c| c.accepted.is_some()) {
+            accepted_ids.insert(c.id);
+        }
         // Timeline metrics (not part of the rules).
         wars += war_pairs(s, n)
             .iter()
@@ -254,6 +291,79 @@ fn play(i: u32, members: &[usize]) -> Season {
     let (s, rules) = (&season.state, &season.rules);
     let pool = ENTRY_FEE * s.members.len() as u64 * 8 / 10;
     let p = settle(s, rules, pool, ENTRY_FEE);
+    // V5 §18: the first SIM_AI (default 1) members of each nation are the
+    // operator's AI members, SIM_BOUNTY (default 5 USDC) each.
+    let ai_k: usize = std::env::var("SIM_AI")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let bounty_each: u64 = std::env::var("SIM_BOUNTY")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(5_000_000);
+    let mut roster = vec![false; s.members.len()];
+    let mut ais: Vec<(CivId, [u8; 32])> = Vec::new();
+    for c in 0..n {
+        for id in (0..s.members.len())
+            .filter(|x| s.members[*x].civ as usize == c)
+            .take(ai_k)
+        {
+            roster[id] = true;
+            let mut salt = seed_bytes("salt", i);
+            salt[28..].copy_from_slice(&(id as u32).to_le_bytes());
+            ais.push((c as CivId, salt));
+        }
+    }
+    let b = permutation_rules::roster::bounties(s, &ais, bounty_each);
+    let p18 = settle_with(
+        s,
+        rules,
+        pool + b.unpaid,
+        ENTRY_FEE,
+        &Extras {
+            roster: &roster,
+            bounty: &b.by_civ,
+        },
+    );
+    let voided = b
+        .homes
+        .iter()
+        .filter(|h| {
+            h.and_then(|c| s.cities.get(c as usize))
+                .and_then(|c| c.first_conquest)
+                .is_some_and(|q| !q.bounty)
+        })
+        .count() as u32;
+    let paid18: u64 = p18.nation_share.iter().sum();
+    let people = |x: &permutation_rules::payout::Settlement| -> u64 {
+        (0..s.members.len())
+            .filter(|i| !roster[*i])
+            .map(|i| x.per_member[i])
+            .sum()
+    };
+    let s18 = Sec18 {
+        ais: ais.len() as u32,
+        homes_paid: (b.by_civ.iter().sum::<u64>() / bounty_each.max(1)) as u32,
+        homes_voided: voided,
+        bounty_total: p18.bounty.iter().sum(),
+        redistributed: p18.redistributed,
+        share: p18
+            .nation_share
+            .iter()
+            .map(|x| {
+                if paid18 == 0 {
+                    0.0
+                } else {
+                    *x as f64 / paid18 as f64
+                }
+            })
+            .collect(),
+        people_with: people(&p18),
+        people_without: people(&p),
+        contracts_offered: s.next_contract,
+        contracts_accepted: accepted_ids.len() as u32,
+        contract_paid: s.civs.iter().map(|c| c.contract_income).sum(),
+    };
     let total: u64 = p.nation_share.iter().sum();
     let mut merit_by_path = [0u64; 5];
     for m in &s.members {
@@ -316,6 +426,7 @@ fn play(i: u32, members: &[usize]) -> Season {
         recalls,
         merit_by_path,
         violations,
+        s18,
     }
 }
 
@@ -614,8 +725,10 @@ fn main() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(0);
+    let mut s18_all: Vec<Sec18> = Vec::new();
     for i in from..seeds {
-        let r = play(i, &members);
+        let mut r = play(i, &members);
+        s18_all.push(std::mem::take(&mut r.s18));
         let counted: Vec<usize> = (0..r.members.len()).filter(|c| r.members[*c] > 0).collect();
         for &c in &counted {
             eras.push(r.era[c]);
@@ -865,5 +978,38 @@ fn main() {
     println!(
         "order budget used: {:.0}%   invariant violations: {violations}",
         100.0 * budget / seeds.max(1) as f64
+    );
+    // V5 §18.
+    let k = s18_all.len().max(1) as f64;
+    let sum = |f: &dyn Fn(&Sec18) -> u64| s18_all.iter().map(f).sum::<u64>();
+    let top40 = s18_all
+        .iter()
+        .filter(|x| x.share.iter().cloned().fold(0.0, f64::max) > 0.4)
+        .count();
+    let with = sum(&|x| x.people_with);
+    let without = sum(&|x| x.people_without);
+    println!(
+        "\n== V5 §18 (SIM_AI operator AI members per nation, SIM_BOUNTY each, home tick {}) ==",
+        rules().ai_home_tick
+    );
+    println!(
+        "AI homes conquered: {:.2} per season of {:.1} AIs ({:.0}%); voided by a recent pact {:.2}; bounty paid {:.2} USDC per season",
+        sum(&|x| x.homes_paid as u64) as f64 / k,
+        sum(&|x| x.ais as u64) as f64 / k,
+        100.0 * sum(&|x| x.homes_paid as u64) as f64 / sum(&|x| x.ais as u64).max(1) as f64,
+        sum(&|x| x.homes_voided as u64) as f64 / k,
+        sum(&|x| x.bounty_total) as f64 / k / 1e6
+    );
+    println!(
+        "top nation's share (bounties included) > 40%: {top40}/{}; AI payouts redistributed {:.2} USDC per season; people receive {:+.1}% vs no roster",
+        s18_all.len(),
+        sum(&|x| x.redistributed) as f64 / k / 1e6,
+        if without == 0 { 0.0 } else { 100.0 * (with as f64 - without as f64) / without as f64 }
+    );
+    println!(
+        "contracts per season: {:.2} offered, {:.2} accepted, {:.2} USDC paid (SIM_TREASURY per nation)",
+        sum(&|x| x.contracts_offered as u64) as f64 / k,
+        sum(&|x| x.contracts_accepted as u64) as f64 / k,
+        sum(&|x| x.contract_paid) as f64 / k / 1e6
     );
 }

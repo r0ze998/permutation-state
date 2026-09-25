@@ -24,7 +24,6 @@ use borsh::BorshDeserialize;
 use permutation_chain::state::{MemberAccount, Season};
 use permutation_rules::genesis::{nation_entries, new_season};
 use permutation_rules::gov::{self, GovAction, GovEntry, Role, NOBODY};
-use permutation_rules::payout::settle;
 use permutation_rules::state::WorldState;
 use permutation_rules::tick::{run_phase, TickInput};
 use permutation_rules::{Preset, Ruleset};
@@ -177,6 +176,18 @@ fn check_seals(
     Ok(input.batches.len())
 }
 
+/// The season's roster account entries (operator AI members), if any.
+fn roster_account(
+    base: &ChainLink,
+    program: &str,
+    season_id: u64,
+) -> Option<Vec<permutation_chain::state::RosterEntry>> {
+    let address = permutation_chain::state::roster_address(program, season_id)?;
+    let data = base.account_data(&address).ok()??;
+    let r = permutation_chain::state::RosterAccount::deserialize(&mut &data[..]).ok()?;
+    Some(r.entries)
+}
+
 /// Every Member account of the season on the base layer, in registration order.
 fn season_members(
     base: &ChainLink,
@@ -186,7 +197,7 @@ fn season_members(
 ) -> Vec<MemberAccount> {
     let program = info["programId"].as_str().unwrap_or_default();
     let id = base64_encode(&season_id.to_le_bytes());
-    let magic = base64_encode(b"PSMEMBR5");
+    let magic = base64_encode(&permutation_chain::state::MEMBER_MAGIC);
     let res = base
         .rpc(
             "getProgramAccounts",
@@ -552,17 +563,104 @@ fn main() {
             state.state_root().unwrap() == season.final_root,
             hex(&season.final_root)[..16].to_string(),
         );
+        // Recompute from the fees and deposits the members paid, not from
+        // the Season account's totals.
         let fee_ops = season.entry_fee * rules.ops_share_bps as u64 / 10_000;
-        let pool = season.member_count as u64 * (season.entry_fee - fee_ops) + state.exchange_vault;
-        let p = settle(&state, &rules, pool, season.entry_fee);
-        let ops = season.member_count as u64 * fee_ops + state.exchange_ops + p.dust;
+        let mut paid = season.clone();
+        paid.pool = season.member_count as u64 * (season.entry_fee - fee_ops);
+        paid.ops = season.member_count as u64 * fee_ops;
+        paid.treasury = vec![0; season.nations as usize];
+        for m in &members {
+            if let Some(t) = paid.treasury.get_mut(m.civ as usize) {
+                *t += m.shares;
+            }
+        }
+        // Operator AI members (V5 §18.2): every revealed salt must turn its
+        // member's wallet into the tag the wallet registered with, and the
+        // tags chain to the roster committed before registration.
+        let program = info["programId"].as_str().unwrap_or_default();
+        let entries = roster_account(b, program, season.season_id).unwrap_or_default();
+        let roster = match season.roster_outcome {
+            1 => {
+                let tags: Vec<[u8; 32]> = entries
+                    .iter()
+                    .filter_map(|e| {
+                        let m = members.get(e.member as usize)?;
+                        let tag = permutation_rules::roster::roster_tag(
+                            season.season_id,
+                            &m.wallet,
+                            &e.salt,
+                        );
+                        (tag == m.tag && m.civ == e.civ).then_some(tag)
+                    })
+                    .collect();
+                let ok = tags.len() == entries.len()
+                    && entries.len() == season.ai_count as usize
+                    && permutation_rules::roster::roster_chain(&tags) == season.roster_chain;
+                let b = permutation_rules::roster::bounties(
+                    &state,
+                    &entries.iter().map(|e| (e.civ, e.salt)).collect::<Vec<_>>(),
+                    season.bounty_each,
+                );
+                let taken = b
+                    .homes
+                    .iter()
+                    .filter(|h| {
+                        h.and_then(|c| state.cities.get(c as usize))
+                            .and_then(|c| c.first_conquest)
+                            .is_some_and(|q| q.bounty)
+                    })
+                    .count();
+                r.check(
+                    "operator AI roster: every revealed member registered with its tag, and the tags chain to the committed roster",
+                    ok,
+                    format!(
+                        "{} AI members {:?}, {} home cities conquered, bounty {} each",
+                        entries.len(),
+                        entries.iter().map(|e| e.member).collect::<Vec<_>>(),
+                        taken,
+                        season.bounty_each
+                    ),
+                );
+                permutation_chain::finalize::Roster::Revealed(&entries)
+            }
+            2 => {
+                r.check(
+                    "operator AI roster was not revealed in time: bounties and bond joined the pool",
+                    season.roster_revealed < season.ai_count
+                        || season.roster_acc != season.roster_chain,
+                    format!("{}/{} revealed", season.roster_revealed, season.ai_count),
+                );
+                permutation_chain::finalize::Roster::Forfeited
+            }
+            _ => {
+                r.check(
+                    "no operator AI members this season",
+                    season.ai_count == 0,
+                    String::new(),
+                );
+                permutation_chain::finalize::Roster::None
+            }
+        };
+        let f = permutation_chain::finalize::finalize(&paid, &state, &rules, roster);
+        let p = f.settlement.clone();
         r.check(
-            "every member's payout recomputed (V5 §7) matches the Season account",
-            p.per_member == season.payouts && pool == season.pool,
+            "every member's payout recomputed (V5 §7, §18) matches the Season account",
+            p.per_member == season.payouts
+                && f.pool == season.pool
+                && f.bounty_paid == season.bounty_paid,
             format!(
-                "pool {} to {} members{}",
-                pool,
+                "pool {} to {} members{}{}",
+                f.pool,
                 p.per_member.iter().filter(|x| **x > 0).count(),
+                if p.redistributed > 0 {
+                    format!(
+                        ", {} redistributed from AI members to people",
+                        p.redistributed
+                    )
+                } else {
+                    String::new()
+                },
                 if p.refund {
                     " (refund: nobody achieved anything)"
                 } else {
@@ -570,16 +668,16 @@ fn main() {
                 }
             ),
         );
+        let ops = paid.ops + f.ops_add;
         r.check(
-            "operations share = 20% of fees + 20% of in-play income + rounding",
+            "operations share = 20% of fees + 20% of in-play income + rounding (+ the bond, returned)",
             ops == season.ops,
             format!("{ops}"),
         );
-        let treasury: Vec<u64> = state.civs.iter().map(|c| c.usdc).collect();
         r.check(
             "treasuries returned to depositors match the final world",
-            treasury == season.treasury_final,
-            format!("{treasury:?}"),
+            f.treasury_final == season.treasury_final && paid.treasury == season.treasury,
+            format!("{:?}", f.treasury_final),
         );
         // The history layer: this season's record, recomputed from the final
         // world, chained onto the root it took over from the season before.

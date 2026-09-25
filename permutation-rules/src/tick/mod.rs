@@ -142,6 +142,23 @@ pub(crate) fn accepted(state: &WorldState, pick: impl Fn(&Order) -> bool) -> Vec
 
 // ---------------------------------------------------------------- phase 11
 
+/// Mark the pairs under a NAP or an alliance this tick: no bounty between
+/// them for `bounty_pact_window` ticks (V5 §18.4).
+fn record_pacts(state: &mut WorldState) {
+    let n = state.civs.len() as CivId;
+    for a in 0..n {
+        for b in a + 1..n {
+            if matches!(
+                state.relation(a, b),
+                crate::state::Relation::Nap { .. } | crate::state::Relation::Alliance { .. }
+            ) {
+                let i = state.pair_index(a, b);
+                state.pact_last[i] = Some(state.tick);
+            }
+        }
+    }
+}
+
 fn phase_commit(state: &mut WorldState, rules: &Ruleset) {
     for civ in 0..state.civs.len() as u16 {
         let cities = state.city_count(civ);
@@ -154,6 +171,13 @@ fn phase_commit(state: &mut WorldState, rules: &Ruleset) {
     }
     // Recalls, idle recalls and elections take effect next tick (V5 §5.3–§5.5).
     crate::gov::end_of_tick(state, rules);
+    record_pacts(state);
+    if state.tick == rules.ai_home_tick {
+        // Operator AI home cities are drawn among these (V5 §18.3).
+        state.home_snapshot = (0..state.civs.len() as CivId)
+            .map(|c| state.living_cities_of(c).map(|x| x.id).collect())
+            .collect();
+    }
     state.implicit.clear();
     state.tick_orders.clear();
     let tick = state.tick;

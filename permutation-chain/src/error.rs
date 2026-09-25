@@ -42,12 +42,17 @@ pub enum ChainError {
     /// `SubmitOrders` is retired: orders are sealed (`CommitOrders`,
     /// `RevealOrders`).
     Retired,
+    /// The operator's AI roster is not revealed yet, and its grace period
+    /// has not passed (V5 §18.2).
+    RosterPending,
+    /// A roster reveal that does not match the member's tag or the chain.
+    RosterMismatch,
 }
 
 impl ChainError {
     /// Every error, in code order (`ALL[i]` has code `i + 1`). Clients (the JS
     /// codec) are checked against this list through the codec vectors.
-    pub const ALL: [ChainError; 31] = [
+    pub const ALL: [ChainError; 33] = [
         ChainError::InvalidInstruction,
         ChainError::MissingSignature,
         ChainError::WrongPda,
@@ -79,6 +84,8 @@ impl ChainError {
         ChainError::WrongPhase,
         ChainError::CommitMismatch,
         ChainError::Retired,
+        ChainError::RosterPending,
+        ChainError::RosterMismatch,
     ];
 
     /// The error's name, as clients show it. Exhaustive, so a new variant
@@ -116,6 +123,8 @@ impl ChainError {
             ChainError::WrongPhase => "WrongPhase",
             ChainError::CommitMismatch => "CommitMismatch",
             ChainError::Retired => "Retired",
+            ChainError::RosterPending => "RosterPending",
+            ChainError::RosterMismatch => "RosterMismatch",
         }
     }
 }
@@ -138,7 +147,7 @@ mod tests {
         }
         assert_eq!(
             ChainError::ALL.len() as u32,
-            ChainError::Retired as u32,
+            ChainError::RosterMismatch as u32,
             "the last variant closes the list"
         );
     }
