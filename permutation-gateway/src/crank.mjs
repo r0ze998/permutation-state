@@ -202,6 +202,10 @@ export class Crank {
       try {
         const r = await send(this.er, this.chain.closeCommits({ nations }), [this.crank], `close tick ${open} commitments`);
         this.closed = { tick: open, signature: r.signature };
+        // Reveal at once: the window is a few seconds, and the commitments
+        // in this snapshot are the ones the close just sealed.
+        await this.revealHosted(open, nations, snap.nations);
+        return;
       } catch (e) {
         const code = chainError(e.message);
         if (code === 'TooEarly') { this.retryAt = Date.now() + 500; return; } // the ER clock has not reached the deadline yet

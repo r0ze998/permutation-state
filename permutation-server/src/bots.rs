@@ -204,6 +204,10 @@ pub struct Bot {
     pub persona: Persona,
     pub traits: Traits,
     pub war_started: HashMap<CivId, u16>,
+    /// Cities this bot marches on first when at war (sim only: the
+    /// operator AIs' home cities, to measure what a leak is worth, V5 §18).
+    /// Hosted bots never get any.
+    pub targets: Vec<permutation_rules::state::CityId>,
 }
 
 impl Bot {
@@ -213,6 +217,7 @@ impl Bot {
             persona,
             traits: Traits::of(persona),
             war_started: HashMap::new(),
+            targets: Vec::new(),
         }
     }
 
@@ -223,6 +228,7 @@ impl Bot {
             persona: traits.persona(),
             traits,
             war_started: HashMap::new(),
+            targets: Vec::new(),
         }
     }
 }
@@ -950,7 +956,7 @@ impl Bot {
                 .cities
                 .iter()
                 .filter(|c| c.alive && c.owner.is_some_and(|o| enemies.contains(&o)))
-                .min_by_key(|c| c.hex.distance(u.hex))
+                .min_by_key(|c| (!self.targets.contains(&c.id), c.hex.distance(u.hex)))
                 .map(|c| c.hex);
             if let Some(goal) = target {
                 if let Some(path) = path_to(s, r, civ, u.hex, |h| h.distance(goal) == 1) {

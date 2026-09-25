@@ -133,8 +133,13 @@ export async function bootstrap({ base, cfg, store, roster = defaultRoster(), lo
   for (let c = 0; c < NATIONS.length; c++) await send(base, chain.allocNation({ payer: crank.publicKey, civ: c }), [crank], `allocNation ${c}`);
   log(`season ${seasonId} created: world and ${NATIONS.length} nation accounts allocated`);
 
+  // The history layer, readable: the records of the seasons this one follows
+  // (the last ten), each checkable against its season's history root.
+  const prev = prevSeasonId && store.state?.seasonId === prevSeasonId.toString() ? store.state : null;
+  const lineage = prev ? [...(prev.lineage ?? []), ...(prev.history ? [{ seasonId: prev.seasonId, nations: prev.nations,
+    historyRoot: prev.history.historyRoot, record: prev.history.record }] : [])].slice(-10) : [];
   const state = store.save({ seasonId: seasonId.toString(), programId: cfg.programId, mint: mint.publicKey.toBase58(), cluster: cfg.cluster,
-    nations: [...NATIONS], members: [], ticks: [], seating: [],
+    nations: [...NATIONS], members: [], ticks: [], seating: [], lineage,
     roster: { aiCount, bountyEach: bountyEach.toString(), bond: bond.toString(), revealed: false } });
   for (const [i, m] of seats.entries()) {
     const { wallet, session, token } = m.keys;

@@ -242,19 +242,21 @@ mod tests {
     }
 
     #[test]
-    fn points_grow_by_tier_and_cap_at_1125() {
+    fn points_grow_by_tier_and_cap_at_775() {
+        // Rules version 8: 10/20/30/40/55 per tier (flatter, so an early
+        // lead snowballs less, V5 §18.13).
         let r = Ruleset::new(Preset::Blitz);
         assert_eq!(ladder_points(&r, 0), 0);
         assert_eq!(ladder_points(&r, 1), 10);
-        assert_eq!(ladder_points(&r, 3), 65);
-        assert_eq!(ladder_points(&r, 5), 225);
+        assert_eq!(ladder_points(&r, 3), 60);
+        assert_eq!(ladder_points(&r, 5), 155);
         let max = NationScore {
             tiers: [5; 4],
             era: 5,
-            path_points: [225; 4],
-            era_points: 225,
+            path_points: [155; 4],
+            era_points: 155,
         };
-        assert_eq!(max.total(), 1_125);
+        assert_eq!(max.total(), 775);
     }
 
     #[test]

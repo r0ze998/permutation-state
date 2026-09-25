@@ -16,7 +16,7 @@ export async function loadDiplomacy() {
 
 const usd = x => (Number(x) / 1e6).toFixed(2);
 const TERM_JA = { Peace: '講和する', LeaveAlliance: '同盟を抜ける', KeepNap: '不可侵を守る（分割払い）', Capture: '都市を落とす（誰でも）' };
-const termText = t => (t.kind === 'LeaveAlliance' ? `${civN(t.with)}との同盟を抜ける` : t.kind === 'KeepNap' ? `不可侵を守る（${t.every}ティックごとに${t.installments}回に分けて）` : t.kind === 'Capture' ? `都市${t.city}を落とす（誰でも）` : TERM_JA[t.kind]);
+const termText = t => (t.kind === 'LeaveAlliance' ? `${civN(t.with)}との同盟を抜ける` : t.kind === 'KeepNap' ? `不可侵を守る（${t.every}ティックごとに${t.installments}回に分けて）` : t.kind === 'Capture' ? `${T.cityName(t.city)}を落とす（誰でも）` : TERM_JA[t.kind]);
 
 /** Treasury contracts (V5 §18.6): what binds a promise. Offer to a nation from its row. */
 export function offerContract(civ) {
@@ -83,7 +83,7 @@ export function drawerDiplomacy() {
         ${blocked.length ? html`<div class="when" style="margin-top:4px">${blocked.map((o, i) => html`${i ? html`<br>` : ''}${T.DIPLO_ACTION[o.action]}：${T.blockedText(o.blocked)}`)}</div>` : ''}
         ${v.market ?? true ? html`<div class="row contract-form" style="margin-top:8px">
           <select id="ct-kind-${c.id}"><option value="Peace">講和したら払う</option><option value="KeepNap">不可侵を守る間、分けて払う</option><option value="Capture">この国の都市を落とした国に払う</option></select>
-          <select id="ct-city-${c.id}">${(v.cities || []).filter(x => x.owner === c.id).map(x => html`<option value="${x.id}">都市${x.id}</option>`)}</select>
+          <select id="ct-city-${c.id}">${(v.cities || []).filter(x => x.owner === c.id).map(x => html`<option value="${x.id}">${T.cityName(x.id)}</option>`)}</select>
           <label class="field">USDC<input id="ct-usdc-${c.id}" type="number" min="0.1" step="0.1" value="2"></label>
           <label class="field">期限<input id="ct-ticks-${c.id}" type="number" min="1" max="60" value="20">ティック</label>
           <button class="btn" type="button" data-offer-contract="${c.id}">契約を出す</button></div>` : ''}

@@ -7,7 +7,7 @@ import { drawerCities } from './cities.mjs';
 import { drawerResearch, loadResearch } from './research.mjs';
 import { drawerDiplomacy, loadDiplomacy } from './diplomacy.mjs';
 import { drawerMarket } from './market.mjs';
-import { drawerChronicle } from './chronicle.mjs';
+import { drawerChronicle, loadHistory } from './chronicle.mjs';
 import { drawerDecisions, loadDecisions } from './decisions.mjs';
 import { drawerTalk } from './talk.mjs';
 
@@ -15,7 +15,7 @@ const DRAWERS = {
   nation: drawerNation, era: drawerEra, merit: drawerMerit, cities: drawerCities, research: drawerResearch,
   diplomacy: drawerDiplomacy, market: drawerMarket, chronicle: drawerChronicle, decisions: drawerDecisions, talk: drawerTalk,
 };
-const LOADERS = { research: loadResearch, diplomacy: loadDiplomacy, decisions: loadDecisions };
+const LOADERS = { research: loadResearch, diplomacy: loadDiplomacy, decisions: loadDecisions, chronicle: loadHistory };
 
 /** Open a drawer, or close it when it is the open one. */
 export function toggleDrawer(name) {

@@ -19,7 +19,7 @@ Normative words: **MUST / MUST NOT / SHOULD / MAY**. Every number here is a rule
 - **C12** (§4.4): `WorldState.last_skipped` records every order that did not take effect.
 - **C13** (§17): the occupancy invariant is checked on every seed of the balance simulation, with a regression test.
 - **C10 and C11 are superseded** by Game Design V5 and not merged. The v0.1 §14 scoring (Dominion / Science / Concord tracks, prize coalitions, §14.5 track payouts) is replaced by V5 achievements and payout (§14).
-- **V5 replacements:** nations of members instead of civs-as-seats; four offices with their own budgets; elections, proposals, recalls and consents (§3.1, §4, §14.6); four paths × five milestone tiers, eras and achievement points (max 1125); payout by points and merit (§14); the USDC market with nation treasuries, call auctions, a rising tariff and delivery (§11.3); on-chain input publication (§15.1–15.2).
+- **V5 replacements:** nations of members instead of civs-as-seats; four offices with their own budgets; elections, proposals, recalls and consents (§3.1, §4, §14.6); four paths × five milestone tiers, eras and achievement points (max 775 since version 8); payout by points and merit (§14); the USDC market with nation treasuries, call auctions, a rising tariff and delivery (§11.3); on-chain input publication (§15.1–15.2).
 - **Corrections to v0.1 found in the code:** there is no late entry (§3.1); the order window ends when the input is frozen, not 2% before the boundary (§1); the Science focus multiplies the city's whole science, not only Academy output (§5.1); captured cities count as held from capture, with no hold period (§8.3.1); USDC-market sellers sell from stored food and production (§11.3); Star Gate records move to phase 6 and aggressor flags are set when the act happens (§15); no Crisis and no Season Law are implemented (§12.2, §16); the aggressor flag is recorded but no rule reads it (§9.2).
 
 **Version 6 (2026-09-25)** — good game and on-chain verifiability ([V5 §17](PERMUTATION_STATE_GAME_DESIGN_V5.md)):
@@ -30,6 +30,8 @@ Normative words: **MUST / MUST NOT / SHOULD / MAY**. Every number here is a rule
 - **Caretaker** (§4.5): a vacant office takes no batch; the rules fill it from the members' top proposal or a minimal default.
 - **Information** (§7.4): the server and every view use the full state (perfect information).
 - **Paths and pacing** (§6.2, §10.2, §12.2, §14.1): science tiers 4–5 need the Star Gate held; hegemony tier 3 banks a conquest; peace after a war of ≥ 6 ticks is a pact; eurekas; the crisis on the leaders; the dark age. Thresholds recalibrated (V5 §6.2).
+
+**Version 8 (2026-09-26)** — flatter milestone points ([V5 §18.13](PERMUTATION_STATE_GAME_DESIGN_V5.md)): `tier_points` 10/20/30/40/55 (was 10/20/35/60/100), so a path at tier 5 scores 155 and a nation at most 775. In 200 simulated seasons the top nation took more than 40% of the pool in 10 (was 20). Nothing else changed.
 
 **Version 7 (2026-09-25)** — hidden operator AI members, home-city bounties and treasury contracts ([V5 §18](PERMUTATION_STATE_GAME_DESIGN_V5.md)):
 - **Treasury contracts** (`contracts.rs`, §4.2): the Diplomat's `OfferContract { to, term, usdc, deadline }`, `AcceptContract { id }` and `CancelContract { id }` (cost 1 each). Terms: `Peace` (the counterparty makes peace with the offerer), `LeaveAlliance { with }`, `KeepNap { every, installments }` (paid in parts while the NAP stands; the rest returns if it breaks) and `Capture { city }` (open to every nation, `to = None`, cannot be cancelled). The offer escrows USDC from the treasury in phase 2, before the market, and counts against the same spend limit (over 5 USDC per tick needs `ConsentSpend`); none from tick `exchange_freeze_tick` = 120 or with the market off. An offer is accepted on a later tick, by its deadline. Conditions are checked at the start of phase 10: met → paid to the counterparty's treasury; expired, broken, or the last tick → returned to the offerer. What a nation receives (`Civ::contract_income`) cannot be spent on the market and is refunded to depositors at the end; contracts never count as trade, wealth or merit. Limits: `contract_max_open` = 4 open offers per nation, a deadline at most `contract_max_ticks` = 60 ticks ahead, at most `contract_max_installments` = 10 installments.
@@ -831,11 +833,11 @@ Parameters (version 6): `hegemony_tiles` [25, 40, 60, 80, 100], `hegemony_cities
 
   | Tier / era | 1 | 2 | 3 | 4 | 5 |
   |---|---|---|---|---|---|
-  | Points per milestone | 10 | 20 | 35 | 60 | 100 |
-  | Era bonus | 10 | 20 | 35 | 60 | 100 |
+  | Points per milestone | 10 | 20 | 30 | 40 | 55 |
+  | Era bonus | 10 | 20 | 30 | 40 | 55 |
 
-- A path at tier `k` scores `Σ tier_points[1..k]` (tier 5 = 225). The era bonus is the same ladder sum for the era.
-- **Nation points** = the four path scores + the era bonus. The maximum is 4 × 225 + 225 = **1125**.
+- A path at tier `k` scores `Σ tier_points[1..k]` (tier 5 = 155). The era bonus is the same ladder sum for the era.
+- **Nation points** = the four path scores + the era bonus. The maximum is 4 × 155 + 155 = **775**. (Rules version 8 flattened the ladder from 10/20/35/60/100: the top tiers weighed so much that an early lead decided the prize; see the Version 8 entry.)
 - A Science ranking key (stages, earliest completion, cumulative science) remains for displays only (`scoring::science_key`).
 
 ### 14.3 Merit

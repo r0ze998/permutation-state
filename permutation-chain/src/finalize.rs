@@ -238,6 +238,47 @@ mod tests {
     }
 
     #[test]
+    fn a_conquered_home_pays_its_bounty_into_the_captors_share() {
+        use permutation_rules::state::Conquest;
+        let (rules, mut state, season) = fixture();
+        // The AI (member 0, nation 0) lived in nation 0's capital, which
+        // nation 1 conquered after the home tick; a second case where the
+        // captor had a recent pact pays nothing.
+        let capital = state.civs[0].capital.unwrap();
+        state.home_snapshot = vec![vec![capital], vec![]];
+        state.cities[capital as usize].first_conquest = Some(Conquest {
+            by: 1,
+            tick: 60,
+            bounty: true,
+        });
+        let entries = [RosterEntry {
+            member: 0,
+            civ: 0,
+            salt: [5; 32],
+        }];
+        let f = finalize(&season, &state, &rules, Roster::Revealed(&entries));
+        assert_eq!(f.bounty_paid, vec![0, season.bounty_each]);
+        let plain = finalize(&season, &state, &rules, Roster::None);
+        assert!(
+            f.settlement.nation_share[1] >= plain.settlement.nation_share[1] + season.bounty_each
+        );
+        conserved(&season, &state, &f);
+
+        state.cities[capital as usize].first_conquest = Some(Conquest {
+            by: 1,
+            tick: 60,
+            bounty: false,
+        });
+        let f = finalize(&season, &state, &rules, Roster::Revealed(&entries));
+        assert_eq!(
+            f.bounty_paid,
+            vec![0, 0],
+            "a recent pact partner earns nothing"
+        );
+        conserved(&season, &state, &f);
+    }
+
+    #[test]
     fn an_unrevealed_roster_forfeits_the_bounties_and_the_bond() {
         let (rules, state, season) = fixture();
         let f = finalize(&season, &state, &rules, Roster::Forfeited);

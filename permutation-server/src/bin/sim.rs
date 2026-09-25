@@ -194,6 +194,28 @@ fn play(i: u32, members: &[usize]) -> Season {
     let mut ticks = 0u32;
     let mut skips = vec![[0u32; 64]; n];
     let mut accepted_ids = std::collections::BTreeSet::new();
+    // V5 §18: the first SIM_AI (default 1) members of each nation are the
+    // operator's AI members, SIM_BOUNTY (default 5 USDC) each. With
+    // SIM_HOMEAWARE=1 every nation's armies know the others' AI home
+    // cities once they are drawn (a leak) and march on them first.
+    let ai_k: usize = std::env::var("SIM_AI")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let home_aware = std::env::var("SIM_HOMEAWARE").is_ok();
+    let mut roster = vec![false; season.state.members.len()];
+    let mut ais: Vec<(CivId, [u8; 32])> = Vec::new();
+    for c in 0..n {
+        for id in (0..season.state.members.len())
+            .filter(|x| season.state.members[*x].civ as usize == c)
+            .take(ai_k)
+        {
+            roster[id] = true;
+            let mut salt = seed_bytes("salt", i);
+            salt[28..].copy_from_slice(&(id as u32).to_le_bytes());
+            ais.push((c as CivId, salt));
+        }
+    }
     // SIM_DEBUG="seed:tick": check the invariants after every phase of that tick.
     let debug = std::env::var("SIM_DEBUG").ok().and_then(|d| {
         let (a, b) = d.split_once(':')?;
@@ -250,6 +272,19 @@ fn play(i: u32, members: &[usize]) -> Season {
         for c in s.contracts.iter().filter(|c| c.accepted.is_some()) {
             accepted_ids.insert(c.id);
         }
+        if home_aware && s.tick == rules.ai_home_tick + 1 {
+            let homes: Vec<(CivId, Option<u32>)> = ais
+                .iter()
+                .map(|(c, salt)| (*c, permutation_rules::roster::home_city(s, *c, salt)))
+                .collect();
+            for bot in &mut season.planner.bots {
+                bot.targets = homes
+                    .iter()
+                    .filter(|(c, _)| *c != bot.civ)
+                    .filter_map(|(_, h)| *h)
+                    .collect();
+            }
+        }
         // Timeline metrics (not part of the rules).
         wars += war_pairs(s, n)
             .iter()
@@ -291,29 +326,10 @@ fn play(i: u32, members: &[usize]) -> Season {
     let (s, rules) = (&season.state, &season.rules);
     let pool = ENTRY_FEE * s.members.len() as u64 * 8 / 10;
     let p = settle(s, rules, pool, ENTRY_FEE);
-    // V5 §18: the first SIM_AI (default 1) members of each nation are the
-    // operator's AI members, SIM_BOUNTY (default 5 USDC) each.
-    let ai_k: usize = std::env::var("SIM_AI")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(1);
     let bounty_each: u64 = std::env::var("SIM_BOUNTY")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(5_000_000);
-    let mut roster = vec![false; s.members.len()];
-    let mut ais: Vec<(CivId, [u8; 32])> = Vec::new();
-    for c in 0..n {
-        for id in (0..s.members.len())
-            .filter(|x| s.members[*x].civ as usize == c)
-            .take(ai_k)
-        {
-            roster[id] = true;
-            let mut salt = seed_bytes("salt", i);
-            salt[28..].copy_from_slice(&(id as u32).to_le_bytes());
-            ais.push((c as CivId, salt));
-        }
-    }
     let b = permutation_rules::roster::bounties(s, &ais, bounty_each);
     let p18 = settle_with(
         s,

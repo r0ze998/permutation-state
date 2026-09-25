@@ -233,16 +233,18 @@ impl Planner {
                 }
             }
             // Vacant offices are filled by the rules' caretaker from the
-            // members' top proposal (gov::caretaker): the nation's first
-            // hosted AI member proposes the plan's orders for every vacant
-            // office that has no open proposal yet.
-            let first_ai = state
+            // members' top proposal (gov::caretaker): one of the nation's
+            // hosted AI members, taking turns by tick (always the same one
+            // would single it out, V5 §18.2), proposes the plan's orders for
+            // every vacant office that has no open proposal yet.
+            let ais: Vec<MemberId> = state
                 .members
                 .iter()
                 .enumerate()
-                .find(|(x, mm)| mm.civ == m.civ && host.is_ai(*x as MemberId))
+                .filter(|(x, mm)| mm.civ == m.civ && host.is_ai(*x as MemberId))
                 .map(|(x, _)| x as MemberId)
-                == Some(id);
+                .collect();
+            let first_ai = !ais.is_empty() && ais[tick as usize % ais.len()] == id;
             let vacant: Vec<Role> = Role::ALL
                 .into_iter()
                 .filter(|r| {

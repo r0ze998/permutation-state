@@ -39,7 +39,9 @@ export const seasonRoutes = {
     const s = decodeSeason((await base.getAccountInfo(chain.season, 'confirmed')).data);
     const hex = b => Buffer.from(b).toString('hex');
     return { body: { season: String(s.seasonId), prevSeasonId: String(s.prevSeasonId), prevHistoryRoot: hex(s.prevHistoryRoot),
-      historyRoot: s.status === 'Finalized' ? hex(s.historyRoot) : null, record: store.state.history?.record ?? null, signature: store.state.history?.signature ?? null } };
+      historyRoot: s.status === 'Finalized' ? hex(s.historyRoot) : null, record: store.state.history?.record ?? null, signature: store.state.history?.signature ?? null,
+      // The records of the seasons before, oldest first (see season.mjs).
+      lineage: store.state.lineage ?? [] } };
   },
 
   'GET /ticks': async ({ crank }, req) => ({ body: { records: crank.tickRecords(Number(req.url.searchParams.get('from') || 0)) } }),

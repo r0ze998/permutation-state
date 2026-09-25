@@ -75,6 +75,11 @@ pub enum Outcome {
         link: Arc<ChainLink>,
         body: Value,
     },
+    /// Read a gateway endpoint (the history layer).
+    Fetch {
+        link: Arc<ChainLink>,
+        path: &'static str,
+    },
 }
 
 impl From<Response> for Outcome {
@@ -105,6 +110,10 @@ impl Outcome {
             Outcome::Gov { link, body } => match link.post_json("/gov", &body) {
                 Ok(res) => Response::ok(&json!({"ok": true, "signature": res["signature"]})),
                 Err(e) => Response::ok(&json!({"ok": false, "error": format!("chain: {e}")})),
+            },
+            Outcome::Fetch { link, path } => match link.get_json(path) {
+                Ok(v) => Response::ok(&v),
+                Err(e) => Response::ok(&json!({"ok": false, "error": format!("gateway: {e}")})),
             },
             Outcome::Talk { link, body } => match link.post_json("/talk", &body) {
                 Ok(res) => Response::ok(&json!({"ok": true, "id": res["id"], "tick": res["tick"]})),
@@ -149,6 +158,14 @@ fn route(g: &mut Game, req: &Request) -> Outcome {
         ("GET", "/api/talk") => Response::ok(&json!({"messages": g.talk})).into(),
         ("POST", "/api/talk") => talk(g, viewer, req),
         ("GET", "/api/roster") => Response::ok(&g.roster_json()).into(),
+        // The history layer: the seasons this one follows (chain mode).
+        ("GET", "/api/history") => match g.chain.as_ref() {
+            Some(c) => Outcome::Fetch {
+                link: c.link.clone(),
+                path: "/history",
+            },
+            None => Response::ok(&json!({"lineage": []})).into(),
+        },
         _ => Response::error("404 Not Found", "no such endpoint; see /llms.txt").into(),
     }
 }

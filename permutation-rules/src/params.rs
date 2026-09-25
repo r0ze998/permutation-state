@@ -9,7 +9,7 @@ use crate::fixed::Bps;
 use crate::{buildings, map, tech, units};
 use borsh::{BorshDeserialize, BorshSerialize};
 
-pub const RULES_VERSION: u16 = 7; // v6 + operator AI members, bounties and treasury contracts (V5 §18)
+pub const RULES_VERSION: u16 = 8; // v7 + flatter milestone points (10/20/30/40/55), V5 §18.13
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Preset {
@@ -345,7 +345,7 @@ impl Ruleset {
             ],
             spend_consent_usdc: 5_000_000,
 
-            tier_points: [10, 20, 35, 60, 100],
+            tier_points: [10, 20, 30, 40, 55],
             hegemony_tiles: [25, 40, 60, 80, 100],
             hegemony_cities: [0, 0, 1, 1, 2],
             prosperity_pop: [9, 15, 22, 31, 42],

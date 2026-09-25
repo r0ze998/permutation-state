@@ -6,7 +6,9 @@
 >
 > Rules version 6 (2026-09-25): perfect information, sealed orders (commit–reveal) on chain, tick randomness from the revealed salts, rotationally symmetric maps, a rules-run caretaker for vacant offices, and a history layer between seasons. **Deployed to devnet** on 2026-09-25 (slot 503993880); season 1790340445651 ran 180 ticks there (4,136 sealed batches revealed), was claimed and VERIFIED. Devnet seasons recorded before it verify with a build of commit `a02862f` or earlier.
 >
-> Rules version 7 (2026-09-25, implemented and tested locally, not on devnet; [V5 §18](PERMUTATION_STATE_GAME_DESIGN_V5.md)): hidden operator AI members revealed after the season, bounties on their home cities, their payouts redistributed to people, treasury contracts between nations, members' messages anchored on chain, and an operator token that closes the gateway's hosted-member endpoints to outsiders.
+> Rules version 7 (2026-09-25, committed and deployed to devnet; [V5 §18](PERMUTATION_STATE_GAME_DESIGN_V5.md)): hidden operator AI members revealed after the season, bounties on their home cities, their payouts redistributed to people, treasury contracts between nations, members' messages anchored on chain, and an operator token that closes the gateway's hosted-member endpoints to outsiders.
+>
+> Rules version 8 (2026-09-26, local; [V5 §18.13](PERMUTATION_STATE_GAME_DESIGN_V5.md)): flatter milestone points (10/20/30/40/55), which brings the top nation above 40% of the pool down to 10 of 200 simulated seasons (the target); plus the history layer on screen (the seasons a season follows), quicker reveals, and a sim of a leaked home city.
 
 ## What it is
 
@@ -241,8 +243,8 @@ The gateway is only an index. If it served a tampered input, the verifier would 
 - **No fog of war.** The game is perfect-information by design, because every account is public on chain. A fog mode would be a separate, possible future mode on a private rollup (MagicBlock PER).
 - **Reveals on a public ER.** An office's reveal must land within the reveal window (a sixth of the tick). The gateway sends a tick's hosted reveals in parallel; on devnet a few ticks still lost some reveals to latency spikes (those offices' orders did not run that tick, as the rules say).
 - **Reveals.** A batch not revealed in the reveal window does not run. The gateway reveals for the members it hosts, and the SDK and MCP server reveal automatically.
-- **Version 7 is not on devnet yet.** Operator AI members, bounties, treasury contracts and talk run on the local stack only. Leaks remain possible from bot patterns and funding flows (V5 §18.10); the operator could also play wallets it leaves off the roster, which only disclosure and the bond discourage. Treasury contracts move USDC between nations by game outcome and need legal review before real money.
-- **Balance is not final.** The top nation took more than 40% of the pool in 21 of 200 simulated seasons, against a target of ≤10%.
+- **Operator AI members.** Leaks remain possible from bot patterns and funding flows (V5 §18.10); the operator could also play wallets it leaves off the roster, which only disclosure and the bond discourage. Treasury contracts move USDC between nations by game outcome and need legal review before real money.
+- **Balance is tuned on bots.** With version 8 the top nation takes more than 40% of the pool in 10 of 200 simulated seasons (the target is ≤10%); with the operator's AI-only nations in the mix, 27 of 200. The numbers still come from bots, not people.
 - **Decision logs** prove what was claimed and when, not that the claim is true.
 - **The operator (crank)** can delay steps but cannot change outcomes (beyond voting and holding offices through its disclosed AI members). Closing commits, publishing a tick's input and resolving it after the deadline are permissionless.
 - **Commits from the ER to base are budgeted.** MagicBlock sponsors 10 commits per delegated account, so the crank commits every 20 ticks and keeps the 10th for the final undelegation.
