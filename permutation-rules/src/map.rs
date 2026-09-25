@@ -142,16 +142,36 @@ impl Map {
 
     /// Indices of the on-map tiles within `radius` of `center`, ascending.
     /// Visits only the hexes in range (≤ 37 for radius 3), which matters on
-    /// chain where scanning every tile per city is the dominant cost.
+    /// chain where scanning every tile per city is the dominant cost. On a
+    /// full hexagonal map the tiles of one column are consecutive, so each
+    /// column costs one `index_of`, not one per hex.
     pub fn indices_within(&self, center: Hex, radius: u32) -> Vec<usize> {
         let r = radius as i32;
         let mut out = Vec::with_capacity((3 * radius * (radius + 1) + 1) as usize);
+        let big_r = self.radius as i32;
+        let full = self.tiles.len() == (3 * big_r * (big_r + 1) + 1) as usize;
         for dq in -r..=r {
-            for dr in (-r).max(-dq - r)..=r.min(-dq + r) {
-                if let Some(i) = self.index_of(Hex::new(center.q + dq, center.r + dr)) {
-                    out.push(i);
-                }
+            let q = center.q + dq;
+            let (lo, hi) = (center.r + (-r).max(-dq - r), center.r + r.min(-dq + r));
+            if !full {
+                out.extend((lo..=hi).filter_map(|rr| self.index_of(Hex::new(q, rr))));
+                continue;
             }
+            if q.abs() > big_r {
+                continue;
+            }
+            // The rows of column `q` on the map, intersected with the range.
+            let (lo, hi) = (
+                lo.max((-big_r).max(-q - big_r)),
+                hi.min(big_r.min(-q + big_r)),
+            );
+            if lo > hi {
+                continue;
+            }
+            let Some(first) = self.index_of(Hex::new(q, lo)) else {
+                continue;
+            };
+            out.extend(first..=first + (hi - lo) as usize);
         }
         out // (q, r) iteration order is tile-index order
     }
@@ -612,6 +632,36 @@ fn place_sites(
 
 #[cfg(test)]
 mod tests {
+    /// The column-wise `indices_within` finds exactly the tiles a per-hex
+    /// scan finds, in the same order, everywhere on the map and off its edge.
+    #[test]
+    fn indices_within_matches_a_per_hex_scan() {
+        let rules = crate::params::Ruleset::new(crate::params::Preset::Blitz);
+        let g = super::generate(&rules, &[5; 32], 6).unwrap();
+        let big = g.map.radius as i32 + 2;
+        for q in -big..=big {
+            for rr in -big..=big {
+                let c = Hex::new(q, rr);
+                for radius in 0..=5u32 {
+                    let r = radius as i32;
+                    let mut want = Vec::new();
+                    for dq in -r..=r {
+                        for dr in (-r).max(-dq - r)..=r.min(-dq + r) {
+                            if let Some(i) = g.map.index_of(Hex::new(q + dq, rr + dr)) {
+                                want.push(i);
+                            }
+                        }
+                    }
+                    assert_eq!(
+                        g.map.indices_within(c, radius),
+                        want,
+                        "center {c:?} radius {radius}"
+                    );
+                }
+            }
+        }
+    }
+
     use super::*;
     use crate::params::Preset;
 

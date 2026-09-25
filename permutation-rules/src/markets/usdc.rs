@@ -265,76 +265,73 @@ pub fn apply_exchange(state: &mut WorldState, rules: &Ruleset) {
     let mut reserved = vec![0u64; n];
     let mut orders: Vec<(bool, ExOrder)> = Vec::new(); // (is_buy, order)
     let mut serial = 0u64;
-    for a in accepted(state) {
-        let civ = a.civ;
-        for (order, _, origin) in a.iter() {
-            let Order::ExchangeOrder {
-                good,
-                side,
-                amount,
-                price,
-            } = *order
-            else {
-                continue;
-            };
-            serial += 1;
-            if amount == 0 || price == 0 {
-                state.skip(civ, origin, Blocked::NothingToSell.code());
-                continue;
-            }
-            let key = tie_key(&state.tick_seed, ((civ as u64) << 32) | serial);
-            let kind = GoodKind::of(good);
-            let qty = match side {
-                Side::Buy => {
-                    if !deliverable(state, civ, good) {
-                        state.skip(civ, origin, Blocked::CannotBuyStarGate.code());
-                        continue;
-                    }
-                    let already: u32 = orders
-                        .iter()
-                        .filter(|(b, o)| *b && o.civ == civ && GoodKind::of(o.good) == kind)
-                        .map(|(_, o)| o.bid.qty)
-                        .sum();
-                    let cap = buy_cap(state, civ, kind).saturating_sub(already);
-                    // Affordable at the limit price, within the treasury and the tick's spend limit.
-                    let unit = unit_cost(rules, price, tariff[civ as usize]);
-                    let room = limit[civ as usize].saturating_sub(reserved[civ as usize]);
-                    let affordable = (room / unit.max(1)).min(u32::MAX as u64) as u32;
-                    let q = amount.min(cap).min(affordable);
-                    if q == 0 {
-                        let why = if limit[civ as usize] < state.civs[civ as usize].usdc {
-                            Blocked::NeedsSpendConsent
-                        } else {
-                            Blocked::NotEnoughUsdc
-                        };
-                        state.skip(civ, origin, why.code());
-                    }
-                    reserved[civ as usize] += q as u64 * unit;
-                    q
+    for (civ, order, _, origin) in accepted(state, |o| matches!(o, Order::ExchangeOrder { .. })) {
+        let Order::ExchangeOrder {
+            good,
+            side,
+            amount,
+            price,
+        } = order
+        else {
+            continue;
+        };
+        serial += 1;
+        if amount == 0 || price == 0 {
+            state.skip(civ, origin, Blocked::NothingToSell.code());
+            continue;
+        }
+        let key = tie_key(&state.tick_seed, ((civ as u64) << 32) | serial);
+        let kind = GoodKind::of(good);
+        let qty = match side {
+            Side::Buy => {
+                if !deliverable(state, civ, good) {
+                    state.skip(civ, origin, Blocked::CannotBuyStarGate.code());
+                    continue;
                 }
-                Side::Sell => {
-                    let already: u32 = orders
-                        .iter()
-                        .filter(|(b, o)| !*b && o.civ == civ && o.good == good)
-                        .map(|(_, o)| o.bid.qty)
-                        .sum();
-                    let q = amount.min(sellable(state, civ, good).saturating_sub(already));
-                    if q == 0 {
-                        state.skip(civ, origin, Blocked::NothingToSell.code());
-                    }
-                    q
+                let already: u32 = orders
+                    .iter()
+                    .filter(|(b, o)| *b && o.civ == civ && GoodKind::of(o.good) == kind)
+                    .map(|(_, o)| o.bid.qty)
+                    .sum();
+                let cap = buy_cap(state, civ, kind).saturating_sub(already);
+                // Affordable at the limit price, within the treasury and the tick's spend limit.
+                let unit = unit_cost(rules, price, tariff[civ as usize]);
+                let room = limit[civ as usize].saturating_sub(reserved[civ as usize]);
+                let affordable = (room / unit.max(1)).min(u32::MAX as u64) as u32;
+                let q = amount.min(cap).min(affordable);
+                if q == 0 {
+                    let why = if limit[civ as usize] < state.civs[civ as usize].usdc {
+                        Blocked::NeedsSpendConsent
+                    } else {
+                        Blocked::NotEnoughUsdc
+                    };
+                    state.skip(civ, origin, why.code());
                 }
-            };
-            if qty > 0 {
-                orders.push((
-                    side == Side::Buy,
-                    ExOrder {
-                        civ,
-                        good,
-                        bid: Bid { qty, price, key },
-                    },
-                ));
+                reserved[civ as usize] += q as u64 * unit;
+                q
             }
+            Side::Sell => {
+                let already: u32 = orders
+                    .iter()
+                    .filter(|(b, o)| !*b && o.civ == civ && o.good == good)
+                    .map(|(_, o)| o.bid.qty)
+                    .sum();
+                let q = amount.min(sellable(state, civ, good).saturating_sub(already));
+                if q == 0 {
+                    state.skip(civ, origin, Blocked::NothingToSell.code());
+                }
+                q
+            }
+        };
+        if qty > 0 {
+            orders.push((
+                side == Side::Buy,
+                ExOrder {
+                    civ,
+                    good,
+                    bid: Bid { qty, price, key },
+                },
+            ));
         }
     }
 

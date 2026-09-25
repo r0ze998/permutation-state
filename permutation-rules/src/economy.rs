@@ -18,10 +18,20 @@ pub fn growth_threshold(pop: u32) -> u64 {
 
 /// `T × (20 + T) / 80`, T = whole effective troops, T2 counted ×1.5 (§6.1).
 pub fn unit_upkeep<'a>(units: impl Iterator<Item = &'a Unit>) -> u64 {
-    let eff_milli: u64 = units
-        .filter(|u| !u.unit_type.is_civilian())
-        .map(|u| u.troops as u64 * stats(u.unit_type).upkeep_bps as u64 / BPS_ONE as u64)
-        .sum();
+    upkeep_of_effective(units.map(effective_troops_milli).sum())
+}
+
+/// A unit's effective troops for upkeep, in milli-troops (civilians: 0).
+pub fn effective_troops_milli(u: &Unit) -> u64 {
+    if u.unit_type.is_civilian() {
+        0
+    } else {
+        u.troops as u64 * stats(u.unit_type).upkeep_bps as u64 / BPS_ONE as u64
+    }
+}
+
+/// Unit upkeep of a civ with `eff_milli` effective milli-troops in total.
+pub fn upkeep_of_effective(eff_milli: u64) -> u64 {
     let t = eff_milli / 1000;
     t * (20 + t) / 80
 }

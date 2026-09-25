@@ -13,46 +13,43 @@ use crate::tick::accepted;
 /// city-state goes to the civ with the most influence at or above the
 /// threshold (ties by tie-break), so civ order never decides suzerainty.
 pub fn apply_envoys(state: &mut WorldState, rules: &Ruleset) {
-    for a in accepted(state) {
-        let civ = a.civ;
-        for (order, credit, origin) in a.iter() {
-            if let Order::SendEnvoy {
-                city_state,
-                influence,
-            } = *order
+    for (civ, order, credit, origin) in accepted(state, |o| matches!(o, Order::SendEnvoy { .. })) {
+        if let Order::SendEnvoy {
+            city_state,
+            influence,
+        } = order
+        {
+            let qty = influence as i64 * MILLI;
+            let open = state
+                .city_states
+                .get(city_state as usize)
+                .is_some_and(|cs| cs.captured_by.is_none());
+            let result = if !open {
+                Err(Blocked::TargetGone)
+            } else if qty <= 0 || state.civs[civ as usize].influence < qty {
+                Err(Blocked::NotEnoughInfluence)
+            } else {
+                Ok(())
+            };
+            if let Err(why) = result {
+                state.skip(civ, origin, why.code());
+                continue;
+            }
+            state.civs[civ as usize].influence -= qty;
+            state.civs[civ as usize].achievements.envoy_sent = true;
+            let cs = &mut state.city_states[city_state as usize];
+            cs.influence[civ as usize] += qty;
+            match cs
+                .envoys
+                .iter_mut()
+                .find(|e| e.civ == civ && e.credit == credit)
             {
-                let qty = influence as i64 * MILLI;
-                let open = state
-                    .city_states
-                    .get(city_state as usize)
-                    .is_some_and(|cs| cs.captured_by.is_none());
-                let result = if !open {
-                    Err(Blocked::TargetGone)
-                } else if qty <= 0 || state.civs[civ as usize].influence < qty {
-                    Err(Blocked::NotEnoughInfluence)
-                } else {
-                    Ok(())
-                };
-                if let Err(why) = result {
-                    state.skip(civ, origin, why.code());
-                    continue;
-                }
-                state.civs[civ as usize].influence -= qty;
-                state.civs[civ as usize].achievements.envoy_sent = true;
-                let cs = &mut state.city_states[city_state as usize];
-                cs.influence[civ as usize] += qty;
-                match cs
-                    .envoys
-                    .iter_mut()
-                    .find(|e| e.civ == civ && e.credit == credit)
-                {
-                    Some(e) => e.influence += qty as u64,
-                    None => cs.envoys.push(EnvoyShare {
-                        civ,
-                        credit,
-                        influence: qty as u64,
-                    }),
-                }
+                Some(e) => e.influence += qty as u64,
+                None => cs.envoys.push(EnvoyShare {
+                    civ,
+                    credit,
+                    influence: qty as u64,
+                }),
             }
         }
     }

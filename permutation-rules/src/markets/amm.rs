@@ -206,45 +206,43 @@ fn pool_index(good: Good) -> Option<usize> {
 /// Phase 2: clear both AMM pools and settle (§11.2).
 pub fn apply_amm(state: &mut WorldState, rules: &Ruleset) {
     let mut per_pool: [Vec<(CivId, AmmOrder, Credit)>; 2] = [Vec::new(), Vec::new()];
-    for a in accepted(state) {
-        let civ = a.civ;
-        for (order, credit, origin) in a.iter() {
-            let Order::MarketTrade {
-                good,
-                side,
-                amount,
-                limit_gold,
-            } = *order
-            else {
-                continue;
-            };
-            let c = &state.civs[civ as usize];
-            let why = if !c.techs.has(Tech::Currency) {
-                Some(Blocked::NeedsTech(Tech::Currency))
-            } else if pool_index(good).is_none() {
-                Some(Blocked::NothingToSell)
-            } else {
-                let pi = pool_index(good).unwrap_or(0);
-                let stock = if pi == 0 { c.iron } else { c.horses };
-                (side == Side::Sell && stock < amount as i64 * MILLI)
-                    .then_some(Blocked::NothingToSell) // sellers must own the goods
-            };
-            if let Some(why) = why {
-                state.skip(civ, origin, why.code());
-                continue;
-            }
+    for (civ, order, credit, origin) in accepted(state, |o| matches!(o, Order::MarketTrade { .. }))
+    {
+        let Order::MarketTrade {
+            good,
+            side,
+            amount,
+            limit_gold,
+        } = order
+        else {
+            continue;
+        };
+        let c = &state.civs[civ as usize];
+        let why = if !c.techs.has(Tech::Currency) {
+            Some(Blocked::NeedsTech(Tech::Currency))
+        } else if pool_index(good).is_none() {
+            Some(Blocked::NothingToSell)
+        } else {
             let pi = pool_index(good).unwrap_or(0);
-            per_pool[pi].push((
-                civ,
-                AmmOrder {
-                    side,
-                    qty: amount,
-                    limit_gold,
-                    budget_milli: c.gold,
-                },
-                credit,
-            ));
+            let stock = if pi == 0 { c.iron } else { c.horses };
+            (side == Side::Sell && stock < amount as i64 * MILLI).then_some(Blocked::NothingToSell)
+            // sellers must own the goods
+        };
+        if let Some(why) = why {
+            state.skip(civ, origin, why.code());
+            continue;
         }
+        let pi = pool_index(good).unwrap_or(0);
+        per_pool[pi].push((
+            civ,
+            AmmOrder {
+                side,
+                qty: amount,
+                limit_gold,
+                budget_milli: c.gold,
+            },
+            credit,
+        ));
     }
     let holders = hub_holders(state);
     for (pi, list) in per_pool.iter().enumerate() {

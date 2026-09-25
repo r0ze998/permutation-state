@@ -19,6 +19,8 @@ sha2 = { version = "=0.10.9", default-features = false }
 [features]
 default = []
 std = ["borsh/std", "sha2/std"]
+# Compute-unit probes on Solana (measurement builds only; see `probe`).
+cu-trace = []
 
 # On Solana, hash with the runtime's sol_sha256 syscall (bit-identical, far
 # cheaper in compute units than hashing in SBF code).

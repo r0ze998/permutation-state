@@ -13,6 +13,8 @@ default = ["custom-heap"]
 no-entrypoint = []
 custom-heap = []
 custom-panic = []
+# Log the compute units left at each step of ResolveTick (measurement builds only).
+cu-trace = ["permutation-rules/cu-trace"]
 
 [dependencies]
 # Same pins as permutation-state-solana-receipt-spike (MagicBlock's Native Rust

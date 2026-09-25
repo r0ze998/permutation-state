@@ -83,4 +83,3 @@ These are recorded here rather than fixed, because each one changes the state ro
 - `Civ.last_aggression` and `aggressor_window` are recorded but no rule reads them.
 - `Scores` duplicates achievement records (`star_gate_stages`, `star_gate_tick` vs `last_star_gate`).
 - Some `Blocked` reasons are reused for other cases; for example, `NothingToSell` also means "amount 0".
-- `accepted()` clones the tick's orders once per phase.

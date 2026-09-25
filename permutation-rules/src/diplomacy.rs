@@ -26,34 +26,43 @@ pub fn phase_diplomacy(state: &mut WorldState, rules: &Ruleset) {
         .proposals
         .retain(|p| now.saturating_sub(p.tick) < rules.proposal_ttl);
 
-    for a in accepted(state) {
-        let civ = a.civ;
-        for (order, credit, origin) in a.iter() {
-            let result = match *order {
-                Order::DeclareWar { civ: t } => {
-                    checks::declare_war(state, civ, t).map(|_| start_war(state, rules, civ, t))
-                }
-                Order::ProposePeace { civ: t } => checks::propose_peace(state, civ, t)
-                    .map(|_| propose(state, ProposalKind::Peace, civ, t, credit)),
-                Order::AcceptPeace { civ: t } => accept_peace(state, rules, civ, t, credit),
-                Order::ProposeNap { civ: t, bond } => {
-                    checks::propose_nap(state, rules, civ, t, bond)
-                        .map(|_| propose(state, ProposalKind::Nap { bond }, civ, t, credit))
-                }
-                Order::AcceptNap { civ: t, bond } => accept_nap(state, rules, civ, t, bond, credit),
-                Order::BreakNap { civ: t } => break_nap(state, civ, t),
-                Order::ProposeAlliance { civ: t } => checks::propose_alliance(state, rules, civ, t)
-                    .map(|_| propose(state, ProposalKind::Alliance, civ, t, credit)),
-                Order::AcceptAlliance { civ: t } => accept_alliance(state, rules, civ, t, credit),
-                Order::LeaveAlliance => {
-                    leave_alliance(state, rules, civ);
-                    Ok(())
-                }
-                _ => Ok(()),
-            };
-            if let Err(why) = result {
-                state.skip(civ, origin, why.code());
+    let diplomatic = |o: &Order| {
+        matches!(
+            o,
+            Order::DeclareWar { .. }
+                | Order::ProposePeace { .. }
+                | Order::AcceptPeace { .. }
+                | Order::ProposeNap { .. }
+                | Order::AcceptNap { .. }
+                | Order::BreakNap { .. }
+                | Order::ProposeAlliance { .. }
+                | Order::AcceptAlliance { .. }
+                | Order::LeaveAlliance
+        )
+    };
+    for (civ, order, credit, origin) in accepted(state, diplomatic) {
+        let result = match order {
+            Order::DeclareWar { civ: t } => {
+                checks::declare_war(state, civ, t).map(|_| start_war(state, rules, civ, t))
             }
+            Order::ProposePeace { civ: t } => checks::propose_peace(state, civ, t)
+                .map(|_| propose(state, ProposalKind::Peace, civ, t, credit)),
+            Order::AcceptPeace { civ: t } => accept_peace(state, rules, civ, t, credit),
+            Order::ProposeNap { civ: t, bond } => checks::propose_nap(state, rules, civ, t, bond)
+                .map(|_| propose(state, ProposalKind::Nap { bond }, civ, t, credit)),
+            Order::AcceptNap { civ: t, bond } => accept_nap(state, rules, civ, t, bond, credit),
+            Order::BreakNap { civ: t } => break_nap(state, civ, t),
+            Order::ProposeAlliance { civ: t } => checks::propose_alliance(state, rules, civ, t)
+                .map(|_| propose(state, ProposalKind::Alliance, civ, t, credit)),
+            Order::AcceptAlliance { civ: t } => accept_alliance(state, rules, civ, t, credit),
+            Order::LeaveAlliance => {
+                leave_alliance(state, rules, civ);
+                Ok(())
+            }
+            _ => Ok(()),
+        };
+        if let Err(why) = result {
+            state.skip(civ, origin, why.code());
         }
     }
 }

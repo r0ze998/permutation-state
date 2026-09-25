@@ -6,8 +6,8 @@
 //! phase lives in its own module; this file only sequences them.
 
 use crate::economy::order_budget;
-use crate::gov::GovEntry;
-use crate::orders::{CivOrders, OrderBatch};
+use crate::gov::{Credit, GovEntry};
+use crate::orders::{Order, OrderBatch};
 use crate::params::Ruleset;
 use crate::rng::Seed;
 use crate::state::{CivId, WorldState};
@@ -120,9 +120,24 @@ pub fn run_phase(
     Ok(())
 }
 
-/// The orders accepted for this tick, per civ in civ order (merged in phase 0).
-pub(crate) fn accepted(state: &WorldState) -> Vec<CivOrders> {
-    state.tick_orders.clone()
+/// One accepted order: its civ, the order, its merit credit and its origin
+/// (office, position in the office's batch).
+pub(crate) type Accepted = (CivId, Order, Credit, (u8, u16));
+
+/// The orders accepted for this tick (merged in phase 0) that `pick`
+/// selects, in engine order: civ order, then batch order. They are copied so
+/// the phase can change the state as it goes through them; copying only the
+/// ones a phase handles keeps phases cheap on chain.
+pub(crate) fn accepted(state: &WorldState, pick: impl Fn(&Order) -> bool) -> Vec<Accepted> {
+    state
+        .tick_orders
+        .iter()
+        .flat_map(|a| {
+            a.iter()
+                .filter(|(o, _, _)| pick(o))
+                .map(move |(o, credit, origin)| (a.civ, o.clone(), credit, origin))
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------- phase 11

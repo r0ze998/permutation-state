@@ -1,21 +1,27 @@
 //! Phases 7–9: upkeep (§6.1), society — war weariness, loyalty, grievance
 //! decay, city regeneration (§9) — and neutral actors (§12).
 
-use crate::economy::{amenities, city_upkeep, unit_upkeep};
+use crate::economy::{amenities, city_upkeep, effective_troops_milli, upkeep_of_effective};
 use crate::fixed::MILLI;
 use crate::movement::allied;
 use crate::params::Ruleset;
-use crate::state::{Owner, Relation, Unit, WorldState};
+use crate::state::{CivId, Owner, Relation, Unit, WorldState};
 use crate::units::stats;
+use alloc::vec::Vec;
 
 pub(crate) fn phase_upkeep(state: &mut WorldState) {
     for civ in 0..state.civs.len() as u16 {
         let cities = state.city_count(civ);
         let owned = |u: &&Unit| u.alive && u.owner == Owner::Civ(civ);
-        let upkeep = |s: &WorldState| {
-            (unit_upkeep(s.units.iter().filter(owned)) + city_upkeep(cities)) as i64 * MILLI
-        };
-        let mut balance = state.civs[civ as usize].gold - upkeep(state);
+        // Effective troops are summed once and updated as troops disband.
+        let mut eff: u64 = state
+            .units
+            .iter()
+            .filter(owned)
+            .map(effective_troops_milli)
+            .sum();
+        let upkeep = |eff: u64| (upkeep_of_effective(eff) + city_upkeep(cities)) as i64 * MILLI;
+        let mut balance = state.civs[civ as usize].gold - upkeep(eff);
         if balance >= 0 {
             state.civs[civ as usize].gold = balance;
             continue;
@@ -31,11 +37,14 @@ pub(crate) fn phase_upkeep(state: &mut WorldState) {
                 .map(|u| u.id as usize);
             let Some(v) = victim else { break };
             let u = &mut state.units[v];
+            eff -= effective_troops_milli(u);
             u.troops = u.troops.saturating_sub(1000);
             if u.troops < 500 {
                 u.alive = false;
+            } else {
+                eff += effective_troops_milli(u);
             }
-            balance = state.civs[civ as usize].gold - upkeep(state);
+            balance = state.civs[civ as usize].gold - upkeep(eff);
         }
         let c = &mut state.civs[civ as usize];
         c.gold = balance.max(0);
@@ -70,7 +79,21 @@ pub(crate) fn phase_society(state: &mut WorldState, rules: &Ruleset) {
         c.war_weariness = (c.war_weariness + gain).saturating_sub(if at_war { 1 } else { 3 });
     }
 
-    // Loyalty (§9.4) and city defence regeneration (§8.3).
+    // Loyalty (§9.4) and city defence regeneration (§8.3). Armies neither
+    // move nor fall here (freeing a city displaces only civilians), and a
+    // city only changes hands by going free, so garrisons are indexed by
+    // tile once and city counts are kept as cities go free.
+    let mut garrisons: Vec<(usize, CivId)> = state
+        .units
+        .iter()
+        .filter(|u| u.alive && !u.unit_type.is_civilian())
+        .filter_map(|u| match (state.map.index_of(u.hex), u.owner) {
+            (Some(t), Owner::Civ(c)) => Some((t, c)),
+            _ => None,
+        })
+        .collect();
+    garrisons.sort_unstable();
+    let mut city_counts: Vec<u32> = (0..n).map(|c| state.city_count(c)).collect();
     for i in 0..state.cities.len() {
         let city = &state.cities[i];
         let (Some(owner), true) = (city.owner, city.alive) else {
@@ -86,12 +109,10 @@ pub(crate) fn phase_society(state: &mut WorldState, rules: &Ruleset) {
         if capital_hex.is_some_and(|h| h.distance(city.hex) <= 6) {
             delta += 1;
         }
-        let garrisoned = state.units.iter().any(|u| {
-            u.alive
-                && u.hex == city.hex
-                && u.owner == Owner::Civ(owner)
-                && !u.unit_type.is_civilian()
-        });
+        let garrisoned = match state.map.index_of(city.hex) {
+            Some(t) => garrisons.binary_search(&(t, owner)).is_ok(),
+            None => false, // no unit stands off the map
+        };
         if garrisoned {
             delta += 3;
         }
@@ -103,7 +124,7 @@ pub(crate) fn phase_society(state: &mut WorldState, rules: &Ruleset) {
             .map(|o| o.pop)
             .sum();
         delta -= (pressure / 3) as i32;
-        let mut amen = amenities(city, state.city_count(owner), civ.war_weariness);
+        let mut amen = amenities(city, city_counts[owner as usize], civ.war_weariness);
         if civ.deficit {
             amen -= 2;
         }
@@ -118,6 +139,7 @@ pub(crate) fn phase_society(state: &mut WorldState, rules: &Ruleset) {
             city.defense = (city.defense + rules.city_regen_milli).min(max_def);
         }
         if city.loyalty == 0 {
+            city_counts[owner as usize] -= 1;
             city.owner = None; // Free City
             city.standing = crate::state::CityStanding::DEFAULT;
             let (id, hex) = (city.id, city.hex);

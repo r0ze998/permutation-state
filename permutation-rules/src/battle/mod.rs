@@ -22,7 +22,6 @@ use crate::merit;
 use crate::orders::{AttackTarget, Order};
 use crate::params::Ruleset;
 use crate::state::{CivId, WorldState};
-use crate::tick::accepted;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -75,10 +74,9 @@ type Origin = Option<(u8, u16)>;
 pub fn phase_combat(state: &mut WorldState, rules: &Ruleset) {
     advance_razing(state);
 
-    let orders = accepted(state);
     let mut attacks: Vec<(CivId, u32, AttackTarget, Credit, Origin)> = Vec::new();
     let mut razes: Vec<(CivId, u32, (u8, u16))> = Vec::new();
-    for a in &orders {
+    for a in &state.tick_orders {
         for (order, credit, origin) in a.iter() {
             match *order {
                 Order::Attack { army, target } => {

@@ -227,10 +227,23 @@ pub(super) fn log_tick_input(
     Ok(())
 }
 
+/// `cu-trace` builds log the compute units left at `what`.
+macro_rules! cu {
+    ($what:expr) => {
+        #[cfg(feature = "cu-trace")]
+        {
+            msg!($what);
+            solana_program::log::sol_log_compute_units();
+        }
+    };
+}
+
 pub(super) fn resolve_tick(program_id: &Pubkey, accounts: &[AccountInfo], to: u8) -> ProgramResult {
+    cu!("cu start");
     let chunk0 = accounts.first().ok_or(ProgramError::NotEnoughAccountKeys)?;
     let world = world_chunks(program_id, accounts, world_season_id(chunk0)?)?;
     let mut meta = world.meta()?;
+    cu!("cu chunks");
     if meta.finished {
         return Err(ChainError::WrongStatus.into());
     }
@@ -239,17 +252,22 @@ pub(super) fn resolve_tick(program_id: &Pubkey, accounts: &[AccountInfo], to: u8
         return Err(ChainError::InputNotPublished.into());
     }
     let body = world.body(&WORLD_MAGIC)?;
+    cu!("cu body");
     let pre_root = hashv(&[&body]).to_bytes();
+    cu!("cu hash");
     let mut state = WorldState::try_from_slice(&body).map_err(|_| ChainError::WrongWorld)?;
     drop(body);
+    cu!("cu decode");
     let rules = rules_for(meta.preset, meta.market)?;
     // Submissions are refused while frozen, so this is the input PS_INPUT published.
     let (input, _, _, nation_ais) =
         pending_input(program_id, &accounts[WORLD_CHUNKS..], &meta, meta.vrf)?;
+    cu!("cu input");
     let tick = state.tick;
     while state.phase_cursor < to.min(PHASE_COUNT) {
         let p = state.phase_cursor;
         run_phase(&mut state, &rules, &input, p).map_err(|_| ChainError::Rules)?;
+        cu!("cu phase");
         if state.phase_cursor == 0 {
             break; // the tick completed
         }
@@ -266,8 +284,10 @@ pub(super) fn resolve_tick(program_id: &Pubkey, accounts: &[AccountInfo], to: u8
         meta.finished = state.tick >= rules.ticks_per_season;
         (meta.frozen, meta.vrf, meta.input_chunks, meta.input_logged) = (false, [0; 32], 0, 0);
     }
+    cu!("cu nations");
     let root = world.write_world(&state)?;
     world.set_meta(&meta)?;
+    cu!("cu write");
     // Tick record for the replay verifier: the step from the previous root
     // to this one, and the hash of the input (published in full as PS_INPUT
     // before the tick could resolve). A split tick logs one record per part.

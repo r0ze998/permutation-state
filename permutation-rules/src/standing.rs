@@ -14,7 +14,6 @@ use crate::hex::Hex;
 use crate::orders::{AttackTarget, Order, StandingOrder, StandingTarget};
 use crate::params::Ruleset;
 use crate::state::{CityStanding, CivId, Owner, StandingRule, WorldState};
-use crate::tick::accepted;
 use crate::units::stats;
 
 /// Phase 2: apply a validated `SetStanding`.
@@ -70,7 +69,7 @@ pub(crate) fn phase_standing(state: &mut WorldState, rules: &Ruleset) {
     state.implicit.clear();
     let mut manual: BTreeSet<u32> = BTreeSet::new();
     let mut manual_purchase: BTreeSet<u32> = BTreeSet::new();
-    for a in accepted(state) {
+    for a in &state.tick_orders {
         for o in &a.orders {
             if let Some(u) = o.commanded_unit() {
                 manual.insert(u);

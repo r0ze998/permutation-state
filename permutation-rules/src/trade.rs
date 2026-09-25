@@ -18,25 +18,22 @@ use alloc::vec::Vec;
 /// from one civ to another (v0.2 C4).
 pub fn apply_transfers(state: &mut WorldState, rules: &Ruleset) {
     let mut sent: Vec<(CivId, CivId, u8, u32)> = Vec::new(); // (from, to, good kind, amount)
-    for a in accepted(state) {
-        let civ = a.civ;
-        for (order, credit, origin) in a.iter() {
-            if let Order::Transfer {
-                civ: to,
-                good,
-                amount,
-            } = *order
-            {
-                let kind = crate::markets::GoodKind::of(good) as u8;
-                let before: u32 = sent
-                    .iter()
-                    .filter(|s| s.0 == civ && s.1 == to && s.2 == kind)
-                    .map(|s| s.3)
-                    .sum();
-                match transfer(state, rules, civ, to, good, amount, before, credit) {
-                    Ok(()) => sent.push((civ, to, kind, amount)),
-                    Err(why) => state.skip(civ, origin, why.code()),
-                }
+    for (civ, order, credit, origin) in accepted(state, |o| matches!(o, Order::Transfer { .. })) {
+        if let Order::Transfer {
+            civ: to,
+            good,
+            amount,
+        } = order
+        {
+            let kind = crate::markets::GoodKind::of(good) as u8;
+            let before: u32 = sent
+                .iter()
+                .filter(|s| s.0 == civ && s.1 == to && s.2 == kind)
+                .map(|s| s.3)
+                .sum();
+            match transfer(state, rules, civ, to, good, amount, before, credit) {
+                Ok(()) => sent.push((civ, to, kind, amount)),
+                Err(why) => state.skip(civ, origin, why.code()),
             }
         }
     }

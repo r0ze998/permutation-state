@@ -27,16 +27,101 @@ pub fn may_enter(state: &WorldState, rules: &Ruleset, mover: Option<CivId>, hex:
 
 /// Occupancy: one army or one civilian per tile; inside an own city, one of each (§7.2).
 pub(crate) fn tile_free_for(state: &WorldState, unit: &Unit, hex: Hex) -> bool {
-    let is_civ = unit.unit_type.is_civilian();
-    let mut occupants = state
-        .units
-        .iter()
-        .filter(|u| u.alive && u.hex == hex && u.id != unit.id);
+    let occupants = state.units.iter().filter(|u| u.alive && u.hex == hex);
     let own_city = state
         .cities
         .iter()
         .any(|c| c.alive && c.hex == hex && c.owner.is_some() && c.owner == unit.owner.civ());
-    occupants.all(|o| o.owner == unit.owner && own_city && o.unit_type.is_civilian() != is_civ)
+    free_among(unit, occupants, own_city)
+}
+
+/// The occupancy rule, given the living units on the tile and whether it
+/// holds a living city of the unit's own civ.
+fn free_among<'a>(
+    unit: &Unit,
+    mut occupants: impl Iterator<Item = &'a Unit>,
+    own_city: bool,
+) -> bool {
+    let is_civ = unit.unit_type.is_civilian();
+    occupants.all(|o| {
+        o.id == unit.id
+            || (o.owner == unit.owner && own_city && o.unit_type.is_civilian() != is_civ)
+    })
+}
+
+/// Who stands where while phase 4 moves units: for each tile, a linked list
+/// of the living units on it (kept up to date as they move), and the living
+/// cities with their owners (cities do not change in phase 4). It answers
+/// exactly what `tile_free_for` answers, without scanning every unit and
+/// city per step; one flat array per tile keeps building it cheap on chain.
+struct Occupancy {
+    /// First unit on each tile, or `NONE`.
+    head: Vec<u32>,
+    /// Next unit on the same tile, per unit.
+    next: Vec<u32>,
+    /// `(tile, owner)` of every living, owned city.
+    cities: Vec<(usize, CivId)>,
+}
+
+const NONE: u32 = u32::MAX;
+
+impl Occupancy {
+    fn new(state: &WorldState) -> Occupancy {
+        let mut o = Occupancy {
+            head: alloc::vec![NONE; state.map.tiles.len()],
+            next: alloc::vec![NONE; state.units.len()],
+            cities: Vec::new(),
+        };
+        for (i, u) in state.units.iter().enumerate().filter(|(_, u)| u.alive) {
+            if let Some(t) = state.map.index_of(u.hex) {
+                o.next[i] = o.head[t];
+                o.head[t] = i as u32;
+            }
+        }
+        for c in state.cities.iter().filter(|c| c.alive) {
+            if let (Some(t), Some(owner)) = (state.map.index_of(c.hex), c.owner) {
+                o.cities.push((t, owner));
+            }
+        }
+        o
+    }
+
+    fn on_tile(&self, t: usize) -> impl Iterator<Item = usize> + '_ {
+        let first = Some(self.head[t]).filter(|&i| i != NONE);
+        core::iter::successors(first, |&i| {
+            Some(self.next[i as usize]).filter(|&n| n != NONE)
+        })
+        .map(|i| i as usize)
+    }
+
+    fn free_for(&self, state: &WorldState, i: usize, hex: Hex) -> bool {
+        let unit = &state.units[i];
+        let Some(t) = state.map.index_of(hex) else {
+            return tile_free_for(state, unit, hex);
+        };
+        let own_city = unit
+            .owner
+            .civ()
+            .is_some_and(|c| self.cities.iter().any(|&(ct, owner)| ct == t && owner == c));
+        free_among(unit, self.on_tile(t).map(|j| &state.units[j]), own_city)
+    }
+
+    fn moved(&mut self, state: &WorldState, i: usize, from: Hex, to: Hex) {
+        if let Some(t) = state.map.index_of(from) {
+            if self.head[t] == i as u32 {
+                self.head[t] = self.next[i];
+            } else {
+                let prev = self.on_tile(t).find(|&j| self.next[j] == i as u32);
+                if let Some(prev) = prev {
+                    self.next[prev] = self.next[i];
+                }
+            }
+        }
+        if let Some(t) = state.map.index_of(to) {
+            self.next[i] = self.head[t];
+            self.head[t] = i as u32;
+        }
+    }
 }
 
 /// Office and position of an order (see `CivOrders::origin`).
@@ -45,15 +130,12 @@ type Origin = (u8, u16);
 pub(crate) fn phase_movement(state: &mut WorldState, rules: &Ruleset) {
     // 1. Accept MoveUnit orders (paths continue on later ticks without orders),
     //    manual first, then those compiled from standing rules (§13).
-    let mut all: Vec<(CivId, Order, Option<Origin>)> = Vec::new();
-    for a in accepted(state) {
-        all.extend(
-            a.orders
-                .into_iter()
-                .zip(a.origin)
-                .map(|(o, g)| (a.civ, o, Some(g))),
-        );
-    }
+    let mut all: Vec<(CivId, Order, Option<Origin>)> = accepted(state, |o| {
+        matches!(o, Order::MoveUnit { .. } | Order::Attack { .. })
+    })
+    .into_iter()
+    .map(|(civ, o, _, g)| (civ, o, Some(g)))
+    .collect();
     all.extend(state.implicit.iter().cloned().map(|(c, o)| (c, o, None)));
     {
         for (civ, order, origin) in all {
@@ -94,6 +176,7 @@ pub(crate) fn phase_movement(state: &mut WorldState, rules: &Ruleset) {
         }
     }
 
+    crate::probe::probe("cu p4.accept");
     // 2. Sub-steps (§15 phase 4).
     let full_mp: Vec<u8> = state
         .units
@@ -103,6 +186,8 @@ pub(crate) fn phase_movement(state: &mut WorldState, rules: &Ruleset) {
     let mut mp_left = full_mp.clone();
     let mut moved = alloc::vec![false; state.units.len()];
     let max_mp = full_mp.iter().copied().max().unwrap_or(0);
+    let mut occupancy = Occupancy::new(state);
+    crate::probe::probe("cu p4.setup");
     for _ in 0..max_mp {
         let mut intents: Vec<(u64, usize, Hex, u8)> = Vec::new();
         for (i, u) in state.units.iter().enumerate() {
@@ -118,20 +203,21 @@ pub(crate) fn phase_movement(state: &mut WorldState, rules: &Ruleset) {
             }
             intents.push((tie_key(&state.tick_seed, u.id as u64), i, next, cost));
         }
+        crate::probe::probe("cu p4.intents");
         if intents.is_empty() {
             break;
         }
         intents.sort();
         for (_, i, next, cost) in intents {
-            let unit = state.units[i].clone();
-            if !may_enter(state, rules, unit.owner.civ(), next) {
+            if !may_enter(state, rules, state.units[i].owner.civ(), next) {
                 state.units[i].path.clear();
                 mp_left[i] = 0;
                 continue;
             }
-            if !tile_free_for(state, &unit, next) {
+            if !occupancy.free_for(state, i, next) {
                 continue; // wait this sub-step; never swap (§15 phase 4)
             }
+            occupancy.moved(state, i, state.units[i].hex, next);
             let u = &mut state.units[i];
             u.hex = next;
             u.path.remove(0);
@@ -267,4 +353,56 @@ pub fn path_to(state: &WorldState, rules: &Ruleset, unit: u32, goal: Hex) -> Opt
     }
     path.reverse();
     Some(path)
+}
+
+#[cfg(test)]
+mod occupancy_tests {
+    use super::*;
+    use crate::genesis::{nation_entries, new_season};
+    use crate::params::Preset;
+
+    /// The index answers exactly what the full scan answers, for every unit
+    /// and every neighbouring tile, also after units move around.
+    #[test]
+    fn occupancy_agrees_with_the_full_scan() {
+        let rules = Ruleset::new(Preset::Blitz);
+        let mut s = new_season(&rules, &[3; 32], &[4; 32], &nation_entries(6)).unwrap();
+        // Crowd a few tiles: every unit steps onto its first passable neighbour.
+        let mut occ = Occupancy::new(&s);
+        let check = |s: &WorldState, occ: &Occupancy| {
+            for i in 0..s.units.len() {
+                for h in s.units[i]
+                    .hex
+                    .neighbors()
+                    .into_iter()
+                    .chain([s.units[i].hex])
+                {
+                    assert_eq!(
+                        occ.free_for(s, i, h),
+                        tile_free_for(s, &s.units[i], h),
+                        "unit {i} to {h:?}"
+                    );
+                }
+            }
+        };
+        check(&s, &occ);
+        for round in 0..3 {
+            for i in 0..s.units.len() {
+                let from = s.units[i].hex;
+                let Some(to) = from
+                    .neighbors()
+                    .into_iter()
+                    .cycle()
+                    .skip(round)
+                    .take(6)
+                    .find(|h| s.map.tile(*h).is_some_and(|t| t.terrain.is_passable()))
+                else {
+                    continue;
+                };
+                occ.moved(&s, i, from, to);
+                s.units[i].hex = to;
+                check(&s, &occ);
+            }
+        }
+    }
 }

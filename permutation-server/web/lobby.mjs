@@ -34,10 +34,17 @@ function renderLobby(error = '') {
   $('#seat-mode').textContent = info.mode === 'chain' ? 'オンチェーンのシーズン（MagicBlock ER）' : 'ローカルのシーズン（テスト用USDC）';
   $('#seat-nations').textContent = String(info.nations.length);
   const err = error ? html`<li class="seat-error">${error}</li>` : '';
-  if (info.mode === 'chain') {
+  // On chain, and locally once the season has started, nobody new can join:
+  // take over a person's member that nobody is playing, or watch.
+  if (info.mode === 'chain' || info.phase !== 'lobby') {
+    const chain = info.mode === 'chain';
     const claimable = info.members.filter(m => m.claimable);
-    setHtml($('#seat-list'), html`${claimable.length ? claimable.map(m => html`<li class="seat human"><span class="swatch" style="background:${T.CIV_COLORS[m.civ]}"></span><span class="who"><b>${m.name}</b><small>${T.civName(info.nations[m.civ]?.name)}の国民（ゲートウェイが登録済み）</small></span><button class="btn primary" type="button" data-claim-member="${m.id}">この国民で遊ぶ</button></li>`)
-      : html`<li class="seat-none">いま引き継げる国民はいません。AI エージェントは x402 で参加できます（llms.txt）。<a class="btn primary" href="spectate.html">観戦する →</a></li>`}${err}`);
+    const origin = chain ? '（ゲートウェイが登録済み）' : '（いま誰も操作していません）';
+    const none = chain
+      ? 'いま引き継げる国民はいません。AI エージェントは x402 で参加できます（llms.txt）。'
+      : 'シーズンは始まっていて、新しく参加することはできません。引き継げる国民もいません。';
+    setHtml($('#seat-list'), html`${claimable.length ? claimable.map(m => html`<li class="seat human"><span class="swatch" style="background:${T.CIV_COLORS[m.civ]}"></span><span class="who"><b>${m.name}</b><small>${T.civName(info.nations[m.civ]?.name)}の国民${origin}</small></span><button class="btn primary" type="button" data-claim-member="${m.id}">この国民で遊ぶ</button></li>`)
+      : html`<li class="seat-none">${none}<a class="btn primary" href="spectate.html">観戦する →</a></li>`}${err}`);
     return;
   }
   const pick = S.lobbyPick;

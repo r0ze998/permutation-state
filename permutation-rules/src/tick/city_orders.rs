@@ -20,55 +20,62 @@ use alloc::vec::Vec;
 pub(crate) fn phase_economy_orders(state: &mut WorldState, rules: &Ruleset) {
     crate::markets::deliver(state);
     let mut purchased: Vec<u32> = Vec::new();
-    for a in accepted(state) {
-        let civ = a.civ;
-        for (order, credit, origin) in a.iter() {
-            let result = match order.clone() {
-                Order::FoundCity { settler } => found_city(state, rules, civ, settler, credit),
-                Order::SetQueue { city, items } => set_queue(state, civ, city, items, credit),
-                Order::SetFocus { city, focus } => match owned_city_mut(state, civ, city) {
-                    Some(c) => {
-                        c.focus = focus;
-                        c.steward_credit = credit;
-                        Ok(())
-                    }
-                    None => Err(Blocked::NotYours),
-                },
-                Order::SetResearch { techs } => set_research(state, civ, techs, credit),
-                // One purchase per city per tick (v0.2 C3).
-                Order::Purchase { city, gold } => {
-                    if purchased.contains(&city) {
-                        Err(Blocked::AlreadyPurchased)
-                    } else {
-                        purchased.push(city);
-                        purchase(state, rules, civ, city, gold)
-                    }
-                }
-                Order::SetStanding { target, rule } => {
-                    crate::standing::apply(state, civ, target, rule)
-                }
-                Order::RevealRationale {
-                    tick,
-                    policy,
-                    salt,
-                    text,
-                } => {
-                    // Recorded, never interpreted: verifiers check it against the
-                    // `decision` event of (`civ`, office, `tick`) (§4.3).
-                    let mut payload = Vec::with_capacity(69);
-                    payload.extend_from_slice(&civ.to_le_bytes());
-                    payload.push(origin.0);
-                    payload.extend_from_slice(&tick.to_le_bytes());
-                    payload.extend_from_slice(&crate::decision::policy_id(&policy));
-                    payload.extend_from_slice(&crate::decision::rationale_hash(&salt, &text));
-                    state.push_event(b"reveal", &payload);
+    let economy = |o: &Order| {
+        matches!(
+            o,
+            Order::FoundCity { .. }
+                | Order::SetQueue { .. }
+                | Order::SetFocus { .. }
+                | Order::SetResearch { .. }
+                | Order::Purchase { .. }
+                | Order::SetStanding { .. }
+                | Order::RevealRationale { .. }
+        )
+    };
+    for (civ, order, credit, origin) in accepted(state, economy) {
+        let result = match order {
+            Order::FoundCity { settler } => found_city(state, rules, civ, settler, credit),
+            Order::SetQueue { city, items } => set_queue(state, civ, city, items, credit),
+            Order::SetFocus { city, focus } => match owned_city_mut(state, civ, city) {
+                Some(c) => {
+                    c.focus = focus;
+                    c.steward_credit = credit;
                     Ok(())
                 }
-                _ => Ok(()),
-            };
-            if let Err(why) = result {
-                state.skip(civ, origin, why.code());
+                None => Err(Blocked::NotYours),
+            },
+            Order::SetResearch { techs } => set_research(state, civ, techs, credit),
+            // One purchase per city per tick (v0.2 C3).
+            Order::Purchase { city, gold } => {
+                if purchased.contains(&city) {
+                    Err(Blocked::AlreadyPurchased)
+                } else {
+                    purchased.push(city);
+                    purchase(state, rules, civ, city, gold)
+                }
             }
+            Order::SetStanding { target, rule } => crate::standing::apply(state, civ, target, rule),
+            Order::RevealRationale {
+                tick,
+                policy,
+                salt,
+                text,
+            } => {
+                // Recorded, never interpreted: verifiers check it against the
+                // `decision` event of (`civ`, office, `tick`) (§4.3).
+                let mut payload = Vec::with_capacity(69);
+                payload.extend_from_slice(&civ.to_le_bytes());
+                payload.push(origin.0);
+                payload.extend_from_slice(&tick.to_le_bytes());
+                payload.extend_from_slice(&crate::decision::policy_id(&policy));
+                payload.extend_from_slice(&crate::decision::rationale_hash(&salt, &text));
+                state.push_event(b"reveal", &payload);
+                Ok(())
+            }
+            _ => Ok(()),
+        };
+        if let Err(why) = result {
+            state.skip(civ, origin, why.code());
         }
     }
     crate::trade::apply_transfers(state, rules);

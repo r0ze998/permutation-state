@@ -73,17 +73,25 @@ Measured on the local MagicBlock stack and on devnet (program `J4aZxe3ynkS7kcvCp
 | 20 × 4 KiB layout, local | 0.88M average, 1.10M peak | 1 |
 | 20 × 4 KiB layout, devnet (an outside agent playing) | 1.11M average per tick in total; 37 of 180 ticks split, every part under 1.4M | 1–3 |
 | A tick too heavy for one transaction | parts of 0.45–0.9M each | 2–7 |
+| After the phase optimisations below, local (four seasons) | 0.81–0.85M average, last 30 ticks 0.95–1.06M, peak 0.98–1.14M | 1 |
+| After the phase optimisations, devnet (season 1790312639004, an outside agent playing) | 0.80M average, last 30 ticks 0.97M, peak 1.04M; no tick split | 1 |
 | `LogTickInput` | small | 1–2 per tick (inputs of 3.5 KB on average, 6.3 KB at most) |
 | All on-chain roots vs a native replay | identical | — |
 
 Most of a part's cost is fixed: decoding the world, re-encoding it and hashing it take roughly 0.4–0.45M CU late in a season (the cheapest parts measured). Splitting a tick therefore costs more in total than resolving it in one transaction, and the crank splits only as far as it has to.
 
-The earlier optimisations still apply:
+Where a late tick's compute goes (about 1.0M CU in total, from a `cu-trace` build): decoding the world ~130k, writing it back ~90k, checking the 20 chunk addresses ~64k, reading the input from the nation accounts ~35–47k and reopening them ~27–40k; of the phases, production (6) ~150–200k, society (8) ~55k, intake (0) ~55–80k, standing rules (3) and movement (4) ~40–60k each.
+
+Optimisations, none of which changes a result (the golden seasons in `permutation-server/tests/golden.rs` pin every root):
 
 - SHA-256 goes through the `sol_sha256` syscall.
-- Tile indexing is arithmetic.
+- Tile indexing is arithmetic, and a neighbourhood costs one `index_of` per column.
 - Territory and yield scans only look at the neighbourhood.
 - The world is encoded into one buffer and copied once.
+- Each phase copies only the orders it handles (`tick::accepted` with a filter), not the whole tick's orders.
+- Movement keeps a per-tile index of who stands where instead of scanning every unit and city per step; society indexes garrisons once; production counts cities once; upkeep updates the effective troops as they disband.
+
+To measure: `cargo build-sbf --features cu-trace` logs the compute units left after each step of `ResolveTick` and inside phases 4 and 6 (`permutation_rules::probe`). Run a local season with that build and read the logs of the resolve transactions. Checking the chunk addresses with stored bumps instead of `find_program_address` would save about 35k more, but needs a new world header layout.
 
 ## Trust model (what the chain guarantees)
 

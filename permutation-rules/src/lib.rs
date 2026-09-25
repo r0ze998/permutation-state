@@ -35,6 +35,7 @@ pub mod orders;
 pub mod params;
 pub mod payout;
 pub mod preview;
+pub mod probe;
 pub mod rng;
 pub mod scoring;
 pub mod standing;

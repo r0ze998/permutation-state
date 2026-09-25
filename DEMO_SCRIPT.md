@@ -1,6 +1,6 @@
 # 3分デモ動画 — 台本（ショットリスト・ナレーション・収録手順）
 
-映すのは、実際に動いているものだけです。ゲームの操作場面はローカルの MagicBlock スタックで撮ります（ティックを速く回せて、公開 RPC の遅延がないため）。「本番のチェーンでも動く」ことは、devnet で完走したシーズン（[ログ抜粋](demo/devnet-season-1790284871773.txt)）とエクスプローラ、devnet に対する検証で見せます。
+映すのは、実際に動いているものだけです。ゲームの操作場面はローカルの MagicBlock スタックで撮ります（ティックを速く回せて、公開 RPC の遅延がないため）。「本番のチェーンでも動く」ことは、devnet で完走したシーズン（[ログ抜粋](demo/devnet-season-1790312639004.txt)）とエクスプローラ、devnet に対する検証で見せます。
 
 - 長さ：3:00（ナレーションは英語、約330語。ゆっくり読んで約2分30秒、残りは画面の間）
 - 画面：ブラウザ 1400×860 前後、ターミナルは文字を大きめ（18pt 以上）
@@ -41,7 +41,7 @@
 完走済みの devnet のシーズンを、2つ目のゲートウェイ（ポート 4192）から読み出します。新しいシーズンは作りません。
 
 ```bash
-(cd permutation-gateway && node src/server.mjs --cluster devnet --base https://api.devnet.solana.com --er https://devnet-as.magicblock.app --er-validator MAS1Dt9qreoRMQ14YQuhg8UTZMMzDdKhmkZMECCzk57 --state devnet-4.json --port 4192)
+(cd permutation-gateway && node src/server.mjs --cluster devnet --base https://api.devnet.solana.com --er https://devnet-as.magicblock.app --er-validator MAS1Dt9qreoRMQ14YQuhg8UTZMMzDdKhmkZMECCzk57 --state devnet-5.json --port 4192)
 ```
 
 ```bash
@@ -52,15 +52,15 @@
 (cd permutation-gateway && node scripts/rpc-proxy.mjs --port 17999 --target https://devnet-as.magicblock.app)
 ```
 
-`devnet-4.json` は `permutation-gateway/.local/` にある、このシーズンの状態ファイルです（Git の管理外）。
+`devnet-5.json` は `permutation-gateway/.local/` にある、このシーズンの状態ファイルです（Git の管理外）。
 
 **3. ブラウザのタブ（左から順に）**
 
 1. A：<http://127.0.0.1:4185/>（Player 1 を引き継ぐ。まだ押さない）
 2. B：<http://127.0.0.1:4185/spectate.html>（観戦）
 3. C：[プログラム（devnet）](https://explorer.solana.com/address/J4aZxe3ynkS7kcvCpKbp6aFYw8d9vtrRDsgSEi1niU6n?cluster=devnet)
-4. D：[シーズンのアカウント（devnet）](https://explorer.solana.com/address/FQvhYJch4XhFx7rqwEsodm6soATaLiKNZrPFDViSedmF?cluster=devnet)
-5. E：[x402 の支払い取引（devnet）](https://explorer.solana.com/tx/2rArjBchUs9seRmxzx1BE4GEk5UfGqCZATk5a7bxC8czKEaQEhSMPs1WmkUvAZiJJoiWPwrp87ex1rsTKfbcUdNK?cluster=devnet)
+4. D：[シーズンのアカウント（devnet）](https://explorer.solana.com/address/J8DBWSUyivswpooBirhcuiAP6NaFzBSwzcM3yLNt6K5T?cluster=devnet)
+5. E：[x402 の支払い取引（devnet）](https://explorer.solana.com/tx/5F73ziXfjUNUAmBwUhtoJaXm3khpVfvvfb4apqLZLzCNYGZu35W7Fux1bRXXKcJwU25MTAder3U6p5kW1KyY4ZRh?cluster=devnet)
 
 **4. ターミナルに打っておくコマンド（Enter はまだ押さない）**
 
@@ -77,7 +77,7 @@ curl -s -i -X POST http://127.0.0.1:4191/x402/join | head -20
 ```
 
 ```bash
-less demo/devnet-season-1790284871773.txt
+less demo/devnet-season-1790312639004.txt
 ```
 
 ## ショットリスト
@@ -120,7 +120,7 @@ less demo/devnet-season-1790284871773.txt
 ## 収録前のチェックリスト
 
 - [ ] ローカルのゲートウェイが「registering」で待っている（`curl -s http://127.0.0.1:4191/season` の `phase`）
-- [ ] 4192 のゲートウェイが devnet のシーズン `1790284871773` を返す（`curl -s http://127.0.0.1:4192/season`）
+- [ ] 4192 のゲートウェイが devnet のシーズン `1790312639004` を返す（`curl -s http://127.0.0.1:4192/season`）
 - [ ] 通知・メール・Slack などの通知を切った
 - [ ] ブラウザの拡張機能やブックマークバーを隠した
 - [ ] 一度通しでリハーサルし、シーン3の献策が出るまでの時間を把握した
@@ -139,7 +139,7 @@ less demo/devnet-season-1790284871773.txt
 - **霧は暗号的には強制されていません。** ER 上のアカウントは読めます。強制は PER（TEE）で行う予定です。
 - **命令は凍結まで平文です。** 締切直前の後出しは、命令の封印（ロードマップ）で防ぐ予定です。
 - **乱数：** 入力が凍結される時点のワールドのルート・スロット・時刻から作っています。MagicBlock VRF に置き換える予定です。
-- **計算量：** 6か国のティックは平均84万〜111万 CU です。1取引の上限（140万 CU）を超えるティックは、フェーズの区切りで自動的に分割して解決します。
+- **計算量：** 6か国のティックは、devnet の最新シーズンで平均約80万 CU、最大約104万 CU で、180ティックすべてが1取引で解決しました（上限は140万 CU）。上限を超えるティックが出た場合は、フェーズの区切りで自動的に分割して解決します。
 - **devnet での制約：** MagicBlock の committor は大きすぎる取引を落とすため、世界データを 4KB×20 に分け、ベース層への保存と返却を小さな単位で送っています（[DESIGN.md](permutation-chain/DESIGN.md)）。
 - **お金：** USDC はテスト用で、価値はありません。mainnet には出していません。
 - **LLM エージェント：** 実キーで1ティック、モデルの判断をチェーンに提出するところまで確認済みです（その後、試験用アカウントの API 残高が尽きたため中断）。動画ではルール型のエージェントを使います。

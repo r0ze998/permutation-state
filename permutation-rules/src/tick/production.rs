@@ -17,6 +17,10 @@ use alloc::vec::Vec;
 pub(crate) fn phase_production(state: &mut WorldState, rules: &Ruleset) {
     let mut last = alloc::vec![crate::state::LastYields::default(); state.civs.len()];
     let mut grown: Vec<Credit> = Vec::new();
+    // No city changes hands or falls in phase 6: count each civ's cities once.
+    let city_counts: Vec<u32> = (0..state.civs.len() as CivId)
+        .map(|c| state.city_count(c))
+        .collect();
     for i in 0..state.cities.len() {
         let (owner, alive) = (state.cities[i].owner, state.cities[i].alive);
         let razing = state.cities[i].razing.is_some();
@@ -27,9 +31,16 @@ pub(crate) fn phase_production(state: &mut WorldState, rules: &Ruleset) {
         let is_capital = c_ref.capital == Some(i as u32);
         let has_philosophy = c_ref.techs.has(Tech::Philosophy);
         let ww = c_ref.war_weariness;
-        let civ_cities = state.city_count(civ);
+        let civ_cities = city_counts[civ as usize];
 
+        let trace = i < 3;
+        if trace {
+            crate::probe::probe("cu p6.start");
+        }
         let (y, worked) = city_yield(&state.map, &state.cities[i], is_capital, has_philosophy);
+        if trace {
+            crate::probe::probe("cu p6.yield");
+        }
         let amen = amenities(&state.cities[i], civ_cities, ww);
         let (surplus, prod_bps) = apply_amenities(rules, y.food, state.cities[i].pop, amen);
 
@@ -52,8 +63,14 @@ pub(crate) fn phase_production(state: &mut WorldState, rules: &Ruleset) {
                 city.heritage_bonus = 0;
             }
         }
+        if trace {
+            crate::probe::probe("cu p6.growth");
+        }
         let (hex, pop, id) = (state.cities[i].hex, state.cities[i].pop, i as u32);
         state.map.claim_territory(id, hex, territory_radius(pop));
+        if trace {
+            crate::probe::probe("cu p6.territory");
+        }
 
         // Civilization-level yields.
         {
@@ -94,8 +111,15 @@ pub(crate) fn phase_production(state: &mut WorldState, rules: &Ruleset) {
             tile.reserve -= 1;
         }
 
+        if trace {
+            crate::probe::probe("cu p6.civ");
+        }
         complete_queue(state, rules, civ, i);
+        if trace {
+            crate::probe::probe("cu p6.queue");
+        }
     }
+    crate::probe::probe("cu p6.cities");
 
     // City-state suzerain bonuses (§12.1).
     for cs in 0..state.city_states.len() {
@@ -123,6 +147,7 @@ pub(crate) fn phase_production(state: &mut WorldState, rules: &Ruleset) {
             }
         }
     }
+    crate::probe::probe("cu p6.suzerain");
     for c in grown {
         merit::credit(
             state,
@@ -143,6 +168,7 @@ pub(crate) fn phase_production(state: &mut WorldState, rules: &Ruleset) {
         c.last = l;
     }
 
+    crate::probe::probe("cu p6.merit");
     // Research (§6.2).
     for civ in 0..state.civs.len() {
         let cities = state.city_count(civ as u16);
