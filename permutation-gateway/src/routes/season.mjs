@@ -1,0 +1,45 @@
+// Reading the season: health, the season account and member registry, the
+// raw world, and the tick index for the replay verifier.
+//
+//   GET /health
+//   GET /season        season account, members (hosted or not), records for the verifier
+//   GET /world.bin     raw world account (octet-stream) from the layer it lives on
+//   GET /ticks?from=N  archived tick records: PS_TICK roots with the input its PS_INPUT
+//                      chunks published (an index for the replay verifier, which re-reads
+//                      both from the ER's logs)
+import { PublicKey } from '@solana/web3.js';
+import { decodeSeason, NATIONS } from '../../client/src/codec.mjs';
+import { RouteError } from './errors.mjs';
+
+const b58 = k => new PublicKey(k).toBase58();
+/** How old a world snapshot /world.bin may serve (ms). */
+const SNAPSHOT_MAX_AGE_MS = 300;
+
+export const seasonRoutes = {
+  'GET /health': async ({ crank, store }) => ({ body: { ok: true, phase: crank.phase, season: store.state.seasonId } }),
+
+  'GET /season': async ({ base, chain, cfg, crank, store, registry }) => {
+    const s = decodeSeason((await base.getAccountInfo(chain.season, 'confirmed')).data);
+    const state = store.state;
+    return {
+      body: {
+        season: { ...s, admin: b58(s.admin), crank: b58(s.crank), usdcMint: b58(s.usdcMint) },
+        nations: NATIONS.slice(0, s.nations), members: await registry.list(),
+        programId: cfg.programId, cluster: cfg.cluster, phase: crank.phase,
+        accounts: { season: chain.season.toBase58(), world: chain.world.toBase58(), vault: chain.vault.toBase58(), nations: chain.nations(s.nations).map(k => k.toBase58()) },
+        genesis: state.genesis ?? null, seating: state.seating ?? [], open: state.open ?? null, endpoints: { base: cfg.baseRpc, er: cfg.erRpc },
+      },
+    };
+  },
+
+  'GET /ticks': async ({ crank }, req) => ({ body: { records: crank.tickRecords(Number(req.url.searchParams.get('from') || 0)) } }),
+
+  'GET /world.bin': async ({ crank, now }) => {
+    const snap = now() - (crank.snapshot?.at ?? 0) < SNAPSHOT_MAX_AGE_MS ? crank.snapshot : await crank.refresh();
+    if (!snap) throw new RouteError(503, 'world not available', 'WorldUnavailable');
+    return {
+      raw: snap.world,
+      headers: { 'Content-Type': 'application/octet-stream', 'X-Slot': String(snap.slot), 'X-Layer': snap.layer, 'X-Phase': crank.phase },
+    };
+  },
+};

@@ -731,7 +731,7 @@ The v0.1 Exchange is replaced by a market between **nation treasuries**. Its goa
 - **Capturing a city-state** makes it the captor's city and ends that city-state's suzerainty. The captor counts as its founder, so it is **not** a captured city held for the Hegemony path (§14.1). Its tiles count as territory.
 
 ### 12.2 Crisis (ticks 120–161) — not implemented (roadmap)
-The engine has no Crisis in v0.2 (`tick.rs`, phase 9: TODO). No barbarian is ever spawned. The v0.1 design below is kept for the roadmap. V5 §10 retargets it: the waves go to the nations with the **most achievement points**, not to track leaders.
+The engine has no Crisis in v0.2 (`tick/society.rs`, phase 9: not implemented). No barbarian is ever spawned. The v0.1 design below is kept for the roadmap. V5 §10 retargets it: the waves go to the nations with the **most achievement points**, not to track leaders.
 - **Targets:** every 6 ticks (at 120, 126, …, 156) the top civilizations by achievement points so far.
 - **Wave per target:** a barbarian army of `4 + (t − 120) / 6` troops.
   - Spearmen until tick 137, Pikemen after.
@@ -856,7 +856,7 @@ The payout rules are fixed before registration opens (they are part of the rules
 ### 14.5 Removed from v0.1
 Dominion, Concord and the Science track as payout tracks; prize coalitions; track winners per track, the rank weights `7500^(k−1)`, the one-top-3-per-entry rule and the participation pool. v0.2 changes C10 and C11 are not merged.
 
-### 14.6 Governance (V5 §5, `gov.rs`)
+### 14.6 Governance (V5 §5, `gov/`)
 Governance is part of the deterministic world. Every action arrives in a tick's input (`TickInput.gov`, submitted with `SubmitGov`), is applied in phase 0 in input order, and elections and recalls resolve in phase 11 and take effect from the next tick. Replaying the inputs replays who held which office and why. An action whose signer is not the member's registered key is ignored.
 
 **Actions**

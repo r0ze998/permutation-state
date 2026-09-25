@@ -242,15 +242,31 @@ impl MapJob {
         if civs == 0 || civs > rules.max_civs as usize {
             return Err(RulesError::MapGeneration("civilization count out of range"));
         }
-        Ok(MapJob { civs: civs as u16, attempt: 0, map: None, valid: Vec::new(), scanned: 0, starts: Vec::new(), rounds: 0, balanced: false })
+        Ok(MapJob {
+            civs: civs as u16,
+            attempt: 0,
+            map: None,
+            valid: Vec::new(),
+            scanned: 0,
+            starts: Vec::new(),
+            rounds: 0,
+            balanced: false,
+        })
     }
 
     /// One step: generate the attempt's terrain; or check up to `work` start
     /// candidates; or place starts; or run up to `work / BALANCE_ROUND_WORK`
     /// balancing rounds; or place sites. A failed stage moves to the next attempt.
-    pub fn step(mut self, rules: &Ruleset, world_seed: &Seed, work: u32) -> Result<MapStep, RulesError> {
+    pub fn step(
+        mut self,
+        rules: &Ruleset,
+        world_seed: &Seed,
+        work: u32,
+    ) -> Result<MapStep, RulesError> {
         if self.attempt >= rules.start_generation_attempts as u64 {
-            return Err(RulesError::MapGeneration("no fair start layout within attempt limit"));
+            return Err(RulesError::MapGeneration(
+                "no fair start layout within attempt limit",
+            ));
         }
         let Some(mut map) = self.map.take() else {
             let map = generate_terrain(rules, world_seed, self.attempt);
@@ -267,7 +283,14 @@ impl MapJob {
             }
             self.scanned = end;
         } else if self.starts.is_empty() {
-            match place_starts(rules, &map, world_seed, self.attempt, self.civs as usize, &self.valid) {
+            match place_starts(
+                rules,
+                &map,
+                world_seed,
+                self.attempt,
+                self.civs as usize,
+                &self.valid,
+            ) {
                 Some(starts) => self.starts = starts,
                 None => return Ok(MapStep::Working(self.next_attempt())),
             }
@@ -287,10 +310,33 @@ impl MapJob {
             }
         } else {
             let civs = self.civs as usize;
-            let city_states = place_sites(&map, world_seed, self.attempt, b"citystate", (civs / 3).max(2), &self.starts, 6, true);
-            let hubs = place_sites(&map, world_seed, self.attempt, b"hub", (civs / 4).max(2), &self.starts, 5, false);
+            let city_states = place_sites(
+                &map,
+                world_seed,
+                self.attempt,
+                b"citystate",
+                (civs / 3).max(2),
+                &self.starts,
+                6,
+                true,
+            );
+            let hubs = place_sites(
+                &map,
+                world_seed,
+                self.attempt,
+                b"hub",
+                (civs / 4).max(2),
+                &self.starts,
+                5,
+                false,
+            );
             return Ok(match (city_states, hubs) {
-                (Some(city_states), Some(hubs)) => MapStep::Done(Generated { map, starts: self.starts, city_states, hubs }),
+                (Some(city_states), Some(hubs)) => MapStep::Done(Generated {
+                    map,
+                    starts: self.starts,
+                    city_states,
+                    hubs,
+                }),
                 _ => MapStep::Working(self.next_attempt()),
             });
         }
@@ -299,7 +345,16 @@ impl MapJob {
     }
 
     fn next_attempt(self) -> MapJob {
-        MapJob { civs: self.civs, attempt: self.attempt + 1, map: None, valid: Vec::new(), scanned: 0, starts: Vec::new(), rounds: 0, balanced: false }
+        MapJob {
+            civs: self.civs,
+            attempt: self.attempt + 1,
+            map: None,
+            valid: Vec::new(),
+            scanned: 0,
+            starts: Vec::new(),
+            rounds: 0,
+            balanced: false,
+        }
     }
 }
 
@@ -585,7 +640,9 @@ mod tests {
             let stepped = loop {
                 steps += 1;
                 match job.step(&rules, &seed, 37).unwrap() {
-                    MapStep::Working(j) => job = borsh::from_slice(&borsh::to_vec(&j).unwrap()).unwrap(), // survives storage
+                    MapStep::Working(j) => {
+                        job = borsh::from_slice(&borsh::to_vec(&j).unwrap()).unwrap()
+                    } // survives storage
                     MapStep::Done(g) => break g,
                 }
             };
@@ -603,12 +660,19 @@ mod tests {
                 assert_eq!(g.map.index_of(t.hex), Some(i), "{:?}", t.hex);
             }
             let r = g.map.radius as i32;
-            for h in [Hex::new(r + 1, 0), Hex::new(0, -r - 1), Hex::new(r, 1), Hex::new(-r, -1)] {
+            for h in [
+                Hex::new(r + 1, 0),
+                Hex::new(0, -r - 1),
+                Hex::new(r, 1),
+                Hex::new(-r, -1),
+            ] {
                 assert_eq!(g.map.index_of(h), None, "{h:?} is off the map");
             }
             let c = g.starts[0];
             let near = g.map.indices_within(c, 3);
-            let brute: Vec<usize> = (0..g.map.tiles.len()).filter(|&i| g.map.tiles[i].hex.distance(c) <= 3).collect();
+            let brute: Vec<usize> = (0..g.map.tiles.len())
+                .filter(|&i| g.map.tiles[i].hex.distance(c) <= 3)
+                .collect();
             assert_eq!(near, brute);
         }
     }

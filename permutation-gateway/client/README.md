@@ -51,6 +51,10 @@ await game.claim({ wallet, usdcAccount });                           // once the
 
 Orders for offices you do not hold come back in `notHeld`; send them as proposals (`propose(role, orders)`).
 
+Every batch is packed before any is sent: if one office's orders do not fit a transaction, nothing is sent and `submit` returns `{ok: false, code: 'BatchTooLarge'}`. Otherwise each office is relayed on its own and listed in `offices` with its `signature`, or its `error` and `code`; `ok` is true only if every office went through.
+
+**Errors.** Failed requests throw `HttpError` with `.status` and `.code`: the gateway's machine-readable code, e.g. a program error name (`TickFrozen`, `NothingToClaim`) or a gateway code (`NotHosted`, `RelayRejected`). Problems found locally throw `GameError` with a `.code` (`NotAMember`, `NotFinalized`, …). `errorCode(e)` reads either.
+
 **Timing.** A tick resolves at its deadline, or as soon as every office of every nation has submitted. At that moment its input is frozen and published on chain; later submissions for that tick get HTTP 409 (`TickFrozen` or `WrongTick`, see `chainError`). Send governance actions before your own batch, and retry anything refused on the next tick.
 
 ## Methods
@@ -100,10 +104,16 @@ Both use [`../agents/runner.mjs`](../agents/runner.mjs). The runner joins throug
 
 | File | What |
 |---|---|
-| `src/game.mjs` | `GameClient`: HTTP, x402 entry, signing and relay, governance, claim |
+| `src/game.mjs` | `GameClient`: reading, x402 entry, signing and relay, governance, claim (a facade over the modules below) |
+| `src/http.mjs` | JSON over HTTP, `HttpError` / `GameError`, default URLs |
+| `src/offices.mjs` | which office gives which order (`officeOf`, `allowedOffices`, `splitByOffice`), checked against `role_allows_static` |
+| `src/batch.mjs` | `packBatch`: an office's orders plus the reveals that fit (`BATCH_BYTES`) |
+| `src/x402-client.mjs` | `joinViaX402`: registration over HTTP 402 |
+| `src/keys.mjs` | keypair files |
+| `src/retry.mjs` | `retry`, `poll` and the transient / too-heavy error classes |
 | `src/decision.mjs` | commit-reveal digests, byte-identical to `permutation-rules::decision` |
-| `src/summary.mjs` | compact state for prompts |
+| `src/summary.mjs`, `src/hexgrid.mjs` | compact state for prompts; hex distance |
 | `src/tools.mjs` | tool definitions shared by MCP and the LLM agent |
 | `src/mcp.mjs`, `bin/permutation-mcp.mjs` | MCP server (stdio) |
-| `src/codec.mjs`, `src/borsh.mjs` | borsh encoding of orders, governance actions and instructions; decoding of accounts and log records; program error names (tested against Rust vectors) |
+| `src/codec.mjs`, `src/borsh.mjs` | borsh encoding of orders, governance actions and instructions (`IX`, `IX_TAG`); decoding of accounts and log records; program error names; `claimAmount`; the constants, magics and names shared with the Rust crates (all tested against Rust vectors) |
 | `src/chain.mjs`, `src/pda.mjs` | instruction builders and PDAs of the `permutation-chain` program |

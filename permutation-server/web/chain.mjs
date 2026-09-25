@@ -1,0 +1,66 @@
+// The chain layer: prize pool chip, the chain beat in the top bar (one pulse
+// per sealed tick) and the chain lens drawer (` key).
+import * as T from './i18n.mjs';
+import { $, html, setHtml, fmt, usdc, short } from './util.mjs';
+import { S, invalidate } from './state.mjs';
+import { poolSharePct } from './rules.mjs';
+
+export const poolUsdc = () => (S.view?.projection ? Number(S.view.projection.pool) / 1e6 : 0);
+
+/** Update step for a new view: a newly sealed tick pulses the beat and refreshes the gateway data. */
+export function onChainView(v) {
+  const t = v.chain?.lastTick;
+  if (t && S.lastSealed !== t.tick) { S.lastSealed = t.tick; loadChain(); }
+}
+
+async function loadChain() {
+  const g = S.view?.chain?.gateway; if (!g) return;
+  const json = url => fetch(url).then(r => r.json()).catch(() => null);
+  if (!S.season) S.season = await json(`${g}/season`);
+  const from = Math.max(0, S.view.tick - 14);
+  const t = await json(`${g}/ticks?from=${from}`);
+  if (t?.records) S.ticks = t.records.slice(-14).reverse();
+  invalidate('pool', 'ribbon', 'chainDrawer');
+}
+
+export function toggleChain() {
+  S.chainOpen = !S.chainOpen;
+  $('#chain-drawer').hidden = !S.chainOpen;
+  if (S.chainOpen) { invalidate('chainDrawer'); loadChain(); }
+}
+
+export function renderPool() {
+  setHtml($('#pool-chip'), html`<span class="k">賞金プール</span><span class="v">${fmt(poolUsdc())}<small>USDC</small></span>`);
+  const pct = poolSharePct(S.view);
+  $('#pool-chip').title = `参加費 ${usdc(S.view?.season?.entryFee)} USDC × 国民${(S.view?.members || []).length}人の${pct}%、と市場の手数料・関税の${pct}%${S.season ? `\nVault ${S.season.accounts?.vault}` : ''}`;
+}
+
+export function renderChainBeat() {
+  const c = S.view.chain, el = $('#chain-beat');
+  if (!c) { el.className = 'chain-beat local'; setHtml(el, html`<span class="dot"></span><span class="l1">LOCAL</span><span class="l2">チェーンなし</span>`); return; }
+  const t = c.lastTick;
+  // Restart the seal animation once per sealed tick.
+  if (t && el.dataset.sealed !== String(t.tick)) { el.dataset.sealed = t.tick; el.classList.remove('sealed'); void el.offsetWidth; el.classList.add('sealed'); }
+  el.className = `chain-beat ${el.classList.contains('sealed') ? 'sealed' : ''}`;
+  setHtml(el, html`<span class="dot"></span><span class="l1">${t ? `T${t.tick} 封印 ✓` : '封印待ち'}</span><span class="l2">${c.layer === 'er' ? 'MagicBlock ER' : 'Solana'} · slot ${fmt(c.slot)}</span>`);
+}
+
+/** Only http(s) links from the server become hrefs. */
+const safeUrl = u => (/^https?:\/\//.test(String(u ?? '')) ? u : null);
+
+export function renderChainDrawer() {
+  if (!S.chainOpen) return;
+  const v = S.view, c = v.chain, el = $('#chain-drawer');
+  if (!c) { setHtml(el, html`<header><b>⛓ CHAIN</b><button class="x" type="button" data-close-chain>✕</button></header><div class="sec">ローカルモードです。エンジンはこのプロセスで動いています。<br><span class="k">--chain で起動すると MagicBlock ER 上のシーズンを表示します</span></div>`); return; }
+  const er = safeUrl(c.endpoints?.er);
+  const explorer = sig => (er ? `https://explorer.solana.com/tx/${encodeURIComponent(sig)}?cluster=custom&customUrl=${encodeURIComponent(er)}` : '#');
+  const reg = (S.season?.members || []).find(m => m.index === S.memberId);
+  const ticks = (S.ticks || []).map((r, i) => html`<div class="tk ${i === 0 ? 'new' : ''}"><span class="t">T${r.tick}</span><span><span class="m">${fmt(r.cu)} CU · ${r.submitted ?? '?'}/${T.ROLES.length * v.civs.length} offices · root ${String(r.root ?? '').slice(0, 8)}…</span><br><a href="${explorer(r.signature)}" target="_blank" rel="noopener">${short(r.signature)}</a></span><span class="ok">✓</span></div>`);
+  const gov = (v.chronicle || []).filter(e => /^(gov|recall|era)\|/.test(e.text)).slice(0, 6).map(e => html`<div class="tk"><span class="t">T${e.tick}</span><span class="m">${T.chronicleText(e.text)[1]}</span></div>`);
+  setHtml(el, html`<header><b>⛓ CHAIN LENS</b><button class="x" type="button" data-close-chain>✕</button></header>
+    <div class="sec"><span class="k">SEASON</span>${c.seasonId} · ${c.cluster || 'localnet'}<span class="k">LAYER</span>${c.layer === 'er' ? 'MagicBlock Ephemeral Rollup' : 'Solana base'} · slot ${fmt(c.slot)}</div>
+    <div class="sec"><span class="k">PRIZE VAULT</span>${fmt(poolUsdc())} USDC · ${short(c.accounts?.vault)}<span class="k">YOUR SESSION KEY</span>${reg ? `${short(reg.session)} · scope: orders & governance only · cannot move USDC` : '—'}</div>
+    <div class="sec"><span class="k">GOVERNANCE ON CHAIN</span></div><div class="ticker">${gov.length ? gov : html`<span class="k" style="padding:6px">選挙・解任・時代の記録はまだありません</span>`}</div>
+    <div class="sec"><span class="k">SEALED TICKS</span></div><div class="ticker">${ticks.length ? ticks : html`<span class="k" style="padding:6px">読み込み中…</span>`}</div>
+    <div class="sec"><span class="k">VERIFY IT YOURSELF</span><pre>cargo run --release --bin verify -- \\\n  --gateway ${c.gateway} --base ${c.endpoints?.base} --er ${c.endpoints?.er}</pre></div>`);
+}

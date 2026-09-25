@@ -90,7 +90,11 @@ fn the_equal_share_is_capped_at_half_the_fee() {
     s.members[0].merit[Path::Science as usize] = 1;
     let pool = 1_000_000_000;
     let p = settle(&s, &rules, pool, FEE);
-    assert_eq!(p.equal_each[0], FEE / 2, "20% of 1000 USDC would be far above 5 USDC each");
+    assert_eq!(
+        p.equal_each[0],
+        FEE / 2,
+        "20% of 1000 USDC would be far above 5 USDC each"
+    );
     assert_eq!(p.per_member[1], FEE / 2);
     assert_eq!(p.per_member[0], pool - 2 * (FEE / 2));
 }

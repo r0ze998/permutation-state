@@ -9,13 +9,11 @@
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { DEFAULTS, LOCAL_DIR as LOCAL, ROOT } from '../src/config.mjs';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const LOCAL = path.join(ROOT, '.local');
 const STACK = path.join(LOCAL, 'stack');
 const PROGRAM_SO = path.resolve(ROOT, '../permutation-chain/target/deploy/permutation_chain.so');
-const PROGRAM_ID = process.env.PS_PROGRAM_ID || 'J4aZxe3ynkS7kcvCpKbp6aFYw8d9vtrRDsgSEi1niU6n';
+const PROGRAM_ID = process.env.PS_PROGRAM_ID || DEFAULTS.programId;
 
 if (!existsSync(PROGRAM_SO)) throw new Error(`build the program first: (cd ../permutation-chain && cargo build-sbf) — missing ${PROGRAM_SO}`);
 // Only ever reset this package's own .local/stack directory.
@@ -40,9 +38,9 @@ const child = spawn('mb-stack', ['--bpf-program', PROGRAM_ID, PROGRAM_SO, ...ext
   env: {
     ...process.env,
     PATH: `${solanaBin}:${process.env.PATH}`,
-    MB_STACK_BASE_PORT: process.env.PS_BASE_PORT || '18899',
-    MB_STACK_ER_PORT: process.env.PS_ER_PORT || '17799',
-    MB_STACK_PUBLIC_PORT: process.env.PS_ROUTER_PORT || '16699',
+    MB_STACK_BASE_PORT: process.env.PS_BASE_PORT || String(DEFAULTS.basePort),
+    MB_STACK_ER_PORT: process.env.PS_ER_PORT || String(DEFAULTS.erPort),
+    MB_STACK_PUBLIC_PORT: process.env.PS_ROUTER_PORT || String(DEFAULTS.routerPort),
     // The ER wrapper defaults to RUST_LOG=quiet; mb-stack forwards only lines
     // that mention error/failed, so warnings are enough to see failed commits.
     RUST_LOG: process.env.RUST_LOG || 'warn',

@@ -1,14 +1,13 @@
 //! Markets (§11): gold AMM with hub fees, and the USDC Exchange.
 
+mod common;
+use common::step;
 use permutation_rules::fixed::MILLI;
 use permutation_rules::genesis::{new_season, Entry};
-use permutation_rules::invariants;
 use permutation_rules::markets::GoodKind;
-use permutation_rules::orders::{office_batches, validate_batch, Good, Order, OrderBatch, Side};
-use permutation_rules::rng::Seed;
-use permutation_rules::state::{WorldState};
+use permutation_rules::orders::{validate_batch, Good, Order, OrderBatch, Side};
+use permutation_rules::state::WorldState;
 use permutation_rules::tech::Tech;
-use permutation_rules::tick::{resolve_tick, TickInput};
 use permutation_rules::{Preset, RulesError, Ruleset};
 
 const USDC: u64 = 1_000_000;
@@ -16,7 +15,10 @@ const USDC: u64 = 1_000_000;
 fn setup() -> (Ruleset, WorldState) {
     let rules = Ruleset::new(Preset::Blitz);
     let entries: Vec<Entry> = (0..4)
-        .map(|i| Entry { name: format!("civ-{i}"), treasury: 20 * USDC })
+        .map(|i| Entry {
+            name: format!("civ-{i}"),
+            treasury: 20 * USDC,
+        })
         .collect();
     let mut s = new_season(&rules, &[11; 32], &[22; 32], &entries).unwrap();
     for c in &mut s.civs {
@@ -25,33 +27,6 @@ fn setup() -> (Ruleset, WorldState) {
         c.gold = 500 * MILLI;
     }
     (rules, s)
-}
-
-fn vrf(tick: u16) -> Seed {
-    let mut s = [0u8; 32];
-    s[..2].copy_from_slice(&tick.to_le_bytes());
-    s
-}
-
-fn step(s: &mut WorldState, rules: &Ruleset, orders: Vec<(u16, Vec<Order>)>) {
-    // Tests exercise mechanics, not office budgets (V5 §5.2 has its own tests).
-    for n in &mut s.nations {
-        n.role_bank = [20; 4];
-    }
-    let batches = orders
-        .into_iter()
-        .flat_map(|(civ, orders)| office_batches(s, civ, [0; 32], orders))
-        .collect();
-    resolve_tick(
-        s,
-        rules,
-        &TickInput {
-            vrf: vrf(s.tick),
-            batches, ..Default::default() },
-    )
-    .unwrap();
-    let v = invariants::check(s, rules);
-    assert!(v.is_empty(), "{v:?}");
 }
 
 /// Gold before phase-6 income: current gold minus last tick's income.
@@ -135,10 +110,17 @@ fn amm_hub_holders_earn_one_percent() {
     let site = hub
         .neighbors()
         .into_iter()
-        .find(|h| s.map.tile(*h).is_some_and(|t| t.terrain.is_passable()) && !s.cities.iter().any(|c| c.hex == *h))
+        .find(|h| {
+            s.map.tile(*h).is_some_and(|t| t.terrain.is_passable())
+                && !s.cities.iter().any(|c| c.hex == *h)
+        })
         .expect("land next to the hub");
     s.cities[cap as usize].hex = site;
-    for u in s.units.iter_mut().filter(|u| u.owner == permutation_rules::state::Owner::Civ(2)) {
+    for u in s
+        .units
+        .iter_mut()
+        .filter(|u| u.owner == permutation_rules::state::Owner::Civ(2))
+    {
         u.hex = site;
     }
     s.map.tile_mut(site).unwrap().owner_city = Some(cap);
@@ -186,7 +168,8 @@ fn buy_iron(qty: u32, price: u64) -> Order {
 /// notional + 5% fee + 5% tariff (V5 §7.5).
 fn first_cost(rules: &Ruleset, qty: u64, price: u64) -> (u64, u64) {
     let notional = qty * price;
-    let income = notional * rules.exchange_fee_bps as u64 / 10_000 + notional * rules.tariff_bps(0) as u64 / 10_000;
+    let income = notional * rules.exchange_fee_bps as u64 / 10_000
+        + notional * rules.tariff_bps(0) as u64 / 10_000;
     (notional, income)
 }
 
@@ -247,7 +230,12 @@ fn exchange_buys_are_capped_by_income_and_the_tariff_rises() {
         price: 10_000,
     };
     step(&mut s, &rules, vec![(0, vec![buy]), (1, vec![sell])]);
-    let bought: u32 = s.deliveries.iter().filter(|d| d.civ == 0).map(|d| d.qty).sum();
+    let bought: u32 = s
+        .deliveries
+        .iter()
+        .filter(|d| d.civ == 0)
+        .map(|d| d.qty)
+        .sum();
     assert_eq!(bought, cap, "per-tick cap = last tick's gold income");
 
     // The tariff rises with cumulative spend: at 100 USDC it is 100%, so
@@ -258,8 +246,24 @@ fn exchange_buys_are_capped_by_income_and_the_tariff_rises() {
         &mut s,
         &rules,
         vec![
-            (0, vec![Order::ExchangeOrder { good: Good::Gold, side: Side::Buy, amount: 1, price: 10_000 }]),
-            (1, vec![Order::ExchangeOrder { good: Good::Gold, side: Side::Sell, amount: 1, price: 10_000 }]),
+            (
+                0,
+                vec![Order::ExchangeOrder {
+                    good: Good::Gold,
+                    side: Side::Buy,
+                    amount: 1,
+                    price: 10_000,
+                }],
+            ),
+            (
+                1,
+                vec![Order::ExchangeOrder {
+                    good: Good::Gold,
+                    side: Side::Sell,
+                    amount: 1,
+                    price: 10_000,
+                }],
+            ),
         ],
     );
     let notional = 10_000;
@@ -306,8 +310,24 @@ fn exchange_delivers_food_to_the_named_city() {
         &mut s,
         &rules,
         vec![
-            (0, vec![Order::ExchangeOrder { good: Good::Food(buyer_city), side: Side::Buy, amount: 1, price: USDC }]),
-            (1, vec![Order::ExchangeOrder { good: Good::Food(seller_city), side: Side::Sell, amount: 1, price: USDC }]),
+            (
+                0,
+                vec![Order::ExchangeOrder {
+                    good: Good::Food(buyer_city),
+                    side: Side::Buy,
+                    amount: 1,
+                    price: USDC,
+                }],
+            ),
+            (
+                1,
+                vec![Order::ExchangeOrder {
+                    good: Good::Food(seller_city),
+                    side: Side::Sell,
+                    amount: 1,
+                    price: USDC,
+                }],
+            ),
         ],
     );
     assert_eq!(s.civs[1].usdc, 21 * USDC);
@@ -320,7 +340,10 @@ fn exchange_delivers_food_to_the_named_city() {
         step(&mut s, &rules, vec![]);
         step(&mut control, &rules, vec![]);
     }
-    let (b, cb) = (&s.cities[buyer_city as usize], &control.cities[buyer_city as usize]);
+    let (b, cb) = (
+        &s.cities[buyer_city as usize],
+        &control.cities[buyer_city as usize],
+    );
     assert_eq!(b.pop, cb.pop, "no growth threshold crossed by the delivery");
     assert_eq!(b.food - cb.food, MILLI, "buyer's city received 1 food");
 }
@@ -332,12 +355,24 @@ fn no_trades_with_oneself_or_an_enemy() {
     s.civs[1].iron = 10 * MILLI;
     step(&mut s, &rules, vec![]);
     // Civ 0 on both sides: no self-match (v0.2 C8).
-    step(&mut s, &rules, vec![(0, vec![buy_iron(1, USDC), sell_iron(1, USDC)])]);
+    step(
+        &mut s,
+        &rules,
+        vec![(0, vec![buy_iron(1, USDC), sell_iron(1, USDC)])],
+    );
     assert!(s.deliveries.is_empty());
     assert_eq!(s.civs[0].usdc, 20 * USDC);
     // At war: no match either.
-    step(&mut s, &rules, vec![(0, vec![Order::DeclareWar { civ: 1 }])]);
-    step(&mut s, &rules, vec![(0, vec![buy_iron(1, USDC)]), (1, vec![sell_iron(1, USDC)])]);
+    step(
+        &mut s,
+        &rules,
+        vec![(0, vec![Order::DeclareWar { civ: 1 }])],
+    );
+    step(
+        &mut s,
+        &rules,
+        vec![(0, vec![buy_iron(1, USDC)]), (1, vec![sell_iron(1, USDC)])],
+    );
     assert!(s.at_war(0, 1));
     assert!(s.deliveries.is_empty());
     assert_eq!(s.civs[1].iron, 10 * MILLI);
@@ -359,8 +394,24 @@ fn bought_production_never_reaches_a_star_gate_city() {
         &mut s,
         &rules,
         vec![
-            (0, vec![Order::ExchangeOrder { good: Good::Production(buyer_city), side: Side::Buy, amount: 1, price: USDC }]),
-            (1, vec![Order::ExchangeOrder { good: Good::Production(seller_city), side: Side::Sell, amount: 1, price: USDC }]),
+            (
+                0,
+                vec![Order::ExchangeOrder {
+                    good: Good::Production(buyer_city),
+                    side: Side::Buy,
+                    amount: 1,
+                    price: USDC,
+                }],
+            ),
+            (
+                1,
+                vec![Order::ExchangeOrder {
+                    good: Good::Production(seller_city),
+                    side: Side::Sell,
+                    amount: 1,
+                    price: USDC,
+                }],
+            ),
         ],
     );
     assert!(s.deliveries.is_empty());
@@ -379,19 +430,43 @@ fn spending_above_the_threshold_needs_a_second_officer() {
     let price = 2 * USDC; // cap × 2 USDC is well above the 5 USDC threshold
     assert!(cap * price > rules.spend_consent_usdc);
     let trade = |consent: Option<u64>| {
-        let mut orders = vec![Order::ExchangeOrder { good: Good::Gold, side: Side::Buy, amount: 1_000, price }];
+        let mut orders = vec![Order::ExchangeOrder {
+            good: Good::Gold,
+            side: Side::Buy,
+            amount: 1_000,
+            price,
+        }];
         if let Some(usdc) = consent {
             orders.push(Order::ConsentSpend { usdc });
         }
-        vec![(0, orders), (1, vec![Order::ExchangeOrder { good: Good::Gold, side: Side::Sell, amount: 1_000, price }])]
+        vec![
+            (0, orders),
+            (
+                1,
+                vec![Order::ExchangeOrder {
+                    good: Good::Gold,
+                    side: Side::Sell,
+                    amount: 1_000,
+                    price,
+                }],
+            ),
+        ]
     };
     let mut alone = s.clone();
     step(&mut alone, &rules, trade(None));
     let spent = 100 * USDC - alone.civs[0].usdc;
-    assert!(spent <= rules.spend_consent_usdc, "the diplomat alone stays under the threshold");
+    assert!(
+        spent <= rules.spend_consent_usdc,
+        "the diplomat alone stays under the threshold"
+    );
     let mut agreed = s.clone();
     step(&mut agreed, &rules, trade(Some(50 * USDC)));
-    let got: u32 = agreed.deliveries.iter().filter(|d| d.civ == 0).map(|d| d.qty).sum();
+    let got: u32 = agreed
+        .deliveries
+        .iter()
+        .filter(|d| d.civ == 0)
+        .map(|d| d.qty)
+        .sum();
     assert_eq!(got as u64, cap, "with consent the income cap binds instead");
 }
 

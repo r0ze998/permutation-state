@@ -31,12 +31,23 @@ fn add(state: &mut WorldState, m: MemberId, path: Path, milli: u64, what: &'stat
     let amount = milli.min(u32::MAX as u64) as u32;
     let slot = &mut member.merit[path as usize];
     *slot = slot.saturating_add(amount);
-    state.merit_log.push(MeritEntry { member: m, path, milli: amount, what });
+    state.merit_log.push(MeritEntry {
+        member: m,
+        path,
+        milli: amount,
+        what,
+    });
 }
 
 /// Split `milli` among `shares` in proportion to their weights (largest
 /// remainder to the first), crediting each.
-pub fn credit_shared(state: &mut WorldState, shares: &[(Credit, u64)], path: Path, milli: u64, what: &'static [u8]) {
+pub fn credit_shared(
+    state: &mut WorldState,
+    shares: &[(Credit, u64)],
+    path: Path,
+    milli: u64,
+    what: &'static [u8],
+) {
     let total: u128 = shares.iter().map(|(_, w)| *w as u128).sum();
     if total == 0 || milli == 0 {
         return;

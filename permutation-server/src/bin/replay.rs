@@ -11,12 +11,10 @@ use permutation_rules::genesis::{nation_entries, new_season};
 use permutation_rules::invariants;
 use permutation_rules::rng::Seed;
 use permutation_rules::state::{CivId, Owner, Relation, WorldState};
-use permutation_rules::tick::{resolve_tick, TickInput};
 use permutation_rules::{Preset, Ruleset};
 use permutation_server::bots::{city_count, troops_of, PERSONAS};
-use permutation_server::driver::{seat_ai_members, AllAi, Planner};
+use permutation_server::driver::{seat_ai_members, AiSeason, Planner};
 use permutation_server::events::diff_events;
-use permutation_server::fog::Fog;
 use permutation_server::ledger::Ledger;
 use std::fmt::Write as _;
 
@@ -167,8 +165,6 @@ fn main() {
     let season: Seed = *b"permutation-state/season/demo-01";
     let mut s = new_season(&rules, &world, &season, &nation_entries(6)).expect("genesis");
     seat_ai_members(&mut s, &rules, &[3, 3, 2, 2, 1, 0]).expect("first election");
-    let mut planner = Planner::new(6);
-    let mut ledger = Ledger::new(b"replay");
 
     let mut out = String::new();
     out.push_str("{\"meta\":{");
@@ -233,23 +229,21 @@ fn main() {
     let names: Vec<&str> = names.iter().map(String::as_str).collect();
     let mut roots = Vec::new();
     // Bots decide from their own fogged belief state, like any player (§7.4).
-    let mut fog = Fog::new(&s);
-    while s.tick < rules.ticks_per_season {
-        ledger.observe(&s, &fog);
-        let gov = planner.member_gov(&s, &rules, &fog, &AllAi);
-        let batches = planner.batches(&s, &rules, &fog, &mut ledger, &AllAi);
+    let mut season = AiSeason::new(rules, s, Planner::new(6), Ledger::seeded(b"replay"));
+    while !season.over() {
         let mut vrf = [0u8; 32];
-        vrf[..2].copy_from_slice(&s.tick.to_le_bytes());
-        let prev = s.clone();
-        let root = resolve_tick(&mut s, &rules, &TickInput { vrf, batches, gov, deposits: vec![] }).expect("tick");
-        let v = invariants::check(&s, &rules);
+        vrf[..2].copy_from_slice(&season.state.tick.to_le_bytes());
+        let input = season.plan(vrf);
+        let prev = season.state.clone();
+        roots.push(season.resolve(&input).expect("tick"));
+        let s = &season.state;
+        let v = invariants::check(s, &season.rules);
         assert!(v.is_empty(), "invariant violated at tick {}: {v:?}", s.tick);
-        roots.push(root);
-        fog.update(&s);
-        let ev = diff_events(&prev, &s, &names);
+        let ev = diff_events(&prev, s, &names);
         out.push(',');
-        out.push_str(&frame(&s, &ev));
+        out.push_str(&frame(s, &ev));
     }
+    let s = &season.state;
     out.push_str("],\"finalRoot\":\"");
     out.push_str(
         &roots
@@ -267,14 +261,14 @@ fn main() {
             "{:9} {:8} cities {} pop {:3} techs {:2} stages {} tiers {:?} era {} sci {:5} troops {}",
             c.name,
             PERSONAS[c.id as usize].name(),
-            city_count(&s, c.id),
+            city_count(s, c.id),
             s.living_cities_of(c.id).map(|x| x.pop).sum::<u32>(),
             c.techs.count(),
             c.scores.star_gate_stages,
             c.achievements.tiers,
             c.achievements.era,
             c.scores.science_total,
-            troops_of(&s, c.id)
+            troops_of(s, c.id)
         );
     }
 }

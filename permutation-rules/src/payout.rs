@@ -45,13 +45,26 @@ fn mul_div(a: u64, b: u64, c: u64) -> u64 {
 pub fn settle(state: &WorldState, rules: &Ruleset, pool: u64, entry_fee: u64) -> Settlement {
     let n = state.civs.len();
     let scores = nation_scores(state, rules);
-    let active: Vec<bool> = state.members.iter().map(|m| is_active_member(rules, m)).collect();
+    let active: Vec<bool> = state
+        .members
+        .iter()
+        .map(|m| is_active_member(rules, m))
+        .collect();
     // A nation without members, without an active member, or without a
     // city (destroyed) takes no share.
     let counted: Vec<bool> = (0..n)
-        .map(|c| state.city_count(c as u16) > 0 && state.members.iter().zip(&active).any(|(m, a)| m.civ as usize == c && *a))
+        .map(|c| {
+            state.city_count(c as u16) > 0
+                && state
+                    .members
+                    .iter()
+                    .zip(&active)
+                    .any(|(m, a)| m.civ as usize == c && *a)
+        })
         .collect();
-    let points: Vec<u64> = (0..n).map(|c| if counted[c] { scores[c].total() } else { 0 }).collect();
+    let points: Vec<u64> = (0..n)
+        .map(|c| if counted[c] { scores[c].total() } else { 0 })
+        .collect();
     let total: u64 = points.iter().sum();
     let mut out = Settlement {
         pool,
@@ -83,13 +96,19 @@ pub fn settle(state: &WorldState, rules: &Ruleset, pool: u64, entry_fee: u64) ->
         if share == 0 {
             continue;
         }
-        let ids: Vec<usize> = (0..state.members.len()).filter(|i| state.members[*i].civ as usize == civ).collect();
+        let ids: Vec<usize> = (0..state.members.len())
+            .filter(|i| state.members[*i].civ as usize == civ)
+            .collect();
         let act: Vec<usize> = ids.iter().copied().filter(|i| active[*i]).collect();
 
         // Equal share (20%), capped per member at half the fee.
         let cap = act.len() as u64 * mul_div(entry_fee, rules.equal_cap_bps as u64, 10_000);
         let equal_total = mul_div(share, rules.equal_share_bps as u64, 10_000).min(cap);
-        let each = if act.is_empty() { 0 } else { equal_total / act.len() as u64 };
+        let each = if act.is_empty() {
+            0
+        } else {
+            equal_total / act.len() as u64
+        };
         out.equal_each[civ] = each;
         for i in &act {
             out.per_member[*i] += each;
@@ -107,7 +126,10 @@ pub fn settle(state: &WorldState, rules: &Ruleset, pool: u64, entry_fee: u64) ->
                 weights.push((s.path_points[p], m));
             }
         }
-        let tot: Vec<u64> = ids.iter().map(|&i| state.members[i].merit_total()).collect();
+        let tot: Vec<u64> = ids
+            .iter()
+            .map(|&i| state.members[i].merit_total())
+            .collect();
         if s.era_points > 0 && tot.iter().any(|x| *x > 0) {
             weights.push((s.era_points, tot));
         }

@@ -2,14 +2,25 @@
 // Keys are the engine's own enum names, as sent by the API.
 
 export const CIV_COLORS = ['#c1504a', '#2f8f84', '#c28f2c', '#7a5fb0', '#3f78c2', '#b5527f'];
-// Border dash pattern per civ, so ownership never relies on colour alone.
-export const CIV_DASH = [[], [7, 3], [2, 3], [9, 3, 2, 3], [4, 4], [1, 2.5]];
-export const CIV_NAMES = { Aster: 'アステル', Borealis: 'ボレアリス', Cinder: 'シンダー', Dunmar: 'ダンマール', Ember: 'エンバー', Fjordal: 'フィヨルダル', Fjordhal: 'フィヨルダル' };
-export const PERSONA = { Human: 'あなた', Warlord: '覇者型', Builder: '建設型', Diplomat: '外交型', Scholar: '学究型' };
+export const CIV_NAMES = { Aster: 'アステル', Borealis: 'ボレアリス', Cinder: 'シンダー', Dunmar: 'ダンマール', Ember: 'エンバー', Fjordal: 'フィヨルダル' };
+
+// Offices of a nation (V5 §5), in the engine's order.
+export const ROLES = ['General', 'Steward', 'Science', 'Diplomat'];
+export const ROLE_JA = { General: '将軍', Steward: '内政官', Science: '科学官', Diplomat: '外交官' };
+export const ROLE_GLYPH = { General: '⚔', Steward: '⌂', Science: '✧', Diplomat: '✉' };
+// The four paths (V5 §6), in the engine's order (tiers arrays use it).
+export const PATHS = ['Hegemony', 'Prosperity', 'Science', 'Concord'];
+export const PATH_JA = ['覇権', '繁栄', '科学', '協調'];
+/** Merit buckets (member.merit keys, merit log paths lower-cased). */
+export const MERIT_JA = { hegemony: '覇権', prosperity: '繁栄', science: '科学', concord: '協調', common: '役職の務め' };
+/** Diplomatic proposal kinds (view.proposals[].kind). */
+export const PROPOSAL_KIND = { Peace: '講和', Nap: '不可侵条約', Alliance: '同盟' };
 
 export const TERRAIN = { Grassland: '草原', Plains: '平原', Forest: '森', Hills: '丘陵', Mountain: '山岳', Water: '水域' };
 export const TERRAIN_EN = { Grassland: 'GRASSLAND', Plains: 'PLAINS', Forest: 'WOODLAND', Hills: 'HILLS', Mountain: 'MOUNTAIN', Water: 'WATER' };
-export const RESOURCE = { Wheat: '小麦', Iron: '鉄', Horses: '馬' };
+/** Tile resources and tradeable goods (tile.resource, pools[].good, good.kind). */
+export const RESOURCE = { Wheat: '小麦', Iron: '鉄', Horses: '馬', Gold: '金', Food: '食料', Production: '生産' };
+export const goodName = g => RESOURCE[g.kind];
 export const UNIT = { Spearman: '槍兵', Archer: '弓兵', Horseman: '騎兵', Pikeman: '長槍兵', Crossbowman: '弩兵', Knight: '騎士', Scout: '斥候', Settler: '開拓者' };
 export const UNIT_GLYPH = { Spearman: '⟋', Archer: '➶', Horseman: '♞', Pikeman: '⫽', Crossbowman: '⤓', Knight: '♘', Scout: '◎', Settler: '⚑' };
 export const BUILDING = { Granary: '穀物庫', Workshop: '工房', Temple: '神殿', Market: '市場', Academy: '学術院', Barracks: '兵舎', Walls: '城壁', StarGate1: 'スターゲート I', StarGate2: 'スターゲート II', StarGate3: 'スターゲート III' };
@@ -32,16 +43,23 @@ export const FOCUS = { Balanced: '均衡', Food: '食料', Production: '生産',
 export const SPECIALTY = { Scientific: '学術', Mercantile: '商業', Agrarian: '農業' };
 export const SPECIALTY_BONUS = { Scientific: '宗主に科学 +3/ティック', Mercantile: '宗主に金 +4/ティック', Agrarian: '宗主の首都に食料 +2/ティック' };
 export const RELATION = { self: 'あなた', peace: '平和', war: '戦争', nap: '不可侵', alliance: '同盟' };
-export const PHASES = [[0, '建国', 'FOUNDING'], [18, '拡大', 'EXPANSION'], [60, '競合', 'CONTENTION'], [120, '危機', 'CRISIS'], [162, '決着', 'RESOLUTION']];
+/** Season phases; their start ticks come from the server (season.phases). */
+export const PHASES = [['建国', 'FOUNDING'], ['拡大', 'EXPANSION'], ['競合', 'CONTENTION'], ['危機', 'CRISIS'], ['決着', 'RESOLUTION']];
+const PHASE_STARTS = [0, 18, 60, 120, 162]; // only if a view has no season.phases
 export const DIPLO_ACTION = {
-  DeclareWar: '宣戦する', ProposePeace: '講和を申し入れる', ProposeNap: '不可侵条約を申し入れる（保証金30金）', ProposeAlliance: '同盟を申し入れる',
+  DeclareWar: '宣戦する', ProposePeace: '講和を申し入れる', ProposeNap: '不可侵条約を申し入れる', ProposeAlliance: '同盟を申し入れる',
   AcceptPeace: '講和を受け入れる', AcceptNap: '不可侵条約を受け入れる', AcceptAlliance: '同盟に加わる',
 };
 
 const CITY_NAMES = ['ラナ', 'ヴェル', 'オルト', 'セナ', 'カロ', 'ミラ', 'トーレ', 'ウルム', 'ネス', 'ハルカ', 'イゼル', 'ボラ', 'エダ', 'クオン', 'サイラ', 'ティモ', 'リュカ', 'ファロ', 'ジン', 'アルバ'];
 export const cityName = id => CITY_NAMES[id % CITY_NAMES.length] + (id >= CITY_NAMES.length ? ` ${Math.floor(id / CITY_NAMES.length) + 1}` : '');
 export const civName = name => CIV_NAMES[name] || name;
-export const phaseOf = tick => PHASES.filter(p => tick >= p[0]).pop();
+/** [start, name, NAME] of the phase `tick` is in. */
+export function phaseOf(tick, starts = PHASE_STARTS) {
+  let i = 0;
+  while (i + 1 < PHASES.length && tick >= (starts[i + 1] ?? Infinity)) i++;
+  return [starts[i] ?? 0, ...PHASES[i]];
+}
 
 export function blockedText(b) {
   if (!b) return '';
@@ -122,8 +140,9 @@ export function chronicleText(line) {
   return [kind, text];
 }
 export const KIND_GLYPH = { war: '⚔', capture: '⚑', raze: '✕', peace: '☮', ally: '⚭', diplo: '✉', science: '✦', revolt: '!', found: '⌂', tech: '✧', gov: '⚖', recall: '⚠', milestone: '◆', era: '✺' };
-const ROLE_NAME = { general: '将軍', steward: '内政官', 'science officer': '科学官', diplomat: '外交官' };
-const PATH_NAME = { Hegemony: '覇権', Prosperity: '繁栄', Science: '科学', Concord: '協調' };
+// Chronicle lines name offices and paths in English.
+const ROLE_NAME = { general: ROLE_JA.General, steward: ROLE_JA.Steward, 'science officer': ROLE_JA.Science, diplomat: ROLE_JA.Diplomat };
+const PATH_NAME = Object.fromEntries(PATHS.map((p, i) => [p, PATH_JA[i]]));
 const actor = s => (s === 'the acting official' || s === 'acting' ? '代行' : s);
 /** What earned merit (engine event names, V5 §7.3). */
 export const MERIT_WHAT = { office: '役職者として活動', gold: '都市が稼いだ金（内政官）', growth: '人口の成長', building: '建物の完成', found_city: '都市の建設', tech: '技術の完成',

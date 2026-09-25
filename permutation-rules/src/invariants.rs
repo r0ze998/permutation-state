@@ -1,6 +1,8 @@
-//! Invariants that MUST hold after every tick (§17). Used by tests and the
-//! replay verifier. Invariant 1 (USDC conservation) and 8 (freezes) are
-//! enforced where USDC and transfers are implemented; see TODOs.
+//! Invariants that MUST hold after every tick (spec v0.2 §17), checked by the
+//! tests, the season simulation and the replay verifier. The freezes
+//! (invariant 8) and the per-office budget (invariant 4) are enforced where
+//! orders are accepted (`orders::validate_batch`), so they are not rechecked
+//! here.
 
 use crate::params::Ruleset;
 use crate::state::WorldState;
@@ -104,10 +106,18 @@ pub fn check(state: &WorldState, rules: &Ruleset) -> Vec<Violation> {
                 continue;
             }
             if !crate::gov::is_member_of(state, m, civ as u16) {
-                v.push(Violation { invariant: 12, what: "office held by a non-member", id: m as u64 });
+                v.push(Violation {
+                    invariant: 12,
+                    what: "office held by a non-member",
+                    id: m as u64,
+                });
             }
             if n.offices_held(m) > rules.max_offices_per_member as usize {
-                v.push(Violation { invariant: 12, what: "too many offices", id: m as u64 });
+                v.push(Violation {
+                    invariant: 12,
+                    what: "too many offices",
+                    id: m as u64,
+                });
             }
         }
     }
@@ -115,11 +125,14 @@ pub fn check(state: &WorldState, rules: &Ruleset) -> Vec<Violation> {
     for t in &state.map.tiles {
         if let Some(c) = t.owner_city.and_then(|c| state.cities.get(c as usize)) {
             if c.hex.distance(t.hex) > crate::map::MAX_TERRITORY_RADIUS {
-                v.push(Violation { invariant: 11, what: "tile owned beyond territory radius", id: c.id as u64 });
+                v.push(Violation {
+                    invariant: 11,
+                    what: "tile owned beyond territory radius",
+                    id: c.id as u64,
+                });
             }
         }
     }
-    // TODO(§17 #4): budget per applied orders is enforced by `validate_batch`.
     v
 }
 
@@ -128,8 +141,14 @@ pub fn check(state: &WorldState, rules: &Ruleset) -> Vec<Violation> {
 pub fn check_monotonic(before: &WorldState, after: &WorldState) -> Vec<Violation> {
     let mut v = Vec::new();
     for (a, b) in before.members.iter().zip(after.members.iter()) {
-        if a.merit.iter().zip(b.merit.iter()).any(|(x, y)| y < x) || b.windows & a.windows != a.windows {
-            v.push(Violation { invariant: 6, what: "merit or activity decreased", id: 0 });
+        if a.merit.iter().zip(b.merit.iter()).any(|(x, y)| y < x)
+            || b.windows & a.windows != a.windows
+        {
+            v.push(Violation {
+                invariant: 6,
+                what: "merit or activity decreased",
+                id: 0,
+            });
         }
     }
     for (a, b) in before.civs.iter().zip(after.civs.iter()) {

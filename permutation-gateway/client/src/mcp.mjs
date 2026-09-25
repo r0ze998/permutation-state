@@ -4,11 +4,13 @@
 import path from 'node:path';
 import os from 'node:os';
 import { createInterface } from 'node:readline';
-import { GameClient, loadOrCreateKeypair } from './game.mjs';
+import { MAX_NAME, NATIONS } from './codec.mjs';
+import { GameClient } from './game.mjs';
+import { loadOrCreateKeypair } from './keys.mjs';
 import { TOOLS, callTool, RULES_BRIEF } from './tools.mjs';
 
 const EXTRA = [
-  { name: 'join_season', description: 'Become a member of a nation in the open season: pays the entry fee in (test) USDC over HTTP 402 and registers your session key. Needed once, unless PS_MEMBER is configured. Omit civ to join the smallest nation.', inputSchema: { type: 'object', properties: { name: { type: 'string', description: 'your display name (≤24)' }, civ: { type: 'integer', description: 'nation 0..5' }, stand: { type: 'array', items: { type: 'string' }, description: 'offices to stand for in the first election' } }, required: ['name'] } },
+  { name: 'join_season', description: 'Become a member of a nation in the open season: pays the entry fee in (test) USDC over HTTP 402 and registers your session key. Needed once, unless PS_MEMBER is configured. Omit civ to join the smallest nation.', inputSchema: { type: 'object', properties: { name: { type: 'string', description: `your display name (at most ${MAX_NAME} bytes)` }, civ: { type: 'integer', description: `nation 0..${NATIONS.length - 1}` }, stand: { type: 'array', items: { type: 'string' }, description: 'offices to stand for in the first election' } }, required: ['name'] } },
   { name: 'wait_for_next_tick', description: 'Block until the current tick resolves, then return the new state summary.', inputSchema: { type: 'object', properties: {} } },
 ];
 

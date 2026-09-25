@@ -1,21 +1,23 @@
 // Transaction builders for the permutation-chain program (Game Design V5).
-// Every builder returns the instructions for one transaction; heavy ones are
-// prefixed with a 1.4M CU limit and the 256 KiB heap the program needs to
-// decode the world.
+// Every builder returns the instructions for one transaction; heavy ones
+// (anything that decodes the world) are prefixed with a 1.4M CU limit and a
+// 256 KiB heap. test/tx-size.test.mjs checks the largest ones still fit a
+// packet.
 import { ComputeBudgetProgram, PublicKey, SystemProgram, SYSVAR_SLOT_HASHES_PUBKEY, TransactionInstruction } from '@solana/web3.js';
 import {
   DELEGATION_PROGRAM_ID, MAGIC_CONTEXT_ID, MAGIC_PROGRAM_ID,
   delegateBufferPdaFromDelegatedAccountAndOwnerProgram, delegationMetadataPdaFromDelegatedAccount, delegationRecordPdaFromDelegatedAccount,
 } from '@magicblock-labs/ephemeral-rollups-sdk';
-import { IX } from './codec.mjs';
-import { memberPda, nationPda, seasonPda, TOKEN_PROGRAM_ID, vaultPda, worldChunkPda, WORLD_CHUNKS } from './pda.mjs';
+import { IX, NATIONS, NATION_TARGET, WORLD_CHUNKS } from './codec.mjs';
+import { memberPda, nationPda, seasonPda, TOKEN_PROGRAM_ID, vaultPda, worldChunkPda } from './pda.mjs';
 
 export const HEAP_BYTES = 256 * 1024;
-/** `Delegate { target }`: 0..WORLD_CHUNKS = a world chunk; NATION_TARGET + civ = a nation account. */
-export const NATION_TARGET = 1000;
-export { WORLD_CHUNKS };
+export { NATION_TARGET, WORLD_CHUNKS };
 export const heavy = () => [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }), ComputeBudgetProgram.requestHeapFrame({ bytes: HEAP_BYTES })];
-/** Nation accounts (8 KiB) decode past the default 32 KiB heap once batches and the inbox fill up. */
+/**
+ * Submissions decode the nation account (batches and the governance inbox),
+ * which outgrows the default 32 KiB heap once they fill up.
+ */
 const medium = () => [ComputeBudgetProgram.requestHeapFrame({ bytes: 128 * 1024 })];
 const W = (pubkey, isSigner = false) => ({ pubkey, isSigner, isWritable: true });
 const R = (pubkey, isSigner = false) => ({ pubkey, isSigner, isWritable: false });
@@ -25,8 +27,8 @@ export class ChainClient {
     this.programId = new PublicKey(programId);
     this.seasonId = BigInt(seasonId);
     this.season = seasonPda(this.programId, this.seasonId);
-    // The world is stored in WORLD_CHUNKS accounts of 4 KiB, small enough for
-    // the ER committor to finalize one densely written chunk on devnet.
+    // The world is stored in WORLD_CHUNKS accounts of CHUNK bytes, small
+    // enough for the ER committor to finalize one densely written chunk.
     this.worldChunks = Array.from({ length: WORLD_CHUNKS }, (_, k) => worldChunkPda(this.programId, this.seasonId, k));
     this.world = this.worldChunks[0];
     this.vault = vaultPda(this.programId, this.seasonId);
@@ -38,7 +40,7 @@ export class ChainClient {
   ix(keys, data) { return new TransactionInstruction({ programId: this.programId, keys, data: Buffer.from(data) }); }
   chunkKeys() { return this.worldChunks.map(k => W(k)); }
 
-  createSeason({ admin, mint, preset = 0, nations = 6, entryFee, tickSeconds = 30, worldSeed, crank, market = true }) {
+  createSeason({ admin, mint, preset = 0, nations = NATIONS.length, entryFee, tickSeconds = 30, worldSeed, crank, market = true }) {
     return [this.ix([W(admin, true), W(this.season), W(this.vault), R(mint), R(TOKEN_PROGRAM_ID), R(SystemProgram.programId)],
       IX.createSeason({ seasonId: this.seasonId, preset, nations, entryFee, tickSeconds, worldSeed, crank: crank.toBytes(), market }))];
   }
@@ -93,19 +95,18 @@ export class ChainClient {
   resolveTick({ nations, to = 12 }) {
     return [...heavy(), this.ix([...this.chunkKeys(), ...this.nations(nations).map(k => W(k))], IX.resolveTick(to))];
   }
-  commit({ payer, nations, undelegate = false }) {
-    return [this.ix([W(payer, true), R(MAGIC_PROGRAM_ID), W(MAGIC_CONTEXT_ID), ...this.chunkKeys(), ...this.nations(nations).map(k => W(k))],
-      undelegate ? IX.commitAndUndelegate() : IX.commit())];
+  /** Accounts of a `CommitPart` / `UndelegatePart` intent: chunk 0 (whose header the program reads) always, then the other targets. */
+  intentKeys(payer, targets) {
+    const keys = targets.filter(t => t !== 0).map(t => W(this.target(t)));
+    return [W(payer, true), R(MAGIC_PROGRAM_ID), W(MAGIC_CONTEXT_ID), W(this.worldChunks[0]), ...keys];
   }
-  /** Commit and undelegate `targets` (see `delegate`); chunk 0 is always passed and must go in the last group. */
+  /** Commit and undelegate `targets` (see `delegate`) in one small intent; chunk 0 must go in the last group. */
   undelegatePart({ payer, targets }) {
-    const keys = targets.filter(t => t !== 0).map(t => W(this.target(t)));
-    return [this.ix([W(payer, true), R(MAGIC_PROGRAM_ID), W(MAGIC_CONTEXT_ID), W(this.worldChunks[0]), ...keys], IX.undelegatePart(targets))];
+    return [this.ix(this.intentKeys(payer, targets), IX.undelegatePart(targets))];
   }
-  /** Commit `targets` to the base layer during play, in one small intent (same accounts as `undelegatePart`). */
+  /** Commit `targets` to the base layer during play, in one small intent. */
   commitPart({ payer, targets }) {
-    const keys = targets.filter(t => t !== 0).map(t => W(this.target(t)));
-    return [this.ix([W(payer, true), R(MAGIC_PROGRAM_ID), W(MAGIC_CONTEXT_ID), W(this.worldChunks[0]), ...keys], IX.commitPart(targets))];
+    return [this.ix(this.intentKeys(payer, targets), IX.commitPart(targets))];
   }
   finishSeason() {
     return [...heavy(), this.ix([W(this.season), ...this.worldChunks.map(k => R(k))], IX.finishSeason())];

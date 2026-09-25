@@ -2,6 +2,9 @@
 // reference LLM agent (agents/llm-agent.mjs). Each tool is a thin, honest
 // wrapper over GameClient: it returns what the game server says, trimmed to
 // what fits a context window.
+import { NATIONS, ROLES } from './codec.mjs';
+import { MAX_RATIONALE } from './decision.mjs';
+import { hexDist } from './hexgrid.mjs';
 import { summarize } from './summary.mjs';
 
 export const ORDER_REFERENCE = `Orders are JSON objects with a "type". Coordinates are axial hexes [q, r].
@@ -32,7 +35,7 @@ Buildings: Granary Workshop Temple Market Academy Barracks Walls StarGate1 StarG
 Units: Spearman Archer Horseman Pikeman Crossbowman Knight Scout Settler.
 Techs: Agriculture BronzeWorking Archery HorsebackRiding Masonry Mysticism Writing Currency IronWorking Mathematics Chivalry Philosophy Engineering Astronomy Physics CelestialMechanics.`;
 
-export const RULES_BRIEF = `PERMUTATION STATE: one shared hex world of six nations, simultaneous ticks. You are a member of one nation (humans and AI alike, same rights).
+export const RULES_BRIEF = `PERMUTATION STATE: one shared hex world of up to ${NATIONS.length} nations, simultaneous ticks. You are a member of one nation (humans and AI alike, same rights).
 Members elect four officers every 30 ticks: general, steward, science officer, diplomat. Only an officer's orders reach the world, each within its office.
 Every member proposes orders to an office, supports proposals, votes, and recalls idle officers (a majority of recently active members).
 An officer who adopts a proposal shares its merit half and half with the proposer. Officers seal a rationale with every batch; it is revealed later.
@@ -52,12 +55,10 @@ export const TOOLS = [
   { name: 'preview_diplomacy', description: 'Which diplomatic actions toward another civilization are possible now, and why not.', inputSchema: { type: 'object', properties: { civ: { type: 'integer' } }, required: ['civ'] } },
   { name: 'find_path', description: 'A legal MoveUnit path for your unit to hex (q, r), or why there is none.', inputSchema: { type: 'object', properties: { unit: { type: 'integer' }, q: { type: 'integer' }, r: { type: 'integer' } }, required: ['unit', 'q', 'r'] } },
   { name: 'validate_orders', description: 'Dry run. ok = accepted at submit time (structure, budget); warnings = orders that would be skipped when the tick resolves.', inputSchema: { type: 'object', properties: { orders: ORDERS_SCHEMA }, required: ['orders'] } },
-  { name: 'submit_orders', description: 'As an officer: sign and submit this tick\'s orders for the offices you hold (one batch per office, replacing earlier ones this tick). The rationale is committed now as a hash and revealed after the tick. Orders for offices you do not hold come back as notHeld: propose them instead.', inputSchema: { type: 'object', properties: { orders: ORDERS_SCHEMA, rationale: { type: 'string', description: 'why, in one or two sentences (max 512 bytes); becomes public after the tick' }, adopt: { type: 'object', description: 'proposal ids to adopt per office, e.g. {"Science": [3]}' } }, required: ['orders', 'rationale'] } },
-  { name: 'propose', description: 'Propose orders to one office of your nation (any member). The officer may adopt it; its merit is then shared with you.', inputSchema: { type: 'object', properties: { role: { type: 'string', enum: ['General', 'Steward', 'Science', 'Diplomat'] }, orders: ORDERS_SCHEMA }, required: ['role', 'orders'] } },
+  { name: 'submit_orders', description: 'As an officer: sign and submit this tick\'s orders for the offices you hold (one batch per office, replacing earlier ones this tick). The rationale is committed now as a hash and revealed after the tick. Orders for offices you do not hold come back as notHeld: propose them instead.', inputSchema: { type: 'object', properties: { orders: ORDERS_SCHEMA, rationale: { type: 'string', description: `why, in one or two sentences (max ${MAX_RATIONALE} bytes); becomes public after the tick` }, adopt: { type: 'object', description: 'proposal ids to adopt per office, e.g. {"Science": [3]}' } }, required: ['orders', 'rationale'] } },
+  { name: 'propose', description: 'Propose orders to one office of your nation (any member). The officer may adopt it; its merit is then shared with you.', inputSchema: { type: 'object', properties: { role: { type: 'string', enum: [...ROLES] }, orders: ORDERS_SCHEMA }, required: ['role', 'orders'] } },
   { name: 'govern', description: 'One governance action: {type:"Support", proposal} | {type:"Vote", role, candidate} | {type:"Stand", roles:[...]} | {type:"Recall", role}.', inputSchema: { type: 'object', properties: { action: { type: 'object' } }, required: ['action'] } },
 ];
-
-const hexDist = (a, b) => (Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[0] + a[1] - b[0] - b[1])) / 2;
 
 /**
  * Run a tool. `ctx` = { game: GameClient, policy: string, view?: last state }.
@@ -75,7 +76,7 @@ export async function callTool(ctx, name, args = {}) {
         const view = ctx.view ?? await g.state();
         const u = view.units.find(x => x.id === args.unit);
         const reach = (p.reach || []).map(([q, r, ticks, cost]) => ({ q, r, ticks, cost }))
-          .sort((a, b) => a.ticks - b.ticks || (u ? hexDist([a.q, a.r], [u.q, u.r]) - hexDist([b.q, b.r], [u.q, u.r]) : 0)).slice(0, args.limit ?? 30);
+          .sort((a, b) => a.ticks - b.ticks || (u ? hexDist(a, u) - hexDist(b, u) : 0)).slice(0, args.limit ?? 30);
         return { unit: u ?? null, reachable: reach, reachableTotal: p.reach?.length ?? 0, attacks: p.attacks, canFound: p.canFound, foundBlocked: p.canFound === false ? p.found : undefined };
       }
       case 'preview_city': return await g.preview('city', { id: args.city });
@@ -94,6 +95,6 @@ export async function callTool(ctx, name, args = {}) {
       default: return { error: `unknown tool ${name}` };
     }
   } catch (e) {
-    return { error: e.message, detail: e.body ?? undefined };
+    return { error: e.message, code: e.code ?? undefined, detail: e.body ?? undefined };
   }
 }

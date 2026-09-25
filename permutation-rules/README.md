@@ -1,87 +1,86 @@
 # permutation-rules
 
-Deterministic rules engine for PERMUTATION STATE. It implements [Rules Specification v0.1](../PERMUTATION_STATE_RULES_SPEC_v0.1.md) for [Game Design V4](../PERMUTATION_STATE_GAME_DESIGN_V4.md).
+Deterministic rules engine for PERMUTATION STATE. It implements [Rules Specification v0.2](../PERMUTATION_STATE_RULES_SPEC_v0.2.md) for [Game Design V5](../PERMUTATION_STATE_GAME_DESIGN_V5.md): six nations in one hex world, members who elect officers, four paths of achievements, merit and the prize settlement, and the USDC market.
 
-A single crate runs everywhere the rules run:
+One crate runs everywhere the rules run, so a tick resolved in one place is byte-identical to the same tick resolved in any other:
 
-| Consumer | Status |
+| Consumer | Where |
 |---|---|
-| MagicBlock ER program (native Rust) | builds for SBF (`cargo-build-sbf`) ✅ |
-| Replay verifier CLI | not yet written; will call `genesis::new_season` + `tick::resolve_tick` |
-| Browser forecast / agent `simulate()` via WASM | not yet built (`wasm32-unknown-unknown` target not installed here) |
+| The Solana program on the MagicBlock Ephemeral Rollup | `../permutation-chain` (built for SBF with `cargo build-sbf`) |
+| The game server, the hosted AI members, the season simulation | `../permutation-server` (`play`, `sim`) |
+| The replay verifier | `../permutation-server` (`verify`) |
 
 ## Properties
 
-- **`no_std` + `alloc`, no floating point, `#![forbid(unsafe_code)]`.** Resources are milli-units, troops are milli-troops, multipliers are basis points (§0.1).
-- **Deterministic.** Iteration is by ascending id. Randomness comes from `sha256(seed_t ‖ domain ‖ id)`, where `seed_t` includes the tick's VRF output (§0.2).
-- **One ruleset, two clocks.** `Ruleset::new(Preset::Season | Preset::Blitz)` differ only in tick length, civ count, map radius and entry window. A test enforces this.
-- **Hashed rules.** `Ruleset::hash()` covers every parameter and every static table (units, techs, buildings, terrain).
+- **`no_std` + `alloc`, no floating point.** `#![deny(unsafe_code)]`, with one exception: the `sol_sha256` syscall in `hash` on SBF. Resources are milli-units, troops are milli-troops, and multipliers are basis points (§0.1).
+- **Deterministic.** Iteration is by ascending id. Randomness comes from `sha256(seed_t ‖ domain ‖ id)`, where `seed_t` mixes the season seed with the tick's randomness (§0.2).
+- **One ruleset, two clocks.** `Ruleset::new(Preset::Season | Preset::Blitz)` differ only in tick length, civ count, map radius and entry window.
+- **Hashed rules.** `Ruleset::hash()` covers the parameters in `Ruleset` and the static tables (units, techs, buildings, terrain). Its value is stored in the world, so it is part of every state root. Some constants are still inline in the code; see "Known debt" below.
 - **Resumable ticks.** `run_phase` advances `phase_cursor`, so a tick can be split across transactions and finished by anyone (§15.1–15.2). `resolve_tick` runs all remaining phases.
-- **Borsh-serializable state.** `WorldState::state_root()` = `sha256(borsh(state))`.
+- **Borsh-serialized state.** `WorldState::state_root()` = `sha256(borsh(state))`. Renaming a field or type is safe. Adding, removing, reordering or retyping a field of anything in `WorldState` changes every root. So does changing a `Blocked` code (codes are recorded in `last_skipped`).
 
 ## Layout
 
 | Module | Spec | Contents |
 |---|---|---|
-| `fixed`, `hex`, `rng` | §0 | numeric types, axial hexes, seeded randomness and tie-breaks |
-| `params` | §1 | `Ruleset`, presets, protection schedule, `ruleset_hash` |
+| `fixed`, `hex`, `rng`, `hash` | §0 | numeric types, axial hexes, seeded randomness and tie-breaks, SHA-256 |
+| `params` | §1 | `Ruleset`, presets, protection schedule, office budget split, tariff table, `ruleset_hash` |
 | `map` | §2 | terrain table, tiles, deterministic generation with fair starts, territory |
-| `genesis` | §3 | `new_season`: capitals, starting units, city-states, hubs |
-| `orders` | §4 | `Order`, `OrderBatch`, costs, `validate_batch`, order bank |
-| `economy` | §5–6 | growth threshold, upkeep, amenities, tech cost, governor yields |
+| `genesis` | §3 | `new_season`: capitals, starting units, city-states, hubs; `nation_entries` |
+| `state` | — | `WorldState` and everything in it, tile and territory lookups |
+| `orders` | §4 | `Order`, `OrderBatch`, costs, which office may issue what, `validate_batch`, per-office banks |
+| `checks` | §4.4 and throughout | shared validity checks with typed reasons (`Blocked`), used by resolution and previews alike |
+| `gov` | §14.6 | members and offices; `actions` (phase 0: stand, vote, propose, support, recall), `terms` (phase 11: recalls and elections) |
+| `tick` | §15 | the phase pipeline; one module per phase group: `intake` (0), `city_orders` (2), `production` (6), `society` (7–9), `milestones` (10) |
+| `diplomacy` | §10 | phase 1: war, peace, NAPs, alliances, offers |
+| `trade` | §10.5 | transfers between nations (phase 2) and the trade accounting behind Concord and merit |
+| `envoys` | §12.1 | city-state envoys and suzerainty (phase 2) |
+| `markets` | §11 | `amm`: the gold AMM (`clear_amm`); `usdc`: the USDC market (`call_auction`, tariff, delivery) |
+| `standing` | §13 | phase 3: AutoDefend, Retreat, Patrol, AutoPurchase |
+| `movement` | §7.3 | phase 4, plus the path planner that standing rules, previews and agents use |
+| `battle` | §8, §9, §12.1 | phase 5: `plan`, `damage`, `capture`, `raze` |
+| `combat` | §8 | the `F` table, `damage`, `resolve_engagement` with modifiers in spec order |
+| `economy` | §5–6 | growth threshold, upkeep, amenities, tech cost, order budget, yields |
 | `tech`, `buildings`, `units` | §5.6, §6.2, §7 | static tables |
-| `combat` | §8 | `F` table, `damage`, `resolve_engagement` with modifiers in spec order |
-| `scoring` | §14 | Dominion, Concord, Science key, winners count, payout weights |
-| `tick` | §15 | phase pipeline |
-| `battle` | §8, §9, §12.1 | phase 5: engagements, captures, razing |
-| `diplomacy` | §10, §12.1 | phase 1 diplomacy; transfers and envoys for phase 2 |
-| `markets` | §11 | trade hubs, gold AMM (`clear_amm`), USDC Exchange (`call_auction`) |
+| `scoring` | §14.1–14.2 | facts, milestone tiers, eras, achievement points |
+| `merit` | §14.3 | merit credited per path |
+| `payout` | §14.4 | `settle`: nation shares, the equal share, merit components, refunds, dust |
+| `vision` | §7.4 | line of sight, memory, and a nation's fogged `belief` of the world |
+| `decision` | §4.3, §7.5 | decision commitments, observation roots and Merkle proofs |
+| `preview` | — | legal actions with costs, forecasts and blocked reasons, from the same checks and formulas the engine uses |
 | `invariants` | §17 | state and monotonicity checks |
 
-## Implementation status of `resolve_tick`
+## Tests
 
-| # | Phase | Status |
-|---|---|---|
-| 0 | Seed | ✅ |
-| 1 | Diplomacy | ✅ (`diplomacy`): war with casus belli, proposals (accepted only on a later tick, 6-tick expiry), peace with withdrawal, NAPs with escrowed bonds, closed alliance groups with the cap and delayed leaving |
-| 2 | Economy orders | ✅ queue, focus, research, purchase, `FoundCity` (with heritage), transfers with income caps, envoys and suzerainty, gold AMM (batch-cleared, hub fees), USDC Exchange (call auction, caps, fee split, re-sale ban) |
-| 3 | Standing rules | **TODO** |
-| 4 | Movement | ✅ paths, MP, one free tile at full MP, occupancy, foreign territory, protected zones, tie-break, no swapping |
-| 5 | Combat | ✅ (`battle`): simultaneous engagements from pre-combat counts, garrisons, walls, ranged and counter modifiers, captures of civilians, cities and city-states, last-city protection, raze to ruin, grievances and aggression. **TODO:** barbarian and standing-rule attacks |
-| 6 | Production and growth | ✅ governor, amenities, growth and starvation, territory, queue completion and spawning, strategic reserves, research |
-| 7 | Upkeep | ✅ including deficit disbanding |
-| 8 | Society | ✅ war weariness (including casualties), loyalty and Free Cities, grievance decay, city regeneration |
-| 9 | Neutral actors | city-state growth and regeneration, suzerainty cycle reset (suzerain bonuses are paid in phase 6). **TODO:** the Crisis |
-| 10 | Scoring | ✅ Dominion, Concord, science, alliance record, activity, order bank. **TODO:** prize coalitions |
-| 11 | Commit | ✅ next tick's budget, event chain |
+| File | Covers |
+|---|---|
+| `tests/season.rs` | genesis, determinism, a full 180-tick season, phase resumption, movement |
+| `tests/governance.rs` | elections, offices and budgets, proposals, recalls, consents, merit, milestones and eras |
+| `tests/rule_fixes.rs` | the spec v0.2 fixes C1–C9 |
+| `tests/battle.rs`, `tests/diplomacy.rs`, `tests/markets.rs`, `tests/standing.rs`, `tests/vision.rs`, `tests/decision.rs`, `tests/payouts.rs` | one area each |
+| `tests/spec_vectors.rs` | the combat test vectors of spec §8.4 |
+| `tests/common/` | shared helpers (`vrf`, `step`, `free`, and `nations` for member/office setups) |
 
-## Bot match, replay viewer and playable client
-
-The bots and every std/JSON concern live in the sibling crate `../permutation-server`, so this crate stays `no_std`. Its `replay` binary plays a six-civilization Blitz match with simple rule-based bots (Warlord, Builder, Diplomat, Scholar) on the real engine, checks every invariant each tick and writes a JSON replay. `viewer/` turns that replay into one self-contained pixel-hex page:
-
-```sh
-cd ../permutation-server
-cargo run --release --bin replay -- ../permutation-rules/viewer/replay.json
-python3 ../permutation-rules/viewer/build.py ../permutation-rules/viewer/replay.json ../permutation-rules/viewer/replay.html
-```
-
-The pipeline is deterministic end to end: the same seeds produce a byte-identical page. The bots read the full state (there is no fog-of-war view yet), so they are a rules test harness, not the reference agent.
-
-To play one civilization against five bots in the browser:
-
-```sh
-cd ../permutation-server
-cargo run --release --bin play -- --port 4180
-# open http://127.0.0.1:4180/
-```
+Whole-season behaviour (every tick's root, every payout, the fogged views) is pinned by `../permutation-server/tests/golden.rs`. Refactors must keep it passing; a change meant to alter behaviour regenerates it with `UPDATE_GOLDEN=1` and the diff is reviewed.
 
 ## Development
 
 ```sh
-cargo test          # 99 tests: unit, spec vectors, combat, diplomacy, markets, full 180-tick season
+cargo test --release
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
-cargo-build-sbf     # Solana SBF build check (Solana CLI)
+cargo build-sbf        # in ../permutation-chain: the Solana SBF build
 ```
 
-The toolchain is pinned to Rust 1.89.0, with `borsh =1.6.1`, the same versions as `permutation-state-solana-receipt-spike`.
+The toolchain is pinned to Rust 1.89.0, with `borsh =1.6.1`.
+
+## Known debt (changes state roots, so deferred to the next rules version)
+
+These are recorded here rather than fixed, because each one changes the state root. A season verified with this version would then no longer replay with the new build.
+
+- Several rule constants are inline instead of in `Ruleset`, so `Ruleset::hash()` does not cover them. Examples: grievance amounts, loyalty steps, city-state growth, suzerain bonuses, the Science focus and Barracks multipliers, raze and fortify durations.
+- Unused `Ruleset` fields: `entry_close_tick`, `crisis_interval`, `entry_fee_usdc`.
+- `Civ.last_aggression` and `aggressor_window` are recorded but no rule reads them.
+- `Scores` duplicates achievement records (`star_gate_stages`, `star_gate_tick` vs `last_star_gate`).
+- Some `Blocked` reasons are reused for other cases; for example, `NothingToSell` also means "amount 0".
+- `accepted()` clones the tick's orders once per phase.

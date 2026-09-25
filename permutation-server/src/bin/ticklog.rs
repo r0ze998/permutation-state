@@ -7,10 +7,8 @@
 //! the tick; and the borsh opening state to `out.bin.genesis`. Seeds match
 //! the program's dev genesis (6 nations, world [7;32], season [9;32]).
 use permutation_rules::genesis::{nation_entries, new_season};
-use permutation_rules::tick::{resolve_tick, TickInput};
 use permutation_rules::{Preset, Ruleset};
-use permutation_server::driver::{seat_ai_members, AllAi, Planner};
-use permutation_server::fog::Fog;
+use permutation_server::driver::{seat_ai_members, AiSeason, Planner};
 use permutation_server::ledger::Ledger;
 use std::io::Write;
 
@@ -26,24 +24,24 @@ fn main() {
     let mut f = std::fs::File::create(&out).unwrap();
     f.write_all(&s.state_root().unwrap()).unwrap();
     std::fs::write(format!("{out}.genesis"), borsh::to_vec(&s).unwrap()).unwrap();
-    let mut planner = Planner::new(6);
-    let mut fog = Fog::new(&s);
-    let mut ledger = Ledger::new(b"ticklog");
+    let mut season = AiSeason::new(rules, s, Planner::new(6), Ledger::seeded(b"ticklog"));
     let mut largest = 0;
-    while s.tick < rules.ticks_per_season {
-        ledger.observe(&s, &fog);
-        let gov = planner.member_gov(&s, &rules, &fog, &AllAi);
-        let batches = planner.batches(&s, &rules, &fog, &mut ledger, &AllAi);
+    while !season.over() {
         let mut vrf = [0u8; 32];
-        vrf[..2].copy_from_slice(&s.tick.to_le_bytes());
-        let input = TickInput { vrf, batches, gov, deposits: vec![] };
+        vrf[..2].copy_from_slice(&season.state.tick.to_le_bytes());
+        let input = season.plan(vrf);
         let bytes = borsh::to_vec(&input).unwrap();
-        resolve_tick(&mut s, &rules, &input).unwrap();
-        fog.update(&s);
-        largest = largest.max(borsh::to_vec(&s).unwrap().len());
+        let root = season.resolve(&input).unwrap();
+        largest = largest.max(borsh::to_vec(&season.state).unwrap().len());
         f.write_all(&(bytes.len() as u32).to_le_bytes()).unwrap();
         f.write_all(&bytes).unwrap();
-        f.write_all(&s.state_root().unwrap()).unwrap();
+        f.write_all(&root).unwrap();
     }
-    eprintln!("wrote {} ticks; largest world {} bytes with {} members", s.tick, largest, s.members.len());
+    let s = &season.state;
+    eprintln!(
+        "wrote {} ticks; largest world {} bytes with {} members",
+        s.tick,
+        largest,
+        s.members.len()
+    );
 }

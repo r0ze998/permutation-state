@@ -1,19 +1,21 @@
 // Season lifecycle on a local (or devnet) stack, Game Design V5:
-// test USDC, a season with six nations, members registering (hosted ones
-// here, outside agents through x402), on-chain genesis, seating the members
-// in the world, the first election, and delegation of the world and the
-// nation accounts to the ER.
+// test USDC, a season with one account per nation in NATIONS, members
+// registering (hosted ones here, outside agents through x402), on-chain
+// genesis, seating the members in the world, the first election, and
+// delegation of the world chunks and the nation accounts to the ER.
 import { LAMPORTS_PER_SOL, PublicKey } from '@solana/web3.js';
-import { ChainClient, NATION_TARGET } from '../client/src/chain.mjs';
-import { decodeMember, decodeSeason, NOBODY, ROLES, roleMask } from '../client/src/codec.mjs';
+import { DELEGATION_PROGRAM_ID } from '@magicblock-labs/ephemeral-rollups-sdk';
+import { ChainClient } from '../client/src/chain.mjs';
+import { decodeMember, decodeSeason, MAGIC, NATION_TARGET, NATIONS, NOBODY, ROLES, roleMask } from '../client/src/codec.mjs';
+import { poll } from '../client/src/retry.mjs';
 import { createMintIxs, createTokenAccountIxs, mintToIx, tokenBalance } from './spl.mjs';
-import { namedKey, writeState } from './config.mjs';
+import { namedKey } from './config.mjs';
 import { send } from './send.mjs';
 
-export const NATIONS = ['Aster', 'Borealis', 'Cinder', 'Dunmar', 'Ember', 'Fjordal'];
+export { NATIONS };
 const USDC = 1_000_000n;
-// Members per SeatMembers: the transaction also carries every world chunk.
-const SEAT_BATCH = 6;
+/** Members per SeatMembers: the transaction also carries every world chunk (test/tx-size.test.mjs). */
+export const SEAT_BATCH = 6;
 
 async function airdrop(conn, key, sol = 20) {
   const bal = await conn.getBalance(key, 'confirmed');
@@ -39,8 +41,12 @@ export function defaultRoster({ humans = 1, ai = 2, nations = NATIONS.length } =
   return roster;
 }
 
-/** Votes of the first election for member `me` of `roster` (indices = registration order). */
-function firstVotes(roster, me) {
+/**
+ * Votes of the first election for member `me` of `roster`. Member indices
+ * are the roster positions: `bootstrap` registers the roster into a season
+ * it has just created, before the gateway accepts outside entrants.
+ */
+export function firstVotes(roster, me) {
   const m = roster[me];
   return ROLES.map(role => {
     const human = roster.findIndex(x => x.civ === m.civ && x.hosted === 'human' && x.stand.includes(role));
@@ -50,10 +56,11 @@ function firstVotes(roster, me) {
 }
 
 /**
- * Create a season and register the hosted members. Registration stays open
- * (for x402 entrants) until the crank starts the season.
+ * Create a season and register the hosted members; the state is saved to
+ * `store`. Registration stays open (for x402 entrants) until the crank
+ * starts the season.
  */
-export async function bootstrap({ base, cfg, roster = defaultRoster(), log = console.log }) {
+export async function bootstrap({ base, cfg, store, roster = defaultRoster(), log = console.log }) {
   const admin = namedKey('admin');
   const crank = namedKey('crank');
   const mint = namedKey('usdc-mint');
@@ -73,15 +80,16 @@ export async function bootstrap({ base, cfg, roster = defaultRoster(), log = con
   for (let c = 0; c < NATIONS.length; c++) await send(base, chain.allocNation({ payer: crank.publicKey, civ: c }), [crank], `allocNation ${c}`);
   log(`season ${seasonId} created: world and ${NATIONS.length} nation accounts allocated`);
 
-  const state = { seasonId: seasonId.toString(), programId: cfg.programId, mint: mint.publicKey.toBase58(), cluster: cfg.cluster, nations: NATIONS, members: [], ticks: [], seating: [] };
+  const state = store.save({ seasonId: seasonId.toString(), programId: cfg.programId, mint: mint.publicKey.toBase58(), cluster: cfg.cluster,
+    nations: [...NATIONS], members: [], ticks: [], seating: [] });
   for (const [i, m] of roster.entries()) {
     const wallet = namedKey(`member${i}-wallet`), session = namedKey(`member${i}-session`), token = namedKey(`member${i}-usdc`);
     const index = await registerWithUsdc({ base, chain, cfg, admin, crank, mint, wallet, session, token, civ: m.civ, name: m.name, kind: m.kind,
       stand: roleMask(m.stand), votes: firstVotes(roster, i), deposit: m.deposit ?? 0n });
     state.members.push({ index, civ: m.civ, name: m.name, kind: m.kind, hosted: m.hosted, key: i, wallet: wallet.publicKey.toBase58(), session: session.publicKey.toBase58(), usdc: token.publicKey.toBase58() });
+    store.save();
     log(`member ${index} ${m.name} joined ${NATIONS[m.civ]} (${m.hosted})`);
   }
-  writeState(state);
   return state;
 }
 
@@ -104,17 +112,23 @@ export async function seasonMembers(base, chain) {
   id.writeBigUInt64LE(chain.seasonId);
   const accounts = await base.getProgramAccounts(chain.programId, {
     commitment: 'confirmed',
-    filters: [{ memcmp: { offset: 0, bytes: Buffer.from('PSMEMBR5').toString('base64'), encoding: 'base64' } },
+    filters: [{ memcmp: { offset: 0, bytes: Buffer.from(MAGIC.member).toString('base64'), encoding: 'base64' } },
       { memcmp: { offset: 8, bytes: id.toString('base64'), encoding: 'base64' } }],
   });
   return accounts.map(a => ({ pubkey: a.pubkey, ...decodeMember(a.account.data) })).sort((a, b) => a.index - b.index);
 }
 
+/** Every delegation target of a season: the world chunks, then the nation accounts. */
+export const delegationTargets = (chain, nations) => [...chain.worldChunks.map((_, k) => k), ...Array.from({ length: nations }, (_, c) => NATION_TARGET + c)];
+
 /**
  * Close registration: genesis, seat every member, hold the first election,
  * delegate (skipped with `delegate: false`, to play on the base layer).
+ * Every step is resumable, so a failed attempt can simply be run again.
+ * Progress is saved to `store`; returns the (live) state.
  */
-export async function startAndDelegate({ base, er, cfg, state, log = console.log, delegate = true }) {
+export async function startAndDelegate({ base, er, cfg, store, log = console.log, delegate = true, delegationTimeoutMs = 30_000 }) {
+  const state = store.state;
   const crank = namedKey('crank');
   const chain = new ChainClient(cfg.programId, BigInt(state.seasonId));
   const season = () => base.getAccountInfo(chain.season, 'confirmed').then(a => decodeSeason(a.data));
@@ -125,7 +139,10 @@ export async function startAndDelegate({ base, er, cfg, state, log = console.log
     steps++;
     for (const rec of r.records) if (rec.tag === 'PS_GENESIS') state.genesis = { root: Buffer.from(rec.root).toString('hex'), seasonSeed: Buffer.from(rec.seasonSeed).toString('hex'), signature: r.signature };
   }
-  log(`genesis complete on chain in ${steps} steps`);
+  if (steps) {
+    store.save();
+    log(`genesis complete on chain in ${steps} steps`);
+  }
   const s = await season();
   if (s.status === 'Seating') {
     const members = await seasonMembers(base, chain);
@@ -133,25 +150,34 @@ export async function startAndDelegate({ base, er, cfg, state, log = console.log
       const group = members.slice(i, i + SEAT_BATCH);
       const r = await send(base, chain.seatMembers({ authority: crank.publicKey, members: group.map(m => m.pubkey) }), [crank], `seat members ${i}..${i + group.length - 1}`);
       for (const rec of r.records.filter(x => x.tag === 'PS_SEAT')) state.seating.push({ signature: r.signature, root: Buffer.from(rec.root).toString('hex'), members: Buffer.from(rec.members).toString('hex') });
-      writeState(state);
+      store.save();
     }
     const r = await send(base, chain.openGovernment({ authority: crank.publicKey, nations: s.nations }), [crank], 'openGovernment');
     for (const rec of r.records.filter(x => x.tag === 'PS_OPEN')) state.open = { signature: r.signature, root: Buffer.from(rec.root).toString('hex') };
+    store.save();
     log(`${members.length} members seated; first election held on chain`);
   }
   if (!delegate) return state;
-  const targets = [...chain.worldChunks.map((_, k) => k), ...Array.from({ length: s.nations }, (_, c) => NATION_TARGET + c)];
-  for (const target of targets) {
+
+  const program = new PublicKey(cfg.programId);
+  const targets = delegationTargets(chain, s.nations);
+  const keys = targets.map(t => chain.target(t));
+  // Skip what an earlier attempt already delegated (owned by the delegation program on base).
+  const onBase = await base.getMultipleAccountsInfo(keys, 'confirmed');
+  for (const [i, target] of targets.entries()) {
+    if (onBase[i]?.owner.equals(DELEGATION_PROGRAM_ID)) continue;
     await send(base, chain.delegate({ authority: crank.publicKey, target, validator: cfg.erValidator }), [crank], `delegate ${target}`);
   }
-  for (let i = 0; i < 60; i++) {
-    const w = await er.getAccountInfo(chain.world, 'confirmed').catch(() => null);
-    if (w && w.owner.equals(new PublicKey(cfg.programId))) break;
-    await new Promise(r => setTimeout(r, 500));
-  }
+  // The ER must have taken every account over (it clones them with the program as owner).
+  const missing = async () => {
+    const onEr = await er.getMultipleAccountsInfo(keys, 'confirmed');
+    return targets.filter((_, i) => !onEr[i]?.owner.equals(program));
+  };
+  const ready = await poll(async () => ((await missing()).length ? null : true), { attempts: Math.max(1, Math.ceil(delegationTimeoutMs / 500)), delayMs: 500 });
+  if (!ready) throw new Error(`delegation not visible on the ER after ${delegationTimeoutMs / 1000} s for targets ${(await missing()).join(',')}; the crank retries`);
   state.delegated = true;
   state.delegatedAt = Date.now();
-  writeState(state);
+  store.save();
   log(`world and ${s.nations} nation accounts delegated to the ER`);
   return state;
 }

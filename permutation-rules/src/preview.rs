@@ -7,138 +7,24 @@
 //! the tick draws variance and resolves every civ's orders together.
 
 use crate::battle::{forecast_attack, AttackForecast};
-use crate::buildings::{Building, BUILDINGS};
+use crate::buildings::BUILDINGS;
 use crate::checks::{self, Blocked};
 use crate::economy::{
-    amenities, apply_amenities, city_yield, growth_threshold, stalemate_multiplier, tech_cost,
-    CityYield,
+    amenities, apply_amenities, city_yield, growth_threshold, tech_cost, CityYield,
 };
 use crate::fixed::{apply_bps, MILLI};
 use crate::hex::Hex;
 use crate::orders::AttackTarget;
 use crate::params::Ruleset;
-use crate::state::{CivId, Owner, QueueItem, WorldState};
+use crate::state::{CivId, QueueItem, WorldState};
 use crate::tech::{Tech, TECHS};
-use crate::tick::may_enter;
-use crate::units::{stats, UnitType};
-use alloc::collections::{BTreeMap, BinaryHeap};
+use crate::units::UnitType;
 use alloc::vec::Vec;
-use core::cmp::Reverse;
 
 // ------------------------------------------------------------------ movement
 
-/// A tile a unit can reach, with the movement cost and ticks needed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Reach {
-    pub hex: Hex,
-    pub cost: u32,
-    pub ticks: u32,
-    pub steps: u32,
-}
-
-fn step_cost(state: &WorldState, unit: UnitType, h: Hex) -> Option<u32> {
-    let t = state.map.tile(h)?;
-    if !t.terrain.is_passable() {
-        return None;
-    }
-    Some(if unit == UnitType::Scout {
-        1
-    } else {
-        t.terrain.info().move_cost as u32
-    })
-}
-
-/// Dijkstra over enterable tiles (§7.3), up to `max_path_len` steps. Tiles
-/// holding a foreign unit are not entered (that needs `Attack`). Returns the
-/// predecessor map and the reach table.
-fn search(
-    state: &WorldState,
-    rules: &Ruleset,
-    unit: u32,
-) -> (BTreeMap<Hex, Hex>, BTreeMap<Hex, Reach>) {
-    let mut prev = BTreeMap::new();
-    let mut best: BTreeMap<Hex, Reach> = BTreeMap::new();
-    let Some(u) = state.units.get(unit as usize).filter(|u| u.alive) else {
-        return (prev, best);
-    };
-    let mover = match u.owner {
-        Owner::Civ(c) => Some(c),
-        Owner::Barbarian => None,
-    };
-    let mp = stats(u.unit_type).movement.max(1) as u32;
-    let mut heap = BinaryHeap::new();
-    heap.push(Reverse((0u32, 0u32, u.hex)));
-    best.insert(
-        u.hex,
-        Reach {
-            hex: u.hex,
-            cost: 0,
-            ticks: 0,
-            steps: 0,
-        },
-    );
-    while let Some(Reverse((cost, steps, h))) = heap.pop() {
-        if best.get(&h).is_some_and(|r| r.cost < cost) || steps >= rules.max_path_len as u32 {
-            continue;
-        }
-        for n in h.neighbors() {
-            let Some(c) = step_cost(state, u.unit_type, n) else {
-                continue;
-            };
-            if !may_enter(state, rules, mover, n) {
-                continue;
-            }
-            if state
-                .units
-                .iter()
-                .any(|o| o.alive && o.hex == n && o.owner != u.owner)
-            {
-                continue;
-            }
-            let nc = cost + c;
-            if best.get(&n).is_none_or(|r| nc < r.cost) {
-                best.insert(
-                    n,
-                    Reach {
-                        hex: n,
-                        cost: nc,
-                        ticks: nc.div_ceil(mp),
-                        steps: steps + 1,
-                    },
-                );
-                prev.insert(n, h);
-                heap.push(Reverse((nc, steps + 1, n)));
-            }
-        }
-    }
-    best.remove(&u.hex);
-    (prev, best)
-}
-
-/// Every tile the unit can reach, cheapest first.
-pub fn reachable(state: &WorldState, rules: &Ruleset, unit: u32) -> Vec<Reach> {
-    let mut v: Vec<Reach> = search(state, rules, unit).1.into_values().collect();
-    v.sort_by_key(|r| (r.cost, r.hex));
-    v
-}
-
-/// Cheapest legal path to `goal` (excluding the start), as a `MoveUnit` path.
-pub fn path_to(state: &WorldState, rules: &Ruleset, unit: u32, goal: Hex) -> Option<Vec<Hex>> {
-    let (prev, best) = search(state, rules, unit);
-    best.get(&goal)?;
-    let start = state.units.get(unit as usize)?.hex;
-    let mut path = alloc::vec![goal];
-    let mut cur = goal;
-    while let Some(p) = prev.get(&cur) {
-        if *p == start {
-            break;
-        }
-        path.push(*p);
-        cur = *p;
-    }
-    path.reverse();
-    Some(path)
-}
+// Reachability and paths are the engine's own (`movement`), re-exported here.
+pub use crate::movement::{path_to, reachable, Reach};
 
 // ------------------------------------------------------------------ attacks
 
@@ -253,28 +139,9 @@ pub struct QueueOption {
     pub result: Result<(), Blocked>,
 }
 
+/// Production cost in whole units: the engine's own `item_cost`.
 fn item_cost(state: &WorldState, rules: &Ruleset, city: u32, item: QueueItem) -> u32 {
-    let c = &state.cities[city as usize];
-    match item {
-        QueueItem::Building(b) => {
-            let base = crate::buildings::info(b).prod_cost;
-            if b.is_star_gate() {
-                apply_bps(base as i64, stalemate_multiplier(rules, state.tick)) as u32
-            } else {
-                base
-            }
-        }
-        QueueItem::Troops { unit, n } => {
-            let base = stats(unit).prod_cost * n as u32;
-            if c.buildings.has(Building::Barracks) {
-                base * 3 / 4
-            } else {
-                base
-            }
-        }
-        QueueItem::Scout => stats(UnitType::Scout).prod_cost,
-        QueueItem::Settler => stats(UnitType::Settler).prod_cost,
-    }
+    (crate::tick::item_cost(state, rules, &state.cities[city as usize], &item) / MILLI) as u32
 }
 
 /// Every building, a 5-troop army of each type, Scout and Settler.
@@ -409,11 +276,16 @@ pub fn diplomacy_options(
         .filter(|p| p.from == other && p.to == civ && p.tick < state.tick)
     {
         let (action, result) = match p.kind {
-            K::Peace => (A::AcceptPeace, checks::propose_peace(state, other, civ)),
-            K::Nap { bond } => (
-                A::AcceptNap,
-                checks::propose_nap(state, rules, civ, other, bond.max(rules.nap_min_bond)),
-            ),
+            K::Peace => (A::AcceptPeace, checks::accept_peace(state, civ, other)),
+            // Offering the proposer's bond back, at least the minimum.
+            K::Nap { bond } => {
+                let mine = bond.max(rules.nap_min_bond);
+                (
+                    A::AcceptNap,
+                    checks::accept_nap(state, rules, civ, other, mine)
+                        .and_then(|()| checks::nap_bonds_payable(state, civ, other, mine, bond)),
+                )
+            }
             K::Alliance => (
                 A::AcceptAlliance,
                 checks::join_alliance(state, rules, civ, other),
@@ -427,13 +299,17 @@ pub fn diplomacy_options(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::buildings::Building;
     use crate::genesis::{new_season, Entry};
     use crate::params::Preset;
 
     fn world() -> (Ruleset, WorldState) {
         let rules = Ruleset::new(Preset::Blitz);
         let entries: Vec<Entry> = (0..4)
-            .map(|i| Entry { name: alloc::format!("c{i}"), treasury: 0 })
+            .map(|i| Entry {
+                name: alloc::format!("c{i}"),
+                treasury: 0,
+            })
             .collect();
         let s = new_season(&rules, &[11; 32], &[22; 32], &entries).unwrap();
         (rules, s)

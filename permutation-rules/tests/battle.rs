@@ -1,14 +1,14 @@
 //! Phase 5 (combat, captures, razing) behaviour.
 
+mod common;
+use common::{free, step, vrf};
 use permutation_rules::buildings::Building;
 use permutation_rules::combat::{resolve_engagement, variance, Combatant, Situation};
 use permutation_rules::genesis::{new_season, Entry};
 use permutation_rules::hex::Hex;
-use permutation_rules::invariants;
-use permutation_rules::orders::{office_batches, AttackTarget, Order};
+use permutation_rules::orders::{AttackTarget, Order};
 use permutation_rules::rng::{tick_seed, Seed};
 use permutation_rules::state::{Owner, StandingRule, Unit, WorldState};
-use permutation_rules::tick::{resolve_tick, TickInput};
 use permutation_rules::units::UnitType::{self, *};
 use permutation_rules::{Preset, Ruleset};
 
@@ -18,38 +18,13 @@ const SEASON: Seed = [22; 32];
 fn setup() -> (Ruleset, WorldState) {
     let rules = Ruleset::new(Preset::Blitz);
     let entries: Vec<Entry> = (0..4)
-        .map(|i| Entry { name: format!("civ-{i}"), treasury: 0 })
+        .map(|i| Entry {
+            name: format!("civ-{i}"),
+            treasury: 0,
+        })
         .collect();
     let state = new_season(&rules, &WORLD, &SEASON, &entries).unwrap();
     (rules, state)
-}
-
-fn vrf(tick: u16) -> Seed {
-    let mut s = [0u8; 32];
-    s[..2].copy_from_slice(&tick.to_le_bytes());
-    s
-}
-
-/// Resolve one tick with the given orders per civ; check invariants.
-fn step(s: &mut WorldState, rules: &Ruleset, orders: Vec<(u16, Vec<Order>)>) {
-    // Tests exercise mechanics, not office budgets (V5 §5.2 has its own tests).
-    for n in &mut s.nations {
-        n.role_bank = [20; 4];
-    }
-    let batches = orders
-        .into_iter()
-        .flat_map(|(civ, orders)| office_batches(s, civ, [0; 32], orders))
-        .collect();
-    resolve_tick(
-        s,
-        rules,
-        &TickInput {
-            vrf: vrf(s.tick),
-            batches, ..Default::default() },
-    )
-    .unwrap();
-    let v = invariants::check(s, rules);
-    assert!(v.is_empty(), "{v:?}");
 }
 
 fn place(s: &mut WorldState, civ: Owner, unit_type: UnitType, troops: u32, hex: Hex) -> u32 {
@@ -67,13 +42,6 @@ fn place(s: &mut WorldState, civ: Owner, unit_type: UnitType, troops: u32, hex: 
         alive: true,
     });
     id
-}
-
-fn free(s: &WorldState, h: Hex) -> bool {
-    s.map.tile(h).is_some_and(|t| t.terrain.is_passable())
-        && !s.units.iter().any(|u| u.alive && u.hex == h)
-        && !s.cities.iter().any(|c| c.alive && c.hex == h)
-        && !s.city_states.iter().any(|c| c.hex == h)
 }
 
 /// Open ground far from every city: returns (a, b, c) with a–b adjacent and c two steps from b.
@@ -424,8 +392,15 @@ fn a_third_civs_civilian_leaves_a_captured_city() {
     );
     assert_eq!(s.cities[ci].owner, Some(0));
     let u = &s.units[settler as usize];
-    assert_eq!(u.owner, Owner::Civ(2), "only the old owner's civilians are captured");
-    assert!(!u.alive || u.hex != hex, "the third civ's settler left the tile (or was disbanded)");
+    assert_eq!(
+        u.owner,
+        Owner::Civ(2),
+        "only the old owner's civilians are captured"
+    );
+    assert!(
+        !u.alive || u.hex != hex,
+        "the third civ's settler left the tile (or was disbanded)"
+    );
     // `step` already checked the occupancy invariant.
 }
 

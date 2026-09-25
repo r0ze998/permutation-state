@@ -10,7 +10,8 @@
 // accept peace. The rationale names what it did and why, and is revealed
 // after the tick.
 import { parseArgs, runAgent } from './runner.mjs';
-import { officeOf } from '../client/src/game.mjs';
+import { hexDist as dist } from '../client/src/hexgrid.mjs';
+import { officeOf } from '../client/src/offices.mjs';
 
 const TECH_PLAN = ['Agriculture', 'BronzeWorking', 'Writing', 'Masonry', 'Mysticism', 'Currency', 'Archery', 'Mathematics', 'Philosophy',
   'IronWorking', 'HorsebackRiding', 'Engineering', 'Astronomy', 'Physics', 'CelestialMechanics', 'Chivalry'];
@@ -22,8 +23,6 @@ const JA = { Agriculture: '農業', BronzeWorking: '青銅器', Archery: '弓術
   Granary: '穀物庫', Workshop: '工房', Temple: '神殿', Market: '市場', Academy: '学術院', Barracks: '兵舎', Walls: '城壁', StarGate1: 'スターゲートI', StarGate2: 'スターゲートII', StarGate3: 'スターゲートIII',
   Spearman: '槍兵', Archer: '弓兵', Horseman: '騎兵', Pikeman: '長槍兵', Crossbowman: '弩兵', Knight: '騎士', Scout: '斥候', Settler: '開拓者' };
 const ja = k => JA[k] || k;
-
-const dist = (a, b) => (Math.abs(a.q - b.q) + Math.abs(a.r - b.r) + Math.abs(a.q + a.r - b.q - b.r)) / 2;
 
 async function decide({ game, view: v, map, held }) {
   const me = v.me;

@@ -58,9 +58,12 @@ pub fn between(a: Hex, b: Hex) -> Vec<Hex> {
 /// Mountain strictly between them. A Mountain itself can be seen.
 pub fn sees(state: &WorldState, from: Hex, radius: u32, to: Hex) -> bool {
     from.distance(to) <= radius
-        && between(from, to)
-            .into_iter()
-            .all(|h| state.map.tile(h).is_none_or(|t| t.terrain != Terrain::Mountain))
+        && between(from, to).into_iter().all(|h| {
+            state
+                .map
+                .tile(h)
+                .is_none_or(|t| t.terrain != Terrain::Mountain)
+        })
 }
 
 /// Civilizations whose vision `civ` shares: itself and its allies (§10.4).
@@ -74,7 +77,12 @@ pub fn sharers(state: &WorldState, civ: CivId) -> Vec<CivId> {
 pub fn visible(state: &WorldState, civ: CivId) -> Vec<bool> {
     let team = sharers(state, civ);
     let mut sources: Vec<(Hex, u32)> = Vec::new();
-    let bonus = |h: Hex| state.map.tile(h).map_or(0, |t| t.terrain.info().vision_bonus as u32);
+    let bonus = |h: Hex| {
+        state
+            .map
+            .tile(h)
+            .map_or(0, |t| t.terrain.info().vision_bonus as u32)
+    };
     for u in state.units.iter().filter(|u| u.alive) {
         if matches!(u.owner, Owner::Civ(o) if team.contains(&o)) {
             sources.push((u.hex, stats(u.unit_type).vision as u32 + bonus(u.hex)));
@@ -110,7 +118,12 @@ pub struct Memory {
 impl Memory {
     pub fn new(state: &WorldState) -> Memory {
         let n = state.map.tiles.len();
-        Memory { explored: vec![false; n], owner_city: vec![None; n], ruin: vec![None; n], cities: BTreeMap::new() }
+        Memory {
+            explored: vec![false; n],
+            owner_city: vec![None; n],
+            ruin: vec![None; n],
+            cities: BTreeMap::new(),
+        }
     }
 
     /// Record everything in `seen` (from [`visible`]) as of `state.tick`.
@@ -125,7 +138,9 @@ impl Memory {
             self.ruin[i] = t.ruin_peak_pop;
         }
         for c in &state.cities {
-            let Some(i) = state.map.index_of(c.hex) else { continue };
+            let Some(i) = state.map.index_of(c.hex) else {
+                continue;
+            };
             if !seen[i] {
                 continue;
             }
@@ -153,8 +168,16 @@ pub fn belief(state: &WorldState, civ: CivId, seen: &[bool], memory: &Memory) ->
     let hidden = |h: Hex| state.map.index_of(h).is_none_or(|i| !seen[i]);
     for (i, t) in b.map.tiles.iter_mut().enumerate() {
         if !seen[i] {
-            t.owner_city = if memory.explored[i] { memory.owner_city[i] } else { None };
-            t.ruin_peak_pop = if memory.explored[i] { memory.ruin[i] } else { None };
+            t.owner_city = if memory.explored[i] {
+                memory.owner_city[i]
+            } else {
+                None
+            };
+            t.ruin_peak_pop = if memory.explored[i] {
+                memory.ruin[i]
+            } else {
+                None
+            };
         }
     }
     for c in b.cities.iter_mut() {
@@ -201,6 +224,158 @@ pub fn belief(state: &WorldState, civ: CivId, seen: &[bool], memory: &Memory) ->
         c.queue.clear();
         c.food = 0;
         c.prod = 0;
+        c.queue_credit = Default::default();
+        c.steward_credit = Default::default();
     }
+    for o in b.civs.iter_mut().filter(|o| o.id != civ) {
+        o.research_credit = Default::default();
+        o.scores.science_total = 0;
+    }
+    // Other nations' members' merit, their market deliveries, and what their
+    // orders were (skips name their orders) are theirs too (V5).
+    for m in b.members.iter_mut().filter(|m| m.civ != civ) {
+        m.merit = Default::default();
+    }
+    b.deliveries.retain(|d| d.civ == civ);
+    b.last_skipped.retain(|k| k.civ == civ);
+    b.merit_log.retain(|e| {
+        state
+            .members
+            .get(e.member as usize)
+            .is_some_and(|m| m.civ == civ)
+    });
+    b.tick_orders.retain(|o| o.civ == civ);
     b
+}
+
+#[cfg(test)]
+mod census {
+    //! Every field of the state is listed here with whether a nation's
+    //! `belief` shows it for other nations. Adding a field stops these
+    //! patterns compiling, so nobody can add state without deciding whether
+    //! it is private.
+    use crate::gov::{Member, Nation};
+    use crate::state::{City, Civ, WorldState};
+
+    #[allow(dead_code, unused_variables)]
+    fn world(s: &WorldState) {
+        let WorldState {
+            ruleset_hash: _,
+            season_seed: _,
+            tick: _,
+            phase_cursor: _,
+            tick_seed: _,
+            map: _, // public (tiles fogged)
+            civs: _,
+            cities: _,
+            units: _, // per-object rules in `belief`
+            city_states: _,
+            hubs: _,
+            relations: _,
+            grievance: _,
+            proposals: _,
+            truce_until: _, // public
+            pools: _,
+            usdc_deposited: _,
+            exchange_vault: _,
+            exchange_ops: _,
+            event_head: _, // public
+            implicit: _,
+            grievance_fresh: _, // public (derived)
+            members: _,
+            nations: _, // per-member / per-nation rules in `belief`
+            tick_orders: _,
+            last_skipped: _,
+            deliveries: _,
+            merit_log: _, // own nation only
+        } = s;
+    }
+
+    #[allow(dead_code, unused_variables)]
+    fn civ(c: &Civ) {
+        let Civ {
+            id: _,
+            name: _,
+            tick_budget: _,
+            last_aggression: _,
+            ever_allied: _,
+            capital: _,
+            last_city_lost: _, // public
+            protection_lost: _,
+            last_star_gate: _,
+            achievements: _,
+            scores: _, // public except scores.science_total
+            gold: _,
+            science_store: _,
+            influence: _,
+            iron: _,
+            horses: _,
+            techs: _,
+            research_queue: _, // private
+            research_credit: _,
+            deficit: _,
+            troops_lost: _,
+            last: _,
+            war_weariness: _,
+            usdc: _, // private
+            market_spent: _,
+            exchange_bought: _, // private
+        } = c;
+    }
+
+    #[allow(dead_code, unused_variables)]
+    fn city(c: &City) {
+        let City {
+            id: _,
+            owner: _,
+            founder: _,
+            founded_tick: _,
+            hex: _,
+            pop: _,
+            buildings: _,
+            loyalty: _,
+            defense: _, // public when seen
+            attacked_this_tick: _,
+            focus: _,
+            captured_tick: _,
+            captured_from: _,
+            capture_scores: _,
+            razing: _, // public when seen
+            heritage_until: _,
+            heritage_bonus: _,
+            standing: _,
+            alive: _, // public when seen
+            food: _,
+            prod: _,
+            queue: _,
+            queue_credit: _,
+            steward_credit: _, // private to the owner
+        } = c;
+    }
+
+    #[allow(dead_code, unused_variables)]
+    fn gov(m: &Member, n: &Nation) {
+        let Member {
+            civ: _,
+            key: _,
+            windows: _,
+            last_active: _,
+            standing_for: _,
+            merit: _,
+        } = m; // merit: own nation only
+        let Nation {
+            offices: _,
+            office_since: _,
+            office_last_act: _,
+            office_seen: _,
+            runner_up: _,
+            members: _,
+            votes: _, // public
+            recalls: _,
+            next_proposal: _,
+            adopted: _, // public
+            role_bank: _,
+            proposals: _, // own nation only
+        } = n;
+    }
 }

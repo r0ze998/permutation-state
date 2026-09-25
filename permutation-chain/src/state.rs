@@ -8,8 +8,9 @@
 //!   candidacy and votes, treasury shares, claim flag.
 //! * **World** `["world", id, k]`, k = 0..WORLD_CHUNKS — delegated to the ER
 //!   during play. Every account the ER delegates, commits or undelegates is
-//!   created through CPI, which Solana caps at 10 KiB, so the world is stored
-//!   in 10 KiB chunks: chunk 0 starts with a fixed header (magic, body length,
+//!   created through CPI, which Solana caps at 10 KiB, and the committor's
+//!   finalize has a compute limit, so the world is stored in `CHUNK`-byte
+//!   (4 KiB) chunks: chunk 0 starts with a fixed header (magic, body length,
 //!   `WorldMeta`), and the borsh `WorldState` (or the `GenesisJob` while
 //!   genesis runs) continues across the chunks in order.
 //! * **Nation** `["nation", id, civ]` — delegated to the ER. The nation's
@@ -204,6 +205,14 @@ pub struct WorldMeta {
     pub input_logged: u16,
 }
 
+impl WorldMeta {
+    /// Decode the meta from world chunk 0's header.
+    pub fn from_chunk0(data: &[u8]) -> Result<Self, ProgramError> {
+        let header = data.get(12..WORLD_HEADER).ok_or(ChainError::WrongWorld)?;
+        WorldMeta::deserialize(&mut &header[..]).map_err(|_| ChainError::WrongWorld.into())
+    }
+}
+
 /// Bytes of tick input per `PS_INPUT` log: a transaction's logs are capped at
 /// 10 000 bytes and `sol_log_data` writes base64.
 pub const INPUT_CHUNK: usize = 6000;
@@ -224,7 +233,9 @@ pub struct Chunks<'a, 'info> {
 }
 
 impl<'a, 'info> Chunks<'a, 'info> {
-    pub fn new(accounts: &'a [solana_program::account_info::AccountInfo<'info>]) -> Result<Self, ProgramError> {
+    pub fn new(
+        accounts: &'a [solana_program::account_info::AccountInfo<'info>],
+    ) -> Result<Self, ProgramError> {
         if accounts.len() != WORLD_CHUNKS || accounts.iter().any(|a| a.data_len() != CHUNK) {
             return Err(ChainError::WorldTooSmall.into());
         }
@@ -236,8 +247,7 @@ impl<'a, 'info> Chunks<'a, 'info> {
     }
 
     pub fn meta(&self) -> Result<WorldMeta, ProgramError> {
-        let d = self.accounts[0].try_borrow_data()?;
-        WorldMeta::deserialize(&mut &d[12..WORLD_HEADER]).map_err(|_| ChainError::WrongWorld.into())
+        WorldMeta::from_chunk0(&self.accounts[0].try_borrow_data()?)
     }
 
     pub fn set_meta(&self, meta: &WorldMeta) -> Result<(), ProgramError> {
@@ -295,7 +305,8 @@ impl<'a, 'info> Chunks<'a, 'info> {
     }
 
     pub fn read_world(&self) -> Result<WorldState, ProgramError> {
-        WorldState::try_from_slice(&self.body(&WORLD_MAGIC)?).map_err(|_| ChainError::WrongWorld.into())
+        WorldState::try_from_slice(&self.body(&WORLD_MAGIC)?)
+            .map_err(|_| ChainError::WrongWorld.into())
     }
 
     /// Returns the new `state_root` (sha256 of exactly these bytes, §15).
@@ -311,7 +322,8 @@ impl<'a, 'info> Chunks<'a, 'info> {
     }
 
     pub fn read_genesis(&self) -> Result<GenesisJob, ProgramError> {
-        GenesisJob::try_from_slice(&self.body(&GENESIS_MAGIC)?).map_err(|_| ChainError::WrongWorld.into())
+        GenesisJob::try_from_slice(&self.body(&GENESIS_MAGIC)?)
+            .map_err(|_| ChainError::WrongWorld.into())
     }
 
     pub fn write_genesis(&self, job: &GenesisJob) -> Result<(), ProgramError> {
@@ -328,6 +340,143 @@ pub fn load<T: BorshDeserialize>(data: &[u8]) -> Result<T, ProgramError> {
 
 pub fn store<T: BorshSerialize>(data: &mut [u8], value: &T) -> Result<(), ProgramError> {
     let bytes = borsh::to_vec(value).map_err(|_| ChainError::InvalidParams)?;
-    data.get_mut(..bytes.len()).ok_or(ProgramError::AccountDataTooSmall)?.copy_from_slice(&bytes);
+    data.get_mut(..bytes.len())
+        .ok_or(ProgramError::AccountDataTooSmall)?
+        .copy_from_slice(&bytes);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use solana_program::{account_info::AccountInfo, pubkey::Pubkey};
+
+    fn season(nations: usize, members: usize) -> Season {
+        Season {
+            magic: SEASON_MAGIC,
+            season_id: u64::MAX,
+            bump: 255,
+            vault_bump: 255,
+            admin: [1; 32],
+            crank: [2; 32],
+            usdc_mint: [3; 32],
+            usdc_decimals: 6,
+            preset: 1,
+            nations: nations as u8,
+            entry_fee: u64::MAX,
+            tick_seconds: u32::MAX,
+            market: true,
+            status: SeasonStatus::Finalized,
+            world_seed: [4; 32],
+            season_seed: [5; 32],
+            member_count: members as u32,
+            nation_members: vec![u32::MAX; nations],
+            seated: members as u32,
+            pool: u64::MAX,
+            ops: u64::MAX,
+            ops_withdrawn: true,
+            treasury: vec![u64::MAX; nations],
+            treasury_final: vec![u64::MAX; nations],
+            payouts: vec![u64::MAX; members],
+            final_root: [6; 32],
+        }
+    }
+
+    #[test]
+    fn a_full_season_fits_its_account() {
+        let bytes = borsh::to_vec(&season(MAX_NATIONS, MAX_MEMBERS as usize)).unwrap();
+        assert!(
+            bytes.len() <= SEASON_SPACE,
+            "{} > {}",
+            bytes.len(),
+            SEASON_SPACE
+        );
+    }
+
+    #[test]
+    fn a_member_with_the_longest_name_fits_its_account() {
+        let m = MemberAccount {
+            magic: MEMBER_MAGIC,
+            season_id: u64::MAX,
+            bump: 255,
+            index: u32::MAX,
+            civ: u16::MAX,
+            wallet: [1; 32],
+            session: [2; 32],
+            kind: 2,
+            name: "x".repeat(MAX_NAME),
+            attestation: [3; 32],
+            stand: 0x0f,
+            votes: [u32::MAX; 4],
+            shares: u64::MAX,
+            claimed: true,
+        };
+        assert!(borsh::to_vec(&m).unwrap().len() <= MEMBER_SPACE);
+    }
+
+    #[test]
+    fn world_meta_fits_the_header() {
+        let meta = WorldMeta {
+            season_id: u64::MAX,
+            deadline: i64::MAX,
+            input_chunks: u16::MAX,
+            ..Default::default()
+        };
+        assert!(borsh::to_vec(&meta).unwrap().len() <= WORLD_HEADER - 12);
+        // The season id is the first field: `world_season_id` reads it at 12..20.
+        let mut chunk0 = vec![0u8; CHUNK];
+        chunk0[12..12 + borsh::to_vec(&meta).unwrap().len()]
+            .copy_from_slice(&borsh::to_vec(&meta).unwrap());
+        assert_eq!(
+            u64::from_le_bytes(chunk0[12..20].try_into().unwrap()),
+            u64::MAX
+        );
+        assert_eq!(WorldMeta::from_chunk0(&chunk0).unwrap(), meta);
+        assert!(WorldMeta::from_chunk0(&chunk0[..20]).is_err());
+    }
+
+    #[test]
+    fn world_body_round_trips_across_chunks() {
+        let owner = Pubkey::new_unique();
+        let keys: Vec<Pubkey> = (0..WORLD_CHUNKS).map(|_| Pubkey::new_unique()).collect();
+        let mut lamports = [0u64; WORLD_CHUNKS];
+        let mut data = vec![vec![0u8; CHUNK]; WORLD_CHUNKS];
+        let accounts: Vec<AccountInfo> = keys
+            .iter()
+            .zip(lamports.iter_mut())
+            .zip(data.iter_mut())
+            .map(|((k, l), d)| AccountInfo::new(k, false, true, l, d, &owner, false))
+            .collect();
+        let chunks = Chunks::new(&accounts).unwrap();
+        let meta = WorldMeta {
+            season_id: 7,
+            civs: 6,
+            ..Default::default()
+        };
+        chunks.set_meta(&meta).unwrap();
+        // Spans several chunk boundaries.
+        let body: Vec<u8> = (0..3 * CHUNK + 123).map(|i| (i * 31 % 251) as u8).collect();
+        chunks.write_body(&WORLD_MAGIC, &body).unwrap();
+        assert_eq!(chunks.body(&WORLD_MAGIC).unwrap(), body);
+        assert!(chunks.body(&GENESIS_MAGIC).is_err());
+        assert_eq!(
+            chunks.meta().unwrap(),
+            meta,
+            "writing the body keeps the meta"
+        );
+        let too_big = vec![0u8; WORLD_CHUNKS * CHUNK - WORLD_HEADER + 1];
+        assert!(chunks.write_body(&WORLD_MAGIC, &too_big).is_err());
+    }
+
+    #[test]
+    fn chunks_need_every_account_at_full_size() {
+        let owner = Pubkey::new_unique();
+        let key = Pubkey::new_unique();
+        let mut l = 0u64;
+        let mut d = vec![0u8; CHUNK - 1];
+        let one = [AccountInfo::new(
+            &key, false, true, &mut l, &mut d, &owner, false,
+        )];
+        assert!(Chunks::new(&one).is_err());
+    }
 }

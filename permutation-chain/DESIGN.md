@@ -2,6 +2,18 @@
 
 The on-chain half of PERMUTATION STATE (Game Design V5). One native Solana program runs the same `permutation-rules` crate as the game server, the AI members and the replay verifier, so a tick resolved on chain is byte-identical to one resolved anywhere else. Registration, the prize vault and the final world live on the Solana base layer; the world and the nations' accounts are delegated to a MagicBlock Ephemeral Rollup (ER) while the season plays.
 
+## Code layout
+
+| File | Contents |
+|---|---|
+| `instruction.rs` | the instructions and their accounts (the borsh tag is the variant index; never reorder) |
+| `state.rs` | account layouts, sizes, and `Chunks` (the world across its chunk accounts) |
+| `processor/` | one module per stage: `registration`, `genesis`, `delegation`, `play`, `settlement`; `accounts` holds the shared checks and loaders |
+| `error.rs` | error codes (clients map them by `ChainError::ALL`) |
+| `token.rs`, `heap.rs` | SPL token calls; the bump allocator for the large world |
+
+Every account an instruction reads is checked for its owner and its PDA address (nation accounts by their stored bump), not by its content alone: world chunks are program-owned too, and their bytes are partly shaped by player input.
+
 ## Accounts
 
 | Account | Seeds | Layer | Holds |

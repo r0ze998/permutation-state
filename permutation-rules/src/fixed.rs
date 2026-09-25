@@ -25,12 +25,6 @@ pub const fn apply_bps(x: i64, bps: Bps) -> i64 {
     x * bps as i64 / BPS_ONE as i64
 }
 
-/// `x × bps / 10000` for unsigned values.
-#[inline]
-pub const fn apply_bps_u64(x: u64, bps: Bps) -> u64 {
-    x * bps as u64 / BPS_ONE as u64
-}
-
 /// Integer square root (floor), used by the growth threshold (§5.3).
 pub const fn isqrt(n: u64) -> u64 {
     if n < 2 {

@@ -16,7 +16,10 @@ impl Fog {
     /// Fog as of `state` (call right after genesis).
     pub fn new(state: &WorldState) -> Fog {
         let n = state.civs.len();
-        let mut f = Fog { seen: vec![Vec::new(); n], memory: vec![Memory::new(state); n] };
+        let mut f = Fog {
+            seen: vec![Vec::new(); n],
+            memory: vec![Memory::new(state); n],
+        };
         f.update(state);
         f
     }
@@ -48,7 +51,15 @@ impl Fog {
         self.seen(civ)
             .iter()
             .zip(&m.explored)
-            .map(|(s, e)| if *s { '2' } else if *e { '1' } else { '0' })
+            .map(|(s, e)| {
+                if *s {
+                    '2'
+                } else if *e {
+                    '1'
+                } else {
+                    '0'
+                }
+            })
             .collect()
     }
 }
@@ -57,7 +68,13 @@ impl Fog {
 /// Research is private to a civ and its allies; everything else in the
 /// chronicle is a public announcement (wars, treaties, captures, Star Gates).
 pub fn line_is_public(state: &WorldState, viewer: CivId, line: &str, names: &[&str]) -> bool {
-    let Some(text) = line.strip_prefix("tech|") else { return true };
+    let Some(text) = line.strip_prefix("tech|") else {
+        return true;
+    };
     let team = sharers(state, viewer);
-    team.iter().any(|c| names.get(*c as usize).is_some_and(|n| text.starts_with(&format!("{n} "))))
+    team.iter().any(|c| {
+        names
+            .get(*c as usize)
+            .is_some_and(|n| text.starts_with(&format!("{n} ")))
+    })
 }

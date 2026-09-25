@@ -3,6 +3,7 @@
  *  and terrain art). Everything drawn comes from the server state; no
  *  decorative entities are invented. */
 import { CIV_COLORS, cityName, itemGlyph, UNIT_GLYPH, STANDING_GLYPH } from './i18n.mjs';
+import { hexDist } from './util.mjs';
 
 const SQRT3 = Math.sqrt(3);
 const RADIUS = 44;
@@ -21,7 +22,27 @@ const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 export const key = (q, r) => `${q},${r}`;
 const project = (q, r) => ({ x: SQRT3 * RADIUS * (q + r / 2), y: RADIUS * 1.5 * r * FLATTEN });
 const seed = (q, r, n = 0) => { const v = Math.sin(q * 127.1 + r * 311.7 + n * 74.7) * 43758.5453; return v - Math.floor(v); };
-const hexDist = (a, b) => (Math.abs(a.q - b.q) + Math.abs(a.r - b.r) + Math.abs(a.q + a.r - b.q - b.r)) / 2;
+
+// Palette shared with the HUD (lens legend, unit lists), so both agree.
+export const BARBARIAN_COLOR = '#5f5a52';
+export const FREE_CITY_COLOR = '#9a9a8c';
+export const YIELD_COLORS = ['#7f9a3e', '#9a6b3c', '#c9a43f']; // food, production, gold
+export const THREAT_COLOR = [172, 98, 81]; // enemy reach on the military lens
+export const CONCORD_NEUTRAL = '#8a9a8a'; // city-state zone without a suzerain
+export const rgba = ([r, g, b], a) => `rgba(${r},${g},${b},${a})`;
+/** Colour of a unit or city owner (a civ id, 'barbarian', or null for free cities). */
+export const ownerColor = o => (o === 'barbarian' ? BARBARIAN_COLOR : o === null || o === undefined ? FREE_CITY_COLOR : CIV_COLORS[o]);
+
+// Base yield of a worked tile: [food, production, gold] (rivers and resources included).
+const TERRAIN_YIELD = { Grassland: [2, 0, 0], Plains: [1, 1, 0], Forest: [1, 2, 0], Hills: [0, 2, 0], Mountain: [0, 0, 0], Water: [1, 0, 1] };
+export function tileYield(t) {
+  const y = [...(TERRAIN_YIELD[t.terrain] || [0, 0, 0])];
+  if (t.river) y[2]++;
+  if (t.resource === 'Wheat') y[0] += 2;
+  if (t.resource === 'Iron') y[1]++;
+  if (t.resource === 'Horses') y[0]++;
+  return y;
+}
 function shade(hex, f) {
   const n = parseInt(hex.slice(1), 16);
   const c = [n >> 16, (n >> 8) & 255, n & 255].map(v => clamp(Math.round(f < 0 ? v * (1 + f) : v + (255 - v) * f), 0, 255));
@@ -56,7 +77,7 @@ export class WorldMap {
   constructor(canvas, { onSelect = () => {}, onHover = () => {}, onMove = () => {} } = {}) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d', { alpha: false });
-    this.callbacks = { onSelect, onHover, onMove };
+    this.setCallbacks({ onSelect, onHover, onMove });
     this.tiles = new Map(); this.sortedTiles = [];
     this.view = null; this.me = 0;
     this.selection = null; this.hover = null; this.lens = 'normal';
@@ -130,6 +151,9 @@ export class WorldMap {
     else { this.offset = newC; this.zoom = this.width < 680 ? .7 : this.height < 700 ? .9 : 1.05; }
     this.dirty = true; this.renderNow();
   }
+
+  /** Map input handlers: onSelect(tile id), onHover(tile id | null), onMove(tile id). */
+  setCallbacks({ onSelect = () => {}, onHover = () => {}, onMove = () => {} } = {}) { this.callbacks = { onSelect, onHover, onMove }; }
 
   // ---------------------------------------------------------------- data
   setMap(map) {
@@ -445,22 +469,20 @@ export class WorldMap {
     if (this.lens === 'normal' || this.lens === 'political') return;
     const p = project(t.q, t.r);
     if (this.lens === 'yields' && t.terrain !== 'Mountain') {
-      const base = { Grassland: [2, 0, 0], Plains: [1, 1, 0], Forest: [1, 2, 0], Hills: [0, 2, 0], Water: [1, 0, 1] }[t.terrain] || [0, 0, 0];
-      const y = [...base]; if (t.river) y[2]++; if (t.resource === 'Wheat') y[0] += 2; if (t.resource === 'Iron') y[1]++; if (t.resource === 'Horses') y[0]++;
-      const cols = ['#7f9a3e', '#9a6b3c', '#c9a43f']; let x = p.x - (y[0] + y[1] + y[2]) * 4.5;
+      const y = tileYield(t), cols = YIELD_COLORS; let x = p.x - (y[0] + y[1] + y[2]) * 4.5;
       rounded(ctx, x - 4, p.y + 12, (y[0] + y[1] + y[2]) * 9 + 8, 12, 5); ctx.fillStyle = 'rgba(251,248,239,.86)'; ctx.fill();
       y.forEach((n, i) => { for (let k = 0; k < n; k++) { ctx.fillStyle = cols[i]; ctx.beginPath(); ctx.arc(x + 4, p.y + 18, 3.2, 0, Math.PI * 2); ctx.fill(); x += 9; } });
     }
     if (this.lens === 'military' && this.view) {
       const threat = this.view.units.some(u => !u.civilian && u.owner !== this.me && (this.view.civs[u.owner]?.relation === 'war' || u.owner === 'barbarian') && hexDist(u, t) <= 2);
-      if (threat) polygon(ctx, hexPoints(p.x, p.y, 3), 'rgba(172,98,81,.2)', 'rgba(172,98,81,.45)', 1.2);
+      if (threat) polygon(ctx, hexPoints(p.x, p.y, 3), rgba(THREAT_COLOR, .2), rgba(THREAT_COLOR, .45), 1.2);
     }
     if (this.lens === 'concord' && this.view) {
       for (const cs of this.view.cityStates) {
         if (cs.capturedBy !== null) continue;
         const d = hexDist(cs, t); if (d > 2) continue;
-        const c = cs.suzerain !== null ? CIV_COLORS[cs.suzerain] : '#8a9a8a';
-        polygon(ctx, hexPoints(p.x, p.y, 3), alpha(c.startsWith('#') ? c : '#8a9a8a', d === 0 ? .32 : .14), null);
+        const c = cs.suzerain !== null ? CIV_COLORS[cs.suzerain] : CONCORD_NEUTRAL;
+        polygon(ctx, hexPoints(p.x, p.y, 3), alpha(c.startsWith('#') ? c : CONCORD_NEUTRAL, d === 0 ? .32 : .14), null);
       }
     }
   }
@@ -478,7 +500,7 @@ export class WorldMap {
     }
   }
   _city(ctx, x, y, c) {
-    const col = c.owner === null ? '#9a9a8c' : CIV_COLORS[c.owner];
+    const col = ownerColor(c.owner);
     const roof = shade(col, -.15), light = shade(col, .15);
     if (c.walls) { ctx.strokeStyle = '#a79f86'; ctx.lineWidth = 5; ctx.beginPath(); ctx.ellipse(x + 2, y + 2, 38, 20, 0, 0, Math.PI * 2); ctx.stroke(); ctx.strokeStyle = '#cfc7ae'; ctx.lineWidth = 1.5; ctx.stroke(); }
     polygon(ctx, [[x - 30, y - 1], [x, y - 15], [x + 32, y - 1], [x + 3, y + 16]], '#d8cdac', '#b4ae93', .8);
@@ -511,7 +533,7 @@ export class WorldMap {
       const t = this.tiles.get(key(u.q, u.r)); if (!t || !this._visible(t)) continue;
       const pos = this._unitPos(u.id, now) || project(u.q, u.r);
       const { x, y } = this._unitAnchor(u, t, pos);
-      const col = u.owner === 'barbarian' ? '#5f5a52' : CIV_COLORS[u.owner];
+      const col = ownerColor(u.owner);
       const mine = u.owner === this.me;
       const selected = this.overlay.unit === u.id;
       if (selected || mine) {
@@ -715,7 +737,12 @@ export class WorldMap {
   }
   // ---------------------------------------------------------------- banners and flags (screen space)
   _screen(p) { return { x: p.x * this.zoom + this.offset.x, y: p.y * this.zoom + this.offset.y }; }
-  _seatKind(civ) { return this.view.seats?.find(s => s.civ === civ)?.kind; }
+  /** Who plays a nation, from its members: '人' (a human among them), 'AI', or '代行' (acting officials only). */
+  _nationKind(civ) {
+    if (!this.view.members) return '';
+    const ms = this.view.members.filter(m => m.civ === civ);
+    return ms.some(m => m.host === 'human') ? '人' : ms.length ? 'AI' : '代行';
+  }
   _drawBanners(ctx, now) {
     const s = clamp(this.zoom, .82, 1.12);
     // attack forecasts on target hexes (the combat preview on the map)
@@ -747,7 +774,7 @@ export class WorldMap {
     ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 1; ctx.stroke();
     ctx.fillStyle = fg; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(text, x, y + .5); ctx.textBaseline = 'alphabetic';
   }
-  /** Civ-style city banner: [pop] ★ Name [production | owner kind] with defence and wall bars. */
+  /** Civ-style city banner: [pop] ★ Name [production | who plays the owner] with defence and wall bars. */
   _cityBanner(ctx, x, y, c, s) {
     const mine = c.owner === this.me;
     const col = c.owner === null ? '#8d8a7c' : CIV_COLORS[c.owner];
@@ -763,7 +790,7 @@ export class WorldMap {
       const item = (c.queue || [])[0];
       if (item) right = itemGlyph(item); else { right = '!'; rightBg = '#e8b04a'; rightFg = '#3a2a0c'; }
     } else if (c.owner !== null) {
-      right = { human: '人', external: 'AI', bot: 'BOT' }[this._seatKind(c.owner)] || '';
+      right = this._nationKind(c.owner);
     }
     ctx.font = '700 11px system-ui, sans-serif';
     const rightW = right ? Math.max(20, ctx.measureText(right).width + 10) : 0;
@@ -833,7 +860,7 @@ export class WorldMap {
       const pos = this._unitPos(u.id, now) || project(u.q, u.r);
       const a = this._unitAnchor(u, t, pos);
       const q = this._screen({ x: a.x, y: a.y - 44 });
-      const col = u.owner === 'barbarian' ? '#5f5a52' : CIV_COLORS[u.owner];
+      const col = ownerColor(u.owner);
       const mine = u.owner === this.me;
       const sameSide = byTile.get(t.id).filter(v => v.civilian === u.civilian);
       ctx.save(); ctx.translate(q.x, q.y); ctx.scale(s * 1.35, s * 1.35);

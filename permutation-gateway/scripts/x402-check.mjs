@@ -9,9 +9,9 @@ import { Keypair, PublicKey, SystemProgram, Transaction } from '@solana/web3.js'
 import assert from 'node:assert/strict';
 import { ChainClient } from '../client/src/chain.mjs';
 import { GameClient } from '../client/src/game.mjs';
+import { DEFAULTS, parseArgs } from '../src/config.mjs';
 
-const i = process.argv.indexOf('--gateway');
-const gateway = i > 0 ? process.argv[i + 1] : 'http://127.0.0.1:4191';
+const { gateway } = parseArgs(process.argv.slice(2), { gateway: DEFAULTS.gatewayUrl });
 const url = `${gateway}/x402/join`;
 const post = async (headers = {}) => {
   const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: '{}' });
@@ -33,7 +33,8 @@ assert.equal(req.maxAmountRequired, String(before.entryFee));
 console.log('✓ 402 with PaymentRequirements (exact, amount = entry fee, payTo = vault)');
 
 assert.equal((await post({ 'X-PAYMENT': 'not base64 json' })).status, 400);
-console.log('✓ malformed X-PAYMENT → 400');
+assert.equal((await post({ 'X-PAYMENT': Buffer.from(JSON.stringify({ scheme: 'exact', payload: { transaction: 'AAAA' } })).toString('base64') })).status, 400);
+console.log('✓ malformed X-PAYMENT (not JSON, or not a transaction) → 400');
 
 const x = req.extra;
 const chain = new ChainClient(x.programId, BigInt(x.seasonId));

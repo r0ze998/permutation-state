@@ -12,7 +12,11 @@ pub fn sha256(parts: &[&[u8]]) -> Digest32 {
     // SAFETY: `parts` is a slice of `&[u8]` (pointer, length) pairs, the ABI
     // the syscall expects; `out` has room for the 32-byte digest.
     unsafe {
-        sol_sha256(parts.as_ptr() as *const u8, parts.len() as u64, out.as_mut_ptr());
+        sol_sha256(
+            parts.as_ptr() as *const u8,
+            parts.len() as u64,
+            out.as_mut_ptr(),
+        );
     }
     out
 }

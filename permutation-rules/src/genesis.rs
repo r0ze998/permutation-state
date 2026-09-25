@@ -3,10 +3,10 @@
 use crate::buildings::BuildingSet;
 use crate::economy::order_budget;
 use crate::fixed::milli;
+use crate::gov::{Credit, Nation};
 use crate::map::{generate, territory_radius};
 use crate::params::Ruleset;
 use crate::rng::{rand_id, Seed};
-use crate::gov::{Credit, Nation};
 use crate::state::{
     Achievements, City, CityState, Civ, Focus, Owner, Pool, Relation, Scores, Specialty,
     StandingRule, Unit, WorldState,
@@ -32,7 +32,14 @@ pub struct Entry {
 pub const NATIONS: [&str; 6] = ["Aster", "Borealis", "Cinder", "Dunmar", "Ember", "Fjordal"];
 
 pub fn nation_entries(n: usize) -> Vec<Entry> {
-    NATIONS.iter().take(n).map(|name| Entry { name: String::from(*name), treasury: 0 }).collect()
+    NATIONS
+        .iter()
+        .take(n)
+        .map(|name| Entry {
+            name: String::from(*name),
+            treasury: 0,
+        })
+        .collect()
 }
 
 /// Build tick-0 state. `world_seed` drives terrain (first season only);
@@ -51,7 +58,9 @@ pub fn new_season(
 /// Entry rules checked before any generation work (§3.1).
 pub fn check_entries(rules: &Ruleset, entries: &[Entry]) -> Result<(), RulesError> {
     if entries.len() < 2 || entries.len() > rules.max_civs as usize {
-        return Err(RulesError::MapGeneration("a season needs 2..=max_civs nations"));
+        return Err(RulesError::MapGeneration(
+            "a season needs 2..=max_civs nations",
+        ));
     }
     Ok(())
 }
@@ -68,7 +77,9 @@ pub fn season_from_map(
     check_entries(rules, entries)?;
     let n = entries.len();
     if generated.starts.len() != n {
-        return Err(RulesError::MapGeneration("map was generated for a different number of civilizations"));
+        return Err(RulesError::MapGeneration(
+            "map was generated for a different number of civilizations",
+        ));
     }
     let mut map = generated.map;
 
@@ -150,7 +161,10 @@ pub fn season_from_map(
             market_spent: 0,
             exchange_bought: [0; 5],
             scores: Scores::default(),
-            achievements: Achievements { trade: vec![0; n + 1], ..Achievements::default() },
+            achievements: Achievements {
+                trade: vec![0; n + 1],
+                ..Achievements::default()
+            },
         });
     }
 

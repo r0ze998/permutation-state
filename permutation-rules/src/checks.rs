@@ -6,6 +6,7 @@
 //! disagree with the rules (the Eternum lesson on logic drift).
 
 use crate::buildings::Building;
+use crate::fixed::MILLI;
 use crate::hex::Hex;
 use crate::params::Ruleset;
 use crate::state::{CivId, Owner, QueueItem, Relation, WorldState};
@@ -26,12 +27,21 @@ pub enum Blocked {
     NotASettler,
     Impassable,
     ForeignTerritory,
-    TooCloseToCity { distance: u32, min: u32 },
-    TooCloseToCityState { distance: u32, min: u32 },
+    TooCloseToCity {
+        distance: u32,
+        min: u32,
+    },
+    TooCloseToCityState {
+        distance: u32,
+        min: u32,
+    },
     InProtectedZone,
     /// Inside `civ`'s capital protection (§3.3); the zone shrinks past this
     /// hex at tick `until` (`u16::MAX` if it never does before protection ends).
-    ProtectedCapital { civ: CivId, until: u16 },
+    ProtectedCapital {
+        civ: CivId,
+        until: u16,
+    },
     // production and research (§5.6, §6.2)
     AlreadyBuilt,
     AlreadyQueued,
@@ -39,36 +49,56 @@ pub enum Blocked {
     StarGateInAnotherCity,
     NeedsPreviousStage,
     InvalidTroopCount,
-    NeedsPop { need: u32, have: u32 },
+    NeedsPop {
+        need: u32,
+        have: u32,
+    },
     AlreadyResearched,
     // diplomacy (§10)
     NotAtPeace,
-    InTruce { until: u16 },
+    InTruce {
+        until: u16,
+    },
     AlreadyAtWar,
     NotAtWar,
     UnderNap,
     Allied,
     NoProposal,
-    BondTooSmall { min: u32 },
-    NotEnoughGold { need: u32, have: u32 },
-    AllianceFull { cap: u32 },
+    BondTooSmall {
+        min: u32,
+    },
+    NotEnoughGold {
+        need: u32,
+        have: u32,
+    },
+    AllianceFull {
+        cap: u32,
+    },
     AlreadyInAlliance,
     AllianceLeaving,
     // combat (§8)
     CivilianCannotAttack,
-    OutOfRange { distance: u32, range: u32 },
+    OutOfRange {
+        distance: u32,
+        range: u32,
+    },
     TargetProtected,
     TargetNotHostile,
     TargetGone,
     // markets (§11)
     Frozen,
     NothingToSell,
-    OverCap { cap: u32 },
+    OverCap {
+        cap: u32,
+    },
     // standing rules (§13)
     /// A unit rule sent to a city or a city rule sent to a unit.
     WrongStandingTarget,
     /// Radius or ratio outside its allowed range.
-    OutOfBounds { min: u32, max: u32 },
+    OutOfBounds {
+        min: u32,
+        max: u32,
+    },
     // offices and V5 fixes
     /// The office's whole batch was rejected at resolution (budget, office, adopted proposal).
     BatchRejected,
@@ -92,17 +122,58 @@ pub enum Blocked {
 
 /// Names of `Blocked` codes, index = `Blocked::code()`, for clients.
 pub const BLOCKED_NAMES: [&str; 52] = [
-    "UnknownUnit", "UnknownCity", "UnknownCiv", "NotYours", "SameCiv",
-    "NotASettler", "Impassable", "ForeignTerritory", "TooCloseToCity", "TooCloseToCityState",
-    "InProtectedZone", "ProtectedCapital", "AlreadyBuilt", "AlreadyQueued", "NeedsTech",
-    "StarGateInAnotherCity", "NeedsPreviousStage", "InvalidTroopCount", "NeedsPop", "AlreadyResearched",
-    "NotAtPeace", "InTruce", "AlreadyAtWar", "NotAtWar", "UnderNap",
-    "Allied", "NoProposal", "BondTooSmall", "NotEnoughGold", "AllianceFull",
-    "AlreadyInAlliance", "AllianceLeaving", "CivilianCannotAttack", "OutOfRange", "TargetProtected",
-    "TargetNotHostile", "TargetGone", "Frozen", "NothingToSell", "OverCap",
-    "WrongStandingTarget", "OutOfBounds", "BatchRejected", "WrongOffice", "NeedsConsent",
-    "AlreadyPurchased", "CannotBuyStarGate", "NothingQueued", "NotEnoughInfluence", "NoCounterparty",
-    "NeedsSpendConsent", "NotEnoughUsdc",
+    "UnknownUnit",
+    "UnknownCity",
+    "UnknownCiv",
+    "NotYours",
+    "SameCiv",
+    "NotASettler",
+    "Impassable",
+    "ForeignTerritory",
+    "TooCloseToCity",
+    "TooCloseToCityState",
+    "InProtectedZone",
+    "ProtectedCapital",
+    "AlreadyBuilt",
+    "AlreadyQueued",
+    "NeedsTech",
+    "StarGateInAnotherCity",
+    "NeedsPreviousStage",
+    "InvalidTroopCount",
+    "NeedsPop",
+    "AlreadyResearched",
+    "NotAtPeace",
+    "InTruce",
+    "AlreadyAtWar",
+    "NotAtWar",
+    "UnderNap",
+    "Allied",
+    "NoProposal",
+    "BondTooSmall",
+    "NotEnoughGold",
+    "AllianceFull",
+    "AlreadyInAlliance",
+    "AllianceLeaving",
+    "CivilianCannotAttack",
+    "OutOfRange",
+    "TargetProtected",
+    "TargetNotHostile",
+    "TargetGone",
+    "Frozen",
+    "NothingToSell",
+    "OverCap",
+    "WrongStandingTarget",
+    "OutOfBounds",
+    "BatchRejected",
+    "WrongOffice",
+    "NeedsConsent",
+    "AlreadyPurchased",
+    "CannotBuyStarGate",
+    "NothingQueued",
+    "NotEnoughInfluence",
+    "NoCounterparty",
+    "NeedsSpendConsent",
+    "NotEnoughUsdc",
 ];
 
 impl Blocked {
@@ -416,11 +487,71 @@ pub fn join_alliance(
     Ok(())
 }
 
+/// `AcceptPeace` (§10.2), apart from the pending proposal: still at war with
+/// no peace already agreed. A civ naming itself is `UnknownCiv` here, as the
+/// engine has always recorded it.
+pub fn accept_peace(state: &WorldState, civ: CivId, from: CivId) -> Result<(), Blocked> {
+    if !crate::diplomacy::valid_pair(state, civ, from) {
+        return Err(Blocked::UnknownCiv);
+    }
+    match state.relation(civ, from) {
+        Relation::War { peace_at: None, .. } => Ok(()),
+        _ => Err(Blocked::NotAtWar),
+    }
+}
+
+/// `AcceptNap` (§10.3), apart from the pending proposal and the escrow
+/// ([`nap_bonds_payable`]): the offered bond and the relation.
+pub fn accept_nap(
+    state: &WorldState,
+    rules: &Ruleset,
+    civ: CivId,
+    from: CivId,
+    bond: u32,
+) -> Result<(), Blocked> {
+    if !crate::diplomacy::valid_pair(state, civ, from) {
+        return Err(Blocked::UnknownCiv);
+    }
+    if bond < rules.nap_min_bond {
+        return Err(Blocked::BondTooSmall {
+            min: rules.nap_min_bond,
+        });
+    }
+    if !matches!(state.relation(civ, from), Relation::Peace) {
+        return Err(Blocked::NotAtPeace);
+    }
+    Ok(())
+}
+
+/// Both NAP bonds are escrowed when the pact is accepted; if either side
+/// cannot pay, it fails. The shortfall is reported as the accepter's gold.
+pub fn nap_bonds_payable(
+    state: &WorldState,
+    civ: CivId,
+    from: CivId,
+    bond: u32,
+    their_bond: u32,
+) -> Result<(), Blocked> {
+    let gold = |c: CivId| state.civs[c as usize].gold;
+    if gold(civ) < bond as i64 * MILLI || gold(from) < their_bond as i64 * MILLI {
+        return Err(Blocked::NotEnoughGold {
+            need: bond,
+            have: (gold(civ) / MILLI).max(0) as u32,
+        });
+    }
+    Ok(())
+}
+
 // ------------------------------------------------------------------ movement
 
 /// Whether `mover` may enter `hex` (terrain, protected capitals, borders;
 /// §3.3, §7.3). `None` is a barbarian, which ignores borders.
-pub fn enter(state: &WorldState, rules: &Ruleset, mover: Option<CivId>, hex: Hex) -> Result<(), Blocked> {
+pub fn enter(
+    state: &WorldState,
+    rules: &Ruleset,
+    mover: Option<CivId>,
+    hex: Hex,
+) -> Result<(), Blocked> {
     let tile = state.map.tile(hex).ok_or(Blocked::Impassable)?;
     if !tile.terrain.is_passable() {
         return Err(Blocked::Impassable);
@@ -431,7 +562,11 @@ pub fn enter(state: &WorldState, rules: &Ruleset, mover: Option<CivId>, hex: Hex
             if Some(civ.id) == mover || civ.protection_lost {
                 continue;
             }
-            let Some(cap) = civ.capital.and_then(|id| state.cities.get(id as usize)).filter(|c| c.alive) else {
+            let Some(cap) = civ
+                .capital
+                .and_then(|id| state.cities.get(id as usize))
+                .filter(|c| c.alive)
+            else {
                 continue;
             };
             let d = cap.hex.distance(hex);
@@ -446,8 +581,16 @@ pub fn enter(state: &WorldState, rules: &Ruleset, mover: Option<CivId>, hex: Hex
         }
     }
     let Some(mover) = mover else { return Ok(()) };
-    match tile.owner_city.and_then(|id| state.cities.get(id as usize)).and_then(|c| c.owner) {
-        Some(owner) if owner != mover && !state.at_war(mover, owner) && !crate::tick::allied(state, mover, owner) => {
+    match tile
+        .owner_city
+        .and_then(|id| state.cities.get(id as usize))
+        .and_then(|c| c.owner)
+    {
+        Some(owner)
+            if owner != mover
+                && !state.at_war(mover, owner)
+                && !crate::tick::allied(state, mover, owner) =>
+        {
             Err(Blocked::ForeignTerritory)
         }
         _ => Ok(()),
@@ -471,7 +614,11 @@ pub fn standing(
     use crate::orders::{StandingOrder as R, StandingTarget as T};
     match target {
         T::Unit(id) => {
-            let u = state.units.get(id as usize).filter(|u| u.alive).ok_or(Blocked::UnknownUnit)?;
+            let u = state
+                .units
+                .get(id as usize)
+                .filter(|u| u.alive)
+                .ok_or(Blocked::UnknownUnit)?;
             if u.owner != Owner::Civ(civ) {
                 return Err(Blocked::NotYours);
             }
@@ -482,7 +629,10 @@ pub fn standing(
                         return Err(Blocked::CivilianCannotAttack);
                     }
                     if *radius == 0 || *radius as u32 > MAX_DEFEND_RADIUS {
-                        return Err(Blocked::OutOfBounds { min: 1, max: MAX_DEFEND_RADIUS });
+                        return Err(Blocked::OutOfBounds {
+                            min: 1,
+                            max: MAX_DEFEND_RADIUS,
+                        });
                     }
                     Ok(())
                 }
@@ -491,15 +641,24 @@ pub fn standing(
                         return Err(Blocked::CivilianCannotAttack);
                     }
                     if !(1_000..=100_000).contains(ratio_bps) {
-                        return Err(Blocked::OutOfBounds { min: 1_000, max: 100_000 });
+                        return Err(Blocked::OutOfBounds {
+                            min: 1_000,
+                            max: 100_000,
+                        });
                     }
                     Ok(())
                 }
                 R::Patrol { route } => {
                     if route.is_empty() || route.len() > crate::orders::MAX_PATROL {
-                        return Err(Blocked::OutOfBounds { min: 1, max: crate::orders::MAX_PATROL as u32 });
+                        return Err(Blocked::OutOfBounds {
+                            min: 1,
+                            max: crate::orders::MAX_PATROL as u32,
+                        });
                     }
-                    if route.iter().any(|h| state.map.tile(*h).is_none_or(|t| !t.terrain.is_passable())) {
+                    if route
+                        .iter()
+                        .any(|h| state.map.tile(*h).is_none_or(|t| !t.terrain.is_passable()))
+                    {
                         return Err(Blocked::Impassable);
                     }
                     Ok(())
@@ -508,18 +667,171 @@ pub fn standing(
             }
         }
         T::City(id) => {
-            let c = state.cities.get(id as usize).filter(|c| c.alive).ok_or(Blocked::UnknownCity)?;
+            let c = state
+                .cities
+                .get(id as usize)
+                .filter(|c| c.alive)
+                .ok_or(Blocked::UnknownCity)?;
             if c.owner != Some(civ) {
                 return Err(Blocked::NotYours);
             }
             match rule {
                 R::Clear | R::QueueRepeat { .. } => Ok(()),
                 R::AutoPurchase { max_gold } if *max_gold > MAX_AUTO_PURCHASE => {
-                    Err(Blocked::OutOfBounds { min: 0, max: MAX_AUTO_PURCHASE })
+                    Err(Blocked::OutOfBounds {
+                        min: 0,
+                        max: MAX_AUTO_PURCHASE,
+                    })
                 }
                 R::AutoPurchase { .. } => Ok(()),
                 _ => Err(Blocked::WrongStandingTarget),
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod blocked_codes {
+    use super::Blocked::{self, *};
+    use super::BLOCKED_NAMES;
+    use crate::tech::Tech;
+
+    /// One of each variant. The exhaustive match below stops compiling when a
+    /// variant is added, so this list, `code()` and `BLOCKED_NAMES` cannot drift.
+    fn every_variant() -> [Blocked; BLOCKED_NAMES.len()] {
+        let z = 0;
+        [
+            UnknownUnit,
+            UnknownCity,
+            UnknownCiv,
+            NotYours,
+            SameCiv,
+            NotASettler,
+            Impassable,
+            ForeignTerritory,
+            TooCloseToCity {
+                distance: z,
+                min: z,
+            },
+            TooCloseToCityState {
+                distance: z,
+                min: z,
+            },
+            InProtectedZone,
+            ProtectedCapital { civ: 0, until: 0 },
+            AlreadyBuilt,
+            AlreadyQueued,
+            NeedsTech(Tech::Agriculture),
+            StarGateInAnotherCity,
+            NeedsPreviousStage,
+            InvalidTroopCount,
+            NeedsPop { need: z, have: z },
+            AlreadyResearched,
+            NotAtPeace,
+            InTruce { until: 0 },
+            AlreadyAtWar,
+            NotAtWar,
+            UnderNap,
+            Allied,
+            NoProposal,
+            BondTooSmall { min: z },
+            NotEnoughGold { need: z, have: z },
+            AllianceFull { cap: z },
+            AlreadyInAlliance,
+            AllianceLeaving,
+            CivilianCannotAttack,
+            OutOfRange {
+                distance: z,
+                range: z,
+            },
+            TargetProtected,
+            TargetNotHostile,
+            TargetGone,
+            Frozen,
+            NothingToSell,
+            OverCap { cap: z },
+            WrongStandingTarget,
+            OutOfBounds { min: z, max: z },
+            BatchRejected,
+            WrongOffice,
+            NeedsConsent,
+            AlreadyPurchased,
+            CannotBuyStarGate,
+            NothingQueued,
+            NotEnoughInfluence,
+            NoCounterparty,
+            NeedsSpendConsent,
+            NotEnoughUsdc,
+        ]
+    }
+
+    #[allow(dead_code)]
+    fn exhaustive(b: Blocked) {
+        match b {
+            UnknownUnit
+            | UnknownCity
+            | UnknownCiv
+            | NotYours
+            | SameCiv
+            | NotASettler
+            | Impassable
+            | ForeignTerritory
+            | TooCloseToCity { .. }
+            | TooCloseToCityState { .. }
+            | InProtectedZone
+            | ProtectedCapital { .. }
+            | AlreadyBuilt
+            | AlreadyQueued
+            | NeedsTech(_)
+            | StarGateInAnotherCity
+            | NeedsPreviousStage
+            | InvalidTroopCount
+            | NeedsPop { .. }
+            | AlreadyResearched
+            | NotAtPeace
+            | InTruce { .. }
+            | AlreadyAtWar
+            | NotAtWar
+            | UnderNap
+            | Allied
+            | NoProposal
+            | BondTooSmall { .. }
+            | NotEnoughGold { .. }
+            | AllianceFull { .. }
+            | AlreadyInAlliance
+            | AllianceLeaving
+            | CivilianCannotAttack
+            | OutOfRange { .. }
+            | TargetProtected
+            | TargetNotHostile
+            | TargetGone
+            | Frozen
+            | NothingToSell
+            | OverCap { .. }
+            | WrongStandingTarget
+            | OutOfBounds { .. }
+            | BatchRejected
+            | WrongOffice
+            | NeedsConsent
+            | AlreadyPurchased
+            | CannotBuyStarGate
+            | NothingQueued
+            | NotEnoughInfluence
+            | NoCounterparty
+            | NeedsSpendConsent
+            | NotEnoughUsdc => {}
+        }
+    }
+
+    #[test]
+    fn codes_are_positions_and_names_match_variants() {
+        for (i, b) in every_variant().iter().enumerate() {
+            // Codes are recorded in hashed state (`Skip`): they are the variant
+            // positions and must never be renumbered.
+            assert_eq!(b.code() as usize, i, "{b:?}");
+            let debug = alloc::format!("{b:?}");
+            let name = debug.split(['(', ' ', '{']).next().unwrap();
+            assert_eq!(BLOCKED_NAMES[i], name);
         }
     }
 }

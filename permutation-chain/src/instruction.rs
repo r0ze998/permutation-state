@@ -1,5 +1,6 @@
 //! Instructions. Accounts are listed as (s) signer, (w) writable.
-//! Base layer: 0–5, 10, 11, 13–16, 18. Ephemeral Rollup: 6–9, 12, 17.
+//! The borsh enum tag is the variant index; never reorder or remove variants.
+//! Base layer: 0–5, 10, 11, 13–16, 18. Ephemeral Rollup: 6–9, 12, 17, 19, 20.
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use permutation_rules::gov::{GovAction, Role};
@@ -21,7 +22,7 @@ pub enum ChainInstruction {
         /// Open the USDC market this season (V5 §7.5).
         market: bool,
     },
-    /// Create one 10 KiB world chunk `["world", id, chunk]`. Anyone may pay.
+    /// Create one `CHUNK`-byte world chunk `["world", id, chunk]`. Anyone may pay.
     /// 0 payer (s,w) · 1 season · 2 world chunk PDA (w) · 3 system
     AllocWorld { chunk: u8 },
     /// Become a member of a nation (V5 §4): pay the entry fee (80% prize pool,
@@ -58,7 +59,13 @@ pub enum ChainInstruction {
     /// ER: replace one office's batch for the open tick. The signer is the
     /// office holder's session key, or the crank for a vacant office.
     /// 0 signer (s) · 1 nation PDA (w)
-    SubmitOrders { role: Role, tick: u16, decision_digest: [u8; 32], orders: Vec<Order>, adopt: Vec<u32> },
+    SubmitOrders {
+        role: Role,
+        tick: u16,
+        decision_digest: [u8; 32],
+        orders: Vec<Order>,
+        adopt: Vec<u32>,
+    },
     /// ER: resolve the open tick once its input was published in full
     /// (`LogTickInput`). Runs phases up to `to` (12 = the whole tick) and logs
     /// `PS_TICK` with the input's hash. Permissionless.
@@ -129,4 +136,38 @@ pub enum ChainInstruction {
         /// 0..WORLD_CHUNKS = that world chunk; 1000 + civ = that nation's account.
         targets: Vec<u16>,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ChainInstruction as I;
+
+    /// Clients (the gateway codec) hardcode these tags.
+    #[test]
+    fn tags_are_stable() {
+        let tag = |ix: I| borsh::to_vec(&ix).unwrap()[0];
+        assert_eq!(tag(I::AllocWorld { chunk: 0 }), 1);
+        assert_eq!(tag(I::StartSeason), 3);
+        assert_eq!(tag(I::GenesisStep { work: 0 }), 4);
+        assert_eq!(tag(I::Delegate { target: 0 }), 5);
+        assert_eq!(tag(I::ResolveTick { to: 12 }), 7);
+        assert_eq!(tag(I::Commit), 8);
+        assert_eq!(tag(I::CommitAndUndelegate), 9);
+        assert_eq!(tag(I::FinishSeason), 10);
+        assert_eq!(tag(I::Claim), 11);
+        assert_eq!(tag(I::UndelegatePart { targets: vec![] }), 12);
+        assert_eq!(
+            tag(I::UpdateMember {
+                stand: 0,
+                votes: [0; 4]
+            }),
+            13
+        );
+        assert_eq!(tag(I::AllocNation { civ: 0 }), 14);
+        assert_eq!(tag(I::SeatMembers), 15);
+        assert_eq!(tag(I::OpenGovernment), 16);
+        assert_eq!(tag(I::WithdrawOps), 18);
+        assert_eq!(tag(I::LogTickInput { chunk: 0 }), 19);
+        assert_eq!(tag(I::CommitPart { targets: vec![] }), 20);
+    }
 }

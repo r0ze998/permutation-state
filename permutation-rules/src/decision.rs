@@ -45,13 +45,36 @@ pub fn rationale_hash(salt: &[u8; 16], text: &[u8]) -> Hash {
     sha(&[b"PS/rationale/v1", salt, text])
 }
 
-pub fn decision_digest(tick: u16, obs_root: &Hash, policy_id: &Hash, rationale_hash: &Hash) -> Hash {
-    sha(&[b"PS/decision/v1", &tick.to_le_bytes(), obs_root, policy_id, rationale_hash])
+pub fn decision_digest(
+    tick: u16,
+    obs_root: &Hash,
+    policy_id: &Hash,
+    rationale_hash: &Hash,
+) -> Hash {
+    sha(&[
+        b"PS/decision/v1",
+        &tick.to_le_bytes(),
+        obs_root,
+        policy_id,
+        rationale_hash,
+    ])
 }
 
 /// Check a revealed rationale against a committed digest.
-pub fn verify_reveal(digest: &Hash, tick: u16, obs_root: &Hash, policy: &[u8], salt: &[u8; 16], text: &[u8]) -> bool {
-    decision_digest(tick, obs_root, &policy_id(policy), &rationale_hash(salt, text)) == *digest
+pub fn verify_reveal(
+    digest: &Hash,
+    tick: u16,
+    obs_root: &Hash,
+    policy: &[u8],
+    salt: &[u8; 16],
+    text: &[u8],
+) -> bool {
+    decision_digest(
+        tick,
+        obs_root,
+        &policy_id(policy),
+        &rationale_hash(salt, text),
+    ) == *digest
 }
 
 // ------------------------------------------------------------------ Merkle tree
@@ -76,7 +99,13 @@ pub fn merkle_root(leaves: &[Hash]) -> Hash {
     while level.len() > 1 {
         level = level
             .chunks(2)
-            .map(|p| if p.len() == 2 { node_hash(&p[0], &p[1]) } else { p[0] })
+            .map(|p| {
+                if p.len() == 2 {
+                    node_hash(&p[0], &p[1])
+                } else {
+                    p[0]
+                }
+            })
             .collect();
     }
     level[0]
@@ -97,11 +126,20 @@ pub fn merkle_proof(leaves: &[Hash], index: usize) -> Vec<Step> {
     while level.len() > 1 {
         let sib = i ^ 1;
         if sib < level.len() {
-            proof.push(Step { sibling: level[sib], left: sib < i });
+            proof.push(Step {
+                sibling: level[sib],
+                left: sib < i,
+            });
         }
         level = level
             .chunks(2)
-            .map(|p| if p.len() == 2 { node_hash(&p[0], &p[1]) } else { p[0] })
+            .map(|p| {
+                if p.len() == 2 {
+                    node_hash(&p[0], &p[1])
+                } else {
+                    p[0]
+                }
+            })
             .collect();
         i /= 2;
     }
@@ -109,7 +147,13 @@ pub fn merkle_proof(leaves: &[Hash], index: usize) -> Vec<Step> {
 }
 
 pub fn verify_proof(root: &Hash, leaf: &Hash, proof: &[Step]) -> bool {
-    let got = proof.iter().fold(*leaf, |acc, s| if s.left { node_hash(&s.sibling, &acc) } else { node_hash(&acc, &s.sibling) });
+    let got = proof.iter().fold(*leaf, |acc, s| {
+        if s.left {
+            node_hash(&s.sibling, &acc)
+        } else {
+            node_hash(&acc, &s.sibling)
+        }
+    });
     got == *root
 }
 
@@ -140,11 +184,38 @@ fn enc<T: BorshSerialize>(v: &T) -> Vec<u8> {
 /// `vision::belief(state, civ, seen, memory)` for the same `seen` and `memory`.
 pub fn obs_leaves(belief: &WorldState, civ: CivId, seen: &[bool], memory: &Memory) -> Vec<ObsLeaf> {
     let mut out = Vec::new();
-    let mut push = |kind: &'static str, id: u32, body: Vec<u8>| out.push(ObsLeaf { kind, id, body });
-    push("header", 0, enc(&(b"PS/obs/v1".as_slice(), belief.tick, civ, belief.ruleset_hash)));
+    let mut push =
+        |kind: &'static str, id: u32, body: Vec<u8>| out.push(ObsLeaf { kind, id, body });
+    push(
+        "header",
+        0,
+        enc(&(
+            b"PS/obs/v1".as_slice(),
+            belief.tick,
+            civ,
+            belief.ruleset_hash,
+        )),
+    );
     for (i, t) in belief.map.tiles.iter().enumerate() {
-        let fog: u8 = if seen[i] { 2 } else if memory.explored[i] { 1 } else { 0 };
-        push("tile", i as u32, enc(&(i as u32, t.hex.q, t.hex.r, fog, t.owner_city, t.ruin_peak_pop)));
+        let fog: u8 = if seen[i] {
+            2
+        } else if memory.explored[i] {
+            1
+        } else {
+            0
+        };
+        push(
+            "tile",
+            i as u32,
+            enc(&(
+                i as u32,
+                t.hex.q,
+                t.hex.r,
+                fog,
+                t.owner_city,
+                t.ruin_peak_pop,
+            )),
+        );
     }
     for c in &belief.civs {
         push("civ", c.id as u32, enc(c));
@@ -158,7 +229,9 @@ pub fn obs_leaves(belief: &WorldState, civ: CivId, seen: &[bool], memory: &Memor
         push("unit", u.id, enc(u));
     }
     for cs in &belief.city_states {
-        let Some(i) = belief.map.index_of(cs.hex) else { continue };
+        let Some(i) = belief.map.index_of(cs.hex) else {
+            continue;
+        };
         if !memory.explored[i] {
             continue;
         }
@@ -167,7 +240,18 @@ pub fn obs_leaves(belief: &WorldState, civ: CivId, seen: &[bool], memory: &Memor
         push(
             "city_state",
             cs.id as u32,
-            enc(&(cs.id, cs.hex.q, cs.hex.r, cs.pop, cs.defense, cs.specialty, cs.suzerain, cs.captured_by, mine, top)),
+            enc(&(
+                cs.id,
+                cs.hex.q,
+                cs.hex.r,
+                cs.pop,
+                cs.defense,
+                cs.specialty,
+                cs.suzerain,
+                cs.captured_by,
+                mine,
+                top,
+            )),
         );
     }
     let n = belief.civs.len() as CivId;
@@ -175,8 +259,16 @@ pub fn obs_leaves(belief: &WorldState, civ: CivId, seen: &[bool], memory: &Memor
         .filter(|o| *o != civ)
         .map(|o| (o, belief.grievance(o, civ), belief.grievance(civ, o)))
         .collect();
-    let proposals: Vec<_> = belief.proposals.iter().filter(|p| p.from == civ || p.to == civ).collect();
-    push("diplomacy", 0, enc(&(&belief.relations, &belief.truce_until, proposals, mine)));
+    let proposals: Vec<_> = belief
+        .proposals
+        .iter()
+        .filter(|p| p.from == civ || p.to == civ)
+        .collect();
+    push(
+        "diplomacy",
+        0,
+        enc(&(&belief.relations, &belief.truce_until, proposals, mine)),
+    );
     push("market", 0, enc(&belief.pools));
     out
 }

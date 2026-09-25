@@ -1,0 +1,62 @@
+# PERMUTATION STATE — devnet season 1790284871773 (2026-09-25), log excerpts
+# program J4aZxe3ynkS7kcvCpKbp6aFYw8d9vtrRDsgSEi1niU6n · season account FQvhYJch4XhFx7rqwEsodm6soATaLiKNZrPFDViSedmF
+# base: Solana devnet · ER: MagicBlock devnet-as (MAS1Dt9qreoRMQ14YQuhg8UTZMMzDdKhmkZMECCzk57)
+
+## gateway (crank, x402)
+21:23:03 season 1790284871773 created: world and 6 nation accounts allocated
+21:23:04 member 0 Player 1 joined Aster (human)
+21:23:09 member 1 Aster-AI1 joined Aster (ai)
+21:23:14 member 2 Aster-AI2 joined Aster (ai)
+21:23:20 member 3 Borealis-AI1 joined Borealis (ai)
+21:23:25 member 4 Borealis-AI2 joined Borealis (ai)
+21:23:31 member 5 Cinder-AI1 joined Cinder (ai)
+21:23:36 member 6 Cinder-AI2 joined Cinder (ai)
+21:23:37 member 7 Dunmar-AI1 joined Dunmar (ai)
+21:23:40 member 8 Dunmar-AI2 joined Dunmar (ai)
+21:23:44 member 9 Ember-AI1 joined Ember (ai)
+21:23:50 member 10 Ember-AI2 joined Ember (ai)
+21:23:55 member 11 Fjordal-AI1 joined Fjordal (ai)
+21:23:56 member 12 Fjordal-AI2 joined Fjordal (ai)
+21:24:15 x402: Hypatia joined Ember as member 13, paid 10000000 into the vault (2rArjBchUs9s…)
+21:24:19 registration closes: 14 members (1 from outside)
+21:25:09 genesis complete on chain in 19 steps
+21:25:27 14 members seated; first election held on chain
+21:27:08 world and 6 nation accounts delegated to the ER
+21:27:29 tick 0 resolved on ER (22/24 offices submitted, 507357 CU)
+21:34:20 requested an ER→base commit at tick 20 (the ER validator settles it on base)
+21:43:10 tick 60 resolved on ER (24/24 offices submitted, 951367 CU)
+21:59:09 tick 120 resolved on ER (23/24 offices submitted, 1070932 CU)
+22:15:21 tick 179 resolved on ER (23/24 offices submitted, 1353107 + 598452 CU)
+22:15:30 requested an ER→base commit at tick 180 (the ER validator settles it on base)
+22:15:30 last tick resolved: committing and undelegating
+22:15:39 undelegation scheduled for 26 accounts in 22 intents
+22:15:40 season finalized on base: every member's payout computed on chain
+
+## outside agent (rule-agent, joined over x402)
+21:24:11 [Hypatia] faucet: FyYSrZ5GrQh5VQYsYBUQ466yTGq9fPjiFQ38xpJCew5Z holds 100 test USDC (test token, no value)
+21:24:15 [Hypatia] paid 10 USDC over x402 → member 13 of Ember (2rArjBchUs9seRmx…)
+21:24:15 [Hypatia] X-PAYMENT-RESPONSE {"success":true,"transaction":"2rArjBchUs9seRmxzx1BE4GEk5UfGqCZATk5a7bxC8czKEaQEhSMPs1WmkUvAZiJJoiWPwrp87ex1rsTKfbcUdNK","network":"solana-devnet","payer":"2oYnVbzp4HPcwpoLnSqGJ4b9VKfTv2KH9rbD6WRKUKyi"}
+21:27:10 [Hypatia] tick 0: as Science+Diplomat: Science 1, Diplomat 0 — 研究: 農業→青銅器→筆記（Science・Diplomatとして）
+21:37:48 [Hypatia] tick 30: as Science+Diplomat: Science 0 (revealed 29), Diplomat 0 (revealed 29) — 担当の命令で急ぐものはありません。枠を繰り越します。
+21:43:02 [Hypatia] tick 60: as Science+Diplomat: Science 0 (revealed 59), Diplomat 0 (revealed 59) — 担当の命令で急ぐものはありません。枠を繰り越します。
+22:15:01 [Hypatia] tick 179: as Science+Diplomat: Science 0 (revealed 178), Diplomat 0 (revealed 178) — 担当の命令で急ぐものはありません。枠を繰り越します。
+22:15:22 [Hypatia] season over
+22:15:44 [Hypatia] claimed the prize into FyYSrZ5GrQh5VQYsYBUQ466yTGq9fPjiFQ38xpJCew5Z (4BmTchCyrwVfpess…)
+
+## scripts/claim-hosted.mjs --cluster devnet (hosted members' claims, last lines)
+operations share withdrawn: 28.00 USDC (20% of fees and of in-play income, plus rounding)
+vault 135.67 → 0.00; conserved: true
+second claim by member 0 rejected: true
+
+## verify (devnet, through scripts/rpc-proxy.mjs)
+✓ season 1790284871773 read from the base layer (FQvhYJch4XhFx7rqwEsodm6soATaLiKNZrPFDViSedmF) — 6 nations, 14 members, entry fee 10000000
+✓ genesis recomputed from the season's nations, seeds and treasuries — root 396f52f7cf99efea (matched the PS_GENESIS log on chain)
+✓ 14 members seated in registration order, with their candidacy and votes
+✓ first election recomputed (PS_OPEN, or tick 0's pre-state root) — officers [[0, 0, 2, 2], [3, 3, 4, 4], [5, 5, 6, 6], [7, 7, 8, 8], [9, 9, 13, 13], [11, 11, 12, 12]]
+✓ 225 tick records replayed; every pre- and post-state root matches (records read from the ER's transaction logs) — now at tick 180, 4114 office batches and 568 governance actions
+✓ governance replayed with the orders — 26 proposals adopted; officers now [[1, 0, 2, 2], [3, 3, 4, 4], [5, 5, 6, 6], [7, 7, 8, 8], [9, 9, 13, 13], [11, 11, 12, 12]]
+✓ final world root matches the Season account — 83333386f3f46bcb
+✓ every member's payout recomputed (V5 §7) matches the Season account — pool 112000000 to 13 members
+✓ operations share = 20% of fees + 20% of in-play income + rounding — 28000026
+✓ treasuries returned to depositors match the final world — [0, 0, 0, 0, 0, 0]
+VERIFIED: the season replays exactly as the chain recorded it.

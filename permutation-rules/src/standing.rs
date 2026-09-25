@@ -9,28 +9,40 @@
 use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 
+use crate::checks::Blocked;
 use crate::hex::Hex;
 use crate::orders::{AttackTarget, Order, StandingOrder, StandingTarget};
 use crate::params::Ruleset;
 use crate::state::{CityStanding, CivId, Owner, StandingRule, WorldState};
-use crate::checks::Blocked;
-use crate::tick::{accepted, TickInput};
+use crate::tick::accepted;
 use crate::units::stats;
 
 /// Phase 2: apply a validated `SetStanding`.
-pub(crate) fn apply(state: &mut WorldState, civ: CivId, target: StandingTarget, rule: StandingOrder) -> Result<(), Blocked> {
+pub(crate) fn apply(
+    state: &mut WorldState,
+    civ: CivId,
+    target: StandingTarget,
+    rule: StandingOrder,
+) -> Result<(), Blocked> {
     // Invalid at resolution: dropped without refund (§4.1).
     crate::checks::standing(state, civ, target, &rule)?;
     match target {
         StandingTarget::Unit(id) => {
             let u = &mut state.units[id as usize];
             u.standing = match rule {
-                StandingOrder::AutoDefend { radius } => StandingRule::AutoDefend { radius, anchor: u.hex },
+                StandingOrder::AutoDefend { radius } => StandingRule::AutoDefend {
+                    radius,
+                    anchor: u.hex,
+                },
                 StandingOrder::Retreat { ratio_bps } => StandingRule::Retreat { ratio_bps },
                 StandingOrder::Patrol { route } => {
                     let mut r = [u.hex; 6];
                     r[..route.len()].copy_from_slice(&route);
-                    StandingRule::Patrol { route: r, len: route.len() as u8, next: 0 }
+                    StandingRule::Patrol {
+                        route: r,
+                        len: route.len() as u8,
+                        next: 0,
+                    }
                 }
                 _ => StandingRule::None,
             };
@@ -54,7 +66,7 @@ fn strength(state: &WorldState, id: usize) -> u64 {
 }
 
 /// Phase 3: compile every rule into implicit orders (and apply AutoPurchase).
-pub(crate) fn phase_standing(state: &mut WorldState, rules: &Ruleset, _input: &TickInput) {
+pub(crate) fn phase_standing(state: &mut WorldState, rules: &Ruleset) {
     state.implicit.clear();
     let mut manual: BTreeSet<u32> = BTreeSet::new();
     let mut manual_purchase: BTreeSet<u32> = BTreeSet::new();
@@ -95,7 +107,13 @@ pub(crate) fn phase_standing(state: &mut WorldState, rules: &Ruleset, _input: &T
                     })
                     .min_by_key(|e| (e.troops, e.id));
                 if let Some(e) = target {
-                    implicit.push((civ, Order::Attack { army: u.id, target: AttackTarget::Unit(e.id) }));
+                    implicit.push((
+                        civ,
+                        Order::Attack {
+                            army: u.id,
+                            target: AttackTarget::Unit(e.id),
+                        },
+                    ));
                 }
             }
             StandingRule::Retreat { ratio_bps } => {
@@ -114,7 +132,13 @@ pub(crate) fn phase_standing(state: &mut WorldState, rules: &Ruleset, _input: &T
                     continue;
                 }
                 if let Some(step) = retreat_step(state, rules, civ, u.hex) {
-                    implicit.push((civ, Order::MoveUnit { unit: u.id, path: alloc::vec![step] }));
+                    implicit.push((
+                        civ,
+                        Order::MoveUnit {
+                            unit: u.id,
+                            path: alloc::vec![step],
+                        },
+                    ));
                 }
             }
             StandingRule::Patrol { route, len, next } => {
@@ -133,7 +157,7 @@ pub(crate) fn phase_standing(state: &mut WorldState, rules: &Ruleset, _input: &T
                 if goal == here {
                     continue;
                 }
-                if let Some(mut path) = crate::preview::path_to(state, rules, id, goal) {
+                if let Some(mut path) = crate::movement::path_to(state, rules, id, goal) {
                     path.truncate(rules.max_path_len as usize);
                     implicit.push((civ, Order::MoveUnit { unit: id, path }));
                 }
@@ -145,7 +169,9 @@ pub(crate) fn phase_standing(state: &mut WorldState, rules: &Ruleset, _input: &T
     // AutoPurchase: the same effect as a manual `Purchase`, at no order cost.
     for id in 0..state.cities.len() as u32 {
         let c = &state.cities[id as usize];
-        let (Some(civ), gold) = (c.owner, c.standing.auto_purchase) else { continue };
+        let (Some(civ), gold) = (c.owner, c.standing.auto_purchase) else {
+            continue;
+        };
         if c.alive && gold > 0 && !c.queue.is_empty() && !manual_purchase.contains(&id) {
             // Same rules as a manual purchase: never a Star Gate stage (v0.2 C3).
             let _ = crate::tick::purchase(state, rules, civ, id, gold);
@@ -164,7 +190,8 @@ fn retreat_step(state: &WorldState, rules: &Ruleset, civ: CivId, from: Hex) -> O
     from.neighbors()
         .into_iter()
         .filter(|h| {
-            crate::tick::may_enter(state, rules, Some(civ), *h) && !state.units.iter().any(|x| x.alive && x.hex == *h)
+            crate::tick::may_enter(state, rules, Some(civ), *h)
+                && !state.units.iter().any(|x| x.alive && x.hex == *h)
         })
         .filter_map(|h| home(h).map(|d| (d, h)))
         .filter(|(d, _)| *d < now)

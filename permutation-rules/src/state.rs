@@ -183,11 +183,20 @@ impl Owner {
 pub enum StandingRule {
     None,
     /// Attack the weakest hostile army in range while it is within `radius` of `anchor`.
-    AutoDefend { radius: u8, anchor: Hex },
+    AutoDefend {
+        radius: u8,
+        anchor: Hex,
+    },
     /// Step toward the nearest own city when adjacent hostile strength exceeds `ratio_bps` of own.
-    Retreat { ratio_bps: u32 },
+    Retreat {
+        ratio_bps: u32,
+    },
     /// Walk `route[..len]` in a loop; `next` is the waypoint being approached.
-    Patrol { route: [Hex; 6], len: u8, next: u8 },
+    Patrol {
+        route: [Hex; 6],
+        len: u8,
+        next: u8,
+    },
 }
 
 /// A city's standing rules (§13).
@@ -200,7 +209,10 @@ pub struct CityStanding {
 }
 
 impl CityStanding {
-    pub const DEFAULT: CityStanding = CityStanding { repeat_queue: true, auto_purchase: 0 };
+    pub const DEFAULT: CityStanding = CityStanding {
+        repeat_queue: true,
+        auto_purchase: 0,
+    };
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -390,10 +402,6 @@ pub struct WorldState {
 }
 
 impl WorldState {
-    pub fn civ_count(&self) -> usize {
-        self.civs.len()
-    }
-
     /// Index into `relations` for the unordered pair {a, b}, a ≠ b.
     pub fn pair_index(&self, a: CivId, b: CivId) -> usize {
         debug_assert_ne!(a, b);
@@ -434,7 +442,25 @@ impl WorldState {
 
     /// Record an order that did not take effect.
     pub fn skip(&mut self, civ: CivId, origin: (u8, u16), reason: u8) {
-        self.last_skipped.push(Skip { civ, role: origin.0, index: origin.1, reason });
+        self.last_skipped.push(Skip {
+            civ,
+            role: origin.0,
+            index: origin.1,
+            reason,
+        });
+    }
+
+    /// The nation whose living city owns the territory `tile` lies in.
+    pub fn tile_owner(&self, tile: &crate::map::Tile) -> Option<CivId> {
+        tile.owner_city
+            .and_then(|c| self.cities.get(c as usize))
+            .filter(|c| c.alive)?
+            .owner
+    }
+
+    /// The nation whose living city owns the territory at `hex`.
+    pub fn territory_owner(&self, hex: Hex) -> Option<CivId> {
+        self.tile_owner(self.map.tile(hex)?)
     }
 
     pub fn living_cities_of(&self, civ: CivId) -> impl Iterator<Item = &City> {
@@ -447,13 +473,15 @@ impl WorldState {
         self.living_cities_of(civ).count() as u32
     }
 
-    pub fn unit_at(&self, hex: Hex) -> impl Iterator<Item = &Unit> {
-        self.units.iter().filter(move |u| u.alive && u.hex == hex)
-    }
-
     /// Append an event to the hash chain: `head = sha256(head ‖ tick ‖ kind ‖ payload)`.
     pub fn push_event(&mut self, kind: &[u8], payload: &[u8]) {
-        self.event_head = crate::hash::sha256(&[&self.event_head, &self.tick.to_le_bytes(), &[kind.len() as u8], kind, payload]);
+        self.event_head = crate::hash::sha256(&[
+            &self.event_head,
+            &self.tick.to_le_bytes(),
+            &[kind.len() as u8],
+            kind,
+            payload,
+        ]);
     }
 
     /// `state_root = sha256(borsh(state))` (§15 phase 11).

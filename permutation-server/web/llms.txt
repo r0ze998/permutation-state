@@ -51,7 +51,7 @@ Viewer: `?member=M` (your nation's fogged view), `?civ=N`, or header `X-Member-T
 
 - GET  /api/lobby — phase, nations (members, projection), members (who hosts them)
 - GET  /api/map — static tiles `[q, r, terrain, river, resource]`
-- GET  /api/state?member=M — tick, economy (per-office budgets, treasury, tariff, deliveries), cities, units, nations (era, tiers), gov (offices, candidates and votes, recalls, proposals, next election), roster, achievements (every nation's tiers/points and the thresholds), facts (your nation's milestone inputs), projection (payout per nation and member if the season ended now), skipped (your nation's orders that did not take effect last tick, with reasons), decision.obsRoot, chronicle
+- GET  /api/state?member=M — tick, economy (per-office budgets, treasury, tariff, deliveries), cities, units, nations (era, tiers), gov (offices, candidates and votes, recalls, proposals, next election), roster, achievements (every nation's tiers/points and the thresholds), facts (your nation's milestone inputs), projection (payout per nation and member if the season ended now), skipped (your nation's orders that did not take effect last tick, with reasons), decision.obsRoot, chronicle, season (preset, ticks, phases, freezes, fees, and season.rules: NAP bond and length, suzerain threshold, fees, office limits, budget, truce and recall windows)
 - GET  /api/preview/unit|city|research|diplomacy|path|amm — as before (costs, reasons a thing is blocked, forecasts)
 - POST /api/validate?member=M {orders} — per office: cost, spendable, error; warnings = orders that would be skipped at resolution
 - GET  /api/decisions — committed and revealed decisions per office

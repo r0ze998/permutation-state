@@ -1,53 +1,26 @@
 //! Diplomacy (§10), transfers (§10.5), envoys (§12.1) and founding (§5.7).
 
+mod common;
+use common::step;
 use permutation_rules::diplomacy::alliance_group;
 use permutation_rules::fixed::MILLI;
 use permutation_rules::genesis::{new_season, Entry};
 use permutation_rules::hex::Hex;
-use permutation_rules::invariants;
-use permutation_rules::orders::{office_batches, validate_batch, Good, Order, OrderBatch};
-use permutation_rules::rng::Seed;
-use permutation_rules::state::{
-    Owner, Relation, Specialty, StandingRule, Unit, WorldState,
-};
-use permutation_rules::tick::{resolve_tick, TickInput};
+use permutation_rules::orders::{validate_batch, Good, Order, OrderBatch};
+use permutation_rules::state::{Owner, Relation, Specialty, StandingRule, Unit, WorldState};
 use permutation_rules::units::UnitType::{self, *};
 use permutation_rules::{Preset, RulesError, Ruleset};
 
 fn setup(n: usize) -> (Ruleset, WorldState) {
     let rules = Ruleset::new(Preset::Blitz);
     let entries: Vec<Entry> = (0..n)
-        .map(|i| Entry { name: format!("civ-{i}"), treasury: 0 })
+        .map(|i| Entry {
+            name: format!("civ-{i}"),
+            treasury: 0,
+        })
         .collect();
     let s = new_season(&rules, &[11; 32], &[22; 32], &entries).unwrap();
     (rules, s)
-}
-
-fn vrf(tick: u16) -> Seed {
-    let mut s = [0u8; 32];
-    s[..2].copy_from_slice(&tick.to_le_bytes());
-    s
-}
-
-fn step(s: &mut WorldState, rules: &Ruleset, orders: Vec<(u16, Vec<Order>)>) {
-    // Tests exercise mechanics, not office budgets (V5 §5.2 has its own tests).
-    for n in &mut s.nations {
-        n.role_bank = [20; 4];
-    }
-    let batches = orders
-        .into_iter()
-        .flat_map(|(civ, orders)| office_batches(s, civ, [0; 32], orders))
-        .collect();
-    resolve_tick(
-        s,
-        rules,
-        &TickInput {
-            vrf: vrf(s.tick),
-            batches, ..Default::default() },
-    )
-    .unwrap();
-    let v = invariants::check(s, rules);
-    assert!(v.is_empty(), "{v:?}");
 }
 
 fn place(s: &mut WorldState, civ: u16, unit_type: UnitType, hex: Hex) -> u32 {
@@ -249,6 +222,42 @@ fn nap_bond_below_minimum_is_rejected() {
     assert_eq!(s.relation(0, 1), Relation::Peace);
 }
 
+/// The preview's AcceptNap verdict is the engine's: it fails when the
+/// proposer can no longer pay its own bond, not only when the accepter cannot.
+#[test]
+fn accept_nap_preview_matches_the_engine_when_the_proposer_is_broke() {
+    use permutation_rules::checks::Blocked;
+    use permutation_rules::preview::{diplomacy_options, DiplomaticAction};
+    let (rules, mut s) = setup(4);
+    for c in &mut s.civs {
+        c.gold = 500 * MILLI;
+    }
+    step(
+        &mut s,
+        &rules,
+        vec![(0, vec![Order::ProposeNap { civ: 1, bond: 40 }])],
+    );
+    let accept = |s: &WorldState| {
+        diplomacy_options(s, &rules, 1, 0)
+            .into_iter()
+            .find(|o| o.action == DiplomaticAction::AcceptNap)
+            .expect("the proposal is listed")
+            .result
+    };
+    assert_eq!(accept(&s), Ok(()));
+    s.civs[0].gold = 10 * MILLI;
+    assert!(matches!(
+        accept(&s),
+        Err(Blocked::NotEnoughGold { need: 40, .. })
+    ));
+    step(
+        &mut s,
+        &rules,
+        vec![(1, vec![Order::AcceptNap { civ: 0, bond: 40 }])],
+    );
+    assert_eq!(s.relation(0, 1), Relation::Peace);
+}
+
 #[test]
 fn breaking_a_nap_forfeits_the_bond_and_starts_war() {
     let (rules, mut s) = setup(4);
@@ -261,7 +270,11 @@ fn breaking_a_nap_forfeits_the_bond_and_starts_war() {
         s.relation(0, 1),
         Relation::War { declared_by: 0, casus_belli: false, active_from, .. } if active_from == t + 1
     ));
-    assert_eq!(s.grievance(0, 1), 40, "added this tick: no decay yet (v0.2 C7)");
+    assert_eq!(
+        s.grievance(0, 1),
+        40,
+        "added this tick: no decay yet (v0.2 C7)"
+    );
     assert_eq!(s.civs[0].last_aggression, Some(t));
     // Civ 1 received both bonds (plus its normal income); civ 0 got nothing back.
     let income1 = s.civs[1].last.gold as i64 * MILLI;
@@ -310,7 +323,10 @@ fn alliances_form_groups_up_to_the_cap() {
 fn larger_games_allow_three_member_groups() {
     let rules = Ruleset::new(Preset::Season); // cap = min(3, 9 / 3) = 3
     let entries: Vec<Entry> = (0..9)
-        .map(|i| Entry { name: format!("c{i}"), treasury: 0 })
+        .map(|i| Entry {
+            name: format!("c{i}"),
+            treasury: 0,
+        })
         .collect();
     let mut s = new_season(&rules, &[11; 32], &[22; 32], &entries).expect("9-civ season map");
     ally(&mut s, &rules, 0, 1);

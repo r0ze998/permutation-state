@@ -1,9 +1,11 @@
 //! End-to-end behaviour of genesis and `resolve_tick`.
 
+mod common;
+use common::vrf;
 use permutation_rules::genesis::{new_season, Entry};
+use permutation_rules::gov::Role;
 use permutation_rules::hex::Hex;
 use permutation_rules::invariants;
-use permutation_rules::gov::Role;
 use permutation_rules::orders::{office_batches, Order, OrderBatch};
 use permutation_rules::rng::Seed;
 use permutation_rules::state::{QueueItem, WorldState};
@@ -17,7 +19,10 @@ const SEASON: Seed = [22; 32];
 
 fn entries(n: usize) -> Vec<Entry> {
     (0..n)
-        .map(|i| Entry { name: format!("civ-{i}"), treasury: 0 })
+        .map(|i| Entry {
+            name: format!("civ-{i}"),
+            treasury: 0,
+        })
         .collect()
 }
 
@@ -25,12 +30,6 @@ fn setup(n: usize) -> (Ruleset, WorldState) {
     let rules = Ruleset::new(Preset::Blitz);
     let state = new_season(&rules, &WORLD, &SEASON, &entries(n)).expect("genesis");
     (rules, state)
-}
-
-fn vrf(tick: u16) -> Seed {
-    let mut s = [0u8; 32];
-    s[..2].copy_from_slice(&tick.to_le_bytes());
-    s
 }
 
 fn batch(state: &WorldState, civ: u16, orders: Vec<Order>) -> Vec<OrderBatch> {
@@ -72,7 +71,9 @@ fn run(state: &mut WorldState, rules: &Ruleset, ticks: u16) -> Vec<[u8; 32]> {
             rules,
             &TickInput {
                 vrf: vrf(state.tick),
-                batches, ..Default::default() },
+                batches,
+                ..Default::default()
+            },
         )
         .expect("tick");
         assert!(
@@ -116,7 +117,9 @@ fn different_vrf_changes_the_root() {
         &rules,
         &TickInput {
             vrf: [1; 32],
-            batches: vec![], ..Default::default() },
+            batches: vec![],
+            ..Default::default()
+        },
     )
     .unwrap();
     let rb = resolve_tick(
@@ -124,7 +127,9 @@ fn different_vrf_changes_the_root() {
         &rules,
         &TickInput {
             vrf: [2; 32],
-            batches: vec![], ..Default::default() },
+            batches: vec![],
+            ..Default::default()
+        },
     )
     .unwrap();
     assert_ne!(ra, rb);
@@ -176,7 +181,9 @@ fn over_budget_batches_are_ignored() {
         &rules,
         &TickInput {
             vrf: vrf(0),
-            batches: b, ..Default::default() },
+            batches: b,
+            ..Default::default()
+        },
     )
     .unwrap();
     assert_eq!(
@@ -185,7 +192,10 @@ fn over_budget_batches_are_ignored() {
     );
     // Unused budget was banked instead, per office.
     assert_eq!(s.nations[0].role_bank, [1, 1, 1, 1]);
-    assert!(s.last_skipped.iter().any(|k| k.civ == 0 && k.role == Role::Steward as u8 && k.index == u16::MAX));
+    assert!(s
+        .last_skipped
+        .iter()
+        .any(|k| k.civ == 0 && k.role == Role::Steward as u8 && k.index == u16::MAX));
 }
 
 #[test]
@@ -197,7 +207,9 @@ fn a_war_declaration_gives_the_victim_casus_belli() {
         &rules,
         &TickInput {
             vrf: vrf(0),
-            batches: b, ..Default::default() },
+            batches: b,
+            ..Default::default()
+        },
     )
     .unwrap();
     // v0.2 C7: grievance created this tick does not decay this tick.
@@ -211,7 +223,9 @@ fn phases_must_run_in_order_and_can_resume() {
     let (rules, mut s) = setup(4);
     let input = TickInput {
         vrf: vrf(0),
-        batches: vec![], ..Default::default() };
+        batches: vec![],
+        ..Default::default()
+    };
     assert_eq!(
         run_phase(&mut s, &rules, &input, 3),
         Err(RulesError::PhaseOutOfOrder {
@@ -267,7 +281,9 @@ fn scouts_move_along_paths() {
         &rules,
         &TickInput {
             vrf: vrf(0),
-            batches: b, ..Default::default() },
+            batches: b,
+            ..Default::default()
+        },
     )
     .unwrap();
     let moved = &s.units[scout.id as usize];
@@ -290,9 +306,15 @@ fn entering_a_protected_capital_says_whose_and_until_when() {
         .expect("passable hex two steps out")
         .hex;
     s.tick = 20; // radius 3 until tick 30, then 2 (still covers distance 2) until 45
-    assert_eq!(enter(&s, &rules, Some(0), hex), Err(Blocked::ProtectedCapital { civ: 1, until: 45 }));
+    assert_eq!(
+        enter(&s, &rules, Some(0), hex),
+        Err(Blocked::ProtectedCapital { civ: 1, until: 45 })
+    );
     assert!(!may_enter(&s, &rules, Some(0), hex));
     assert_eq!(enter(&s, &rules, Some(1), hex), Ok(()), "own zone is open");
     s.civs[1].protection_lost = true;
-    assert_ne!(enter(&s, &rules, Some(0), hex).err(), Some(Blocked::ProtectedCapital { civ: 1, until: 45 }));
+    assert_ne!(
+        enter(&s, &rules, Some(0), hex).err(),
+        Some(Blocked::ProtectedCapital { civ: 1, until: 45 })
+    );
 }

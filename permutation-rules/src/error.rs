@@ -12,9 +12,6 @@ pub enum RulesError {
     /// The season has already resolved its last tick.
     SeasonOver,
     UnknownCiv(u16),
-    UnknownUnit(u32),
-    UnknownCity(u32),
-    NotOwner,
     /// Orders cost more than `budget + bank` (§4.1).
     OverBudget {
         cost: u32,
@@ -27,8 +24,6 @@ pub enum RulesError {
     /// A list in an order exceeds its maximum length.
     TooLong,
     MapGeneration(&'static str),
-    /// More civilizations for one payout wallet than allowed (§3.1).
-    WalletCap,
     /// `resolve_tick` phases must run in order (§15.1).
     PhaseOutOfOrder {
         expected: u8,
@@ -63,9 +58,6 @@ impl fmt::Display for RulesError {
             }
             RulesError::SeasonOver => write!(f, "season is over"),
             RulesError::UnknownCiv(id) => write!(f, "unknown civilization {id}"),
-            RulesError::UnknownUnit(id) => write!(f, "unknown unit {id}"),
-            RulesError::UnknownCity(id) => write!(f, "unknown city {id}"),
-            RulesError::NotOwner => write!(f, "entity is not owned by this civilization"),
             RulesError::OverBudget { cost, spendable } => {
                 write!(f, "orders cost {cost}, only {spendable} spendable")
             }
@@ -75,7 +67,6 @@ impl fmt::Display for RulesError {
             RulesError::Frozen => write!(f, "this action is frozen in the current phase"),
             RulesError::TooLong => write!(f, "list exceeds its maximum length"),
             RulesError::MapGeneration(why) => write!(f, "map generation failed: {why}"),
-            RulesError::WalletCap => write!(f, "too many civilizations for one payout wallet"),
             RulesError::PhaseOutOfOrder { expected, got } => {
                 write!(f, "phase {got} requested, phase {expected} is next")
             }
@@ -87,8 +78,12 @@ impl fmt::Display for RulesError {
             RulesError::NationFull => write!(f, "the season has no room for more members"),
             RulesError::AlreadyMember => write!(f, "this key is already a member"),
             RulesError::NotOfficer => write!(f, "the signer does not hold this office"),
-            RulesError::MissingRationale => write!(f, "an officer must seal a rationale (decision digest)"),
-            RulesError::UnknownProposal(id) => write!(f, "proposal {id} is not open for this office"),
+            RulesError::MissingRationale => {
+                write!(f, "an officer must seal a rationale (decision digest)")
+            }
+            RulesError::UnknownProposal(id) => {
+                write!(f, "proposal {id} is not open for this office")
+            }
             RulesError::WrongOffice(i) => write!(f, "order {i} belongs to another office"),
         }
     }

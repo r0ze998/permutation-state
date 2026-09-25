@@ -9,7 +9,7 @@ use crate::fixed::Bps;
 use crate::{buildings, map, tech, units};
 use borsh::{BorshDeserialize, BorshSerialize};
 
-pub const RULES_VERSION: u16 = 5; // Rules Specification v0.1 + v0.2 changes + Game Design V5
+pub const RULES_VERSION: u16 = 5; // Rules Specification v0.2 (Game Design V5)
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Preset {
@@ -339,7 +339,9 @@ impl Ruleset {
             market_enabled: true,
             delivery_ticks: 3,
             // 5% + 95% × x^1.3 at x = 0, 0.1, …, 1.0 (V5 §7.5).
-            tariff_table_bps: [500, 976, 1_672, 2_486, 3_387, 4_358, 5_391, 6_475, 7_608, 8_784, 10_000],
+            tariff_table_bps: [
+                500, 976, 1_672, 2_486, 3_387, 4_358, 5_391, 6_475, 7_608, 8_784, 10_000,
+            ],
             tariff_full_usdc: 100_000_000,
         }
     }
@@ -365,7 +367,10 @@ impl Ruleset {
         let x = spent as u128 * 10; // position in tenths of `full`
         let i = (x / full as u128) as usize;
         let frac = x % full as u128;
-        let (a, b) = (self.tariff_table_bps[i] as u128, self.tariff_table_bps[i + 1] as u128);
+        let (a, b) = (
+            self.tariff_table_bps[i] as u128,
+            self.tariff_table_bps[i + 1] as u128,
+        );
         (a + (b - a) * frac / full as u128) as u32
     }
 

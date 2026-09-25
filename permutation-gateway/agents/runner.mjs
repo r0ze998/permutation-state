@@ -5,22 +5,17 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { GameClient, loadOrCreateKeypair } from '../client/src/index.mjs';
-import { officeOf } from '../client/src/game.mjs';
+import { ROLES } from '../client/src/codec.mjs';
+import { errorCode } from '../client/src/http.mjs';
+import { officeOf, splitByOffice } from '../client/src/offices.mjs';
+import { retry, sleep } from '../client/src/retry.mjs';
+import { DEFAULTS, parseArgs } from '../src/config.mjs';
 
-export function parseArgs(argv, defaults = {}) {
-  const out = { ...defaults };
-  for (let i = 2; i < argv.length; i++) {
-    const a = argv[i];
-    if (!a.startsWith('--')) continue;
-    const k = a.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-    const next = argv[i + 1];
-    if (next === undefined || next.startsWith('--')) out[k] = true; else { out[k] = next; i++; }
-  }
-  return out;
-}
+export { parseArgs };
 
-const sleep = ms => new Promise(r => setTimeout(r, ms));
 const stamp = () => new Date().toISOString().slice(11, 19);
+/** Program errors that mean "too late for this tick": no point retrying within it. */
+const LATE = new Set(['TickFrozen', 'WrongTick']);
 
 /**
  * Join a nation (x402), then every tick: read the nation's fogged view,
@@ -37,11 +32,13 @@ export async function runAgent({ name, policy, decide, args }) {
   const log = (...a) => console.log(stamp(), `[${name}]`, ...a);
   const dir = path.resolve(args.dir || `.local/agents/${name.toLowerCase()}`);
   mkdirSync(dir, { recursive: true });
-  const game = new GameClient({ server: args.server || 'http://127.0.0.1:4185', gateway: args.gateway || 'http://127.0.0.1:4191' });
+  const game = new GameClient({ server: args.server || DEFAULTS.serverUrl, gateway: args.gateway || DEFAULTS.gatewayUrl });
   const wallet = await loadOrCreateKeypair(path.join(dir, 'wallet.json'));
   const session = await loadOrCreateKeypair(path.join(dir, 'session.json'));
   game.session = session;
   const stand = String(args.stand || 'Science,Diplomat').split(',').map(s => s.trim()).filter(Boolean);
+  const unknown = stand.filter(r => !ROLES.includes(r));
+  if (unknown.length) throw new Error(`--stand: unknown office ${unknown.join(', ')} (offices: ${ROLES.join(', ')})`);
 
   // ---- membership
   const info = await game.season();
@@ -62,10 +59,10 @@ export async function runAgent({ name, policy, decide, args }) {
     const f = await game.faucet(wallet.publicKey);
     log(`faucet: ${f.usdcAccount} holds 100 test USDC (test token, no value)`);
     const civ = args.civ !== undefined ? Number(args.civ) : undefined;
-    // Stand, and vote for ourselves in the first election for the offices we stand for.
-    const me = info.season.memberCount;
-    const votes = ['General', 'Steward', 'Science', 'Diplomat'].map(r => (stand.includes(r) ? me : undefined));
-    const j = await game.joinViaX402({ wallet, session, civ, name, kind: 1, usdcAccount: f.usdcAccount, stand, votes });
+    // Stand for the first election, without pre-season votes: our member
+    // index is only known once the registration lands (others may register
+    // first), so votes are cast in the vote windows once we are a member.
+    const j = await game.joinViaX402({ wallet, session, civ, name, kind: 1, usdcAccount: f.usdcAccount, stand });
     log(`paid ${Number(j.requirements.maxAmountRequired) / 1e6} USDC over x402 → member ${j.member} of ${j.nation} (${j.signature.slice(0, 16)}…)`);
     log(`X-PAYMENT-RESPONSE ${JSON.stringify(j.paymentResponse)}`);
     writeFileSync(seatFile, JSON.stringify({ seasonId, member: j.member, civ: j.civ, signature: j.signature, usdcAccount: f.usdcAccount }, null, 2));
@@ -75,11 +72,11 @@ export async function runAgent({ name, policy, decide, args }) {
   log(`member ${game.member} of nation ${game.civ}, season ${seasonId} (session key ${session.publicKey.toBase58().slice(0, 8)}…)`);
 
   // ---- ticks
-  const map = await retry(() => game.map(), log, 'waiting for the game server (the season starts once registration closes)');
+  const map = await untilReachable(() => game.map(), log, 'waiting for the game server (the season starts once registration closes)');
   let last = null, played = 0, over = false;
   const proposedAt = new Map();
   for (;;) {
-    const v = await retry(() => game.state(), log, 'game server unreachable');
+    const v = await untilReachable(() => game.state(), log, 'game server unreachable');
     if (v.over || v.chain?.finished) { log('season over'); over = true; break; }
     if (v.me !== game.civ || !v.decision?.obsRoot || v.phase !== 'playing') { await sleep(1000); continue; }
     if (last === v.tick) { await game.waitForTick(v.tick).catch(() => {}); continue; }
@@ -94,14 +91,24 @@ export async function runAgent({ name, policy, decide, args }) {
     // Governance first (proposals of the orders for offices we do not hold,
     // support, votes): once every office's batch is in, the tick's input is
     // frozen and later actions wait for the next tick.
-    const notHeld = (decision.orders || []).filter(o => { const role = officeOf(o, v); return role && !held.includes(role); });
+    const notHeld = splitByOffice(decision.orders || [], held, v).notHeld.filter(o => officeOf(o, v));
     await govern({ game, view: v, proposals: notHeld, stand, proposedAt, log });
     if (held.length) {
-      const r = await game.submit({ orders: decision.orders, policy, rationale: decision.rationale, adopt: decision.adopt || {}, view: v }).catch(e => ({ ok: false, error: e.message }));
-      if (r.ok) {
-        log(`tick ${r.tick}: as ${held.join('+')}: ${r.offices.map(o => `${o.role} ${o.orders}${o.revealed.length ? ` (revealed ${o.revealed.join(',')})` : ''}`).join(', ') || 'nothing to send'}${r.warnings.length ? `, ${r.warnings.length} warnings` : ''} — ${decision.rationale}`);
-        writeFileSync(decisionsFile, JSON.stringify([...game.decisions.values()], null, 1));
-      } else log(`tick ${v.tick}: not submitted: ${r.error}`);
+      // Retry a failed submission a few times within the tick (e.g. the ER
+      // is still taking the accounts over), but not one that came too late
+      // or cannot fit.
+      const attempt = async () => {
+        const r = await game.submit({ orders: decision.orders, policy, rationale: decision.rationale, adopt: decision.adopt || {}, view: v })
+          .catch(e => ({ ok: false, error: e.message, code: errorCode(e), status: e.status }));
+        if (!r.ok) throw Object.assign(new Error(r.error), { result: r });
+        return r;
+      };
+      const r = await retry(attempt, { attempts: 4, delayMs: 2000, retryIf: e => !LATE.has(e.result.code) && e.result.status !== 409 && e.result.code !== 'BatchTooLarge' })
+        .catch(e => e.result);
+      if (r.ok) log(`tick ${r.tick}: as ${held.join('+')}: ${r.offices.map(o => `${o.role} ${o.orders}${o.revealed.length ? ` (revealed ${o.revealed.join(',')})` : ''}`).join(', ') || 'nothing to send'}${r.warnings.length ? `, ${r.warnings.length} warnings` : ''} — ${decision.rationale}`);
+      else log(`tick ${v.tick}: not submitted: ${r.error}`);
+      // Offices that did go through (even if another failed) must reveal later, also after a restart.
+      writeFileSync(decisionsFile, JSON.stringify([...game.decisions.values()], null, 1));
     }
     last = v.tick;
     if (args.ticks && ++played >= Number(args.ticks)) break;
@@ -114,14 +121,21 @@ export async function runAgent({ name, policy, decide, args }) {
 async function claimPrize({ game, wallet, seatFile, log }) {
   const seat = existsSync(seatFile) ? JSON.parse(readFileSync(seatFile, 'utf8')) : {};
   const usdcAccount = seat.usdcAccount ?? (await game.faucet(wallet.publicKey)).usdcAccount; // the faucet (localnet/devnet) returns our account
-  for (let i = 0; i < 120; i++) {
-    const r = await game.claim({ wallet, usdcAccount }).catch(e => ({ ok: false, error: e.message }));
-    if (r.ok) { log(`claimed the prize into ${usdcAccount} (${r.signature.slice(0, 16)}…)`); return; }
-    if (/NothingToClaim|AlreadyClaimed/.test(r.error)) { log(`nothing to claim (${r.error.match(/NothingToClaim|AlreadyClaimed/)[0]})`); return; }
-    if (i === 0 || !/Finalized/.test(r.error)) log(`claim: ${r.error}`);
-    await sleep(5000);
+  try {
+    // Every 5 s for up to 10 minutes while the season is not finalized yet.
+    const r = await retry(() => game.claim({ wallet, usdcAccount }), {
+      attempts: 120, delayMs: 5000,
+      retryIf: (e, i) => {
+        if (i === 0 || errorCode(e) !== 'NotFinalized') log(`claim: ${e.message}`);
+        return !['NothingToClaim', 'AlreadyClaimed'].includes(errorCode(e));
+      },
+    });
+    log(`claimed the prize into ${usdcAccount} (${r.signature.slice(0, 16)}…)`);
+  } catch (e) {
+    const code = errorCode(e);
+    if (code === 'NothingToClaim' || code === 'AlreadyClaimed') log(`nothing to claim (${code})`);
+    else log('gave up waiting for the season to be finalized; run the agent again later to claim');
   }
-  log('gave up waiting for the season to be finalized; run the agent again later to claim');
 }
 
 /**
@@ -158,11 +172,7 @@ async function govern({ game, view: v, proposals, stand, proposedAt, log }) {
   }
 }
 
-async function retry(fn, log, what) {
-  for (let i = 0; ; i++) {
-    try { return await fn(); } catch (e) {
-      if (i % 10 === 0) log(`${what} (${e.message})`);
-      await sleep(2000);
-    }
-  }
+/** Retry `fn` every 2 s until it answers, logging every 10th failure. */
+function untilReachable(fn, log, what) {
+  return retry(fn, { attempts: Infinity, delayMs: 2000, onRetry: (e, i) => { if (i % 10 === 0) log(`${what} (${e.message})`); } });
 }

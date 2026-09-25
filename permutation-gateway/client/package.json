@@ -6,16 +6,34 @@
   "license": "MIT",
   "exports": {
     ".": "./src/index.mjs",
-    "./codec": "./src/codec.mjs",
-    "./chain": "./src/chain.mjs",
+    "./game": "./src/game.mjs",
+    "./http": "./src/http.mjs",
+    "./offices": "./src/offices.mjs",
+    "./batch": "./src/batch.mjs",
+    "./x402-client": "./src/x402-client.mjs",
+    "./keys": "./src/keys.mjs",
     "./decision": "./src/decision.mjs",
-    "./summary": "./src/summary.mjs"
+    "./summary": "./src/summary.mjs",
+    "./hexgrid": "./src/hexgrid.mjs",
+    "./chain": "./src/chain.mjs",
+    "./codec": "./src/codec.mjs",
+    "./pda": "./src/pda.mjs",
+    "./retry": "./src/retry.mjs",
+    "./tools": "./src/tools.mjs"
   },
-  "bin": { "permutation-mcp": "./bin/permutation-mcp.mjs" },
-  "files": ["src", "bin", "README.md"],
+  "bin": {
+    "permutation-mcp": "./bin/permutation-mcp.mjs"
+  },
+  "files": [
+    "src",
+    "bin",
+    "README.md"
+  ],
   "peerDependencies": {
     "@magicblock-labs/ephemeral-rollups-sdk": "0.17.2",
     "@solana/web3.js": "^1.95.0"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  }
 }

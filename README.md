@@ -180,7 +180,7 @@ The gateway is only an index. If it served a tampered input, the verifier would 
 (cd permutation-gateway && node scripts/e2e-base.mjs)
 ```
 
-- `permutation-rules`: 158 tests.
+- `permutation-rules`: 161 tests. `permutation-server` pins whole seasons with a golden test ([README](permutation-server/README.md)).
 - `sim 40` plays 40 AI-only seasons and prints the balance numbers V5 §6.5 is calibrated against.
 - `x402-check.mjs` sends tampered x402 payments against a registering season; all must be refused.
 - `e2e-base.mjs` plays a season on the base layer alone, without the ER.

@@ -1,4 +1,409 @@
 {
+  "accounts": {
+    "member": {
+      "decoded": {
+        "attestation": "0909090909090909090909090909090909090909090909090909090909090909",
+        "bump": 251,
+        "civ": 1,
+        "claimed": false,
+        "index": 2,
+        "kind": 1,
+        "name": "Hypatia-アステル",
+        "seasonId": "1790000000123",
+        "session": "0808080808080808080808080808080808080808080808080808080808080808",
+        "shares": "2500000",
+        "stand": 10,
+        "votes": [
+          2,
+          4294967295,
+          0,
+          1
+        ],
+        "wallet": "0707070707070707070707070707070707070707070707070707070707070707"
+      },
+      "hex": "50534d454d4252357b6c50c4a0010000fb020000000100070707070707070707070707070707070707070707070707070707070707070708080808080808080808080808080808080808080808080808080808080808080114000000487970617469612de382a2e382b9e38386e383ab09090909090909090909090909090909090909090909090909090909090909090a02000000ffffffff0000000001000000a02526000000000000"
+    },
+    "nation": {
+      "decoded": {
+        "bump": 250,
+        "civ": 4,
+        "crank": "0202020202020202020202020202020202020202020202020202020202020202",
+        "frozen": true,
+        "keys": [
+          "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+          "0000000000000000000000000000000000000000000000000000000000000000",
+          "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+          "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c"
+        ],
+        "market": false,
+        "officers": [
+          0,
+          4294967295,
+          5,
+          7
+        ],
+        "openTick": 17,
+        "preset": 1,
+        "seasonId": "1790000000123",
+        "spendable": [
+          3,
+          0,
+          8,
+          2
+        ],
+        "submitted": [
+          17,
+          65535,
+          16,
+          17
+        ]
+      },
+      "hex": "50534e41544e30367b6c50c4a00100000400fa01000202020202020202020202020202020202020202020202020202020202020202110000000000ffffffff05000000070000000a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a00000000000000000000000000000000000000000000000000000000000000000b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c030000000000000008000000020000001100ffff10001100010000000000000000"
+    },
+    "season": {
+      "decoded": {
+        "admin": "0101010101010101010101010101010101010101010101010101010101010101",
+        "bump": 254,
+        "crank": "0202020202020202020202020202020202020202020202020202020202020202",
+        "entryFee": "10000000",
+        "finalRoot": "0606060606060606060606060606060606060606060606060606060606060606",
+        "market": true,
+        "memberCount": 3,
+        "nationMembers": [
+          2,
+          1,
+          0,
+          0,
+          0,
+          0
+        ],
+        "nations": 6,
+        "ops": "6000123",
+        "opsWithdrawn": false,
+        "payouts": [
+          "12000000",
+          "0",
+          "6148914691236517205"
+        ],
+        "pool": "24000000",
+        "preset": 0,
+        "seasonId": "1790000000123",
+        "seasonSeed": "0505050505050505050505050505050505050505050505050505050505050505",
+        "seated": 3,
+        "status": "Finalized",
+        "tickSeconds": 30,
+        "treasury": [
+          "5000000",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        "treasuryFinal": [
+          "4000000",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        "usdcDecimals": 6,
+        "usdcMint": "0303030303030303030303030303030303030303030303030303030303030303",
+        "vaultBump": 253,
+        "worldSeed": "0404040404040404040404040404040404040404040404040404040404040404"
+      },
+      "hex": "5053534541534e357b6c50c4a0010000fefd01010101010101010101010101010101010101010101010101010101010101010202020202020202020202020202020202020202020202020202020202020202030303030303030303030303030303030303030303030303030303030303030306000680969800000000001e00000001040404040404040404040404040404040404040404040404040404040404040404050505050505050505050505050505050505050505050505050505050505050503000000060000000200000001000000000000000000000000000000000000000300000000366e0100000000fb8d5b00000000000006000000404b4c0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000600000000093d00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003000000001bb70000000000000000000000000055555555555555550606060606060606060606060606060606060606060606060606060606060606"
+    },
+    "worldHeader": {
+      "decoded": {
+        "bodyOffset": 76,
+        "len": 23456,
+        "magic": "PSWORLD5",
+        "meta": {
+          "civs": 6,
+          "deadline": 1790000123,
+          "finished": false,
+          "frozen": true,
+          "inputChunks": 2,
+          "inputLogged": 1,
+          "market": true,
+          "preset": 0,
+          "seasonId": "1790000000123",
+          "tickSeconds": 30,
+          "vrf": "0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d"
+        }
+      },
+      "hex": "5053574f524c4435a05b00007b6c50c4a001000000061e000000fb3bb16a000000000001010d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d02000100000000"
+    }
+  },
+  "claims": [
+    {
+      "amount": "14000000",
+      "civ": 0,
+      "index": 0,
+      "payouts": [
+        "12000000",
+        "0",
+        "7"
+      ],
+      "shares": "2500000",
+      "treasury": [
+        "5000000",
+        "0"
+      ],
+      "treasuryFinal": [
+        "4000000",
+        "0"
+      ]
+    },
+    {
+      "amount": "0",
+      "civ": 1,
+      "index": 1,
+      "payouts": [
+        "12000000",
+        "0",
+        "7"
+      ],
+      "shares": "0",
+      "treasury": [
+        "5000000",
+        "0"
+      ],
+      "treasuryFinal": [
+        "4000000",
+        "0"
+      ]
+    },
+    {
+      "amount": "7",
+      "civ": 0,
+      "index": 2,
+      "payouts": [
+        "12000000",
+        "0",
+        "7"
+      ],
+      "shares": "1",
+      "treasury": [
+        "5000000",
+        "0"
+      ],
+      "treasuryFinal": [
+        "4000000",
+        "0"
+      ]
+    },
+    {
+      "amount": "0",
+      "civ": 5,
+      "index": 9,
+      "payouts": [
+        "1"
+      ],
+      "shares": "1",
+      "treasury": [
+        "3"
+      ],
+      "treasuryFinal": [
+        "2"
+      ]
+    },
+    {
+      "amount": "10",
+      "civ": 1,
+      "index": 0,
+      "payouts": [],
+      "shares": "10",
+      "treasury": [
+        "0",
+        "10"
+      ],
+      "treasuryFinal": [
+        "0",
+        "10"
+      ]
+    },
+    {
+      "amount": "3074457345618258607",
+      "civ": 0,
+      "index": 0,
+      "payouts": [
+        "5"
+      ],
+      "shares": "6148914691236517205",
+      "treasury": [
+        "9223372036854775807"
+      ],
+      "treasuryFinal": [
+        "4611686018427387903"
+      ]
+    }
+  ],
+  "constants": {
+    "BATCH_BYTES": 820,
+    "CHUNK": 4096,
+    "INPUT_CHUNK": 6000,
+    "MAGIC": {
+      "genesis": "PSGENJB1",
+      "member": "PSMEMBR5",
+      "nation": "PSNATN06",
+      "season": "PSSEASN5",
+      "world": "PSWORLD5"
+    },
+    "MAX_GOV_PER_SIGNER": 8,
+    "MAX_MEMBERS": 256,
+    "MAX_NAME": 24,
+    "MAX_NATIONS": 8,
+    "MAX_POLICY": 64,
+    "MAX_RATIONALE": 512,
+    "NATIONS": [
+      "Aster",
+      "Borealis",
+      "Cinder",
+      "Dunmar",
+      "Ember",
+      "Fjordal"
+    ],
+    "NATION_TARGET": 1000,
+    "ROLES": [
+      "General",
+      "Steward",
+      "Science",
+      "Diplomat"
+    ],
+    "SEASON_STATUS": [
+      "Registering",
+      "Genesis",
+      "Seating",
+      "Running",
+      "Finalized"
+    ],
+    "SEEDS": {
+      "member": "member",
+      "nation": "nation",
+      "season": "season",
+      "vault": "vault",
+      "world": "world"
+    },
+    "WORLD_CHUNKS": 20,
+    "WORLD_HEADER": 76
+  },
+  "errors": [
+    {
+      "code": 1,
+      "name": "InvalidInstruction"
+    },
+    {
+      "code": 2,
+      "name": "MissingSignature"
+    },
+    {
+      "code": 3,
+      "name": "WrongPda"
+    },
+    {
+      "code": 4,
+      "name": "AlreadyInitialized"
+    },
+    {
+      "code": 5,
+      "name": "NotInitialized"
+    },
+    {
+      "code": 6,
+      "name": "WrongStatus"
+    },
+    {
+      "code": 7,
+      "name": "Unauthorized"
+    },
+    {
+      "code": 8,
+      "name": "SeasonFull"
+    },
+    {
+      "code": 9,
+      "name": "InvalidName"
+    },
+    {
+      "code": 10,
+      "name": "WrongMint"
+    },
+    {
+      "code": 11,
+      "name": "WrongTokenAccount"
+    },
+    {
+      "code": 12,
+      "name": "WorldTooSmall"
+    },
+    {
+      "code": 13,
+      "name": "Rules"
+    },
+    {
+      "code": 14,
+      "name": "WrongTick"
+    },
+    {
+      "code": 15,
+      "name": "OverBudget"
+    },
+    {
+      "code": 16,
+      "name": "TooEarly"
+    },
+    {
+      "code": 17,
+      "name": "MissingNation"
+    },
+    {
+      "code": 18,
+      "name": "WrongDelegationProgram"
+    },
+    {
+      "code": 19,
+      "name": "WrongMagicProgram"
+    },
+    {
+      "code": 20,
+      "name": "AlreadyClaimed"
+    },
+    {
+      "code": 21,
+      "name": "NothingToClaim"
+    },
+    {
+      "code": 22,
+      "name": "SeasonNotOver"
+    },
+    {
+      "code": 23,
+      "name": "WrongOffice"
+    },
+    {
+      "code": 24,
+      "name": "InvalidParams"
+    },
+    {
+      "code": 25,
+      "name": "WrongWorld"
+    },
+    {
+      "code": 26,
+      "name": "InboxFull"
+    },
+    {
+      "code": 27,
+      "name": "TickFrozen"
+    },
+    {
+      "code": 28,
+      "name": "InputNotPublished"
+    }
+  ],
   "gov": [
     {
       "dto": {
@@ -132,6 +537,427 @@
     {
       "hex": "1403000000e803e9030700",
       "name": "commitPart"
+    }
+  ],
+  "offices": [
+    {
+      "dto": {
+        "path": [
+          [
+            1,
+            -2
+          ],
+          [
+            2,
+            -2
+          ],
+          [
+            -3,
+            4
+          ]
+        ],
+        "type": "MoveUnit",
+        "unit": 7
+      },
+      "offices": [
+        "General",
+        "Steward"
+      ]
+    },
+    {
+      "dto": {
+        "army": 3,
+        "target": {
+          "id": 9,
+          "kind": "Unit"
+        },
+        "type": "Attack"
+      },
+      "offices": [
+        "General"
+      ]
+    },
+    {
+      "dto": {
+        "army": 3,
+        "target": {
+          "id": 2,
+          "kind": "City"
+        },
+        "type": "Attack"
+      },
+      "offices": [
+        "General"
+      ]
+    },
+    {
+      "dto": {
+        "army": 3,
+        "target": {
+          "id": 1,
+          "kind": "CityState"
+        },
+        "type": "Attack"
+      },
+      "offices": [
+        "General"
+      ]
+    },
+    {
+      "dto": {
+        "settler": 12,
+        "type": "FoundCity"
+      },
+      "offices": [
+        "Steward"
+      ]
+    },
+    {
+      "dto": {
+        "city": 0,
+        "items": [
+          {
+            "building": "Granary",
+            "kind": "Building"
+          },
+          {
+            "kind": "Troops",
+            "n": 5,
+            "unit": "Archer"
+          },
+          {
+            "kind": "Scout"
+          },
+          {
+            "kind": "Settler"
+          }
+        ],
+        "type": "SetQueue"
+      },
+      "offices": [
+        "Steward"
+      ]
+    },
+    {
+      "dto": {
+        "city": 1,
+        "focus": "Science",
+        "type": "SetFocus"
+      },
+      "offices": [
+        "Steward"
+      ]
+    },
+    {
+      "dto": {
+        "city": 1,
+        "gold": 60,
+        "type": "Purchase"
+      },
+      "offices": [
+        "Steward"
+      ]
+    },
+    {
+      "dto": {
+        "techs": [
+          "Agriculture",
+          "CelestialMechanics",
+          "Writing"
+        ],
+        "type": "SetResearch"
+      },
+      "offices": [
+        "Science"
+      ]
+    },
+    {
+      "dto": {
+        "civ": 4,
+        "type": "DeclareWar"
+      },
+      "offices": [
+        "Diplomat"
+      ]
+    },
+    {
+      "dto": {
+        "civ": 4,
+        "type": "ProposePeace"
+      },
+      "offices": [
+        "Diplomat"
+      ]
+    },
+    {
+      "dto": {
+        "civ": 4,
+        "type": "AcceptPeace"
+      },
+      "offices": [
+        "Diplomat"
+      ]
+    },
+    {
+      "dto": {
+        "bond": 30,
+        "civ": 2,
+        "type": "ProposeNap"
+      },
+      "offices": [
+        "Diplomat"
+      ]
+    },
+    {
+      "dto": {
+        "bond": 30,
+        "civ": 2,
+        "type": "AcceptNap"
+      },
+      "offices": [
+        "Diplomat"
+      ]
+    },
+    {
+      "dto": {
+        "civ": 2,
+        "type": "BreakNap"
+      },
+      "offices": [
+        "Diplomat"
+      ]
+    },
+    {
+      "dto": {
+        "civ": 5,
+        "type": "ProposeAlliance"
+      },
+      "offices": [
+        "Diplomat"
+      ]
+    },
+    {
+      "dto": {
+        "civ": 5,
+        "type": "AcceptAlliance"
+      },
+      "offices": [
+        "Diplomat"
+      ]
+    },
+    {
+      "dto": {
+        "type": "LeaveAlliance"
+      },
+      "offices": [
+        "Diplomat"
+      ]
+    },
+    {
+      "dto": {
+        "cityState": 1,
+        "influence": 20,
+        "type": "SendEnvoy"
+      },
+      "offices": [
+        "Diplomat"
+      ]
+    },
+    {
+      "dto": {
+        "amount": 10,
+        "civ": 3,
+        "good": {
+          "city": 4,
+          "kind": "Food"
+        },
+        "type": "Transfer"
+      },
+      "offices": [
+        "Diplomat"
+      ]
+    },
+    {
+      "dto": {
+        "amount": 5,
+        "good": {
+          "kind": "Iron"
+        },
+        "limitGold": 200,
+        "side": "Buy",
+        "type": "MarketTrade"
+      },
+      "offices": [
+        "Diplomat"
+      ]
+    },
+    {
+      "dto": {
+        "amount": 3,
+        "good": {
+          "city": 2,
+          "kind": "Production"
+        },
+        "price": 1500000,
+        "side": "Sell",
+        "type": "ExchangeOrder"
+      },
+      "offices": [
+        "Diplomat"
+      ]
+    },
+    {
+      "dto": {
+        "city": 6,
+        "type": "Raze"
+      },
+      "offices": [
+        "General"
+      ]
+    },
+    {
+      "dto": {
+        "rule": {
+          "kind": "AutoDefend",
+          "radius": 2
+        },
+        "target": {
+          "id": 1,
+          "kind": "Unit"
+        },
+        "type": "SetStanding"
+      },
+      "offices": [
+        "General",
+        "Steward"
+      ]
+    },
+    {
+      "dto": {
+        "rule": {
+          "kind": "Retreat",
+          "ratioBps": 15000
+        },
+        "target": {
+          "id": 1,
+          "kind": "Unit"
+        },
+        "type": "SetStanding"
+      },
+      "offices": [
+        "General",
+        "Steward"
+      ]
+    },
+    {
+      "dto": {
+        "rule": {
+          "kind": "Patrol",
+          "route": [
+            [
+              1,
+              1
+            ],
+            [
+              2,
+              0
+            ]
+          ]
+        },
+        "target": {
+          "id": 0,
+          "kind": "Unit"
+        },
+        "type": "SetStanding"
+      },
+      "offices": [
+        "General",
+        "Steward"
+      ]
+    },
+    {
+      "dto": {
+        "rule": {
+          "kind": "QueueRepeat",
+          "on": false
+        },
+        "target": {
+          "id": 0,
+          "kind": "City"
+        },
+        "type": "SetStanding"
+      },
+      "offices": [
+        "Steward"
+      ]
+    },
+    {
+      "dto": {
+        "rule": {
+          "kind": "AutoPurchase",
+          "maxGold": 40
+        },
+        "target": {
+          "id": 0,
+          "kind": "City"
+        },
+        "type": "SetStanding"
+      },
+      "offices": [
+        "Steward"
+      ]
+    },
+    {
+      "dto": {
+        "rule": {
+          "kind": "Clear"
+        },
+        "target": {
+          "id": 0,
+          "kind": "Unit"
+        },
+        "type": "SetStanding"
+      },
+      "offices": [
+        "General",
+        "Steward"
+      ]
+    },
+    {
+      "dto": {
+        "policy": "bot/warlord@1",
+        "salt": "00112233445566778899aabbccddeeff",
+        "text": "攻撃は最大の防御",
+        "tick": 3,
+        "type": "RevealRationale"
+      },
+      "offices": [
+        "General",
+        "Steward",
+        "Science",
+        "Diplomat"
+      ]
+    },
+    {
+      "dto": {
+        "civ": 2,
+        "type": "ConsentWar"
+      },
+      "offices": [
+        "General",
+        "Steward"
+      ]
+    },
+    {
+      "dto": {
+        "type": "ConsentSpend",
+        "usdc": 25000000
+      },
+      "offices": [
+        "General",
+        "Steward",
+        "Science"
+      ]
     }
   ],
   "orders": [

@@ -9,18 +9,26 @@ use solana_program::{
     pubkey::Pubkey,
 };
 
-pub const TOKEN_PROGRAM_ID: Pubkey = solana_program::pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+pub const TOKEN_PROGRAM_ID: Pubkey =
+    solana_program::pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 /// Size of an SPL token account.
 pub const TOKEN_ACCOUNT_LEN: usize = 165;
 
 /// `InitializeAccount3 { owner }` (tag 18).
-pub fn initialize_account3<'a>(account: &AccountInfo<'a>, mint: &AccountInfo<'a>, owner: &Pubkey) -> ProgramResult {
+pub fn initialize_account3<'a>(
+    account: &AccountInfo<'a>,
+    mint: &AccountInfo<'a>,
+    owner: &Pubkey,
+) -> ProgramResult {
     let mut data = Vec::with_capacity(33);
     data.push(18);
     data.extend_from_slice(owner.as_ref());
     let ix = Instruction {
         program_id: TOKEN_PROGRAM_ID,
-        accounts: vec![AccountMeta::new(*account.key, false), AccountMeta::new_readonly(*mint.key, false)],
+        accounts: vec![
+            AccountMeta::new(*account.key, false),
+            AccountMeta::new_readonly(*mint.key, false),
+        ],
         data,
     };
     invoke(&ix, &[account.clone(), mint.clone()])
@@ -51,7 +59,12 @@ pub fn transfer_checked<'a>(
         ],
         data,
     };
-    let infos = [source.clone(), mint.clone(), destination.clone(), authority.clone()];
+    let infos = [
+        source.clone(),
+        mint.clone(),
+        destination.clone(),
+        authority.clone(),
+    ];
     match seeds {
         Some(s) => invoke_signed(&ix, &infos, &[s]),
         None => invoke(&ix, &infos),
@@ -75,5 +88,8 @@ pub fn token_account_mint_owner(account: &AccountInfo) -> Option<(Pubkey, Pubkey
     if data.len() < TOKEN_ACCOUNT_LEN {
         return None;
     }
-    Some((Pubkey::new_from_array(data[0..32].try_into().ok()?), Pubkey::new_from_array(data[32..64].try_into().ok()?)))
+    Some((
+        Pubkey::new_from_array(data[0..32].try_into().ok()?),
+        Pubkey::new_from_array(data[32..64].try_into().ok()?),
+    ))
 }

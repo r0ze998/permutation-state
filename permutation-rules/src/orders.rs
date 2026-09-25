@@ -5,13 +5,12 @@
 //! re-checked at resolution, and an order that has become invalid is dropped
 //! without refund (§4.1).
 
-use crate::buildings::Building;
 use crate::gov::{Credit, MemberId, Role, NOBODY};
 use crate::hex::Hex;
 use crate::params::Ruleset;
 use crate::state::{CityId, CivId, Focus, QueueItem, UnitId, WorldState};
-use crate::units::UnitType;
 use crate::tech::Tech;
+use crate::units::UnitType;
 use crate::RulesError;
 use alloc::vec::Vec;
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -157,12 +156,22 @@ pub enum StandingTarget {
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum StandingOrder {
     Clear,
-    AutoDefend { radius: u8 },
-    Retreat { ratio_bps: u32 },
+    AutoDefend {
+        radius: u8,
+    },
+    Retreat {
+        ratio_bps: u32,
+    },
     /// Waypoints, 1..=6.
-    Patrol { route: Vec<Hex> },
-    QueueRepeat { on: bool },
-    AutoPurchase { max_gold: u32 },
+    Patrol {
+        route: Vec<Hex>,
+    },
+    QueueRepeat {
+        on: bool,
+    },
+    AutoPurchase {
+        max_gold: u32,
+    },
 }
 
 pub const MAX_PATROL: usize = 6;
@@ -188,7 +197,10 @@ impl Order {
     pub fn commanded_unit(&self) -> Option<UnitId> {
         match self {
             Order::MoveUnit { unit, .. } => Some(*unit),
-            Order::SetStanding { target: StandingTarget::Unit(unit), .. } => Some(*unit),
+            Order::SetStanding {
+                target: StandingTarget::Unit(unit),
+                ..
+            } => Some(*unit),
             Order::Attack { army, .. } => Some(*army),
             Order::FoundCity { settler } => Some(*settler),
             _ => None,
@@ -231,7 +243,11 @@ pub struct CivOrders {
 impl CivOrders {
     /// `(order, credit, origin)` triples.
     pub fn iter(&self) -> impl Iterator<Item = (&Order, Credit, (u8, u16))> {
-        self.orders.iter().zip(self.credits.iter().copied()).zip(self.origin.iter().copied()).map(|((o, c), g)| (o, c, g))
+        self.orders
+            .iter()
+            .zip(self.credits.iter().copied())
+            .zip(self.origin.iter().copied())
+            .map(|((o, c), g)| (o, c, g))
     }
 }
 
@@ -240,10 +256,23 @@ impl CivOrders {
 /// `ConsentWar` belongs to the general and the steward, `ConsentSpend` to
 /// any office but the diplomat, reveals to every office.
 pub fn role_allows(state: &WorldState, role: Role, order: &Order) -> bool {
-    let settler = |u: &UnitId| state.units.get(*u as usize).is_some_and(|x| x.unit_type == UnitType::Settler);
+    let settler = |u: &UnitId| {
+        state
+            .units
+            .get(*u as usize)
+            .is_some_and(|x| x.unit_type == UnitType::Settler)
+    };
     match order {
-        Order::MoveUnit { unit, .. } | Order::SetStanding { target: StandingTarget::Unit(unit), .. } => {
-            role == if settler(unit) { Role::Steward } else { Role::General }
+        Order::MoveUnit { unit, .. }
+        | Order::SetStanding {
+            target: StandingTarget::Unit(unit),
+            ..
+        } => {
+            role == if settler(unit) {
+                Role::Steward
+            } else {
+                Role::General
+            }
         }
         _ => role_allows_static(role, order),
     }
@@ -255,7 +284,10 @@ pub fn role_allows(state: &WorldState, role: Role, order: &Order) -> bool {
 pub fn split_by_office(state: &WorldState, orders: Vec<Order>) -> [Vec<Order>; 4] {
     let mut out: [Vec<Order>; 4] = Default::default();
     for o in orders {
-        let role = Role::ALL.into_iter().find(|r| role_allows(state, *r, &o)).unwrap_or(Role::General);
+        let role = Role::ALL
+            .into_iter()
+            .find(|r| role_allows(state, *r, &o))
+            .unwrap_or(Role::General);
         out[role.index()].push(o);
     }
     out
@@ -266,7 +298,12 @@ pub fn split_by_office(state: &WorldState, orders: Vec<Order>) -> [Vec<Order>; 4
 /// `DeclareWar`/`BreakNap` gets a `ConsentWar` in the general's batch, as
 /// when one agent runs the offices involved. Offices with no orders are
 /// omitted.
-pub fn office_batches(state: &WorldState, civ: CivId, digest: [u8; 32], orders: Vec<Order>) -> Vec<OrderBatch> {
+pub fn office_batches(
+    state: &WorldState,
+    civ: CivId,
+    digest: [u8; 32],
+    orders: Vec<Order>,
+) -> Vec<OrderBatch> {
     let mut parts = split_by_office(state, orders);
     let wars: Vec<CivId> = parts[Role::Diplomat.index()]
         .iter()
@@ -276,7 +313,10 @@ pub fn office_batches(state: &WorldState, civ: CivId, digest: [u8; 32], orders: 
         })
         .collect();
     parts[Role::General.index()].extend(wars.into_iter().map(|civ| Order::ConsentWar { civ }));
-    let holders = state.nations.get(civ as usize).map_or([NOBODY; 4], |n| n.offices);
+    let holders = state
+        .nations
+        .get(civ as usize)
+        .map_or([NOBODY; 4], |n| n.offices);
     Role::ALL
         .into_iter()
         .zip(parts)
@@ -299,13 +339,20 @@ pub fn office_batches(state: &WorldState, civ: CivId, digest: [u8; 32], orders: 
 pub fn role_allows_static(role: Role, order: &Order) -> bool {
     use Role::*;
     match order {
-        Order::MoveUnit { .. } | Order::SetStanding { target: StandingTarget::Unit(_), .. } => matches!(role, General | Steward),
+        Order::MoveUnit { .. }
+        | Order::SetStanding {
+            target: StandingTarget::Unit(_),
+            ..
+        } => matches!(role, General | Steward),
         Order::Attack { .. } | Order::Raze { .. } => role == General,
         Order::FoundCity { .. }
         | Order::SetQueue { .. }
         | Order::SetFocus { .. }
         | Order::Purchase { .. }
-        | Order::SetStanding { target: StandingTarget::City(_), .. } => role == Steward,
+        | Order::SetStanding {
+            target: StandingTarget::City(_),
+            ..
+        } => role == Steward,
         Order::SetResearch { .. } => role == Science,
         Order::DeclareWar { .. }
         | Order::ProposePeace { .. }
@@ -333,24 +380,41 @@ pub const MAX_RESEARCH_QUEUE: usize = 3;
 /// budget plus its bank (§4.1, V5 §5.2). The budget was fixed when the
 /// previous tick committed (cities counted at the start of this tick).
 pub fn spendable(state: &WorldState, rules: &Ruleset, civ: CivId, role: Role) -> u32 {
-    match (state.civs.get(civ as usize), state.nations.get(civ as usize)) {
-        (Some(c), Some(n)) => rules.role_budget(c.tick_budget, role.index()) as u32 + n.role_bank[role.index()] as u32,
+    match (
+        state.civs.get(civ as usize),
+        state.nations.get(civ as usize),
+    ) {
+        (Some(c), Some(n)) => {
+            rules.role_budget(c.tick_budget, role.index()) as u32 + n.role_bank[role.index()] as u32
+        }
         _ => 0,
     }
 }
 
 /// The orders a batch runs: its own, then those of the proposals it adopts.
 /// Fails if an adopted proposal does not exist for this civ and office.
-pub fn batch_orders(state: &WorldState, batch: &OrderBatch) -> Result<Vec<(Order, Credit)>, RulesError> {
+pub fn batch_orders(
+    state: &WorldState,
+    batch: &OrderBatch,
+) -> Result<Vec<(Order, Credit)>, RulesError> {
     let own = Credit::officer(batch.member);
     let mut out: Vec<(Order, Credit)> = batch.orders.iter().map(|o| (o.clone(), own)).collect();
-    let nation = state.nations.get(batch.civ as usize).ok_or(RulesError::UnknownCiv(batch.civ))?;
+    let nation = state
+        .nations
+        .get(batch.civ as usize)
+        .ok_or(RulesError::UnknownCiv(batch.civ))?;
     for (i, id) in batch.adopt.iter().enumerate() {
         if batch.adopt[..i].contains(id) {
             return Err(RulesError::UnknownProposal(*id));
         }
-        let p = nation.proposal(*id).filter(|p| p.role == batch.role && !p.adopted).ok_or(RulesError::UnknownProposal(*id))?;
-        let credit = Credit { officer: batch.member, proposer: p.proposer };
+        let p = nation
+            .proposal(*id)
+            .filter(|p| p.role == batch.role && !p.adopted)
+            .ok_or(RulesError::UnknownProposal(*id))?;
+        let credit = Credit {
+            officer: batch.member,
+            proposer: p.proposer,
+        };
         out.extend(p.orders.iter().map(|o| (o.clone(), credit)));
     }
     Ok(out)
@@ -373,15 +437,24 @@ pub fn validate_batch(
             got: batch.tick,
         });
     }
-    let nation = state.nations.get(batch.civ as usize).ok_or(RulesError::UnknownCiv(batch.civ))?;
+    let nation = state
+        .nations
+        .get(batch.civ as usize)
+        .ok_or(RulesError::UnknownCiv(batch.civ))?;
     if nation.holder(batch.role) != batch.member {
         return Err(RulesError::NotOfficer);
     }
     if batch.member != NOBODY && batch.decision_digest == [0; 32] {
         return Err(RulesError::MissingRationale);
     }
-    let orders: Vec<Order> = batch_orders(state, batch)?.into_iter().map(|(o, _)| o).collect();
-    if let Some(i) = orders.iter().position(|o| !role_allows_static(batch.role, o)) {
+    let orders: Vec<Order> = batch_orders(state, batch)?
+        .into_iter()
+        .map(|(o, _)| o)
+        .collect();
+    if let Some(i) = orders
+        .iter()
+        .position(|o| !role_allows_static(batch.role, o))
+    {
         return Err(RulesError::WrongOffice(i as u16));
     }
     let cost = check_structure(rules, state.tick, &orders)?;
@@ -396,7 +469,11 @@ pub fn validate_batch(
 /// lengths, one manual order per unit, reveal timing. Returns the order cost.
 /// `validate_batch` runs these plus the tick and budget; the on-chain
 /// `SubmitOrders` runs them to reject malformed batches cheaply.
-pub fn check_structure(rules: &Ruleset, open_tick: u16, orders: &[Order]) -> Result<u32, RulesError> {
+pub fn check_structure(
+    rules: &Ruleset,
+    open_tick: u16,
+    orders: &[Order],
+) -> Result<u32, RulesError> {
     let mut seen: Vec<UnitId> = Vec::new();
     let mut cost = 0u32;
     for order in orders {
@@ -418,11 +495,13 @@ pub fn check_structure(rules: &Ruleset, open_tick: u16, orders: &[Order]) -> Res
             Order::MoveUnit { path, .. } if path.len() > rules.max_path_len as usize => {
                 return Err(RulesError::TooLong)
             }
-            Order::SetStanding { rule: StandingOrder::Patrol { route }, .. } if route.len() > MAX_PATROL => {
-                return Err(RulesError::TooLong)
-            }
+            Order::SetStanding {
+                rule: StandingOrder::Patrol { route },
+                ..
+            } if route.len() > MAX_PATROL => return Err(RulesError::TooLong),
             Order::RevealRationale { policy, text, .. }
-                if policy.len() > crate::decision::MAX_POLICY || text.len() > crate::decision::MAX_RATIONALE =>
+                if policy.len() > crate::decision::MAX_POLICY
+                    || text.len() > crate::decision::MAX_RATIONALE =>
             {
                 return Err(RulesError::TooLong)
             }
@@ -449,11 +528,6 @@ pub fn next_bank(rules: &Ruleset, bank: u16, budget: u16, spent: u32) -> u16 {
     let total = budget as u32 + bank as u32;
     let left = total.saturating_sub(spent);
     left.min(rules.bank_ticks as u32 * budget as u32) as u16
-}
-
-/// Building queue items require their tech; exposed for clients and resolution.
-pub fn building_unlocked(techs: crate::tech::TechSet, b: Building) -> bool {
-    crate::buildings::info(b).tech.is_none_or(|t| techs.has(t))
 }
 
 #[cfg(test)]

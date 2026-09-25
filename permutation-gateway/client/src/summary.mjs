@@ -2,7 +2,7 @@
 // models. Everything in it comes from `GET /api/state?member=M`; nothing is
 // invented.
 
-const hexDist = (a, b) => (Math.abs(a.q - b.q) + Math.abs(a.r - b.r) + Math.abs(a.q + a.r - b.q - b.r)) / 2;
+import { hexDist } from './hexgrid.mjs';
 
 /**
  * @param {object} v  the view from GameClient.state()

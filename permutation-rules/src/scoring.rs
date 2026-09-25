@@ -14,20 +14,6 @@ use crate::state::{CivId, Relation, WorldState};
 
 pub const PATH_NAMES: [&str; 4] = ["hegemony", "prosperity", "science", "concord"];
 
-/// Tiles owned by the civ's living cities.
-pub fn owned_tiles(state: &WorldState, civ: CivId) -> u32 {
-    state
-        .map
-        .tiles
-        .iter()
-        .filter(|t| {
-            t.owner_city
-                .and_then(|id| state.cities.get(id as usize))
-                .is_some_and(|c| c.alive && c.owner == Some(civ))
-        })
-        .count() as u32
-}
-
 /// Cities held that the civ took from another founder (V5 §6.2). The city
 /// must have been at least `capture_min_founded_age` ticks old when taken.
 pub fn captured_held(state: &WorldState, civ: CivId) -> u32 {
@@ -44,7 +30,13 @@ pub fn total_pop(state: &WorldState, civ: CivId) -> u32 {
 /// Civs with a NAP or an alliance with `civ` ("条約相手").
 pub fn treaty_partners(state: &WorldState, civ: CivId) -> u32 {
     (0..state.civs.len() as CivId)
-        .filter(|o| *o != civ && matches!(state.relation(civ, *o), Relation::Nap { .. } | Relation::Alliance { .. }))
+        .filter(|o| {
+            *o != civ
+                && matches!(
+                    state.relation(civ, *o),
+                    Relation::Nap { .. } | Relation::Alliance { .. }
+                )
+        })
         .count() as u32
 }
 
@@ -92,7 +84,7 @@ pub fn facts_all(state: &WorldState, rules: &Ruleset) -> alloc::vec::Vec<Facts> 
     let n = state.civs.len();
     let mut tiles = alloc::vec![0u32; n];
     for t in &state.map.tiles {
-        if let Some(owner) = t.owner_city.and_then(|id| state.cities.get(id as usize)).filter(|c| c.alive).and_then(|c| c.owner) {
+        if let Some(owner) = state.tile_owner(t) {
             tiles[owner as usize] += 1;
         }
     }
@@ -145,7 +137,9 @@ pub fn milestone(rules: &Ruleset, f: &Facts, path: usize, tier: usize) -> bool {
                 1 => partners || f.envoy_sent,
                 2 => partners && f.ever_suzerain,
                 3 => partners && suz,
-                4 => partners && suz && f.alliances >= 1 && f.trade >= rules.concord_trade[0] as u64,
+                4 => {
+                    partners && suz && f.alliances >= 1 && f.trade >= rules.concord_trade[0] as u64
+                }
                 _ => partners && suz && f.trade >= rules.concord_trade[1] as u64,
             }
         }
@@ -188,12 +182,20 @@ impl NationScore {
 
 /// Points of a ladder climbed to `tier`: 10 + 20 + … (V5 §6.4).
 pub fn ladder_points(rules: &Ruleset, tier: u8) -> u64 {
-    rules.tier_points.iter().take(tier as usize).map(|p| *p as u64).sum()
+    rules
+        .tier_points
+        .iter()
+        .take(tier as usize)
+        .map(|p| *p as u64)
+        .sum()
 }
 
 /// Points of every civ now.
 pub fn nation_scores(state: &WorldState, rules: &Ruleset) -> alloc::vec::Vec<NationScore> {
-    facts_all(state, rules).iter().map(|f| score_of(rules, f)).collect()
+    facts_all(state, rules)
+        .iter()
+        .map(|f| score_of(rules, f))
+        .collect()
 }
 
 pub fn score_of(rules: &Ruleset, f: &Facts) -> NationScore {
@@ -205,16 +207,6 @@ pub fn score_of(rules: &Ruleset, f: &Facts) -> NationScore {
         path_points: t.map(|x| ladder_points(rules, x)),
         era_points: ladder_points(rules, e),
     }
-}
-
-/// Science ranking key for displays: more stages, then earlier completion,
-/// then more cumulative science. Sorts ascending = best first.
-pub fn science_key(civ: &crate::state::Civ) -> (core::cmp::Reverse<u8>, u16, core::cmp::Reverse<u64>) {
-    (
-        core::cmp::Reverse(civ.scores.star_gate_stages),
-        civ.scores.star_gate_tick.unwrap_or(u16::MAX),
-        core::cmp::Reverse(civ.scores.science_total),
-    )
 }
 
 #[cfg(test)]
@@ -239,7 +231,12 @@ mod tests {
         assert_eq!(ladder_points(&r, 1), 10);
         assert_eq!(ladder_points(&r, 3), 65);
         assert_eq!(ladder_points(&r, 5), 225);
-        let max = NationScore { tiers: [5; 4], era: 5, path_points: [225; 4], era_points: 225 };
+        let max = NationScore {
+            tiers: [5; 4],
+            era: 5,
+            path_points: [225; 4],
+            era_points: 225,
+        };
         assert_eq!(max.total(), 1_125);
     }
 

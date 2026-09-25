@@ -5,13 +5,14 @@
 //   node scripts/claim-hosted.mjs [--state season.json]
 import { Connection, PublicKey } from '@solana/web3.js';
 import { ChainClient } from '../client/src/chain.mjs';
-import { decodeMember, decodeSeason } from '../client/src/codec.mjs';
-import { loadConfig, namedKey, readState } from '../src/config.mjs';
+import { claimParts, decodeMember, decodeSeason, NATIONS } from '../client/src/codec.mjs';
+import { createStateStore, loadConfig, namedKey } from '../src/config.mjs';
 import { send } from '../src/send.mjs';
 import { createTokenAccountIxs, tokenBalance } from '../src/spl.mjs';
 
 const cfg = loadConfig();
-const state = readState(cfg.stateFile);
+const state = createStateStore(cfg.stateFile).load();
+if (!state) throw new Error(`no season state in ${cfg.stateFile}`);
 const base = new Connection(cfg.baseRpc, 'confirmed');
 const chain = new ChainClient(cfg.programId, BigInt(state.seasonId));
 const crank = namedKey('crank');
@@ -30,15 +31,14 @@ for (const m of state.members) {
   if (m.hosted === 'external') continue; // outside agents claim with their own wallet
   const wallet = namedKey(`member${m.key}-wallet`);
   const acc = decodeMember((await base.getAccountInfo(chain.member(wallet.publicKey), 'confirmed')).data);
-  const prize = s.payouts[acc.index] ?? 0n;
-  const refund = s.treasury[acc.civ] ? acc.shares * s.treasuryFinal[acc.civ] / s.treasury[acc.civ] : 0n;
-  if (prize + refund === 0n || acc.claimed) { console.log(`member ${acc.index} ${m.name}: nothing to claim`); continue; }
+  const { prize, refund, total } = claimParts(s, acc); // what the program pays (claim_amount)
+  if (total === 0n || acc.claimed) { console.log(`member ${acc.index} ${m.name}: nothing to claim`); continue; }
   const dest = new PublicKey(m.usdc);
   const before = await tokenBalance(base, dest);
   const r = await send(base, chain.claim({ wallet: wallet.publicKey, dest, mint }), [crank, wallet], `claim ${acc.index}`);
   const after = await tokenBalance(base, dest);
   paid += after - before;
-  console.log(`member ${acc.index} ${m.name} (${state.nations[acc.civ]}): claimed ${usdc(after - before)} USDC = prize ${usdc(prize)} + treasury ${usdc(refund)} (${r.signature.slice(0, 16)}…)`);
+  console.log(`member ${acc.index} ${m.name} (${NATIONS[acc.civ]}): claimed ${usdc(after - before)} USDC = prize ${usdc(prize)} + treasury ${usdc(refund)}${after - before === total ? '' : ` — expected ${usdc(total)}`} (${r.signature.slice(0, 16)}…)`);
 }
 // Operations share, to the admin's own test-USDC account.
 const opsAccount = namedKey('ops-usdc');

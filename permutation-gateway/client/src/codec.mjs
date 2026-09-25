@@ -1,9 +1,50 @@
-// Borsh encoding of PERMUTATION STATE orders and program instructions, and
-// decoding of the program's accounts. The input shape is the server's order
-// DTO (JSON, camelCase). Byte-for-byte equality with the Rust types is
-// checked by test/codec.test.mjs against vectors produced by the Rust side.
+// Borsh encoding of PERMUTATION STATE orders and program instructions,
+// decoding of the program's accounts and log records, program error names,
+// and the constants the client shares with the Rust crates. The input shape
+// of orders is the server's order DTO (JSON, camelCase).
+//
+// Everything here is checked against vectors the Rust types produce
+// (permutation-server/tests/codec_vectors.rs → test/vectors.json): encoders
+// byte for byte, decoders value for value, instruction tags, error codes,
+// constants, magics and names (test/codec.test.mjs, test/constants.test.mjs).
 
 import { Writer, Reader } from './borsh.mjs';
+
+// ------------------------------------------------------------------ constants
+// Mirrors of permutation-chain `state.rs` / `processor.rs`, permutation-rules
+// and permutation-server `ledger.rs`.
+
+/** World chunk accounts per season, and the size of each (bytes). */
+export const WORLD_CHUNKS = 20;
+export const CHUNK = 4 * 1024;
+/** Chunk 0 header: magic (8) + body length (4) + `WorldMeta` padded to 64. */
+export const WORLD_HEADER = 8 + 4 + 64;
+/** `Delegate { target }` etc.: 0..WORLD_CHUNKS = a world chunk; NATION_TARGET + civ = a nation account. */
+export const NATION_TARGET = 1000;
+/** Bytes of tick input per `PS_INPUT` log record. */
+export const INPUT_CHUNK = 6000;
+export const MAX_NATIONS = 8;
+/** Member names, in UTF-8 bytes. */
+export const MAX_NAME = 24;
+export const MAX_MEMBERS = 256;
+/** Governance actions one signer may queue per tick. */
+export const MAX_GOV_PER_SIGNER = 8;
+/** Encoded orders that fit in one SubmitOrders transaction (packet limit 1232 bytes); the server's `BATCH_BYTES`. */
+export const BATCH_BYTES = 820;
+/** PDA seeds (first component). */
+export const SEEDS = Object.freeze({ season: 'season', world: 'world', nation: 'nation', member: 'member', vault: 'vault' });
+/** Account magics (first 8 bytes). `genesis` marks a world whose genesis is still being built. */
+export const MAGIC = Object.freeze({ season: 'PSSEASN5', member: 'PSMEMBR5', nation: 'PSNATN06', world: 'PSWORLD5', genesis: 'PSGENJB1' });
+/** Nation names, in civ order (`permutation_rules::genesis::NATIONS`). */
+export const NATIONS = Object.freeze(['Aster', 'Borealis', 'Cinder', 'Dunmar', 'Ember', 'Fjordal']);
+/** Offices (V5 §5.1), in `Role` order. */
+export const ROLES = Object.freeze(['General', 'Steward', 'Science', 'Diplomat']);
+/** `SeasonStatus`, in tag order. */
+export const SEASON_STATUS = Object.freeze(['Registering', 'Genesis', 'Seating', 'Running', 'Finalized']);
+/** `MemberAccount.kind` (self-declared, V5 D16), as the gateway names it. */
+export const MEMBER_KINDS = Object.freeze(['human', 'agent', 'undeclared']);
+/** `u32::MAX`: no member (a vacant office, no vote). */
+export const NOBODY = 0xffffffff;
 
 const TECHS = ['Agriculture', 'BronzeWorking', 'Archery', 'HorsebackRiding', 'Masonry', 'Mysticism', 'Writing', 'Currency',
   'IronWorking', 'Mathematics', 'Chivalry', 'Philosophy', 'Engineering', 'Astronomy', 'Physics', 'CelestialMechanics'];
@@ -13,11 +54,7 @@ const FOCUS = ['Balanced', 'Food', 'Production', 'Gold', 'Science'];
 const ORDER = ['MoveUnit', 'Attack', 'FoundCity', 'SetQueue', 'SetFocus', 'Purchase', 'SetResearch', 'DeclareWar', 'ProposePeace',
   'AcceptPeace', 'ProposeNap', 'AcceptNap', 'BreakNap', 'ProposeAlliance', 'AcceptAlliance', 'LeaveAlliance', 'SendEnvoy',
   'Transfer', 'MarketTrade', 'ExchangeOrder', 'Raze', 'SetStanding', 'RevealRationale', 'ConsentWar', 'ConsentSpend'];
-/** Offices (V5 §5.1), in `Role` order. */
-export const ROLES = ['General', 'Steward', 'Science', 'Diplomat'];
 const GOV = ['Stand', 'Vote', 'Propose', 'Support', 'Recall'];
-/** `u32::MAX`: no member (a vacant office, no vote). */
-export const NOBODY = 0xffffffff;
 const STANDING = ['Clear', 'AutoDefend', 'Retreat', 'Patrol', 'QueueRepeat', 'AutoPurchase'];
 
 const index = (list, name, what) => { const i = list.indexOf(name); if (i < 0) throw new Error(`unknown ${what} ${name}`); return i; };
@@ -102,44 +139,55 @@ export function encodeGov(w, a) {
   }
 }
 
+/**
+ * `ChainInstruction` tags (the first byte of instruction data). Security
+ * filters (the gateway's relays and x402) match on these. `commit` and
+ * `commitAndUndelegate` (whole-world intents) are superseded by
+ * `commitPart` / `undelegatePart`; the client builds neither.
+ */
+export const IX_TAG = Object.freeze({
+  createSeason: 0, allocWorld: 1, register: 2, startSeason: 3, genesisStep: 4, delegate: 5, submitOrders: 6, resolveTick: 7,
+  commit: 8, commitAndUndelegate: 9, finishSeason: 10, claim: 11, undelegatePart: 12, updateMember: 13, allocNation: 14,
+  seatMembers: 15, openGovernment: 16, submitGov: 17, withdrawOps: 18, logTickInput: 19, commitPart: 20,
+});
+
 /** Program instruction data (enum `ChainInstruction`). Keys are 32-byte arrays. */
 const votes4 = (w, v) => { for (let i = 0; i < 4; i++) w.u32(v?.[i] ?? NOBODY); return w; };
+const ixWriter = name => { if (!(name in IX_TAG)) throw new Error(`unknown instruction ${name}`); return new Writer().u8(IX_TAG[name]); };
+const targets = (w, list) => w.vec(list, (x, t) => x.u16(t));
 export const IX = {
-  createSeason: a => new Writer().u8(0).u64(a.seasonId).u8(a.preset).u8(a.nations).u64(a.entryFee)
+  createSeason: a => ixWriter('createSeason').u64(a.seasonId).u8(a.preset).u8(a.nations).u64(a.entryFee)
     .u32(a.tickSeconds).fixed(a.worldSeed, 32).fixed(a.crank, 32).bool(a.market ?? true).toBytes(),
-  allocWorld: chunk => Uint8Array.of(1, chunk),
-  register: a => votes4(new Writer().u8(2).u16(a.civ).string(a.name).u8(a.kind).fixed(a.session, 32).fixed(a.attestation ?? new Uint8Array(32), 32)
+  allocWorld: chunk => ixWriter('allocWorld').u8(chunk).toBytes(),
+  register: a => votes4(ixWriter('register').u16(a.civ).string(a.name).u8(a.kind).fixed(a.session, 32).fixed(a.attestation ?? new Uint8Array(32), 32)
     .u8(a.stand ?? 0), a.votes).u64(a.deposit ?? 0n).toBytes(),
-  startSeason: () => Uint8Array.of(3),
-  genesisStep: work => new Writer().u8(4).u32(work).toBytes(),
-  delegate: target => new Writer().u8(5).u16(target).toBytes(),
-  submitOrders: a => new Writer().u8(6).u8(roleIndex(a.role)).u16(a.tick).fixed(a.decisionDigest, 32).vec(a.orders, encodeOrder).vec(a.adopt ?? [], (w, id) => w.u32(id)).toBytes(),
-  resolveTick: (to = 12) => Uint8Array.of(7, to),
-  commit: () => Uint8Array.of(8),
-  commitAndUndelegate: () => Uint8Array.of(9),
-  finishSeason: () => Uint8Array.of(10),
-  claim: () => Uint8Array.of(11),
-  undelegatePart: targets => new Writer().u8(12).vec(targets, (w, t) => w.u16(t)).toBytes(),
-  updateMember: a => votes4(new Writer().u8(13).u8(a.stand ?? 0), a.votes).toBytes(),
-  allocNation: civ => new Writer().u8(14).u16(civ).toBytes(),
-  seatMembers: () => Uint8Array.of(15),
-  openGovernment: () => Uint8Array.of(16),
-  submitGov: a => encodeGov(new Writer().u8(17).u32(a.member), a.action).toBytes(),
-  withdrawOps: () => Uint8Array.of(18),
-  logTickInput: chunk => new Writer().u8(19).u16(chunk).toBytes(),
-  commitPart: targets => new Writer().u8(20).vec(targets, (w, t) => w.u16(t)).toBytes(),
+  startSeason: () => ixWriter('startSeason').toBytes(),
+  genesisStep: work => ixWriter('genesisStep').u32(work).toBytes(),
+  delegate: target => ixWriter('delegate').u16(target).toBytes(),
+  submitOrders: a => ixWriter('submitOrders').u8(roleIndex(a.role)).u16(a.tick).fixed(a.decisionDigest, 32).vec(a.orders, encodeOrder).vec(a.adopt ?? [], (w, id) => w.u32(id)).toBytes(),
+  resolveTick: (to = 12) => ixWriter('resolveTick').u8(to).toBytes(),
+  finishSeason: () => ixWriter('finishSeason').toBytes(),
+  claim: () => ixWriter('claim').toBytes(),
+  undelegatePart: list => targets(ixWriter('undelegatePart'), list).toBytes(),
+  updateMember: a => votes4(ixWriter('updateMember').u8(a.stand ?? 0), a.votes).toBytes(),
+  allocNation: civ => ixWriter('allocNation').u16(civ).toBytes(),
+  seatMembers: () => ixWriter('seatMembers').toBytes(),
+  openGovernment: () => ixWriter('openGovernment').toBytes(),
+  submitGov: a => encodeGov(ixWriter('submitGov').u32(a.member), a.action).toBytes(),
+  withdrawOps: () => ixWriter('withdrawOps').toBytes(),
+  logTickInput: chunk => ixWriter('logTickInput').u16(chunk).toBytes(),
+  commitPart: list => targets(ixWriter('commitPart'), list).toBytes(),
 };
 
 // ------------------------------------------------------------------ accounts
 
-const STATUS = ['Registering', 'Genesis', 'Seating', 'Running', 'Finalized'];
 const magicOf = r => new TextDecoder().decode(r.fixed(8));
 
 export function decodeSeason(data) {
   const r = new Reader(data);
-  if (magicOf(r) !== 'PSSEASN5') throw new Error('not a V5 season account');
+  if (magicOf(r) !== MAGIC.season) throw new Error('not a V5 season account');
   const s = { seasonId: r.u64(), bump: r.u8(), vaultBump: r.u8(), admin: r.fixed(32), crank: r.fixed(32), usdcMint: r.fixed(32), usdcDecimals: r.u8(),
-    preset: r.u8(), nations: r.u8(), entryFee: r.u64(), tickSeconds: r.u32(), market: r.bool(), status: STATUS[r.u8()],
+    preset: r.u8(), nations: r.u8(), entryFee: r.u64(), tickSeconds: r.u32(), market: r.bool(), status: SEASON_STATUS[r.u8()],
     worldSeed: r.fixed(32), seasonSeed: r.fixed(32), memberCount: r.u32() };
   s.nationMembers = r.vec(x => x.u32()); s.seated = r.u32(); s.pool = r.u64(); s.ops = r.u64(); s.opsWithdrawn = r.bool();
   s.treasury = r.vec(x => x.u64()); s.treasuryFinal = r.vec(x => x.u64()); s.payouts = r.vec(x => x.u64()); s.finalRoot = r.fixed(32);
@@ -148,7 +196,7 @@ export function decodeSeason(data) {
 
 export function decodeMember(data) {
   const r = new Reader(data);
-  if (magicOf(r) !== 'PSMEMBR5') throw new Error('not a member account');
+  if (magicOf(r) !== MAGIC.member) throw new Error('not a member account');
   const m = { seasonId: r.u64(), bump: r.u8(), index: r.u32(), civ: r.u16(), wallet: r.fixed(32), session: r.fixed(32), kind: r.u8(), name: r.string(),
     attestation: r.fixed(32), stand: r.u8() };
   m.votes = [r.u32(), r.u32(), r.u32(), r.u32()];
@@ -159,7 +207,7 @@ export function decodeMember(data) {
 /** The fixed front of a nation account: office holders, keys, budgets, who submitted. */
 export function decodeNationHeader(data) {
   const r = new Reader(data);
-  if (magicOf(r) !== 'PSNATN06') throw new Error('not a nation account');
+  if (magicOf(r) !== MAGIC.nation) throw new Error('not a nation account');
   const n = { seasonId: r.u64(), civ: r.u16(), bump: r.u8(), preset: r.u8(), market: r.bool(), crank: r.fixed(32), openTick: r.u16() };
   n.officers = [r.u32(), r.u32(), r.u32(), r.u32()];
   n.keys = [r.fixed(32), r.fixed(32), r.fixed(32), r.fixed(32)];
@@ -169,17 +217,20 @@ export function decodeNationHeader(data) {
   return n;
 }
 
-/** World header: magic, body length, `WorldMeta`. */
+/** World header (chunk 0): magic (`MAGIC.world`, or `MAGIC.genesis` while genesis runs), body length, `WorldMeta`. */
 export function decodeWorldHeader(data) {
   const r = new Reader(data);
-  const magic = new TextDecoder().decode(r.fixed(8));
+  const magic = magicOf(r);
   const len = r.u32();
   const meta = { seasonId: r.u64(), preset: r.u8(), civs: r.u8(), tickSeconds: r.u32(), deadline: Number(r.i64()), finished: r.bool(), market: r.bool(),
     frozen: r.bool(), vrf: r.fixed(32), inputChunks: r.u16(), inputLogged: r.u16() };
-  return { magic, len, meta, bodyOffset: 76 };
+  return { magic, len, meta, bodyOffset: WORLD_HEADER };
 }
 
-/** Parse a `Program data:` log of the PS_TICK / PS_INPUT / PS_GENESIS / PS_SEAT / PS_OPEN records. */
+/** The program's log records (`sol_log_data`, logged as `Program data:`). */
+export const RECORD_TAGS = Object.freeze(['PS_TICK', 'PS_INPUT', 'PS_GENESIS', 'PS_SEAT', 'PS_OPEN']);
+
+/** Parse a `Program data:` log of one of the `RECORD_TAGS` records (fields already base64-decoded). */
 export function parseRecord(fields) {
   const tag = new TextDecoder().decode(fields[0]);
   const u16 = f => new DataView(f.buffer, f.byteOffset).getUint16(0, true);
@@ -194,11 +245,35 @@ export function parseRecord(fields) {
   return { tag };
 }
 
-/** Program errors (`ChainError`, surfaced as `{"Custom": code}`), in code order from 1. */
-export const CHAIN_ERRORS = ['InvalidInstruction', 'MissingSignature', 'WrongPda', 'AlreadyInitialized', 'NotInitialized', 'WrongStatus', 'Unauthorized', 'SeasonFull', 'InvalidName', 'WrongMint', 'WrongTokenAccount', 'WorldTooSmall', 'Rules', 'WrongTick', 'OverBudget', 'TooEarly', 'MissingNation', 'WrongDelegationProgram', 'WrongMagicProgram', 'AlreadyClaimed', 'NothingToClaim', 'SeasonNotOver', 'WrongOffice', 'InvalidParams', 'WrongWorld', 'InboxFull', 'TickFrozen', 'InputNotPublished'];
+/**
+ * What a member can claim once the season is finalized: its prize plus its
+ * share of what is left in its nation's treasury (V5 §7.5), exactly as the
+ * program's `claim_amount`. `season` and `member` as decoded above.
+ */
+export function claimParts(season, member) {
+  const prize = BigInt(season.payouts[member.index] ?? 0n);
+  const deposited = BigInt(season.treasury[member.civ] ?? 0n);
+  const left = BigInt(season.treasuryFinal[member.civ] ?? 0n);
+  const refund = deposited === 0n ? 0n : (BigInt(member.shares) * left) / deposited;
+  return { prize, refund, total: prize + refund };
+}
+export const claimAmount = (season, member) => claimParts(season, member).total;
 
-/** The program error named in a transaction error message, or null. */
+/** Program errors (`ChainError`, surfaced as `{"Custom": code}`), in code order from 1. */
+export const CHAIN_ERRORS = Object.freeze(['InvalidInstruction', 'MissingSignature', 'WrongPda', 'AlreadyInitialized', 'NotInitialized', 'WrongStatus',
+  'Unauthorized', 'SeasonFull', 'InvalidName', 'WrongMint', 'WrongTokenAccount', 'WorldTooSmall', 'Rules', 'WrongTick', 'OverBudget', 'TooEarly',
+  'MissingNation', 'WrongDelegationProgram', 'WrongMagicProgram', 'AlreadyClaimed', 'NothingToClaim', 'SeasonNotOver', 'WrongOffice',
+  'InvalidParams', 'WrongWorld', 'InboxFull', 'TickFrozen', 'InputNotPublished']);
+
+/**
+ * The program error named in a transaction error message, or null. Reads
+ * both the JSON form (`{"Custom":27}`) and the log form
+ * (`custom program error: 0x1b`).
+ */
 export function chainError(message) {
-  const m = /"Custom":(\d+)/.exec(String(message));
-  return m ? CHAIN_ERRORS[Number(m[1]) - 1] ?? `Custom(${m[1]})` : null;
+  const text = String(message);
+  const m = /"Custom":\s*(\d+)/.exec(text) ?? /custom program error: (0x[0-9a-f]+|\d+)/i.exec(text);
+  if (!m) return null;
+  const code = Number(m[1]);
+  return CHAIN_ERRORS[code - 1] ?? `Custom(${code})`;
 }

@@ -6,7 +6,9 @@
 use permutation_rules::buildings::Building;
 use permutation_rules::hex::Hex;
 use permutation_rules::orders::{AttackTarget, Order, StandingOrder, StandingTarget};
-use permutation_rules::state::{CivId, Owner, ProposalKind, QueueItem, Relation, StandingRule, WorldState};
+use permutation_rules::state::{
+    CivId, Owner, ProposalKind, QueueItem, Relation, StandingRule, WorldState,
+};
 use permutation_rules::tech::{Tech, TECHS};
 use permutation_rules::tick::may_enter;
 use permutation_rules::units::{stats, UnitClass, UnitType};
@@ -250,7 +252,8 @@ impl Bot {
         let n = s.civs.len() as CivId;
         // Each office has its own budget and bank (V5 §5.2).
         let budget: [usize; 4] = core::array::from_fn(|i| {
-            permutation_rules::orders::spendable(s, r, civ, permutation_rules::gov::Role::ALL[i]) as usize
+            permutation_rules::orders::spendable(s, r, civ, permutation_rules::gov::Role::ALL[i])
+                as usize
         });
         // (priority, order): lower number = more important.
         let mut wish: Vec<(u8, Order)> = Vec::new();
@@ -318,16 +321,32 @@ impl Bot {
                 // Keep up to three treaty partners: offer non-aggression pacts to
                 // the nearest civs at peace, and (diplomats) turn pacts into alliances.
                 let partners = (0..n)
-                    .filter(|o| *o != civ && matches!(s.relation(civ, *o), Relation::Nap { .. } | Relation::Alliance { .. }))
+                    .filter(|o| {
+                        *o != civ
+                            && matches!(
+                                s.relation(civ, *o),
+                                Relation::Nap { .. } | Relation::Alliance { .. }
+                            )
+                    })
                     .count();
                 let offered = |o: CivId| s.proposals.iter().any(|p| p.from == civ && p.to == o);
                 if s.tick % 5 == 0 && partners < 3 && me.gold >= 50_000 {
-                    if let Some(t) = nearest_civ(&|o| matches!(s.relation(civ, o), Relation::Peace) && !offered(o)) {
-                        wish.push((2, Order::ProposeNap { civ: t, bond: r.nap_min_bond }));
+                    if let Some(t) = nearest_civ(&|o| {
+                        matches!(s.relation(civ, o), Relation::Peace) && !offered(o)
+                    }) {
+                        wish.push((
+                            2,
+                            Order::ProposeNap {
+                                civ: t,
+                                bond: r.nap_min_bond,
+                            },
+                        ));
                     }
                 }
                 if self.persona == Persona::Diplomat && s.tick % 10 == 5 {
-                    if let Some(t) = nearest_civ(&|o| matches!(s.relation(civ, o), Relation::Nap { .. }) && !offered(o)) {
+                    if let Some(t) = nearest_civ(&|o| {
+                        matches!(s.relation(civ, o), Relation::Nap { .. }) && !offered(o)
+                    }) {
                         wish.push((1, Order::ProposeAlliance { civ: t }));
                     }
                 }
@@ -352,10 +371,21 @@ impl Bot {
                     .city_states
                     .iter()
                     .filter(|cs| cs.captured_by.is_none() && cs.suzerain.is_none_or(|z| z == civ))
-                    .min_by_key(|cs| (std::cmp::Reverse(cs.influence[civ as usize]), cs.hex.distance(cap)))
+                    .min_by_key(|cs| {
+                        (
+                            std::cmp::Reverse(cs.influence[civ as usize]),
+                            cs.hex.distance(cap),
+                        )
+                    })
                 {
                     let amount = (me.influence / 1000) as u32;
-                    wish.push((3, Order::SendEnvoy { city_state: cs.id, influence: amount }));
+                    wish.push((
+                        3,
+                        Order::SendEnvoy {
+                            city_state: cs.id,
+                            influence: amount,
+                        },
+                    ));
                 }
             }
         }
@@ -614,7 +644,9 @@ impl Bot {
         }
 
         // ---- standing rules (§13): set once, then they run for free every tick
-        for u in my_units(s, civ).filter(|u| !u.unit_type.is_civilian() && u.standing == StandingRule::None) {
+        for u in my_units(s, civ)
+            .filter(|u| !u.unit_type.is_civilian() && u.standing == StandingRule::None)
+        {
             let rule = if Some(u.id) == garrison {
                 StandingOrder::AutoDefend { radius: 2 }
             } else if self.persona != Persona::Warlord {
@@ -622,11 +654,26 @@ impl Bot {
             } else {
                 continue;
             };
-            wish.push((4, Order::SetStanding { target: StandingTarget::Unit(u.id), rule }));
+            wish.push((
+                4,
+                Order::SetStanding {
+                    target: StandingTarget::Unit(u.id),
+                    rule,
+                },
+            ));
         }
         if matches!(self.persona, Persona::Builder | Persona::Scholar) && me.gold > 120_000 {
-            if let Some(cap) = me.capital.filter(|c| s.cities[*c as usize].standing.auto_purchase == 0) {
-                wish.push((4, Order::SetStanding { target: StandingTarget::City(cap), rule: StandingOrder::AutoPurchase { max_gold: 30 } }));
+            if let Some(cap) = me
+                .capital
+                .filter(|c| s.cities[*c as usize].standing.auto_purchase == 0)
+            {
+                wish.push((
+                    4,
+                    Order::SetStanding {
+                        target: StandingTarget::City(cap),
+                        rule: StandingOrder::AutoPurchase { max_gold: 30 },
+                    },
+                ));
             }
         }
 
@@ -641,7 +688,10 @@ impl Bot {
                     continue;
                 }
             }
-            let Some(role) = permutation_rules::gov::Role::ALL.into_iter().find(|x| permutation_rules::orders::role_allows(s, *x, &o)) else {
+            let Some(role) = permutation_rules::gov::Role::ALL
+                .into_iter()
+                .find(|x| permutation_rules::orders::role_allows(s, *x, &o))
+            else {
                 continue;
             };
             let c = o.cost() as usize;
@@ -657,22 +707,77 @@ impl Bot {
 
 // ------------------------------------------------------------------ rationale
 
-const NAMES_JA: [&str; 6] = ["アステル", "ボレアリス", "シンダー", "ダンマール", "エンバー", "フィヨルダル"];
+const NAMES_JA: [&str; 6] = [
+    "アステル",
+    "ボレアリス",
+    "シンダー",
+    "ダンマール",
+    "エンバー",
+    "フィヨルダル",
+];
 
 fn civ_ja(c: CivId) -> &'static str {
     NAMES_JA.get(c as usize).copied().unwrap_or("?")
 }
 
-const TECH_JA: [&str; 16] = [
-    "農業", "青銅器", "弓術", "騎乗", "石工", "神秘主義", "筆記", "通貨", "製鉄", "数学", "騎士道", "哲学", "工学", "天文学", "物理学", "天体力学",
-];
-const BUILDING_JA: [&str; 10] = ["穀物庫", "工房", "神殿", "市場", "学術院", "兵舎", "城壁", "スターゲートI", "スターゲートII", "スターゲートIII"];
-const UNIT_JA: [&str; 8] = ["槍兵", "弓兵", "騎兵", "長槍兵", "弩兵", "騎士", "斥候", "開拓者"];
+// Exhaustive matches, so a new tech, building or unit does not compile
+// until it has a name here.
+fn tech_ja(t: Tech) -> &'static str {
+    use Tech::*;
+    match t {
+        Agriculture => "農業",
+        BronzeWorking => "青銅器",
+        Archery => "弓術",
+        HorsebackRiding => "騎乗",
+        Masonry => "石工",
+        Mysticism => "神秘主義",
+        Writing => "筆記",
+        Currency => "通貨",
+        IronWorking => "製鉄",
+        Mathematics => "数学",
+        Chivalry => "騎士道",
+        Philosophy => "哲学",
+        Engineering => "工学",
+        Astronomy => "天文学",
+        Physics => "物理学",
+        CelestialMechanics => "天体力学",
+    }
+}
+
+fn building_ja(b: Building) -> &'static str {
+    use Building::*;
+    match b {
+        Granary => "穀物庫",
+        Workshop => "工房",
+        Temple => "神殿",
+        Market => "市場",
+        Academy => "学術院",
+        Barracks => "兵舎",
+        Walls => "城壁",
+        StarGate1 => "スターゲートI",
+        StarGate2 => "スターゲートII",
+        StarGate3 => "スターゲートIII",
+    }
+}
+
+fn unit_ja(u: UnitType) -> &'static str {
+    use UnitType::*;
+    match u {
+        Spearman => "槍兵",
+        Archer => "弓兵",
+        Horseman => "騎兵",
+        Pikeman => "長槍兵",
+        Crossbowman => "弩兵",
+        Knight => "騎士",
+        Scout => "斥候",
+        Settler => "開拓者",
+    }
+}
 
 fn item_ja(i: &QueueItem) -> String {
     match i {
-        QueueItem::Building(b) => BUILDING_JA[*b as usize].to_string(),
-        QueueItem::Troops { unit, n } => format!("{}×{}", UNIT_JA[*unit as usize], n),
+        QueueItem::Building(b) => building_ja(*b).to_string(),
+        QueueItem::Troops { unit, n } => format!("{}×{}", unit_ja(*unit), n),
         QueueItem::Scout => "斥候".to_string(),
         QueueItem::Settler => "開拓者".to_string(),
     }
@@ -701,37 +806,69 @@ impl Bot {
                     mine,
                     troops_of(s, *t)
                 )),
-                Order::ProposePeace { civ: t } => parts.push(format!("{}に講和を提案：戦争を長引かせない", civ_ja(*t))),
+                Order::ProposePeace { civ: t } => {
+                    parts.push(format!("{}に講和を提案：戦争を長引かせない", civ_ja(*t)))
+                }
                 Order::AcceptPeace { civ: t } => parts.push(format!("{}の講和を受諾", civ_ja(*t))),
-                Order::AcceptNap { civ: t, .. } => parts.push(format!("{}の不可侵条約を受諾：金に余裕あり", civ_ja(*t))),
-                Order::ProposeNap { civ: t, .. } => parts.push(format!("{}に不可侵条約を提案：国境を落ち着かせる", civ_ja(*t))),
-                Order::ProposeAlliance { civ: t } => parts.push(format!("{}に同盟を提案：同じ外交方針", civ_ja(*t))),
-                Order::AcceptAlliance { civ: t } => parts.push(format!("{}の同盟に参加", civ_ja(*t))),
+                Order::AcceptNap { civ: t, .. } => {
+                    parts.push(format!("{}の不可侵条約を受諾：金に余裕あり", civ_ja(*t)))
+                }
+                Order::ProposeNap { civ: t, .. } => parts.push(format!(
+                    "{}に不可侵条約を提案：国境を落ち着かせる",
+                    civ_ja(*t)
+                )),
+                Order::ProposeAlliance { civ: t } => {
+                    parts.push(format!("{}に同盟を提案：同じ外交方針", civ_ja(*t)))
+                }
+                Order::AcceptAlliance { civ: t } => {
+                    parts.push(format!("{}の同盟に参加", civ_ja(*t)))
+                }
                 Order::Attack { target, .. } => parts.push(match target {
                     AttackTarget::City(id) => format!("都市{}を攻撃：射程内の敵都市を優先", id),
                     AttackTarget::Unit(_) => "射程内で最も弱い敵部隊を攻撃".to_string(),
                     AttackTarget::CityState(id) => format!("都市国家{}を攻撃", id + 1),
                 }),
-                Order::FoundCity { .. } => parts.push("開拓者が良い立地に着いたので都市を建設".to_string()),
+                Order::FoundCity { .. } => {
+                    parts.push("開拓者が良い立地に着いたので都市を建設".to_string())
+                }
                 Order::SetResearch { techs } => parts.push(format!(
                     "研究：{}",
-                    techs.iter().map(|t| TECH_JA[*t as usize]).collect::<Vec<_>>().join("→")
+                    techs
+                        .iter()
+                        .map(|t| tech_ja(*t))
+                        .collect::<Vec<_>>()
+                        .join("→")
                 )),
                 Order::SetQueue { city, items } => parts.push(format!(
                     "都市{}の生産：{}",
                     city,
-                    if items.is_empty() { "なし".to_string() } else { items.iter().map(item_ja).collect::<Vec<_>>().join("→") }
+                    if items.is_empty() {
+                        "なし".to_string()
+                    } else {
+                        items.iter().map(item_ja).collect::<Vec<_>>().join("→")
+                    }
                 )),
-                Order::SendEnvoy { city_state, .. } => parts.push(format!("最寄りの都市国家{}へ使節", city_state + 1)),
+                Order::SendEnvoy { city_state, .. } => {
+                    parts.push(format!("最寄りの都市国家{}へ使節", city_state + 1))
+                }
                 Order::Purchase { .. } => parts.push("余った金で首都の生産を購入".to_string()),
                 Order::SetStanding { rule, .. } => parts.push(match rule {
-                    StandingOrder::AutoDefend { radius } => format!("首都の守備隊に自動防衛（半径{radius}）"),
-                    StandingOrder::Retreat { .. } => "野戦軍に撤退ルール：1.5倍の敵で後退".to_string(),
-                    StandingOrder::AutoPurchase { max_gold } => format!("首都で毎ティック{max_gold}金まで自動購入"),
+                    StandingOrder::AutoDefend { radius } => {
+                        format!("首都の守備隊に自動防衛（半径{radius}）")
+                    }
+                    StandingOrder::Retreat { .. } => {
+                        "野戦軍に撤退ルール：1.5倍の敵で後退".to_string()
+                    }
+                    StandingOrder::AutoPurchase { max_gold } => {
+                        format!("首都で毎ティック{max_gold}金まで自動購入")
+                    }
                     _ => "継続命令を更新".to_string(),
                 }),
                 Order::MoveUnit { unit, .. } => {
-                    if s.units.get(*unit as usize).is_some_and(|u| u.unit_type == UnitType::Scout) {
+                    if s.units
+                        .get(*unit as usize)
+                        .is_some_and(|u| u.unit_type == UnitType::Scout)
+                    {
                         scouting += 1;
                     } else {
                         moves += 1;
