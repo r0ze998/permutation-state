@@ -17,14 +17,13 @@
 //   POST /claim-relay  {tx, lastValidBlockHeight?}: a wallet-signed Claim on the base layer; the
 //                      gateway only adds the fee payer
 import { ComputeBudgetProgram, PublicKey, Transaction } from '@solana/web3.js';
-import { decodeSeason, IX_TAG, MAX_GOV_PER_SIGNER, NATIONS, NOBODY } from '../../client/src/codec.mjs';
+import { IX_TAG, MAX_GOV_PER_SIGNER, NATIONS, NOBODY } from '../../client/src/codec.mjs';
 import { send, sendSigned } from '../send.mjs';
-import { RouteError } from './errors.mjs';
+import { RouteError, routeSeason } from './errors.mjs';
 import { seal } from '../sealed.mjs';
 import { allowedOffices } from '../../client/src/offices.mjs';
 import { requireOperator } from './roster.mjs';
-
-const fromHex = h => Uint8Array.from(Buffer.from(h || '', 'hex'));
+import { fromHex, toHex } from '../../client/src/bytes.mjs';
 
 /** A base64 wire transaction, or a 400. */
 export function parseTransaction(b64) {
@@ -92,7 +91,7 @@ export const relayRoutes = {
     if (!signer) throw new RouteError(403, NOT_HOSTED, 'NotHosted');
     // What the program checks only at the reveal is checked now, while the
     // batch can still be fixed: a sealed rationale and orders of this office.
-    const digest = fromHex(b.digest);
+    const digest = fromHex(b.digest || '');
     if (digest.length !== 32 || digest.every(x => x === 0)) throw new RouteError(400, 'digest: 32 bytes, not all zero (officers seal a rationale)', 'MissingRationale');
     const orders = b.orders || [];
     const wrong = orders.find(o => !allowedOffices(o).includes(b.role));
@@ -104,7 +103,7 @@ export const relayRoutes = {
     crank.sealed.put(batch, salt, commitment);
     const ixs = chain.commitOrders({ signer: signer.publicKey, civ: b.civ, role: b.role, tick: b.tick, commitment });
     const r = await send(er, ixs, [crank.crank, signer], `commit ${NATIONS[b.civ]} ${b.role}`);
-    return { body: { ok: true, signature: r.signature, commitment: Buffer.from(commitment).toString('hex') } };
+    return { body: { ok: true, signature: r.signature, commitment: toHex(commitment) } };
   },
 
   'POST /gov': async (ctx, req) => {
@@ -152,7 +151,7 @@ export const relayRoutes = {
   // redirect it.
   'GET /claim-relay': async ({ base, cfg, chain, crank, blockhashes }) => {
     const { blockhash, lastValidBlockHeight } = await blockhashes.base.latest();
-    const s = decodeSeason((await base.getAccountInfo(chain.season, 'confirmed')).data);
+    const s = await routeSeason({ base, chain });
     return { body: { feePayer: crank.crank.publicKey.toBase58(), blockhash, lastValidBlockHeight, programId: cfg.programId, mint: new PublicKey(s.usdcMint).toBase58(), status: s.status } };
   },
 

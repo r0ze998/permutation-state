@@ -28,7 +28,6 @@ async function decide({ game, view: v, map, held }) {
   const me = v.me;
   const tiles = map.tiles.map(([q, r, terrain, river, resource], i) => ({ q, r, terrain, river, resource, i }));
   const tileAt = new Map(tiles.map(t => [`${t.q},${t.r}`, t]));
-  const fogAt = t => v.fog[t.i];
   const myCities = v.cities.filter(c => c.owner === me);
   const myUnits = v.units.filter(u => u.owner === me);
   const cap = myCities.find(c => c.capital) || myCities[0];
@@ -85,7 +84,7 @@ async function decide({ game, view: v, map, held }) {
       let best = null;
       for (const [q, r, ticks] of p.reach) {
         const t = tileAt.get(`${q},${r}`);
-        if (!t || !GOOD_GROUND[t.terrain] || ticks > 5 || fogAt(t) === '0') continue;
+        if (!t || !GOOD_GROUND[t.terrain] || ticks > 5) continue;
         if (knownCities.some(c => dist(c, t) < 3)) continue;
         const score = GOOD_GROUND[t.terrain] + (t.river ? 1 : 0) + (t.resource ? 2 : 0) - ticks * 0.6 - (cap ? Math.abs(dist(cap, t) - 4) * 0.5 : 0);
         if (!best || score > best.score) best = { q, r, score };
@@ -100,21 +99,9 @@ async function decide({ game, view: v, map, held }) {
     const fight = p.attacks.filter(a => !a.blocked && a.forecast && (a.forecast.captureCivilian || a.forecast.toDefender >= 1.3 * a.forecast.toAttacker))
       .sort((a, b) => (b.forecast.toDefender ?? 99) - (a.forecast.toDefender ?? 99))[0];
     if (fight) { add(88, { type: 'Attack', army: u.id, target: fight.target }, `${ja(u.type)}${u.id}が(${fight.q},${fight.r})を攻撃（有利な見込み）`); continue; }
-    if (u.type === 'Scout') {
-      // Toward the most unexplored ground within a few ticks.
-      let best = null;
-      for (const [q, r, ticks] of p.reach) {
-        if (ticks > 3) continue;
-        const unseen = tiles.filter(t => fogAt(t) === '0' && dist(t, { q, r }) <= 3).length;
-        const score = unseen - ticks * 0.5;
-        if (unseen && (!best || score > best.score)) best = { q, r, score, unseen };
-      }
-      if (best) {
-        const path = await game.preview('path', { unit: u.id, q: best.q, r: best.r });
-        if (path.path) add(60, { type: 'MoveUnit', unit: u.id, path: path.path }, `斥候${u.id}で未踏の${best.unseen}マスへ`);
-      }
-      continue;
-    }
+    // Perfect information (the view's fog is display only, every tile seen):
+    // there is no unexplored ground to send a scout to, so it holds.
+    if (u.type === 'Scout') continue;
     // Soldiers far from home walk back to guard the capital.
     if (cap && dist(u, cap) > 3) {
       const path = await game.preview('path', { unit: u.id, q: cap.q, r: cap.r });

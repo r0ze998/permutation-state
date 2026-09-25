@@ -534,3 +534,155 @@ fn offers_respect_the_spend_limit_and_the_open_cap() {
     }
     assert_eq!(s.contracts.len(), rules.contract_max_open as usize);
 }
+
+// ------------------------------------------------------------- more cases
+
+#[test]
+fn nobody_scoring_refunds_only_people() {
+    let (rules, mut s) = season(&[2, 1, 0, 0, 0, 0]);
+    for c in &mut s.civs {
+        c.techs = Default::default();
+    }
+    let roster = [true, false, false];
+    let p = settle_with(
+        &s,
+        &rules,
+        30 * USDC,
+        FEE,
+        &Extras {
+            roster: &roster,
+            bounty: &[],
+        },
+    );
+    assert!(p.refund);
+    assert_eq!(p.per_member[0], 0, "the operator's AI is not refunded");
+    assert_eq!(p.per_member[1], 15 * USDC);
+    assert_eq!(p.per_member[2], 15 * USDC);
+}
+
+#[test]
+fn an_ai_share_no_nation_can_take_goes_to_everyone_by_what_they_receive() {
+    // Nation 0: an AI and a person without merit (the cap stops it); nation
+    // 1: only a person without merit, capped too; the rest goes pro rata.
+    let (rules, s) = season(&[2, 1, 0, 0, 0, 0]);
+    let roster = [true, false, false];
+    let pool = 400 * USDC;
+    let p = settle_with(
+        &s,
+        &rules,
+        pool,
+        FEE,
+        &Extras {
+            roster: &roster,
+            bounty: &[],
+        },
+    );
+    assert_eq!(p.per_member[0], 0);
+    assert!(p.dust < 10, "nothing is left over: {}", p.dust);
+    assert_eq!(p.per_member[1] + p.per_member[2] + p.dust, pool);
+}
+
+#[test]
+fn a_leave_alliance_contract_pays_when_the_alliance_ends() {
+    let (rules, mut s) = world(20 * USDC);
+    s.set_relation(1, 2, Relation::Alliance { leaving_at: None });
+    let term = ContractTerm::LeaveAlliance { with: 2 };
+    step(
+        &mut s,
+        &rules,
+        vec![(0, vec![offer(Some(1), term, 3 * USDC, 40)])],
+    );
+    let id = s.contracts[0].id;
+    step(
+        &mut s,
+        &rules,
+        vec![(1, vec![Order::AcceptContract { id }])],
+    );
+    step(&mut s, &rules, vec![(1, vec![Order::LeaveAlliance])]);
+    for _ in 0..rules.alliance_leave_delay + 1 {
+        step(&mut s, &rules, vec![]);
+    }
+    assert!(!s.relation(1, 2).is_alliance());
+    assert!(s.contracts.is_empty());
+    assert_eq!(s.civs[1].contract_income, 3 * USDC);
+}
+
+#[test]
+fn offers_can_be_withdrawn_before_acceptance_but_capture_offers_cannot() {
+    let (rules, mut s) = world(20 * USDC);
+    war(&mut s, &rules, 0, 1);
+    let city = s.civs[2].capital.unwrap();
+    step(
+        &mut s,
+        &rules,
+        vec![(
+            0,
+            vec![
+                offer(Some(1), ContractTerm::Peace, 2 * USDC, 40),
+                offer(None, ContractTerm::Capture { city }, USDC, 40),
+            ],
+        )],
+    );
+    assert_eq!(s.contracts.len(), 2);
+    let (peace, capture) = (s.contracts[0].id, s.contracts[1].id);
+    step(
+        &mut s,
+        &rules,
+        vec![(
+            0,
+            vec![
+                Order::CancelContract { id: peace },
+                Order::CancelContract { id: capture },
+            ],
+        )],
+    );
+    assert_eq!(s.contracts.len(), 1, "the capture offer stays");
+    assert_eq!(s.contracts[0].id, capture);
+    assert_eq!(s.civs[0].usdc, 19 * USDC);
+}
+
+#[test]
+fn the_last_installment_takes_the_remainder() {
+    let (rules, mut s) = world(20 * USDC);
+    s.set_relation(
+        0,
+        1,
+        Relation::Nap {
+            until: 150,
+            bond_low: 0,
+            bond_high: 0,
+        },
+    );
+    // 1 USDC in 3 installments: 333333, 333333, 333334.
+    let term = ContractTerm::KeepNap {
+        every: 1,
+        installments: 3,
+    };
+    step(
+        &mut s,
+        &rules,
+        vec![(0, vec![offer(Some(1), term, USDC, 20)])],
+    );
+    let id = s.contracts[0].id;
+    step(
+        &mut s,
+        &rules,
+        vec![(1, vec![Order::AcceptContract { id }])],
+    );
+    for _ in 0..4 {
+        step(&mut s, &rules, vec![]);
+    }
+    assert!(s.contracts.is_empty());
+    assert_eq!(s.civs[1].contract_income, USDC);
+    assert_eq!(s.civs[0].usdc, 19 * USDC);
+}
+
+#[test]
+fn a_nation_without_cities_at_the_home_tick_has_no_home_and_pays_no_bounty() {
+    let (_, mut s) = world(0);
+    s.home_snapshot = vec![vec![], vec![0]];
+    assert_eq!(home_city(&s, 0, &[1; 32]), None);
+    assert_eq!(home_city(&s, 3, &[1; 32]), None, "beyond the snapshot");
+    let b = bounties(&s, &[(0, [1; 32])], 5 * USDC);
+    assert_eq!((b.homes[0], b.unpaid), (None, 5 * USDC));
+}

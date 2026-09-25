@@ -6,8 +6,9 @@
 import { randomBytes, randomInt } from 'node:crypto';
 import { LAMPORTS_PER_SOL, PublicKey } from '@solana/web3.js';
 import { DELEGATION_PROGRAM_ID } from '@magicblock-labs/ephemeral-rollups-sdk';
-import { ChainClient, randomTag } from '../client/src/chain.mjs';
-import { decodeMember, decodeSeason, MAGIC, NATION_TARGET, NATIONS, NOBODY, ROLES, roleMask, rosterChain, rosterTag } from '../client/src/codec.mjs';
+import { toHex, u64le } from '../client/src/bytes.mjs';
+import { ChainClient, readSeason } from '../client/src/chain.mjs';
+import { decodeMember, MAGIC, NATION_TARGET, NATIONS, NOBODY, ROLES, roleMask, rosterChain, rosterTag } from '../client/src/codec.mjs';
 import { poll } from '../client/src/retry.mjs';
 import { createMintIxs, createTokenAccountIxs, mintToIx, tokenBalance } from './spl.mjs';
 import { namedKey } from './config.mjs';
@@ -25,18 +26,19 @@ async function airdrop(conn, key, sol = 20) {
 }
 
 /**
- * The members this gateway registers and hosts: `humans` claimable human
- * members (nations 0, 1, …) who stand for general and steward, and `ai`
- * AI members per nation (run by the game server's reference AI) who stand
- * for two offices each, rotating, and vote for a human candidate where
- * there is one.
+ * The members this gateway registers and hosts, as `{civ, hosted, stand}`:
+ * `humans` claimable human members (nations 0, 1, …) who stand for general
+ * and steward, and `ai` AI members per nation (run by the game server's
+ * reference AI) who stand for two offices each, rotating, and vote for a
+ * human candidate where there is one. Names and keys are drawn per season
+ * (`drawSeats`); no seat declares a kind.
  */
 export function defaultRoster({ humans = 1, ai = 2, nations = NATIONS.length } = {}) {
   const roster = [];
-  for (let h = 0; h < humans; h++) roster.push({ civ: h % nations, hosted: 'human', kind: 0, name: `Player ${h + 1}`, stand: ['General', 'Steward'] });
+  for (let h = 0; h < humans; h++) roster.push({ civ: h % nations, hosted: 'human', stand: ['General', 'Steward'] });
   for (let c = 0; c < nations; c++) {
     for (let j = 0; j < ai; j++) {
-      roster.push({ civ: c, hosted: 'ai', kind: 1, name: `${NATIONS[c]}-AI${j + 1}`, stand: [ROLES[(2 * j) % 4], ROLES[(2 * j + 1) % 4]] });
+      roster.push({ civ: c, hosted: 'ai', stand: [ROLES[(2 * j) % ROLES.length], ROLES[(2 * j + 1) % ROLES.length]] });
     }
   }
   return roster;
@@ -75,6 +77,62 @@ export function firstVotes(roster, me) {
 }
 
 /**
+ * The hosted seats of season `seasonId`, people and operator AI members
+ * alike (V5 §18.2), in the order of `roster` (bootstrap shuffles it): fresh
+ * keys every season (`keyFor(name)`), a name from `names` (with a numeric
+ * suffix once the pool is used up) and no self-declared kind (2), so
+ * nothing but play tells them apart. Each AI gets a secret salt and
+ * registers with its roster tag; everyone else with random bytes. Pure given
+ * `keyFor` and `random(n)` (n random bytes).
+ */
+export function drawSeats(roster, seasonId, { names = shuffled(SEAT_NAMES), keyFor = namedKey, random = n => new Uint8Array(randomBytes(n)) } = {}) {
+  return roster.map((m, i) => {
+    const key = part => keyFor(`s${seasonId}-m${i}-${part}`);
+    const keys = { wallet: key('wallet'), session: key('session'), token: key('usdc') };
+    const salt = m.hosted === 'ai' ? random(32) : null;
+    const tag = salt ? rosterTag(seasonId, keys.wallet.publicKey.toBytes(), salt) : random(32);
+    const round = Math.floor(i / names.length);
+    return { ...m, name: names[i % names.length] + (round ? ` ${round + 1}` : ''), kind: 2, keys, salt, tag };
+  });
+}
+
+/** The bounty per operator AI member and the operator's bond (default: AI members × entry fee × 2); none without AI members. */
+export function bountyAndBond({ aiCount, bounty, bond = null, entryFee }) {
+  if (!aiCount) return { bountyEach: 0n, bond: 0n };
+  return { bountyEach: bounty, bond: bond ?? BigInt(aiCount) * entryFee * 2n };
+}
+
+/** The gateway's test USDC mint, created on first use. */
+async function ensureMint({ base, cfg, admin, mint, log }) {
+  if (await base.getAccountInfo(mint.publicKey)) return;
+  await send(base, await createMintIxs(base, { payer: admin.publicKey, mint: mint.publicKey, authority: admin.publicKey }), [admin, mint], 'create test USDC mint');
+  log(`test USDC mint ${mint.publicKey.toBase58()} on ${cfg.cluster} (created by this gateway; no value, not real USDC)`);
+}
+
+/** The admin's USDC account, holding at least `need` (the bounties and the bond, escrowed at creation). Returns its address. */
+async function escrowBountyAndBond({ base, admin, mint, need }) {
+  const t = namedKey('admin-usdc');
+  if (!(await base.getAccountInfo(t.publicKey))) {
+    await send(base, await createTokenAccountIxs(base, { payer: admin.publicKey, account: t.publicKey, mint: mint.publicKey, owner: admin.publicKey }), [admin, t], 'create admin USDC account');
+  }
+  const have = await tokenBalance(base, t.publicKey);
+  if (have < need) await send(base, [mintToIx({ mint: mint.publicKey, dest: t.publicKey, authority: admin.publicKey, amount: need - have })], [admin], 'mint bounty and bond');
+  return t.publicKey;
+}
+
+/**
+ * The history layer, readable: the records of the seasons a season follows
+ * (the last ten), each checkable against its season's history root — the
+ * previous season's own lineage plus its record. `prev` is that season's
+ * state (null: none).
+ */
+export function lineageOf(prev) {
+  if (!prev) return [];
+  const own = prev.history ? [{ seasonId: prev.seasonId, nations: prev.nations, historyRoot: prev.history.historyRoot, record: prev.history.record }] : [];
+  return [...(prev.lineage ?? []), ...own].slice(-10);
+}
+
+/**
  * Create a season and register the hosted members; the state is saved to
  * `store`. Registration stays open (for x402 entrants) until the crank
  * starts the season.
@@ -87,43 +145,20 @@ export async function bootstrap({ base, cfg, store, roster = defaultRoster(), lo
     await airdrop(base, admin.publicKey, 50);
     await airdrop(base, crank.publicKey, 50);
   }
-  if (!(await base.getAccountInfo(mint.publicKey))) {
-    await send(base, await createMintIxs(base, { payer: admin.publicKey, mint: mint.publicKey, authority: admin.publicKey }), [admin, mint], 'create test USDC mint');
-    log(`test USDC mint ${mint.publicKey.toBase58()} on ${cfg.cluster} (created by this gateway; no value, not real USDC)`);
-  }
+  await ensureMint({ base, cfg, admin, mint, log });
   const seasonId = BigInt(Date.now());
   const chain = new ChainClient(cfg.programId, seasonId);
   // The history layer: follow --prev-season, else the finalized season this
   // state file held before (the same world's previous season).
   const prevSeasonId = cfg.prevSeason ? BigInt(cfg.prevSeason) : (store.state?.finalized && store.state?.programId === cfg.programId ? BigInt(store.state.seasonId) : null);
-  // The hosted seats, people and operator AI members alike (V5 §18.2): in
-  // a random order, with fresh wallets every season, names from one pool
-  // and no self-declared kind, so nothing but play tells them apart. Each
-  // AI registers with the tag of a secret salt; the chain of those tags is
-  // committed now and revealed after the season.
-  const names = shuffled(SEAT_NAMES);
-  const seats = shuffled(roster).map((m, i) => {
-    const keys = { wallet: namedKey(`s${seasonId}-m${i}-wallet`), session: namedKey(`s${seasonId}-m${i}-session`), token: namedKey(`s${seasonId}-m${i}-usdc`) };
-    const salt = m.hosted === 'ai' ? new Uint8Array(randomBytes(32)) : null;
-    const tag = salt ? rosterTag(seasonId, keys.wallet.publicKey.toBytes(), salt) : randomTag();
-    return { ...m, name: names[i % names.length] + (i >= names.length ? ` ${Math.floor(i / names.length) + 1}` : ''), kind: 2, keys, salt, tag };
-  });
+  // The hosted seats in a random order (see drawSeats). The chain of the
+  // AI members' tags is committed now and revealed after the season.
+  const seats = drawSeats(shuffled(roster), seasonId);
   const ais = seats.filter(s => s.salt);
   const aiCount = ais.length;
-  const bountyEach = aiCount ? cfg.bounty : 0n;
-  const bond = aiCount ? (cfg.bond ?? BigInt(aiCount) * cfg.entryFee * 2n) : 0n;
-  let adminToken;
-  if (aiCount) {
-    // The operator escrows the bounties and its bond (test USDC here).
-    const t = namedKey('admin-usdc');
-    adminToken = t.publicKey;
-    if (!(await base.getAccountInfo(adminToken))) {
-      await send(base, await createTokenAccountIxs(base, { payer: admin.publicKey, account: adminToken, mint: mint.publicKey, owner: admin.publicKey }), [admin, t], 'create admin USDC account');
-    }
-    const need = bountyEach * BigInt(aiCount) + bond;
-    const have = await tokenBalance(base, adminToken);
-    if (have < need) await send(base, [mintToIx({ mint: mint.publicKey, dest: adminToken, authority: admin.publicKey, amount: need - have })], [admin], 'mint bounty and bond');
-  }
+  const { bountyEach, bond } = bountyAndBond({ aiCount, bounty: cfg.bounty, bond: cfg.bond, entryFee: cfg.entryFee });
+  // The operator escrows the bounties and its bond (test USDC here).
+  const adminToken = aiCount ? await escrowBountyAndBond({ base, admin, mint, need: bountyEach * BigInt(aiCount) + bond }) : undefined;
   await send(base, chain.createSeason({ admin: admin.publicKey, mint: mint.publicKey, nations: NATIONS.length, entryFee: cfg.entryFee,
     tickSeconds: cfg.tickSeconds, worldSeed: worldSeedFor(seasonId), crank: crank.publicKey, market: cfg.market, prevSeasonId,
     aiCount, rosterChain: rosterChain(ais.map(s => s.tag)), bountyEach, bond, adminToken }), [admin], 'createSeason');
@@ -133,11 +168,8 @@ export async function bootstrap({ base, cfg, store, roster = defaultRoster(), lo
   for (let c = 0; c < NATIONS.length; c++) await send(base, chain.allocNation({ payer: crank.publicKey, civ: c }), [crank], `allocNation ${c}`);
   log(`season ${seasonId} created: world and ${NATIONS.length} nation accounts allocated`);
 
-  // The history layer, readable: the records of the seasons this one follows
-  // (the last ten), each checkable against its season's history root.
-  const prev = prevSeasonId && store.state?.seasonId === prevSeasonId.toString() ? store.state : null;
-  const lineage = prev ? [...(prev.lineage ?? []), ...(prev.history ? [{ seasonId: prev.seasonId, nations: prev.nations,
-    historyRoot: prev.history.historyRoot, record: prev.history.record }] : [])].slice(-10) : [];
+  // The lineage is known when the previous season is the one this state file held.
+  const lineage = lineageOf(prevSeasonId && store.state?.seasonId === prevSeasonId.toString() ? store.state : null);
   const state = store.save({ seasonId: seasonId.toString(), programId: cfg.programId, mint: mint.publicKey.toBase58(), cluster: cfg.cluster,
     nations: [...NATIONS], members: [], ticks: [], seating: [], lineage,
     roster: { aiCount, bountyEach: bountyEach.toString(), bond: bond.toString(), revealed: false } });
@@ -147,7 +179,7 @@ export async function bootstrap({ base, cfg, store, roster = defaultRoster(), lo
       stand: roleMask(m.stand), votes: firstVotes(seats, i), deposit: m.deposit ?? 0n, tag: m.tag });
     // `hosted` and the salt stay in this (private) state file.
     state.members.push({ index, civ: m.civ, name: m.name, kind: m.kind, hosted: m.hosted, key: `s${seasonId}-m${i}`, wallet: wallet.publicKey.toBase58(),
-      session: session.publicKey.toBase58(), usdc: token.publicKey.toBase58(), ...(m.salt ? { salt: Buffer.from(m.salt).toString('hex') } : {}) });
+      session: session.publicKey.toBase58(), usdc: token.publicKey.toBase58(), ...(m.salt ? { salt: toHex(m.salt) } : {}) });
     store.save();
     log(`member ${index} ${m.name} joined ${NATIONS[m.civ]}`);
   }
@@ -156,7 +188,7 @@ export async function bootstrap({ base, cfg, store, roster = defaultRoster(), lo
 
 /**
  * The key file of a hosted member's `part` ('wallet', 'session', 'usdc').
- * Seasons before v7 numbered them `member<i>-…`; now each season has its
+ * Seasons before program version 7 numbered them `member<i>-…`; now each season has its
  * own (`s<season>-m<i>-…`).
  */
 export const memberKeyName = (m, part) => (typeof m.key === 'number' ? `member${m.key}-${part}` : `${m.key}-${part}`);
@@ -179,8 +211,7 @@ export async function registerWithUsdc({ base, chain, cfg, admin, crank, mint, w
 
 /** Every Member PDA of the season, in registration order (hosted or not). */
 export async function seasonMembers(base, chain) {
-  const id = Buffer.alloc(8);
-  id.writeBigUInt64LE(chain.seasonId);
+  const id = Buffer.from(u64le(chain.seasonId));
   const accounts = await base.getProgramAccounts(chain.programId, {
     commitment: 'confirmed',
     filters: [{ memcmp: { offset: 0, bytes: Buffer.from(MAGIC.member).toString('base64'), encoding: 'base64' } },
@@ -202,13 +233,13 @@ export async function startAndDelegate({ base, er, cfg, store, log = console.log
   const state = store.state;
   const crank = namedKey('crank');
   const chain = new ChainClient(cfg.programId, BigInt(state.seasonId));
-  const season = () => base.getAccountInfo(chain.season, 'confirmed').then(a => decodeSeason(a.data));
+  const season = () => readSeason(base, chain);
   if ((await season()).status === 'Registering') await send(base, chain.startSeason({ authority: crank.publicKey }), [crank], 'startSeason');
   let steps = 0;
   while ((await season()).status === 'Genesis') {
     const r = await send(base, chain.genesisStep({ work: 50 }), [crank], 'genesisStep');
     steps++;
-    for (const rec of r.records) if (rec.tag === 'PS_GENESIS') state.genesis = { root: Buffer.from(rec.root).toString('hex'), seasonSeed: Buffer.from(rec.seasonSeed).toString('hex'), signature: r.signature };
+    for (const rec of r.records) if (rec.tag === 'PS_GENESIS') state.genesis = { root: toHex(rec.root), seasonSeed: toHex(rec.seasonSeed), signature: r.signature };
   }
   if (steps) {
     store.save();
@@ -220,11 +251,11 @@ export async function startAndDelegate({ base, er, cfg, store, log = console.log
     for (let i = s.seated; i < members.length; i += SEAT_BATCH) {
       const group = members.slice(i, i + SEAT_BATCH);
       const r = await send(base, chain.seatMembers({ authority: crank.publicKey, members: group.map(m => m.pubkey) }), [crank], `seat members ${i}..${i + group.length - 1}`);
-      for (const rec of r.records.filter(x => x.tag === 'PS_SEAT')) state.seating.push({ signature: r.signature, root: Buffer.from(rec.root).toString('hex'), members: Buffer.from(rec.members).toString('hex') });
+      for (const rec of r.records.filter(x => x.tag === 'PS_SEAT')) state.seating.push({ signature: r.signature, root: toHex(rec.root), members: toHex(rec.members) });
       store.save();
     }
     const r = await send(base, chain.openGovernment({ authority: crank.publicKey, nations: s.nations }), [crank], 'openGovernment');
-    for (const rec of r.records.filter(x => x.tag === 'PS_OPEN')) state.open = { signature: r.signature, root: Buffer.from(rec.root).toString('hex') };
+    for (const rec of r.records.filter(x => x.tag === 'PS_OPEN')) state.open = { signature: r.signature, root: toHex(rec.root) };
     store.save();
     log(`${members.length} members seated; first election held on chain`);
   }
@@ -256,7 +287,7 @@ export async function startAndDelegate({ base, er, cfg, store, log = console.log
 /** World seed of a season: public and fixed at creation (terrain, §2.4). */
 export function worldSeedFor(seasonId) {
   const b = new Uint8Array(32);
-  new DataView(b.buffer).setBigUint64(0, BigInt(seasonId), true);
+  b.set(u64le(seasonId), 0);
   b.set(new TextEncoder().encode('PS-world'), 8);
   return b;
 }

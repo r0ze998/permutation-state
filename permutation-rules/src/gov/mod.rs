@@ -13,8 +13,9 @@
 //! recalls resolve in phase 11 for the next tick. Replaying the inputs
 //! therefore replays who held which office and why, exactly like the orders.
 //!
-//! An office without a holder is run by the **acting official** (`NOBODY`,
-//! the bot "代行"): its orders count, but earn no merit.
+//! An office without a holder (`NOBODY`) is run by the rules' caretaker
+//! (`gov::caretaker`, "代行"): the members' top proposal or a minimal
+//! default. Its orders count, but earn no merit.
 
 use crate::orders::Order;
 use crate::params::Ruleset;
@@ -32,7 +33,7 @@ pub use actions::{apply_actions, next_term_start, vote_open};
 pub use terms::{electorate, end_of_tick, run_election};
 
 pub type MemberId = u32;
-/// No member: a vacant office (run by the acting official) or no proposer.
+/// No member: a vacant office (run by the caretaker) or no proposer.
 pub const NOBODY: MemberId = u32::MAX;
 /// A tick that never happened.
 pub const NEVER: u16 = u16::MAX;

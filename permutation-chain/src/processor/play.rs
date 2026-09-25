@@ -39,15 +39,7 @@ pub(super) fn open_nation(n: &mut NationAccount, state: &WorldState, rules: &Rul
         n.keys[i] = state.members.get(m as usize).map_or([0; 32], |x| x.key);
         n.spendable[i] = permutation_rules::orders::spendable(state, rules, civ as u16, role);
     }
-    n.batches = [None, None, None, None];
-    n.submitted = [u16::MAX; 4];
-    n.frozen = false;
-    n.revealing = false;
-    n.reveal_deadline = 0;
-    n.committed = [u16::MAX; 4];
-    n.commits = [[0; 32]; 4];
-    n.salts = [[0; 32]; 4];
-    n.inbox.clear();
+    n.clear_tick();
 }
 
 /// Seal one office's orders for the open tick (commit–reveal): only the
@@ -62,9 +54,9 @@ pub(super) fn commit_orders(
 ) -> ProgramResult {
     let it = &mut accounts.iter();
     let who = next_account_info(it)?;
-    let nation_ai = next_account_info(it)?;
+    let nation_info = next_account_info(it)?;
     signer(who)?;
-    let mut n = load_nation_at(program_id, nation_ai)?;
+    let mut n = load_nation_at(program_id, nation_info)?;
     let i = role.index();
     // Only the office holder's session key. A vacant office takes no batch
     // from anyone, the operator included: the rules' caretaker fills it
@@ -86,7 +78,7 @@ pub(super) fn commit_orders(
     }
     n.commits[i] = commitment;
     n.committed[i] = tick;
-    store(&mut nation_ai.try_borrow_mut_data()?, &n)
+    store(&mut nation_info.try_borrow_mut_data()?, &n)
 }
 
 /// A revealed batch's fields besides its office and tick.
@@ -107,9 +99,9 @@ pub(super) fn reveal_orders(
 ) -> ProgramResult {
     let it = &mut accounts.iter();
     let who = next_account_info(it)?;
-    let nation_ai = next_account_info(it)?;
+    let nation_info = next_account_info(it)?;
     signer(who)?;
-    let mut n = load_nation_at(program_id, nation_ai)?;
+    let mut n = load_nation_at(program_id, nation_info)?;
     let i = role.index();
     if tick != n.open_tick || n.committed[i] != tick {
         return Err(ChainError::WrongTick.into());
@@ -150,14 +142,13 @@ pub(super) fn reveal_orders(
     n.batches[i] = Some(batch);
     n.submitted[i] = tick;
     n.salts[i] = salt;
-    store(&mut nation_ai.try_borrow_mut_data()?, &n)
+    store(&mut nation_info.try_borrow_mut_data()?, &n)
 }
 
 /// Close the open tick's commitments after its deadline and open the reveal
 /// window. Governance closes with them, so nobody acts on revealed orders.
 pub(super) fn close_commits(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
-    let chunk0 = accounts.first().ok_or(ProgramError::NotEnoughAccountKeys)?;
-    let world = world_chunks(program_id, accounts, world_season_id(chunk0)?)?;
+    let world = world_at(program_id, accounts)?;
     let mut meta = world.meta()?;
     if meta.finished || meta.frozen || meta.revealing {
         return Err(ChainError::WrongPhase.into());
@@ -168,10 +159,10 @@ pub(super) fn close_commits(program_id: &Pubkey, accounts: &[AccountInfo]) -> Pr
     }
     let it = &mut accounts[WORLD_CHUNKS..].iter();
     let mut commits: Vec<(u16, u8, u32, [u8; 32])> = Vec::new();
-    let mut tick = u16::MAX;
+    let mut tick = NO_TICK;
     for civ in 0..meta.civs as u16 {
-        let ai = next_account_info(it)?;
-        let mut n = load_nation(program_id, ai, meta.season_id, civ)?;
+        let info = next_account_info(it)?;
+        let mut n = load_nation(program_id, info, meta.season_id, civ)?;
         tick = n.open_tick;
         for role in Role::ALL {
             let i = role.index();
@@ -181,7 +172,7 @@ pub(super) fn close_commits(program_id: &Pubkey, accounts: &[AccountInfo]) -> Pr
         }
         n.revealing = true;
         n.reveal_deadline = clock.unix_timestamp + reveal_seconds(meta.tick_seconds);
-        store(&mut ai.try_borrow_mut_data()?, &n)?;
+        store(&mut info.try_borrow_mut_data()?, &n)?;
     }
     meta.revealing = true;
     meta.deadline = clock.unix_timestamp + reveal_seconds(meta.tick_seconds);
@@ -199,10 +190,10 @@ pub(super) fn submit_gov(
 ) -> ProgramResult {
     let it = &mut accounts.iter();
     let who = next_account_info(it)?;
-    let nation_ai = next_account_info(it)?;
+    let nation_info = next_account_info(it)?;
     signer(who)?;
-    let mut n = load_nation_at(program_id, nation_ai)?;
-    if n.open_tick == u16::MAX {
+    let mut n = load_nation_at(program_id, nation_info)?;
+    if n.open_tick == NO_TICK {
         return Err(ChainError::WrongStatus.into());
     }
     if n.frozen || n.revealing {
@@ -224,7 +215,7 @@ pub(super) fn submit_gov(
     if len + unrevealed * REVEAL_ROOM > NATION_SPACE {
         return Err(ChainError::InboxFull.into());
     }
-    store(&mut nation_ai.try_borrow_mut_data()?, &n)
+    store(&mut nation_info.try_borrow_mut_data()?, &n)
 }
 
 /// The open tick's input as it stands in the nation accounts, with `vrf`
@@ -238,7 +229,7 @@ pub(super) struct Pending<'a, 'info> {
     pub revealed: usize,
     /// Each revealed batch's salt, in the same order (the tick randomness).
     pub salts: Vec<Salt>,
-    pub ais: Vec<&'a AccountInfo<'info>>,
+    pub infos: Vec<&'a AccountInfo<'info>>,
 }
 
 pub(super) fn pending_input<'a, 'info>(
@@ -255,16 +246,16 @@ pub(super) fn pending_input<'a, 'info>(
             gov: Vec::new(),
             deposits: Vec::new(),
         },
-        tick: u16::MAX,
+        tick: NO_TICK,
         committed: 0,
         revealed: 0,
         salts: Vec::new(),
-        ais: Vec::with_capacity(meta.civs as usize),
+        infos: Vec::with_capacity(meta.civs as usize),
     };
     for civ in 0..meta.civs as u16 {
-        let ai = next_account_info(it)?;
-        let n = load_nation(program_id, ai, meta.season_id, civ)?;
-        if p.tick == u16::MAX {
+        let info = next_account_info(it)?;
+        let n = load_nation(program_id, info, meta.season_id, civ)?;
+        if p.tick == NO_TICK {
             p.tick = n.open_tick;
         }
         for role in Role::ALL {
@@ -279,7 +270,7 @@ pub(super) fn pending_input<'a, 'info>(
             }
         }
         p.input.gov.extend(n.inbox);
-        p.ais.push(ai);
+        p.infos.push(info);
     }
     Ok(p)
 }
@@ -289,8 +280,7 @@ pub(super) fn log_tick_input(
     accounts: &[AccountInfo],
     chunk: u16,
 ) -> ProgramResult {
-    let chunk0 = accounts.first().ok_or(ProgramError::NotEnoughAccountKeys)?;
-    let world = world_chunks(program_id, accounts, world_season_id(chunk0)?)?;
+    let world = world_at(program_id, accounts)?;
     let mut meta = world.meta()?;
     if meta.finished {
         return Err(ChainError::WrongStatus.into());
@@ -312,16 +302,13 @@ pub(super) fn log_tick_input(
         // The salts were sealed before the commitments closed and only their
         // officers knew them, so nobody (the crank choosing this slot
         // included) can pick the outcome.
-        let body = world.body(&WORLD_MAGIC)?;
-        let root = hashv(&[&body]).to_bytes();
-        drop(body);
-        meta.vrf = tick_vrf(&root, &p.salts);
+        meta.vrf = tick_vrf(&world.root()?, &p.salts);
         meta.frozen = true;
         meta.input_logged = 0;
-        for ai in p.ais {
-            let mut n: NationAccount = load(&ai.try_borrow_data()?)?;
+        for info in p.infos {
+            let mut n: NationAccount = load(&info.try_borrow_data()?)?;
             n.frozen = true;
-            store(&mut ai.try_borrow_mut_data()?, &n)?;
+            store(&mut info.try_borrow_mut_data()?, &n)?;
         }
     }
     let Pending {
@@ -331,9 +318,7 @@ pub(super) fn log_tick_input(
     // record is in whichever transaction the index keeps (the verifier takes
     // the one whose root is the tick's pre-state root).
     if chunk == 0 {
-        let body = world.body(&WORLD_MAGIC)?;
-        let root = hashv(&[&body]).to_bytes();
-        drop(body);
+        let root = world.root()?;
         let bytes = borsh::to_vec(&salts).map_err(|_| ChainError::Rules)?;
         solana_program::log::sol_log_data(&[b"PS_SALTS", &tick.to_le_bytes(), &root, &bytes]);
     }
@@ -372,8 +357,7 @@ macro_rules! cu {
 
 pub(super) fn resolve_tick(program_id: &Pubkey, accounts: &[AccountInfo], to: u8) -> ProgramResult {
     cu!("cu start");
-    let chunk0 = accounts.first().ok_or(ProgramError::NotEnoughAccountKeys)?;
-    let world = world_chunks(program_id, accounts, world_season_id(chunk0)?)?;
+    let world = world_at(program_id, accounts)?;
     let mut meta = world.meta()?;
     cu!("cu chunks");
     if meta.finished {
@@ -394,7 +378,7 @@ pub(super) fn resolve_tick(program_id: &Pubkey, accounts: &[AccountInfo], to: u8
     // Submissions are refused while frozen, so this is the input PS_INPUT published.
     let Pending {
         input,
-        ais: nation_ais,
+        infos: nation_infos,
         ..
     } = pending_input(program_id, &accounts[WORLD_CHUNKS..], &meta, meta.vrf)?;
     cu!("cu input");
@@ -409,10 +393,10 @@ pub(super) fn resolve_tick(program_id: &Pubkey, accounts: &[AccountInfo], to: u8
     }
     let completed = state.tick != tick;
     if completed {
-        for ai in &nation_ais {
-            let mut n: NationAccount = load(&ai.try_borrow_data()?)?;
+        for info in &nation_infos {
+            let mut n: NationAccount = load(&info.try_borrow_data()?)?;
             open_nation(&mut n, &state, &rules);
-            store(&mut ai.try_borrow_mut_data()?, &n)?;
+            store(&mut info.try_borrow_mut_data()?, &n)?;
         }
         let clock = Clock::get()?;
         meta.deadline = clock.unix_timestamp + meta.tick_seconds as i64;

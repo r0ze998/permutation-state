@@ -6,14 +6,13 @@
 // The batch carries only the digest; the next batches reveal policy, salt
 // and text, and anyone can recompute the digest.
 import { createHash, randomBytes } from 'node:crypto';
+import { fromHex as hexToBytes, toHex } from './bytes.mjs';
 
 export const MAX_POLICY = 64;
 export const MAX_RATIONALE = 512;
 
 const enc = new TextEncoder();
 const sha = (...parts) => { const h = createHash('sha256'); for (const p of parts) h.update(p); return new Uint8Array(h.digest()); };
-const hexToBytes = h => Uint8Array.from(Buffer.from(h, 'hex'));
-const toHex = b => Buffer.from(b).toString('hex');
 
 /** Cut `s` to at most `max` UTF-8 bytes on a character boundary (as the server does). */
 export function clip(s, max) {

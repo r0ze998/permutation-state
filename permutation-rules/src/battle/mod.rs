@@ -127,7 +127,7 @@ pub fn phase_combat(state: &mut WorldState, rules: &Ruleset) {
         capture_civilian(state, attacker, civ, target);
     }
     resolve_city_captures(state, rules, &engagements);
-    resolve_city_state_captures(state, &engagements);
+    resolve_city_state_captures(state, rules, &engagements);
     for (civ, city, origin) in razes {
         if let Err(why) = order_raze(state, civ, city) {
             state.skip(civ, origin, why.code());

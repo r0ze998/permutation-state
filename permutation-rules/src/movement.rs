@@ -8,7 +8,7 @@ use crate::hex::Hex;
 use crate::orders::Order;
 use crate::params::Ruleset;
 use crate::rng::tie_key;
-use crate::state::{CivId, Owner, Relation, Unit, WorldState};
+use crate::state::{CivId, Owner, Unit, WorldState};
 use crate::tick::accepted;
 use crate::units::{stats, UnitType};
 use alloc::collections::{BTreeMap, BinaryHeap};
@@ -16,7 +16,7 @@ use alloc::vec::Vec;
 use core::cmp::Reverse;
 
 pub(crate) fn allied(state: &WorldState, a: CivId, b: CivId) -> bool {
-    a != b && matches!(state.relation(a, b), Relation::Alliance { .. })
+    a != b && state.relation(a, b).is_alliance()
 }
 
 /// Whether `mover` may enter `hex` (terrain, protected zones, borders). Public

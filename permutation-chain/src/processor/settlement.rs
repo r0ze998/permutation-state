@@ -12,11 +12,10 @@ use solana_program::{
 use super::accounts::*;
 use crate::error::ChainError;
 use crate::state::*;
-use crate::token;
 
 pub(super) fn finish_season(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
-    let season_ai = accounts.first().ok_or(ProgramError::NotEnoughAccountKeys)?;
-    let mut season = load_season(program_id, season_ai)?;
+    let season_info = accounts.first().ok_or(ProgramError::NotEnoughAccountKeys)?;
+    let mut season = load_season(program_id, season_info)?;
     if season.status != SeasonStatus::Running {
         return Err(ChainError::WrongStatus.into());
     }
@@ -37,10 +36,10 @@ pub(super) fn finish_season(program_id: &Pubkey, accounts: &[AccountInfo]) -> Pr
         crate::finalize::Roster::None
     } else if season.roster_revealed == season.ai_count && season.roster_acc == season.roster_chain
     {
-        let roster_ai = accounts
+        let roster_info = accounts
             .get(1 + WORLD_CHUNKS)
             .ok_or(ProgramError::NotEnoughAccountKeys)?;
-        roster_account = load_roster(program_id, roster_ai, season.season_id)?;
+        roster_account = load_roster(program_id, roster_info, season.season_id)?;
         crate::finalize::Roster::Revealed(&roster_account.entries)
     } else {
         let ended = world.meta()?.deadline;
@@ -80,7 +79,7 @@ pub(super) fn finish_season(program_id: &Pubkey, accounts: &[AccountInfo]) -> Pr
         &bytes,
     ]);
     season.status = SeasonStatus::Finalized;
-    store(&mut season_ai.try_borrow_mut_data()?, &season)?;
+    store(&mut season_info.try_borrow_mut_data()?, &season)?;
     msg!(
         "PS season {} finalized: pool {} ops {} refund {}",
         season.season_id,
@@ -113,18 +112,18 @@ pub fn claim_amount(season: &Season, member: &MemberAccount) -> u64 {
 pub(super) fn claim(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
     let it = &mut accounts.iter();
     let wallet = next_account_info(it)?;
-    let season_ai = next_account_info(it)?;
-    let member_ai = next_account_info(it)?;
+    let season_info = next_account_info(it)?;
+    let member_info = next_account_info(it)?;
     let vault = next_account_info(it)?;
     let dest = next_account_info(it)?;
     let mint = next_account_info(it)?;
     let token_program = next_account_info(it)?;
     signer(wallet)?;
-    let season = load_season(program_id, season_ai)?;
+    let season = load_season(program_id, season_info)?;
     if season.status != SeasonStatus::Finalized {
         return Err(ChainError::WrongStatus.into());
     }
-    let mut member = load_member(program_id, member_ai, season.season_id)?;
+    let mut member = load_member(program_id, member_info, season.season_id)?;
     if wallet.key.as_ref() != member.wallet {
         return Err(ChainError::Unauthorized.into());
     }
@@ -136,23 +135,10 @@ pub(super) fn claim(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramRes
         return Err(ChainError::NothingToClaim.into());
     }
     check_usdc(program_id, &season, mint, token_program, vault)?;
-    let id = season.season_id.to_le_bytes();
-    let (dmint, downer) =
-        token::token_account_mint_owner(dest).ok_or(ChainError::WrongTokenAccount)?;
-    if dmint != *mint.key || downer != *wallet.key {
-        return Err(ChainError::WrongTokenAccount.into());
-    }
+    check_token_account(dest, mint, Some(wallet.key))?;
     member.claimed = true;
-    store(&mut member_ai.try_borrow_mut_data()?, &member)?;
-    token::transfer_checked(
-        vault,
-        mint,
-        dest,
-        season_ai,
-        amount,
-        season.usdc_decimals,
-        Some(&[SEASON_SEED, &id, &[season.bump]]),
-    )?;
+    store(&mut member_info.try_borrow_mut_data()?, &member)?;
+    pay_from_vault(&season, season_info, vault, mint, dest, amount)?;
     msg!(
         "PS claim season {} member {} amount {}",
         season.season_id,
@@ -165,13 +151,13 @@ pub(super) fn claim(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramRes
 pub(super) fn withdraw_ops(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
     let it = &mut accounts.iter();
     let admin = next_account_info(it)?;
-    let season_ai = next_account_info(it)?;
+    let season_info = next_account_info(it)?;
     let vault = next_account_info(it)?;
     let dest = next_account_info(it)?;
     let mint = next_account_info(it)?;
     let token_program = next_account_info(it)?;
     signer(admin)?;
-    let mut season = load_season(program_id, season_ai)?;
+    let mut season = load_season(program_id, season_info)?;
     if admin.key.as_ref() != season.admin {
         return Err(ChainError::Unauthorized.into());
     }
@@ -179,24 +165,12 @@ pub(super) fn withdraw_ops(program_id: &Pubkey, accounts: &[AccountInfo]) -> Pro
         return Err(ChainError::WrongStatus.into());
     }
     check_usdc(program_id, &season, mint, token_program, vault)?;
-    let id = season.season_id.to_le_bytes();
-    let (dmint, _) = token::token_account_mint_owner(dest).ok_or(ChainError::WrongTokenAccount)?;
-    if dmint != *mint.key {
-        return Err(ChainError::WrongTokenAccount.into());
-    }
+    check_token_account(dest, mint, None)?;
     season.ops_withdrawn = true;
     let amount = season.ops;
-    store(&mut season_ai.try_borrow_mut_data()?, &season)?;
+    store(&mut season_info.try_borrow_mut_data()?, &season)?;
     if amount > 0 {
-        token::transfer_checked(
-            vault,
-            mint,
-            dest,
-            season_ai,
-            amount,
-            season.usdc_decimals,
-            Some(&[SEASON_SEED, &id, &[season.bump]]),
-        )?;
+        pay_from_vault(&season, season_info, vault, mint, dest, amount)?;
     }
     msg!("PS operations share {} withdrawn", amount);
     Ok(())

@@ -18,8 +18,9 @@
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { PublicKey } from '@solana/web3.js';
-import { ChainClient } from '../client/src/chain.mjs';
-import { chainError, decodeNationHeader, decodeSeason, decodeWorldHeader, MAGIC, MAX_NATIONS, NATION_TARGET, roleIndex, WORLD_CHUNKS } from '../client/src/codec.mjs';
+import { fromHex, jsonSafe, toHex } from '../client/src/bytes.mjs';
+import { ChainClient, readSeason } from '../client/src/chain.mjs';
+import { chainError, decodeNationHeader, decodeWorldHeader, MAGIC, MAX_NATIONS, NATION_TARGET, roleIndex, ROLES, WORLD_CHUNKS } from '../client/src/codec.mjs';
 import { LOCAL_DIR, namedKey } from './config.mjs';
 import { aiMembers, startAndDelegate } from './season.mjs';
 import { TalkBook } from './talk.mjs';
@@ -39,8 +40,6 @@ export const SPONSORED_COMMITS = 10;
 export const INTENT_GROUP = 3;
 /** Targets one `CommitPart`/`UndelegatePart` may name (the program's limit). */
 export const MAX_INTENT_TARGETS = WORLD_CHUNKS + MAX_NATIONS;
-/** Offices per nation. */
-const OFFICES = 4;
 
 /**
  * The season's accounts in small intents, for commits and undelegation.
@@ -92,6 +91,17 @@ export function nextStep({ meta, openTick, committed, revealed, now, delegatedAt
 export const commitDue = ({ open, commitEvery, commits = 0 }) =>
   commitEvery > 0 && (open + 1) % commitEvery === 0 && commits < SPONSORED_COMMITS - 1;
 
+/** Operator AI members revealed per `RevealRoster` transaction (a member account each). */
+export const ROSTER_BATCH = 8;
+
+/**
+ * A `PS_HISTORY` record as kept in the state file, which is JSON: u64s as
+ * decimal strings, bytes as hex.
+ */
+export function historyEntry(h, signature) {
+  return JSON.parse(JSON.stringify({ prevHistoryRoot: h.prevHistoryRoot, historyRoot: h.historyRoot, record: h.record, signature }, jsonSafe));
+}
+
 export class Crank {
   /**
    * @param {object} o
@@ -119,9 +129,7 @@ export class Crank {
 
   get state() { return this.store.state; }
 
-  async season() {
-    return decodeSeason((await this.base.getAccountInfo(this.chain.season, 'confirmed')).data);
-  }
+  season() { return readSeason(this.base, this.chain); }
 
   /** Nations of the season, as its account says (read once). */
   async nationCount() {
@@ -198,29 +206,45 @@ export class Crank {
     const step = nextStep({ meta, openTick: open, committed, revealed, now: Date.now(), delegatedAt: this.state.delegatedAt, tickSeconds: this.cfg.tickSeconds });
     if (meta.revealing && !meta.frozen) await this.revealHosted(open, nations, snap.nations);
     if (!step) return;
-    if (step === 'close') {
-      try {
-        const r = await send(this.er, this.chain.closeCommits({ nations }), [this.crank], `close tick ${open} commitments`);
-        this.closed = { tick: open, signature: r.signature };
-        // Reveal at once: the window is a few seconds, and the commitments
-        // in this snapshot are the ones the close just sealed.
-        await this.revealHosted(open, nations, snap.nations);
-        return;
-      } catch (e) {
-        const code = chainError(e.message);
-        if (code === 'TooEarly') { this.retryAt = Date.now() + 500; return; } // the ER clock has not reached the deadline yet
-        if (code !== 'WrongPhase') throw e; // someone else closed it: go on from the next snapshot
-      }
-      this.retryAt = Date.now() + 300; // let the close land before revealing
-      return;
+    if (step === 'close') return this.closeTick(open, nations, snap);
+    if (!(await this.publishAndResolve(open, nations, { committed, revealed }))) return;
+    if ((this.state.talk ?? []).some(m => !m.anchored)) {
+      await this.anchorTalk(open + 1).catch(e => this.log(`talk anchor: ${e.message}`));
     }
+    await this.maybeCommit(open, nations);
+  }
+
+  /** Close the open tick's commitments (`CloseCommits`) and reveal the hosted members' batches at once. */
+  async closeTick(open, nations, snap) {
+    try {
+      const r = await send(this.er, this.chain.closeCommits({ nations }), [this.crank], `close tick ${open} commitments`);
+      this.closed = { tick: open, signature: r.signature };
+      // Reveal at once: the window is a few seconds, and the commitments
+      // in this snapshot are the ones the close just sealed.
+      await this.revealHosted(open, nations, snap.nations);
+      return;
+    } catch (e) {
+      const code = chainError(e.message);
+      if (code === 'TooEarly') { this.retryAt = Date.now() + 500; return; } // the ER clock has not reached the deadline yet
+      if (code !== 'WrongPhase') throw e; // someone else closed it: go on from the next snapshot
+    }
+    this.retryAt = Date.now() + 300; // let the close land before revealing
+  }
+
+  /**
+   * Publish the open tick's input, resolve it (in parts) and archive every
+   * part. `seals` = {committed, revealed} of the snapshot. Returns whether
+   * the tick was resolved (false: the reveal window is still open on the
+   * ER's clock; try again shortly).
+   */
+  async publishAndResolve(open, nations, { committed, revealed }) {
     // Publish the tick's input on chain first (PS_INPUT chunks; chunk 0
     // freezes it): the program resolves only a published input.
     let published;
     try {
       published = await this.publishInput(open, nations);
     } catch (e) {
-      if (chainError(e.message) === 'TooEarly') { this.retryAt = Date.now() + 500; return; } // the reveal window is still open on the ER's clock
+      if (chainError(e.message) === 'TooEarly') { this.retryAt = Date.now() + 500; return false; } // the reveal window is still open on the ER's clock
       throw e;
     }
     const commitSignature = this.closed?.tick === open ? this.closed.signature : await this.findClose(open);
@@ -235,18 +259,19 @@ export class Crank {
       onPart: r => appendTickLines(this.tickFile, tickLinesOf(r, published, seals)),
     });
     this.sealed.dropBefore(open + 1);
-    this.log(`tick ${open} resolved on ER (${revealed}/${committed} sealed batches revealed, ${OFFICES * nations} offices, ${parts.map(r => r.cu).join(' + ')} CU)`);
-    if ((this.state.talk ?? []).some(m => !m.anchored)) {
-      await this.anchorTalk(open + 1).catch(e => this.log(`talk anchor: ${e.message}`));
+    this.log(`tick ${open} resolved on ER (${revealed}/${committed} sealed batches revealed, ${ROLES.length * nations} offices, ${parts.map(r => r.cu).join(' + ')} CU)`);
+    return true;
+  }
+
+  /** After resolving tick `open`: every `commitEvery` ticks, request an ER→base commit in small intents. */
+  async maybeCommit(open, nations) {
+    if (!commitDue({ open, commitEvery: this.cfg.commitEvery, commits: this.state.commits })) return;
+    for (const group of intentGroups({ nations })) {
+      await send(this.er, this.chain.commitPart({ payer: this.crank.publicKey, targets: group }), [this.crank], `commit ${group.join(',')}`);
     }
-    if (commitDue({ open, commitEvery: this.cfg.commitEvery, commits: this.state.commits })) {
-      for (const group of intentGroups({ nations })) {
-        await send(this.er, this.chain.commitPart({ payer: this.crank.publicKey, targets: group }), [this.crank], `commit ${group.join(',')}`);
-      }
-      this.state.commits = (this.state.commits ?? 0) + 1;
-      this.store.save();
-      this.log(`requested an ER→base commit at tick ${open + 1} (the ER validator settles it on base)`);
-    }
+    this.state.commits = (this.state.commits ?? 0) + 1;
+    this.store.save();
+    this.log(`requested an ER→base commit at tick ${open + 1} (the ER validator settles it on base)`);
   }
 
   /**
@@ -259,7 +284,7 @@ export class Crank {
     // Only the kept batches whose commitment is the one on chain.
     const due = this.sealed.forTick(tick).filter(b => {
       const h = headers[b.civ], i = roleIndex(b.role);
-      return h && h.submitted[i] !== tick && h.committed[i] === tick && Buffer.from(h.commits[i]).toString('hex') === b.commitment;
+      return h && h.submitted[i] !== tick && h.committed[i] === tick && toHex(h.commits[i]) === b.commitment;
     });
     // All at once: the window is a few seconds and each reveal is a round
     // trip (~0.4 s to a public ER), so one after another the last nations
@@ -360,7 +385,7 @@ export class Crank {
     const ais = aiMembers(this.state);
     for (let i = from; i < ais.length; i += ROSTER_BATCH) {
       const group = ais.slice(i, i + ROSTER_BATCH);
-      await send(this.base, this.chain.revealRoster({ members: group.map(m => new PublicKey(m.wallet)), salts: group.map(m => Uint8Array.from(Buffer.from(m.salt, 'hex'))) }),
+      await send(this.base, this.chain.revealRoster({ members: group.map(m => new PublicKey(m.wallet)), salts: group.map(m => fromHex(m.salt)) }),
         [this.crank], `reveal roster ${i}..${i + group.length - 1}`);
     }
     this.log(`operator AI roster revealed: ${ais.length} members (${ais.map(m => m.index).join(', ')})`);
@@ -375,20 +400,10 @@ export class Crank {
     for (const [tick, messages] of book.pending(open)) {
       const root = TalkBook.root(messages);
       const r = await send(this.er, this.chain.anchorTalk({ crank: this.crank.publicKey, tick, count: messages.length, root }), [this.crank], `anchor tick ${tick} talk`);
-      for (const m of messages) m.anchored = { signature: r.signature, root: Buffer.from(root).toString('hex') };
+      for (const m of messages) m.anchored = { signature: r.signature, root: toHex(root) };
+      // Saved per tick: a later tick failing must not lose this one's
+      // anchor (it would be anchored twice, with two PS_TALK roots).
+      this.store.save();
     }
-    this.store.save();
   }
-}
-
-/** Operator AI members revealed per `RevealRoster` transaction (a member account each). */
-export const ROSTER_BATCH = 8;
-
-/**
- * A `PS_HISTORY` record as kept in the state file, which is JSON: u64s as
- * decimal strings, bytes as hex.
- */
-export function historyEntry(h, signature) {
-  const json = v => JSON.parse(JSON.stringify(v, (_, x) => (typeof x === 'bigint' ? x.toString() : x instanceof Uint8Array ? Buffer.from(x).toString('hex') : x)));
-  return json({ prevHistoryRoot: h.prevHistoryRoot, historyRoot: h.historyRoot, record: h.record, signature });
 }

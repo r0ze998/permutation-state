@@ -1,6 +1,6 @@
 //! Chain mode: the world comes from the on-chain program (through the local
 //! gateway), and orders go back to it. The server keeps doing what only it
-//! can do off chain — fog, previews, the decision ledger, bots — on the exact
+//! can do off chain — previews, the decision ledger, bots — on the exact
 //! bytes the program stores.
 //!
 //! The gateway is a local HTTP service (permutation-gateway); this is a
@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use borsh::BorshDeserialize;
 use permutation_rules::state::WorldState;
-use permutation_rules::tick::TickInput;
+use permutation_rules::tick::{TickInput, PHASE_COUNT};
 use serde_json::Value;
 
 pub use permutation_chain::state::WorldMeta;
@@ -265,12 +265,14 @@ impl ChainLink {
     }
 
     /// The input the program resolved `tick` with (every office's batch and
-    /// every governance action), from the PS_TICK record.
+    /// every governance action), from the PS_TICK record that completed it.
     pub fn resolved_input(&self, tick: u16) -> Result<Option<(TickInput, Value)>, String> {
         let v = self.get_json(&format!("/ticks?from={tick}"))?;
         let Some(rec) = v["records"].as_array().and_then(|r| {
-            r.iter()
-                .find(|x| x["tick"].as_u64() == Some(tick as u64) && x["to"].as_u64() == Some(12))
+            r.iter().find(|x| {
+                x["tick"].as_u64() == Some(tick as u64)
+                    && x["to"].as_u64() == Some(PHASE_COUNT as u64)
+            })
         }) else {
             return Ok(None);
         };

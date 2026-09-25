@@ -17,7 +17,7 @@ import { toggleChain } from './chain.mjs';
 import { pickCiv, pickStand, join, claim, startSeason } from './lobby.mjs';
 import { offerContract } from './drawers/diplomacy.mjs';
 import { sendTalk } from './drawers/talk.mjs';
-import { poll } from './app.mjs';
+import { poll } from './sync.mjs';
 
 // ================================================================== click registry
 // [data attribute (dataset key), handler(value, element, event)] — the element

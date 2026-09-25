@@ -72,7 +72,7 @@ pub fn resolve_tick(
 /// | 6 | Production and growth | `tick::production` |
 /// | 7 | Upkeep | `tick::society` |
 /// | 8 | Society: war weariness, loyalty, grievance decay, city regeneration | `tick::society` |
-/// | 9 | Neutral actors: city-state growth and suzerainty cycle (the Crisis is not implemented, spec v0.2 §12.2) | `tick::society` |
+/// | 9 | Neutral actors: city-state growth, suzerainty cycle, the crisis on the leaders (V5 §17.3) | `tick::society` |
 /// | 10 | Milestones, eras, office banks, merit | `tick::milestones` |
 /// | 11 | Commit: budgets, elections and recalls, event chain | here |
 pub fn run_phase(
@@ -148,10 +148,7 @@ fn record_pacts(state: &mut WorldState) {
     let n = state.civs.len() as CivId;
     for a in 0..n {
         for b in a + 1..n {
-            if matches!(
-                state.relation(a, b),
-                crate::state::Relation::Nap { .. } | crate::state::Relation::Alliance { .. }
-            ) {
+            if state.relation(a, b).is_pact() {
                 let i = state.pair_index(a, b);
                 state.pact_last[i] = Some(state.tick);
             }

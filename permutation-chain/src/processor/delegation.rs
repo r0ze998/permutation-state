@@ -28,7 +28,7 @@ pub(super) fn delegate(
     let it = &mut accounts.iter();
     let authority = next_account_info(it)?;
     let system = next_account_info(it)?;
-    let season_ai = next_account_info(it)?;
+    let season_info = next_account_info(it)?;
     let pda = next_account_info(it)?;
     let owner_program = next_account_info(it)?;
     let buffer = next_account_info(it)?;
@@ -37,7 +37,7 @@ pub(super) fn delegate(
     let delegation_program = next_account_info(it)?;
     let validator = it.next();
     signer(authority)?;
-    let season = load_season(program_id, season_ai)?;
+    let season = load_season(program_id, season_info)?;
     require_operator(&season, authority)?;
     if season.status != SeasonStatus::Running {
         return Err(ChainError::WrongStatus.into());
@@ -132,8 +132,7 @@ pub(super) fn commit(
     if magic_program.key != &MAGIC_PROGRAM_ID || magic_context.key != &MAGIC_CONTEXT_ID {
         return Err(ChainError::WrongMagicProgram.into());
     }
-    let chunk0 = accounts.get(3).ok_or(ProgramError::NotEnoughAccountKeys)?;
-    let world = world_chunks(program_id, &accounts[3..], world_season_id(chunk0)?)?;
+    let world = world_at(program_id, &accounts[3..])?;
     let meta = world.meta()?;
     if undelegate && !meta.finished {
         return Err(ChainError::SeasonNotOver.into());
@@ -141,9 +140,9 @@ pub(super) fn commit(
     let it = &mut accounts[3 + WORLD_CHUNKS..].iter();
     let mut list: Vec<AccountInfo> = world.accounts.to_vec();
     for civ in 0..meta.civs as u16 {
-        let ai = next_account_info(it)?;
-        load_nation(program_id, ai, meta.season_id, civ)?;
-        list.push(ai.clone());
+        let info = next_account_info(it)?;
+        load_nation(program_id, info, meta.season_id, civ)?;
+        list.push(info.clone());
     }
     if !undelegate {
         require_crank(program_id, &list[WORLD_CHUNKS], meta.season_id, payer)?;
@@ -207,20 +206,20 @@ pub(super) fn commit_part(
             list.push(chunk0.clone());
             continue;
         }
-        let ai = next_account_info(it)?;
+        let info = next_account_info(it)?;
         if (t as usize) < WORLD_CHUNKS {
-            if ai.owner != program_id {
+            if info.owner != program_id {
                 return Err(ChainError::WrongWorld.into());
             }
-            expect_pda(program_id, ai, &[WORLD_SEED, &id, &[t as u8]])?;
+            expect_pda(program_id, info, &[WORLD_SEED, &id, &[t as u8]])?;
         } else {
             let civ = t
                 .checked_sub(NATION_TARGET)
                 .filter(|c| *c < meta.civs as u16)
                 .ok_or(ChainError::InvalidParams)?;
-            load_nation(program_id, ai, season_id, civ)?;
+            load_nation(program_id, info, season_id, civ)?;
         }
-        list.push(ai.clone());
+        list.push(info.clone());
     }
     let builder =
         MagicIntentBundleBuilder::new(payer.clone(), magic_context.clone(), magic_program.clone());

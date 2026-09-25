@@ -14,8 +14,8 @@
 // solana-test-validator with the program loaded (`--bpf-program`).
 import { createHash, randomBytes } from 'node:crypto';
 import { Connection } from '@solana/web3.js';
-import { ChainClient } from '../client/src/chain.mjs';
-import { chainError, decodeNationHeader, decodeSeason, decodeWorldHeader, NOBODY, orderCommitment, ROLES } from '../client/src/codec.mjs';
+import { ChainClient, readSeason } from '../client/src/chain.mjs';
+import { chainError, decodeNationHeader, decodeWorldHeader, NOBODY, orderCommitment, ROLES } from '../client/src/codec.mjs';
 import { createStateStore, loadConfig, namedKey, parseArgs } from '../src/config.mjs';
 import { bootstrap, defaultRoster, memberKeyName, startAndDelegate } from '../src/season.mjs';
 import { send } from '../src/send.mjs';
@@ -35,8 +35,7 @@ await bootstrap({ base, cfg, store, roster: defaultRoster({ humans: 0, ai: 2 }),
 const state = await startAndDelegate({ base, er: null, cfg, store, log, delegate: false });
 const chain = new ChainClient(cfg.programId, BigInt(state.seasonId));
 const crank = namedKey('crank');
-const readSeason = async () => decodeSeason((await base.getAccountInfo(chain.season, 'confirmed')).data);
-const nations = (await readSeason()).nations;
+const nations = (await readSeason(base, chain)).nations;
 const sessionOf = new Map(state.members.map(m => [m.index, namedKey(memberKeyName(m, 'session'))]));
 
 const cus = [];
@@ -80,11 +79,11 @@ for (;;) {
 const avg = cus.reduce((a, b) => a + b, 0) / cus.length;
 log(`${cus.length} ticks on base: ${Math.round(avg)} CU per tick on average, ${Math.max(...cus)} at most`);
 
-let s = await readSeason();
+let s = await readSeason(base, chain);
 const header = decodeWorldHeader(Buffer.concat((await base.getMultipleAccountsInfo(chain.worldChunks, 'confirmed')).map(a => a.data)));
 if (header.meta.finished && s.status === 'Running') {
   await send(base, chain.finishSeason(), [crank], 'finishSeason');
-  s = await readSeason();
+  s = await readSeason(base, chain);
   const paid = s.payouts.reduce((a, b) => a + b, 0n);
   const vault = await tokenBalance(base, chain.vault);
   const refunds = s.treasuryFinal.reduce((a, b) => a + b, 0n);

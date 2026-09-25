@@ -1,7 +1,7 @@
 //! Decision ledger: observations, commitments and reveals (§4.3, §7.5).
 //!
 //! At every tick opening the server records each civ's observation (the
-//! Merkle leaves of its belief state). Each office's batch then carries
+//! Merkle leaves of what it decides from: the full state, `fog`). Each office's batch then carries
 //! `decision_digest(tick, obs_root, policy_id, rationale_hash)`; after the
 //! tick resolves the rationale is revealed with a `RevealRationale` order in
 //! the same office's batch, so anyone can check it against the commitment in

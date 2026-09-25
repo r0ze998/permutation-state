@@ -3,9 +3,9 @@
 // they are known — how many, their bounty, and those whose home city fell.
 import * as T from '../i18n.mjs';
 import * as api from '../api.mjs';
-import { $, html } from '../util.mjs';
+import { $, html, usdcFixed } from '../util.mjs';
 import { S, civN, invalidate } from '../state.mjs';
-import { poll } from '../app.mjs';
+import { poll } from '../sync.mjs';
 
 const nameOf = id => (S.view.members || []).find(m => m.id === id)?.name ?? `国民${id}`;
 const toText = to => (to?.civ != null ? `${civN(to.civ)}へ` : to?.member != null ? `${nameOf(to.member)}へ` : '全員へ');
@@ -32,6 +32,6 @@ export function drawerTalk() {
     <div class="section-title">メッセージ ${msgs.length}</div>
     ${msgs.length ? msgs.slice(0, 60).map(m => html`<div class="proposal"><div><b>${nameOf(m.member)}</b>（${civN((v.members || []).find(x => x.id === m.member)?.civ)}） ${toText(m.to)}</div><div>${m.text}</div><div class="when">ティック${m.tick}${m.anchored ? ' · チェーンに記録済み' : ''}</div></div>`) : html`<p class="desc">まだありません。</p>`}
     <div class="section-title">運営のAI国民と懸賞金</div>
-    <p class="desc">このシーズンには運営のAI国民が <b>${r.aiCount}人</b> 混ざっています。誰かは遊んでいる間は分かりません。それぞれ自国のどこかの都市に住んでいて（ティック${r.homeTick ?? 45}に決まる）、その都市を最初に落とした国に懸賞金 <b>${(Number(r.bountyEach || 0) / 1e6).toFixed(2)} USDC</b> が入ります（直前10ティック以内に条約があった相手からは出ません）。AI国民の取り分は、同じ国の人に配り直されます。</p>
+    <p class="desc">このシーズンには運営のAI国民が <b>${r.aiCount}人</b> 混ざっています。誰かは遊んでいる間は分かりません。それぞれ自国のどこかの都市に住んでいて（ティック${r.homeTick ?? 45}に決まる）、その都市を最初に落とした国に懸賞金 <b>${usdcFixed(r.bountyEach || 0)} USDC</b> が入ります（直前10ティック以内に条約があった相手からは出ません）。AI国民の取り分は、同じ国の人に配り直されます。</p>
     ${(r.fallen || []).length ? r.fallen.map(f => html`<div class="proposal"><div><b>${f.name}</b>（${civN(f.civ)}）${f.home != null ? `：${T.cityName(f.home)}を${civN(f.captor)}がティック${f.tick}に落とした${f.bounty ? '（懸賞金あり）' : '（条約のため懸賞金なし）'}` : '：シーズン終了で公開'}</div><div class="when">salt ${String(f.salt).slice(0, 16)}… · 登録時の tag と照らし合わせて誰でも確かめられます</div></div>`) : html`<p class="desc">まだ落ちた住まいはありません。</p>`}`;
 }

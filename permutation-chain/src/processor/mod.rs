@@ -5,11 +5,12 @@
 //! | `registration` | base | CreateSeason, AllocWorld, AllocNation, Register, UpdateMember |
 //! | `genesis` | base | StartSeason, GenesisStep, SeatMembers, OpenGovernment |
 //! | `delegation` | base / ER | Delegate, the undelegation callback, Commit, CommitAndUndelegate, CommitPart, UndelegatePart |
-//! | `play` | ER | SubmitOrders, SubmitGov, LogTickInput, ResolveTick |
+//! | `play` | ER | CommitOrders, CloseCommits, RevealOrders, SubmitGov, LogTickInput, ResolveTick |
 //! | `roster` | base / ER | RevealRoster, AnchorTalk |
 //! | `settlement` | base | FinishSeason, Claim, WithdrawOps |
 //!
-//! `accounts` holds the checks and loaders they share.
+//! `accounts` holds the checks and loaders they share. `SubmitOrders`
+//! (plain orders, before commit–reveal) is retired and always refused.
 
 use borsh::BorshDeserialize;
 use solana_program::{account_info::AccountInfo, entrypoint::ProgramResult, pubkey::Pubkey};

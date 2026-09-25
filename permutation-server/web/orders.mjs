@@ -3,10 +3,10 @@
 // offices become proposals (献策) to their officers (V5 §5.4).
 import * as T from './i18n.mjs';
 import * as api from './api.mjs';
-import { $, toast, usdc } from './util.mjs';
+import { $, toast, usdc, usdcFixed } from './util.mjs';
 import { S, civN, held, spendable, unitById, cityById, isWatching, invalidate } from './state.mjs';
 import { map, keyOf, key } from './world.mjs';
-import { poll } from './app.mjs';
+import { poll } from './sync.mjs';
 
 // ================================================================== costs and offices
 const FREE = new Set(['ExchangeOrder', 'RevealRationale', 'ConsentWar', 'ConsentSpend']);
@@ -81,7 +81,7 @@ export function describeOrder(dto) {
     case 'LeaveAlliance': return { dto, glyph: '⚭', label: '同盟から離脱' };
     case 'SendEnvoy': return { dto, glyph: '✉', label: `都市国家${dto.cityState + 1}に使節（影響力${dto.influence}）`, focus: keyOf(S.view.cityStates.find(c => c.id === dto.cityState)) };
     case 'MarketTrade': return { dto, glyph: '⇄', label: `金の市場：${T.goodName(dto.good)}を${dto.amount}${dto.side === 'Buy' ? '購入' : '売却'}` };
-    case 'ExchangeOrder': return { dto, glyph: '$', usdc: true, label: `USDC取引所：${T.goodName(dto.good)}${dto.amount}を${dto.side === 'Buy' ? '買い' : '売り'} @${(dto.price / 1e6).toFixed(2)}` };
+    case 'ExchangeOrder': return { dto, glyph: '$', usdc: true, label: `USDC取引所：${T.goodName(dto.good)}${dto.amount}を${dto.side === 'Buy' ? '買い' : '売り'} @${usdcFixed(dto.price)}` };
     case 'Raze': return { dto, glyph: '✕', label: `${T.cityName(dto.city)}を破壊` };
     case 'ConsentWar': return { dto, glyph: '⚖', label: `${civN(dto.civ)}への宣戦に同意` };
     case 'ConsentSpend': return { dto, glyph: '⚖', label: `国庫から${usdc(dto.usdc)} USDCまでの支出に同意` };

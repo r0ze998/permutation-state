@@ -144,7 +144,7 @@ impl Game {
     pub fn state_json(&self, viewer: Viewer) -> Value {
         let civ = self.civ_of(viewer);
         let belief = civ.map(|c| self.fog.belief(&self.state, c));
-        let s = belief.as_ref().unwrap_or(&self.state);
+        let s = belief.as_deref().unwrap_or(&self.state);
         let mut v = api::world_view(s, &self.rules, civ, &self.fog);
         // Perfect information: the whole chronicle is public (research too:
         // it is on chain).

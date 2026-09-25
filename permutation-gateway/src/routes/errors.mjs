@@ -2,6 +2,7 @@
 // program errors are mapped by class (a late submission is 409 so clients
 // retry next tick, a refused signer 403, a bad request 400); anything else
 // (RPC trouble, a confirmation that timed out) is 500.
+import { readSeason } from '../../client/src/chain.mjs';
 import { chainError } from '../../client/src/codec.mjs';
 
 /** A failure a route reports on purpose: HTTP status, message, machine-readable code. */
@@ -43,4 +44,14 @@ export function errorResponse(e) {
     body: { error: code ? `${code}: ${e.message}` : e.message, code, logs: e.logs?.slice(-6) },
     log: !(code === 'TickFrozen' || code === 'WrongTick'),
   };
+}
+
+/** The season account for a route: a missing one is a 503 (the world is not there), not a crash. */
+export async function routeSeason({ base, chain }) {
+  try {
+    return await readSeason(base, chain);
+  } catch (e) {
+    if (e.code === 'SeasonNotFound') throw new RouteError(503, e.message, 'WorldUnavailable');
+    throw e;
+  }
 }

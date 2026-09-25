@@ -12,6 +12,7 @@
 import { copyFileSync, existsSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Connection } from '@solana/web3.js';
+import { toHex as hex } from '../client/src/bytes.mjs';
 import { ChainClient } from '../client/src/chain.mjs';
 import { createStateStore, LOCAL_DIR, loadConfig } from '../src/config.mjs';
 import { records } from '../src/send.mjs';
@@ -23,7 +24,6 @@ if (!state) throw new Error(`no season state in ${cfg.stateFile}`);
 const er = new Connection(cfg.erRpc, 'confirmed');
 const chain = new ChainClient(cfg.programId, BigInt(state.seasonId));
 const world = chain.worldChunks[0];
-const hex = b => Buffer.from(b).toString('hex');
 const file = path.join(LOCAL_DIR, 'ticks', `${state.seasonId}.jsonl`);
 
 // Newest first, 1000 per page, until the history is exhausted.

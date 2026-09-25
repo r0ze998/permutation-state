@@ -116,31 +116,11 @@ fn found_city(
         None => (None, 0),
     };
     state.cities.push(crate::state::City {
-        id,
-        owner: Some(civ),
-        founder: civ,
-        founded_tick: state.tick,
-        hex,
-        pop: 1,
-        food: 0,
-        prod: 0,
-        buildings: Default::default(),
-        loyalty: 100,
-        defense: (rules.city_defense_base + 1) * 1000,
-        attacked_this_tick: false,
-        focus: crate::state::Focus::Balanced,
-        queue: Vec::new(),
         queue_credit: credit,
         steward_credit: credit,
-        captured_tick: None,
-        captured_from: None,
-        capture_scores: false,
-        razing: None,
         heritage_until,
         heritage_bonus,
-        standing: crate::state::CityStanding::DEFAULT,
-        alive: true,
-        first_conquest: None,
+        ..crate::state::City::founded(id, civ, hex, state.tick, rules)
     });
     if let Some(t) = state.map.tile_mut(hex) {
         t.owner_city = Some(id); // the centre always belongs to the new city

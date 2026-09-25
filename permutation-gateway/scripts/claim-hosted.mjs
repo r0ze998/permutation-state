@@ -4,8 +4,8 @@
 //
 //   node scripts/claim-hosted.mjs [--state season.json]
 import { Connection, PublicKey } from '@solana/web3.js';
-import { ChainClient } from '../client/src/chain.mjs';
-import { claimParts, decodeMember, decodeSeason, NATIONS } from '../client/src/codec.mjs';
+import { ChainClient, readSeason } from '../client/src/chain.mjs';
+import { claimParts, decodeMember, NATIONS } from '../client/src/codec.mjs';
 import { createStateStore, loadConfig, namedKey } from '../src/config.mjs';
 import { memberKeyName } from '../src/season.mjs';
 import { send } from '../src/send.mjs';
@@ -19,7 +19,7 @@ const chain = new ChainClient(cfg.programId, BigInt(state.seasonId));
 const crank = namedKey('crank');
 const admin = namedKey('admin');
 const usdc = x => (Number(x) / 1e6).toFixed(2);
-const read = async () => decodeSeason((await base.getAccountInfo(chain.season, 'confirmed')).data);
+const read = () => readSeason(base, chain);
 
 const s = await read();
 if (s.status !== 'Finalized') { console.error(`season ${state.seasonId} is ${s.status}, not Finalized`); process.exit(1); }

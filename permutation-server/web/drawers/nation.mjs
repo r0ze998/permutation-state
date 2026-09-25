@@ -6,7 +6,7 @@ import { html, attrJson, toast } from '../util.mjs';
 import { S, civN, held, invalidate } from '../state.mjs';
 import { describeOrder } from '../orders.mjs';
 import { MAX_OFFICES, RECALL_ACTIVE_TICKS, RECALL_TICKS, activityWindows, recallNeeded } from '../rules.mjs';
-import { poll } from '../app.mjs';
+import { poll } from '../sync.mjs';
 
 /** A member's name with AI / attestation badges; nobody = the acting official. */
 const who = m => (m ? html`${m.name}${m.kind === 'agent' ? html` <span class="badge agent">AI</span>` : ''}${m.attested ? html` <span class="badge agent" title="登録の証明あり（ERC-8004 など）">証明済みAI</span>` : ''}` : html`<span class="meta">代行（AI）</span>`);

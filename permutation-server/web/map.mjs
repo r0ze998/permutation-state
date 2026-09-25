@@ -163,8 +163,6 @@ export class WorldMap {
     this.dirty = true;
   }
   owner(tile) { const c = this.view?.owners?.[tile.index]; return c && c !== '.' ? parseInt(c, 36) : null; }
-  /** '0' never seen · '1' remembered · '2' in sight (server fog, §7.4). */
-  fogAt(tile) { return this.view?.fog?.[tile.index] ?? '2'; }
   setView(view, me) {
     const now = performance.now();
     const prevUnits = new Map((this.view?.units || []).map(u => [u.id, u]));
@@ -282,38 +280,6 @@ export class WorldMap {
     for (const t of tiles) this._drawLens(ctx, t);
     for (const t of tiles) this._drawBorders(ctx, t);
     ctx.restore();
-    this._drawFog(ctx, tiles);
-  }
-
-  // ---------------------------------------------------------------- fog of war
-  // Drawn as one soft layer: parchment where nothing was ever seen (terrain is
-  // public, so it shows faintly), a cool veil where the map is only remembered.
-  _drawFog(ctx, tiles) {
-    if (!this.view?.fog) return;
-    const fog = this.fogCanvas ||= document.createElement('canvas');
-    if (fog.width !== this.cache.width || fog.height !== this.cache.height) { fog.width = this.cache.width; fog.height = this.cache.height; }
-    const f = fog.getContext('2d');
-    f.setTransform(1, 0, 0, 1, 0, 0); f.clearRect(0, 0, fog.width, fog.height);
-    f.setTransform(this.dpr, 0, 0, this.dpr, 0, 0); f.translate(this.offset.x, this.offset.y); f.scale(this.zoom, this.zoom);
-    for (const [code, color] of [['0', 'rgba(236,229,208,.86)'], ['1', 'rgba(196,203,194,.52)']]) {
-      f.beginPath();
-      for (const t of tiles) {
-        if (this.fogAt(t) !== code) continue;
-        const p = project(t.q, t.r); const pts = hexPoints(p.x, p.y, -1.5);
-        pts.forEach(([x, y], i) => i ? f.lineTo(x, y) : f.moveTo(x, y)); f.closePath();
-      }
-      f.fillStyle = color; f.fill(); // one fill = union, no double-dark seams
-    }
-    // Faint survey hatching on uncharted land.
-    f.save(); f.beginPath();
-    for (const t of tiles) { if (this.fogAt(t) !== '0') continue; const p = project(t.q, t.r); hexPoints(p.x, p.y, -1.5).forEach(([x, y], i) => i ? f.lineTo(x, y) : f.moveTo(x, y)); f.closePath(); }
-    f.clip(); f.strokeStyle = 'rgba(150,132,96,.10)'; f.lineWidth = 1 / this.zoom; f.beginPath();
-    const vp = this.viewport();
-    for (let x = vp.x0 - vp.y1; x < vp.x1; x += 14) { f.moveTo(x, vp.y0); f.lineTo(x + (vp.y1 - vp.y0), vp.y1); }
-    f.stroke(); f.restore();
-    ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.filter = `blur(${Math.max(2, 5 * this.zoom * this.dpr)}px)`; ctx.drawImage(fog, 0, 0);
-    ctx.filter = 'none'; ctx.restore();
   }
 
   // ---------------------------------------------------------------- terrain (prototype art)
@@ -499,9 +465,7 @@ export class WorldMap {
     for (const { c, cs } of sites) {
       const t = this.tiles.get(key(c.q, c.r)); if (!t || !this._visible(t)) continue;
       const p = project(c.q, c.r);
-      ctx.globalAlpha = c.seenTick !== null && c.seenTick !== undefined ? .62 : 1; // last known, not live
       if (cs) this._cityState(ctx, p.x, p.y, c); else this._city(ctx, p.x, p.y, c);
-      ctx.globalAlpha = 1;
     }
   }
   _city(ctx, x, y, c) {
@@ -694,7 +658,7 @@ export class WorldMap {
     for (const [id, selected] of [[this.hover, false], [this.selection, true]]) {
       if (!id || (!selected && id === this.selection)) continue;
       const t = this.tiles.get(id); if (!t) continue; const p = project(t.q, t.r);
-      // Dark casing first so the gold ring reads on parchment fog as well as on terrain.
+      // Dark casing first so the gold ring reads on parchment as well as on terrain.
       polygon(ctx, hexPoints(p.x, p.y, 2.5), null, 'rgba(40,52,46,.45)', (selected ? 4.6 : 3) / this.zoom);
       polygon(ctx, hexPoints(p.x, p.y, 2.5), selected ? 'rgba(249,220,139,.10)' : 'rgba(255,252,225,.10)', selected ? '#ffedb0' : 'rgba(255,248,217,.7)', (selected ? 2.4 : 1.4) / this.zoom);
       if (selected) { ctx.save(); ctx.shadowBlur = 8; ctx.shadowColor = 'rgba(221,190,112,.35)'; for (const [x, y] of hexPoints(p.x, p.y, 0)) { ctx.fillStyle = '#ffedb0'; ctx.beginPath(); ctx.arc(x, y, 2.3 / this.zoom, 0, Math.PI * 2); ctx.fill(); } ctx.restore(); }
@@ -783,9 +747,8 @@ export class WorldMap {
   _cityBanner(ctx, x, y, c, s) {
     const mine = c.owner === this.me;
     const col = c.owner === null ? '#8d8a7c' : CIV_COLORS[c.owner];
-    const stale = c.seenTick !== null && c.seenTick !== undefined;
-    const name = `${cityName(c.id)}${stale ? ` · T${c.seenTick}` : ''}`;
-    ctx.save(); ctx.translate(x, y); ctx.scale(s, s); ctx.globalAlpha = stale ? .72 : 1;
+    const name = cityName(c.id);
+    ctx.save(); ctx.translate(x, y); ctx.scale(s, s);
     ctx.font = '600 13px Georgia, "Yu Mincho", serif';
     const nameW = ctx.measureText(name).width;
     const star = c.capital ? 14 : 0;
@@ -918,9 +881,9 @@ export function drawMinimap(canvas, map, view, footprint) {
   const s = Math.min(W / (maxX - minX), H / (maxY - minY)), ox = (W - (maxX - minX) * s) / 2 - minX * s, oy = (H - (maxY - minY) * s) / 2 - minY * s;
   const tcol = { Grassland: '#b8c294', Plains: '#cbc28f', Forest: '#86a079', Hills: '#b3a784', Mountain: '#9c978b', Water: '#6f9fa0' };
   map.tiles.forEach(([q, r, terrain], i) => {
-    const p = project(q, r); const o = view?.owners?.[i]; const fog = view?.fog?.[i] ?? '2';
-    ctx.fillStyle = fog === '0' ? '#ddd5bd' : o && o !== '.' ? CIV_COLORS[parseInt(o, 36)] : tcol[terrain] || '#bbb';
-    ctx.globalAlpha = fog === '0' ? 1 : (o && o !== '.' ? .85 : 1) * (fog === '1' ? .55 : 1);
+    const p = project(q, r); const o = view?.owners?.[i];
+    ctx.fillStyle = o && o !== '.' ? CIV_COLORS[parseInt(o, 36)] : tcol[terrain] || '#bbb';
+    ctx.globalAlpha = o && o !== '.' ? .85 : 1;
     ctx.beginPath(); ctx.arc(p.x * s + ox, p.y * s + oy, Math.max(1.6, RADIUS * s * .82), 0, Math.PI * 2); ctx.fill();
   });
   ctx.globalAlpha = 1;

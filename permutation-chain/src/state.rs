@@ -24,7 +24,7 @@
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use permutation_rules::genesis::Entry;
-use permutation_rules::gov::GovEntry;
+use permutation_rules::gov::{GovEntry, NOBODY};
 use permutation_rules::map::MapJob;
 use permutation_rules::orders::OrderBatch;
 use permutation_rules::state::WorldState;
@@ -147,14 +147,20 @@ pub struct Season {
     /// how many.
     pub roster_acc: [u8; 32],
     pub roster_revealed: u16,
-    /// Set by FinishSeason: 0 no AI, 1 roster revealed, 2 not revealed in
-    /// time (bounties and bond joined the pool).
+    /// Set by FinishSeason: `ROSTER_NONE`, `ROSTER_REVEALED` or
+    /// `ROSTER_FORFEITED` (not revealed in time: bounties and bond joined
+    /// the pool).
     pub roster_outcome: u8,
     /// Bounty paid into each nation's share (FinishSeason).
     pub bounty_paid: Vec<u64>,
 }
 
 pub const SEASON_MAGIC: [u8; 8] = *b"PSSEASN7";
+
+/// `Season::roster_outcome`.
+pub const ROSTER_NONE: u8 = 0;
+pub const ROSTER_REVEALED: u8 = 1;
+pub const ROSTER_FORFEITED: u8 = 2;
 
 /// A season's address (`["season", id]`), as base58, from the program id as
 /// base58; `None` if the program id is not a valid key. For tools (the
@@ -194,12 +200,13 @@ pub struct MemberAccount {
     pub wallet: [u8; 32],
     /// Signs governance actions and, in office, orders. Cannot move USDC.
     pub session: [u8; 32],
-    /// 0 Human, 1 Agent, 2 Undeclared (self-declared, V5 D16).
+    /// 0 Human, 1 Agent, 2 Undeclared (self-declared, V5 D16); at most `MAX_KIND`.
     pub kind: u8,
     pub name: String,
     /// Optional agent registration proof (e.g. an ERC-8004 id hash), all zero if none.
     pub attestation: [u8; 32],
-    /// Pre-season candidacy (`Role::bit` mask) and votes per office (`u32::MAX` = none).
+    /// Pre-season candidacy (`Role::bit` mask, within `STAND_MASK`) and
+    /// votes per office (`u32::MAX` = none).
     pub stand: u8,
     pub votes: [u32; 4],
     /// Treasury shares: USDC deposited into the nation treasury.
@@ -211,6 +218,10 @@ pub struct MemberAccount {
 }
 
 pub const MEMBER_MAGIC: [u8; 8] = *b"PSMEMBR6";
+/// `MemberAccount::kind`: 0 Human, 1 Agent, 2 Undeclared.
+pub const MAX_KIND: u8 = 2;
+/// Every office's `Role::bit`.
+pub const STAND_MASK: u8 = 0x0f;
 
 // ------------------------------------------------------------------ roster
 
@@ -257,7 +268,7 @@ pub struct NationAccount {
     pub keys: [[u8; 32]; 4],
     /// This tick's budget + bank per office, cached from the world.
     pub spendable: [u32; 4],
-    /// Tick of each office's revealed batch (`u16::MAX` = none), so clients
+    /// Tick of each office's revealed batch (`NO_TICK` = none), so clients
     /// can see who revealed without decoding the batches.
     pub submitted: [u16; 4],
     /// The open tick's input is frozen (see `WorldMeta::frozen`).
@@ -268,7 +279,7 @@ pub struct NationAccount {
     /// End of the reveal window (unix time): later reveals are refused, so
     /// nobody can wait to reveal until it has seen everyone else's salt.
     pub reveal_deadline: i64,
-    /// Tick of each office's sealed commitment (`u16::MAX` = none), and the
+    /// Tick of each office's sealed commitment (`NO_TICK` = none), and the
     /// commitment (`permutation_rules::orders::order_commitment`).
     pub committed: [u16; 4],
     pub commits: [[u8; 32]; 4],
@@ -281,6 +292,60 @@ pub struct NationAccount {
 }
 
 pub const NATION_MAGIC: [u8; 8] = *b"PSNATN07";
+
+/// "No tick": an office with nothing submitted or committed, a nation whose
+/// government has not opened yet.
+pub const NO_TICK: u16 = u16::MAX;
+
+impl NationAccount {
+    /// A nation account as `AllocNation` creates it: no tick open until the
+    /// government opens (`open_nation`).
+    pub fn new(
+        season_id: u64,
+        civ: u16,
+        bump: u8,
+        preset: u8,
+        market: bool,
+        crank: [u8; 32],
+    ) -> Self {
+        NationAccount {
+            magic: NATION_MAGIC,
+            season_id,
+            civ,
+            bump,
+            preset,
+            market,
+            crank,
+            open_tick: NO_TICK,
+            officers: [NOBODY; 4],
+            keys: [[0; 32]; 4],
+            spendable: [0; 4],
+            submitted: [NO_TICK; 4],
+            frozen: false,
+            revealing: false,
+            reveal_deadline: 0,
+            committed: [NO_TICK; 4],
+            commits: [[0; 32]; 4],
+            salts: [[0; 32]; 4],
+            batches: [None, None, None, None],
+            inbox: Vec::new(),
+        }
+    }
+
+    /// Forget the previous tick: batches, commitments, salts, the inbox and
+    /// the freeze / reveal flags.
+    pub fn clear_tick(&mut self) {
+        self.batches = [None, None, None, None];
+        self.submitted = [NO_TICK; 4];
+        self.frozen = false;
+        self.revealing = false;
+        self.reveal_deadline = 0;
+        self.committed = [NO_TICK; 4];
+        self.commits = [[0; 32]; 4];
+        self.salts = [[0; 32]; 4];
+        self.inbox.clear();
+    }
+}
 
 // ------------------------------------------------------------------ world
 

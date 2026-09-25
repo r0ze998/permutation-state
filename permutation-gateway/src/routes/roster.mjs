@@ -24,7 +24,7 @@ export function requireOperator({ cfg }, req) {
   if (!cfg.operatorToken || auth !== `Bearer ${cfg.operatorToken}`) throw new RouteError(403, 'operator only', 'OperatorOnly');
 }
 
-const publicAi = (state, m) => ({ member: m.index, civ: m.civ, salt: m.salt });
+const publicAi = m => ({ member: m.index, civ: m.civ, salt: m.salt });
 
 export const rosterRoutes = {
   'GET /roster': async ({ store }) => {
@@ -33,14 +33,14 @@ export const rosterRoutes = {
     const announced = new Set(r.announced ?? []);
     const shown = aiMembers(state).filter(m => r.revealed || announced.has(m.index));
     return { body: { aiCount: r.aiCount ?? 0, bountyEach: r.bountyEach ?? '0', bond: r.bond ?? '0', revealed: !!r.revealed,
-      ai: shown.map(m => publicAi(state, m)) } };
+      ai: shown.map(publicAi) } };
   },
 
   'GET /operator/roster': async (ctx, req) => {
     requireOperator(ctx, req);
     const state = ctx.store.state;
     return { body: { members: state.members.map(m => ({ member: m.index, civ: m.civ, hosted: m.hosted })),
-      ai: aiMembers(state).map(m => publicAi(state, m)), bountyEach: state.roster?.bountyEach ?? '0' } };
+      ai: aiMembers(state).map(publicAi), bountyEach: state.roster?.bountyEach ?? '0' } };
   },
 
   'POST /roster/announce': async (ctx, req) => {
@@ -49,10 +49,11 @@ export const rosterRoutes = {
     const state = ctx.store.state;
     const m = aiMembers(state).find(x => x.index === b.member);
     if (!m) throw new RouteError(404, 'not an operator AI member', 'NotOnRoster');
+    state.roster ??= {};
     state.roster.announced = [...new Set([...(state.roster.announced ?? []), m.index])];
     ctx.store.save();
     ctx.log(`bounty: AI member ${m.index} (${m.name}) lived in a conquered city; its salt is public`);
-    return { body: { ok: true, ...publicAi(state, m) } };
+    return { body: { ok: true, ...publicAi(m) } };
   },
 
   'POST /talk': async (ctx, req) => {
@@ -68,6 +69,11 @@ export const rosterRoutes = {
     // may have resolved while the message travelled).
     const tick = signature && Number.isInteger(b.tick) ? b.tick : open;
     if (tick > open || tick + 1 < open) throw new RouteError(400, `tick ${tick} is not the open tick ${open}`, 'TalkRefused');
+    // A tick's messages are anchored once (one PS_TALK root per tick): late
+    // ones for an anchored tick (the one before, or the snapshot's open tick
+    // right after it resolved) are refused, not anchored a second time.
+    const book = new TalkBook(store.state);
+    if (book.isAnchored(tick)) throw new RouteError(400, `tick ${tick} is already anchored`, 'TalkRefused');
     let text = b.text;
     if (!signature) {
       // A hosted member's message, sent by the game server that runs it; an
@@ -78,7 +84,6 @@ export const rosterRoutes = {
       if (b.draft && ctx.advisor) text = await ctx.advisor.phrase({ fallback: text, draft: b.draft, nation: NATIONS[member.civ] });
       signature = signTalk(talkBytes({ season, tick, member: b.member, to, text: text ?? '' }), key);
     }
-    const book = new TalkBook(store.state);
     let m;
     try {
       m = book.add({ season, tick, member: b.member, to, text, signature, publicKey: new PublicKey(member.session).toBytes() });

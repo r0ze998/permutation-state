@@ -18,7 +18,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 
 use crate::hex::Hex;
 use crate::map::Terrain;
-use crate::state::{City, CityId, CivId, LastYields, Owner, Relation, WorldState};
+use crate::state::{City, CityId, CivId, LastYields, Owner, WorldState};
 use crate::tech::TechSet;
 use crate::units::stats;
 
@@ -69,7 +69,7 @@ pub fn sees(state: &WorldState, from: Hex, radius: u32, to: Hex) -> bool {
 /// Civilizations whose vision `civ` shares: itself and its allies (§10.4).
 pub fn sharers(state: &WorldState, civ: CivId) -> Vec<CivId> {
     (0..state.civs.len() as CivId)
-        .filter(|o| *o == civ || matches!(state.relation(civ, *o), Relation::Alliance { .. }))
+        .filter(|o| *o == civ || state.relation(civ, *o).is_alliance())
         .collect()
 }
 

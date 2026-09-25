@@ -7,6 +7,7 @@
 //
 //   node scripts/verify-talk.mjs [--gateway http://127.0.0.1:4191] [--base URL] [--er URL]
 import { Connection, PublicKey } from '@solana/web3.js';
+import { toHex } from '../client/src/bytes.mjs';
 import { ChainClient } from '../client/src/chain.mjs';
 import { decodeMember } from '../client/src/codec.mjs';
 import { verifyTalk } from '../client/src/talk.mjs';
@@ -44,8 +45,8 @@ for (const [tick, ms] of [...byTick].sort((a, b) => a[0] - b[0])) {
   if (!sig) { console.log(`· tick ${tick}: ${ms.length} messages not anchored yet`); continue; }
   const t = await er.getTransaction(sig, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 });
   const rec = records(t?.meta?.logMessages ?? []).find(r => r.tag === 'PS_TALK' && r.tick === tick);
-  const root = Buffer.from(TalkBook.root(ms)).toString('hex');
-  const ok = !!rec && rec.count === ms.length && Buffer.from(rec.root).toString('hex') === root && rec.seasonId === BigInt(info.season.seasonId);
+  const root = toHex(TalkBook.root(ms));
+  const ok = !!rec && rec.count === ms.length && toHex(rec.root) === root && rec.seasonId === BigInt(info.season.seasonId);
   check(ok, `tick ${tick}: ${ms.length} messages hash to the anchored root ${root.slice(0, 16)}… (${sig.slice(0, 12)}…)`);
   anchored += ok;
 }

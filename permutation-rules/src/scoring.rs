@@ -12,7 +12,7 @@
 //! conquest).
 
 use crate::params::Ruleset;
-use crate::state::{CivId, Relation, WorldState};
+use crate::state::{CivId, WorldState};
 
 pub const PATH_NAMES: [&str; 4] = ["hegemony", "prosperity", "science", "concord"];
 
@@ -32,19 +32,13 @@ pub fn total_pop(state: &WorldState, civ: CivId) -> u32 {
 /// Civs with a NAP or an alliance with `civ` ("条約相手").
 pub fn treaty_partners(state: &WorldState, civ: CivId) -> u32 {
     (0..state.civs.len() as CivId)
-        .filter(|o| {
-            *o != civ
-                && matches!(
-                    state.relation(civ, *o),
-                    Relation::Nap { .. } | Relation::Alliance { .. }
-                )
-        })
+        .filter(|o| *o != civ && state.relation(civ, *o).is_pact())
         .count() as u32
 }
 
 pub fn alliances(state: &WorldState, civ: CivId) -> u32 {
     (0..state.civs.len() as CivId)
-        .filter(|o| *o != civ && matches!(state.relation(civ, *o), Relation::Alliance { .. }))
+        .filter(|o| *o != civ && state.relation(civ, *o).is_alliance())
         .count() as u32
 }
 
@@ -60,7 +54,7 @@ pub fn suzerainties(state: &WorldState, civ: CivId) -> u32 {
 /// `trade_counterparty_bps` of the raw total (V5 §6.2 "馴れ合いの防止").
 pub fn trade_effective(rules: &Ruleset, trade: &[u64]) -> u64 {
     let raw: u64 = trade.iter().sum();
-    let cap = raw as u128 * rules.trade_counterparty_bps as u128 / 10_000;
+    let cap = raw as u128 * rules.trade_counterparty_bps as u128 / crate::fixed::BPS_ONE as u128;
     trade.iter().map(|v| (*v as u128).min(cap) as u64).sum()
 }
 

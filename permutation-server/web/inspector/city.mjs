@@ -59,7 +59,6 @@ export function foreignCityPanel(c) {
   const o = c.owner; const rel = o === null ? null : civ(o)?.relation;
   const mine = S.view.units.filter(u => u.owner === S.myCiv && !u.civilian && hexDist(u, c) <= 2);
   return html`${head(`${o === null ? 'FREE CITY · 自由都市' : 'CITY · 都市'} · ${c.q}, ${c.r}`, T.cityName(c.id), o === null ? 'どの文明にも属さない自由都市です。攻撃は侵略扱いになります。' : `${civN(o)}の${c.capital ? '首都' : '都市'}です。関係：${T.RELATION[rel]}`)}
-    ${c.seenTick !== null && c.seenTick !== undefined ? html`<div class="explanation fog">ティック${c.seenTick}に見たときの情報です。今の持ち主・人口・防御は視界に入れるまで分かりません。</div>` : ''}
     <div class="stats"><div class="stat"><div class="k">人口</div><div class="v">${c.pop}</div></div><div class="stat"><div class="k">防御</div><div class="v">${defense(c)}</div></div><div class="stat"><div class="k">城壁</div><div class="v">${c.walls ? 'あり' : 'なし'}</div></div></div>
     ${c.stages ? html`<div class="explanation">スターゲート ${c.stages}/3 段階。この都市を占領すると、完成した段階はすべて失われます。</div>` : ''}
     ${mine.length ? html`<div class="section-title">近くのあなたの部隊</div>${mine.map(u => html`<button class="option" type="button" data-select-unit="${u.id}"><span class="ic">${T.UNIT_GLYPH[u.type]}</span><span><span class="name">${T.UNIT[u.type]} 兵${troops(u.troops)}</span><div class="meta">選択して攻撃の予測を見る</div></span><span></span></button>`)}` : ''}

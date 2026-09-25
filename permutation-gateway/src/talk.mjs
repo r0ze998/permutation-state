@@ -3,6 +3,7 @@
 // tick's messages), so anyone can later prove who said what by when. Words
 // bind nothing; contracts do. Signing and the signed bytes: client/src/talk.mjs.
 import { createHash } from 'node:crypto';
+import { toHex } from '../client/src/bytes.mjs';
 import { MAX_TALK_CHARS, signTalk, talkBytes, verifyTalk } from '../client/src/talk.mjs';
 
 export { MAX_TALK_CHARS, signTalk, talkBytes, verifyTalk };
@@ -14,15 +15,18 @@ const sha256 = (...parts) => { const h = createHash('sha256'); for (const p of p
 /** A message's leaf in the tick's Merkle tree. */
 export const talkLeaf = m => sha256(Buffer.from([0]), Buffer.from(m.bytes, 'hex'), Buffer.from(m.signature, 'hex'));
 
-/** Merkle root of leaves (in order): pairs hashed with a 0x01 prefix, an odd one carried up. */
+/** One level up the Merkle tree: pairs hashed with a 0x01 prefix, an odd last node carried up as is. */
+export function nextLevel(level) {
+  const next = [];
+  for (let i = 0; i < level.length; i += 2) next.push(i + 1 < level.length ? sha256(Buffer.from([1]), level[i], level[i + 1]) : level[i]);
+  return next;
+}
+
+/** Merkle root of leaves (in order); 32 zero bytes for none. */
 export function merkleRoot(leaves) {
   if (!leaves.length) return new Uint8Array(32);
   let level = leaves;
-  while (level.length > 1) {
-    const next = [];
-    for (let i = 0; i < level.length; i += 2) next.push(i + 1 < level.length ? sha256(Buffer.from([1]), level[i], level[i + 1]) : level[i]);
-    level = next;
-  }
+  while (level.length > 1) level = nextLevel(level);
   return level[0];
 }
 
@@ -33,10 +37,9 @@ export function merkleProof(leaves, i) {
   let k = i;
   while (level.length > 1) {
     const sib = k ^ 1;
-    if (sib < level.length) proof.push({ hash: Buffer.from(level[sib]).toString('hex'), left: sib < k });
-    const next = [];
-    for (let j = 0; j < level.length; j += 2) next.push(j + 1 < level.length ? sha256(Buffer.from([1]), level[j], level[j + 1]) : level[j]);
-    level = next;
+    // A node carried up alone has no sibling at this level.
+    if (sib < level.length) proof.push({ hash: toHex(level[sib]), left: sib < k });
+    level = nextLevel(level);
     k >>= 1;
   }
   return proof;
@@ -59,10 +62,13 @@ export class TalkBook {
     if (sent >= TALK_PER_TICK) throw new Error(`at most ${TALK_PER_TICK} messages per member and tick`);
     const bytes = talkBytes({ season, tick, member, to, text });
     if (!verifyTalk(bytes, signature, publicKey)) throw new Error('the signature is not the member\'s session key over the message');
-    const m = { id: this.state.talk.length, tick, member, to, text, bytes: bytes.toString('hex'), signature: Buffer.from(signature).toString('hex') };
+    const m = { id: this.state.talk.length, tick, member, to, text, bytes: bytes.toString('hex'), signature: toHex(signature) };
     this.state.talk.push(m);
     return m;
   }
+
+  /** Whether tick `tick`'s messages were anchored already. */
+  isAnchored(tick) { return this.state.talk.some(m => m.tick === tick && m.anchored); }
 
   since(id = 0) { return this.state.talk.filter(m => m.id >= id); }
 

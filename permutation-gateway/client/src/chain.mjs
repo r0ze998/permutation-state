@@ -8,7 +8,7 @@ import {
   DELEGATION_PROGRAM_ID, MAGIC_CONTEXT_ID, MAGIC_PROGRAM_ID,
   delegateBufferPdaFromDelegatedAccountAndOwnerProgram, delegationMetadataPdaFromDelegatedAccount, delegationRecordPdaFromDelegatedAccount,
 } from '@magicblock-labs/ephemeral-rollups-sdk';
-import { IX, NATIONS, NATION_TARGET, WORLD_CHUNKS } from './codec.mjs';
+import { decodeSeason, IX, NATIONS, NATION_TARGET, WORLD_CHUNKS } from './codec.mjs';
 import { memberPda, nationPda, rosterPda, seasonPda, TOKEN_PROGRAM_ID, vaultPda, worldChunkPda } from './pda.mjs';
 
 export const HEAP_BYTES = 256 * 1024;
@@ -21,6 +21,17 @@ export const heavy = () => [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_
  * which outgrows the default 32 KiB heap once they fill up.
  */
 const medium = () => [ComputeBudgetProgram.requestHeapFrame({ bytes: 128 * 1024 })];
+/**
+ * The season account of `chain` (a ChainClient), decoded, as `connection`
+ * sees it at 'confirmed'. Throws when it is not there (a wrong program or
+ * season id, or a season not created yet) rather than failing on `.data`.
+ */
+export async function readSeason(connection, chain) {
+  const info = await connection.getAccountInfo(chain.season, 'confirmed');
+  if (!info) throw Object.assign(new Error('season account not found'), { code: 'SeasonNotFound' });
+  return decodeSeason(info.data);
+}
+
 const W = (pubkey, isSigner = false) => ({ pubkey, isSigner, isWritable: true });
 const R = (pubkey, isSigner = false) => ({ pubkey, isSigner, isWritable: false });
 

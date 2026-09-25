@@ -65,7 +65,7 @@ pub(super) fn resolve_recalls(state: &mut WorldState, rules: &Ruleset, civ: CivI
     state.nations[civ as usize].recalls = keep;
 }
 
-/// Remove the holder; the last election's runner-up succeeds, else the acting official.
+/// Remove the holder; the last election's runner-up succeeds, else the office is vacant (the caretaker runs it).
 pub(super) fn vacate(state: &mut WorldState, rules: &Ruleset, civ: CivId, role: Role) {
     let next = state.tick + 1;
     let n = &mut state.nations[civ as usize];

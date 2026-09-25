@@ -10,6 +10,7 @@
 
 import { createHash } from 'node:crypto';
 import { Writer, Reader } from './borsh.mjs';
+import { fromHex, toHex, u64le } from './bytes.mjs';
 
 // ------------------------------------------------------------------ constants
 // Mirrors of permutation-chain `state.rs` / `processor.rs`, permutation-rules
@@ -67,7 +68,6 @@ const STANDING = ['Clear', 'AutoDefend', 'Retreat', 'Patrol', 'QueueRepeat', 'Au
 
 const index = (list, name, what) => { const i = list.indexOf(name); if (i < 0) throw new Error(`unknown ${what} ${name}`); return i; };
 const hex = (w, [q, r]) => w.i32(q).i32(r);
-const fromHex = h => Uint8Array.from((h.match(/../g) || []).map(b => parseInt(b, 16)));
 
 function good(w, g) {
   switch (g.kind) {
@@ -225,7 +225,6 @@ export const orderCommitment = (b, salt) => sha256(new TextEncoder().encode('per
  * Operator AI members (V5 §18.2), as `permutation_rules::roster`: the tag an
  * AI registers with, and the chain over the tags committed at creation.
  */
-const u64le = v => { const b = new Uint8Array(8); new DataView(b.buffer).setBigUint64(0, BigInt(v), true); return b; };
 export const rosterTag = (seasonId, wallet, salt) => sha256(new TextEncoder().encode('permutation-rules/ai'), u64le(seasonId), wallet, salt);
 export const rosterLink = (prev, tag) => sha256(new TextEncoder().encode('permutation-rules/roster'), prev, tag);
 export const rosterChain = tags => tags.reduce((acc, t) => rosterLink(acc, t), new Uint8Array(32));
@@ -321,7 +320,7 @@ export function parseRecord(fields) {
   // A finalized season's history (permutation_rules::history): its record, borsh SeasonRecord.
   if (tag === 'PS_HISTORY') {
     const r = new Reader(fields[4]);
-    const hex32 = () => Buffer.from(r.fixed(32)).toString('hex');
+    const hex32 = () => toHex(r.fixed(32));
     const finalRoot = hex32();
     const nations = r.vec(x => ({ points: x.u64(), era: x.u8(), tiers: [x.u8(), x.u8(), x.u8(), x.u8()], share: x.u64(), cities: x.u32(), members: x.u32() }));
     const opt = (x, f) => (x.u8() ? f(x) : null);

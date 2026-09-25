@@ -84,6 +84,7 @@ impl Game {
         rules.market_enabled = snap.meta.market;
         let tick_seconds = snap.meta.tick_seconds as u64;
         let season_id = snap.meta.season_id.to_le_bytes();
+        let roster = link.get_json("/operator/roster");
         let chain = ChainMode {
             link,
             meta: snap.meta,
@@ -101,7 +102,7 @@ impl Game {
             .and_then(|x| x.parse().ok())
             .unwrap_or(LOCAL_FEE);
         g.sync_registry(&info);
-        if let Ok(op) = g.chain_link().unwrap().get_json("/operator/roster") {
+        if let Ok(op) = roster {
             g.sync_operator(&op);
         }
         let started = g.state.tick > 0
@@ -174,16 +175,7 @@ impl Game {
             operator,
             talk,
         } = poll;
-        if !talk.is_empty() {
-            self.talk_next = talk
-                .iter()
-                .filter_map(|m| m["id"].as_u64())
-                .max()
-                .map_or(self.talk_next, |x| x + 1);
-            self.talk.extend(talk);
-            let cut = self.talk.len().saturating_sub(500);
-            self.talk.drain(..cut);
-        }
+        self.receive_talk(talk);
         let changed = snap.state.tick != self.state.tick
             || snap.state.members.len() != self.state.members.len();
         let prev = std::mem::replace(&mut self.state, snap.state);
@@ -309,7 +301,10 @@ impl Poll {
         };
         let changed = snap.state.tick != tick || snap.state.members.len() != members;
         let resolved = if snap.state.tick != tick {
-            link.resolved_input(tick).unwrap_or(None)
+            link.resolved_input(tick).unwrap_or_else(|e| {
+                eprintln!("tick {tick}: resolved input unreadable ({e})");
+                None
+            })
         } else {
             None
         };

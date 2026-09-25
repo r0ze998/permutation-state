@@ -15,6 +15,8 @@
 //! support people's proposals, and propose orders from their nation's plan
 //! (which an officer adopts when it issues the same order, V5 §5.4).
 
+use std::borrow::Cow;
+
 use crate::bots::{persona_of, Bot};
 use crate::fog::Fog;
 use crate::ledger::Ledger;
@@ -76,7 +78,7 @@ impl Planner {
         }
     }
 
-    /// Nation `civ`'s plan for the open tick, made from its belief `view`.
+    /// Nation `civ`'s plan for the open tick, made from `view` (`Fog::belief`).
     fn plan(&mut self, civ: CivId, view: &WorldState, rules: &Ruleset, fog: &Fog) -> Vec<Order> {
         let slot = &mut self.plans[civ as usize];
         match slot {
@@ -117,10 +119,7 @@ impl Planner {
             let diplomat = offices[Role::Diplomat.index()];
             let wars: Vec<CivId> = parts[Role::Diplomat.index()]
                 .iter()
-                .filter_map(|o| match o {
-                    Order::DeclareWar { civ } | Order::BreakNap { civ } => Some(*civ),
-                    _ => None,
-                })
+                .filter_map(Order::war_target)
                 .collect();
             if !wars.is_empty() {
                 let consenter = [Role::General, Role::Steward].into_iter().find(|r| {
@@ -131,9 +130,7 @@ impl Planner {
                     Some(r) => {
                         parts[r.index()].extend(wars.iter().map(|c| Order::ConsentWar { civ: *c }))
                     }
-                    None => parts[Role::Diplomat.index()].retain(|o| {
-                        !matches!(o, Order::DeclareWar { .. } | Order::BreakNap { .. })
-                    }),
+                    None => parts[Role::Diplomat.index()].retain(|o| o.war_target().is_none()),
                 }
             }
             for role in Role::ALL {
@@ -183,7 +180,7 @@ impl Planner {
         let vote_open = gov::vote_open(rules, tick);
         // Each nation's view (the full state), made when first needed: AI members
         // judge proposals and plan from what their nation can see.
-        let mut views: Vec<Option<WorldState>> = vec![None; state.civs.len()];
+        let mut views: Vec<Option<Cow<WorldState>>> = vec![None; state.civs.len()];
         for (id, m) in state.members.iter().enumerate() {
             let id = id as MemberId;
             if !host.is_ai(id) {
@@ -260,10 +257,7 @@ impl Planner {
                 // in the same tick: propose it too when the general is vacant.
                 let wars: Vec<CivId> = parts[Role::Diplomat.index()]
                     .iter()
-                    .filter_map(|o| match o {
-                        Order::DeclareWar { civ } | Order::BreakNap { civ } => Some(*civ),
-                        _ => None,
-                    })
+                    .filter_map(Order::war_target)
                     .collect();
                 parts[Role::General.index()]
                     .extend(wars.into_iter().map(|c| Order::ConsentWar { civ: c }));

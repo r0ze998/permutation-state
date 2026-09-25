@@ -14,6 +14,8 @@
 //! for a possible fog mode enforced by a private rollup; the server does not
 //! use it.
 
+use std::borrow::Cow;
+
 use permutation_rules::state::{CivId, WorldState};
 use permutation_rules::vision::{visible, Memory};
 
@@ -59,9 +61,10 @@ impl Fog {
         &self.memory
     }
 
-    /// What `civ` decides from: the full state.
-    pub fn belief(&self, state: &WorldState, _civ: CivId) -> WorldState {
-        state.clone()
+    /// What `civ` decides from: the full state, borrowed (a fog mode would
+    /// return an owned belief state).
+    pub fn belief<'a>(&self, state: &'a WorldState, _civ: CivId) -> Cow<'a, WorldState> {
+        Cow::Borrowed(state)
     }
 
     /// Per tile, for display: `2` in sight of `civ`, `1` known but out of sight.

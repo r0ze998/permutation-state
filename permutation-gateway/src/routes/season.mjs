@@ -1,15 +1,20 @@
 // Reading the season: health, the season account and member registry, the
-// raw world, and the tick index for the replay verifier.
+// history layer, the open tick's phase, the raw world, and the tick index
+// for the replay verifier. (The AI roster and members' messages:
+// roster.mjs.)
 //
 //   GET /health
 //   GET /season        season account, members (hosted or not), records for the verifier
-//   GET /world.bin     raw world account (octet-stream) from the layer it lives on
+//   GET /history       the season it follows, its PS_HISTORY record once finalized, the lineage
 //   GET /ticks?from=N  archived tick records: PS_TICK roots with the input its PS_INPUT
 //                      chunks published (an index for the replay verifier, which re-reads
 //                      both from the ER's logs)
+//   GET /tick          the open tick's sealed-orders phase (commit | reveal | frozen | finished)
+//   GET /world.bin     raw world account (octet-stream) from the layer it lives on
 import { PublicKey } from '@solana/web3.js';
-import { decodeSeason, NATIONS } from '../../client/src/codec.mjs';
-import { RouteError } from './errors.mjs';
+import { NATIONS } from '../../client/src/codec.mjs';
+import { RouteError, routeSeason } from './errors.mjs';
+import { toHex as hex } from '../../client/src/bytes.mjs';
 import { countSeals } from '../crank.mjs';
 
 const b58 = k => new PublicKey(k).toBase58();
@@ -20,7 +25,7 @@ export const seasonRoutes = {
   'GET /health': async ({ crank, store }) => ({ body: { ok: true, phase: crank.phase, season: store.state.seasonId } }),
 
   'GET /season': async ({ base, chain, cfg, crank, store, registry }) => {
-    const s = decodeSeason((await base.getAccountInfo(chain.season, 'confirmed')).data);
+    const s = await routeSeason({ base, chain });
     const state = store.state;
     return {
       body: {
@@ -36,8 +41,7 @@ export const seasonRoutes = {
   // The history layer: the season it follows and, once finalized, its
   // record (PS_HISTORY) and history root, which the next season takes over.
   'GET /history': async ({ base, chain, store }) => {
-    const s = decodeSeason((await base.getAccountInfo(chain.season, 'confirmed')).data);
-    const hex = b => Buffer.from(b).toString('hex');
+    const s = await routeSeason({ base, chain });
     return { body: { season: String(s.seasonId), prevSeasonId: String(s.prevSeasonId), prevHistoryRoot: hex(s.prevHistoryRoot),
       historyRoot: s.status === 'Finalized' ? hex(s.historyRoot) : null, record: store.state.history?.record ?? null, signature: store.state.history?.signature ?? null,
       // The records of the seasons before, oldest first (see season.mjs).

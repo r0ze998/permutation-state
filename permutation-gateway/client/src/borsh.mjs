@@ -1,6 +1,7 @@
 // Minimal borsh writer/reader matching the Rust `borsh` 1.x layout:
 // little-endian integers, u32 length prefixes for Vec/String, 1-byte enum
 // and Option tags, fixed arrays without a prefix.
+import { u64le } from './bytes.mjs';
 
 export class Writer {
   constructor() { this.parts = []; }
@@ -9,7 +10,7 @@ export class Writer {
   u16(v) { const b = new Uint8Array(2); new DataView(b.buffer).setUint16(0, v, true); this.parts.push(b); return this; }
   u32(v) { const b = new Uint8Array(4); new DataView(b.buffer).setUint32(0, v, true); this.parts.push(b); return this; }
   i32(v) { const b = new Uint8Array(4); new DataView(b.buffer).setInt32(0, v, true); this.parts.push(b); return this; }
-  u64(v) { const b = new Uint8Array(8); new DataView(b.buffer).setBigUint64(0, BigInt(v), true); this.parts.push(b); return this; }
+  u64(v) { this.parts.push(u64le(v)); return this; }
   fixed(bytes, len) {
     const b = Uint8Array.from(bytes);
     if (b.length !== len) throw new Error(`expected ${len} bytes, got ${b.length}`);

@@ -206,6 +206,25 @@ pub fn spend_limit(state: &WorldState, rules: &Ruleset, civ: CivId) -> u64 {
     rules.spend_consent_usdc.max(consent)
 }
 
+/// USDC `civ` may still commit this tick (market purchases and contract
+/// escrow share it): the spend limit less what it already committed, and
+/// never more than its free treasury.
+pub fn treasury_room(state: &WorldState, rules: &Ruleset, civ: CivId, committed: u64) -> u64 {
+    spend_limit(state, rules, civ)
+        .saturating_sub(committed)
+        .min(state.civs[civ as usize].free_usdc())
+}
+
+/// The reason a treasury payment of more than `room` is refused: the spend
+/// limit (a second officer's consent would allow it) or the treasury.
+pub fn short_of_usdc(limit_binds: bool) -> Blocked {
+    if limit_binds {
+        Blocked::NeedsSpendConsent
+    } else {
+        Blocked::NotEnoughUsdc
+    }
+}
+
 /// Phase 2 (start): hand over goods bought `delivery_ticks` ago (V5 §7.5).
 /// Food and production go to the named city if it is still the buyer's and
 /// (for production) not building a Star Gate stage, else to the capital
@@ -250,7 +269,7 @@ pub fn deliver(state: &mut WorldState) {
 }
 
 /// Phase 2: run one call auction per good between treasuries and settle in
-/// USDC (V5 §7.5). Submission rejects market orders from tick 120 on and in
+/// USDC (V5 §7.5). Submission rejects market orders from `exchange_freeze_tick` on and in
 /// seasons without a market.
 pub fn apply_exchange(state: &mut WorldState, rules: &Ruleset, escrowed: &[u64]) {
     let n = state.civs.len();
@@ -259,14 +278,15 @@ pub fn apply_exchange(state: &mut WorldState, rules: &Ruleset, escrowed: &[u64])
         .iter()
         .map(|c| rules.tariff_bps(c.market_spent))
         .collect();
+    // Contract escrow placed this tick shares the limit (V5 §18.6).
     let limit: Vec<u64> = (0..n as CivId)
         .map(|c| {
-            // Contract escrow placed this tick shares the limit, and USDC
-            // received from contracts is never spent here (V5 §18.6).
-            let civ = &state.civs[c as usize];
-            spend_limit(state, rules, c)
-                .saturating_sub(escrowed.get(c as usize).copied().unwrap_or(0))
-                .min(civ.usdc.saturating_sub(civ.contract_income))
+            treasury_room(
+                state,
+                rules,
+                c,
+                escrowed.get(c as usize).copied().unwrap_or(0),
+            )
         })
         .collect();
     let mut reserved = vec![0u64; n];
@@ -307,12 +327,8 @@ pub fn apply_exchange(state: &mut WorldState, rules: &Ruleset, escrowed: &[u64])
                 let affordable = (room / unit.max(1)).min(u32::MAX as u64) as u32;
                 let q = amount.min(cap).min(affordable);
                 if q == 0 {
-                    let c = &state.civs[civ as usize];
-                    let why = if limit[civ as usize] < c.usdc.saturating_sub(c.contract_income) {
-                        Blocked::NeedsSpendConsent
-                    } else {
-                        Blocked::NotEnoughUsdc
-                    };
+                    let why =
+                        short_of_usdc(limit[civ as usize] < state.civs[civ as usize].free_usdc());
                     state.skip(civ, origin, why.code());
                 }
                 reserved[civ as usize] += q as u64 * unit;

@@ -2,7 +2,7 @@
 //!
 //! Merit is credited by the rules as events happen, to the officer who
 //! issued the order behind them (and half to the proposer if the order came
-//! from an adopted proposal). The acting official earns nothing. Only the
+//! from an adopted proposal). The caretaker of a vacant office earns nothing. Only the
 //! members named in a credit are touched, so the cost does not grow with the
 //! number of members (V5 §11).
 
@@ -26,7 +26,7 @@ pub fn credit(state: &mut WorldState, c: Credit, path: Path, milli: u64, what: &
 
 fn add(state: &mut WorldState, m: MemberId, path: Path, milli: u64, what: &'static [u8]) {
     let Some(member) = state.members.get_mut(m as usize) else {
-        return; // NOBODY: the acting official earns no merit
+        return; // NOBODY: the caretaker earns no merit
     };
     let amount = milli.min(u32::MAX as u64) as u32;
     let slot = &mut member.merit[path as usize];

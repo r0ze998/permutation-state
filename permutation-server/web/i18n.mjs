@@ -117,33 +117,46 @@ export function itemGlyph(item) {
 /** Chronicle lines come from the server as `kind|English text`; translate the common forms. */
 export function chronicleText(line) {
   const [kind, text = ''] = line.split('|');
-  const n = s => civName(s.trim());
-  let m;
-  if ((m = text.match(/^(\w+) declares war on (\w+)(.*)$/))) return [kind, `${n(m[1])}が${n(m[2])}に宣戦${m[3].includes('pact') ? '（条約破棄）' : m[3].includes('casus') ? '（正当な理由あり）' : ''}`];
-  if ((m = text.match(/^(\w+) and (\w+) make peace$/))) return [kind, `${n(m[1])}と${n(m[2])}が講和`];
-  if ((m = text.match(/^(\w+) and (\w+) form an alliance$/))) return [kind, `${n(m[1])}と${n(m[2])}が同盟を結成`];
-  if ((m = text.match(/^(\w+) and (\w+) sign a non-aggression pact$/))) return [kind, `${n(m[1])}と${n(m[2])}が不可侵条約を締結`];
-  if ((m = text.match(/^The pact between (\w+) and (\w+) expires$/))) return [kind, `${n(m[1])}と${n(m[2])}の不可侵条約が満了`];
-  if ((m = text.match(/^(\w+) and (\w+) end their alliance$/))) return [kind, `${n(m[1])}と${n(m[2])}の同盟が解消`];
-  if ((m = text.match(/^(\w+) founds a new city$/))) return [kind, `${n(m[1])}が新しい都市を建設`];
-  if ((m = text.match(/^(\w+) captures a city of (\w+)$/))) return [kind, `${n(m[1])}が${n(m[2])}の都市を占領`];
-  if ((m = text.match(/^(\w+) captures a free city$/))) return [kind, `${n(m[1])}が自由都市を占領`];
-  if ((m = text.match(/^(\w+) conquers a city-state$/))) return [kind, `${n(m[1])}が都市国家を征服`];
-  if ((m = text.match(/^A city of (\w+) revolts and becomes free$/))) return [kind, `${n(m[1])}の都市が反乱し自由都市に`];
-  if (text === 'A city is razed to a ruin') return [kind, '都市が破壊され遺跡になった'];
-  if ((m = text.match(/^(\w+) completes Star Gate stage (\d)$/))) return [kind, `${n(m[1])}がスターゲート第${m[2]}段階を完成`];
-  if ((m = text.match(/^(\w+) becomes suzerain of city-state (\d+)$/))) return [kind, `${n(m[1])}が都市国家${m[2]}の宗主に`];
-  if ((m = text.match(/^(\w+) discovers (\w+)$/))) return [kind, `${n(m[1])}が「${TECH[m[2]] || m[2]}」を発見`];
-  if ((m = text.match(/^(\w+): (.+) becomes (general|steward|science officer|diplomat) \(was (.+)\)$/))) return [kind, `${n(m[1])}：${actor(m[2])}が${ROLE_NAME[m[3]]}に${kind === 'recall' ? '（解任による交代）' : ''}（前任 ${actor(m[4])}）`];
-  if ((m = text.match(/^First election — (\w+): (.+)$/))) return [kind, `${n(m[1])}の第1回選挙：${m[2].split(', ').map(x => { const r = Object.keys(ROLE_NAME).find(k => x.startsWith(`${k} `)); return r ? `${ROLE_NAME[r]} ${actor(x.slice(r.length + 1))}` : x; }).join('・')}`];
-  if ((m = text.match(/^(\w+) adopts (\d+) proposals?$/))) return [kind, `${n(m[1])}が献策を${m[2]}件採用`];
-  if ((m = text.match(/^(\w+) reaches (\w+) (\d)$/))) return [kind, `${n(m[1])}が${PATH_NAME[m[2]]}の第${m[3]}段階に到達`];
-  if ((m = text.match(/^(\w+) loses (\w+) (\d)$/))) return [kind, `${n(m[1])}が${PATH_NAME[m[2]]}の第${m[3]}段階を失った`];
-  if ((m = text.match(/^(\w+) enters era (\d)$/))) return [kind, `${n(m[1])}が第${m[2]}時代に入った`];
-  if ((m = text.match(/^(\w+) conquers the home of (.+) of (\w+), an operator AI member: bounty (\d+) USDC$/))) return [kind, `${n(m[1])}が${n(m[3])}の${m[2]}（運営のAI国民）の住む都市を落とした：懸賞金 ${m[4]} USDC`];
-  if ((m = text.match(/^(\w+) conquers the home of (.+) of (\w+), an operator AI member: no bounty/))) return [kind, `${n(m[1])}が${n(m[3])}の${m[2]}（運営のAI国民）の住む都市を落とした：直前に条約があったため懸賞金なし`];
+  // First match wins, so the table order matters (e.g. the two bounty forms).
+  for (const [re, ja] of CHRONICLE) {
+    const m = text.match(re);
+    if (m) return [kind, ja(m, kind)];
+  }
   return [kind, text];
 }
+const n = s => civName(s.trim());
+// Unknown paths (a newer engine) fall back to the raw English name.
+const pathName = p => PATH_NAME[p] ?? p;
+const electedText = x => { const r = Object.keys(ROLE_NAME).find(k => x.startsWith(`${k} `)); return r ? `${ROLE_NAME[r]} ${actor(x.slice(r.length + 1))}` : x; };
+/** [English pattern, (match, kind) => Japanese] — evaluated top to bottom by chronicleText. */
+const CHRONICLE = [
+  [/^(\w+) declares war on (\w+)(.*)$/, m => `${n(m[1])}が${n(m[2])}に宣戦${m[3].includes('pact') ? '（条約破棄）' : m[3].includes('casus') ? '（正当な理由あり）' : ''}`],
+  [/^(\w+) and (\w+) make peace$/, m => `${n(m[1])}と${n(m[2])}が講和`],
+  [/^(\w+) and (\w+) form an alliance$/, m => `${n(m[1])}と${n(m[2])}が同盟を結成`],
+  [/^(\w+) and (\w+) sign a non-aggression pact$/, m => `${n(m[1])}と${n(m[2])}が不可侵条約を締結`],
+  [/^The pact between (\w+) and (\w+) expires$/, m => `${n(m[1])}と${n(m[2])}の不可侵条約が満了`],
+  [/^(\w+) and (\w+) end their alliance$/, m => `${n(m[1])}と${n(m[2])}の同盟が解消`],
+  [/^(\w+) founds a new city$/, m => `${n(m[1])}が新しい都市を建設`],
+  [/^(\w+) captures a city of (\w+)$/, m => `${n(m[1])}が${n(m[2])}の都市を占領`],
+  [/^(\w+) captures a free city$/, m => `${n(m[1])}が自由都市を占領`],
+  [/^(\w+) conquers a city-state$/, m => `${n(m[1])}が都市国家を征服`],
+  [/^A city of (\w+) revolts and becomes free$/, m => `${n(m[1])}の都市が反乱し自由都市に`],
+  [/^A city is razed to a ruin$/, () => '都市が破壊され遺跡になった'],
+  [/^(\w+) completes Star Gate stage (\d)$/, m => `${n(m[1])}がスターゲート第${m[2]}段階を完成`],
+  [/^(\w+) becomes suzerain of city-state (\d+)$/, m => `${n(m[1])}が都市国家${m[2]}の宗主に`],
+  [/^(\w+) discovers (\w+)$/, m => `${n(m[1])}が「${TECH[m[2]] || m[2]}」を発見`],
+  [/^(\w+): (.+) becomes (general|steward|science officer|diplomat) \(was (.+)\)$/,
+    (m, kind) => `${n(m[1])}：${actor(m[2])}が${ROLE_NAME[m[3]]}に${kind === 'recall' ? '（解任による交代）' : ''}（前任 ${actor(m[4])}）`],
+  [/^First election — (\w+): (.+)$/, m => `${n(m[1])}の第1回選挙：${m[2].split(', ').map(electedText).join('・')}`],
+  [/^(\w+) adopts (\d+) proposals?$/, m => `${n(m[1])}が献策を${m[2]}件採用`],
+  [/^(\w+) reaches (\w+) (\d)$/, m => `${n(m[1])}が${pathName(m[2])}の第${m[3]}段階に到達`],
+  [/^(\w+) loses (\w+) (\d)$/, m => `${n(m[1])}が${pathName(m[2])}の第${m[3]}段階を失った`],
+  [/^(\w+) enters era (\d)$/, m => `${n(m[1])}が第${m[2]}時代に入った`],
+  [/^(\w+) conquers the home of (.+) of (\w+), an operator AI member: bounty (\d+) USDC$/,
+    m => `${n(m[1])}が${n(m[3])}の${m[2]}（運営のAI国民）の住む都市を落とした：懸賞金 ${m[4]} USDC`],
+  [/^(\w+) conquers the home of (.+) of (\w+), an operator AI member: no bounty/,
+    m => `${n(m[1])}が${n(m[3])}の${m[2]}（運営のAI国民）の住む都市を落とした：直前に条約があったため懸賞金なし`],
+];
 export const KIND_GLYPH = { bounty: '◎', war: '⚔', capture: '⚑', raze: '✕', peace: '☮', ally: '⚭', diplo: '✉', science: '✦', revolt: '!', found: '⌂', tech: '✧', gov: '⚖', recall: '⚠', milestone: '◆', era: '✺' };
 // Chronicle lines name offices and paths in English.
 const ROLE_NAME = { general: ROLE_JA.General, steward: ROLE_JA.Steward, 'science officer': ROLE_JA.Science, diplomat: ROLE_JA.Diplomat };

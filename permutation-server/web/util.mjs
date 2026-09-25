@@ -39,6 +39,7 @@ export const fmt = n => Number(n ?? 0).toLocaleString('ja-JP');
 export const fmtOr = n => (n === null || n === undefined ? '—' : fmt(n));
 /** Micro-USDC → display amount. */
 export const usdc = x => (Number(x ?? 0) / 1e6).toLocaleString('ja-JP', { maximumFractionDigits: 2 });
+/** Micro-USDC → amount with exactly two decimals (tables, contracts, prices). */
 export const usdcFixed = x => (Number(x ?? 0) / 1e6).toFixed(2);
 /** abcd…wxyz for hashes and keys. */
 export const short = (s, head = 4, tail = 4, empty = '') => (s ? `${s.slice(0, head)}…${s.slice(-tail)}` : empty);
@@ -67,6 +68,16 @@ export function toast(text, kind = '', action = null) {
   box.prepend(el);
   while (box.children.length > 3) box.lastChild.remove();
   setTimeout(() => el.remove(), kind === 'error' || kind === 'war' ? 8000 : 4500);
+}
+
+/**
+ * Rejection handler for background tasks (intervals, fire-and-forget loads):
+ * logs the first failure only, so a server that is down does not flood the
+ * console every beat. One handler per task.
+ */
+export function logOnce(label) {
+  let logged = false;
+  return e => { if (!logged) { logged = true; console.warn(`${label}:`, e); } };
 }
 
 /**

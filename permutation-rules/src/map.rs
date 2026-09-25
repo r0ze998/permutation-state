@@ -552,7 +552,7 @@ enum Balance {
 fn balance_round(rules: &Ruleset, map: &mut Map, starts: &[Hex]) -> Balance {
     let values: Vec<u64> = starts.iter().map(|s| start_value(map, *s)).collect();
     let max = values.iter().copied().max().unwrap_or(0);
-    let floor = (max * 10_000).div_ceil(rules.start_fairness_max_bps as u64);
+    let floor = (max * crate::fixed::BPS_ONE as u64).div_ceil(rules.start_fairness_max_bps as u64);
     let mut all_ok = true;
     let mut changed = false;
     for (i, st) in starts.iter().enumerate() {

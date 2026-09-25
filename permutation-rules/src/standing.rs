@@ -127,7 +127,7 @@ pub(crate) fn phase_standing(state: &mut WorldState, rules: &Ruleset) {
                     })
                     .map(|j| strength(state, j))
                     .sum();
-                if own == 0 || enemy * 10_000 <= own * ratio_bps as u64 {
+                if own == 0 || enemy * crate::fixed::BPS_ONE as u64 <= own * ratio_bps as u64 {
                     continue;
                 }
                 if let Some(step) = retreat_step(state, rules, civ, u.hex) {

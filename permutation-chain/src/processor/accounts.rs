@@ -208,6 +208,16 @@ pub(super) fn world_chunks<'a, 'info>(
     Chunks::new(list)
 }
 
+/// The world accounts at the front of `accounts`, for the season chunk 0
+/// names (the ER instructions carry no season account).
+pub(super) fn world_at<'a, 'info>(
+    program_id: &Pubkey,
+    accounts: &'a [AccountInfo<'info>],
+) -> Result<Chunks<'a, 'info>, ProgramError> {
+    let chunk0 = accounts.first().ok_or(ProgramError::NotEnoughAccountKeys)?;
+    world_chunks(program_id, accounts, world_season_id(chunk0)?)
+}
+
 /// Season id recorded in world chunk 0 (to find the other accounts).
 pub(super) fn world_season_id(chunk0: &AccountInfo) -> Result<u64, ProgramError> {
     let d = chunk0.try_borrow_data()?;
@@ -225,11 +235,11 @@ pub(super) fn world_season_id(chunk0: &AccountInfo) -> Result<u64, ProgramError>
 /// records the crank's key, and they stay delegated for the whole of play.
 pub(super) fn require_crank(
     program_id: &Pubkey,
-    nation_ai: &AccountInfo,
+    nation_info: &AccountInfo,
     season_id: u64,
     payer: &AccountInfo,
 ) -> ProgramResult {
-    let n = load_nation_at(program_id, nation_ai)?;
+    let n = load_nation_at(program_id, nation_info)?;
     if n.season_id != season_id {
         return Err(ChainError::MissingNation.into());
     }
@@ -268,34 +278,46 @@ pub(super) fn check_usdc(
     Ok(())
 }
 
+/// A token account of `mint` (and, with `owner`, owned by it).
+pub(super) fn check_token_account(
+    account: &AccountInfo,
+    mint: &AccountInfo,
+    owner: Option<&Pubkey>,
+) -> ProgramResult {
+    let (m, o) = token::token_account_mint_owner(account).ok_or(ChainError::WrongTokenAccount)?;
+    if m != *mint.key || owner.is_some_and(|w| o != *w) {
+        return Err(ChainError::WrongTokenAccount.into());
+    }
+    Ok(())
+}
+
+/// Pay `amount` out of the season's vault, signed by the season account.
+pub(super) fn pay_from_vault<'info>(
+    season: &Season,
+    season_info: &AccountInfo<'info>,
+    vault: &AccountInfo<'info>,
+    mint: &AccountInfo<'info>,
+    dest: &AccountInfo<'info>,
+    amount: u64,
+) -> ProgramResult {
+    let id = season.season_id.to_le_bytes();
+    token::transfer_checked(
+        vault,
+        mint,
+        dest,
+        season_info,
+        amount,
+        season.usdc_decimals,
+        Some(&[SEASON_SEED, &id, &[season.bump]]),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use permutation_rules::gov::NOBODY;
 
     fn nation(season_id: u64, civ: u16, bump: u8) -> Vec<u8> {
-        let n = NationAccount {
-            magic: NATION_MAGIC,
-            season_id,
-            civ,
-            bump,
-            preset: 0,
-            market: false,
-            crank: [0; 32],
-            open_tick: 0,
-            officers: [NOBODY; 4],
-            keys: [[0; 32]; 4],
-            spendable: [0; 4],
-            submitted: [u16::MAX; 4],
-            frozen: false,
-            revealing: false,
-            reveal_deadline: 0,
-            committed: [u16::MAX; 4],
-            commits: [[0; 32]; 4],
-            salts: [[0; 32]; 4],
-            batches: [None, None, None, None],
-            inbox: Vec::new(),
-        };
+        let n = NationAccount::new(season_id, civ, bump, 0, false, [0; 32]);
         let mut data = vec![0u8; NATION_SPACE];
         store(&mut data, &n).unwrap();
         data
@@ -314,12 +336,12 @@ mod tests {
         let mut data = vec![0u8; NATION_SPACE];
         store(&mut data, &n).unwrap();
         let (mut l, mut l1, mut l2) = (0u64, 0u64, 0u64);
-        let nation_ai = AccountInfo::new(&pda, false, false, &mut l, &mut data, &program, false);
+        let nation_info = AccountInfo::new(&pda, false, false, &mut l, &mut data, &program, false);
         let mut none: [u8; 0] = [];
         let mut none2: [u8; 0] = [];
         let owner = Pubkey::default();
         let stranger_key = Pubkey::new_unique();
-        let crank_ai = AccountInfo::new(&crank, true, true, &mut l1, &mut none, &owner, false);
+        let crank_info = AccountInfo::new(&crank, true, true, &mut l1, &mut none, &owner, false);
         let stranger = AccountInfo::new(
             &stranger_key,
             true,
@@ -329,13 +351,13 @@ mod tests {
             &owner,
             false,
         );
-        assert!(require_crank(&program, &nation_ai, 7, &crank_ai).is_ok());
+        assert!(require_crank(&program, &nation_info, 7, &crank_info).is_ok());
         assert_eq!(
-            require_crank(&program, &nation_ai, 7, &stranger).unwrap_err(),
+            require_crank(&program, &nation_info, 7, &stranger).unwrap_err(),
             ChainError::Unauthorized.into()
         );
         assert_eq!(
-            require_crank(&program, &nation_ai, 8, &crank_ai).unwrap_err(),
+            require_crank(&program, &nation_info, 8, &crank_info).unwrap_err(),
             ChainError::MissingNation.into()
         );
     }

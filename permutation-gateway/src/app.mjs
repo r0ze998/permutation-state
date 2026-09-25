@@ -3,6 +3,7 @@
 // where `req` is { method, url: URL, headers, json() }; it throws a
 // RouteError (or lets a program error through) to fail. `createApp` returns
 // a plain Node request handler, so it is testable without a socket.
+import { toJson } from '../client/src/bytes.mjs';
 import { ChainClient } from '../client/src/chain.mjs';
 import { namedKey } from './config.mjs';
 import { memberKeyName } from './season.mjs';
@@ -19,8 +20,8 @@ export const ROUTES = Object.freeze({ ...seasonRoutes, ...relayRoutes, ...x402Ro
 export const MAX_BODY_BYTES = 1 << 20;
 const CORS = { 'Access-Control-Allow-Origin': '*' };
 
-/** JSON with bigints as decimal strings and byte arrays as hex. */
-export const toJson = body => JSON.stringify(body, (_, v) => (typeof v === 'bigint' ? v.toString() : v instanceof Uint8Array ? Buffer.from(v).toString('hex') : v));
+/** JSON with bigints as decimal strings and byte arrays as hex (re-exported: tests and tools import it from here). */
+export { toJson };
 
 function readJson(req) {
   return new Promise((resolve, reject) => {

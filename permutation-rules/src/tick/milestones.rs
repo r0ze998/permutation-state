@@ -141,7 +141,9 @@ fn dark_age(state: &mut WorldState, rules: &Ruleset) {
         .unwrap_or(0);
     let behind: Vec<usize> = (0..scores.len())
         .filter(|c| {
-            counted(*c) && scores[*c].total() * 10_000 < lead * rules.dark_age_share_bps as u64
+            counted(*c)
+                && scores[*c].total() * (crate::fixed::BPS_ONE as u64)
+                    < lead * rules.dark_age_share_bps as u64
         })
         .collect();
     for c in behind {

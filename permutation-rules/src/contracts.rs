@@ -14,9 +14,10 @@
 
 use crate::checks::Blocked;
 use crate::gov::Credit;
+use crate::markets::{short_of_usdc, treasury_room};
 use crate::orders::Order;
 use crate::params::Ruleset;
-use crate::state::{CityId, CivId, Relation, WorldState};
+use crate::state::{CityId, CivId, WorldState};
 use crate::tick::accepted;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -118,7 +119,7 @@ fn check_offer(
                 return Err(Blocked::SameCiv);
             }
             let ok = match term {
-                ContractTerm::Peace => state.at_war(civ, t) || war_declared(state, civ, t),
+                ContractTerm::Peace => state.war_pending(civ, t),
                 ContractTerm::LeaveAlliance { with } => {
                     with < n && with != civ && with != t && allied(state, t, with)
                 }
@@ -141,25 +142,12 @@ fn check_offer(
     Ok(())
 }
 
-fn war_declared(state: &WorldState, a: CivId, b: CivId) -> bool {
-    matches!(state.relation(a, b), Relation::War { peace_at: None, .. })
-}
-
 fn allied(state: &WorldState, a: CivId, b: CivId) -> bool {
-    matches!(state.relation(a, b), Relation::Alliance { .. })
+    state.relation(a, b).is_alliance()
 }
 
 fn under_nap(state: &WorldState, a: CivId, b: CivId) -> bool {
-    matches!(state.relation(a, b), Relation::Nap { .. })
-}
-
-/// USDC `civ` may still escrow this tick: the treasury spend limit less
-/// what it already escrowed, and never contract income (V5 §18.6).
-pub fn escrow_room(state: &WorldState, rules: &Ruleset, civ: CivId, escrowed: u64) -> u64 {
-    let c = &state.civs[civ as usize];
-    crate::markets::spend_limit(state, rules, civ)
-        .saturating_sub(escrowed)
-        .min(c.usdc.saturating_sub(c.contract_income))
+    state.relation(a, b).is_nap()
 }
 
 /// Phase 2 (before the market): offers, acceptances and cancellations, in
@@ -183,14 +171,9 @@ pub fn apply_contract_orders(state: &mut WorldState, rules: &Ruleset) -> Vec<u64
                 usdc,
                 deadline,
             } => check_offer(state, rules, civ, to, term, usdc, deadline).and_then(|_| {
-                let room = escrow_room(state, rules, civ, escrowed[civ as usize]);
+                let room = treasury_room(state, rules, civ, escrowed[civ as usize]);
                 if usdc > room {
-                    let c = &state.civs[civ as usize];
-                    return Err(if usdc <= c.usdc.saturating_sub(c.contract_income) {
-                        Blocked::NeedsSpendConsent
-                    } else {
-                        Blocked::NotEnoughUsdc
-                    });
+                    return Err(short_of_usdc(usdc <= state.civs[civ as usize].free_usdc()));
                 }
                 escrowed[civ as usize] += usdc;
                 offer(state, civ, to, term, usdc, deadline, credit);
@@ -252,7 +235,7 @@ fn accept(state: &mut WorldState, civ: CivId, id: u32) -> Result<(), Blocked> {
     let c = state.contracts[i];
     // Offered on an earlier tick, and its condition still possible.
     let still = match c.term {
-        ContractTerm::Peace => state.at_war(c.from, civ) || war_declared(state, c.from, civ),
+        ContractTerm::Peace => state.war_pending(c.from, civ),
         ContractTerm::LeaveAlliance { with } => allied(state, civ, with),
         ContractTerm::KeepNap { .. } => under_nap(state, c.from, civ),
         ContractTerm::Capture { .. } => false,
@@ -332,7 +315,7 @@ fn outcome(state: &WorldState, c: &Contract, now: u16) -> Outcome {
     };
     match (c.term, c.to) {
         (ContractTerm::Peace, Some(to)) => {
-            if !state.at_war(c.from, to) && !war_declared(state, c.from, to) {
+            if !state.war_pending(c.from, to) {
                 Outcome::Pay(to, c.escrow, 0)
             } else {
                 Outcome::Wait

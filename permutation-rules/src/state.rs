@@ -114,6 +114,12 @@ pub struct Civ {
 }
 
 impl Civ {
+    /// Treasury USDC the nation may spend: all of it but what contracts
+    /// paid in, which only goes back to depositors (V5 §18.6).
+    pub fn free_usdc(&self) -> u64 {
+        self.usdc.saturating_sub(self.contract_income)
+    }
+
     pub fn is_aggressor(&self, tick: u16, window: u16) -> bool {
         matches!(self.last_aggression, Some(t) if tick.saturating_sub(t) < window)
     }
@@ -175,6 +181,47 @@ pub struct City {
     /// The first conquest of this city after `ai_home_tick` (V5 §18.3): an
     /// operator AI's home city pays its bounty to that nation.
     pub first_conquest: Option<Conquest>,
+}
+
+impl City {
+    /// A city `civ` founds at `hex` on `tick`: pop 1, full loyalty, the base
+    /// defense, nothing queued. Genesis capitals, founded cities and captured
+    /// city-states start from it.
+    pub fn founded(
+        id: CityId,
+        civ: CivId,
+        hex: Hex,
+        tick: u16,
+        rules: &crate::params::Ruleset,
+    ) -> City {
+        City {
+            id,
+            owner: Some(civ),
+            founder: civ,
+            founded_tick: tick,
+            hex,
+            pop: 1,
+            food: 0,
+            prod: 0,
+            buildings: BuildingSet::default(),
+            loyalty: 100,
+            defense: (rules.city_defense_base + 1) * 1000,
+            attacked_this_tick: false,
+            focus: Focus::Balanced,
+            queue: Vec::new(),
+            queue_credit: Credit::NONE,
+            steward_credit: Credit::NONE,
+            captured_tick: None,
+            captured_from: None,
+            capture_scores: false,
+            razing: None,
+            heritage_until: None,
+            heritage_bonus: 0,
+            standing: CityStanding::DEFAULT,
+            alive: true,
+            first_conquest: None,
+        }
+    }
 }
 
 /// A city's first conquest after the home cities were drawn (V5 §18.3).
@@ -276,6 +323,27 @@ pub enum Relation {
     Alliance {
         leaving_at: Option<u16>,
     },
+}
+
+impl Relation {
+    pub const fn is_alliance(self) -> bool {
+        matches!(self, Relation::Alliance { .. })
+    }
+
+    pub const fn is_nap(self) -> bool {
+        matches!(self, Relation::Nap { .. })
+    }
+
+    /// A NAP or an alliance: a treaty partner ("条約相手", V5 §6.2).
+    pub const fn is_pact(self) -> bool {
+        matches!(self, Relation::Nap { .. } | Relation::Alliance { .. })
+    }
+
+    /// A war declared and not yet ended by a peace (it may not be active
+    /// yet: war starts the tick after its declaration).
+    pub const fn is_declared_war(self) -> bool {
+        matches!(self, Relation::War { peace_at: None, .. })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -438,6 +506,12 @@ pub struct WorldState {
     pub merit_log: Vec<MeritEntry>,
 }
 
+/// Unordered pairs among `n` civs: the length of the per-pair tables
+/// (`relations`, `truce_until`, `pact_last`).
+pub const fn pair_count(n: usize) -> usize {
+    n * n.saturating_sub(1) / 2
+}
+
 impl WorldState {
     /// Index into `relations` for the unordered pair {a, b}, a ≠ b.
     pub fn pair_index(&self, a: CivId, b: CivId) -> usize {
@@ -458,6 +532,11 @@ impl WorldState {
     pub fn set_relation(&mut self, a: CivId, b: CivId, rel: Relation) {
         let i = self.pair_index(a, b);
         self.relations[i] = rel;
+    }
+
+    /// At war now, or a war declared that is not active yet.
+    pub fn war_pending(&self, a: CivId, b: CivId) -> bool {
+        a != b && (self.at_war(a, b) || self.relation(a, b).is_declared_war())
     }
 
     pub fn at_war(&self, a: CivId, b: CivId) -> bool {

@@ -1,7 +1,7 @@
 // The SPL Token v3 instructions needed for local test USDC, built by hand
 // (no @solana/spl-token dependency).
 import { PublicKey, SystemProgram, TransactionInstruction } from '@solana/web3.js';
-
+import { u64le } from '../client/src/bytes.mjs';
 import { TOKEN_PROGRAM_ID } from '../client/src/pda.mjs';
 
 export { TOKEN_PROGRAM_ID };
@@ -28,7 +28,7 @@ export async function createTokenAccountIxs(connection, { payer, account, mint, 
 }
 
 export function mintToIx({ mint, dest, authority, amount }) {
-  const data = Buffer.alloc(9); data[0] = 7; data.writeBigUInt64LE(BigInt(amount), 1);
+  const data = Buffer.alloc(9); data[0] = 7; data.set(u64le(amount), 1);
   return new TransactionInstruction({ programId: TOKEN_PROGRAM_ID, keys: [
     { pubkey: mint, isSigner: false, isWritable: true }, { pubkey: dest, isSigner: false, isWritable: true }, { pubkey: authority, isSigner: true, isWritable: false }], data });
 }

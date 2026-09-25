@@ -10,8 +10,9 @@
 // everything else lives in the modules imported below.
 import * as T from './i18n.mjs';
 import * as api from './api.mjs';
-import { $, toast, singleFlight } from './util.mjs';
+import { $, toast } from './util.mjs';
 import { S, civN, isWatching, invalidate, registerRenderers } from './state.mjs';
+import { poll, setPollStep } from './sync.mjs';
 import { map } from './world.mjs';
 import { drawMinimap } from './map.mjs';
 import { isDirty, commit, restoreCommitted, resetTick } from './orders.mjs';
@@ -64,8 +65,8 @@ async function pollOnce() {
   applied = seq;
   applyView(v);
 }
-/** Fetch and apply the latest view; overlapping calls are coalesced (one request in flight). */
-export const poll = singleFlight(pollOnce);
+// poll() itself lives in sync.mjs (no import cycle back into this module).
+setPollStep(pollOnce);
 
 function applyView(v) {
   // The server no longer knows this browser's member token (it restarted):
@@ -136,7 +137,8 @@ async function boot() {
   if (params.has('spectate')) { location.replace('spectate.html'); return; }
   if (params.get('token')) { api.tokenStore.set(params.get('token')); history.replaceState(null, '', location.pathname); }
   api.setMemberToken(api.tokenStore.get());
-  // ?watch=N: read-only view through nation N's fog (for review; no membership needed).
+  // ?watch=N: read-only view as nation N (for review; no membership needed). The
+  // world is the same for everyone (perfect information); only relations and sight differ.
   if (params.has('watch')) { S.watch = +params.get('watch'); api.setMemberToken(null); }
   bindInput();
   try {

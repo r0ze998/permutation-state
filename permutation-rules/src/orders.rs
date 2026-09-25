@@ -218,6 +218,15 @@ impl Order {
         }
     }
 
+    /// The nation this order goes to war with (`DeclareWar`, `BreakNap`):
+    /// such an order needs a second officer's `ConsentWar` (V5 §5.6).
+    pub const fn war_target(&self) -> Option<CivId> {
+        match self {
+            Order::DeclareWar { civ } | Order::BreakNap { civ } => Some(*civ),
+            _ => None,
+        }
+    }
+
     /// Whether the order does something (anything but a reveal, v0.2 C9).
     pub const fn is_action(&self) -> bool {
         !matches!(self, Order::RevealRationale { .. })
@@ -244,8 +253,9 @@ pub struct OrderBatch {
     pub civ: CivId,
     pub tick: u16,
     pub role: Role,
-    /// The office holder who issued it, or `NOBODY` for the acting official
-    /// of a vacant office. The chain program sets it from the signer.
+    /// The office holder who issued it (`NOBODY` for a vacant office, whose
+    /// batches the caretaker replaces). The chain program sets it from the
+    /// signer.
     pub member: MemberId,
     /// `sha256(tick ‖ obs_root ‖ policy_id ‖ rationale_hash)`, stored, never
     /// interpreted. Required (non-zero) from a member (V5 D17).
@@ -320,8 +330,8 @@ pub fn role_allows(state: &WorldState, role: Role, order: &Order) -> bool {
 }
 
 /// Split one civ's mixed orders by office (V5 §5.1), keeping their order.
-/// Reveals go to the general. For an agent that runs several offices (or
-/// the acting official of a bot nation).
+/// Reveals go to the general. For an agent (or a bot) that plans several
+/// offices at once.
 pub fn split_by_office(state: &WorldState, orders: Vec<Order>) -> [Vec<Order>; 4] {
     let mut out: [Vec<Order>; 4] = Default::default();
     for o in orders {
@@ -335,7 +345,8 @@ pub fn split_by_office(state: &WorldState, orders: Vec<Order>) -> [Vec<Order>; 4
 }
 
 /// One batch per office for `civ`, from mixed orders, issued by the
-/// current office holders (the acting official for vacant offices). Every
+/// current office holders (`NOBODY` for vacant offices, which the caretaker
+/// fills instead: `tick::intake` ignores their batches). Every
 /// `DeclareWar`/`BreakNap` gets a `ConsentWar` in the general's batch, as
 /// when one agent runs the offices involved. Offices with no orders are
 /// omitted.
@@ -348,10 +359,7 @@ pub fn office_batches(
     let mut parts = split_by_office(state, orders);
     let wars: Vec<CivId> = parts[Role::Diplomat.index()]
         .iter()
-        .filter_map(|o| match o {
-            Order::DeclareWar { civ } | Order::BreakNap { civ } => Some(*civ),
-            _ => None,
-        })
+        .filter_map(Order::war_target)
         .collect();
     parts[Role::General.index()].extend(wars.into_iter().map(|civ| Order::ConsentWar { civ }));
     let holders = state
@@ -512,7 +520,7 @@ pub fn validate_batch(
 /// The checks on a batch that need no world state (§4.2): freezes, list
 /// lengths, one manual order per unit, reveal timing. Returns the order cost.
 /// `validate_batch` runs these plus the tick and budget; the on-chain
-/// `SubmitOrders` runs them to reject malformed batches cheaply.
+/// `RevealOrders` runs them to reject malformed batches cheaply.
 pub fn check_structure(
     rules: &Ruleset,
     open_tick: u16,

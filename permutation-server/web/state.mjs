@@ -12,7 +12,7 @@ export const S = {
   lastTick: null,        // tick of the last applied view
   online: false,
   clockAt: 0,            // performance.now() when `view` arrived (the clock counts down from it)
-  watch: null,           // ?watch=N: read-only view through nation N's fog
+  watch: null,           // ?watch=N: read-only view as nation N (perfect information: same world)
   myCiv: 0,              // the nation (civ id) this view belongs to
   memberId: null,        // my member id (null when watching)
 

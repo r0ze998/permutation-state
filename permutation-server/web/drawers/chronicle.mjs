@@ -1,7 +1,7 @@
 // The chronicle: public events of the season, filterable.
 import * as T from '../i18n.mjs';
 import * as api from '../api.mjs';
-import { html } from '../util.mjs';
+import { html, usdcFixed } from '../util.mjs';
 import { S, invalidate } from '../state.mjs';
 
 /** The seasons this one follows (the history layer, V5 §17.5). */
@@ -18,7 +18,7 @@ function lineage() {
     const rows = r.nations.map((n, c) => ({ c, ...n })).sort((a, b) => Number(b.points) - Number(a.points));
     const taken = r.cities.filter(c => c.capturedFrom != null).length;
     return html`<details class="diplo-civ"><summary><span class="l1"><b>シーズン ${x.seasonId}</b><span class="grow"></span><span class="meta">都市 ${r.cities.length} · 奪われた ${taken}</span></span></summary>
-      <div class="civ-body">${rows.map((n, i) => html`<div class="list-row" style="cursor:default"><div class="main"><div class="title" style="font-weight:400">${i + 1}. ${T.civName((x.nations || [])[n.c] || `国${n.c}`)}</div><div class="meta">第${n.era}時代 · ${n.points}点 · 都市${n.cities} · 国民${n.members}</div></div><span class="meta">${(Number(n.share) / 1e6).toFixed(2)} USDC</span></div>`)}
+      <div class="civ-body">${rows.map((n, i) => html`<div class="list-row" style="cursor:default"><div class="main"><div class="title" style="font-weight:400">${i + 1}. ${T.civName((x.nations || [])[n.c] || `国${n.c}`)}</div><div class="meta">第${n.era}時代 · ${n.points}点 · 都市${n.cities} · 国民${n.members}</div></div><span class="meta">${usdcFixed(n.share)} USDC</span></div>`)}
       <p class="when">歴史のルート ${String(x.historyRoot).slice(0, 16)}… · チェーンのシーズン口座と照らし合わせられます</p></div></details>`;
   });
 }

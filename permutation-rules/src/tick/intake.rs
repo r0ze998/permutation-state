@@ -136,7 +136,7 @@ fn merge_orders(
                 state.skip(civ, origin, Blocked::WrongOffice.code());
                 continue;
             }
-            let war = matches!(order, Order::DeclareWar { civ: t } | Order::BreakNap { civ: t } if !consents.contains(&t));
+            let war = order.war_target().is_some_and(|t| !consents.contains(&t));
             if war {
                 state.skip(civ, origin, Blocked::NeedsConsent.code());
                 continue;

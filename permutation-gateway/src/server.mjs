@@ -11,11 +11,12 @@
 // Every option and its environment variable: config.mjs OPTIONS.
 //
 // Endpoints (JSON unless noted), one module each:
-//   routes/season.mjs   GET /health, /season, /world.bin, /ticks
-//   routes/relay.mjs    POST /submit, /gov; GET+POST /relay, /claim-relay
+//   routes/season.mjs   GET /health, /season, /history, /world.bin, /ticks, /tick
+//   routes/relay.mjs    POST /submit, /gov (operator); GET+POST /relay, /claim-relay
 //   routes/x402.mjs     POST /x402/join
 //   routes/faucet.mjs   POST /faucet
-//   routes/roster.mjs   GET /roster, /talk; operator: GET /operator/roster, POST /roster/announce; POST /talk
+//   routes/roster.mjs   GET /roster; operator: GET /operator/roster, POST /roster/announce;
+//                       GET+POST /talk (members' messages)
 // Failures: routes/errors.mjs (a late submission is 409, a refused signer
 // 403, a bad request 400).
 import http from 'node:http';

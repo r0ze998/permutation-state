@@ -71,12 +71,10 @@ pub fn batch(
         // War (declaring it, breaking a pact) needs two people (V5 §5.6):
         // such a proposal runs only with a supporter besides its proposer.
         .filter(|p| {
-            !p.orders.iter().any(|o| {
-                matches!(
-                    o,
-                    Order::DeclareWar { .. } | Order::BreakNap { .. } | Order::ConsentWar { .. }
-                )
-            }) || p.supporters.iter().any(|m| *m != p.proposer)
+            !p.orders
+                .iter()
+                .any(|o| o.war_target().is_some() || matches!(o, Order::ConsentWar { .. }))
+                || p.supporters.iter().any(|m| *m != p.proposer)
         })
         .max_by_key(|p| (p.supporters.len(), core::cmp::Reverse(p.id)));
     if let Some(p) = top {

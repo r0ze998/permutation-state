@@ -1,6 +1,5 @@
 //! Season genesis: map, capitals, starting units, neutral actors (§2, §3).
 
-use crate::buildings::BuildingSet;
 use crate::economy::order_budget;
 use crate::fixed::milli;
 use crate::gov::{Credit, Nation};
@@ -8,7 +7,7 @@ use crate::map::{generate, territory_radius};
 use crate::params::Ruleset;
 use crate::rng::{rand_id, Seed};
 use crate::state::{
-    Achievements, City, CityState, Civ, Focus, Owner, Pool, Relation, Scores, Specialty,
+    pair_count, Achievements, City, CityState, Civ, Owner, Pool, Relation, Scores, Specialty,
     StandingRule, Unit, WorldState,
 };
 use crate::tech::TechSet;
@@ -115,33 +114,7 @@ pub fn season_from_map(
         let civ_id = i as u16;
         let city_id = cities.len() as u32;
         map.claim_territory(city_id, *start, territory_radius(1));
-        cities.push(City {
-            id: city_id,
-            owner: Some(civ_id),
-            founder: civ_id,
-            founded_tick: 0,
-            hex: *start,
-            pop: 1,
-            food: 0,
-            prod: 0,
-            buildings: BuildingSet::default(),
-            loyalty: 100,
-            defense: (rules.city_defense_base + 1) * 1000,
-            attacked_this_tick: false,
-            focus: Focus::Balanced,
-            queue: Vec::new(),
-            queue_credit: Credit::NONE,
-            steward_credit: Credit::NONE,
-            captured_tick: None,
-            captured_from: None,
-            capture_scores: false,
-            razing: None,
-            heritage_until: None,
-            heritage_bonus: 0,
-            standing: crate::state::CityStanding::DEFAULT,
-            alive: true,
-            first_conquest: None,
-        });
+        cities.push(City::founded(city_id, civ_id, *start, 0, rules));
         let new_unit = |id: usize, unit_type: UnitType, troops: u32| Unit {
             id: id as u32,
             owner: Owner::Civ(civ_id),
@@ -241,10 +214,10 @@ pub fn season_from_map(
         units,
         city_states,
         hubs: generated.hubs,
-        relations: vec![Relation::Peace; n * n.saturating_sub(1) / 2],
+        relations: vec![Relation::Peace; pair_count(n)],
         grievance: vec![0; n * n],
         proposals: Vec::new(),
-        truce_until: vec![0; n * n.saturating_sub(1) / 2],
+        truce_until: vec![0; pair_count(n)],
         pools: vec![
             Pool {
                 goods: rules.amm_seed_goods as i64 * 1000,
@@ -264,7 +237,7 @@ pub fn season_from_map(
         last_skipped: Vec::new(),
         deliveries: Vec::new(),
         home_snapshot: Vec::new(),
-        pact_last: vec![None; n * n.saturating_sub(1) / 2],
+        pact_last: vec![None; pair_count(n)],
         contracts: Vec::new(),
         next_contract: 0,
         merit_log: Vec::new(),

@@ -6,12 +6,13 @@
 // member u32 ‖ to ‖ text` where `to` is 0 (everyone), 1 ‖ civ u16 (a
 // nation) or 2 ‖ member u32 (one member).
 import { createPrivateKey, createPublicKey, sign, verify } from 'node:crypto';
+import { u64le } from './bytes.mjs';
 
 export const MAX_TALK_CHARS = 280;
 /** The signed bytes of a message `{season, tick, member, to, text}`; `to` is null, {civ} or {member}. */
 export function talkBytes({ season, tick, member, to, text }) {
   const head = Buffer.alloc(8 + 2 + 4);
-  head.writeBigUInt64LE(BigInt(season), 0);
+  head.set(u64le(season), 0);
   head.writeUInt16LE(tick, 8);
   head.writeUInt32LE(member, 10);
   let target;

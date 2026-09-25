@@ -223,27 +223,26 @@ pub fn layout(radius: u8) -> Layout {
 /// per step until every land tile is reachable), 2 rivers and resources,
 /// then done. Every change is made to all six turns of a tile, so the map
 /// stays symmetric throughout.
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct SymJob {
+    /// The next stage (`STAGE_*`).
     pub stage: u8,
     /// Elevation per sextant tile (rivers run down it).
     pub elev: Vec<i32>,
     pub map: Option<Map>,
 }
 
+/// The stages of symmetric generation, one or more `step_symmetric` calls
+/// each (so a step stays within an on-chain transaction's compute).
+const STAGE_TERRAIN: u8 = 0;
+/// Repeats until every passable tile is reachable from the centre.
+const STAGE_CONNECT: u8 = 1;
+const STAGE_FEATURES: u8 = 2;
+const STAGE_DONE: u8 = 3;
+
 impl SymJob {
     pub fn new() -> SymJob {
-        SymJob {
-            stage: 0,
-            elev: Vec::new(),
-            map: None,
-        }
-    }
-}
-
-impl Default for SymJob {
-    fn default() -> Self {
-        SymJob::new()
+        SymJob::default()
     }
 }
 
@@ -262,360 +261,67 @@ fn set_all(map: &mut Map, w: Hex, f: impl Fn(&mut Tile)) {
     }
 }
 
+/// What every stage reads: the sextant, the layout and the start.
+struct Plan {
+    radius: u8,
+    sx: Sextant,
+    lay: Layout,
+    start_i: usize,
+}
+
+impl Plan {
+    fn new(rules: &Ruleset) -> Plan {
+        let radius = rules.map_radius;
+        let sx = Sextant::new(radius);
+        let lay = layout(radius);
+        let start_i = sx.index(lay.start).expect("start in the sextant");
+        Plan {
+            radius,
+            sx,
+            lay,
+            start_i,
+        }
+    }
+
+    fn n(&self) -> usize {
+        self.sx.tiles.len()
+    }
+
+    /// Sextant tile `k` is `lo..=hi` from the start (not the start itself).
+    fn near(&self, k: usize, lo: u32, hi: u32) -> bool {
+        let dist = self.sx.tiles[k].distance(self.lay.start);
+        k != self.start_i && dist >= lo && dist <= hi
+    }
+}
+
 /// One step of symmetric generation.
 pub fn step_symmetric(rules: &Ruleset, seed: &Seed, civs: usize, mut job: SymJob) -> SymStep {
-    use Terrain::*;
-    let radius = rules.map_radius;
-    let sx = Sextant::new(radius);
-    let n = sx.tiles.len();
-    let lay = layout(radius);
-    let start_i = sx.index(lay.start).expect("start in the sextant");
-    let near = |k: usize, lo: u32, hi: u32| {
-        let dist = sx.tiles[k].distance(lay.start);
-        k != start_i && dist >= lo && dist <= hi
-    };
+    let p = Plan::new(rules);
     match job.stage {
-        0 => {
-            let base = rand_id(seed, b"mapgen", 0);
-            let elev: Vec<i64> = sx
-                .tiles
-                .iter()
-                .map(|h| {
-                    let (d, i) = (ring(*h), h.r);
-                    let mut e = field(base, 1, *h);
-                    // A ridge along the seam, broken by the two passes.
-                    if i == 0 && d >= 3 && d < sx.radius && d != lay.gate && d != lay.inner_pass {
-                        e += 4000;
-                    }
-                    // The rim is lower: coasts form there.
-                    if d == sx.radius {
-                        e -= 500;
-                    }
-                    e
-                })
-                .collect();
-            // Moisture, smoothed once with its six neighbours (read across the
-            // seams through the rotation), so forests, grassland and plains
-            // form patches.
-            let raw: Vec<i64> = sx.tiles.iter().map(|h| field(base, 2, *h)).collect();
-            let at = |h: Hex| -> Option<i64> {
-                sextant_of(h).and_then(|(_, w)| sx.index(w)).map(|k| raw[k])
-            };
-            let moist: Vec<i64> = sx
-                .tiles
-                .iter()
-                .enumerate()
-                .map(|(k, h)| {
-                    let (mut sum, mut cnt) = (2 * raw[k], 2);
-                    for nb in h.neighbors() {
-                        if let Some(v) = at(nb) {
-                            sum += v;
-                            cnt += 1;
-                        }
-                    }
-                    sum / cnt
-                })
-                .collect();
-            // Terrain by rank.
-            let protected: Vec<bool> = sx
-                .tiles
-                .iter()
-                .map(|h| {
-                    ring(*h) <= 2
-                        || h.distance(lay.start) <= 1
-                        || (h.r == 0 && (ring(*h) == lay.gate || ring(*h) == lay.inner_pass))
-                })
-                .collect();
-            let want = counts(n);
-            let mut terrain: Vec<Option<Terrain>> = vec![None; n];
-            terrain[start_i] = Some(Grassland);
-            let assign = |t: Terrain,
-                          count: usize,
-                          key: &dyn Fn(usize) -> i64,
-                          may: &dyn Fn(usize) -> bool,
-                          terrain: &mut Vec<Option<Terrain>>| {
-                let mut order: Vec<usize> = (0..n)
-                    .filter(|k| terrain[*k].is_none() && may(*k))
-                    .collect();
-                order.sort_by_key(|k| (key(*k), *k));
-                for k in order.into_iter().take(count) {
-                    terrain[k] = Some(t);
-                }
-            };
-            let idx = |t: Terrain| TERRAIN_TABLE.iter().position(|x| x.terrain == t).unwrap();
-            assign(
-                Water,
-                want[idx(Water)],
-                &|k| elev[k],
-                &|k| !protected[k],
-                &mut terrain,
-            );
-            assign(
-                Mountain,
-                want[idx(Mountain)],
-                &|k| -elev[k],
-                &|k| !protected[k],
-                &mut terrain,
-            );
-            assign(
-                Hills,
-                want[idx(Hills)],
-                &|k| -elev[k],
-                &|_| true,
-                &mut terrain,
-            );
-            assign(
-                Forest,
-                want[idx(Forest)],
-                &|k| -moist[k],
-                &|_| true,
-                &mut terrain,
-            );
-            assign(
-                Grassland,
-                want[idx(Grassland)] - 1,
-                &|k| -moist[k],
-                &|_| true,
-                &mut terrain,
-            );
-            assign(Plains, n, &|k| k as i64, &|_| true, &mut terrain);
-            let mut terrain: Vec<Terrain> =
-                terrain.into_iter().map(|t| t.unwrap_or(Plains)).collect();
-            // The city-state and inner-pass seam tiles are open ground.
-            for d in [lay.gate, lay.inner_pass] {
-                if let Some(k) = sx.index(Hex::new(d, 0)) {
-                    if !terrain[k].is_passable() {
-                        terrain[k] = Plains;
-                    }
-                }
-            }
-            // A workable start (§2.4 validity): forest or hills within 2.
-            if !(0..n).any(|k| near(k, 1, 2) && matches!(terrain[k], Forest | Hills)) {
-                if let Some(k) = (0..n).find(|k| near(*k, 1, 2) && terrain[*k] == Plains) {
-                    terrain[k] = Forest;
-                }
-            }
-            // The whole map: the origin (grassland) and six turned copies.
-            let tiles: Vec<Tile> = hexes_within(radius as u32)
-                .into_iter()
-                .map(|h| {
-                    let t = sextant_of(h)
-                        .and_then(|(_, w)| sx.index(w))
-                        .map_or(Grassland, |k| terrain[k]);
-                    Tile {
-                        hex: h,
-                        terrain: t,
-                        river: false,
-                        resource: None,
-                        reserve: 0,
-                        owner_city: None,
-                        ruin_peak_pop: None,
-                        heritage_claimed: false,
-                    }
-                })
-                .collect();
-            job.map = Some(Map { radius, tiles });
-            job.elev = elev.into_iter().map(|e| e as i32).collect();
-            job.stage = 1;
+        STAGE_TERRAIN => {
+            let (map, elev) = terrain(&p, seed);
+            job.map = Some(map);
+            job.elev = elev;
+            job.stage = STAGE_CONNECT;
             SymStep::Working(job)
         }
-        1 => {
-            // Connectivity: a 0-1 BFS from the centre (cost 1 per impassable
-            // tile crossed); if some land is cut off, open the cheapest way
-            // to the nearest such tile (mountain → hills, water → grassland),
-            // on all six turns, and check again on the next step.
-            let map = job.map.as_mut().expect("map from stage 0");
-            let len = map.tiles.len();
-            let mut cost = vec![u32::MAX; len];
-            let mut from = vec![u32::MAX; len];
-            let o = map.index_of(Hex::ORIGIN).expect("origin");
-            cost[o] = 0;
-            let mut q = VecDeque::from([o as u32]);
-            while let Some(a) = q.pop_front() {
-                let a = a as usize;
-                for nb in map.tiles[a].hex.neighbors() {
-                    let Some(b) = map.index_of(nb) else { continue };
-                    let w = if map.tiles[b].terrain.is_passable() {
-                        0
-                    } else {
-                        1
-                    };
-                    if cost[a] + w < cost[b] {
-                        cost[b] = cost[a] + w;
-                        from[b] = a as u32;
-                        if w == 0 {
-                            q.push_front(b as u32);
-                        } else {
-                            q.push_back(b as u32);
-                        }
-                    }
-                }
-            }
-            let cut = (0..len)
-                .filter(|b| cost[*b] > 0 && map.tiles[*b].terrain.is_passable())
-                .min_by_key(|b| (cost[*b], *b));
-            match cut {
-                None => job.stage = 2,
-                Some(mut b) => {
-                    while from[b] != u32::MAX {
-                        let h = map.tiles[b].hex;
-                        if let Some((_, w)) = sextant_of(h) {
-                            set_all(map, w, |t| {
-                                t.terrain = match t.terrain {
-                                    Mountain => Hills,
-                                    Water => Grassland,
-                                    x => x,
-                                }
-                            });
-                        }
-                        b = from[b] as usize;
-                    }
-                }
+        STAGE_CONNECT => {
+            let map = job.map.as_mut().expect("map from the terrain stage");
+            if connect_step(map) {
+                job.stage = STAGE_FEATURES;
             }
             SymStep::Working(job)
         }
-        2 => {
-            let map = job.map.as_mut().expect("map from stage 0");
-            let elev = |h: Hex| -> i32 {
-                sextant_of(h)
-                    .and_then(|(_, w)| sx.index(w))
-                    .map_or(0, |k| job.elev[k])
-            };
-            let terrain_at = |map: &Map, h: Hex| map.tile(h).map(|t| t.terrain);
-            // Rivers: downhill from hills next to mountains.
-            let mut sources: Vec<usize> = (0..n)
-                .filter(|k| {
-                    terrain_at(map, sx.tiles[*k]) == Some(Hills)
-                        && sx.tiles[*k]
-                            .neighbors()
-                            .iter()
-                            .any(|nb| terrain_at(map, *nb) == Some(Mountain))
-                })
-                .collect();
-            sources.sort_by_key(|k| (-(job.elev[*k] as i64), *k));
-            let river_cap = (n * 10).div_ceil(100);
-            let mut river_tiles = 0usize;
-            for s in sources {
-                if river_tiles >= river_cap {
-                    break;
-                }
-                let mut at = sx.tiles[s];
-                for _ in 0..8 {
-                    let Some((_, w)) = sextant_of(at) else { break };
-                    let t = map.tile(w).expect("on the map");
-                    if !t.terrain.is_passable() || t.river {
-                        break;
-                    }
-                    set_all(map, w, |t| t.river = true);
-                    river_tiles += 1;
-                    if at
-                        .neighbors()
-                        .iter()
-                        .any(|nb| terrain_at(map, *nb) == Some(Water))
-                        || at.radius() == radius as u32
-                    {
-                        break;
-                    }
-                    let next = at
-                        .neighbors()
-                        .into_iter()
-                        .filter(|nb| {
-                            *nb != Hex::ORIGIN
-                                && terrain_at(map, *nb).is_some_and(|t| t.is_passable())
-                        })
-                        .filter(|nb| elev(*nb) < elev(at))
-                        .min_by_key(|nb| (elev(*nb), *nb));
-                    match next {
-                        Some(nb) => at = nb,
-                        None => break,
-                    }
-                }
-            }
-            // Resources.
-            let reserve = rules.resource_reserve;
-            let place = |map: &mut Map,
-                         area: &dyn Fn(usize) -> bool,
-                         fits: &[Terrain],
-                         res: TileResource,
-                         amount: u16,
-                         target: Hex| {
-                let mut cands: Vec<usize> = (0..n)
-                    .filter(|k| {
-                        area(*k)
-                            && *k != start_i
-                            && map.tile(sx.tiles[*k]).is_some_and(|t| t.resource.is_none())
-                    })
-                    .collect();
-                cands.sort_by_key(|k| (sx.tiles[*k].distance(target), *k));
-                let terrain = |k: usize| map.tile(sx.tiles[k]).map(|t| t.terrain).unwrap_or(Water);
-                let k = cands
-                    .iter()
-                    .copied()
-                    .find(|k| fits.contains(&terrain(*k)))
-                    .or_else(|| cands.iter().copied().find(|k| terrain(*k).is_passable()));
-                if let Some(k) = k {
-                    let convert = !fits.contains(&terrain(k));
-                    set_all(map, sx.tiles[k], |t| {
-                        if convert {
-                            t.terrain = fits[0];
-                        }
-                        t.resource = Some(res);
-                        t.reserve = amount;
-                    });
-                }
-            };
-            let start = lay.start;
-            // Wheat: two tiles next to the start.
-            for _ in 0..2 {
-                place(
-                    map,
-                    &|k| near(k, 1, 2),
-                    &[Grassland, Plains],
-                    TileResource::Wheat,
-                    0,
-                    start,
-                );
-            }
-            // Home deposits, half reserves, 3–4 from the start.
-            place(
-                map,
-                &|k| near(k, 3, 4),
-                &[Hills, Plains],
-                TileResource::Iron,
-                reserve / 2,
-                start,
-            );
-            place(
-                map,
-                &|k| near(k, 3, 4),
-                &[Grassland, Plains],
-                TileResource::Horses,
-                reserve / 2,
-                start,
-            );
-            // Central fields, full reserves: iron on ring 3, horses on ring 5.
-            let mid = |d: i32| Hex::new(d - d / 2, d / 2);
-            place(
-                map,
-                &|k| ring(sx.tiles[k]) == 3 && sx.tiles[k].r > 0,
-                &[Hills, Plains],
-                TileResource::Iron,
-                reserve,
-                mid(3),
-            );
-            place(
-                map,
-                &|k| ring(sx.tiles[k]) == 5 && sx.tiles[k].r > 0,
-                &[Grassland, Plains],
-                TileResource::Horses,
-                reserve,
-                mid(5),
-            );
-            job.stage = 3;
+        STAGE_FEATURES => {
+            let map = job.map.as_mut().expect("map from the terrain stage");
+            rivers(&p, map, &job.elev);
+            resources(&p, rules, map);
+            job.stage = STAGE_DONE;
             SymStep::Working(job)
         }
         _ => {
-            let map = job.map.take().expect("map from stage 0");
+            let map = job.map.take().expect("map from the terrain stage");
+            let lay = &p.lay;
             let starts: Vec<Hex> = (0..civs)
                 .map(|c| rotate_by(lay.start, (c * 6 / civs) as u8))
                 .collect();
@@ -625,6 +331,359 @@ pub fn step_symmetric(rules: &Ruleset, seed: &Seed, civs: usize, mut job: SymJob
             SymStep::Done(map, starts, city_states, vec![Hex::ORIGIN])
         }
     }
+}
+
+/// Terrain: elevation (with the ridge and its passes) and moisture fields,
+/// terrain assigned by rank in the proportions of the table, the whole map
+/// made of the origin and six turned copies of the sextant. Returns the map
+/// and the sextant's elevation.
+fn terrain(p: &Plan, seed: &Seed) -> (Map, Vec<i32>) {
+    use Terrain::*;
+    let (radius, sx, lay, start_i, n) = (p.radius, &p.sx, &p.lay, p.start_i, p.n());
+    let near = |k: usize, lo: u32, hi: u32| p.near(k, lo, hi);
+    let base = rand_id(seed, b"mapgen", 0);
+    let elev: Vec<i64> = sx
+        .tiles
+        .iter()
+        .map(|h| {
+            let (d, i) = (ring(*h), h.r);
+            let mut e = field(base, 1, *h);
+            // A ridge along the seam, broken by the two passes.
+            if i == 0 && d >= 3 && d < sx.radius && d != lay.gate && d != lay.inner_pass {
+                e += 4000;
+            }
+            // The rim is lower: coasts form there.
+            if d == sx.radius {
+                e -= 500;
+            }
+            e
+        })
+        .collect();
+    // Moisture, smoothed once with its six neighbours (read across the
+    // seams through the rotation), so forests, grassland and plains
+    // form patches.
+    let raw: Vec<i64> = sx.tiles.iter().map(|h| field(base, 2, *h)).collect();
+    let at =
+        |h: Hex| -> Option<i64> { sextant_of(h).and_then(|(_, w)| sx.index(w)).map(|k| raw[k]) };
+    let moist: Vec<i64> = sx
+        .tiles
+        .iter()
+        .enumerate()
+        .map(|(k, h)| {
+            let (mut sum, mut cnt) = (2 * raw[k], 2);
+            for nb in h.neighbors() {
+                if let Some(v) = at(nb) {
+                    sum += v;
+                    cnt += 1;
+                }
+            }
+            sum / cnt
+        })
+        .collect();
+    // Terrain by rank.
+    let protected: Vec<bool> = sx
+        .tiles
+        .iter()
+        .map(|h| {
+            ring(*h) <= 2
+                || h.distance(lay.start) <= 1
+                || (h.r == 0 && (ring(*h) == lay.gate || ring(*h) == lay.inner_pass))
+        })
+        .collect();
+    let want = counts(n);
+    let mut terrain: Vec<Option<Terrain>> = vec![None; n];
+    terrain[start_i] = Some(Grassland);
+    let assign = |t: Terrain,
+                  count: usize,
+                  key: &dyn Fn(usize) -> i64,
+                  may: &dyn Fn(usize) -> bool,
+                  terrain: &mut Vec<Option<Terrain>>| {
+        let mut order: Vec<usize> = (0..n)
+            .filter(|k| terrain[*k].is_none() && may(*k))
+            .collect();
+        order.sort_by_key(|k| (key(*k), *k));
+        for k in order.into_iter().take(count) {
+            terrain[k] = Some(t);
+        }
+    };
+    let idx = |t: Terrain| TERRAIN_TABLE.iter().position(|x| x.terrain == t).unwrap();
+    assign(
+        Water,
+        want[idx(Water)],
+        &|k| elev[k],
+        &|k| !protected[k],
+        &mut terrain,
+    );
+    assign(
+        Mountain,
+        want[idx(Mountain)],
+        &|k| -elev[k],
+        &|k| !protected[k],
+        &mut terrain,
+    );
+    assign(
+        Hills,
+        want[idx(Hills)],
+        &|k| -elev[k],
+        &|_| true,
+        &mut terrain,
+    );
+    assign(
+        Forest,
+        want[idx(Forest)],
+        &|k| -moist[k],
+        &|_| true,
+        &mut terrain,
+    );
+    assign(
+        Grassland,
+        want[idx(Grassland)] - 1,
+        &|k| -moist[k],
+        &|_| true,
+        &mut terrain,
+    );
+    assign(Plains, n, &|k| k as i64, &|_| true, &mut terrain);
+    let mut terrain: Vec<Terrain> = terrain.into_iter().map(|t| t.unwrap_or(Plains)).collect();
+    // The city-state and inner-pass seam tiles are open ground.
+    for d in [lay.gate, lay.inner_pass] {
+        if let Some(k) = sx.index(Hex::new(d, 0)) {
+            if !terrain[k].is_passable() {
+                terrain[k] = Plains;
+            }
+        }
+    }
+    // A workable start (§2.4 validity): forest or hills within 2.
+    if !(0..n).any(|k| near(k, 1, 2) && matches!(terrain[k], Forest | Hills)) {
+        if let Some(k) = (0..n).find(|k| near(*k, 1, 2) && terrain[*k] == Plains) {
+            terrain[k] = Forest;
+        }
+    }
+    // The whole map: the origin (grassland) and six turned copies.
+    let tiles: Vec<Tile> = hexes_within(radius as u32)
+        .into_iter()
+        .map(|h| {
+            let t = sextant_of(h)
+                .and_then(|(_, w)| sx.index(w))
+                .map_or(Grassland, |k| terrain[k]);
+            Tile {
+                hex: h,
+                terrain: t,
+                river: false,
+                resource: None,
+                reserve: 0,
+                owner_city: None,
+                ruin_peak_pop: None,
+                heritage_claimed: false,
+            }
+        })
+        .collect();
+    (
+        Map { radius, tiles },
+        elev.into_iter().map(|e| e as i32).collect(),
+    )
+}
+
+/// Connectivity: a 0-1 BFS from the centre (cost 1 per impassable tile
+/// crossed); if some land is cut off, open the cheapest way to the nearest
+/// such tile (mountain → hills, water → grassland), on all six turns.
+/// Returns whether the map was already connected (else the next step checks
+/// again).
+fn connect_step(map: &mut Map) -> bool {
+    use Terrain::*;
+    let len = map.tiles.len();
+    let mut cost = vec![u32::MAX; len];
+    let mut from = vec![u32::MAX; len];
+    let o = map.index_of(Hex::ORIGIN).expect("origin");
+    cost[o] = 0;
+    let mut q = VecDeque::from([o as u32]);
+    while let Some(a) = q.pop_front() {
+        let a = a as usize;
+        for nb in map.tiles[a].hex.neighbors() {
+            let Some(b) = map.index_of(nb) else { continue };
+            let w = if map.tiles[b].terrain.is_passable() {
+                0
+            } else {
+                1
+            };
+            if cost[a] + w < cost[b] {
+                cost[b] = cost[a] + w;
+                from[b] = a as u32;
+                if w == 0 {
+                    q.push_front(b as u32);
+                } else {
+                    q.push_back(b as u32);
+                }
+            }
+        }
+    }
+    let cut = (0..len)
+        .filter(|b| cost[*b] > 0 && map.tiles[*b].terrain.is_passable())
+        .min_by_key(|b| (cost[*b], *b));
+    let Some(mut b) = cut else {
+        return true;
+    };
+    while from[b] != u32::MAX {
+        let h = map.tiles[b].hex;
+        if let Some((_, w)) = sextant_of(h) {
+            set_all(map, w, |t| {
+                t.terrain = match t.terrain {
+                    Mountain => Hills,
+                    Water => Grassland,
+                    x => x,
+                }
+            });
+        }
+        b = from[b] as usize;
+    }
+    false
+}
+
+/// Rivers: downhill from hills next to mountains, on all six turns, up to a
+/// tenth of the sextant.
+fn rivers(p: &Plan, map: &mut Map, sextant_elev: &[i32]) {
+    use Terrain::*;
+    let (radius, sx, n) = (p.radius, &p.sx, p.n());
+    let elev = |h: Hex| -> i32 {
+        sextant_of(h)
+            .and_then(|(_, w)| sx.index(w))
+            .map_or(0, |k| sextant_elev[k])
+    };
+    let terrain_at = |map: &Map, h: Hex| map.tile(h).map(|t| t.terrain);
+    // Rivers: downhill from hills next to mountains.
+    let mut sources: Vec<usize> = (0..n)
+        .filter(|k| {
+            terrain_at(map, sx.tiles[*k]) == Some(Hills)
+                && sx.tiles[*k]
+                    .neighbors()
+                    .iter()
+                    .any(|nb| terrain_at(map, *nb) == Some(Mountain))
+        })
+        .collect();
+    sources.sort_by_key(|k| (-(sextant_elev[*k] as i64), *k));
+    let river_cap = (n * 10).div_ceil(100);
+    let mut river_tiles = 0usize;
+    for s in sources {
+        if river_tiles >= river_cap {
+            break;
+        }
+        let mut at = sx.tiles[s];
+        for _ in 0..8 {
+            let Some((_, w)) = sextant_of(at) else { break };
+            let t = map.tile(w).expect("on the map");
+            if !t.terrain.is_passable() || t.river {
+                break;
+            }
+            set_all(map, w, |t| t.river = true);
+            river_tiles += 1;
+            if at
+                .neighbors()
+                .iter()
+                .any(|nb| terrain_at(map, *nb) == Some(Water))
+                || at.radius() == radius as u32
+            {
+                break;
+            }
+            let next = at
+                .neighbors()
+                .into_iter()
+                .filter(|nb| {
+                    *nb != Hex::ORIGIN && terrain_at(map, *nb).is_some_and(|t| t.is_passable())
+                })
+                .filter(|nb| elev(*nb) < elev(at))
+                .min_by_key(|nb| (elev(*nb), *nb));
+            match next {
+                Some(nb) => at = nb,
+                None => break,
+            }
+        }
+    }
+}
+
+/// Resources: wheat by the start, half-reserve iron and horses 3–4 from it,
+/// and full-reserve fields in the centre, on all six turns.
+fn resources(p: &Plan, rules: &Ruleset, map: &mut Map) {
+    use Terrain::*;
+    let (sx, lay, start_i, n) = (&p.sx, &p.lay, p.start_i, p.n());
+    let near = |k: usize, lo: u32, hi: u32| p.near(k, lo, hi);
+    let reserve = rules.resource_reserve;
+    let place = |map: &mut Map,
+                 area: &dyn Fn(usize) -> bool,
+                 fits: &[Terrain],
+                 res: TileResource,
+                 amount: u16,
+                 target: Hex| {
+        let mut cands: Vec<usize> = (0..n)
+            .filter(|k| {
+                area(*k)
+                    && *k != start_i
+                    && map.tile(sx.tiles[*k]).is_some_and(|t| t.resource.is_none())
+            })
+            .collect();
+        cands.sort_by_key(|k| (sx.tiles[*k].distance(target), *k));
+        let terrain = |k: usize| map.tile(sx.tiles[k]).map(|t| t.terrain).unwrap_or(Water);
+        let k = cands
+            .iter()
+            .copied()
+            .find(|k| fits.contains(&terrain(*k)))
+            .or_else(|| cands.iter().copied().find(|k| terrain(*k).is_passable()));
+        if let Some(k) = k {
+            let convert = !fits.contains(&terrain(k));
+            set_all(map, sx.tiles[k], |t| {
+                if convert {
+                    t.terrain = fits[0];
+                }
+                t.resource = Some(res);
+                t.reserve = amount;
+            });
+        }
+    };
+    let start = lay.start;
+    // Wheat: two tiles next to the start.
+    for _ in 0..2 {
+        place(
+            map,
+            &|k| near(k, 1, 2),
+            &[Grassland, Plains],
+            TileResource::Wheat,
+            0,
+            start,
+        );
+    }
+    // Home deposits, half reserves, 3–4 from the start.
+    place(
+        map,
+        &|k| near(k, 3, 4),
+        &[Hills, Plains],
+        TileResource::Iron,
+        reserve / 2,
+        start,
+    );
+    place(
+        map,
+        &|k| near(k, 3, 4),
+        &[Grassland, Plains],
+        TileResource::Horses,
+        reserve / 2,
+        start,
+    );
+    // Central fields, full reserves: iron on ring 3, horses on ring 5.
+    let mid = |d: i32| Hex::new(d - d / 2, d / 2);
+    place(
+        map,
+        &|k| ring(sx.tiles[k]) == 3 && sx.tiles[k].r > 0,
+        &[Hills, Plains],
+        TileResource::Iron,
+        reserve,
+        mid(3),
+    );
+    place(
+        map,
+        &|k| ring(sx.tiles[k]) == 5 && sx.tiles[k].r > 0,
+        &[Grassland, Plains],
+        TileResource::Horses,
+        reserve,
+        mid(5),
+    );
 }
 
 /// Generate a symmetric map for `civs` nations (a divisor of 6) in one go.

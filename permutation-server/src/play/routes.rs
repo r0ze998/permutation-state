@@ -11,6 +11,7 @@ use permutation_rules::orders::{
 };
 use permutation_rules::state::{CivId, WorldState};
 use serde_json::{json, Value};
+use std::borrow::Cow;
 use std::net::TcpStream;
 use std::path::Path;
 use std::sync::Arc;
@@ -19,6 +20,7 @@ use std::time::{Duration, Instant};
 use super::chain::Submission;
 use super::game::{role_name, Game, Host, Phase, Viewer};
 use super::http::{Request, Response, IO_TIMEOUT};
+use super::talk::MAX_TALK_CHARS;
 use super::{lock, Shared};
 use crate::api::{self, GovDto, MemberMeta, OrderDto};
 use crate::chainlink::ChainLink;
@@ -101,7 +103,7 @@ impl Outcome {
                 Ok(sigs) => Response::ok(
                     &json!({"ok": true, "tick": tick, "offices": offices, "signatures": sigs}),
                 ),
-                Err(e) => Response::ok(&json!({"ok": false, "error": e})),
+                Err(e) => not_ok(e),
             },
             Outcome::EndTurn { submission, tick } => {
                 let error = submission.send(game).err();
@@ -109,23 +111,28 @@ impl Outcome {
             }
             Outcome::Gov { link, body } => match link.post_json("/gov", &body) {
                 Ok(res) => Response::ok(&json!({"ok": true, "signature": res["signature"]})),
-                Err(e) => Response::ok(&json!({"ok": false, "error": format!("chain: {e}")})),
+                Err(e) => not_ok(format!("chain: {e}")),
             },
             Outcome::Fetch { link, path } => match link.get_json(path) {
                 Ok(v) => Response::ok(&v),
-                Err(e) => Response::ok(&json!({"ok": false, "error": format!("gateway: {e}")})),
+                Err(e) => not_ok(format!("gateway: {e}")),
             },
             Outcome::Talk { link, body } => match link.post_json("/talk", &body) {
                 Ok(res) => Response::ok(&json!({"ok": true, "id": res["id"], "tick": res["tick"]})),
-                Err(e) => Response::ok(&json!({"ok": false, "error": format!("gateway: {e}")})),
+                Err(e) => not_ok(format!("gateway: {e}")),
             },
         }
     }
 }
 
-/// `{"ok": false, "error": …}` with 200: the request was understood, the game said no.
+/// `{"ok": false, "error": …}` with 200: the request was understood, the
+/// game (or the chain) said no.
+fn not_ok(error: impl Into<String>) -> Response {
+    Response::ok(&json!({"ok": false, "error": error.into()}))
+}
+
 fn refused(error: impl Into<String>) -> Outcome {
-    Response::ok(&json!({"ok": false, "error": error.into()})).into()
+    not_ok(error).into()
 }
 
 fn route(g: &mut Game, req: &Request) -> Outcome {
@@ -171,10 +178,10 @@ fn route(g: &mut Game, req: &Request) -> Outcome {
 }
 
 /// What `civ` believes the world is (spectators: the full state).
-fn belief(g: &Game, civ: Option<CivId>) -> WorldState {
+fn belief(g: &Game, civ: Option<CivId>) -> Cow<'_, WorldState> {
     match civ {
         Some(c) => g.fog.belief(&g.state, c),
-        None => g.state.clone(),
+        None => Cow::Borrowed(&g.state),
     }
 }
 
@@ -274,7 +281,7 @@ fn talk(g: &mut Game, viewer: Viewer, req: &Request) -> Outcome {
         .unwrap_or("")
         .trim()
         .chars()
-        .take(280)
+        .take(MAX_TALK_CHARS)
         .collect();
     if text.is_empty() {
         return refused("text required");
@@ -293,14 +300,9 @@ fn talk(g: &mut Game, viewer: Viewer, req: &Request) -> Outcome {
         };
     }
     // Local mode: kept here; the AI members answer at once.
-    let id = g.talk_next;
-    g.talk
-        .push(json!({"id": id, "tick": g.state.tick, "member": m, "to": to, "text": text}));
-    g.talk_next += 1;
+    let id = g.push_talk(json!(m), to, json!(text));
     for r in g.ai_replies() {
-        let id = g.talk_next;
-        g.talk.push(json!({"id": id, "tick": g.state.tick, "member": r["member"], "to": r["to"], "text": r["text"]}));
-        g.talk_next += 1;
+        g.push_talk(r["member"].clone(), r["to"].clone(), r["text"].clone());
     }
     Response::ok(&json!({"ok": true, "id": id})).into()
 }

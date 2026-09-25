@@ -23,10 +23,10 @@ use crate::state::*;
 pub(super) fn start_season(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
     let it = &mut accounts.iter();
     let authority = next_account_info(it)?;
-    let season_ai = next_account_info(it)?;
+    let season_info = next_account_info(it)?;
     let hashes = next_account_info(it)?;
     signer(authority)?;
-    let mut season = load_season(program_id, season_ai)?;
+    let mut season = load_season(program_id, season_info)?;
     require_operator(&season, authority)?;
     if season.status != SeasonStatus::Registering || season.member_count == 0 {
         return Err(ChainError::WrongStatus.into());
@@ -83,7 +83,7 @@ pub(super) fn start_season(program_id: &Pubkey, accounts: &[AccountInfo]) -> Pro
     };
     world.set_meta(&meta)?;
     season.status = SeasonStatus::Genesis;
-    store(&mut season_ai.try_borrow_mut_data()?, &season)?;
+    store(&mut season_info.try_borrow_mut_data()?, &season)?;
     msg!(
         "PS season {} genesis started: {} nations, {} members",
         season.season_id,
@@ -98,8 +98,8 @@ pub(super) fn genesis_step(
     accounts: &[AccountInfo],
     work: u32,
 ) -> ProgramResult {
-    let season_ai = accounts.first().ok_or(ProgramError::NotEnoughAccountKeys)?;
-    let mut season = load_season(program_id, season_ai)?;
+    let season_info = accounts.first().ok_or(ProgramError::NotEnoughAccountKeys)?;
+    let mut season = load_season(program_id, season_info)?;
     if season.status != SeasonStatus::Genesis {
         return Err(ChainError::WrongStatus.into());
     }
@@ -136,7 +136,7 @@ pub(super) fn genesis_step(
                 .map_err(|_| ChainError::Rules)?;
             let root = world.write_world(&state)?;
             season.status = SeasonStatus::Seating;
-            store(&mut season_ai.try_borrow_mut_data()?, &season)?;
+            store(&mut season_info.try_borrow_mut_data()?, &season)?;
             solana_program::log::sol_log_data(&[b"PS_GENESIS", &root, &season_seed]);
             msg!("PS genesis complete");
             Ok(())
@@ -149,9 +149,9 @@ pub(super) fn genesis_step(
 /// the verifier.
 pub(super) fn seat_members(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
     let authority = accounts.first().ok_or(ProgramError::NotEnoughAccountKeys)?;
-    let season_ai = accounts.get(1).ok_or(ProgramError::NotEnoughAccountKeys)?;
+    let season_info = accounts.get(1).ok_or(ProgramError::NotEnoughAccountKeys)?;
     signer(authority)?;
-    let mut season = load_season(program_id, season_ai)?;
+    let mut season = load_season(program_id, season_info)?;
     require_operator(&season, authority)?;
     if season.status != SeasonStatus::Seating {
         return Err(ChainError::WrongStatus.into());
@@ -160,8 +160,8 @@ pub(super) fn seat_members(program_id: &Pubkey, accounts: &[AccountInfo]) -> Pro
     let rules = rules_for(season.preset, season.market)?;
     let mut state = world.read_world()?;
     let mut seated = Vec::new();
-    for ai in &accounts[2 + WORLD_CHUNKS..] {
-        let m = load_member(program_id, ai, season.season_id)?;
+    for info in &accounts[2 + WORLD_CHUNKS..] {
+        let m = load_member(program_id, info, season.season_id)?;
         if m.index != state.members.len() as u32 {
             return Err(ChainError::InvalidParams.into());
         }
@@ -186,7 +186,7 @@ pub(super) fn seat_members(program_id: &Pubkey, accounts: &[AccountInfo]) -> Pro
     }
     season.seated = state.members.len() as u32;
     let root = world.write_world(&state)?;
-    store(&mut season_ai.try_borrow_mut_data()?, &season)?;
+    store(&mut season_info.try_borrow_mut_data()?, &season)?;
     let record = borsh::to_vec(&seated).map_err(|_| ChainError::Rules)?;
     solana_program::log::sol_log_data(&[b"PS_SEAT", &root, &record]);
     msg!(
@@ -200,9 +200,9 @@ pub(super) fn seat_members(program_id: &Pubkey, accounts: &[AccountInfo]) -> Pro
 
 pub(super) fn open_government(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
     let authority = accounts.first().ok_or(ProgramError::NotEnoughAccountKeys)?;
-    let season_ai = accounts.get(1).ok_or(ProgramError::NotEnoughAccountKeys)?;
+    let season_info = accounts.get(1).ok_or(ProgramError::NotEnoughAccountKeys)?;
     signer(authority)?;
-    let mut season = load_season(program_id, season_ai)?;
+    let mut season = load_season(program_id, season_info)?;
     require_operator(&season, authority)?;
     if season.status != SeasonStatus::Seating || season.seated != season.member_count {
         return Err(ChainError::WrongStatus.into());
@@ -213,17 +213,17 @@ pub(super) fn open_government(program_id: &Pubkey, accounts: &[AccountInfo]) -> 
     gov::first_election(&mut state, &rules).map_err(|_| ChainError::Rules)?;
     let it = &mut accounts[2 + WORLD_CHUNKS..].iter();
     for civ in 0..season.nations as u16 {
-        let ai = next_account_info(it)?;
-        let mut n = load_nation(program_id, ai, season.season_id, civ)?;
+        let info = next_account_info(it)?;
+        let mut n = load_nation(program_id, info, season.season_id, civ)?;
         open_nation(&mut n, &state, &rules);
-        store(&mut ai.try_borrow_mut_data()?, &n)?;
+        store(&mut info.try_borrow_mut_data()?, &n)?;
     }
     let root = world.write_world(&state)?;
     let mut meta = world.meta()?;
     meta.deadline = Clock::get()?.unix_timestamp + meta.tick_seconds as i64;
     world.set_meta(&meta)?;
     season.status = SeasonStatus::Running;
-    store(&mut season_ai.try_borrow_mut_data()?, &season)?;
+    store(&mut season_info.try_borrow_mut_data()?, &season)?;
     solana_program::log::sol_log_data(&[b"PS_OPEN", &root]);
     msg!("PS government opened: tick 0 is open");
     Ok(())

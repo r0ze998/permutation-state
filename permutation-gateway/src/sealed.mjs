@@ -21,10 +21,8 @@
 // `revealWhenOpen`, relayed through POST /relay).
 import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { fromHex, toHex } from '../client/src/bytes.mjs';
 import { orderCommitment } from '../client/src/codec.mjs';
-
-const toHex = b => Buffer.from(b).toString('hex');
-const fromHex = h => new Uint8Array(Buffer.from(h, 'hex'));
 
 /** A new salt and the commitment of `batch` = {civ, tick, role, member, decisionDigest, orders, adopt}. */
 export function seal(batch, salt = new Uint8Array(randomBytes(32))) {

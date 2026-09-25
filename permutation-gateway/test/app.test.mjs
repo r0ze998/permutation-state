@@ -34,9 +34,9 @@ function connection(overrides = {}) {
 /** The operator token header (the game server's). */
 const OP = { authorization: 'Bearer op-token' };
 
-function app({ base = connection(), er = connection(), cluster = 'localnet', members = [], registryMembers = [], roster } = {}) {
+function app({ base = connection(), er = connection(), cluster = 'localnet', members = [], registryMembers = [], roster, talk } = {}) {
   const logs = [];
-  const store = { state: { seasonId: seasonId.toString(), members, mint: Keypair.generate().publicKey.toBase58(), ...(roster ? { roster } : {}) }, save() {} };
+  const store = { state: { seasonId: seasonId.toString(), members, mint: Keypair.generate().publicKey.toBase58(), ...(roster ? { roster } : {}), ...(talk ? { talk } : {}) }, save() {} };
   const crank = { crank: crankKey, phase: 'registering', snapshot: null, refresh: async () => null, tickRecords: from => [{ tick: from }], sealed: new SealedStore() };
   const cfg = { programId: DEFAULTS.programId, cluster, port: 4191, baseRpc: 'b', erRpc: 'e', operatorToken: 'op-token' };
   const handle = createApp({ cfg, base, er, store, crank, keys, log: m => logs.push(m), registry: { list: async () => registryMembers, invalidate() {} } });
@@ -130,6 +130,30 @@ test('/talk: a member-signed message is kept and public; a forged one is refused
   assert.equal((await call(handle, 'POST', '/talk', { body: { member: 7, text: 'Deal.' }, headers: OP })).status, 200);
   const all = await call(handle, 'GET', '/talk');
   assert.deepEqual(all.json.messages.map(m => [m.member, m.text]), [[3, text], [7, 'Deal.']]);
+});
+
+test('/talk refuses a message for a tick whose messages are already anchored (one PS_TALK root per tick)', async () => {
+  const { talkBytes, signTalk } = await import('../src/talk.mjs');
+  const session = Keypair.generate();
+  const talk = [{ id: 0, tick: 0, member: 3, to: null, text: 'earlier', bytes: '00', signature: '00', anchored: { signature: 'x', root: '00'.repeat(32) } }];
+  const { handle } = app({ registryMembers: [{ index: 3, civ: 1, session: session.publicKey.toBase58() }], talk });
+  const text = 'too late';
+  const signature = Buffer.from(signTalk(talkBytes({ season: seasonId, tick: 0, member: 3, to: null, text }), session)).toString('hex');
+  const r = await call(handle, 'POST', '/talk', { body: { member: 3, text, tick: 0, signature } });
+  assert.deepEqual([r.status, r.json.code, r.json.error], [400, 'TalkRefused', 'tick 0 is already anchored']);
+});
+
+test('/roster/announce works before the roster record exists', async () => {
+  const { handle } = app({ members: [{ index: 1, civ: 0, hosted: 'ai', salt: 'aa'.repeat(32) }] });
+  assert.equal((await call(handle, 'POST', '/roster/announce', { body: { member: 1 }, headers: OP })).status, 200);
+});
+
+test('a missing season account is a 503, not a crash', async () => {
+  const { handle } = app({ base: connection({ getAccountInfo: async () => null }) });
+  for (const url of ['/season', '/history', '/claim-relay']) {
+    const r = await call(handle, 'GET', url);
+    assert.deepEqual([r.status, r.json.code, r.json.error], [503, 'WorldUnavailable', 'season account not found'], url);
+  }
 });
 
 test('program errors map to 4xx by class; late ones are 409 and not logged', async () => {

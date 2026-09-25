@@ -18,22 +18,22 @@ pub(super) fn reveal_roster(
     accounts: &[AccountInfo],
     salts: Vec<[u8; 32]>,
 ) -> ProgramResult {
-    let [season_ai, roster_ai, members @ ..] = accounts else {
+    let [season_info, roster_info, members @ ..] = accounts else {
         return Err(solana_program::program_error::ProgramError::NotEnoughAccountKeys);
     };
-    let mut season = load_season(program_id, season_ai)?;
+    let mut season = load_season(program_id, season_info)?;
     if season.status == SeasonStatus::Finalized {
         return Err(ChainError::WrongStatus.into());
     }
-    let mut roster = load_roster(program_id, roster_ai, season.season_id)?;
+    let mut roster = load_roster(program_id, roster_info, season.season_id)?;
     if salts.is_empty()
         || members.len() != salts.len()
         || season.roster_revealed as usize + salts.len() > season.ai_count as usize
     {
         return Err(ChainError::InvalidParams.into());
     }
-    for (member_ai, salt) in members.iter().zip(&salts) {
-        let m = load_member(program_id, member_ai, season.season_id)?;
+    for (member_info, salt) in members.iter().zip(&salts) {
+        let m = load_member(program_id, member_info, season.season_id)?;
         if roster_tag(season.season_id, &m.wallet, salt) != m.tag
             || roster.entries.iter().any(|e| e.member == m.index)
         {
@@ -50,8 +50,8 @@ pub(super) fn reveal_roster(
     if season.roster_revealed == season.ai_count && season.roster_acc != season.roster_chain {
         return Err(ChainError::RosterMismatch.into());
     }
-    store(&mut roster_ai.try_borrow_mut_data()?, &roster)?;
-    store(&mut season_ai.try_borrow_mut_data()?, &season)?;
+    store(&mut roster_info.try_borrow_mut_data()?, &roster)?;
+    store(&mut season_info.try_borrow_mut_data()?, &season)?;
     msg!(
         "PS roster {}/{} revealed, season {}",
         season.roster_revealed,
@@ -69,12 +69,12 @@ pub(super) fn anchor_talk(
     count: u32,
     root: [u8; 32],
 ) -> ProgramResult {
-    let [crank, nation_ai, ..] = accounts else {
+    let [crank, nation_info, ..] = accounts else {
         return Err(solana_program::program_error::ProgramError::NotEnoughAccountKeys);
     };
     signer(crank)?;
-    let n = load_nation_at(program_id, nation_ai)?;
-    require_crank(program_id, nation_ai, n.season_id, crank)?;
+    let n = load_nation_at(program_id, nation_info)?;
+    require_crank(program_id, nation_info, n.season_id, crank)?;
     solana_program::log::sol_log_data(&[
         b"PS_TALK",
         &n.season_id.to_le_bytes(),

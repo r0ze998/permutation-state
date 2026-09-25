@@ -10,9 +10,8 @@
 // * the tick index line (.local/ticks/<season>.jsonl), one per resolve part.
 import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
+import { toHex as hex } from '../client/src/bytes.mjs';
 import { isHeavyError } from '../client/src/retry.mjs';
-
-const hex = b => Buffer.from(b).toString('hex');
 
 /** Phase boundaries a tick may be split at (`LAST_PHASE` = the whole tick). */
 export const STOPS = Object.freeze([2, 4, 5, 6, 7, 9, 12]);

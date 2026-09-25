@@ -1,7 +1,7 @@
 // The chain layer: prize pool chip, the chain beat in the top bar (one pulse
 // per sealed tick) and the chain lens drawer (` key).
 import * as T from './i18n.mjs';
-import { $, html, setHtml, fmt, usdc, short } from './util.mjs';
+import { $, html, setHtml, fmt, usdc, short, logOnce } from './util.mjs';
 import { S, invalidate } from './state.mjs';
 import { poolSharePct } from './rules.mjs';
 
@@ -10,11 +10,13 @@ export const poolUsdc = () => (S.view?.projection ? Number(S.view.projection.poo
 /** Update step for a new view: a newly sealed tick pulses the beat and refreshes the gateway data. */
 export function onChainView(v) {
   const t = v.chain?.lastTick;
-  if (t && S.lastSealed !== t.tick) { S.lastSealed = t.tick; loadChain(); }
+  if (t && S.lastSealed !== t.tick) { S.lastSealed = t.tick; refreshChain(); }
 }
 
 async function loadChain() {
   const g = S.view?.chain?.gateway; if (!g) return;
+  // Not api.tryGet: that sends X-Member-Token, which must not go to the
+  // (other-origin) gateway, and would add a CORS preflight.
   const json = url => fetch(url).then(r => r.json()).catch(() => null);
   if (!S.season) S.season = await json(`${g}/season`);
   const from = Math.max(0, S.view.tick - 14);
@@ -22,11 +24,14 @@ async function loadChain() {
   if (t?.records) S.ticks = t.records.slice(-14).reverse();
   invalidate('pool', 'ribbon', 'chainDrawer');
 }
+/** loadChain is fire-and-forget (every poll that sees a new sealed tick): log a failure once. */
+const chainFailed = logOnce('chain: gateway load failed');
+const refreshChain = () => loadChain().catch(chainFailed);
 
 export function toggleChain() {
   S.chainOpen = !S.chainOpen;
   $('#chain-drawer').hidden = !S.chainOpen;
-  if (S.chainOpen) { invalidate('chainDrawer'); loadChain(); }
+  if (S.chainOpen) { invalidate('chainDrawer'); refreshChain(); }
 }
 
 export function renderPool() {

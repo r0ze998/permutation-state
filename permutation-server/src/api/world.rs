@@ -47,7 +47,6 @@ pub fn map_view(s: &WorldState) -> Value {
 pub fn world_view(s: &WorldState, rules: &Ruleset, viewer: Option<CivId>, fog: &Fog) -> Value {
     let omni = viewer.is_none();
     let me = viewer.unwrap_or(0);
-    let n = s.civs.len() as CivId;
     let owners: String = s
         .map
         .tiles
@@ -199,7 +198,6 @@ pub fn world_view(s: &WorldState, rules: &Ruleset, viewer: Option<CivId>, fog: &
                    "spot": if p.goods > 0 { p.gold as f64 / p.goods as f64 } else { 0.0 }})
         })
         .collect();
-    let _ = n;
     let economy = json!({
         "gold": m.gold / 1000, "goldIncome": m.last.gold, "iron": m.iron / 1000, "horses": m.horses / 1000,
         "ironIncome": m.last.iron, "horseIncome": m.last.horses,

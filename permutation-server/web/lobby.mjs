@@ -6,7 +6,7 @@ import * as api from './api.mjs';
 import { $, html, setHtml, toast, usdc } from './util.mjs';
 import { S } from './state.mjs';
 import { MAX_OFFICES, adoptRules, opsSharePct, poolSharePct } from './rules.mjs';
-import { poll } from './app.mjs';
+import { poll } from './sync.mjs';
 
 let pending = null; // { info, resolve, refresh } while the dialog is open
 

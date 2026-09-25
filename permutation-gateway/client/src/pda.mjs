@@ -1,12 +1,14 @@
 // Program-derived addresses of the permutation-chain accounts (seeds in
 // codec.mjs `SEEDS`, checked against the Rust constants).
 import { PublicKey } from '@solana/web3.js';
+import { u64le } from './bytes.mjs';
 import { SEEDS, WORLD_CHUNKS } from './codec.mjs';
 
 export const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
 export { WORLD_CHUNKS };
 
-const u64 = v => { const b = Buffer.alloc(8); b.writeBigUInt64LE(BigInt(v)); return b; };
+// Seed parts stay Buffers, like the `Buffer.from(SEEDS.x)` they sit next to.
+const u64 = v => Buffer.from(u64le(v));
 const u16 = v => { const b = Buffer.alloc(2); b.writeUInt16LE(v); return b; };
 const pda = (programId, seeds) => PublicKey.findProgramAddressSync(seeds, programId)[0];
 

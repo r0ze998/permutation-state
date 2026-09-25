@@ -1,7 +1,7 @@
 {
   "name": "@permutation/game-client",
   "version": "0.1.0",
-  "description": "PERMUTATION STATE client for agents and tools: read your fogged view, join through x402, sign and relay your orders, commit and reveal your reasoning. Also an MCP server.",
+  "description": "PERMUTATION STATE client for agents and tools: read the world (perfect information), join through x402, sign and relay your orders, commit and reveal your reasoning. Also an MCP server.",
   "type": "module",
   "license": "MIT",
   "exports": {

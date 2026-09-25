@@ -34,14 +34,14 @@ Your temperament: aggression ${draft.aggression}/100, greed ${draft.greed}/100, 
 What you mean to say (keep its substance): ${fallback}
 Only a treasury contract binds you (OfferContract); do not promise anything else. Never claim to be a person. If asked whether you are an AI, say that who the operator's AI members are is revealed at the end of the season.`;
     try {
-      const res = await Promise.race([
-        this.fetchImpl('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', 'x-api-key': this.key, 'anthropic-version': '2023-06-01' },
-          body: JSON.stringify({ model: ADVISOR_MODEL, max_tokens: 160, system, messages: [{ role: 'user', content: String(draft.incoming ?? '') }] }),
-        }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), this.timeoutMs)),
-      ]);
+      // The signal aborts the request itself (and its body) at the timeout,
+      // leaving no timer behind when the model answers in time.
+      const res = await this.fetchImpl('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-api-key': this.key, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({ model: ADVISOR_MODEL, max_tokens: 160, system, messages: [{ role: 'user', content: String(draft.incoming ?? '') }] }),
+        signal: AbortSignal.timeout(this.timeoutMs),
+      });
       if (!res.ok) return fallback;
       const body = await res.json();
       const text = body?.content?.find?.(c => c.type === 'text')?.text?.trim();

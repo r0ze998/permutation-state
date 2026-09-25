@@ -170,7 +170,7 @@ pub(super) fn plan(
         city_strike,
         ranged_attack: a_stats.class == UnitClass::Ranged,
         defender_on_rough_terrain: matches!(defender, Defender::Unit(u)
-            if tile(state.units[u].hex).is_some_and(|t| t.terrain.info().defense_bps < 10_000)),
+            if tile(state.units[u].hex).is_some_and(|t| t.terrain.info().defense_bps < crate::fixed::BPS_ONE)),
         defender_fortified: matches!(defender, Defender::Unit(u)
             if state.units[u].last_moved.is_none_or(|m| state.tick.saturating_sub(m) >= 2)),
         attacker_exhausted: a.used_full_mp,
@@ -222,8 +222,14 @@ pub fn forecast_attack(
                 troops: a.troops,
             };
             let defender = combatant(state, e.defender);
-            let (to_defender, to_attacker) =
-                resolve_engagement(rules, attacker, defender, e.sit, 10_000, 10_000);
+            let (to_defender, to_attacker) = resolve_engagement(
+                rules,
+                attacker,
+                defender,
+                e.sit,
+                crate::fixed::BPS_ONE,
+                crate::fixed::BPS_ONE,
+            );
             let defender_troops = match defender {
                 Combatant::Army { troops, .. } => troops,
                 Combatant::City { defense } => defense,

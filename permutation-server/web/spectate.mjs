@@ -1,13 +1,16 @@
 // PERMUTATION STATE — spectator view.
-// Reads the omniscient view (no member token, no ?civ), or one nation's
-// fogged view when a row is selected. Revealed decisions are re-verified in
-// the browser (verify.mjs), so the feed does not rest on the server's word.
+// Reads the whole-world view (no member token, no ?civ), or one nation's
+// view when a row is selected (perfect information: the same world, with that
+// nation's relations and display-only sight). Revealed decisions are
+// re-verified in the browser (verify.mjs), so the feed does not rest on the
+// server's word.
 import { WorldMap } from './map.mjs';
 import * as T from './i18n.mjs';
 import * as V from './verify.mjs';
-import { $, $$, html, setHtml, fmtOr, short, usdcFixed, singleFlight } from './util.mjs';
+import * as api from './api.mjs';
+import { $, $$, html, setHtml, fmtOr, short, usdcFixed, singleFlight, logOnce } from './util.mjs';
 
-const get = p => fetch(p, { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
+// api.get/tryGet: this page never sets a member token, so no X-Member-Token is sent.
 const hash = h => short(h, 8, 6, '—');
 
 const S = { view: null, watch: null, tab: 'decisions', decisions: [], verified: new Map(), lastTick: null, focused: false };
@@ -19,30 +22,31 @@ const color = id => T.CIV_COLORS[id % T.CIV_COLORS.length];
 
 async function boot() {
   try {
-    map.setMap(await get('/api/map'));
+    map.setMap(await api.get('/api/map'));
     await pollOnce();
     $('#loading').hidden = true;
   } catch {
     $('#loading-text').textContent = 'ゲームサーバーに接続できません。play サーバーを起動してから再読み込みしてください。';
   }
   setInterval(poll, 800);
-  setInterval(loadDecisions, 3000);
-  loadDecisions();
+  setInterval(refreshDecisions, 3000);
+  refreshDecisions();
 }
 
 async function pollOnce() {
   const watch = S.watch;
-  const v = await get(`/api/state${watch === null ? '' : `?civ=${watch}`}`);
+  const v = await api.get(`/api/state${watch === null ? '' : `?civ=${watch}`}`);
   if (watch !== S.watch) return; // the viewer switched nations meanwhile
   const newTick = S.lastTick !== null && v.tick !== S.lastTick;
   S.view = v; S.lastTick = v.tick;
   map.setView(v, v.me);
   if (!S.focused) { S.focused = true; map.focusTile(S.watch === null ? '0,0' : capitalKey(v), true); }
-  if (newTick) loadDecisions();
+  if (newTick) refreshDecisions();
   render();
 }
-/** One request in flight; a server that is down just skips the beat. */
-const poll = singleFlight(() => pollOnce().catch(() => {}));
+/** One request in flight; a server that is down just skips the beat (logged once). */
+const pollFailed = logOnce('spectate: state poll failed');
+const poll = singleFlight(() => pollOnce().catch(pollFailed));
 
 function capitalKey(v) {
   const cap = v.cities.find(c => c.id === v.civs[v.me]?.capital);
@@ -50,7 +54,7 @@ function capitalKey(v) {
 }
 
 async function loadDecisions() {
-  const d = await get('/api/decisions?limit=240').catch(() => null);
+  const d = await api.tryGet('/api/decisions?limit=240');
   if (!d) return;
   S.decisions = d.records.filter(r => r.reveal).sort((a, b) => b.tick - a.tick || a.civ - b.civ).slice(0, 60);
   // Up to four records per nation and tick (one per office): key by digest.
@@ -59,6 +63,9 @@ async function loadDecisions() {
   }));
   renderFeed();
 }
+/** loadDecisions for timers and fire-and-forget calls: a failure is logged once, never unhandled. */
+const decisionsFailed = logOnce('spectate: decisions failed');
+const refreshDecisions = () => loadDecisions().catch(decisionsFailed);
 
 function render() {
   renderTop(); renderBoard(); renderChain(); renderFeed();

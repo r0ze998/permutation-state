@@ -149,7 +149,8 @@ pub(super) fn capture_city(
         // Half defence, not zero: an army adjacent to a freshly captured city
         // must fight for it instead of walking in next tick (§8.3).
         let max = (rules.city_defense_base + c.pop) * 1000;
-        c.defense = (max as u64 * rules.capture_defense_bps as u64 / 10_000) as u32;
+        c.defense =
+            (max as u64 * rules.capture_defense_bps as u64 / crate::fixed::BPS_ONE as u64) as u32;
         c.razing = None;
         c.capture_scores = c.founder != captor
             && tick >= c.founded_tick.saturating_add(rules.capture_min_founded_age);
@@ -218,7 +219,11 @@ pub(super) fn capture_city(
     state.push_event(b"capture_city", &payload);
 }
 
-pub(super) fn resolve_city_state_captures(state: &mut WorldState, engagements: &[Engagement]) {
+pub(super) fn resolve_city_state_captures(
+    state: &mut WorldState,
+    rules: &Ruleset,
+    engagements: &[Engagement],
+) {
     for csi in 0..state.city_states.len() {
         let cs = &state.city_states[csi];
         if cs.captured_by.is_some() || cs.defense != 0 {
@@ -234,32 +239,15 @@ pub(super) fn resolve_city_state_captures(state: &mut WorldState, engagements: &
         };
         let (hex, pop) = (cs.hex, cs.pop);
         let id = state.cities.len() as u32;
+        // A city-state taken becomes the captor's city: its pop, half
+        // loyalty, no defense left.
         state.cities.push(City {
-            id,
-            owner: Some(captor),
-            founder: captor,
-            founded_tick: state.tick,
-            hex,
             pop,
-            food: 0,
-            prod: 0,
-            buildings: Default::default(),
             loyalty: 50,
             defense: 0,
             attacked_this_tick: true,
-            focus: crate::state::Focus::Balanced,
-            queue: Vec::new(),
-            queue_credit: Credit::NONE,
-            steward_credit: Credit::NONE,
             captured_tick: Some(state.tick),
-            captured_from: None,
-            capture_scores: false,
-            razing: None,
-            heritage_until: None,
-            heritage_bonus: 0,
-            standing: crate::state::CityStanding::DEFAULT,
-            alive: true,
-            first_conquest: None,
+            ..City::founded(id, captor, hex, state.tick, rules)
         });
         state.map.claim_territory(id, hex, territory_radius(pop));
         let cs = &mut state.city_states[csi];

@@ -15,7 +15,7 @@ use permutation_rules::payout::{settle_with, Extras, Settlement};
 use permutation_rules::roster::bounties;
 use permutation_rules::state::WorldState;
 
-use crate::state::{RosterEntry, Season};
+use crate::state::{RosterEntry, Season, ROSTER_FORFEITED, ROSTER_NONE, ROSTER_REVEALED};
 
 /// How the operator's roster stands at the end.
 #[derive(Clone, Copy, Debug)]
@@ -31,9 +31,9 @@ pub enum Roster<'a> {
 impl Roster<'_> {
     pub const fn outcome(&self) -> u8 {
         match self {
-            Roster::None => 0,
-            Roster::Revealed(_) => 1,
-            Roster::Forfeited => 2,
+            Roster::None => ROSTER_NONE,
+            Roster::Revealed(_) => ROSTER_REVEALED,
+            Roster::Forfeited => ROSTER_FORFEITED,
         }
     }
 }
@@ -78,8 +78,8 @@ pub fn finalize(
     match roster {
         Roster::None => {}
         Roster::Revealed(entries) => {
-            let ais: Vec<(u16, [u8; 32])> = entries.iter().map(|e| (e.civ, e.salt)).collect();
-            let b = bounties(state, &ais, season.bounty_each);
+            let infos: Vec<(u16, [u8; 32])> = entries.iter().map(|e| (e.civ, e.salt)).collect();
+            let b = bounties(state, &infos, season.bounty_each);
             pool += b.unpaid;
             by_civ = b.by_civ;
             for e in entries {

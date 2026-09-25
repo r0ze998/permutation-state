@@ -16,10 +16,10 @@
 // fee-payer signature; it cannot change the amount or the payee.
 import { ComputeBudgetProgram, PublicKey, Transaction } from '@solana/web3.js';
 import bs58 from 'bs58';
-import { decodeMember, decodeSeason, IX_TAG, NATIONS } from '../../client/src/codec.mjs';
+import { decodeMember, IX_TAG, NATIONS } from '../../client/src/codec.mjs';
 import { poll } from '../../client/src/retry.mjs';
 import { sendSigned } from '../send.mjs';
-import { RouteError } from './errors.mjs';
+import { RouteError, routeSeason } from './errors.mjs';
 
 const b64json = v => Buffer.from(JSON.stringify(v)).toString('base64');
 export const x402Network = cluster => (cluster === 'devnet' ? 'solana-devnet' : cluster === 'mainnet' ? 'solana' : 'solana-localnet');
@@ -70,7 +70,7 @@ export function paymentProblems({ payment, tx, network, programId, season, vault
 export const x402Routes = {
   'POST /x402/join': async ({ base, cfg, chain, crank, store, registry, blockhashes, log }, req) => {
     const body = await req.json().catch(() => ({}));
-    const season = decodeSeason((await base.getAccountInfo(chain.season, 'confirmed')).data);
+    const season = await routeSeason({ base, chain });
     const facilitator = crank.crank;
     const civ = Number.isInteger(body.civ) ? body.civ : null;
     const requirements = {
@@ -121,7 +121,7 @@ export const x402Routes = {
     account ??= await memberAccount(base, chain.member(payer));
     if (!account) throw new Error(`x402: ${signature} settled but the member account cannot be read`);
     const m = decodeMember(account.data);
-    const after = decodeSeason((await base.getAccountInfo(chain.season, 'confirmed')).data);
+    const after = await routeSeason({ base, chain });
     // Remember the member at once: the file is the gateway's record of who is external.
     store.state.members.push({ index: m.index, civ: m.civ, name: m.name, kind: m.kind, hosted: 'external', wallet: payer.toBase58(), session: new PublicKey(m.session).toBase58() });
     store.save();

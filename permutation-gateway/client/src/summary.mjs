@@ -46,6 +46,8 @@ export function summarize(v, { near = 6, member = null } = {}) {
     treatyOffers: v.proposals.filter(p => p.to === civ),
     skippedLastTick: v.skipped ?? [],
     lastTick: (v.lastSummary || []).map(l => l.split('|')[1] ?? l),
-    fog: { unexplored: [...(v.fog || '')].filter(c => c === '0').length, tiles: (v.fog || '').length },
+    // Perfect information: every tile is seen (the view's fog is display
+    // only), so there is no count of unexplored tiles; no agent read it.
+    fog: { tiles: (v.fog || '').length },
   };
 }

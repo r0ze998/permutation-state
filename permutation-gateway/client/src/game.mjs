@@ -25,6 +25,7 @@ import { signTalk, talkBytes } from './talk.mjs';
 import { randomBytes } from 'node:crypto';
 import { PublicKey, Transaction } from '@solana/web3.js';
 import { packBatch } from './batch.mjs';
+import { fromHex, toHex } from './bytes.mjs';
 import { ChainClient } from './chain.mjs';
 import { BATCH_BYTES, orderCommitment } from './codec.mjs';
 import { commit } from './decision.mjs';
@@ -211,12 +212,10 @@ export class GameClient {
 
   /** The sealed batches not yet revealed, as JSON (keep them across a restart; `importSealed` restores them). */
   exportSealed() {
-    const hex = b => Buffer.from(b).toString('hex');
-    return [...this.sealed].map(([k, list]) => [k, list.map(({ batch, salt }) => ({ batch: { ...batch, decisionDigest: hex(batch.decisionDigest) }, salt: hex(salt) }))]);
+    return [...this.sealed].map(([k, list]) => [k, list.map(({ batch, salt }) => ({ batch: { ...batch, decisionDigest: toHex(batch.decisionDigest) }, salt: toHex(salt) }))]);
   }
   importSealed(saved = []) {
-    const bin = h => new Uint8Array(Buffer.from(h, 'hex'));
-    for (const [k, list] of saved) this.sealed.set(k, list.map(({ batch, salt }) => ({ batch: { ...batch, decisionDigest: bin(batch.decisionDigest) }, salt: bin(salt) })));
+    for (const [k, list] of saved) this.sealed.set(k, list.map(({ batch, salt }) => ({ batch: { ...batch, decisionDigest: fromHex(batch.decisionDigest) }, salt: fromHex(salt) })));
   }
 
   /** The open tick's sealed-orders phase from the gateway: {tick, phase: commit|reveal|frozen|finished, deadline}. */
@@ -313,7 +312,7 @@ export class GameClient {
     const { tick } = await this.get(this.gateway, '/tick');
     const season = BigInt((await this.season()).season.seasonId);
     const bytes = talkBytes({ season, tick, member: this.member, to, text });
-    const signature = Buffer.from(signTalk(bytes, this.session)).toString('hex');
+    const signature = toHex(signTalk(bytes, this.session));
     return this.post(this.gateway, '/talk', { member: this.member, to, text, tick, signature });
   }
   /** Every public message since id `since`. */

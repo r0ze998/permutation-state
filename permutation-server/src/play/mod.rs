@@ -26,12 +26,13 @@
 //! * `--chain http://127.0.0.1:4191`: the world is the on-chain program's
 //!   (read through permutation-gateway), ticks resolve on the MagicBlock ER,
 //!   and members act on chain with their own session keys.
-
 //!
 //! | Module | Contents |
 //! |---|---|
 //! | `game` | the game: members and who runs them, the lobby, resolving ticks |
 //! | `chain` | chain mode: following the chain, sending batches through the gateway |
+//! | `roster` | the operator's AI members: salts, home cities, announcements (V5 §18.2) |
+//! | `talk` | members' messages and the AI members' answers (V5 §18.7) |
 //! | `views` | `/api/state` and `/api/lobby` |
 //! | `routes` | the JSON API |
 //! | `http` | parsing requests, writing responses |
@@ -44,6 +45,7 @@ mod game;
 mod http;
 mod roster;
 mod routes;
+mod talk;
 mod views;
 
 pub use game::{Game, Host, Member, Phase, Viewer};
