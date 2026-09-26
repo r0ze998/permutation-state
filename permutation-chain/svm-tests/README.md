@@ -25,13 +25,19 @@ under `permutation-chain/src` or `permutation-rules/src`.
 
 This crate has its own `[workspace]`, `Cargo.lock` and toolchain (1.95.0;
 LiteSVM does not build on 1.89). It is excluded from the root workspace and
-builds into its own `target/`.
+builds into its own `target/`. So do `permutation-server` and
+`permutation-state-solana-receipt-spike` (each has its own `[workspace]`
+table, so a worktree nested inside a checkout with a root `Cargo.toml`
+still builds them). A worktree of a commit from before the root workspace
+has no `[workspace]` in `permutation-chain`: nested inside a checkout that
+has one, its chain crate no longer builds (cargo finds the outer root).
+Build such a tree outside the checkout, as `run.sh` does for `OLD_REF`.
 
 | Variable | Effect |
 |---|---|
 | `PERMUTATION_CHAIN_SO` | the binary to test (`run.sh` sets it to the fresh build) |
 | `RELEASE_CHECK=1` | the coverage guard also fails while any test waits for a fix (PENDING) or any instruction is `Cover::Pending`. CI sets it on tags and `release/*` |
-| `OLD_REF` / `OLD_SO` | `chain::tests::swap_program_mid_season` starts the season on that older program (`run.sh` builds `OLD_REF` into `target/old`). Without it, the binary under test is swapped for itself |
+| `OLD_REF` / `OLD_SO` | `chain::tests::swap_program_mid_season` starts the season on that older program (`run.sh` builds `OLD_REF` in a temporary directory outside every workspace, so a ref from before the root workspace, such as 96a3464, builds too). Without it, the binary under test is swapped for itself |
 | `DLP_SO` | `Chain::with_real_dlp` loads a real delegation program instead of the stand-in (opt-in tests) |
 | `SVM_HEAVY=1` | with `--ignored`, `budget::finish_after_played_season_at_the_cap` (a 256-member played season, minutes). At this commit it stops at OpenGovernment: 256 bot members voting in the first election exceed 1.4M CU (the election and member-cap work, WP06/WP07) |
 | `PLAYED_TICKS=n` | `lifecycle::bots_play_a_blitz_season_on_the_sbf_build` stops after n ticks |

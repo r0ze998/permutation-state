@@ -1,3 +1,7 @@
+# Its own workspace root: excluded from the root workspace, and cargo would
+# otherwise keep searching parent directories.
+[workspace]
+
 [package]
 name = "permutation-state-receipt"
 version = "0.1.0"

@@ -9,12 +9,16 @@ here="$(cd "$(dirname "$0")" && pwd)"
 "$here/../../scripts/build-program.sh"
 export PERMUTATION_CHAIN_SO="$here/../target/deploy/permutation_chain.so"
 # Opt-in: a real previous release for the upgrade test. OLD_REF=<tag or commit>
-# builds that tree's program into $here/target/old (needs the ref in the clone).
+# builds that tree's program in a temporary directory (needs the ref in the
+# clone). The tree is unpacked outside every Cargo workspace: under this
+# crate's `[workspace]`, a tree from before the root workspace (such as
+# 96a3464, the last devnet deploy) would fail to load.
 if [ -n "${OLD_REF:-}" ] && [ -z "${OLD_SO:-}" ]; then
-  old="$here/target/old"
-  rm -rf "$old"
+  old="$(mktemp -d "${TMPDIR:-/tmp}/permutation-old.XXXXXX")"
+  trap 'rm -rf "$old"' EXIT
   mkdir -p "$old/src"
-  git -C "$here" archive "$OLD_REF" | tar -x -C "$old/src"
+  # From the top level: run in a subdirectory, git archive packs only that.
+  git -C "$here/../.." archive "$OLD_REF" | tar -x -C "$old/src"
   if [ -f "$old/src/Cargo.toml" ]; then
     (cd "$old/src" && CARGO_TARGET_DIR="$old/target" cargo-build-sbf --manifest-path permutation-chain/Cargo.toml --sbf-out-dir "$old/target/deploy")
   else

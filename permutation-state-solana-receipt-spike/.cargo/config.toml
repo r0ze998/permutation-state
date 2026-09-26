@@ -1,2 +1,7 @@
 [resolver]
 incompatible-rust-versions = "fallback"
+# Outside the root workspace: build into this crate's own target/ (overrides
+# the root .cargo/config.toml, which cargo would otherwise pick up here;
+# server/start-local-stack.mjs reads target/deploy).
+[build]
+target-dir = "target"

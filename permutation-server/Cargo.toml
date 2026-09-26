@@ -1,3 +1,8 @@
+# Its own workspace root: excluded from the root workspace, and cargo would
+# otherwise keep searching parent directories (a worktree nested in a
+# checkout that has a root Cargo.toml would fail to build).
+[workspace]
+
 [package]
 name = "permutation-server"
 version = "0.1.0"

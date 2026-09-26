@@ -1,7 +1,8 @@
 # Keep build output where local-stack.mjs, the svm-tests harness and the
 # READMEs expect it (the root workspace would otherwise move it to
 # <root>/target). Relative to this directory's parent. Does not affect the
-# program hash (measured). permutation-server and permutation-chain/svm-tests
-# have their own .cargo/config.toml so this does not reach them.
+# program hash (measured). permutation-server, permutation-chain/svm-tests
+# and permutation-state-solana-receipt-spike have their own
+# .cargo/config.toml so this does not reach them.
 [build]
 target-dir = "permutation-chain/target"
