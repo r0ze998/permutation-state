@@ -63,6 +63,9 @@ export const ENVOY_AMOUNTS = [10, 20, 40];  // influence per envoy button
 export const AUTO_PURCHASE_STEPS = [0, 20, 40, 80];
 export const QUEUE_MAX = 3;                 // production queue / research plan length
 export const PATROL_MAX = 6;
+export const RULED_UNITS_TOTAL = 48;        // unit rules that run per tick, world-wide (orders::MAX_RULED_UNITS_TOTAL)
+/** Units per nation whose standing rules run each tick (the lowest unit numbers; orders::ruled_units_cap). */
+export const ruledUnitsCap = civs => Math.max(1, Math.floor(RULED_UNITS_TOTAL / Math.max(1, civs)));
 export const AUTO_COMMIT_SECONDS = 3;       // a dirty draft is committed this close to the deadline
 /** Paths that must reach a tier to enter the next era (the last era needs three). */
 export const eraPathsNeeded = era => (era === 5 ? 3 : 2);

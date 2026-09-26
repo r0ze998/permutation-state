@@ -192,6 +192,23 @@ pub enum StandingOrder {
 }
 
 pub const MAX_PATROL: usize = 6;
+/// Each tick, the unit rules (`AutoDefend`, `Retreat`, `Patrol`) of at most
+/// this many living units run in the whole world, shared equally by the
+/// nations (`ruled_units_cap`). Phase 3 runs in one transaction on chain,
+/// so its work must not grow with the armies (§13).
+pub const MAX_RULED_UNITS_TOTAL: usize = 48;
+
+/// Per nation: the rules of its `ruled_units_cap` lowest-id living units
+/// that carry one run each tick; the others wait (8 with six nations).
+pub const fn ruled_units_cap(civs: usize) -> usize {
+    let c = if civs == 0 { 1 } else { civs };
+    let cap = MAX_RULED_UNITS_TOTAL / c;
+    if cap == 0 {
+        1
+    } else {
+        cap
+    }
+}
 
 impl Order {
     /// This order in a world turned by `k` × 60° (`mapgen::rotate_world`):

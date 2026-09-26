@@ -429,3 +429,82 @@ fn captured_units_and_cities_drop_their_rules() {
     assert_eq!(s.units[settler as usize].owner, Owner::Civ(1));
     assert_eq!(s.units[settler as usize].standing, StandingRule::None);
 }
+
+#[test]
+fn a_far_patrol_walks_toward_its_waypoint_every_tick() {
+    let (rules, mut s) = setup();
+    let a = near_home(&s, 3);
+    let scout = place(&mut s, Owner::Civ(0), Scout, 1_000, a);
+    // A waypoint 5 tiles away across open ground (every tile between is free).
+    let goal = s
+        .map
+        .tiles
+        .iter()
+        .map(|t| t.hex)
+        .filter(|h| h.distance(a) == 5 && free(&s, *h))
+        .find(|h| {
+            s.map
+                .tiles
+                .iter()
+                .filter(|t| t.hex != a && t.hex.distance(*h) + t.hex.distance(a) == 5)
+                .all(|t| {
+                    free(&s, t.hex)
+                        && permutation_rules::tick::may_enter(&s, &rules, Some(0), t.hex)
+                })
+        })
+        .expect("open ground");
+    step(
+        &mut s,
+        &rules,
+        vec![(
+            0,
+            vec![set(
+                StandingTarget::Unit(scout),
+                StandingOrder::Patrol { route: vec![goal] },
+            )],
+        )],
+    );
+    let mut d = s.units[scout as usize].hex.distance(goal);
+    assert_eq!(d, 5);
+    for _ in 0..2 {
+        step(&mut s, &rules, vec![]);
+        let now = s.units[scout as usize].hex.distance(goal);
+        assert!(now < d && d - now <= 3, "{d} -> {now}");
+        d = now;
+    }
+    assert_eq!(d, 0, "arrived in two ticks (3 + 2 tiles)");
+}
+
+#[test]
+fn a_patrol_skips_a_waypoint_it_cannot_step_toward() {
+    let (rules, mut s) = setup();
+    let a = near_home(&s, 3);
+    let scout = place(&mut s, Owner::Civ(0), Scout, 1_000, a);
+    let b = a.neighbors().into_iter().find(|h| free(&s, *h)).unwrap();
+    // x: 2 tiles away on the far side of a; wall off both tiles one step closer to it.
+    let x = a
+        .neighbors()
+        .into_iter()
+        .map(|n| Hex::new(2 * n.q - a.q, 2 * n.r - a.r))
+        .find(|x| x.distance(b) > 2 && s.map.tile(*x).is_some() && free(&s, *x))
+        .unwrap();
+    for h in a.neighbors() {
+        if h.distance(x) < a.distance(x) {
+            s.map.tile_mut(h).unwrap().terrain = Terrain::Mountain;
+        }
+    }
+    step(
+        &mut s,
+        &rules,
+        vec![(
+            0,
+            vec![set(
+                StandingTarget::Unit(scout),
+                StandingOrder::Patrol { route: vec![x, b] },
+            )],
+        )],
+    );
+    step(&mut s, &rules, vec![]); // x is blocked: the rule moves on to b
+    step(&mut s, &rules, vec![]);
+    assert_eq!(s.units[scout as usize].hex, b);
+}

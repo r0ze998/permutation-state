@@ -22,7 +22,9 @@ use alloc::vec::Vec;
 // ------------------------------------------------------------------ movement
 
 // Reachability and paths are the engine's own (`movement`), re-exported here.
-pub use crate::movement::{path_to, reachable, Reach};
+pub use crate::movement::Reach;
+#[cfg(not(target_os = "solana"))]
+pub use crate::movement::{path_to, reachable};
 
 // ------------------------------------------------------------------ attacks
 

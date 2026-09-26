@@ -5,7 +5,7 @@ import { S, civN, unitById } from '../state.mjs';
 import { map, key } from '../world.mjs';
 import { slotOf } from '../orders.mjs';
 import { moveWhyKey, moveBlockedText } from '../selection.mjs';
-import { PATROL_MAX } from '../rules.mjs';
+import { PATROL_MAX, ruledUnitsCap } from '../rules.mjs';
 import { head } from './head.mjs';
 import { L } from '../lang.mjs';
 
@@ -44,7 +44,7 @@ function standingSection(u) {
   return html`<div class="section-title">${L`継続命令 · 毎ティック自動（設定に枠1・実行は無料）`}</div>
     <div class="standing-now">${cur ? html`<span class="tag positive">${T.STANDING_GLYPH[cur.kind]} ${T.standingText(cur)}</span>` : html`<span class="tag">${L`なし`}</span>`}${draft ? html`<span class="tag warning">${L`下書き：${T.standingText(draft.dto.rule)}`}</span>` : ''}</div>
     ${rows}<div class="standing-row"><span class="sl">${T.STANDING_GLYPH.Patrol} ${L`巡回`}</span><button class="btn" type="button" id="patrol-start" data-unit="${u.id}">${cur?.kind === 'Patrol' ? L`道筋を引き直す` : L`地図で地点を選ぶ`}</button>${cur ? btn({ kind: 'Clear' }, L`解除`, false) : ''}</div>
-    <p class="desc">${L`${u.civilian ? '' : L`自動防衛：基点から半径内に入った敵軍のうち最も弱いものを攻撃。撤退：隣の敵の強さが自軍の指定倍を超えたら自分の都市へ1マス下がる。`}巡回：最大${PATROL_MAX}地点を順に回り続けます。手動の命令を出したティックはそちらが優先されます。`}</p>`;
+    <p class="desc">${L`${u.civilian ? '' : L`自動防衛：基点から半径内に入った敵軍のうち最も弱いものを攻撃。撤退：隣の敵の強さが自軍の指定倍を超えたら自分の都市へ1マス下がる。`}巡回：最大${PATROL_MAX}地点を順に回り続けます。各地点へはまっすぐ進みます（水や山を回り込むには地点を足してください）。進めない地点は飛ばします。手動の命令を出したティックはそちらが優先されます。`}${L`継続命令が動くのは国ごとに${ruledUnitsCap(S.view.civs.length)}部隊まで（番号の小さい順）。`}</p>`;
 }
 
 export function patrolPanel() {

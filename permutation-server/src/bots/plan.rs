@@ -619,9 +619,19 @@ impl Bot {
     /// outmatched; rich builders and scholars auto-purchase in the capital.
     fn standing_rules(&self, cx: &Ctx, garrison: Option<UnitId>, wish: &mut Wishes) {
         let (s, civ, me) = (cx.s, cx.civ, cx.me);
+        // Only `ruled_units_cap` ruled units per nation run their rules; a
+        // rule past the cap would wait unused and cost an order.
+        let ruled = my_units(s, civ)
+            .filter(|u| u.standing != StandingRule::None)
+            .count();
+        let mut room =
+            permutation_rules::orders::ruled_units_cap(s.civs.len()).saturating_sub(ruled);
         for u in my_units(s, civ)
             .filter(|u| !u.unit_type.is_civilian() && u.standing == StandingRule::None)
         {
+            if room == 0 {
+                break;
+            }
             let rule = if Some(u.id) == garrison {
                 StandingOrder::AutoDefend { radius: 2 }
             } else if self.persona != Persona::Warlord {
@@ -629,6 +639,7 @@ impl Bot {
             } else {
                 continue;
             };
+            room -= 1;
             wish.push((
                 4,
                 Order::SetStanding {
@@ -685,4 +696,66 @@ fn within_budget(cx: &Ctx, mut wish: Wishes) -> Vec<Order> {
         out.push(o);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use permutation_rules::genesis::{nation_entries, new_season};
+    use permutation_rules::orders::ruled_units_cap;
+    use permutation_rules::state::Unit;
+    use permutation_rules::Preset;
+
+    /// The AI never asks for a unit rule that would wait past the cap: with
+    /// a dozen unruled armies it wishes for at most `ruled_units_cap` rules,
+    /// counting the ones its armies already carry.
+    #[test]
+    fn standing_rules_stay_within_the_cap() {
+        let r = Ruleset::new(Preset::Blitz);
+        let mut s = new_season(&r, &[5; 32], &[6; 32], &nation_entries(6)).unwrap();
+        let civ: CivId = 0;
+        let home = my_units(&s, civ).next().unwrap().hex;
+        for _ in 0..12 {
+            let id = s.units.len() as u32;
+            s.units.push(Unit {
+                id,
+                owner: Owner::Civ(civ),
+                unit_type: UnitType::Spearman,
+                troops: 1_000,
+                hex: home,
+                path: Vec::new(),
+                last_moved: None,
+                used_full_mp: false,
+                standing: StandingRule::None,
+                alive: true,
+            });
+        }
+        let cap = ruled_units_cap(s.civs.len());
+        let unit_rules = |s: &WorldState| {
+            let mut wish = Wishes::new();
+            let bot = Bot::new(civ, Persona::Builder);
+            bot.standing_rules(&Ctx::new(s, &r, civ), None, &mut wish);
+            wish.iter()
+                .filter(|(_, o)| {
+                    matches!(
+                        o,
+                        Order::SetStanding {
+                            target: StandingTarget::Unit(_),
+                            ..
+                        }
+                    )
+                })
+                .count()
+        };
+        assert_eq!(unit_rules(&s), cap);
+        // Five armies already ruled: room for the rest of the cap only.
+        let armies: Vec<usize> = (0..s.units.len())
+            .filter(|&i| s.units[i].owner == Owner::Civ(civ) && !s.units[i].unit_type.is_civilian())
+            .take(5)
+            .collect();
+        for i in armies {
+            s.units[i].standing = StandingRule::Retreat { ratio_bps: 15_000 };
+        }
+        assert_eq!(unit_rules(&s), cap - 5);
+    }
 }

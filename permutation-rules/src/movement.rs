@@ -1,7 +1,7 @@
 //! Movement (§7.3): who may enter a tile, occupancy, moving units along
 //! their paths in phase 4 in a deterministic order, and the planner
-//! (reachable tiles, cheapest paths) that standing rules, previews and
-//! agents use — so a planned path is costed exactly as it will be moved.
+//! (reachable tiles, cheapest paths) that previews and agents use off
+//! chain — so a planned path is costed exactly as it will be moved.
 
 use crate::checks::Blocked;
 use crate::hex::Hex;
@@ -11,8 +11,10 @@ use crate::rng::tie_key;
 use crate::state::{CivId, Owner, Unit, WorldState};
 use crate::tick::accepted;
 use crate::units::{stats, UnitType};
+#[cfg(not(target_os = "solana"))]
 use alloc::collections::{BTreeMap, BinaryHeap};
 use alloc::vec::Vec;
+#[cfg(not(target_os = "solana"))]
 use core::cmp::Reverse;
 
 pub(crate) fn allied(state: &WorldState, a: CivId, b: CivId) -> bool {
@@ -54,7 +56,7 @@ fn free_among<'a>(
 /// cities with their owners (cities do not change in phase 4). It answers
 /// exactly what `tile_free_for` answers, without scanning every unit and
 /// city per step; one flat array per tile keeps building it cheap on chain.
-struct Occupancy {
+pub(crate) struct Occupancy {
     /// First unit on each tile, or `NONE`.
     head: Vec<u32>,
     /// Next unit on the same tile, per unit.
@@ -66,7 +68,7 @@ struct Occupancy {
 const NONE: u32 = u32::MAX;
 
 impl Occupancy {
-    fn new(state: &WorldState) -> Occupancy {
+    pub(crate) fn new(state: &WorldState) -> Occupancy {
         let mut o = Occupancy {
             head: alloc::vec![NONE; state.map.tiles.len()],
             next: alloc::vec![NONE; state.units.len()],
@@ -86,12 +88,25 @@ impl Occupancy {
         o
     }
 
-    fn on_tile(&self, t: usize) -> impl Iterator<Item = usize> + '_ {
+    pub(crate) fn on_tile(&self, t: usize) -> impl Iterator<Item = usize> + '_ {
         let first = Some(self.head[t]).filter(|&i| i != NONE);
         core::iter::successors(first, |&i| {
             Some(self.next[i as usize]).filter(|&n| n != NONE)
         })
         .map(|i| i as usize)
+    }
+
+    /// The living units on `hex` (none off the map).
+    pub(crate) fn at<'a>(
+        &'a self,
+        state: &WorldState,
+        hex: Hex,
+    ) -> impl Iterator<Item = usize> + 'a {
+        state
+            .map
+            .index_of(hex)
+            .into_iter()
+            .flat_map(|t| self.on_tile(t))
     }
 
     fn free_for(&self, state: &WorldState, i: usize, hex: Hex) -> bool {
@@ -256,6 +271,7 @@ pub fn move_cost(state: &WorldState, unit: UnitType, h: Hex) -> u8 {
 }
 
 /// The cost of a step for planning: `None` when the tile cannot be entered.
+#[cfg(not(target_os = "solana"))] // off chain only, as `search`
 fn step_cost(state: &WorldState, unit: UnitType, h: Hex) -> Option<u32> {
     let t = state.map.tile(h)?;
     t.terrain
@@ -266,6 +282,10 @@ fn step_cost(state: &WorldState, unit: UnitType, h: Hex) -> Option<u32> {
 /// Dijkstra over enterable tiles (§7.3), up to `max_path_len` steps. Tiles
 /// holding a foreign unit are not entered (that needs `Attack`). Returns the
 /// predecessor map and the reach table.
+///
+/// Off chain only: unbounded work, so the program must never contain it
+/// (phase 3 plans patrols with `standing::patrol_path`).
+#[cfg(not(target_os = "solana"))]
 fn search(
     state: &WorldState,
     rules: &Ruleset,
@@ -335,6 +355,7 @@ fn search(
 }
 
 /// Every tile the unit can reach, cheapest first.
+#[cfg(not(target_os = "solana"))] // off chain only, as `search`
 pub fn reachable(state: &WorldState, rules: &Ruleset, unit: u32) -> Vec<Reach> {
     let mut v: Vec<Reach> = search(state, rules, unit).1.into_values().collect();
     v.sort_by_key(|r| (r.cost, r.hex));
@@ -342,6 +363,7 @@ pub fn reachable(state: &WorldState, rules: &Ruleset, unit: u32) -> Vec<Reach> {
 }
 
 /// Cheapest legal path to `goal` (excluding the start), as a `MoveUnit` path.
+#[cfg(not(target_os = "solana"))] // off chain only, as `search`
 pub fn path_to(state: &WorldState, rules: &Ruleset, unit: u32, goal: Hex) -> Option<Vec<Hex>> {
     let (prev, best) = search(state, rules, unit);
     best.get(&goal)?;
