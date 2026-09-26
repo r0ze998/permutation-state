@@ -11,6 +11,7 @@ use solana_program::{
 
 use super::accounts::*;
 use crate::error::ChainError;
+use crate::payout::claim_amount;
 use crate::state::*;
 
 pub(super) fn finish_season(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
@@ -88,25 +89,6 @@ pub(super) fn finish_season(program_id: &Pubkey, accounts: &[AccountInfo]) -> Pr
         s.refund
     );
     Ok(())
-}
-
-/// What a member receives: its prize, plus its share of what is left in
-/// its nation's treasury (V5 §7.5).
-pub fn claim_amount(season: &Season, member: &MemberAccount) -> u64 {
-    let prize = season
-        .payouts
-        .get(member.index as usize)
-        .copied()
-        .unwrap_or(0);
-    let civ = member.civ as usize;
-    let deposited = season.treasury.get(civ).copied().unwrap_or(0);
-    let left = season.treasury_final.get(civ).copied().unwrap_or(0);
-    let refund = if deposited == 0 {
-        0
-    } else {
-        (member.shares as u128 * left as u128 / deposited as u128) as u64
-    };
-    prize + refund
 }
 
 pub(super) fn claim(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {

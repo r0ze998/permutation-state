@@ -33,12 +33,11 @@ use registration::*;
 use roster::*;
 use settlement::*;
 
-pub use settlement::claim_amount;
+pub use crate::payout::claim_amount;
+pub use crate::state::NATION_TARGET;
 
 /// Fixed discriminator the delegation program calls on undelegation.
 pub const UNDELEGATE_CALLBACK_DISCRIMINATOR: [u8; 8] = [196, 28, 41, 206, 48, 37, 51, 167];
-/// `Delegate { target }`: world chunks are 0..WORLD_CHUNKS, nations are NATION_TARGET + civ.
-pub const NATION_TARGET: u16 = 1000;
 /// How often the ER auto-commits delegated accounts to the base layer.
 pub const ER_COMMIT_FREQUENCY_MS: u32 = 30_000;
 

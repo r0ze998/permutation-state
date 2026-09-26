@@ -1,0 +1,4 @@
+# Outside the root workspace: build into this crate's own target/ (overrides
+# the root .cargo/config.toml, which cargo would otherwise pick up here).
+[build]
+target-dir = "target"

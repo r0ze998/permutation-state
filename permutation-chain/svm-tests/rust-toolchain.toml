@@ -1,0 +1,5 @@
+# LiteSVM 0.16 does not build on 1.89 (`maybe_uninit_write_slice` is unstable
+# there); the program and the server stay on 1.89.0.
+[toolchain]
+channel = "1.95.0"
+profile = "minimal"

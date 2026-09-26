@@ -50,6 +50,8 @@ pub const CHUNK: usize = 4 * 1024;
 /// 80 KiB in total. A Blitz world with ~15 members ends near 23 KB; the rest
 /// is room for up to 256 members and Season-sized worlds.
 pub const WORLD_CHUNKS: usize = 20;
+/// `Delegate { target }`: world chunks are 0..WORLD_CHUNKS, nations are NATION_TARGET + civ.
+pub const NATION_TARGET: u16 = 1000;
 pub const MAX_NAME: usize = 24;
 pub const MAX_NATIONS: usize = 8;
 /// Members per season: bounded by the world account and the payout table in
