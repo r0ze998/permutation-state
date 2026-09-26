@@ -48,6 +48,11 @@ pub enum RulesError {
     UnknownProposal(u32),
     /// Order `i` is outside the office's domain (V5 §5.1).
     WrongOffice(u16),
+    /// A batch over `MAX_BATCH_ORDERS` orders (adopted proposals' included)
+    /// or `MAX_FREE_ORDERS` zero-cost orders.
+    TooManyOrders,
+    /// A price, amount or hex coordinate in an order is out of range.
+    OutOfRange,
 }
 
 impl fmt::Display for RulesError {
@@ -66,6 +71,7 @@ impl fmt::Display for RulesError {
             }
             RulesError::Frozen => write!(f, "this action is frozen in the current phase"),
             RulesError::TooLong => write!(f, "list exceeds its maximum length"),
+            RulesError::OutOfRange => write!(f, "a price, amount or coordinate is out of range"),
             RulesError::MapGeneration(why) => write!(f, "map generation failed: {why}"),
             RulesError::PhaseOutOfOrder { expected, got } => {
                 write!(f, "phase {got} requested, phase {expected} is next")
@@ -85,6 +91,7 @@ impl fmt::Display for RulesError {
                 write!(f, "proposal {id} is not open for this office")
             }
             RulesError::WrongOffice(i) => write!(f, "order {i} belongs to another office"),
+            RulesError::TooManyOrders => write!(f, "the batch holds too many orders"),
         }
     }
 }

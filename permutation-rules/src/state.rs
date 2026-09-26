@@ -111,6 +111,13 @@ pub struct Civ {
 
     pub scores: Scores,
     pub achievements: Achievements,
+    /// Units this nation built this season, genesis units not counted;
+    /// production of units waits at `max_units_built` (WP07).
+    pub units_built: u16,
+    /// Treasury USDC committed this term without a covering `ConsentSpend`
+    /// (V5 §7.5 ④): at most `spend_consent_usdc` per term. Reset when a
+    /// term starts.
+    pub free_spent: u64,
 }
 
 impl Civ {
@@ -400,7 +407,8 @@ pub struct CityState {
     pub influence: Vec<Milli>,
     pub suzerain: Option<CivId>,
     pub captured_by: Option<CivId>,
-    /// Influence sent, per (civ, officer): suzerain merit is shared by it (V5 §7.3).
+    /// Influence sent, per (civ, officer): suzerain merit is shared by it
+    /// (V5 §7.3). At most `envoys::MAX_ENVOY_SHARES` entries (A15).
     pub envoys: Vec<EnvoyShare>,
 }
 
@@ -443,6 +451,27 @@ pub struct MeritEntry {
     pub what: &'static [u8],
 }
 
+/// Skipped orders `last_skipped` keeps per tick (display data: a tick with
+/// more skipped orders reports the first `MAX_SKIPPED`, WP07).
+pub const MAX_SKIPPED: usize = 640;
+
+/// Decode a `Vec` into exactly its length. borsh's own decoder starts
+/// small and doubles, and on the chain's bump heap (which never frees) every
+/// outgrown buffer stays allocated: a world's large vectors would take about
+/// twice their size. The encoding is unchanged.
+pub fn vec_exact<R: borsh::io::Read, T: BorshDeserialize>(r: &mut R) -> borsh::io::Result<Vec<T>> {
+    let len = u32::deserialize_reader(r)? as usize;
+    // A world never holds more; refuse lengths that could only be garbage.
+    if len > 1 << 16 {
+        return Err(borsh::io::ErrorKind::InvalidData.into());
+    }
+    let mut v = Vec::with_capacity(len);
+    for _ in 0..len {
+        v.push(T::deserialize_reader(r)?);
+    }
+    Ok(v)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct WorldState {
     pub ruleset_hash: [u8; 32],
@@ -453,20 +482,33 @@ pub struct WorldState {
     pub phase_cursor: u8,
     pub tick_seed: Seed,
     pub map: Map,
+    #[borsh(deserialize_with = "vec_exact")]
     pub civs: Vec<Civ>,
+    #[borsh(deserialize_with = "vec_exact")]
     pub cities: Vec<City>,
+    /// Append-only: at most genesis + nations × `max_units_built` entries.
+    /// A dead unit keeps its id (orders and events name units by index)
+    /// and carries no path or rule.
+    #[borsh(deserialize_with = "vec_exact")]
     pub units: Vec<Unit>,
+    #[borsh(deserialize_with = "vec_exact")]
     pub city_states: Vec<CityState>,
+    #[borsh(deserialize_with = "vec_exact")]
     pub hubs: Vec<Hex>,
     /// Upper-triangular pair table, see `pair_index`.
+    #[borsh(deserialize_with = "vec_exact")]
     pub relations: Vec<Relation>,
     /// `grievance[a * n + v]` = grievance victim `v` holds against `a` (§9.1).
+    #[borsh(deserialize_with = "vec_exact")]
     pub grievance: Vec<u16>,
     /// Open diplomatic proposals (§10.6).
+    #[borsh(deserialize_with = "vec_exact")]
     pub proposals: Vec<Proposal>,
     /// Per pair (see `pair_index`): no war may be declared before this tick (§10.2 truce).
+    #[borsh(deserialize_with = "vec_exact")]
     pub truce_until: Vec<u16>,
     /// Gold AMM pools (§11.2): Iron/Gold, Horses/Gold.
+    #[borsh(deserialize_with = "vec_exact")]
     pub pools: Vec<Pool>,
     /// USDC ledger on the ER (§11.3): total delegated, and fee accumulators.
     pub usdc_deposited: u64,
@@ -476,29 +518,45 @@ pub struct WorldState {
     pub event_head: [u8; 32],
     /// Orders compiled from standing rules in phase 3, consumed by phases 4–5
     /// and cleared at commit (§13). Kept in state so phases can resume.
+    #[borsh(deserialize_with = "vec_exact")]
     pub implicit: Vec<(CivId, crate::orders::Order)>,
     /// Grievance added to each `grievance` entry during the current tick: it
     /// does not decay in that tick (v0.2 C7). Cleared by the decay in phase 8.
+    #[borsh(deserialize_with = "vec_exact")]
     pub grievance_fresh: Vec<u16>,
 
     // --- V5 ---
+    #[borsh(deserialize_with = "vec_exact")]
     pub members: Vec<Member>,
+    /// Each member's votes for the coming term (`ballots[MemberId]`), kept
+    /// beside `members` so a member stays 64 bytes in memory. Empty until
+    /// the first vote of a term (then one entry per member), emptied by
+    /// every election (V5 §5.3).
+    #[borsh(deserialize_with = "vec_exact")]
+    pub ballots: Vec<crate::gov::Ballot>,
     /// One government per civ.
+    #[borsh(deserialize_with = "vec_exact")]
     pub nations: Vec<Nation>,
     /// The orders accepted for this tick, merged per civ in phase 0 and
     /// cleared at commit.
+    #[borsh(deserialize_with = "vec_exact")]
     pub tick_orders: Vec<crate::orders::CivOrders>,
+    #[borsh(deserialize_with = "vec_exact")]
     pub last_skipped: Vec<Skip>,
+    #[borsh(deserialize_with = "vec_exact")]
     pub deliveries: Vec<Delivery>,
 
     // --- V5 §18 ---
     /// Living cities of each nation at the end of `ai_home_tick`, by id
     /// (empty before): operator AI home cities are drawn from them.
+    #[borsh(deserialize_with = "vec_exact")]
     pub home_snapshot: Vec<Vec<CityId>>,
     /// Per pair (see `pair_index`): the last tick the pair had a NAP or an
     /// alliance.
+    #[borsh(deserialize_with = "vec_exact")]
     pub pact_last: Vec<Option<u16>>,
     /// Contracts escrowed from nation treasuries (V5 §18.6), by ascending id.
+    #[borsh(deserialize_with = "vec_exact")]
     pub contracts: Vec<crate::contracts::Contract>,
     pub next_contract: u32,
     /// Not hashed; see `MeritEntry`.
@@ -556,8 +614,12 @@ impl WorldState {
         self.grievance_fresh[i] = self.grievance_fresh[i].saturating_add(amount);
     }
 
-    /// Record an order that did not take effect.
+    /// Record an order that did not take effect (the first `MAX_SKIPPED`
+    /// of a tick are kept).
     pub fn skip(&mut self, civ: CivId, origin: (u8, u16), reason: u8) {
+        if self.last_skipped.len() >= MAX_SKIPPED {
+            return;
+        }
         self.last_skipped.push(Skip {
             civ,
             role: origin.0,
@@ -604,5 +666,57 @@ impl WorldState {
     pub fn state_root(&self) -> Result<[u8; 32], RulesError> {
         let bytes = borsh::to_vec(self).map_err(|_| RulesError::Serialization)?;
         Ok(crate::hash::sha256(&[&bytes]))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::genesis::{nation_entries, new_season};
+    use crate::params::{Preset, Ruleset};
+
+    fn world() -> WorldState {
+        let rules = Ruleset::new(Preset::Blitz);
+        new_season(&rules, &[1; 32], &[2; 32], &nation_entries(6)).unwrap()
+    }
+
+    #[test]
+    fn last_skipped_is_capped() {
+        let mut s = world();
+        for i in 0..700u16 {
+            s.skip(0, (0, i), 1);
+        }
+        assert_eq!(s.last_skipped.len(), MAX_SKIPPED);
+        assert!(
+            s.last_skipped
+                .iter()
+                .enumerate()
+                .all(|(i, k)| k.index == i as u16),
+            "the first 640 are kept"
+        );
+    }
+
+    #[test]
+    fn vec_exact_round_trips_and_refuses_garbage() {
+        let mut s = world();
+        // Vectors pushed one by one hold spare capacity; decoded ones do not.
+        s.units.push(s.units[0].clone());
+        let bytes = borsh::to_vec(&s).unwrap();
+        let back: WorldState = borsh::from_slice(&bytes).unwrap();
+        assert_eq!(back, s);
+        assert_eq!(borsh::to_vec(&back).unwrap(), bytes, "encoding unchanged");
+        assert_eq!(back.units.capacity(), back.units.len());
+        assert_eq!(back.map.tiles.capacity(), back.map.tiles.len());
+        assert_eq!(back.nations[0].proposals.capacity(), 0);
+        // A length no world holds is refused before anything is allocated.
+        let mut garbage = ((1u32 << 16) + 1).to_le_bytes().to_vec();
+        garbage.extend_from_slice(&[0; 8]);
+        assert!(vec_exact::<_, u16>(&mut garbage.as_slice()).is_err());
+        let mut ok = 2u32.to_le_bytes().to_vec();
+        ok.extend_from_slice(&[1, 0, 2, 0]);
+        assert_eq!(
+            vec_exact::<_, u16>(&mut ok.as_slice()).unwrap(),
+            alloc::vec![1, 2]
+        );
     }
 }

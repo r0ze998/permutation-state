@@ -263,7 +263,7 @@ fn cancel(state: &mut WorldState, civ: CivId, id: u32) -> Result<(), Blocked> {
         .position(|c| c.id == id && c.from == civ && c.accepted.is_none() && c.needs_acceptance())
         .ok_or(Blocked::UnknownContract)?;
     let c = state.contracts.remove(i);
-    state.civs[civ as usize].usdc += c.escrow;
+    refund_escrow(state, civ, c.escrow);
     event(state, b"contract_cancel", id, civ);
     Ok(())
 }
@@ -293,7 +293,7 @@ pub fn settle_contracts(state: &mut WorldState, rules: &Ruleset) {
         }
         // Done, broken, expired or season over: what is left goes back.
         if c.escrow > 0 {
-            state.civs[c.from as usize].usdc += c.escrow;
+            refund_escrow(state, c.from, c.escrow);
             event(state, b"contract_return", c.id, c.from);
         }
     }
@@ -366,6 +366,14 @@ fn outcome(state: &WorldState, c: &Contract, now: u16) -> Outcome {
         }
         _ => Outcome::Void,
     }
+}
+
+/// Escrow that comes back was never spent: it leaves the tariff position
+/// too (audit WP08; only escrow actually paid out stays counted).
+fn refund_escrow(state: &mut WorldState, civ: CivId, amount: u64) {
+    let c = &mut state.civs[civ as usize];
+    c.usdc += amount;
+    c.market_spent = c.market_spent.saturating_sub(amount);
 }
 
 fn pay(state: &mut WorldState, c: &mut Contract, to: CivId, amount: u64) {

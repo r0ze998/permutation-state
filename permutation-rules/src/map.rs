@@ -103,6 +103,7 @@ impl Tile {
 pub struct Map {
     pub radius: u8,
     /// Sorted by (q, r); index = tile index.
+    #[borsh(deserialize_with = "crate::state::vec_exact")]
     pub tiles: Vec<Tile>,
 }
 

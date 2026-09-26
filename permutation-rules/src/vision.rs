@@ -207,6 +207,7 @@ pub fn belief(state: &WorldState, civ: CivId, seen: &[bool], memory: &Memory) ->
         o.research_queue.clear();
         o.usdc = 0;
         o.market_spent = 0;
+        o.free_spent = 0;
         o.exchange_bought = [0; 5];
         o.last = LastYields::default();
         o.deficit = false;
@@ -283,6 +284,7 @@ mod census {
             implicit: _,
             grievance_fresh: _, // public (derived)
             members: _,
+            ballots: _, // public (votes always were)
             nations: _, // per-member / per-nation rules in `belief`
             tick_orders: _,
             last_skipped: _,
@@ -325,6 +327,8 @@ mod census {
             market_spent: _,
             exchange_bought: _, // private
             contract_income: _,
+            units_built: _, // public (units are counted in the world anyway)
+            free_spent: _,  // private
         } = c;
     }
 
@@ -376,7 +380,6 @@ mod census {
             office_seen: _,
             runner_up: _,
             members: _,
-            votes: _, // public
             recalls: _,
             next_proposal: _,
             adopted: _, // public

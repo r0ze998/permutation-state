@@ -304,11 +304,14 @@ fn merit_components(state: &WorldState, s: &NationScore, ids: &[usize]) -> Vec<(
 
 /// V5 §18.5: each operator AI's payout goes to the people of its nation by
 /// merit; with no merit among them, equally to its active people (or all of
-/// them), at most `equal_cap_bps` of the fee each (so members who only vote
-/// cannot collect it). What a nation cannot take goes to the other nations
-/// with people, by points, the same way; what is still left, to every
-/// person in proportion to what they already receive. None of it returns to
-/// the operator.
+/// them). Each person takes at most `equal_cap × max(1, merit / unit)` of AI
+/// payouts over the whole redistribution, where `unit` is
+/// `redistribute_merit_unit_bps` of the revealed AIs' average merit: members
+/// who only vote, or earn a token of merit, cannot collect it, and there is
+/// no cliff (WP10). What a nation cannot take goes to the other nations with
+/// people, by points, the same way; what is still left, to every person by
+/// merit (or, with no merit anywhere, by what they already receive). None of
+/// it returns to the operator.
 fn redistribute(
     roll: &Roll,
     rules: &Ruleset,
@@ -319,6 +322,10 @@ fn redistribute(
     let state = roll.state;
     let n = state.civs.len();
     let cap = mul_div(entry_fee, rules.equal_cap_bps as u64, BPS);
+    let unit = mul_div(ai_avg(roll), rules.redistribute_merit_unit_bps as u64, BPS).max(1);
+    let limit = Limit { cap, unit };
+    // AI payouts each person has taken so far.
+    let mut got = vec![0u64; state.members.len()];
     let mut leftover = 0u64;
     let mut full = Vec::with_capacity(n);
     for civ in 0..n {
@@ -329,7 +336,7 @@ fn redistribute(
             .map(|i| core::mem::take(&mut out.per_member[i]))
             .sum();
         out.redistributed += taken;
-        let (left, capped) = give_people(roll, civ, taken, cap, &mut out.per_member);
+        let (left, capped) = give_people(roll, civ, taken, limit, &mut got, &mut out.per_member);
         full.push(capped);
         leftover += left;
     }
@@ -343,12 +350,33 @@ fn redistribute(
         let mut rest = leftover;
         for c in takers {
             let part = mul_div(leftover, points[c], pts);
-            let (left, _) = give_people(roll, c, part, cap, &mut out.per_member);
+            let (left, _) = give_people(roll, c, part, limit, &mut got, &mut out.per_member);
             rest -= part - left;
         }
         leftover = rest;
     }
-    // Still left: to every person by what they receive already.
+    // Still left: to every person by merit, so an equal-share or token-merit
+    // receipt does not multiply.
+    let merit: Vec<u64> = (0..state.members.len())
+        .map(|i| {
+            if roll.ai(i) {
+                0
+            } else {
+                state.members[i].merit_total()
+            }
+        })
+        .collect();
+    let m_total: u64 = merit.iter().sum();
+    if leftover > 0 && m_total > 0 {
+        let mut given = 0u64;
+        for (i, m) in merit.iter().enumerate() {
+            let x = mul_div(leftover, *m, m_total);
+            out.per_member[i] += x;
+            given += x;
+        }
+        leftover -= given;
+    }
+    // Then (no person has merit, or rounding dust): by what they receive.
     let base: u64 = (0..state.members.len())
         .filter(|i| !roll.ai(*i))
         .map(|i| out.per_member[i])
@@ -363,13 +391,39 @@ fn redistribute(
     }
 }
 
-/// Give `amount` to the people of `civ` by merit, else equally up to `cap`
-/// each. Returns what could not be given and whether the cap stopped it.
+/// The revealed AI members' average merit (0 without any).
+fn ai_avg(roll: &Roll) -> u64 {
+    let (mut sum, mut k) = (0u64, 0u64);
+    for i in (0..roll.state.members.len()).filter(|i| roll.ai(*i)) {
+        sum = sum.saturating_add(roll.state.members[i].merit_total());
+        k += 1;
+    }
+    sum.checked_div(k).unwrap_or(0)
+}
+
+/// A person's limit on AI payouts: `cap × max(1, merit / unit)`, continuous
+/// in merit.
+#[derive(Clone, Copy)]
+struct Limit {
+    cap: u64,
+    unit: u64,
+}
+
+impl Limit {
+    fn of(self, merit: u64) -> u64 {
+        mul_div(self.cap, merit, self.unit).max(self.cap)
+    }
+}
+
+/// Give `amount` to the people of `civ` by merit, else equally, each up to
+/// their limit less what they already took (`got`). Returns what could not
+/// be given and whether every person of the nation is at their limit.
 fn give_people(
     roll: &Roll,
     civ: usize,
     amount: u64,
-    cap: u64,
+    limit: Limit,
+    got: &mut [u64],
     per_member: &mut [u64],
 ) -> (u64, bool) {
     if amount == 0 {
@@ -381,25 +435,33 @@ fn give_people(
         .map(|i| roll.state.members[*i].merit_total())
         .collect();
     let m_total: u64 = merit.iter().sum();
+    let mut given = 0u64;
     if m_total > 0 {
-        let mut given = 0;
         for (k, i) in people.iter().enumerate() {
-            let x = mul_div(amount, merit[k], m_total);
+            let room = limit.of(merit[k]).saturating_sub(got[*i]);
+            let x = mul_div(amount, merit[k], m_total).min(room);
             per_member[*i] += x;
+            got[*i] += x;
             given += x;
         }
-        return (amount - given, false);
+    } else {
+        let to = roll.active_or_all(&people);
+        if to.is_empty() {
+            return (amount, false);
+        }
+        let even = amount / to.len() as u64;
+        for i in &to {
+            let x = even.min(limit.cap.saturating_sub(got[*i]));
+            per_member[*i] += x;
+            got[*i] += x;
+            given += x;
+        }
     }
-    let to = roll.active_or_all(&people);
-    if to.is_empty() {
-        return (amount, false);
-    }
-    let even = amount / to.len() as u64;
-    let each = even.min(cap);
-    for i in &to {
-        per_member[*i] += each;
-    }
-    (amount - each * to.len() as u64, even > cap)
+    let full = people
+        .iter()
+        .enumerate()
+        .all(|(k, i)| got[*i] >= limit.of(merit[k]));
+    (amount - given, full)
 }
 
 #[cfg(test)]

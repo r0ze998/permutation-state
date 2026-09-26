@@ -15,6 +15,12 @@ pub fn end_of_tick(state: &mut WorldState, rules: &Ruleset) {
         resolve_recalls(state, rules, civ as CivId);
         open_idle_recalls(state, rules, civ as CivId);
     }
+    // The no-consent spending allowance is per term (V5 §7.5 ④).
+    if (t + 1) % rules.term_ticks.max(1) == 0 {
+        for c in &mut state.civs {
+            c.free_spent = 0;
+        }
+    }
     if (t + 1) % rules.term_ticks.max(1) == 0 && t + 1 < rules.ticks_per_season {
         run_election(state, rules, t + 1);
     }
@@ -41,6 +47,11 @@ pub fn electorate(state: &WorldState, rules: &Ruleset, civ: CivId) -> usize {
 
 pub(super) fn resolve_recalls(state: &mut WorldState, rules: &Ruleset, civ: CivId) {
     let t = state.tick;
+    // The electorate is a scan of every member: only count it when a recall
+    // is open (A16; most ticks have none).
+    if state.nations[civ as usize].recalls.is_empty() {
+        return;
+    }
     let voters = electorate(state, rules, civ);
     let recalls = core::mem::take(&mut state.nations[civ as usize].recalls);
     let mut keep = Vec::new();
@@ -111,11 +122,34 @@ pub(super) fn open_idle_recalls(state: &mut WorldState, rules: &Ruleset, civ: Ci
     }
 }
 
+/// Votes per candidate and office (`[candidate][Role::index]`), in one
+/// pass over the ballots. A ballot counts only for a member of the voter's
+/// own nation: votes for anyone else (a pre-season vote may name any id)
+/// are ignored, as they always were.
+pub fn tally(state: &WorldState) -> Vec<[u32; 4]> {
+    let mut t = alloc::vec![[0u32; 4]; state.members.len()];
+    for (m, b) in state.members.iter().zip(&state.ballots) {
+        for (r, c) in b.iter().enumerate() {
+            if state
+                .members
+                .get(*c as usize)
+                .is_some_and(|x| x.civ == m.civ)
+            {
+                t[*c as usize][r] += 1;
+            }
+        }
+    }
+    t
+}
+
 /// Elect every office of every nation for the term starting at `start`
 /// (V5 §5.3). Offices are filled in `Role::ALL` order; a member already
 /// holding `max_offices_per_member` offices is passed over. Most votes wins;
-/// ties go to the on-chain random tie-break. A candidate with no votes can
-/// still win an uncontested office.
+/// ties go to the on-chain random tie-break (then the lower member id). A
+/// candidate with no votes can still win an uncontested office.
+///
+/// Cost: one pass over the ballots, then one pass over the members per
+/// nation and office keeping the best two; no sort, one allocation.
 pub fn run_election(state: &mut WorldState, rules: &Ruleset, start: u16) {
     let seed = crate::hash::sha256(&[
         b"PS/election",
@@ -123,38 +157,39 @@ pub fn run_election(state: &mut WorldState, rules: &Ruleset, start: u16) {
         &state.tick_seed,
         &start.to_le_bytes(),
     ]);
+    let votes = tally(state);
     for civ in 0..state.nations.len() {
         let civ_id = civ as CivId;
         let mut new_offices = [NOBODY; 4];
         let mut runners = [NOBODY; 4];
         for role in Role::ALL {
-            let mut ranked: Vec<(u32, u64, MemberId)> = state
-                .members
-                .iter()
-                .enumerate()
-                .filter(|(_, m)| m.civ == civ_id && m.standing_for & role.bit() != 0)
-                .map(|(id, _)| {
-                    let id = id as MemberId;
-                    let votes = state.nations[civ]
-                        .votes
-                        .iter()
-                        .filter(|v| v.role == role && v.candidate == id)
-                        .count() as u32;
-                    let key = ((civ as u64) << 40) | ((role as u64) << 32) | id as u64;
-                    (votes, crate::rng::tie_key(&seed, key), id)
-                })
-                .collect();
-            ranked.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
-            let eligible: Vec<MemberId> = ranked
-                .into_iter()
-                .map(|(_, _, id)| id)
-                .filter(|id| {
-                    new_offices.iter().filter(|o| *o == id).count()
-                        < rules.max_offices_per_member as usize
-                })
-                .collect();
-            new_offices[role.index()] = eligible.first().copied().unwrap_or(NOBODY);
-            runners[role.index()] = eligible.get(1).copied().unwrap_or(NOBODY);
+            // Rank key: more votes first, then the lower tie key, then the lower id.
+            let mut best: [Option<(core::cmp::Reverse<u32>, u64, MemberId)>; 2] = [None, None];
+            for (id, m) in state.members.iter().enumerate() {
+                let id = id as MemberId;
+                if m.civ != civ_id || m.standing_for & role.bit() == 0 {
+                    continue;
+                }
+                if new_offices.iter().filter(|o| **o == id).count()
+                    >= rules.max_offices_per_member as usize
+                {
+                    continue;
+                }
+                let key = ((civ as u64) << 40) | ((role as u64) << 32) | id as u64;
+                let k = (
+                    core::cmp::Reverse(votes[id as usize][role.index()]),
+                    crate::rng::tie_key(&seed, key),
+                    id,
+                );
+                if best[0].is_none_or(|b| k < b) {
+                    best[1] = best[0];
+                    best[0] = Some(k);
+                } else if best[1].is_none_or(|b| k < b) {
+                    best[1] = Some(k);
+                }
+            }
+            new_offices[role.index()] = best[0].map_or(NOBODY, |b| b.2);
+            runners[role.index()] = best[1].map_or(NOBODY, |b| b.2);
         }
         let n = &mut state.nations[civ];
         // A re-elected holder keeps its tenure (and its idle clock, and any
@@ -169,7 +204,6 @@ pub fn run_election(state: &mut WorldState, rules: &Ruleset, start: u16) {
         }
         n.offices = new_offices;
         n.runner_up = runners;
-        n.votes.clear();
         for (i, m) in new_offices.iter().enumerate() {
             let mut payload = [0u8; 9];
             payload[..2].copy_from_slice(&civ_id.to_le_bytes());
@@ -179,4 +213,6 @@ pub fn run_election(state: &mut WorldState, rules: &Ruleset, start: u16) {
             state.push_event(b"elected", &payload);
         }
     }
+    // Every ballot was for this term.
+    state.ballots.clear();
 }

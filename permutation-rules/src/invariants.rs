@@ -15,6 +15,24 @@ pub struct Violation {
     pub id: u64,
 }
 
+/// USDC the world holds (treasuries, contract escrow, exchange vault and
+/// operations), summed without overflow (WP12: the chain checks it too).
+pub fn usdc_held(state: &WorldState) -> u128 {
+    state.civs.iter().map(|c| c.usdc as u128).sum::<u128>()
+        + state
+            .contracts
+            .iter()
+            .map(|c| c.escrow as u128)
+            .sum::<u128>()
+        + state.exchange_vault as u128
+        + state.exchange_ops as u128
+}
+
+/// Invariant 1: every USDC base unit deposited is held somewhere, exactly.
+pub fn usdc_conserved(state: &WorldState) -> bool {
+    usdc_held(state) == state.usdc_deposited as u128
+}
+
 /// Check every invariant that depends only on the current state.
 pub fn check(state: &WorldState, rules: &Ruleset) -> Vec<Violation> {
     let mut v = Vec::new();
@@ -89,15 +107,20 @@ pub fn check(state: &WorldState, rules: &Ruleset) -> Vec<Violation> {
     }
 
     // 1. USDC conservation on the ER: balances + Vault + operations = deposits.
-    let held: u64 = state.civs.iter().map(|c| c.usdc).sum::<u64>()
-        + crate::contracts::escrowed(state)
-        + state.exchange_vault
-        + state.exchange_ops;
-    if held != state.usdc_deposited {
+    // In u128: a wrapped balance must not hide in a wrapped sum (audit WP08).
+    if !usdc_conserved(state) {
         v.push(Violation {
             invariant: 1,
             what: "USDC not conserved",
-            id: held,
+            id: u64::try_from(usdc_held(state)).unwrap_or(u64::MAX),
+        });
+    }
+    // V5: at most one ballot per member (WP06).
+    if state.ballots.len() > state.members.len() {
+        v.push(Violation {
+            invariant: 12,
+            what: "ballots out of step with members",
+            id: state.ballots.len() as u64,
         });
     }
     // V5: offices are held by members of the nation, at most
@@ -177,4 +200,31 @@ pub fn check_monotonic(before: &WorldState, after: &WorldState) -> Vec<Violation
         }
     }
     v
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::genesis::{nation_entries, new_season};
+    use crate::params::{Preset, Ruleset};
+
+    #[test]
+    fn a_wrapped_treasury_is_not_conserved() {
+        let rules = Ruleset::new(Preset::Blitz);
+        let mut entries = nation_entries(2);
+        for e in &mut entries {
+            e.treasury = 10;
+        }
+        let mut s = new_season(&rules, &[1; 32], &[2; 32], &entries).unwrap();
+        assert!(usdc_conserved(&s));
+        assert!(check(&s, &rules).iter().all(|v| v.invariant != 1));
+        // One treasury wrapped below zero (u64::MAX) and the other +11: the
+        // u64 sum still equals the deposits, the u128 sum does not.
+        s.civs[0].usdc = u64::MAX;
+        s.civs[1].usdc += 11;
+        let wrapped = s.civs.iter().fold(0u64, |a, c| a.wrapping_add(c.usdc));
+        assert_eq!(wrapped, s.usdc_deposited);
+        assert!(!usdc_conserved(&s));
+        assert!(check(&s, &rules).iter().any(|v| v.invariant == 1));
+    }
 }

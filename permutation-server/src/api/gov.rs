@@ -46,6 +46,7 @@ pub fn gov_view(s: &WorldState, rules: &Ruleset, civ: CivId, meta: &[MemberMeta]
             })
         })
         .collect();
+    let tally = permutation_rules::gov::tally(s);
     let candidates: Vec<Value> = Role::ALL
         .iter()
         .map(|r| {
@@ -55,11 +56,7 @@ pub fn gov_view(s: &WorldState, rules: &Ruleset, civ: CivId, meta: &[MemberMeta]
                 .enumerate()
                 .filter(|(_, m)| m.civ == civ && m.standing_for & r.bit() != 0)
                 .map(|(id, _)| {
-                    let votes = n
-                        .votes
-                        .iter()
-                        .filter(|v| v.role == *r && v.candidate == id as MemberId)
-                        .count();
+                    let votes = tally[id][r.index()];
                     json!({"member": who(id as MemberId), "votes": votes})
                 })
                 .collect();

@@ -164,6 +164,8 @@ pub fn season_from_map(
                 trade: vec![0; n + 1],
                 ..Achievements::default()
             },
+            units_built: 0,
+            free_spent: 0,
         });
     }
 
@@ -232,6 +234,7 @@ pub fn season_from_map(
         implicit: Vec::new(),
         grievance_fresh: vec![0; n * n],
         members: Vec::new(),
+        ballots: Vec::new(),
         nations: vec![Nation::new(); n],
         tick_orders: Vec::new(),
         last_skipped: Vec::new(),

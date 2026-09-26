@@ -29,8 +29,8 @@ pub mod caretaker;
 mod terms;
 
 use actions::apply;
-pub use actions::{apply_actions, next_term_start, vote_open};
-pub use terms::{electorate, end_of_tick, run_election};
+pub use actions::{apply_actions, next_term_start, proposal_shape_ok, vote_open};
+pub use terms::{electorate, end_of_tick, run_election, tally};
 
 pub type MemberId = u32;
 /// No member: a vacant office (run by the caretaker) or no proposer.
@@ -129,6 +129,38 @@ pub struct Member {
     pub merit: [u32; 5],
 }
 
+/// One member's votes for the coming term, per office (`Role::index`), as
+/// member ids; `NO_VOTE` = none. Stored in `WorldState::ballots`, indexed by
+/// `MemberId` (member ids stay below `NO_VOTE`, `join`). The list is empty
+/// until the first vote of a term and may be shorter than `members`: a
+/// missing entry is an empty ballot.
+pub type Ballot = [u16; 4];
+/// An empty ballot slot.
+pub const NO_VOTE: u16 = u16::MAX;
+
+impl WorldState {
+    /// `member`'s vote for `role`, `NOBODY` if none.
+    pub fn vote(&self, member: MemberId, role: Role) -> MemberId {
+        match self.ballots.get(member as usize).map(|b| b[role.index()]) {
+            None | Some(NO_VOTE) => NOBODY,
+            Some(c) => c as MemberId,
+        }
+    }
+
+    /// Record `member`'s vote for `role`, replacing the last one. An id no
+    /// member can have (`>= NO_VOTE`) is kept as no vote: it never counted.
+    pub fn cast(&mut self, member: MemberId, role: Role, candidate: MemberId) {
+        let n = self.members.len();
+        if member as usize >= n {
+            return;
+        }
+        if self.ballots.len() < n {
+            self.ballots.resize(n, [NO_VOTE; 4]);
+        }
+        self.ballots[member as usize][role.index()] = u16::try_from(candidate).unwrap_or(NO_VOTE);
+    }
+}
+
 impl Member {
     pub fn merit_total(&self) -> u64 {
         self.merit.iter().map(|m| *m as u64).sum()
@@ -137,13 +169,6 @@ impl Member {
     pub fn active_windows(&self) -> u32 {
         self.windows.count_ones()
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct Vote {
-    pub voter: MemberId,
-    pub role: Role,
-    pub candidate: MemberId,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -166,7 +191,8 @@ pub struct GovProposal {
     pub tick: u16,
     pub orders: Vec<Order>,
     pub supporters: Vec<MemberId>,
-    /// Adopted this tick; removed at commit.
+    /// Adopted this tick; removed at the end of phase 0 (its orders then
+    /// live in `tick_orders` only).
     pub adopted: bool,
 }
 
@@ -189,9 +215,11 @@ pub struct Nation {
     /// Unused budget carried per office (§4.1 bank, per role).
     pub role_bank: [u16; 4],
     pub members: u32,
-    /// Votes for the coming term.
-    pub votes: Vec<Vote>,
+    #[borsh(deserialize_with = "crate::state::vec_exact")]
     pub recalls: Vec<Recall>,
+    /// Open proposals: at most `max_open_proposals`, `max_member_proposals`
+    /// per member; adopted ones leave at the end of phase 0 (WP07).
+    #[borsh(deserialize_with = "crate::state::vec_exact")]
     pub proposals: Vec<GovProposal>,
     pub next_proposal: u32,
     /// Proposals adopted so far this season.
@@ -208,7 +236,6 @@ impl Nation {
             runner_up: [NOBODY; 4],
             role_bank: [0; 4],
             members: 0,
-            votes: Vec::new(),
             recalls: Vec::new(),
             proposals: Vec::new(),
             next_proposal: 0,
@@ -295,7 +322,7 @@ pub fn join(
     if civ as usize >= state.civs.len() {
         return Err(RulesError::UnknownCiv(civ));
     }
-    if state.members.len() >= rules.max_members as usize {
+    if state.members.len() >= (rules.max_members as usize).min(NO_VOTE as usize) {
         return Err(RulesError::NationFull);
     }
     if state.members.iter().any(|m| m.key == key) {

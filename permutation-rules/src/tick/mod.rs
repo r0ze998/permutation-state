@@ -59,6 +59,34 @@ pub fn resolve_tick(
     state.state_root()
 }
 
+/// A degraded step (WP04 liveness escape, chain `ResolveTick` with the
+/// `DEGRADED` flag): run the next phase of a tick whose normal resolution
+/// did not complete, without the tick's orders and governance. Phase 0
+/// runs on an input holding only `vrf`; a later phase first drops the
+/// merged orders not yet run (`tick_orders`: orders, credits and origins;
+/// the budget already `spent` stays). The verifier replays it the same way.
+pub fn run_phase_degraded(
+    state: &mut WorldState,
+    rules: &Ruleset,
+    vrf: crate::rng::Seed,
+    phase: u8,
+) -> Result<(), RulesError> {
+    if phase > 0 {
+        for c in &mut state.tick_orders {
+            c.orders.clear();
+            c.credits.clear();
+            c.origin.clear();
+        }
+    }
+    let empty = TickInput {
+        vrf,
+        batches: Vec::new(),
+        gov: Vec::new(),
+        deposits: Vec::new(),
+    };
+    run_phase(state, rules, &empty, phase)
+}
+
 /// Run exactly one phase (spec v0.2 §15). Each phase lives in the module named.
 ///
 /// | # | Phase | Module |
@@ -177,6 +205,14 @@ fn phase_commit(state: &mut WorldState, rules: &Ruleset) {
     }
     state.implicit.clear();
     state.tick_orders.clear();
+    // Dead units carry nothing (their id stays: orders and events name
+    // units by index), so `units` holds no bytes for them beyond the record.
+    for u in state.units.iter_mut().filter(|u| !u.alive) {
+        if !u.path.is_empty() {
+            u.path = Vec::new();
+        }
+        u.standing = crate::state::StandingRule::None;
+    }
     let tick = state.tick;
     state.push_event(b"tick", &tick.to_le_bytes());
 }
