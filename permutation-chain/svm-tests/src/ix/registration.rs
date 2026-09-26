@@ -21,10 +21,16 @@ pub struct CreateArgs {
     pub market: bool,
     pub prev_season_id: u64,
     pub ai_count: u16,
-    pub roster_chain: [u8; 32],
+    pub roster_commit: [u8; 32],
     pub bounty_each: u64,
     pub bond: u64,
+    pub deposit: u64,
+    pub start_by: i64,
+    pub validator: [u8; 32],
 }
+
+/// The ER validator seasons are created with (devnet's default identity).
+pub const ER_VALIDATOR: &str = "MAS1Dt9qreoRMQ14YQuhg8UTZMMzDdKhmkZMECCzk57";
 
 impl CreateArgs {
     pub fn data(&self) -> I {
@@ -39,9 +45,12 @@ impl CreateArgs {
             market: self.market,
             prev_season_id: self.prev_season_id,
             ai_count: self.ai_count,
-            roster_chain: self.roster_chain,
+            roster_commit: self.roster_commit,
             bounty_each: self.bounty_each,
             bond: self.bond,
+            deposit: self.deposit,
+            start_by: self.start_by,
+            validator: self.validator,
         }
     }
 }
@@ -90,9 +99,12 @@ impl SeasonFx {
             market: self.p.market,
             prev_season_id: 0,
             ai_count: 0,
-            roster_chain: [0; 32],
+            roster_commit: [0; 32],
             bounty_each: 0,
             bond: 0,
+            deposit: 0,
+            start_by: crate::T0 + 7 * 86_400,
+            validator: addr(ER_VALIDATOR).to_bytes(),
         }
     }
 
@@ -122,10 +134,10 @@ impl SeasonFx {
     }
 
     /// CreateSeason with this season's AIs, bounty and bond (`chain.mjs:63`).
-    pub fn create_ai_ix(&self, admin: &Address, roster_chain: [u8; 32]) -> Instruction {
+    pub fn create_ai_ix(&self, admin: &Address, roster_commit: [u8; 32]) -> Instruction {
         let a = CreateArgs {
             ai_count: self.ai.len() as u16,
-            roster_chain,
+            roster_commit,
             bounty_each: self.bounty,
             bond: self.bond,
             ..self.create_args()

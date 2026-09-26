@@ -189,13 +189,33 @@ mod tests {
             prev_history_root: [0; 32],
             history_root: [0; 32],
             ai_count: 1,
-            roster_chain: [0; 32],
+            roster_commit: [0; 32],
             bounty_each: 4_000_000,
             bond: 20_000_000,
             roster_acc: [0; 32],
             roster_revealed: 1,
             roster_outcome: 0,
             bounty_paid: Vec::new(),
+            delegated: 0,
+            roster_blind: [0; 32],
+            refund_base: Vec::new(),
+            refund_in_payout: Vec::new(),
+            seed_state: 0,
+            seed_oracle: [0; 32],
+            seed_requested_at: 0,
+            seed_requests: 0,
+            deposit: 0,
+            outstanding: 0,
+            voided: false,
+            start_by: 0,
+            stage_at: 0,
+            rolled_back: 0,
+            aborted_from: 0,
+            validator: [0; 32],
+            rules_version: 0,
+            rules_hash: [0; 32],
+            logic_version: 0,
+            created_slot: 0,
         };
         (rules, s, season)
     }
@@ -222,6 +242,7 @@ mod tests {
             member: 0,
             civ: 0,
             salt: [5; 32],
+            shares: 0,
         }];
         let f = finalize(&season, &state, &rules, Roster::Revealed(&entries));
         assert_eq!(f.settlement.per_member[0], 0, "the AI takes nothing");
@@ -255,6 +276,7 @@ mod tests {
             member: 0,
             civ: 0,
             salt: [5; 32],
+            shares: 0,
         }];
         let f = finalize(&season, &state, &rules, Roster::Revealed(&entries));
         assert_eq!(f.bounty_paid, vec![0, season.bounty_each]);

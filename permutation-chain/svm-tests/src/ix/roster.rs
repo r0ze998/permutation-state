@@ -12,7 +12,14 @@ impl SeasonFx {
     pub fn reveal_roster_ix(&self, members: &[usize], salts: Vec<[u8; 32]>) -> Instruction {
         let mut m = vec![w(&self.season), w(&self.roster)];
         m.extend(members.iter().map(|i| r(&self.members[*i].member)));
-        self.ix(&I::RevealRoster { salts }, m)
+        self.ix(
+            &I::RevealRoster {
+                from: 0,
+                salts,
+                blind: [0; 32],
+            },
+            m,
+        )
     }
 
     /// RevealRoster of AIs `ai` (indices into `self.ai`, registered) with

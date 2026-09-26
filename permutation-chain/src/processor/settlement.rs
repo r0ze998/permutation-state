@@ -35,7 +35,7 @@ pub(super) fn finish_season(program_id: &Pubkey, accounts: &[AccountInfo]) -> Pr
     let roster_account;
     let roster = if season.ai_count == 0 {
         crate::finalize::Roster::None
-    } else if season.roster_revealed == season.ai_count && season.roster_acc == season.roster_chain
+    } else if season.roster_revealed == season.ai_count && season.roster_acc == season.roster_commit
     {
         let roster_info = accounts
             .get(1 + WORLD_CHUNKS)
@@ -217,13 +217,33 @@ mod tests {
             prev_history_root: [0; 32],
             history_root: [0; 32],
             ai_count: 0,
-            roster_chain: [0; 32],
+            roster_commit: [0; 32],
             bounty_each: 0,
             bond: 0,
             roster_acc: [0; 32],
             roster_revealed: 0,
             roster_outcome: 0,
             bounty_paid: Vec::new(),
+            delegated: 0,
+            roster_blind: [0; 32],
+            refund_base: Vec::new(),
+            refund_in_payout: Vec::new(),
+            seed_state: 0,
+            seed_oracle: [0; 32],
+            seed_requested_at: 0,
+            seed_requests: 0,
+            deposit: 0,
+            outstanding: 0,
+            voided: false,
+            start_by: 0,
+            stage_at: 0,
+            rolled_back: 0,
+            aborted_from: 0,
+            validator: [0; 32],
+            rules_version: 0,
+            rules_hash: [0; 32],
+            logic_version: 0,
+            created_slot: 0,
         };
         let (a, b, c) = (member(0, 0, 200), member(1, 0, 100), member(2, 1, 0));
         assert_eq!(claim_amount(&season, &a), 5 + 66);

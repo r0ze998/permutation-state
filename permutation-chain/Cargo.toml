@@ -18,6 +18,17 @@ custom-heap = []
 custom-panic = []
 # Log the compute units left at each step of ResolveTick (measurement builds only).
 cu-trace = ["permutation-rules/cu-trace"]
+# Measurement builds only: the heap allocator keeps its high-water mark (`heap::peak`).
+heap-trace = []
+# Local stacks without a VRF oracle: tick and season randomness drawn in the
+# transaction (flagged `RAND_DEV` / `SEED_DEV`; the verifier refuses them on
+# devnet, testnet and mainnet). Never a deployed build.
+dev-randomness = []
+# Mainnet builds: CreateSeason admits only Circle USDC (`token::USDC_MAINNET`).
+mainnet = []
+# Host tests of the processor: `processor::now()` reads a settable clock
+# (`set_host_clock`) instead of the Clock sysvar.
+host-clock = []
 
 [dependencies]
 # Same pins as permutation-state-solana-receipt-spike (MagicBlock's Native Rust

@@ -27,25 +27,22 @@ pub const CALLBACK: &[Cover] = &[Cover::Test(
     ],
 )];
 
+/// Retired (WP02): always `Retired`.
 pub const COMMIT: &[Cover] = &[Cover::Test(
-    "delegation::commit_checks",
-    &[
-        Chain(E::Unauthorized),
-        Chain(E::WrongMagicProgram),
-        Chain(E::MissingNation),
-        Lands("commit_ix("),
-    ],
+    "delegation::whole_world_commits_are_retired",
+    &[Chain(E::Retired)],
 )];
 
 pub const COMMIT_AND_UNDELEGATE: &[Cover] = &[Cover::Test(
-    "delegation::commit_and_undelegate_after_the_last_tick",
-    &[Chain(E::SeasonNotOver), Lands("commit_ix(")],
+    "delegation::whole_world_commits_are_retired",
+    &[Chain(E::Retired)],
 )];
 
 pub const COMMIT_PART: &[Cover] = &[Cover::Test(
     "delegation::commit_part_checks",
     &[
         Chain(E::Unauthorized),
+        Chain(E::WrongMagicProgram),
         Chain(E::InvalidParams),
         Chain(E::WrongWorld),
         Lands("part_ix("),

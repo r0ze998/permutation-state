@@ -158,49 +158,21 @@ fn undelegate_callback_restores_the_account() {
     println!("undelegate callback: {cu} CU");
 }
 
+/// `Commit` and `CommitAndUndelegate` are retired (WP02): one intent over
+/// every account exceeds the committor's limits on devnet. The crank's
+/// commit during play and anyone's after the last tick are both refused,
+/// and nothing is scheduled.
 #[test]
-fn commit_checks() {
+fn whole_world_commits_are_retired() {
     let mut c = Chain::new().with_magicblock();
     let s = running(&mut c, 2);
     let crank = s.crank.insecure_clone();
     let cp = crank.pubkey();
-    let stranger = c.funded();
-    assert_err(
-        c.send(vec![s.commit_ix(&stranger.pubkey(), false)], &[&stranger]),
-        E::Unauthorized,
-    );
-    for k in [1, 2] {
-        let mut ix = s.commit_ix(&cp, false);
-        ix.accounts[k].pubkey = stranger.pubkey();
-        assert_err(c.send(vec![ix], &[&crank]), E::WrongMagicProgram);
-    }
-    let mut ix = s.commit_ix(&cp, false);
-    ix.accounts.swap(3 + WORLD_CHUNKS, 4 + WORLD_CHUNKS);
-    assert_err(c.send(vec![ix], &[&crank]), E::MissingNation);
-    // One intent that commits every world chunk and every nation.
     mocks::take();
-    c.send(vec![s.commit_ix(&cp, false)], &[&crank])
-        .expect("crank Commit");
-    let all: Vec<Address> = s.chunks.iter().chain(&s.nations).copied().collect();
-    assert_eq!(intent(), (all, vec![]));
-}
-
-#[test]
-fn commit_and_undelegate_after_the_last_tick() {
-    let mut c = Chain::new().with_magicblock();
-    let s = running(&mut c, 2);
-    let crank = s.crank.insecure_clone();
-    let cp = crank.pubkey();
-    assert_err(
-        c.send(vec![s.commit_ix(&cp, true)], &[&crank]),
-        E::SeasonNotOver,
-    );
+    assert_err(c.send(vec![s.commit_ix(&cp, false)], &[&crank]), E::Retired);
     s.fast_forward_to_end(&mut c);
-    mocks::take();
-    c.send(vec![s.commit_ix(&cp, true)], &[&crank])
-        .expect("CommitAndUndelegate after the last tick");
-    let all: Vec<Address> = s.chunks.iter().chain(&s.nations).copied().collect();
-    assert_eq!(intent(), (vec![], all));
+    assert_err(c.send(vec![s.commit_ix(&cp, true)], &[&crank]), E::Retired);
+    assert!(mocks::take().is_empty(), "nothing scheduled");
 }
 
 #[test]
@@ -217,6 +189,12 @@ fn commit_part_checks() {
         ),
         E::Unauthorized,
     );
+    // Another program in the Magic program's or the context's place.
+    for k in [1, 2] {
+        let mut ix = s.part_ix(&cp, vec![1], false);
+        ix.accounts[k].pubkey = stranger.pubkey();
+        assert_err(c.send(vec![ix], &[&crank]), E::WrongMagicProgram);
+    }
     // Empty, too many, repeated targets.
     for targets in [
         vec![],

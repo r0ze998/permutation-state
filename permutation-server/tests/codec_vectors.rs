@@ -13,15 +13,24 @@
 //! `UPDATE_VECTORS=1 cargo test --test codec_vectors` rewrites the file;
 //! otherwise the file must match (so a Rust-side change fails loudly).
 
+// The account vectors are one large `json!` literal.
+#![recursion_limit = "256"]
+
 use borsh::BorshDeserialize;
 use permutation_chain::error::ChainError;
 use permutation_chain::instruction::ChainInstruction;
 use permutation_chain::state::{
-    MemberAccount, NationAccount, RosterAccount, RosterEntry, Season, SeasonStatus, WorldMeta,
-    CHUNK, GENESIS_MAGIC, INPUT_CHUNK, MAX_AI, MAX_GOV_PER_SIGNER, MAX_MEMBERS, MAX_NAME,
-    MAX_NATIONS, MEMBER_MAGIC, MEMBER_SEED, NATION_MAGIC, NATION_SEED, ROSTER_GRACE_SECONDS,
-    ROSTER_MAGIC, ROSTER_SEED, SEASON_MAGIC, SEASON_SEED, VAULT_SEED, WORLD_CHUNKS, WORLD_HEADER,
-    WORLD_MAGIC, WORLD_SEED,
+    MemberAccount, NationAccount, RollSeat, RosterAccount, RosterEntry, Season, SeasonStatus,
+    WorldMeta, ABORT_GRACE_SECONDS, CHUNK, DEGRADED, FINISH_GRACE_SECONDS, GENESIS_MAGIC,
+    GOV_QUOTA_MAX, GOV_QUOTA_MIN, GOV_SLOTS_PER_TICK, GOV_SLOT_BYTES, INPUT_CHUNK,
+    LEGACY_SEASON_MAGIC, MAX_AI, MAX_BOND, MAX_BOUNTY, MAX_DEPOSIT, MAX_ENTRY_FEE,
+    MAX_GENESIS_WORK, MAX_GOV_ACTION_BYTES, MAX_GOV_PER_SIGNER, MAX_MEMBERS, MAX_NAME, MAX_NATIONS,
+    MAX_NATIONS_PER_INTENT, MAX_REGISTRATION_SECONDS, MAX_REVEAL_BYTES, MAX_TICK_SECONDS,
+    MEMBER_MAGIC, MEMBER_SEED, NATION_MAGIC, NATION_MEMBER_CAP, NATION_SEED, REVEAL_ROOM,
+    ROSTER_GRACE_SECONDS, ROSTER_MAGIC, ROSTER_SEED, SEASON_MAGIC, SEASON_MEMBER_CAP, SEASON_SEED,
+    SEED_RETRY_SECONDS, TAKEOVER_SECONDS, TICK0_GRACE_SECONDS, TICK_OVERHEAD_SECONDS,
+    USDC_DECIMALS, VAULT_SEED, VRF_GIVEUP_SECONDS, VRF_RETRY_SECONDS, WORLD_BODY_MAX, WORLD_CHUNKS,
+    WORLD_HEADER, WORLD_MAGIC, WORLD_META_SPACE, WORLD_SEED,
 };
 use permutation_chain::{payout::claim_amount, state::NATION_TARGET};
 use permutation_rules::decision::{MAX_POLICY, MAX_RATIONALE};
@@ -77,13 +86,33 @@ fn sample_season() -> Season {
         prev_history_root: [14; 32],
         history_root: [15; 32],
         ai_count: 3,
-        roster_chain: [16; 32],
+        roster_commit: [16; 32],
         bounty_each: 5_000_000,
         bond: 60_000_000,
         roster_acc: [16; 32],
         roster_revealed: 3,
         roster_outcome: 1,
         bounty_paid: vec![0, 5_000_000, 0, 0, 0, 0],
+        delegated: 0x03ff_ffff,
+        roster_blind: [26; 32],
+        refund_base: vec![4_000_000, 0, 0, 0, 0, 0],
+        refund_in_payout: vec![0b0000_0010],
+        seed_state: 2,
+        seed_oracle: [27; 32],
+        seed_requested_at: 1_789_999_990,
+        seed_requests: 1,
+        deposit: 1_000_000,
+        outstanding: 30_000_000,
+        voided: false,
+        start_by: 1_790_003_600,
+        stage_at: 1_790_000_000,
+        rolled_back: 0,
+        aborted_from: 0,
+        validator: [28; 32],
+        rules_version: 9,
+        rules_hash: [29; 32],
+        logic_version: 1,
+        created_slot: 412_345_678,
     }
 }
 
@@ -97,11 +126,13 @@ fn sample_roster() -> RosterAccount {
                 member: 1,
                 civ: 0,
                 salt: [17; 32],
+                shares: 1_000_000,
             },
             RosterEntry {
                 member: 2,
                 civ: 1,
                 salt: [18; 32],
+                shares: 0,
             },
         ],
     }
@@ -143,12 +174,23 @@ fn sample_nation() -> NationAccount {
         submitted: [17, u16::MAX, 16, 17],
         frozen: true,
         revealing: true,
-        reveal_deadline: 1_790_000_140,
+        deadline: 1_790_000_140,
         committed: [17, u16::MAX, 17, 16],
         commits: [[20; 32], [0; 32], [21; 32], [22; 32]],
         salts: [[23; 32], [0; 32], [24; 32], [25; 32]],
+        gov_quota: 6,
         batches: [None, None, None, None],
         inbox: vec![],
+        roll: vec![
+            RollSeat {
+                member: 0,
+                key8: [10; 8],
+            },
+            RollSeat {
+                member: 5,
+                key8: [11; 8],
+            },
+        ],
     }
 }
 
@@ -166,6 +208,16 @@ fn sample_meta() -> WorldMeta {
         input_chunks: 2,
         input_logged: 1,
         revealing: true,
+        undelegated: 0,
+        input_hash: [30; 32],
+        rand_state: 2,
+        rand_tick: 17,
+        rand_pre: [31; 32],
+        rand_out: [32; 32],
+        frozen_at: 1_790_000_118,
+        rand_requested_at: 1_790_000_119,
+        rand_requests: 1,
+        usdc_broken: false,
     }
 }
 
@@ -201,15 +253,22 @@ fn account_vectors() -> Value {
                 "opsWithdrawn": s.ops_withdrawn, "treasury": u64s(&s.treasury), "treasuryFinal": u64s(&s.treasury_final),
                 "payouts": u64s(&s.payouts), "finalRoot": hex(&s.final_root),
                 "prevSeasonId": s.prev_season_id.to_string(), "prevHistoryRoot": hex(&s.prev_history_root), "historyRoot": hex(&s.history_root),
-                "aiCount": s.ai_count, "rosterChain": hex(&s.roster_chain), "bountyEach": s.bounty_each.to_string(), "bond": s.bond.to_string(),
+                "aiCount": s.ai_count, "rosterCommit": hex(&s.roster_commit), "bountyEach": s.bounty_each.to_string(), "bond": s.bond.to_string(),
                 "rosterAcc": hex(&s.roster_acc), "rosterRevealed": s.roster_revealed, "rosterOutcome": "revealed", "bountyPaid": u64s(&s.bounty_paid),
+                "delegated": s.delegated, "rosterBlind": hex(&s.roster_blind), "refundBase": u64s(&s.refund_base),
+                "refundInPayout": hex(&s.refund_in_payout), "seedState": s.seed_state, "seedOracle": hex(&s.seed_oracle),
+                "seedRequestedAt": s.seed_requested_at, "seedRequests": s.seed_requests, "deposit": s.deposit.to_string(),
+                "outstanding": s.outstanding.to_string(), "voided": s.voided, "startBy": s.start_by, "stageAt": s.stage_at,
+                "rolledBack": s.rolled_back, "abortedFrom": s.aborted_from, "validator": hex(&s.validator),
+                "rulesVersion": s.rules_version, "rulesHash": hex(&s.rules_hash), "logicVersion": s.logic_version,
+                "createdSlot": s.created_slot.to_string(),
             },
         },
         "roster": {
             "hex": hex(&borsh::to_vec(&ro).unwrap()),
             "decoded": {
                 "seasonId": ro.season_id.to_string(), "bump": ro.bump,
-                "entries": ro.entries.iter().map(|e| json!({"member": e.member, "civ": e.civ, "salt": hex(&e.salt)})).collect::<Vec<_>>(),
+                "entries": ro.entries.iter().map(|e| json!({"member": e.member, "civ": e.civ, "salt": hex(&e.salt), "shares": e.shares.to_string()})).collect::<Vec<_>>(),
             },
         },
         "member": {
@@ -226,9 +285,10 @@ fn account_vectors() -> Value {
                 "seasonId": n.season_id.to_string(), "civ": n.civ, "bump": n.bump, "preset": n.preset, "market": n.market,
                 "crank": hex(&n.crank), "openTick": n.open_tick, "officers": n.officers,
                 "keys": n.keys.iter().map(|k| hex(k)).collect::<Vec<_>>(), "spendable": n.spendable, "submitted": n.submitted,
-                "frozen": n.frozen, "revealing": n.revealing, "revealDeadline": n.reveal_deadline, "committed": n.committed,
+                "frozen": n.frozen, "revealing": n.revealing, "deadline": n.deadline, "committed": n.committed,
                 "commits": n.commits.iter().map(|k| hex(k)).collect::<Vec<_>>(),
-                "salts": n.salts.iter().map(|k| hex(k)).collect::<Vec<_>>(),
+                "salts": n.salts.iter().map(|k| hex(k)).collect::<Vec<_>>(), "govQuota": n.gov_quota,
+                "roll": n.roll.iter().map(|r| json!({"member": r.member, "key8": hex(&r.key8)})).collect::<Vec<_>>(),
             },
         },
         "worldHeader": {
@@ -239,7 +299,10 @@ fn account_vectors() -> Value {
                     "seasonId": meta.season_id.to_string(), "preset": meta.preset, "civs": meta.civs, "tickSeconds": meta.tick_seconds,
                     "deadline": meta.deadline, "finished": meta.finished, "market": meta.market, "frozen": meta.frozen,
                     "vrf": hex(&meta.vrf), "inputChunks": meta.input_chunks, "inputLogged": meta.input_logged,
-                    "revealing": meta.revealing,
+                    "revealing": meta.revealing, "undelegated": meta.undelegated, "inputHash": hex(&meta.input_hash),
+                    "randState": meta.rand_state, "randTick": meta.rand_tick, "randPre": hex(&meta.rand_pre),
+                    "randOut": hex(&meta.rand_out), "frozenAt": meta.frozen_at, "randRequestedAt": meta.rand_requested_at,
+                    "randRequests": meta.rand_requests, "usdcBroken": meta.usdc_broken,
                 },
             },
         },
@@ -257,8 +320,18 @@ fn constant_vectors() -> Value {
         "INPUT_CHUNK": INPUT_CHUNK, "MAX_NATIONS": MAX_NATIONS, "MAX_NAME": MAX_NAME, "MAX_MEMBERS": MAX_MEMBERS,
         "MAX_GOV_PER_SIGNER": MAX_GOV_PER_SIGNER, "MAX_POLICY": MAX_POLICY, "MAX_RATIONALE": MAX_RATIONALE, "BATCH_BYTES": BATCH_BYTES,
         "MAX_AI": MAX_AI, "ROSTER_GRACE_SECONDS": ROSTER_GRACE_SECONDS,
+        "WORLD_META_SPACE": WORLD_META_SPACE, "WORLD_BODY_MAX": WORLD_BODY_MAX, "REVEAL_ROOM": REVEAL_ROOM, "MAX_REVEAL_BYTES": MAX_REVEAL_BYTES,
+        "MAX_GOV_ACTION_BYTES": MAX_GOV_ACTION_BYTES, "GOV_SLOT_BYTES": GOV_SLOT_BYTES, "GOV_SLOTS_PER_TICK": GOV_SLOTS_PER_TICK,
+        "GOV_QUOTA_MIN": GOV_QUOTA_MIN, "GOV_QUOTA_MAX": GOV_QUOTA_MAX, "SEASON_MEMBER_CAP": SEASON_MEMBER_CAP, "NATION_MEMBER_CAP": NATION_MEMBER_CAP,
+        "MAX_GENESIS_WORK": MAX_GENESIS_WORK, "USDC_DECIMALS": USDC_DECIMALS, "MAX_ENTRY_FEE": MAX_ENTRY_FEE.to_string(),
+        "MAX_DEPOSIT": MAX_DEPOSIT.to_string(), "MAX_BOUNTY": MAX_BOUNTY.to_string(), "MAX_BOND": MAX_BOND.to_string(),
+        "ABORT_GRACE_SECONDS": ABORT_GRACE_SECONDS, "FINISH_GRACE_SECONDS": FINISH_GRACE_SECONDS,
+        "MAX_REGISTRATION_SECONDS": MAX_REGISTRATION_SECONDS, "MAX_TICK_SECONDS": MAX_TICK_SECONDS,
+        "TICK_OVERHEAD_SECONDS": TICK_OVERHEAD_SECONDS, "TAKEOVER_SECONDS": TAKEOVER_SECONDS, "TICK0_GRACE_SECONDS": TICK0_GRACE_SECONDS,
+        "DEGRADED": DEGRADED, "VRF_RETRY_SECONDS": VRF_RETRY_SECONDS, "VRF_GIVEUP_SECONDS": VRF_GIVEUP_SECONDS,
+        "SEED_RETRY_SECONDS": SEED_RETRY_SECONDS, "MAX_NATIONS_PER_INTENT": MAX_NATIONS_PER_INTENT,
         "SEEDS": { "season": text(SEASON_SEED), "world": text(WORLD_SEED), "nation": text(NATION_SEED), "member": text(MEMBER_SEED), "vault": text(VAULT_SEED), "roster": text(ROSTER_SEED) },
-        "MAGIC": { "season": text(&SEASON_MAGIC), "member": text(&MEMBER_MAGIC), "nation": text(&NATION_MAGIC), "world": text(&WORLD_MAGIC), "genesis": text(&GENESIS_MAGIC), "roster": text(&ROSTER_MAGIC) },
+        "MAGIC": { "season": text(&SEASON_MAGIC), "legacySeason": text(&LEGACY_SEASON_MAGIC), "member": text(&MEMBER_MAGIC), "nation": text(&NATION_MAGIC), "world": text(&WORLD_MAGIC), "genesis": text(&GENESIS_MAGIC), "roster": text(&ROSTER_MAGIC) },
         "NATIONS": NATIONS,
         "ROLES": Role::ALL.iter().map(|r| format!("{r:?}")).collect::<Vec<_>>(),
         "SEASON_STATUS": statuses,
@@ -437,9 +510,12 @@ fn vectors_match_the_js_encoder_fixture() {
                 market: true,
                 prev_season_id: 41,
                 ai_count: 3,
-                roster_chain: k(12),
+                roster_commit: k(12),
                 bounty_each: 5_000_000,
                 bond: 60_000_000,
+                deposit: 1_000_000,
+                start_by: 1_790_003_600,
+                validator: k(17),
             },
         ),
         ("allocWorld", ChainInstruction::AllocWorld { chunk: 3 }),
@@ -529,7 +605,9 @@ fn vectors_match_the_js_encoder_fixture() {
         (
             "revealRoster",
             ChainInstruction::RevealRoster {
+                from: 1,
                 salts: vec![k(14), k(15)],
+                blind: k(18),
             },
         ),
         (
@@ -538,6 +616,41 @@ fn vectors_match_the_js_encoder_fixture() {
                 tick: 33,
                 count: 12,
                 root: k(16),
+            },
+        ),
+        ("startClock", ChainInstruction::StartClock),
+        ("postBond", ChainInstruction::PostBond { amount: 7_000_000 }),
+        ("freezeTick", ChainInstruction::FreezeTick),
+        (
+            "consumeTickRandomness",
+            ChainInstruction::ConsumeTickRandomness {
+                randomness: k(19),
+                season_id: 42,
+                tick: 17,
+            },
+        ),
+        ("retryTickRandomness", ChainInstruction::RetryTickRandomness),
+        (
+            "consumeSeasonSeed",
+            ChainInstruction::ConsumeSeasonSeed {
+                randomness: k(20),
+                season_id: 42,
+            },
+        ),
+        ("retrySeasonSeed", ChainInstruction::RetrySeasonSeed),
+        ("abort", ChainInstruction::Abort),
+        (
+            "requestUndelegation",
+            ChainInstruction::RequestUndelegation { target: 1002 },
+        ),
+        (
+            "rollbackUndelegation",
+            ChainInstruction::RollbackUndelegation { target: 7 },
+        ),
+        (
+            "closeSeasonAccounts",
+            ChainInstruction::CloseSeasonAccounts {
+                targets: vec![1, 2, 1000],
             },
         ),
     ];

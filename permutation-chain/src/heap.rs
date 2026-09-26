@@ -11,6 +11,12 @@
 //!
 //! The arithmetic is `Bump`, a plain struct tested on the host; the SBF
 //! allocator is `Bump` over the program's heap region.
+//!
+//! Instructions never copy the world: it is streamed from and to the chunks
+//! (`state::Chunks`). `processor::play::scoped` gives back a whole region
+//! (`mark` / `release`); nothing else is ever freed except the last block.
+//! `heap-trace` builds keep a second header word, the high-water mark
+//! (`peak`), for measurements.
 
 use core::alloc::Layout;
 
@@ -23,12 +29,58 @@ pub struct Bump {
     pub end: usize,
 }
 
+const WORD: usize = core::mem::size_of::<usize>();
+
 impl Bump {
-    const HEAD: usize = core::mem::size_of::<usize>();
+    #[cfg(not(feature = "heap-trace"))]
+    const HEAD: usize = WORD;
+    /// The next free address, then the highest end ever handed out.
+    #[cfg(feature = "heap-trace")]
+    const HEAD: usize = 2 * WORD;
 
     #[inline]
     unsafe fn next(&self) -> *mut usize {
         self.start as *mut usize
+    }
+
+    #[inline]
+    unsafe fn note(&self, _end: usize) {
+        #[cfg(feature = "heap-trace")]
+        {
+            let p = (self.start + WORD) as *mut usize;
+            if _end > *p {
+                *p = _end;
+            }
+        }
+    }
+
+    /// The next free address (0 before the first allocation).
+    ///
+    /// # Safety
+    /// As `alloc`.
+    pub unsafe fn mark(&self) -> usize {
+        *self.next()
+    }
+
+    /// Forget every allocation made since `mark`. Panics (the transaction
+    /// fails, nothing is written) if the pointer is below `mark`: something
+    /// allocated before the scope was freed inside it, i.e. the scope
+    /// contract was broken.
+    ///
+    /// # Safety
+    /// As `alloc`; nothing allocated since `mark` is used afterwards.
+    pub unsafe fn release(&self, mark: usize) {
+        assert!(*self.next() >= mark, "heap scope released below its mark");
+        *self.next() = mark;
+    }
+
+    /// The highest heap offset ever handed out (`heap-trace` builds).
+    ///
+    /// # Safety
+    /// As `alloc`.
+    #[cfg(feature = "heap-trace")]
+    pub unsafe fn peak(&self) -> usize {
+        (*((self.start + WORD) as *const usize)).saturating_sub(self.start)
     }
 
     #[inline]
@@ -50,6 +102,7 @@ impl Bump {
             _ => return core::ptr::null_mut(),
         };
         *self.next() = end;
+        self.note(end);
         at as *mut u8
     }
 
@@ -71,6 +124,7 @@ impl Bump {
             return match p.checked_add(new_size) {
                 Some(e) if e <= self.end => {
                     *self.next() = e;
+                    self.note(e);
                     ptr
                 }
                 _ => core::ptr::null_mut(),
@@ -87,13 +141,58 @@ impl Bump {
     }
 }
 
+/// The bump pointer now (0 off SBF or before the first allocation). Only
+/// `processor::play::scoped` uses this pair.
+///
+/// # Safety
+/// See `release`.
+#[allow(dead_code)]
+pub(crate) unsafe fn mark() -> usize {
+    #[cfg(all(feature = "custom-heap", target_os = "solana"))]
+    {
+        upward::B.mark()
+    }
+    #[cfg(not(all(feature = "custom-heap", target_os = "solana")))]
+    {
+        0
+    }
+}
+
+/// Give back every allocation made since `mark` (SBF; a no-op elsewhere).
+/// Panics if the pointer is below `mark` (`Bump::release`).
+///
+/// # Safety
+/// Nothing allocated since `mark` is used afterwards.
+#[allow(dead_code)]
+pub(crate) unsafe fn release(mark: usize) {
+    #[cfg(all(feature = "custom-heap", target_os = "solana"))]
+    {
+        upward::B.release(mark)
+    }
+    #[cfg(not(all(feature = "custom-heap", target_os = "solana")))]
+    {
+        let _ = mark;
+    }
+}
+
+/// `heap-trace` builds: the highest heap offset ever handed out (0 off SBF).
+#[cfg(feature = "heap-trace")]
+pub fn peak() -> usize {
+    #[cfg(all(feature = "custom-heap", target_os = "solana"))]
+    unsafe {
+        upward::B.peak()
+    }
+    #[cfg(not(all(feature = "custom-heap", target_os = "solana")))]
+    0
+}
+
 #[cfg(all(feature = "custom-heap", target_os = "solana"))]
 mod upward {
     use super::{Bump, HEAP_BYTES};
     use core::alloc::{GlobalAlloc, Layout};
     use solana_program::entrypoint::HEAP_START_ADDRESS;
 
-    const B: Bump = Bump {
+    pub(super) const B: Bump = Bump {
         start: HEAP_START_ADDRESS as usize,
         end: HEAP_START_ADDRESS as usize + HEAP_BYTES,
     };
@@ -123,7 +222,7 @@ mod tests {
     use super::Bump;
     use core::alloc::Layout;
 
-    const WORD: usize = core::mem::size_of::<usize>();
+    const WORD: usize = Bump::HEAD;
 
     /// A `Bump` over a zeroed 8 KiB region (the region outlives the test body).
     fn with_bump(f: impl FnOnce(&Bump)) {
@@ -255,6 +354,50 @@ mod tests {
             let _last = b.alloc(l);
             assert!(b.realloc(a, l, b.end - b.start).is_null());
             assert_eq!(*a.add(15), 5, "the block is untouched");
+        });
+    }
+
+    #[test]
+    fn release_gives_back_the_scope() {
+        with_bump(|b| unsafe {
+            let l = layout(16, 8);
+            let before = b.alloc(l);
+            let m = b.mark();
+            let a = b.alloc(layout(100, 8));
+            let c = b.alloc(layout(200, 8));
+            assert!(c > a);
+            b.release(m);
+            // The next block reuses the scope's space; the one before survives.
+            assert_eq!(b.alloc(layout(100, 8)), a);
+            before.write_bytes(1, 16);
+            // Releasing to a mark before any allocation starts over.
+            b.release(0);
+            assert_eq!(b.alloc(l), before);
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "heap scope released below its mark")]
+    fn release_below_the_mark_panics() {
+        with_bump(|b| unsafe {
+            let l = layout(16, 8);
+            let a = b.alloc(l);
+            let m = b.mark();
+            // Freeing a block made before the scope inside it breaks the contract.
+            b.dealloc(a, l);
+            b.release(m);
+        });
+    }
+
+    #[cfg(feature = "heap-trace")]
+    #[test]
+    fn peak_remembers_the_highest_end() {
+        with_bump(|b| unsafe {
+            let m = b.mark();
+            let p = b.alloc(layout(1000, 8));
+            b.release(m);
+            b.alloc(layout(10, 8));
+            assert_eq!(b.peak(), p as usize + 1000 - b.start);
         });
     }
 }
