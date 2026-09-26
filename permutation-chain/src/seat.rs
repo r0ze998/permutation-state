@@ -172,10 +172,7 @@ mod tests {
         assert_eq!(s.members[0].key, [1; 32]);
         assert_eq!(s.members[1].key, sub);
         assert_eq!(s.members[1].standing_for, Role::General.bit());
-        assert!(s.nations[0]
-            .votes
-            .iter()
-            .any(|v| v.voter == 1 && v.role == Role::General && v.candidate == 1));
+        assert_eq!(s.vote(1, Role::General), 1);
         // A third copy of the key gets its own wallet's substitute.
         let c = member(2, 1, 12, [1; 32], 0);
         assert_eq!(

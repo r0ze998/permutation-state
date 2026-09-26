@@ -29,6 +29,10 @@ pub(crate) fn phase_production(state: &mut WorldState, rules: &Ruleset) {
     let city_counts: Vec<u32> = (0..state.civs.len() as CivId)
         .map(|c| state.city_count(c))
         .collect();
+    // At most one unit spawns per living city: grow `units` once, exactly
+    // (a push past an exact capacity doubles it on the chain's bump heap).
+    let room = state.cities.iter().filter(|c| c.alive).count();
+    state.units.reserve_exact(room);
     for i in 0..state.cities.len() {
         let (owner, alive) = (state.cities[i].owner, state.cities[i].alive);
         let razing = state.cities[i].razing.is_some();
@@ -310,7 +314,7 @@ fn try_complete(state: &mut WorldState, rules: &Ruleset, civ: CivId, i: usize) -
                 if c.iron < iron || c.horses < horses {
                     return false; // wait for strategic resources
                 }
-                if !spawn(state, civ, i, unit, n as u32 * 1000) {
+                if !spawn(state, rules, civ, i, unit, n as u32 * 1000) {
                     return false; // no free tile: delayed (§5.6)
                 }
                 let c = &mut state.civs[civ as usize];
@@ -318,7 +322,7 @@ fn try_complete(state: &mut WorldState, rules: &Ruleset, civ: CivId, i: usize) -
                 c.horses -= horses;
             }
             QueueItem::Scout => {
-                if !spawn(state, civ, i, UnitType::Scout, 1000) {
+                if !spawn(state, rules, civ, i, UnitType::Scout, 1000) {
                     return false;
                 }
             }
@@ -326,7 +330,7 @@ fn try_complete(state: &mut WorldState, rules: &Ruleset, civ: CivId, i: usize) -
                 if state.cities[i].pop < rules.settler_min_pop {
                     return false;
                 }
-                if !spawn(state, civ, i, UnitType::Settler, 1000) {
+                if !spawn(state, rules, civ, i, UnitType::Settler, 1000) {
                     return false;
                 }
                 state.cities[i].pop -= 1;
@@ -346,14 +350,20 @@ fn try_complete(state: &mut WorldState, rules: &Ruleset, civ: CivId, i: usize) -
     }
 }
 
-/// Spawn on the city tile or the first free neighbour (§5.6). False = delayed.
+/// Spawn on the city tile or the first free neighbour (§5.6). False =
+/// delayed: no free tile, or the nation built `max_units_built` units this
+/// season (WP07; the item waits at the head of the queue, production kept).
 fn spawn(
     state: &mut WorldState,
+    rules: &Ruleset,
     civ: CivId,
     city: usize,
     unit_type: UnitType,
     troops: u32,
 ) -> bool {
+    if state.civs[civ as usize].units_built >= rules.max_units_built {
+        return false;
+    }
     let center = state.cities[city].hex;
     let probe = Unit {
         id: state.units.len() as u32,
@@ -374,6 +384,7 @@ fn spawn(
         let passable = state.map.tile(hex).is_some_and(|t| t.terrain.is_passable());
         if passable && tile_free_for(state, &probe, hex) {
             state.units.push(Unit { hex, ..probe });
+            state.civs[civ as usize].units_built += 1;
             return true;
         }
     }

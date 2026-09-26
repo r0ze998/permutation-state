@@ -51,6 +51,8 @@ pub enum RulesError {
     /// A batch over `MAX_BATCH_ORDERS` orders (adopted proposals' included)
     /// or `MAX_FREE_ORDERS` zero-cost orders.
     TooManyOrders,
+    /// A price, amount or hex coordinate in an order is out of range.
+    OutOfRange,
 }
 
 impl fmt::Display for RulesError {
@@ -69,6 +71,7 @@ impl fmt::Display for RulesError {
             }
             RulesError::Frozen => write!(f, "this action is frozen in the current phase"),
             RulesError::TooLong => write!(f, "list exceeds its maximum length"),
+            RulesError::OutOfRange => write!(f, "a price, amount or coordinate is out of range"),
             RulesError::MapGeneration(why) => write!(f, "map generation failed: {why}"),
             RulesError::PhaseOutOfOrder { expected, got } => {
                 write!(f, "phase {got} requested, phase {expected} is next")

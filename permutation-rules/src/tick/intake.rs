@@ -34,9 +34,16 @@ pub(crate) fn phase_seed(state: &mut WorldState, rules: &Ruleset, input: &TickIn
             state.usdc_deposited += amount;
         }
     }
-    state.tick_orders = (0..state.civs.len() as CivId)
-        .map(|civ| merge_orders(state, rules, input, civ))
-        .collect();
+    let mut merged = Vec::with_capacity(state.civs.len());
+    for civ in 0..state.civs.len() as CivId {
+        merged.push(merge_orders(state, rules, input, civ));
+    }
+    state.tick_orders = merged;
+    // Adopted proposals now live in `tick_orders` only: the world never
+    // holds their orders twice (WP07).
+    for n in &mut state.nations {
+        n.proposals.retain(|p| !p.adopted);
+    }
 }
 
 /// An office's accepted batch: the input's (by reference) or the caretaker's.
@@ -116,7 +123,7 @@ fn merge_orders(
     for (pick, _) in chosen.iter().flatten() {
         let b = pick.batch();
         let (refs, _) = batch_order_refs(state, b).unwrap_or_default();
-        total += refs.len();
+        total += refs.iter().filter(|(o, _)| o.is_action()).count();
         if matches!(b.role, Role::General | Role::Steward)
             && diplomat.is_none_or(|d| b.member != d || d == NOBODY)
         {
@@ -173,6 +180,26 @@ fn merge_orders(
         let orders = own_orders.iter().map(|o| (o.clone(), own)).chain(adopted);
         for (i, (order, mut credit)) in orders.enumerate() {
             let origin = (role as u8, i as u16);
+            // A reveal is recorded here, at intake, and never enters the
+            // tick's orders: nothing later reads it, and its text is the
+            // largest thing a batch can carry (WP07). Verifiers check it
+            // against the `decision` event of (`civ`, office, `tick`) (§4.3).
+            if let Order::RevealRationale {
+                tick: at,
+                policy,
+                salt,
+                text,
+            } = &order
+            {
+                let mut payload = Vec::with_capacity(69);
+                payload.extend_from_slice(&civ.to_le_bytes());
+                payload.push(origin.0);
+                payload.extend_from_slice(&at.to_le_bytes());
+                payload.extend_from_slice(&crate::decision::policy_id(policy));
+                payload.extend_from_slice(&crate::decision::rationale_hash(salt, text));
+                state.push_event(b"reveal", &payload);
+                continue;
+            }
             if !role_allows(state, role, &order) {
                 state.skip(civ, origin, Blocked::WrongOffice.code());
                 continue;

@@ -205,6 +205,14 @@ fn phase_commit(state: &mut WorldState, rules: &Ruleset) {
     }
     state.implicit.clear();
     state.tick_orders.clear();
+    // Dead units carry nothing (their id stays: orders and events name
+    // units by index), so `units` holds no bytes for them beyond the record.
+    for u in state.units.iter_mut().filter(|u| !u.alive) {
+        if !u.path.is_empty() {
+            u.path = Vec::new();
+        }
+        u.standing = crate::state::StandingRule::None;
+    }
     let tick = state.tick;
     state.push_event(b"tick", &tick.to_le_bytes());
 }

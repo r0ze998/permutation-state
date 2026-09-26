@@ -46,23 +46,22 @@ pub(super) fn apply(state: &mut WorldState, rules: &Ruleset, e: &GovEntry, pre_s
                 vote_open(rules, state.tick) && is_member_of(state, *candidate, civ)
             };
             if ok {
-                let n = &mut state.nations[civ as usize];
-                n.votes
-                    .retain(|v| !(v.voter == e.member && v.role == *role));
-                n.votes.push(Vote {
-                    voter: e.member,
-                    role: *role,
-                    candidate: *candidate,
-                });
-                true
-            } else {
-                false
+                // One vote per office: a new vote replaces the member's last one.
+                state.cast(e.member, *role, *candidate);
             }
+            ok
         }
         GovAction::Propose { role, orders } => propose(state, rules, civ, e.member, *role, orders),
         GovAction::Support { proposal } => {
             let n = &mut state.nations[civ as usize];
+            // A member backs at most `max_member_supports` open proposals.
+            let backing = n
+                .proposals
+                .iter()
+                .filter(|p| p.supporters.contains(&e.member))
+                .count();
             match n.proposals.iter_mut().find(|p| p.id == *proposal) {
+                _ if backing >= rules.max_member_supports as usize => false,
                 Some(p) if p.proposer != e.member && !p.supporters.contains(&e.member) => {
                     p.supporters.push(e.member);
                     true
@@ -77,6 +76,19 @@ pub(super) fn apply(state: &mut WorldState, rules: &Ruleset, e: &GovEntry, pre_s
     }
 }
 
+/// The checks on a proposal that need no world: 1..=`max_proposal_orders`
+/// orders, none of them a reveal (a reveal opens the officer's own decision,
+/// and it is the largest order, free of budget), at most
+/// `max_proposal_bytes` encoded, and a valid structure (WP07). The engine
+/// runs it when the proposal is made; the server and clients before sending.
+pub fn proposal_shape_ok(rules: &Ruleset, open_tick: u16, orders: &[Order]) -> bool {
+    !orders.is_empty()
+        && orders.len() <= rules.max_proposal_orders as usize
+        && orders.iter().all(|o| o.is_action())
+        && borsh::object_length(orders).is_ok_and(|len| len <= rules.max_proposal_bytes as usize)
+        && crate::orders::check_structure(rules, open_tick, orders).is_ok()
+}
+
 pub(super) fn propose(
     state: &mut WorldState,
     rules: &Ruleset,
@@ -85,10 +97,11 @@ pub(super) fn propose(
     role: Role,
     orders: &[Order],
 ) -> bool {
-    if orders.is_empty() || orders.len() > rules.max_proposal_orders as usize {
+    if !proposal_shape_ok(rules, state.tick, orders) {
         return false;
     }
-    if crate::orders::check_structure(rules, state.tick, orders).is_err() {
+    // Treasury orders are the officers' own (V5 §7.5 ④): never proposals.
+    if orders.iter().any(Order::is_treasury_order) {
         return false;
     }
     if !orders
@@ -98,7 +111,10 @@ pub(super) fn propose(
         return false;
     }
     let n = &mut state.nations[civ as usize];
-    if n.proposals.len() >= rules.max_open_proposals as usize {
+    if n.proposals.len() >= rules.max_open_proposals as usize
+        || n.proposals.iter().filter(|p| p.proposer == m).count()
+            >= rules.max_member_proposals as usize
+    {
         return false;
     }
     let id = n.next_proposal;

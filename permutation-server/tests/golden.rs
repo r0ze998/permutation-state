@@ -7,9 +7,18 @@
 //! alter behaviour, regenerate the file and review the diff:
 //!
 //!     UPDATE_GOLDEN=1 cargo test --release --test golden
+//!
+//! The file also records `RULES_VERSION` and the four ruleset hashes
+//! (`[preset·2 + market]`, as the chain pins them). Roots (or ruleset
+//! hashes) that change under the recorded `RULES_VERSION` fail: rules
+//! behaviour must not change without a version bump (WP15), and
+//! `UPDATE_GOLDEN=1` refuses to re-pin them. `UPDATE_GOLDEN=force` re-pins
+//! anyway: allowed only while that version is undeployed (not in
+//! DEPLOYS.md), so that one release shares one bump.
 
 use permutation_rules::genesis::{nation_entries, new_season};
 use permutation_rules::hash::sha256;
+use permutation_rules::params::RULES_VERSION;
 use permutation_rules::payout::settle;
 use permutation_rules::rng::Seed;
 use permutation_rules::state::CivId;
@@ -89,19 +98,78 @@ fn season(i: u32) -> Value {
     })
 }
 
+/// The ruleset hashes the chain pins, `[preset·2 + market]`.
+fn ruleset_hashes() -> Vec<String> {
+    [Preset::Blitz, Preset::Season]
+        .into_iter()
+        .flat_map(|p| {
+            [false, true].map(|market| {
+                let mut r = Ruleset::new(p);
+                r.market_enabled = market;
+                hex(&r.hash())
+            })
+        })
+        .collect()
+}
+
+/// What a rules version pins: the ruleset hashes and every season's roots.
+fn roots(doc: &Value) -> Vec<Value> {
+    let mut out = vec![doc["ruleset_hashes"].clone()];
+    if let Some(seasons) = doc["seasons"].as_object() {
+        for s in seasons.values() {
+            out.push(s["final_root"].clone());
+            out.push(s["roots_chain"].clone());
+        }
+    }
+    out
+}
+
 #[test]
 fn seasons_replay_exactly_as_recorded() {
-    let doc = json!((0..SEEDS)
-        .map(|i| (i.to_string(), season(i)))
-        .collect::<serde_json::Map<_, _>>());
+    let doc = json!({
+        "rules_version": RULES_VERSION,
+        "ruleset_hashes": ruleset_hashes(),
+        "seasons": (0..SEEDS)
+            .map(|i| (i.to_string(), season(i)))
+            .collect::<serde_json::Map<_, _>>(),
+    });
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden.json");
     let text = serde_json::to_string_pretty(&doc).unwrap() + "\n";
-    if std::env::var("UPDATE_GOLDEN").is_ok() {
-        std::fs::write(&path, &text).unwrap();
-        return;
+    let recorded = std::fs::read_to_string(&path).ok();
+    let old: Option<Value> = recorded
+        .as_deref()
+        .and_then(|t| serde_json::from_str(t).ok());
+    // Same version, other roots: the rules changed without a bump.
+    let unbumped = old.as_ref().is_some_and(|old| {
+        old["rules_version"].as_u64() == Some(RULES_VERSION as u64) && roots(old) != roots(&doc)
+    });
+    match std::env::var("UPDATE_GOLDEN").as_deref() {
+        Ok("force") => {
+            if unbumped {
+                eprintln!(
+                    "re-pinned under an unchanged RULES_VERSION ({RULES_VERSION}): allowed only \
+                     while that version is undeployed (not in DEPLOYS.md)"
+                );
+            }
+            std::fs::write(&path, &text).unwrap();
+            return;
+        }
+        Ok(_) => {
+            assert!(
+                !unbumped,
+                "rules behaviour changed without a RULES_VERSION bump: not re-pinned \
+                 (UPDATE_GOLDEN=force only while RULES_VERSION {RULES_VERSION} is undeployed)"
+            );
+            std::fs::write(&path, &text).unwrap();
+            return;
+        }
+        Err(_) => {}
     }
-    let recorded = std::fs::read_to_string(&path)
-        .expect("tests/golden.json exists (run with UPDATE_GOLDEN=1)");
+    let recorded = recorded.expect("tests/golden.json exists (run with UPDATE_GOLDEN=1)");
+    assert!(
+        !unbumped,
+        "rules behaviour changed without a RULES_VERSION bump"
+    );
     assert_eq!(
         recorded, text,
         "behaviour changed: if intended, regenerate with UPDATE_GOLDEN=1 and review the diff"

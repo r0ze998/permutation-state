@@ -113,6 +113,8 @@ struct ExOrder {
     civ: CivId,
     good: Good,
     bid: Bid,
+    /// Office and position of the order, for `Skip`.
+    origin: (u8, u16),
 }
 
 /// Per-tick buy cap in whole units (§11.3), from the previous tick's yields.
@@ -149,10 +151,6 @@ fn sellable(state: &WorldState, civ: CivId, good: Good) -> u32 {
     (stock_milli / MILLI - bought).max(0) as u32
 }
 
-fn fee_of(rules: &Ruleset, notional: u64) -> u64 {
-    notional * rules.exchange_fee_bps as u64 / BPS_ONE as u64
-}
-
 /// A city whose current item is a Star Gate stage: bought production may
 /// not reach it (v0.2 C8, V5 §7.5).
 fn building_star_gate(state: &WorldState, city: u32) -> bool {
@@ -177,33 +175,63 @@ fn deliverable(state: &WorldState, civ: CivId, good: Good) -> bool {
     }
 }
 
-/// Price per unit a buyer pays at its limit: price + fee + tariff (V5 §7.5).
-fn unit_cost(rules: &Ruleset, price: u64, tariff_bps: u32) -> u64 {
-    price + fee_of(rules, price) + price * tariff_bps as u64 / BPS_ONE as u64
+/// What a buyer pays for `qty` units at `price` with `tariff_bps`:
+/// `(notional, income)`, the fee and the tariff rounded **up, per unit**
+/// (V5 §7.5). The reservation (at the buyer's limit) and the settlement (at
+/// the clearing price, never above the limit) use this one function, and
+/// the cost never falls as the price rises, so a fill never costs more than
+/// was reserved. `None` if the total does not fit a u64.
+pub fn trade_cost(rules: &Ruleset, qty: u32, price: u64, tariff_bps: u32) -> Option<(u64, u64)> {
+    let p = price as u128;
+    let b = BPS_ONE as u128;
+    let per_unit_income =
+        (p * rules.exchange_fee_bps as u128).div_ceil(b) + (p * tariff_bps as u128).div_ceil(b);
+    let notional = u64::try_from(qty as u128 * p).ok()?;
+    let income = u64::try_from(qty as u128 * per_unit_income).ok()?;
+    notional.checked_add(income)?;
+    Some((notional, income))
 }
 
-/// Most the diplomat may spend from the treasury this tick: the threshold,
-/// or more with another officer's `ConsentSpend` (V5 §7.5).
+/// Price per unit a buyer pays at `price`: price + fee + tariff.
+fn unit_cost(rules: &Ruleset, price: u64, tariff_bps: u32) -> Option<u64> {
+    trade_cost(rules, 1, price, tariff_bps).map(|(n, i)| n + i)
+}
+
+/// Most the diplomat may spend from the treasury this tick: what is left of
+/// the term's allowance without consent, or more with the `ConsentSpend` of
+/// a seated officer other than the diplomat, in their own batch (V5 §7.5 ④).
 pub fn spend_limit(state: &WorldState, rules: &Ruleset, civ: CivId) -> u64 {
+    let free = rules
+        .spend_consent_usdc
+        .saturating_sub(state.civs[civ as usize].free_spent);
+    free.max(spend_consent(state, civ))
+}
+
+/// The largest valid `ConsentSpend` for `civ` this tick (0 if none).
+pub fn spend_consent(state: &WorldState, civ: CivId) -> u64 {
     let diplomat = state
         .nations
         .get(civ as usize)
         .map_or(NOBODY, |n| n.holder(Role::Diplomat));
-    let consent = state
+    state
         .tick_orders
         .iter()
         .filter(|a| a.civ == civ)
         .flat_map(|a| a.iter())
+        // A consent counts only from a seated officer of another office who
+        // is not the diplomat: the caretaker (officer NOBODY) never consents,
+        // and nobody consents to their own spending (V5 §7.5 ④).
         .filter(|(_, credit, origin)| {
-            origin.0 != Role::Diplomat as u8 && (credit.officer != diplomat || diplomat == NOBODY)
+            origin.0 != Role::Diplomat as u8
+                && credit.officer != NOBODY
+                && credit.officer != diplomat
         })
         .filter_map(|(o, _, _)| match o {
             Order::ConsentSpend { usdc } => Some(*usdc),
             _ => None,
         })
         .max()
-        .unwrap_or(0);
-    rules.spend_consent_usdc.max(consent)
+        .unwrap_or(0)
 }
 
 /// USDC `civ` may still commit this tick (market purchases and contract
@@ -303,7 +331,12 @@ pub fn apply_exchange(state: &mut WorldState, rules: &Ruleset, escrowed: &[u64])
             continue;
         };
         serial += 1;
-        if amount == 0 || price == 0 {
+        // `check_structure` (phase 0) already refused larger values.
+        if amount == 0
+            || price == 0
+            || amount > rules.max_trade_amount
+            || price > rules.exchange_max_price
+        {
             state.skip(civ, origin, Blocked::NothingToSell.code());
             continue;
         }
@@ -322,16 +355,22 @@ pub fn apply_exchange(state: &mut WorldState, rules: &Ruleset, escrowed: &[u64])
                     .sum();
                 let cap = buy_cap(state, civ, kind).saturating_sub(already);
                 // Affordable at the limit price, within the treasury and the tick's spend limit.
-                let unit = unit_cost(rules, price, tariff[civ as usize]);
                 let room = limit[civ as usize].saturating_sub(reserved[civ as usize]);
-                let affordable = (room / unit.max(1)).min(u32::MAX as u64) as u32;
+                let affordable = unit_cost(rules, price, tariff[civ as usize])
+                    .map_or(0, |unit| (room / unit.max(1)).min(u32::MAX as u64) as u32);
                 let q = amount.min(cap).min(affordable);
-                if q == 0 {
-                    let why =
-                        short_of_usdc(limit[civ as usize] < state.civs[civ as usize].free_usdc());
-                    state.skip(civ, origin, why.code());
+                // q × unit ≤ room, so this always fits.
+                let cost = trade_cost(rules, q, price, tariff[civ as usize]).map(|(n, i)| n + i);
+                match cost {
+                    Some(c) if q > 0 => reserved[civ as usize] += c,
+                    _ => {
+                        let why = short_of_usdc(
+                            limit[civ as usize] < state.civs[civ as usize].free_usdc(),
+                        );
+                        state.skip(civ, origin, why.code());
+                        continue;
+                    }
                 }
-                reserved[civ as usize] += q as u64 * unit;
                 q
             }
             Side::Sell => {
@@ -354,6 +393,7 @@ pub fn apply_exchange(state: &mut WorldState, rules: &Ruleset, escrowed: &[u64])
                     civ,
                     good,
                     bid: Bid { qty, price, key },
+                    origin,
                 },
             ));
         }
@@ -406,7 +446,12 @@ pub fn apply_exchange(state: &mut WorldState, rules: &Ruleset, escrowed: &[u64])
                     continue;
                 }
                 let q = bq.min(*sq);
-                settle(state, rules, b, sl, q, price, tariff[b.civ as usize]);
+                if !settle(state, rules, b, sl, q, price, tariff[b.civ as usize]) {
+                    // Cannot happen (a fill costs no more than was reserved):
+                    // refuse the rest of this buy rather than wrap.
+                    state.skip(b.civ, b.origin, Blocked::NotEnoughUsdc.code());
+                    break;
+                }
                 bq -= q;
                 *sq -= q;
             }
@@ -414,6 +459,9 @@ pub fn apply_exchange(state: &mut WorldState, rules: &Ruleset, escrowed: &[u64])
     }
 }
 
+/// Settle one fill. Every amount is computed and checked before anything
+/// changes; returns false (and changes nothing) if a balance would go below
+/// zero or overflow.
 fn settle(
     state: &mut WorldState,
     rules: &Ruleset,
@@ -422,28 +470,39 @@ fn settle(
     qty: u32,
     price: u64,
     tariff_bps: u32,
-) {
-    let notional = qty as u64 * price;
-    let fee = fee_of(rules, notional);
-    let tariff = notional * tariff_bps as u64 / BPS_ONE as u64;
-    let income = fee + tariff;
+) -> bool {
+    let Some((notional, income)) = trade_cost(rules, qty, price, tariff_bps) else {
+        return false;
+    };
+    // Fits: checked in trade_cost.
+    let cost = notional + income;
     // Income from play is split like entry fees: 80% prize pool, 20% operations (V5 D11).
-    let pool = income * rules.vault_share_bps as u64 / BPS_ONE as u64;
+    let pool = (income as u128 * rules.vault_share_bps as u128 / BPS_ONE as u128) as u64;
+    let (b, s) = (buy.civ as usize, sell.civ as usize);
+    let (Some(b_usdc), Some(s_usdc), Some(vault), Some(ops)) = (
+        state.civs[b].usdc.checked_sub(cost),
+        state.civs[s].usdc.checked_add(notional),
+        state.exchange_vault.checked_add(pool),
+        state.exchange_ops.checked_add(income - pool),
+    ) else {
+        return false;
+    };
     {
-        let b = &mut state.civs[buy.civ as usize];
-        b.usdc -= notional + income;
-        b.market_spent += notional + income;
-        b.exchange_bought[GoodKind::of(buy.good) as usize] += qty;
+        let c = &mut state.civs[b];
+        c.usdc = b_usdc;
+        c.market_spent = c.market_spent.saturating_add(cost);
+        let k = GoodKind::of(buy.good) as usize;
+        c.exchange_bought[k] = c.exchange_bought[k].saturating_add(qty);
     }
-    state.civs[sell.civ as usize].usdc += notional;
-    state.exchange_vault += pool;
-    state.exchange_ops += income - pool;
+    state.civs[s].usdc = s_usdc;
+    state.exchange_vault = vault;
+    state.exchange_ops = ops;
     // The seller's goods leave now; the buyer's arrive after the delivery delay.
     let q = qty as i64 * MILLI;
     match sell.good {
-        Good::Gold => state.civs[sell.civ as usize].gold -= q,
-        Good::Iron => state.civs[sell.civ as usize].iron -= q,
-        Good::Horses => state.civs[sell.civ as usize].horses -= q,
+        Good::Gold => state.civs[s].gold -= q,
+        Good::Iron => state.civs[s].iron -= q,
+        Good::Horses => state.civs[s].horses -= q,
         Good::Food(from) => state.cities[from as usize].food -= q,
         Good::Production(from) => state.cities[from as usize].prod -= q,
     }
@@ -454,10 +513,14 @@ fn settle(
         qty,
         due,
     });
-    let mut payload = [0u8; 12];
+    // buyer, seller, qty, price (u64), notional, income: nothing truncated.
+    let mut payload = [0u8; 32];
     payload[..2].copy_from_slice(&buy.civ.to_le_bytes());
     payload[2..4].copy_from_slice(&sell.civ.to_le_bytes());
     payload[4..8].copy_from_slice(&qty.to_le_bytes());
-    payload[8..].copy_from_slice(&(price as u32).to_le_bytes());
+    payload[8..16].copy_from_slice(&price.to_le_bytes());
+    payload[16..24].copy_from_slice(&notional.to_le_bytes());
+    payload[24..32].copy_from_slice(&income.to_le_bytes());
     state.push_event(b"exchange", &payload);
+    true
 }

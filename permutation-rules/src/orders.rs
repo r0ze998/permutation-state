@@ -210,6 +210,14 @@ pub const fn ruled_units_cap(civs: usize) -> usize {
     }
 }
 
+/// Largest |q| or |r| of a hex in an order. Every map hex is within it
+/// (`map_radius` is a u8), and no hex arithmetic can overflow i32 below it.
+pub const MAX_ORDER_COORD: i32 = 255;
+
+fn hex_in_range(h: &Hex) -> bool {
+    h.q.unsigned_abs() <= MAX_ORDER_COORD as u32 && h.r.unsigned_abs() <= MAX_ORDER_COORD as u32
+}
+
 impl Order {
     /// This order in a world turned by `k` × 60° (`mapgen::rotate_world`):
     /// its hexes (move paths, patrol routes) turned the same way.
@@ -242,6 +250,18 @@ impl Order {
             Order::DeclareWar { civ } | Order::BreakNap { civ } => Some(*civ),
             _ => None,
         }
+    }
+
+    /// Orders that move or unlock treasury USDC (V5 §7.5, §18.6): the
+    /// exchange (either side), contract escrow and the second officer's
+    /// spending consent. Only an officer's own sealed batch may carry them:
+    /// they cannot be proposed, so neither the caretaker nor an officer who
+    /// adopts mechanically can run someone else's money order (WP10).
+    pub const fn is_treasury_order(&self) -> bool {
+        matches!(
+            self,
+            Order::ExchangeOrder { .. } | Order::OfferContract { .. } | Order::ConsentSpend { .. }
+        )
     }
 
     /// Whether the order does something (anything but a reveal, v0.2 C9).
@@ -496,11 +516,15 @@ pub fn batch_orders(
     expand_batch(state, batch).map(|(orders, _)| orders)
 }
 
+/// The orders a batch runs, with their credits, and the ids of the
+/// proposals it actually adopts.
+pub type Expansion<O> = (Vec<(O, Credit)>, Vec<u32>);
+
 /// `batch_orders` and the ids of the proposals actually adopted.
 pub fn expand_batch(
     state: &WorldState,
     batch: &OrderBatch,
-) -> Result<(Vec<(Order, Credit)>, Vec<u32>), RulesError> {
+) -> Result<Expansion<Order>, RulesError> {
     let (refs, adopted) = batch_order_refs(state, batch)?;
     let orders = refs.into_iter().map(|(o, c)| (o.clone(), c)).collect();
     Ok((orders, adopted))
@@ -513,7 +537,7 @@ pub fn expand_batch(
 pub fn batch_order_refs<'a>(
     state: &'a WorldState,
     batch: &'a OrderBatch,
-) -> Result<(Vec<(&'a Order, Credit)>, Vec<u32>), RulesError> {
+) -> Result<Expansion<&'a Order>, RulesError> {
     check_batch_size(&batch.orders, &batch.adopt)?;
     let own = Credit::officer(batch.member);
     let mut out: Vec<(&Order, Credit)> = Vec::with_capacity(
@@ -647,6 +671,23 @@ pub fn check_structure<'a>(
                 rule: StandingOrder::Patrol { route },
                 ..
             } if route.len() > MAX_PATROL => return Err(RulesError::TooLong),
+            // Values the engine multiplies or adds (audit WP08): bounded here,
+            // so RevealOrders and phase 0 both refuse them.
+            Order::MoveUnit { path: hexes, .. }
+            | Order::SetStanding {
+                rule: StandingOrder::Patrol { route: hexes },
+                ..
+            } if !hexes.iter().all(hex_in_range) => return Err(RulesError::OutOfRange),
+            Order::ExchangeOrder { amount, price, .. }
+                if *amount > rules.max_trade_amount || *price > rules.exchange_max_price =>
+            {
+                return Err(RulesError::OutOfRange)
+            }
+            Order::MarketTrade { amount, .. } | Order::Transfer { amount, .. }
+                if *amount > rules.max_trade_amount =>
+            {
+                return Err(RulesError::OutOfRange)
+            }
             Order::RevealRationale { policy, text, .. }
                 if policy.len() > crate::decision::MAX_POLICY
                     || text.len() > crate::decision::MAX_RATIONALE =>

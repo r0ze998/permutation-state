@@ -1,158 +1,167 @@
 {
-  "0": {
-    "dust": 24,
-    "final_root": "561074aea1c9faa13df32866530a4d489e3322b9533cc3caec6fdaef140a1004",
-    "payouts": [
-      5559474,
-      7170057,
-      984748,
-      1470132,
-      10703788,
-      4587979,
-      4382284,
-      15427236,
-      11429687,
-      16379832,
-      9904759
-    ],
-    "roots_chain": "4884e78618b1905a75da1e75b07b9d75164c12827977e39820182b209cec4f15",
-    "settlement_view": "5fbb759767263b0b",
-    "views": {
-      "tick180": [
-        "ade7b5a98583fd8f",
-        "ecdecaf5cc280d5b",
-        "98560a09ecf2a423",
-        "20bbd3cef85ee926",
-        "630545b7bfd31619",
-        "e1cfe5e1ab9daab3",
-        "700a432598fd1c5d"
+  "rules_version": 9,
+  "ruleset_hashes": [
+    "b4af95e1b370a310c02b6d89ee0746baf09c9e104d12d1d21a7f34f2509678ee",
+    "d0fe02f7042fa20fee5de97bd0226022cd196d82953fbe1a3914be750c9cedff",
+    "a202a53067ad5e6bd8d9dc5dd6c7bf840042581db09f03d8ad972b791d484490",
+    "9ab238aabe0683108e277d5933da360f4bce83dae15972e0cb314caa8e5cde56"
+  ],
+  "seasons": {
+    "0": {
+      "dust": 24,
+      "final_root": "0b88295e774559422bd5afe2fec9ac6303d4963a123ede08a876f6a5aa559d5c",
+      "payouts": [
+        5559474,
+        7170057,
+        984748,
+        1470132,
+        10703788,
+        4587979,
+        4382284,
+        15427236,
+        11429687,
+        16379832,
+        9904759
       ],
-      "tick60": [
-        "d74ea857f3cfc96f",
-        "57d159bb361ecd46",
-        "a7c18b2c65fedbfc",
-        "ce9cb6242caf74c9",
-        "d10f7337735ec570",
-        "6548595ae39aafe2",
-        "ad748f1ae5396b1a"
-      ]
-    }
-  },
-  "1": {
-    "dust": 20,
-    "final_root": "7675b5578791a9f028d8ac009ef598697c057a49a29bf13aa89f9aa6bc1113f1",
-    "payouts": [
-      7689582,
-      7532311,
-      1150195,
-      1554881,
-      12977474,
-      4227329,
-      5218380,
-      13882393,
-      10207652,
-      14691568,
-      8868215
-    ],
-    "roots_chain": "89e3402fc41f9e48f3ee58ce33acbb205d9e9828e1f9d4bd04e77420a47536d9",
-    "settlement_view": "377ae1b2e83df555",
-    "views": {
-      "tick180": [
-        "8d1454117dc56bd2",
-        "565b0de60d1eaf9e",
-        "d8e0f2d7c8677b0e",
-        "37dc2dee5375f89a",
-        "95109d78edcecd07",
-        "cdf9053bc3735048",
-        "cf572415e7d9ef3a"
+      "roots_chain": "222cd436aca22f5b2455c13664d625bf5b424a7914e9faf791e04057df54369b",
+      "settlement_view": "5fbb759767263b0b",
+      "views": {
+        "tick180": [
+          "ade7b5a98583fd8f",
+          "ecdecaf5cc280d5b",
+          "98560a09ecf2a423",
+          "20bbd3cef85ee926",
+          "630545b7bfd31619",
+          "e1cfe5e1ab9daab3",
+          "700a432598fd1c5d"
+        ],
+        "tick60": [
+          "d74ea857f3cfc96f",
+          "57d159bb361ecd46",
+          "a7c18b2c65fedbfc",
+          "ce9cb6242caf74c9",
+          "d10f7337735ec570",
+          "6548595ae39aafe2",
+          "ad748f1ae5396b1a"
+        ]
+      }
+    },
+    "1": {
+      "dust": 20,
+      "final_root": "ee0c89578e63db31df7d9a9a3713c5c7e7f041b4c7813cb96ca25185006af0a6",
+      "payouts": [
+        7689582,
+        7532311,
+        1150195,
+        1554881,
+        12977474,
+        4227329,
+        5218380,
+        13882393,
+        10207652,
+        14691568,
+        8868215
       ],
-      "tick60": [
-        "07a1f4c3085cf7ff",
-        "a5f7dd8e552f0e5f",
-        "c8fe2806f0ac14b3",
-        "ecfdac69e36fe373",
-        "88dfdf5e3b9638b9",
-        "d1236da401e01d28",
-        "8f0753dc82bc5da0"
-      ]
-    }
-  },
-  "2": {
-    "dust": 20,
-    "final_root": "82d4f318c8bf8473b793a8fad32ff39335b8dfc115b55a77aa3b9ee09958a718",
-    "payouts": [
-      7690002,
-      7509635,
-      1172451,
-      1555432,
-      12966414,
-      4237838,
-      5218437,
-      13882336,
-      10207652,
-      14691568,
-      8868215
-    ],
-    "roots_chain": "0f292cd4c5570bef1c87681df35e3b76ce7e0aa7a304ca35db5f067a3a63435b",
-    "settlement_view": "f92817faa5baf7e8",
-    "views": {
-      "tick180": [
-        "dfd37e014f4383a7",
-        "1677bfc153e97805",
-        "d0b62d6cb7d2e005",
-        "93b26e2d4d90bee6",
-        "304198977c9f1bf6",
-        "f533839175051d9f",
-        "00856f05e86af539"
+      "roots_chain": "7e6772f09f3b359621db1a7131f18abf3f6f700fabe83ebde0659361e678697f",
+      "settlement_view": "377ae1b2e83df555",
+      "views": {
+        "tick180": [
+          "8d1454117dc56bd2",
+          "565b0de60d1eaf9e",
+          "d8e0f2d7c8677b0e",
+          "37dc2dee5375f89a",
+          "95109d78edcecd07",
+          "cdf9053bc3735048",
+          "cf572415e7d9ef3a"
+        ],
+        "tick60": [
+          "07a1f4c3085cf7ff",
+          "a5f7dd8e552f0e5f",
+          "c8fe2806f0ac14b3",
+          "ecfdac69e36fe373",
+          "88dfdf5e3b9638b9",
+          "d1236da401e01d28",
+          "8f0753dc82bc5da0"
+        ]
+      }
+    },
+    "2": {
+      "dust": 20,
+      "final_root": "a1dbf6b770ed584095b996bca1eeee4b67dbdb1984b3d5049d295c610f7949aa",
+      "payouts": [
+        7690002,
+        7509635,
+        1172451,
+        1555432,
+        12966414,
+        4237838,
+        5218437,
+        13882336,
+        10207652,
+        14691568,
+        8868215
       ],
-      "tick60": [
-        "4cf89db344baec1a",
-        "7309d56dd60f0b3c",
-        "7347b3f2f73758f2",
-        "ce5ef1a03cf96fd4",
-        "3fb26678a35e0a11",
-        "f1ac6dc4772a79c6",
-        "0cbed76598bc2b84"
-      ]
-    }
-  },
-  "3": {
-    "dust": 20,
-    "final_root": "219e261655f7032532968ca4e0c04afd129e14c50ccf5553adf27cca04e8ce65",
-    "payouts": [
-      7701713,
-      7520637,
-      1149738,
-      1555432,
-      12966414,
-      4237838,
-      5218437,
-      13882336,
-      10207652,
-      14691568,
-      8868215
-    ],
-    "roots_chain": "5152c34d890019b4f28b006598d6c1da4635a1e2017ef099822a73a19c04810e",
-    "settlement_view": "fd03705b9e548619",
-    "views": {
-      "tick180": [
-        "5db4a46b5ccb4594",
-        "acaf4ca8877b784e",
-        "a98c7e7968b65c6e",
-        "8c1b1e4e2c392bed",
-        "64d4f1b7cbb864de",
-        "815deec1e2493450",
-        "570643b6503a0297"
+      "roots_chain": "c62cf8f2632b2fdd1cede21ddbadf3e0871b1381e58cc723c200f35ac19a00c8",
+      "settlement_view": "f92817faa5baf7e8",
+      "views": {
+        "tick180": [
+          "dfd37e014f4383a7",
+          "1677bfc153e97805",
+          "d0b62d6cb7d2e005",
+          "93b26e2d4d90bee6",
+          "304198977c9f1bf6",
+          "f533839175051d9f",
+          "00856f05e86af539"
+        ],
+        "tick60": [
+          "4cf89db344baec1a",
+          "7309d56dd60f0b3c",
+          "7347b3f2f73758f2",
+          "ce5ef1a03cf96fd4",
+          "3fb26678a35e0a11",
+          "f1ac6dc4772a79c6",
+          "0cbed76598bc2b84"
+        ]
+      }
+    },
+    "3": {
+      "dust": 20,
+      "final_root": "4b355212d837a4ef37354af0cd04cd219af62ebca52a4cfbda66686157c0f9d9",
+      "payouts": [
+        7701713,
+        7520637,
+        1149738,
+        1555432,
+        12966414,
+        4237838,
+        5218437,
+        13882336,
+        10207652,
+        14691568,
+        8868215
       ],
-      "tick60": [
-        "8ca382a77fcbd6a7",
-        "fc9ae4db5814f62a",
-        "8860a1920d8a16e2",
-        "5bc2d2c1f44795d6",
-        "2fb6b39889984865",
-        "70bd4b098f6846e6",
-        "039c9070cda43259"
-      ]
+      "roots_chain": "de9b78db47605c59268f59d8b1647f20955ed4e9014e1f98acc72490a74434ce",
+      "settlement_view": "fd03705b9e548619",
+      "views": {
+        "tick180": [
+          "5db4a46b5ccb4594",
+          "acaf4ca8877b784e",
+          "a98c7e7968b65c6e",
+          "8c1b1e4e2c392bed",
+          "64d4f1b7cbb864de",
+          "815deec1e2493450",
+          "570643b6503a0297"
+        ],
+        "tick60": [
+          "8ca382a77fcbd6a7",
+          "fc9ae4db5814f62a",
+          "8860a1920d8a16e2",
+          "5bc2d2c1f44795d6",
+          "2fb6b39889984865",
+          "70bd4b098f6846e6",
+          "039c9070cda43259"
+        ]
+      }
     }
   }
 }

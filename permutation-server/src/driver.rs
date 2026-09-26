@@ -193,7 +193,7 @@ impl Planner {
             };
             if vote_open {
                 for role in Role::ALL {
-                    if n.votes.iter().any(|v| v.voter == id && v.role == role) {
+                    if state.vote(id, role) != NOBODY {
                         continue;
                     }
                     let candidates: Vec<MemberId> = state
@@ -246,7 +246,10 @@ impl Planner {
                         && !n.proposals.iter().any(|p| p.role == *r && !p.adopted)
                 })
                 .collect();
-            if first_ai && !vacant.is_empty() {
+            // A member may have `max_member_proposals` open at once.
+            let mine = n.proposals.iter().filter(|p| p.proposer == id).count();
+            let mut room = (rules.max_member_proposals as usize).saturating_sub(mine);
+            if first_ai && !vacant.is_empty() && room > 0 {
                 let view = views[m.civ as usize].get_or_insert_with(|| fog.belief(state, m.civ));
                 let plan = self.plan(m.civ, view, rules, fog);
                 let mut parts = split_by_office(view, plan);
@@ -259,32 +262,58 @@ impl Planner {
                 parts[Role::General.index()]
                     .extend(wars.into_iter().map(|c| Order::ConsentWar { civ: c }));
                 for r in vacant {
-                    let orders: Vec<Order> = parts[r.index()]
+                    if room == 0 {
+                        break;
+                    }
+                    // A proposal's shape (gov::proposal_shape_ok): no reveal,
+                    // at most `max_proposal_orders` orders and
+                    // `max_proposal_bytes` bytes; never a treasury order.
+                    let mut orders: Vec<Order> = Vec::new();
+                    for o in parts[r.index()]
                         .iter()
-                        .take(rules.max_proposal_orders as usize)
-                        .cloned()
-                        .collect();
+                        .filter(|o| o.is_action() && !o.is_treasury_order())
+                    {
+                        orders.push(o.clone());
+                        if orders.len() > rules.max_proposal_orders as usize
+                            || borsh::object_length(&orders).unwrap_or(usize::MAX)
+                                > rules.max_proposal_bytes as usize
+                        {
+                            orders.pop();
+                            break;
+                        }
+                    }
                     if !orders.is_empty() {
                         push(&mut out, GovAction::Propose { role: r, orders });
+                        room -= 1;
                     }
                 }
             }
             let in_office = n.offices.contains(&id);
-            let proposes = !in_office && (tick as u32 + id).is_multiple_of(10);
+            let proposes = !in_office && room > 0 && (tick as u32 + id).is_multiple_of(10);
             let open: Vec<&gov::GovProposal> = n
                 .proposals
                 .iter()
                 .filter(|p| p.proposer != id && !p.supporters.contains(&id))
+                .filter(|p| p.orders.iter().all(|o| bot_accepts(state, m.civ, o)))
                 .collect();
             if open.is_empty() && !proposes {
                 continue;
             }
             let view = views[m.civ as usize].get_or_insert_with(|| fog.belief(state, m.civ));
-            // Support nation-mates' proposals that would still work now.
+            // Support nation-mates' proposals that would still work now, up
+            // to `max_member_supports` at once.
+            let backing = n
+                .proposals
+                .iter()
+                .filter(|p| p.supporters.contains(&id))
+                .count();
+            let can_back = (rules.max_member_supports as usize)
+                .saturating_sub(backing)
+                .min(2);
             for p in open
                 .into_iter()
                 .filter(|p| crate::api::preflight(view, rules, m.civ, &p.orders).is_empty())
-                .take(2)
+                .take(can_back)
             {
                 push(&mut out, GovAction::Support { proposal: p.id });
             }
@@ -295,7 +324,11 @@ impl Planner {
                 if let Some((role, order)) = Role::ALL.into_iter().find_map(|r| {
                     parts[r.index()]
                         .iter()
-                        .find(|o| !matches!(o, Order::MoveUnit { .. }))
+                        .find(|o| {
+                            !matches!(o, Order::MoveUnit { .. })
+                                && o.is_action()
+                                && !o.is_treasury_order()
+                        })
                         .map(|o| (r, o.clone()))
                 }) {
                     push(
@@ -321,11 +354,27 @@ impl Planner {
     }
 }
 
+/// Whether an AI member backs (supports or adopts) a proposed order: never
+/// one that moves treasury USDC (the rules refuse those anyway, V5 §7.5),
+/// and a `Transfer` only to a nation in a NAP or an alliance, the bots' own
+/// gift rule (WP10).
+fn bot_accepts(state: &WorldState, civ: CivId, o: &Order) -> bool {
+    match o {
+        _ if o.is_treasury_order() => false,
+        Order::Transfer { civ: to, .. } => {
+            *to != civ && (*to as usize) < state.civs.len() && state.relation(civ, *to).is_pact()
+        }
+        _ => true,
+    }
+}
+
 /// An office run here adopts the best open proposal for it (most support,
 /// then the oldest; never by who proposed it, which would tell observers
 /// who the operator's AI members are), if its orders would still work and fit the budget next
 /// to the office's own plan; the plan yields the lowest-priority orders to
-/// make room. Returns the ids to put in the batch (V5 §5.4).
+/// make room. Never a proposal that moves treasury USDC, nor a transfer to a
+/// nation without a pact (`bot_accepts`). Returns the ids to put in the batch
+/// (V5 §5.4).
 fn adopt_one(
     view: &WorldState,
     rules: &Ruleset,
@@ -339,6 +388,7 @@ fn adopt_one(
         .proposals
         .iter()
         .filter(|p| p.role == role && !p.adopted && p.tick < view.tick)
+        .filter(|p| p.orders.iter().all(|o| bot_accepts(view, civ, o)))
         .filter(|p| crate::api::preflight(view, rules, civ, &p.orders).is_empty())
         .filter(|p| p.orders.iter().map(|o| o.cost() as usize).sum::<usize>() <= budget)
         .max_by_key(|p| (p.supporters.len(), std::cmp::Reverse(p.id)));
@@ -460,5 +510,113 @@ impl AiSeason {
         let root = resolve_tick(&mut self.state, &self.rules, input)?;
         self.fog.update(&self.state);
         Ok(root)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use permutation_rules::genesis::{nation_entries, new_season};
+    use permutation_rules::gov::GovProposal;
+    use permutation_rules::orders::{Good, Side};
+    use permutation_rules::state::Relation;
+    use permutation_rules::Preset;
+
+    const USDC: u64 = 1_000_000;
+
+    /// A proposal put straight into the world (bypassing `gov::propose`,
+    /// which refuses treasury orders).
+    fn inject(s: &mut WorldState, civ: usize, proposer: MemberId, orders: Vec<Order>) -> u32 {
+        let n = &mut s.nations[civ];
+        let id = n.next_proposal;
+        n.next_proposal += 1;
+        n.proposals.push(GovProposal {
+            id,
+            role: Role::Diplomat,
+            proposer,
+            tick: s.tick - 1,
+            orders,
+            supporters: Vec::new(),
+            adopted: false,
+        });
+        id
+    }
+
+    fn supports(gov: &[GovEntry], id: u32) -> bool {
+        gov.iter()
+            .any(|e| matches!(e.action, GovAction::Support { proposal } if proposal == id))
+    }
+
+    #[test]
+    fn ai_members_never_propose_support_or_adopt_treasury_orders() {
+        let rules = Ruleset::new(Preset::Blitz);
+        let mut entries = nation_entries(6);
+        for e in &mut entries {
+            e.treasury = 10 * USDC;
+        }
+        let mut s = new_season(&rules, &[5; 32], &[6; 32], &entries).unwrap();
+        seat_ai_members(&mut s, &rules, &[3; 6]).unwrap();
+        // Nation 0's diplomat office is vacant: its AIs propose for it.
+        s.nations[0].offices[Role::Diplomat.index()] = NOBODY;
+        let mut season = AiSeason::new(rules, s, Planner::new(6), Ledger::seeded(b"wp10"));
+        let mut proposed = 0;
+        while season.state.tick < 20 {
+            let mut vrf = [0u8; 32];
+            vrf[..2].copy_from_slice(&season.state.tick.to_le_bytes());
+            let input = season.plan(vrf);
+            for e in &input.gov {
+                if let GovAction::Propose { orders, .. } = &e.action {
+                    proposed += 1;
+                    assert!(!orders.iter().any(Order::is_treasury_order), "{orders:?}");
+                }
+            }
+            season.resolve(&input).unwrap();
+        }
+        assert!(proposed > 0);
+
+        // Hand-made proposals in nation 1: a treasury buy, and a transfer
+        // to nation 2 (no pact).
+        let (rules, mut s) = (season.rules.clone(), season.state.clone());
+        s.nations[1].proposals.clear();
+        s.nations[1].role_bank = [20; 4];
+        s.set_relation(1, 2, Relation::Peace);
+        let proposer = (0..s.members.len() as MemberId)
+            .find(|m| s.members[*m as usize].civ == 1 && !s.nations[1].offices.contains(m))
+            .unwrap();
+        let buy = Order::ExchangeOrder {
+            good: Good::Iron,
+            side: Side::Buy,
+            amount: 1,
+            price: USDC,
+        };
+        let gift = Order::Transfer {
+            civ: 2,
+            good: Good::Gold,
+            amount: 1,
+        };
+        let treasury = inject(&mut s, 1, proposer, vec![buy]);
+        let transfer = inject(&mut s, 1, proposer, vec![gift]);
+        let fog = Fog::new(&s);
+        let mut planner = Planner::new(6);
+        let gov = planner.member_gov(&s, &rules, &fog, &AllAi);
+        assert!(!supports(&gov, treasury) && !supports(&gov, transfer));
+        assert!(adopt_one(&s, &rules, 1, Role::Diplomat, &mut Vec::new()).is_empty());
+        // The same transfer to a NAP partner is backed and adopted.
+        s.set_relation(
+            1,
+            2,
+            Relation::Nap {
+                until: 200,
+                bond_low: 0,
+                bond_high: 0,
+            },
+        );
+        let fog = Fog::new(&s);
+        let gov = planner.member_gov(&s, &rules, &fog, &AllAi);
+        assert!(supports(&gov, transfer) && !supports(&gov, treasury));
+        assert_eq!(
+            adopt_one(&s, &rules, 1, Role::Diplomat, &mut Vec::new()),
+            vec![transfer]
+        );
     }
 }

@@ -9,7 +9,8 @@ use crate::fixed::Bps;
 use crate::{buildings, map, tech, units};
 use borsh::{BorshDeserialize, BorshSerialize};
 
-pub const RULES_VERSION: u16 = 8; // v7 + flatter milestone points (10/20/30/40/55), V5 §18.13
+// v8: v7 + flatter milestone points (10/20/30/40/55), V5 §18.13.
+pub const RULES_VERSION: u16 = 9; // v8 + batch caps, adoption skip, degraded step (WP04); bounded standing rules (WP05); ballots, one-pass election (WP06); proposal/support/unit caps, reveals at intake, dead units cleared, skip cap, envoy share cap (WP07); bounded checked market (WP08); treasury governance (WP10)
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Preset {
@@ -124,6 +125,8 @@ pub struct Ruleset {
     pub ranged_city_strike_bps: Bps,
 
     // --- nations and governance (V5 §4–§5) ---
+    /// Members per season; equals the chain's `SEASON_MEMBER_CAP` (48 is
+    /// measured on the WP07 prototype; the joint capacity gate is pending).
     pub max_members: u32,
     pub max_offices_per_member: u8,
     pub term_ticks: u16,
@@ -138,11 +141,22 @@ pub struct Ruleset {
     /// An officer counts as active (for merit credited to "the officer") within this many ticks of an order.
     pub officer_active_ticks: u16,
     pub proposal_ttl_ticks: u16,
+    /// Open proposals in one nation at once (adopted ones leave at intake).
     pub max_open_proposals: u16,
     pub max_proposal_orders: u8,
+    /// Open proposals one member may have in its nation at once.
+    pub max_member_proposals: u8,
+    /// Open proposals one member may support at once.
+    pub max_member_supports: u8,
+    /// Largest `borsh(orders)` of a proposal, in bytes.
+    pub max_proposal_bytes: u16,
+    /// Units one nation may build in a season (genesis units not counted);
+    /// production of a unit waits once it is reached (WP07).
+    pub max_units_built: u16,
     /// Role budget split `[general, steward, science, diplomat]` by `B` = 0..=8 (V5 §5.2).
     pub role_split: [[u8; 4]; 9],
-    /// Treasury spending above this per tick needs a second officer's consent (V5 §7.5).
+    /// Treasury spending above this per term needs a second officer's
+    /// consent (V5 §7.5 ④): the no-consent allowance of a term.
     pub spend_consent_usdc: u64,
 
     // --- achievements (V5 §6), calibrated with `sim` (see V5 §6.5) ---
@@ -183,6 +197,10 @@ pub struct Ruleset {
     pub equal_share_bps: Bps,
     /// Equal share cap per member, as a share of the entry fee.
     pub equal_cap_bps: Bps,
+    /// V5 §18.5: the merit unit for taking operator AIs' payouts, as a share
+    /// of the revealed AIs' average merit. A person takes at most
+    /// `equal_cap × max(1, merit / unit)` of AI payouts in total.
+    pub redistribute_merit_unit_bps: Bps,
     pub activity_window_ticks: u16,
     pub active_windows_needed: u8,
 
@@ -192,6 +210,10 @@ pub struct Ruleset {
     /// Tariff in bps at cumulative spend 0, 10%, …, 100% of `tariff_full_usdc`.
     pub tariff_table_bps: [u32; 11],
     pub tariff_full_usdc: u64,
+    /// Highest `ExchangeOrder.price` (USDC base units per whole unit).
+    pub exchange_max_price: u64,
+    /// Highest `amount` of one `ExchangeOrder`, `MarketTrade` or `Transfer`.
+    pub max_trade_amount: u32,
 
     // --- paths and pacing (2026-09-25) ---
     /// A conquest counts for hegemony tier 3 once (banked) when the city had
@@ -321,7 +343,7 @@ impl Ruleset {
             star_gate_spacing: 6,
             ranged_city_strike_bps: 5_000,
 
-            max_members: 256,
+            max_members: 48,
             max_offices_per_member: 2,
             term_ticks: 30,
             vote_window: 10,
@@ -330,8 +352,12 @@ impl Ruleset {
             idle_recall_ticks: 30,
             officer_active_ticks: 10,
             proposal_ttl_ticks: 10,
-            max_open_proposals: 24,
+            max_open_proposals: 8,
             max_proposal_orders: 4,
+            max_member_proposals: 2,
+            max_member_supports: 4,
+            max_proposal_bytes: 256,
+            max_units_built: 56,
             role_split: [
                 [0, 0, 0, 0],
                 [1, 0, 0, 0],
@@ -374,6 +400,7 @@ impl Ruleset {
             ops_share_bps: 2_000,
             equal_share_bps: 2_000,
             equal_cap_bps: 5_000,
+            redistribute_merit_unit_bps: 1_000,
             activity_window_ticks: 10,
             active_windows_needed: 9,
 
@@ -384,6 +411,8 @@ impl Ruleset {
                 500, 976, 1_672, 2_486, 3_387, 4_358, 5_391, 6_475, 7_608, 8_784, 10_000,
             ],
             tariff_full_usdc: 100_000_000,
+            exchange_max_price: 100_000_000,
+            max_trade_amount: 10_000,
 
             conquest_min_pop: 3,
             peace_pact_min_war: 6,

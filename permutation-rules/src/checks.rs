@@ -656,6 +656,20 @@ pub fn ruled_units_below_cap(state: &WorldState, civ: CivId) -> Result<(), Block
     Ok(())
 }
 
+/// Advisory (clients, `preflight`; never called while a tick resolves): a
+/// unit `civ` queues would be built. A nation builds at most
+/// `max_units_built` units a season; beyond it production of units waits
+/// (WP07).
+pub fn can_build_unit(state: &WorldState, rules: &Ruleset, civ: CivId) -> Result<(), Blocked> {
+    let built = state.civs.get(civ as usize).map_or(0, |c| c.units_built);
+    if built >= rules.max_units_built {
+        return Err(Blocked::OverCap {
+            cap: rules.max_units_built as u32,
+        });
+    }
+    Ok(())
+}
+
 /// `SetStanding` (§13).
 pub fn standing(
     state: &WorldState,

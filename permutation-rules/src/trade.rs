@@ -17,7 +17,7 @@ use alloc::vec::Vec;
 /// submission. The caps apply to the sum of one tick's transfers of a good
 /// from one civ to another (v0.2 C4).
 pub fn apply_transfers(state: &mut WorldState, rules: &Ruleset) {
-    let mut sent: Vec<(CivId, CivId, u8, u32)> = Vec::new(); // (from, to, good kind, amount)
+    let mut sent: Vec<(CivId, CivId, u8, u64)> = Vec::new(); // (from, to, good kind, amount)
     for (civ, order, credit, origin) in accepted(state, |o| matches!(o, Order::Transfer { .. })) {
         if let Order::Transfer {
             civ: to,
@@ -26,13 +26,13 @@ pub fn apply_transfers(state: &mut WorldState, rules: &Ruleset) {
         } = order
         {
             let kind = crate::markets::GoodKind::of(good) as u8;
-            let before: u32 = sent
+            let before: u64 = sent
                 .iter()
                 .filter(|s| s.0 == civ && s.1 == to && s.2 == kind)
                 .map(|s| s.3)
                 .sum();
             match transfer(state, rules, civ, to, good, amount, before, credit) {
-                Ok(()) => sent.push((civ, to, kind, amount)),
+                Ok(()) => sent.push((civ, to, kind, amount as u64)),
                 Err(why) => state.skip(civ, origin, why.code()),
             }
         }
@@ -96,7 +96,7 @@ fn transfer(
     to: CivId,
     good: Good,
     amount: u32,
-    already: u32,
+    already: u64,
     credit: Credit,
 ) -> Result<(), Blocked> {
     if !valid_pair(state, from, to) {
@@ -117,7 +117,7 @@ fn transfer(
                 Good::Iron => last.iron.max(1),
                 _ => last.horses.max(1),
             };
-            if already + amount > cap {
+            if already + amount as u64 > cap as u64 {
                 return Err(Blocked::OverCap { cap });
             }
             if *stock_mut(&mut state.civs[from as usize], good) < qty {
@@ -133,7 +133,7 @@ fn transfer(
             } else {
                 last.max_city_prod
             };
-            if already + amount > cap {
+            if already + amount as u64 > cap as u64 {
                 return Err(Blocked::OverCap { cap });
             }
             let target_ok = state

@@ -29,7 +29,6 @@ pub(crate) fn phase_economy_orders(state: &mut WorldState, rules: &Ruleset) {
                 | Order::SetResearch { .. }
                 | Order::Purchase { .. }
                 | Order::SetStanding { .. }
-                | Order::RevealRationale { .. }
         )
     };
     for (civ, order, credit, origin) in accepted(state, economy) {
@@ -55,23 +54,6 @@ pub(crate) fn phase_economy_orders(state: &mut WorldState, rules: &Ruleset) {
                 }
             }
             Order::SetStanding { target, rule } => crate::standing::apply(state, civ, target, rule),
-            Order::RevealRationale {
-                tick,
-                policy,
-                salt,
-                text,
-            } => {
-                // Recorded, never interpreted: verifiers check it against the
-                // `decision` event of (`civ`, office, `tick`) (§4.3).
-                let mut payload = Vec::with_capacity(69);
-                payload.extend_from_slice(&civ.to_le_bytes());
-                payload.push(origin.0);
-                payload.extend_from_slice(&tick.to_le_bytes());
-                payload.extend_from_slice(&crate::decision::policy_id(&policy));
-                payload.extend_from_slice(&crate::decision::rationale_hash(&salt, &text));
-                state.push_event(b"reveal", &payload);
-                Ok(())
-            }
             _ => Ok(()),
         };
         if let Err(why) = result {
@@ -81,8 +63,22 @@ pub(crate) fn phase_economy_orders(state: &mut WorldState, rules: &Ruleset) {
     crate::trade::apply_transfers(state, rules);
     crate::envoys::apply_envoys(state, rules);
     crate::markets::apply_amm(state, rules);
+    let n = state.civs.len();
+    let consent: Vec<u64> = (0..n as CivId)
+        .map(|c| crate::markets::spend_consent(state, c))
+        .collect();
     let escrowed = crate::contracts::apply_contract_orders(state, rules);
+    let before: Vec<u64> = state.civs.iter().map(|c| c.market_spent).collect();
     crate::markets::apply_exchange(state, rules, &escrowed);
+    // Spending the consent did not cover uses the term's free allowance
+    // (V5 §7.5 ④): new contract escrow plus what the exchange charged.
+    for c in 0..n {
+        let spent =
+            escrowed[c].saturating_add(state.civs[c].market_spent.saturating_sub(before[c]));
+        if spent > consent[c] {
+            state.civs[c].free_spent = state.civs[c].free_spent.saturating_add(spent);
+        }
+    }
 }
 
 /// `FoundCity` (§4.2, §5.7): the settler founds a city where it stands.

@@ -76,19 +76,26 @@ fn price_net(goods: i64, gold: i64, buys: u64, sells: u64) -> Option<(i64, i64, 
 /// dropped once more and the final price is used as is.
 pub fn clear_amm(rules: &Ruleset, goods: i64, gold: i64, orders: &[AmmOrder]) -> AmmClearing {
     let fee = |notional: i64| notional * rules.amm_fee_bps as i64 / BPS_ONE as i64;
+    let fee128 = |notional: i128| notional * rules.amm_fee_bps as i128 / BPS_ONE as i128;
     let mut live: Vec<bool> = orders.iter().map(|o| o.qty > 0).collect();
+    // In i128: a price near an emptied pool times a large quantity must not wrap.
     let violates = |o: &AmmOrder, p: i64| {
-        let notional = o.qty as i64 * p;
+        let notional = o.qty as i128 * p as i128;
         match o.side {
             Side::Buy => {
-                let cost = notional + fee(notional);
-                cost > o.limit_gold as i64 * MILLI || cost > o.budget_milli
+                let cost = notional + fee128(notional);
+                cost > o.limit_gold as i128 * MILLI as i128 || cost > o.budget_milli as i128
             }
-            Side::Sell => notional - fee(notional) < o.limit_gold as i64 * MILLI,
+            Side::Sell => notional - fee128(notional) < o.limit_gold as i128 * MILLI as i128,
         }
     };
-    let mut priced = None;
-    for round in 0..=rules.amm_limit_iterations {
+    let over_budget = |o: &AmmOrder, p: i64| {
+        let notional = o.qty as i128 * p as i128;
+        o.side == Side::Buy && notional + fee128(notional) > o.budget_milli as i128
+    };
+    let mut priced;
+    let mut round = 0u8;
+    loop {
         let buys: u64 = orders
             .iter()
             .zip(&live)
@@ -121,6 +128,8 @@ pub fn clear_amm(rules: &Ruleset, goods: i64, gold: i64, orders: &[AmmOrder]) ->
                     }
                 }
             }
+            // Dropping an order the pool cannot supply is not a re-pricing
+            // round: oversized buys cannot use the rounds up (audit WP08).
             continue;
         };
         let mut dropped = false;
@@ -130,7 +139,7 @@ pub fn clear_amm(rules: &Ruleset, goods: i64, gold: i64, orders: &[AmmOrder]) ->
                 dropped = true;
             }
         }
-        if !dropped || round == rules.amm_limit_iterations {
+        if !dropped || round >= rules.amm_limit_iterations {
             if dropped {
                 // Final pass: price what is left and accept it.
                 let buys: u64 = orders
@@ -150,11 +159,23 @@ pub fn clear_amm(rules: &Ruleset, goods: i64, gold: i64, orders: &[AmmOrder]) ->
                 } else {
                     price_net(goods, gold, buys, sells)
                 };
+                // A buyer never pays more than its reserved gold: if the
+                // final price breaks a budget, nothing clears this tick.
+                if let Some((p, _, _)) = priced {
+                    if orders
+                        .iter()
+                        .zip(&live)
+                        .any(|(o, l)| *l && over_budget(o, p))
+                    {
+                        priced = None;
+                    }
+                }
             } else {
                 priced = Some(p);
             }
             break;
         }
+        round += 1;
     }
     let Some((p, dgoods, dgold)) = priced else {
         return AmmClearing {
@@ -169,6 +190,19 @@ pub fn clear_amm(rules: &Ruleset, goods: i64, gold: i64, orders: &[AmmOrder]) ->
         pool_gold_delta: dgold,
         ..Default::default()
     };
+    // Every live buy costs at most its budget (an i64); a sell receives at
+    // most what the buys and the pool pay. Checked anyway: nothing clears
+    // rather than wrap.
+    let fits = orders
+        .iter()
+        .zip(&live)
+        .all(|(o, l)| !*l || i64::try_from(o.qty as i128 * p as i128 * 2).is_ok());
+    if !fits {
+        return AmmClearing {
+            fills: vec![None; orders.len()],
+            ..Default::default()
+        };
+    }
     for (i, o) in orders.iter().enumerate() {
         if !live[i] {
             continue;
@@ -206,6 +240,11 @@ fn pool_index(good: Good) -> Option<usize> {
 /// Phase 2: clear both AMM pools and settle (§11.2).
 pub fn apply_amm(state: &mut WorldState, rules: &Ruleset) {
     let mut per_pool: [Vec<(CivId, AmmOrder, Credit)>; 2] = [Vec::new(), Vec::new()];
+    // Per civ, across both pools and every order of the tick (audit WP08):
+    // gold set aside for its buys, goods set aside for its sells (milli).
+    let n = state.civs.len();
+    let mut gold_reserved = vec![0i64; n];
+    let mut goods_reserved = vec![[0i64; 2]; n];
     for (civ, order, credit, origin) in accepted(state, |o| matches!(o, Order::MarketTrade { .. }))
     {
         let Order::MarketTrade {
@@ -225,21 +264,47 @@ pub fn apply_amm(state: &mut WorldState, rules: &Ruleset) {
         } else {
             let pi = pool_index(good).unwrap_or(0);
             let stock = if pi == 0 { c.iron } else { c.horses };
-            (side == Side::Sell && stock < amount as i64 * MILLI).then_some(Blocked::NothingToSell)
-            // sellers must own the goods
+            let free = stock - goods_reserved[civ as usize][pi];
+            // Sellers must own the goods, net of their earlier sells this tick.
+            (side == Side::Sell && free < amount as i64 * MILLI).then_some(Blocked::NothingToSell)
         };
         if let Some(why) = why {
             state.skip(civ, origin, why.code());
             continue;
         }
         let pi = pool_index(good).unwrap_or(0);
+        let budget_milli = match side {
+            Side::Sell => {
+                goods_reserved[civ as usize][pi] += amount as i64 * MILLI;
+                0
+            }
+            Side::Buy => {
+                // At most the limit, out of the gold not yet set aside.
+                let left = c.gold - gold_reserved[civ as usize];
+                let r = (limit_gold as i64 * MILLI).min(left);
+                if r <= 0 {
+                    state.skip(
+                        civ,
+                        origin,
+                        Blocked::NotEnoughGold {
+                            need: limit_gold,
+                            have: (left / MILLI).max(0) as u32,
+                        }
+                        .code(),
+                    );
+                    continue;
+                }
+                gold_reserved[civ as usize] += r;
+                r
+            }
+        };
         per_pool[pi].push((
             civ,
             AmmOrder {
                 side,
                 qty: amount,
                 limit_gold,
-                budget_milli: c.gold,
+                budget_milli,
             },
             credit,
         ));

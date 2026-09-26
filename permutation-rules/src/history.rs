@@ -53,7 +53,16 @@ pub struct SeasonRecord {
 
 /// The record of a finished season, from its final world and settlement.
 pub fn season_record(state: &WorldState, settlement: &Settlement) -> SeasonRecord {
-    let final_root = state.state_root().unwrap_or([0; 32]);
+    season_record_at(state, settlement, state.state_root().unwrap_or([0; 32]))
+}
+
+/// `season_record` with the final world's root already known (the chain
+/// hashes the stored world instead of encoding it again).
+pub fn season_record_at(
+    state: &WorldState,
+    settlement: &Settlement,
+    final_root: [u8; 32],
+) -> SeasonRecord {
     let nations = (0..state.civs.len())
         .map(|c| {
             let score = settlement.scores.get(c).copied().unwrap_or_default();
