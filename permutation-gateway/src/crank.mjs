@@ -17,6 +17,10 @@
 //   the input (`LogTickInput`; chunk 0 freezes it and draws the randomness
 //   from the revealed salts), resolve it (`ResolveTick`, in parts when it
 //   does not fit one transaction) and archive every part's PS_TICK record.
+// * Fill tick-index gaps left by others' ResolveTick parts from the ER
+//   history, in the background (one bounded attempt per gap); a tick
+//   closed by someone else has commitSignature null. Nothing that reads
+//   history runs on the path that closes, reveals and resolves.
 // * Every `commitEvery` ticks, commit the ER state to the base layer in
 //   small `CommitPart` intents (`intentGroups`).
 // * After the last tick: `UndelegatePart` intents (commit and undelegate),
@@ -33,7 +37,8 @@ import { aiMembers, fundPlanned, registerPlanned, registrationOf, respread, RESP
 import { TalkBook } from './talk.mjs';
 import { records, send } from './send.mjs';
 import { SealedStore } from './sealed.mjs';
-import { appendTickLines, publishTickInput, readTickLines, resolveInParts, tickLinesOf } from './ticks.mjs';
+import { appendTickLines, LAST_PHASE, publishTickInput, readTickLines, resolveInParts, tickLinesOf } from './ticks.mjs';
+import { buildTickLines, chainLines, scanRecords } from './tickscan.mjs';
 
 /** The program judges deadlines by the ER's clock, which can trail ours by a second. */
 export const DEADLINE_GRACE_S = 1;
@@ -97,6 +102,16 @@ export function nextStep({ meta, openTick, committed, revealed, now, delegatedAt
 /** Whether to request a periodic commit after resolving tick `open`. */
 export const commitDue = ({ open, commitEvery, commits = 0 }) =>
   commitEvery > 0 && (open + 1) % commitEvery === 0 && commits < SPONSORED_COMMITS - 1;
+
+/** Pages (of 1000 transactions) the background indexer reads for one gap. */
+export const INDEX_PAGES = 1;
+
+/** A tick line's identity in the index: its transaction and the root it starts from. */
+const lineKey = l => `${l.signature}:${l.preRoot}`;
+/** A gap's identity: after which line, before which line (or up to which open tick). */
+const gapKey = g => `${g.after?.signature ?? 'open'}|${g.before?.signature ?? `tail@${g.openTick}`}`;
+/** Index lines in chain order: within a tick, `to` grows along the chain. */
+const chainOrder = (a, b) => a.tick - b.tick || a.to - b.to;
 
 /** Operator AI members revealed per `RevealRoster` transaction (a member account each). */
 export const ROSTER_BATCH = 8;
@@ -181,6 +196,17 @@ export class Crank {
     this.sealed = new SealedStore(path.join(ticksDir, `${this.state.seasonId}.sealed.json`));
     /** The CloseCommits transaction of a tick: {tick, signature}. */
     this.closed = null;
+    /**
+     * The tick index as this crank keeps it: the keys of its lines (loaded
+     * from the file on first use), the line the chain is at, the gaps to
+     * fill in the background (each tried once) and the scan in flight.
+     */
+    this.indexed = null;
+    this.head = null;
+    this.gaps = [];
+    this.triedGaps = new Set();
+    this.indexing = null;
+    this.slots = new Map(); // signature → slot, as scans saw them
   }
 
   get state() { return this.store.state; }
@@ -233,8 +259,92 @@ export class Crank {
     return this.snapshot;
   }
 
+  /** The tick index from `from`, in chain order (a filled gap lands after the lines past it). */
   tickRecords(from = 0) {
-    return readTickLines(this.tickFile, from);
+    return readTickLines(this.tickFile, from).sort(chainOrder);
+  }
+
+  /** Load the index's keys and head from the file, once. */
+  loadIndex() {
+    if (this.indexed) return;
+    const lines = this.tickRecords();
+    this.indexed = new Set(lines.map(lineKey));
+    this.head = lines.at(-1) ?? null;
+  }
+
+  /** Queue a gap unless it is queued or was tried already. */
+  queueGap(gap) {
+    const k = gapKey(gap);
+    if (!this.triedGaps.has(k) && !this.gaps.some(g => gapKey(g) === k)) this.gaps.push(gap);
+  }
+
+  /**
+   * Archive a landed resolve part at once: one line per advancing PS_TICK
+   * (no-op parts, `ResolveTick { to <= cursor }` after someone else's part,
+   * are skipped), never twice. A part that does not start from the head's
+   * root came after something the index lacks: that gap is queued.
+   */
+  archivePart(result, published, seals) {
+    this.loadIndex();
+    for (const line of tickLinesOf(result, published, seals)) {
+      if (line.preRoot === line.root || this.indexed.has(lineKey(line))) continue;
+      appendTickLines(this.tickFile, [line]);
+      this.indexed.add(lineKey(line));
+      const from = this.head?.root ?? this.state.open?.root;
+      if (from && line.preRoot !== from) this.queueGap({ after: this.head, before: line });
+      this.head = line;
+    }
+  }
+
+  /** Queue a tail gap when the open tick is past what the index reaches (others resolved whole ticks). */
+  noteTail(openTick) {
+    this.loadIndex();
+    const h = this.head;
+    const expected = h ? (h.to >= LAST_PHASE ? h.tick + 1 : h.tick) : 0;
+    if (Number.isInteger(openTick) && openTick > expected) this.queueGap({ after: h, before: null, openTick });
+  }
+
+  /**
+   * Fill the oldest untried gap from world chunk 0's ER history, in the
+   * background: single-flight, never awaited by `step()`, one attempt per
+   * gap. Returns the scan in flight (tests await it).
+   */
+  kickIndexer() {
+    if (this.indexing) return this.indexing;
+    const gap = this.gaps.shift();
+    if (!gap) return Promise.resolve();
+    this.triedGaps.add(gapKey(gap));
+    this.indexing = this.fillGap(gap)
+      .catch(e => this.log(`tick index: gap after tick ${gap.after?.tick ?? 'open'}: ${e.message}`))
+      .finally(() => { this.indexing = null; });
+    return this.indexing;
+  }
+
+  /** The slot of a transaction (from a scan, else its status). */
+  async slotOf(signature) {
+    if (!this.slots.has(signature)) {
+      const st = await this.er.getSignatureStatuses([signature], { searchTransactionHistory: true });
+      this.slots.set(signature, st?.value?.[0]?.slot ?? 0);
+    }
+    return this.slots.get(signature);
+  }
+
+  async fillGap({ after, before, openTick }) {
+    const chunk0 = this.chain.worldChunks[0];
+    const lo = after ? await this.slotOf(after.signature) : 0;
+    const { txs } = await scanRecords({ connection: this.er, address: chunk0, program: this.cfg.programId, lo, start: before?.signature ?? null, maxPages: INDEX_PAGES, concurrency: 4 });
+    for (const t of txs) this.slots.set(t.signature, t.slot);
+    const from = after?.root ?? this.state.open?.root;
+    const found = chainLines(buildTickLines(txs, { anchor: chunk0, knownLines: after ? [after] : [] }), from);
+    const fresh = found.filter(l => !this.indexed.has(lineKey(l)));
+    appendTickLines(this.tickFile, fresh);
+    for (const l of fresh) this.indexed.add(lineKey(l));
+    const last = found.at(-1);
+    if (!before && last && (!this.head || chainOrder(last, this.head) > 0)) this.head = last;
+    const filled = before ? (found.length ? last.root : from) === before.preRoot : found.length > 0;
+    if (!filled) {
+      this.log(`index gap after tick ${after?.tick ?? 'open'}${before ? '' : ` (to open tick ${openTick})`} not filled within ${INDEX_PAGES * 1000} transactions; the verifier recovers it from the ER history; scripts/reindex-ticks.mjs rebuilds the index`);
+    }
   }
 
   async step() {
@@ -350,6 +460,15 @@ export class Crank {
   }
 
   async play(snap) {
+    try {
+      this.noteTail(snap.nations[0]?.openTick);
+      return await this.playStep(snap);
+    } finally {
+      void this.kickIndexer();
+    }
+  }
+
+  async playStep(snap) {
     const { meta } = snap.header;
     const nations = await this.nationCount();
     if (meta.finished) return this.undelegate(nations);
@@ -399,7 +518,8 @@ export class Crank {
       if (chainError(e.message) === 'TooEarly') { this.retryAt = Date.now() + 500; return false; } // the reveal window is still open on the ER's clock
       throw e;
     }
-    const commitSignature = this.closed?.tick === open ? this.closed.signature : await this.findClose(open);
+    // Closed by someone else: null (the verifier finds this season's close itself).
+    const commitSignature = this.closed?.tick === open ? this.closed.signature : null;
     const seals = { committed, revealed, commitSignature };
     // From each cursor try the furthest stop that worked last time, then
     // shorter ones; every 10 ticks probe further again, since cost depends
@@ -408,7 +528,7 @@ export class Crank {
     const parts = await resolveInParts({
       reach: this.reach,
       resolve: to => send(this.er, this.chain.resolveTick({ nations, to }), [this.crank], `resolve tick ${open} to phase ${to}`),
-      onPart: r => appendTickLines(this.tickFile, tickLinesOf(r, published, seals)),
+      onPart: r => this.archivePart(r, published, seals),
     });
     this.sealed.dropBefore(open + 1);
     this.log(`tick ${open} resolved on ER (${revealed}/${committed} sealed batches revealed, ${ROLES.length * nations} offices, ${parts.map(r => r.cu).join(' + ')} CU)`);
@@ -446,21 +566,6 @@ export class Crank {
     await Promise.all(due.map(b =>
       send(this.er, this.chain.revealOrders({ signer: this.crank.publicKey, ...b }), [this.crank], `reveal ${b.civ} ${b.role} tick ${tick}`)
         .catch(e => this.log(`reveal ${b.civ} ${b.role} tick ${tick}: ${chainError(e.message) ?? e.message}`))));
-  }
-
-  /**
-   * The CloseCommits transaction of `tick` when someone else sent it: the
-   * latest transactions on world chunk 0 with a PS_COMMITS record for it.
-   */
-  async findClose(tick) {
-    const sigs = await this.er.getSignaturesForAddress(this.chain.worldChunks[0], { limit: 40 }, 'confirmed');
-    for (const { signature, err } of sigs) {
-      if (err) continue;
-      const t = await this.er.getTransaction(signature, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 });
-      if (records(t?.meta?.logMessages ?? []).some(r => r.tag === 'PS_COMMITS' && r.tick === tick)) return signature;
-    }
-    this.log(`tick ${tick}: its CloseCommits transaction was not found; the verifier cannot check its reveals`);
-    return null;
   }
 
   /** The season's `PS_HISTORY` record and its FinishSeason transaction on base, if found. */

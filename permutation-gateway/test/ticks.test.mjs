@@ -11,9 +11,10 @@ const heavy = () => Object.assign(new Error('resolve: failed'), { logs: ['exceed
 
 test('nextStops: past the cursor, up to what reached before, furthest first', () => {
   assert.deepEqual(nextStops(0), [...STOPS].reverse());
-  assert.deepEqual(nextStops(0, { 0: 5 }), [5, 4, 2]);
-  assert.deepEqual(nextStops(5, { 0: 5 }), [12, 9, 7, 6]);
-  assert.deepEqual(nextStops(9, { 9: 12 }), [12]);
+  assert.deepEqual(nextStops(0, { 0: 5 }), [5, 4, 3, 2, 1]);
+  assert.deepEqual(nextStops(5, { 0: 5 }), [12, 11, 10, 9, 8, 7, 6]);
+  assert.deepEqual(nextStops(9, { 9: 12 }), [12, 11, 10]);
+  assert.deepEqual(nextStops(2, { 2: 3 }), [3], 'any single phase can be a part of its own');
   assert.deepEqual(nextStops(LAST_PHASE), []);
 });
 
@@ -25,14 +26,14 @@ test('resolveInParts: shorter parts on heavy failures, remembers the reach, othe
   const reach = {};
   const archived = [];
   const parts = await resolveInParts({ resolve: resolve(cursor), reach, onPart: (r, to) => archived.push(to) });
-  assert.deepEqual(parts.map(p => p.to), [5, 9, 12]);
-  assert.deepEqual(archived, [5, 9, 12]);
-  assert.deepEqual(reach, { 0: 5, 5: 9, 9: 12 });
+  assert.deepEqual(parts.map(p => p.to), [5, 10, 12]);
+  assert.deepEqual(archived, [5, 10, 12]);
+  assert.deepEqual(reach, { 0: 5, 5: 10, 10: 12 });
   // The next tick starts from the reach: no heavy failure at all.
   tried.length = 0;
   cursor.at = 0;
   await resolveInParts({ resolve: resolve(cursor), reach });
-  assert.deepEqual(tried, [5, 9, 12]);
+  assert.deepEqual(tried, [5, 10, 12]);
   await assert.rejects(resolveInParts({ resolve: async () => { throw new Error('{"Custom":28}'); } }), /Custom/);
   await assert.rejects(resolveInParts({ resolve: async () => { throw heavy(); } }), /exceeded CUs|failed/);
 });
@@ -80,4 +81,11 @@ test('tick index lines: one format for the crank and the reindexer', () => {
   appendTickLines(file, [line, { ...line, tick: 4 }]);
   assert.deepEqual(readTickLines(file, 4), [{ ...line, tick: 4 }]);
   assert.deepEqual(readTickLines(`${file}.missing`), []);
+});
+
+test('tickLine: `to` is the stop that ran (an outsider may log a raw to above 12)', () => {
+  const published = assembleInput(recs(), ['a', 'b', 'c']);
+  const rec = { tag: 'PS_TICK', tick: 3, to: 255, preRoot: Buffer.alloc(32, 1), root: Buffer.alloc(32, 2), inputHash: sha(input) };
+  assert.equal(tickLine({ rec, published, signature: 's', cu: 1 }).to, 12);
+  assert.equal(tickLine({ rec: { ...rec, to: 7 }, published, signature: 's', cu: 1 }).to, 7);
 });

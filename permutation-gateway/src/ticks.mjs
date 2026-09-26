@@ -13,8 +13,11 @@ import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { toHex as hex } from '../client/src/bytes.mjs';
 import { isHeavyError } from '../client/src/retry.mjs';
 
-/** Phase boundaries a tick may be split at (`LAST_PHASE` = the whole tick). */
-export const STOPS = Object.freeze([2, 4, 5, 6, 7, 9, 12]);
+/**
+ * Phase boundaries a tick may be split at (`LAST_PHASE` = the whole tick):
+ * every one, so any single phase can run in a transaction of its own.
+ */
+export const STOPS = Object.freeze([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
 export const LAST_PHASE = 12;
 
 /**
@@ -108,12 +111,14 @@ export async function publishTickInput({ tick, publishChunk }) {
  * offices that sealed orders, how many revealed them (`submitted`, kept for
  * older readers), and the `CloseCommits` transaction whose PS_COMMITS record
  * the verifier checks the reveals against (nulls when unknown, e.g. rebuilt
- * from the chain).
+ * from the chain, or closed by someone else). `to` is the stop that ran:
+ * the program logs the raw byte of `ResolveTick { to }`, and a v8 record
+ * runs `min(to, 12)` phases.
  */
 export function tickLine({ rec, published, signature, cu, seals = {} }) {
   const { committed = null, revealed = null, commitSignature = null } = seals;
   return {
-    tick: rec.tick, to: rec.to, preRoot: hex(rec.preRoot), root: hex(rec.root),
+    tick: rec.tick, to: Math.min(rec.to, LAST_PHASE), preRoot: hex(rec.preRoot), root: hex(rec.root),
     input: published.input, inputHash: published.hash, inputSignatures: published.signatures,
     signature, cu, submitted: revealed, committed, revealed, commitSignature,
   };

@@ -5,6 +5,7 @@ import { Transaction, VersionedTransaction } from '@solana/web3.js';
 import { equal } from '../client/src/bytes.mjs';
 import { parseRecord, RECORD_TAGS } from '../client/src/codec.mjs';
 import { isTransientRpcError, poll, retry, sleep } from '../client/src/retry.mjs';
+import { programLog } from './tickscan.mjs';
 
 export class SendError extends Error {
   constructor(label, cause, logs) {
@@ -137,12 +138,15 @@ async function fetchResult(connection, signature) {
   return { signature, logs, cu: t?.meta?.computeUnitsConsumed ?? null, records: records(logs), fetched: !!t };
 }
 
-/** Decode `Program data:` log lines (sol_log_data: base64 fields separated by spaces) into the program's records. */
-export function records(logs) {
-  return logs
-    .filter(l => l.startsWith('Program data: '))
-    .map(l => l.slice('Program data: '.length).split(' ').map(f => new Uint8Array(Buffer.from(f, 'base64'))))
-    .map(parseRecord)
+/**
+ * Decode `Program data:` log lines (sol_log_data: base64 fields separated by
+ * spaces) into the program's records. With `program` (base58), only lines
+ * logged while `program` was the innermost invocation count, so no other
+ * program can forge a record (tickscan.mjs `programLog`).
+ */
+export function records(logs, program = null) {
+  return programLog(logs, program)
+    .map(x => parseRecord(x.fields))
     .filter(r => RECORD_TAGS.includes(r.tag));
 }
 
