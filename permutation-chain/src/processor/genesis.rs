@@ -4,6 +4,8 @@
 use permutation_rules::genesis::{check_entries, map_seed, nation_entries, season_from_map};
 use permutation_rules::gov;
 use permutation_rules::map::{MapJob, MapStep};
+use permutation_rules::state::WorldState;
+use permutation_rules::Ruleset;
 use solana_program::{
     account_info::{next_account_info, AccountInfo},
     clock::Clock,
@@ -214,14 +216,15 @@ fn open_government_with(
     let rules = rules_for(season.preset, season.market)?;
     let mut state = world.read_world()?;
     gov::first_election(&mut state, &rules).map_err(|_| ChainError::Rules)?;
-    let it = &mut accounts[2 + WORLD_CHUNKS..].iter();
     let deadline = now()? + season.tick_seconds as i64;
-    for civ in 0..season.nations as u16 {
-        let info = next_account_info(it)?;
-        let mut n = load_nation(program_id, info, season.season_id, civ)?;
-        open_nation(&mut n, &state, &rules, deadline);
-        store(&mut info.try_borrow_mut_data()?, &n)?;
-    }
+    open_nations(
+        program_id,
+        &accounts[2 + WORLD_CHUNKS..],
+        &season,
+        &state,
+        &rules,
+        deadline,
+    )?;
     let root = world.write_world(&state)?;
     let mut meta = world.meta()?;
     meta.deadline = deadline;
@@ -230,6 +233,28 @@ fn open_government_with(
     store(&mut season_info.try_borrow_mut_data()?, &season)?;
     solana_program::log::sol_log_data(&[b"PS_OPEN", &root]);
     msg!("PS government opened: tick 0 is open");
+    Ok(())
+}
+
+/// Opens tick 0 in every nation account. Not inlined: the nation account
+/// stays out of `OpenGovernment`'s 4 KiB stack frame, which already holds
+/// the season and the world.
+#[inline(never)]
+fn open_nations(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    season: &Season,
+    state: &WorldState,
+    rules: &Ruleset,
+    deadline: i64,
+) -> ProgramResult {
+    let it = &mut accounts.iter();
+    for civ in 0..season.nations as u16 {
+        let info = next_account_info(it)?;
+        let mut n = load_nation(program_id, info, season.season_id, civ)?;
+        open_nation(&mut n, state, rules, deadline);
+        store(&mut info.try_borrow_mut_data()?, &n)?;
+    }
     Ok(())
 }
 

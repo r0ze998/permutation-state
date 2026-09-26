@@ -41,12 +41,14 @@ fn light(c: &mut Chain, label: &str, ixs: Vec<Instruction>, signers: &[&Keypair]
     assert!(l.cu <= LIGHT_CU, "{label}: {} CU over {LIGHT_CU}", l.cu);
 }
 
-/// `MAX_MEMBERS` idle members standing for every office in six nations
-/// (the creatable presets: Blitz at HEAD): OpenGovernment, LogTickInput and
-/// every crank part for three ticks, FinishSeason, and Claim under Light.
+/// `SEASON_MEMBER_CAP` idle members standing for every office in six
+/// nations (the creatable presets: Blitz at HEAD): OpenGovernment,
+/// LogTickInput and every crank part for three ticks, FinishSeason, and
+/// Claim under Light. (The rules seat at most `Ruleset.max_members`, which
+/// is the season cap from rules v9 on.)
 #[test]
 fn idle_at_member_cap() {
-    let n: usize = env("MEMBERS", MAX_MEMBERS as usize);
+    let n: usize = env("MEMBERS", SEASON_MEMBER_CAP as usize);
     let started = Instant::now();
     let mut c = Chain::new();
     let mut s = SeasonFx::create(
