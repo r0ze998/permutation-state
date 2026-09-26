@@ -186,44 +186,35 @@ impl ChainLink {
         self
     }
 
+    /// A transaction (`getTransaction`, encoding `json`), or `Null` if the
+    /// RPC does not have it.
+    pub fn transaction(&self, signature: &str) -> Result<Value, String> {
+        self.rpc("getTransaction", serde_json::json!([signature, {"encoding": "json", "commitment": "confirmed", "maxSupportedTransactionVersion": 0}]))
+    }
+
     /// `Program data:` log records (sol_log_data) of a transaction. A failed
     /// transaction has none. With `with_program`, only records emitted while
     /// that program was the one executing (the innermost invocation) count,
-    /// so no other program can forge them.
+    /// so no other program can forge them (`replay::tx_records`).
     pub fn log_records(&self, signature: &str) -> Result<Vec<Vec<Vec<u8>>>, String> {
-        let r = self.rpc("getTransaction", serde_json::json!([signature, {"encoding": "json", "commitment": "confirmed", "maxSupportedTransactionVersion": 0}]))?;
-        if !r["meta"]["err"].is_null() {
+        let tx = self.transaction(signature)?;
+        if let Some(p) = &self.program {
+            let r = crate::replay::tx_records(signature, &tx, p)?;
+            return Ok(r.emitted.into_iter().map(|e| e.record).collect());
+        }
+        if !tx["meta"]["err"].is_null() {
             return Ok(Vec::new());
         }
-        let logs = r["meta"]["logMessages"]
+        let logs: Vec<&str> = tx["meta"]["logMessages"]
             .as_array()
-            .ok_or("transaction not found")?;
-        let mut stack: Vec<&str> = Vec::new();
-        let mut out = Vec::new();
-        for l in logs.iter().filter_map(|l| l.as_str()) {
-            if let Some(rest) = l.strip_prefix("Program ") {
-                let mut words = rest.split(' ');
-                let (id, what) = (words.next().unwrap_or(""), words.next().unwrap_or(""));
-                if what == "invoke" {
-                    stack.push(id);
-                    continue;
-                }
-                if (what == "success" || what == "failed:") && stack.last() == Some(&id) {
-                    stack.pop();
-                    continue;
-                }
-            }
-            let Some(data) = l.strip_prefix("Program data: ") else {
-                continue;
-            };
-            if let Some(p) = &self.program {
-                if stack.last().copied() != Some(p.as_str()) {
-                    continue;
-                }
-            }
-            out.push(data.split(' ').map(base64).collect::<Result<Vec<_>, _>>()?);
-        }
-        Ok(out)
+            .ok_or("transaction not found")?
+            .iter()
+            .filter_map(|l| l.as_str())
+            .collect();
+        Ok(crate::replay::walk(&logs, None)?
+            .into_iter()
+            .map(|(r, _)| r)
+            .collect())
     }
 
     /// The world as the program stores it, or `None` while genesis runs.
@@ -262,18 +253,26 @@ impl ChainLink {
     /// every governance action), from the PS_TICK record that completed it.
     pub fn resolved_input(&self, tick: u16) -> Result<Option<(TickInput, Value)>, String> {
         let v = self.get_json(&format!("/ticks?from={tick}"))?;
-        let Some(rec) = v["records"].as_array().and_then(|r| {
-            r.iter().find(|x| {
-                x["tick"].as_u64() == Some(tick as u64)
-                    && x["to"].as_u64() == Some(PHASE_COUNT as u64)
-            })
-        }) else {
+        let Some(rec) = v["records"]
+            .as_array()
+            .and_then(|r| completing_line(r, tick))
+        else {
             return Ok(None);
         };
         let bytes = from_hex(rec["input"].as_str().unwrap_or(""));
         let input = TickInput::try_from_slice(&bytes).map_err(|e| e.to_string())?;
         Ok(Some((input, rec.clone())))
     }
+}
+
+/// The tick index line that completed `tick`: the one that ran to the last
+/// phase (index files written before the stop was normalized may hold an
+/// outsider's raw `to` above 12).
+fn completing_line(lines: &[Value], tick: u16) -> Option<&Value> {
+    lines.iter().find(|x| {
+        x["tick"].as_u64() == Some(tick as u64)
+            && x["to"].as_u64().is_some_and(|t| t >= PHASE_COUNT as u64)
+    })
 }
 
 /// Host and port of a gateway URL like `http://127.0.0.1:4191` (plain HTTP,
@@ -307,4 +306,22 @@ pub fn dechunk(b: &[u8]) -> Vec<u8> {
         i += size + 2;
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn resolved_input_finds_old_and_new_completing_lines() {
+        let lines = [
+            json!({"tick": 3, "to": 5, "input": "a"}),
+            json!({"tick": 3, "to": 255, "input": "old"}),
+            json!({"tick": 4, "to": 12, "input": "new"}),
+        ];
+        assert_eq!(completing_line(&lines, 3).unwrap()["input"], "old");
+        assert_eq!(completing_line(&lines, 4).unwrap()["input"], "new");
+        assert!(completing_line(&lines[..1], 3).is_none());
+    }
 }

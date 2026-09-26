@@ -9,3 +9,4 @@ pub mod events;
 pub mod fog;
 pub mod ledger;
 pub mod play;
+pub mod replay;
