@@ -8,8 +8,8 @@
 //! Two layers, split by the `program` feature (on by default):
 //!
 //! * **Always compiled**: the account layouts and the pure modules below
-//!   (`error`, `finalize`, `heap`, `instruction`, `payout`, `seat`, `state`,
-//!   `token`). They must never `use` the MagicBlock SDK,
+//!   (`error`, `finalize`, `heap`, `instruction`, `lifecycle`, `payout`,
+//!   `randomness`, `rules`, `seat`, `state`, `token`). They must never `use` the MagicBlock SDK,
 //!   `solana_system_interface` or `crate::processor` (test-only uses are
 //!   gated `#[cfg(all(test, feature = "program"))]`). The play server, the
 //!   replay verifier and the LiteSVM suite (`svm-tests`) build this crate
@@ -24,12 +24,21 @@ pub mod error;
 pub mod finalize;
 pub mod heap;
 pub mod instruction;
+pub mod lifecycle;
 pub mod payout;
 #[cfg(feature = "program")]
 pub mod processor;
+pub mod randomness;
+pub mod rules;
 pub mod seat;
 pub mod state;
 pub mod token;
+
+/// The published deployment (devnet); the verifier's default `--program`.
+/// Changed only with a DEPLOYS.md row. No `declare_id!`: the local stack
+/// deploys the same id, and the program never needs its own id at compile
+/// time.
+pub const CANONICAL_PROGRAM_ID: &str = "J4aZxe3ynkS7kcvCpKbp6aFYw8d9vtrRDsgSEi1niU6n";
 
 #[cfg(all(feature = "program", not(feature = "no-entrypoint")))]
 mod entrypoint {

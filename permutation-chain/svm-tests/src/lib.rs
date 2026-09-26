@@ -16,6 +16,7 @@
 //! | `drive` | genesis, seating and ticks as the crank drives them |
 //! | `bots` | the play server's bots playing a season through the program |
 //! | `magicblock` | stand-ins for the delegation and Magic programs |
+//! | `vrf` | a stand-in for the MagicBlock VRF program (requests, `fulfil`) |
 //! | `records` | `sol_log_data` records (`PS_*`) |
 //! | `budget` | CU/heap needs (`need`), the ceilings, the crank's split points |
 //! | `cover` | the coverage tables the guard (`tests/coverage.rs`) checks |
@@ -36,6 +37,7 @@ pub mod magicblock;
 pub mod records;
 pub mod season;
 pub mod spl;
+pub mod vrf;
 
 pub use bots::{BotSeason, TickReport};
 pub use budget::*;

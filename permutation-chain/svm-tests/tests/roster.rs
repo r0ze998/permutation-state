@@ -103,7 +103,7 @@ fn reveal_roster_checks() {
     );
     t.register_ai(&mut c, 0);
     t.register_ai(&mut c, 1);
-    c.edit::<Season>(&t.season, |x| x.roster_chain = [0x77; 32]);
+    c.edit::<Season>(&t.season, |x| x.roster_commit = [0x77; 32]);
     c.send(vec![t.reveal_ai_ix(&[0])], &[&anyone])
         .expect("RevealRoster");
     assert_err(

@@ -119,49 +119,6 @@ pub(super) fn undelegate_callback(
     Ok(())
 }
 
-pub(super) fn commit(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo],
-    undelegate: bool,
-) -> ProgramResult {
-    let it = &mut accounts.iter();
-    let payer = next_account_info(it)?;
-    let magic_program = next_account_info(it)?;
-    let magic_context = next_account_info(it)?;
-    signer(payer)?;
-    if magic_program.key != &MAGIC_PROGRAM_ID || magic_context.key != &MAGIC_CONTEXT_ID {
-        return Err(ChainError::WrongMagicProgram.into());
-    }
-    let world = world_at(program_id, &accounts[3..])?;
-    let meta = world.meta()?;
-    if undelegate && !meta.finished {
-        return Err(ChainError::SeasonNotOver.into());
-    }
-    let it = &mut accounts[3 + WORLD_CHUNKS..].iter();
-    let mut list: Vec<AccountInfo> = world.accounts.to_vec();
-    for civ in 0..meta.civs as u16 {
-        let info = next_account_info(it)?;
-        load_nation(program_id, info, meta.season_id, civ)?;
-        list.push(info.clone());
-    }
-    if !undelegate {
-        require_crank(program_id, &list[WORLD_CHUNKS], meta.season_id, payer)?;
-    }
-    let builder =
-        MagicIntentBundleBuilder::new(payer.clone(), magic_context.clone(), magic_program.clone());
-    if undelegate {
-        builder.commit_and_undelegate(&list).build_and_invoke()?;
-    } else {
-        builder.commit(&list).build_and_invoke()?;
-    }
-    msg!(
-        "PS commit{} season {}",
-        if undelegate { "+undelegate" } else { "" },
-        meta.season_id
-    );
-    Ok(())
-}
-
 /// Commit (and with `undelegate`, undelegate) the `targets` in one small intent.
 pub(super) fn commit_part(
     program_id: &Pubkey,

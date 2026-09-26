@@ -215,21 +215,37 @@ fn open_government_with(
     let mut state = world.read_world()?;
     gov::first_election(&mut state, &rules).map_err(|_| ChainError::Rules)?;
     let it = &mut accounts[2 + WORLD_CHUNKS..].iter();
+    let deadline = now()? + season.tick_seconds as i64;
     for civ in 0..season.nations as u16 {
         let info = next_account_info(it)?;
         let mut n = load_nation(program_id, info, season.season_id, civ)?;
-        open_nation(&mut n, &state, &rules);
+        open_nation(&mut n, &state, &rules, deadline);
         store(&mut info.try_borrow_mut_data()?, &n)?;
     }
     let root = world.write_world(&state)?;
     let mut meta = world.meta()?;
-    meta.deadline = now()? + meta.tick_seconds as i64;
+    meta.deadline = deadline;
     world.set_meta(&meta)?;
     season.status = SeasonStatus::Running;
     store(&mut season_info.try_borrow_mut_data()?, &season)?;
     solana_program::log::sol_log_data(&[b"PS_OPEN", &root]);
     msg!("PS government opened: tick 0 is open");
     Ok(())
+}
+
+/// `ConsumeSeasonSeed` (lands with unit P2; refused until then).
+pub(super) fn consume_season_seed(
+    _program_id: &Pubkey,
+    _accounts: &[AccountInfo],
+    _randomness: [u8; 32],
+    _season_id: u64,
+) -> ProgramResult {
+    Err(ChainError::InvalidInstruction.into())
+}
+
+/// `RetrySeasonSeed` (lands with unit P2; refused until then).
+pub(super) fn retry_season_seed(_program_id: &Pubkey, _accounts: &[AccountInfo]) -> ProgramResult {
+    Err(ChainError::InvalidInstruction.into())
 }
 
 #[cfg(test)]
@@ -275,13 +291,33 @@ mod tests {
             prev_history_root: [0; 32],
             history_root: [0; 32],
             ai_count: 0,
-            roster_chain: [0; 32],
+            roster_commit: [0; 32],
             bounty_each: 0,
             bond: 0,
             roster_acc: [0; 32],
             roster_revealed: 0,
             roster_outcome: 0,
             bounty_paid: Vec::new(),
+            delegated: 0,
+            roster_blind: [0; 32],
+            refund_base: Vec::new(),
+            refund_in_payout: Vec::new(),
+            seed_state: 0,
+            seed_oracle: [0; 32],
+            seed_requested_at: 0,
+            seed_requests: 0,
+            deposit: 0,
+            outstanding: 0,
+            voided: false,
+            start_by: 0,
+            stage_at: 0,
+            rolled_back: 0,
+            aborted_from: 0,
+            validator: [0; 32],
+            rules_version: crate::rules::PINNED_RULES_VERSION,
+            rules_hash: crate::rules::pinned_ruleset_hash(0, true).unwrap(),
+            logic_version: crate::rules::CHAIN_LOGIC_VERSION,
+            created_slot: 0,
         }
     }
 

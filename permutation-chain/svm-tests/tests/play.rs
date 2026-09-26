@@ -171,7 +171,7 @@ fn close_commits_checks() {
     assert_eq!((m.revealing, m.frozen, m.deadline), (true, false, until));
     for civ in 0..2 {
         let n = s.nation(&c, civ);
-        assert_eq!((n.revealing, n.reveal_deadline), (true, until));
+        assert_eq!((n.revealing, n.deadline), (true, until));
     }
     let r = record(&l.logs, b"PS_COMMITS");
     assert_eq!(r[1], 0u16.to_le_bytes().to_vec());
@@ -260,7 +260,7 @@ fn reveal_orders_checks() {
     assert_eq!(late.tick, 2);
     commit(&mut c, &s, who, &late, salt);
     s.close(&mut c);
-    c.set_time(s.nation(&c, civ as usize).reveal_deadline + 1);
+    c.set_time(s.nation(&c, civ as usize).deadline + 1);
     assert_err(reveal(&mut c, &late, salt), E::TickFrozen);
     finish_tick(&mut c, &s);
 }

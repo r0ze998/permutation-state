@@ -26,9 +26,12 @@ pub(super) struct SeasonParams {
     pub market: bool,
     pub prev_season_id: u64,
     pub ai_count: u16,
-    pub roster_chain: [u8; 32],
+    pub roster_commit: [u8; 32],
     pub bounty_each: u64,
     pub bond: u64,
+    pub deposit: u64,
+    pub start_by: i64,
+    pub validator: [u8; 32],
 }
 
 pub(super) fn create_season(
@@ -47,9 +50,12 @@ pub(super) fn create_season(
         market,
         prev_season_id,
         ai_count,
-        roster_chain,
+        roster_commit,
         bounty_each,
         bond,
+        deposit,
+        start_by,
+        validator,
     } = p;
     let it = &mut accounts.iter();
     let admin = next_account_info(it)?;
@@ -133,7 +139,7 @@ pub(super) fn create_season(
             entries: Vec::new(),
         };
         store(&mut roster_info.try_borrow_mut_data()?, &roster)?;
-    } else if bounty_each != 0 || bond != 0 || roster_chain != [0; 32] {
+    } else if bounty_each != 0 || bond != 0 || roster_commit != [0; 32] {
         return Err(ChainError::InvalidParams.into());
     }
     let season = Season {
@@ -167,13 +173,33 @@ pub(super) fn create_season(
         prev_history_root,
         history_root: [0; 32],
         ai_count,
-        roster_chain,
+        roster_commit,
         bounty_each,
         bond,
         roster_acc: [0; 32],
         roster_revealed: 0,
         roster_outcome: 0,
         bounty_paid: Vec::new(),
+        delegated: 0,
+        roster_blind: [0; 32],
+        refund_base: Vec::new(),
+        refund_in_payout: Vec::new(),
+        seed_state: 0,
+        seed_oracle: [0; 32],
+        seed_requested_at: 0,
+        seed_requests: 0,
+        deposit,
+        outstanding: 0,
+        voided: false,
+        start_by,
+        stage_at: 0,
+        rolled_back: 0,
+        aborted_from: 0,
+        validator,
+        rules_version: 0,
+        rules_hash: [0; 32],
+        logic_version: 0,
+        created_slot: 0,
     };
     store(&mut season_info.try_borrow_mut_data()?, &season)?;
     msg!(
@@ -357,6 +383,15 @@ pub(super) fn register(
         season.pool
     );
     Ok(())
+}
+
+/// `PostBond { amount }` (lands with unit P2; refused until then).
+pub(super) fn post_bond(
+    _program_id: &Pubkey,
+    _accounts: &[AccountInfo],
+    _amount: u64,
+) -> ProgramResult {
+    Err(ChainError::InvalidInstruction.into())
 }
 
 pub(super) fn update_member(

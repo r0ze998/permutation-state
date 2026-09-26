@@ -11,13 +11,18 @@ use crate::state::*;
 /// `RevealRoster`: the next AIs of the roster, in the committed order. Each
 /// salt must turn its member's wallet into the tag the wallet registered
 /// with; the revealed tags extend `roster_acc`, which must equal
-/// `roster_chain` once all `ai_count` are in. Before the season is
+/// `roster_commit` once all `ai_count` are in. Before the season is
 /// finalized; anyone holding the salts may send it.
 pub(super) fn reveal_roster(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
+    from: u16,
     salts: Vec<[u8; 32]>,
+    blind: [u8; 32],
 ) -> ProgramResult {
+    // The operator-only, restartable reveal with the blinded commitment
+    // (`from`, `blind`) lands with unit P3.
+    let _ = (from, blind);
     let [season_info, roster_info, members @ ..] = accounts else {
         return Err(solana_program::program_error::ProgramError::NotEnoughAccountKeys);
     };
@@ -45,9 +50,10 @@ pub(super) fn reveal_roster(
             member: m.index,
             civ: m.civ,
             salt: *salt,
+            shares: m.shares,
         });
     }
-    if season.roster_revealed == season.ai_count && season.roster_acc != season.roster_chain {
+    if season.roster_revealed == season.ai_count && season.roster_acc != season.roster_commit {
         return Err(ChainError::RosterMismatch.into());
     }
     store(&mut roster_info.try_borrow_mut_data()?, &roster)?;

@@ -83,7 +83,7 @@ fn create_season_with_ais_escrows_into_the_vault() {
             season.ai_count,
             season.bounty_each,
             season.bond,
-            season.roster_chain
+            season.roster_commit
         ),
         (2, bounty, bond, s.roster_chain())
     );
@@ -141,7 +141,7 @@ fn create_season_checks() {
             ..a.clone()
         },
         CreateArgs {
-            roster_chain: [1; 32],
+            roster_commit: [1; 32],
             ..a.clone()
         },
     ] {

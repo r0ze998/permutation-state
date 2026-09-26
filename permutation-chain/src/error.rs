@@ -45,14 +45,47 @@ pub enum ChainError {
     /// The operator's AI roster is not revealed yet, and its grace period
     /// has not passed (V5 §18.2).
     RosterPending,
-    /// A roster reveal that does not match the member's tag or the chain.
+    /// A roster reveal that does not match the member's tag or the
+    /// commitment.
     RosterMismatch,
+    /// CloseCommits, LogTickInput, ResolveTick or UndelegatePart shares its
+    /// transaction with an instruction other than compute-budget ones, or
+    /// runs as a CPI.
+    NotAlone,
+    /// UndelegatePart targets are not the next ones of
+    /// `state::undelegation_order`.
+    UndelegationOrder,
+    /// Delegate of a target already delegated this season
+    /// (`Season::delegated`).
+    AlreadyDelegated,
+    /// StartSeason with the operator's bond below `state::bond_floor` (top
+    /// it up with `PostBond`).
+    BondTooSmall,
+    /// LogTickInput or ResolveTick before the tick's randomness was drawn.
+    RandomnessPending,
+    /// The VRF program, oracle queue, program identity or callback signer
+    /// is not the expected one.
+    WrongOracle,
+    /// What the vault owes would exceed what it holds (FinishSeason), or a
+    /// payment would exceed what FinishSeason set aside (`outstanding`).
+    Insolvent,
+    /// Delegate of world chunk 0 before every other account of the season.
+    DelegationOrder,
+    /// FinishSeason after a world chunk was rolled back
+    /// (`RollbackUndelegation`): the season can only be aborted.
+    WorldRolledBack,
+    /// Delegate to a validator other than the season's
+    /// (`Season::validator`).
+    WrongValidator,
+    /// This build runs other rules or settlement logic than the season was
+    /// created under (`rules::require_rules`).
+    RulesMismatch,
 }
 
 impl ChainError {
     /// Every error, in code order (`ALL[i]` has code `i + 1`). Clients (the JS
     /// codec) are checked against this list through the codec vectors.
-    pub const ALL: [ChainError; 33] = [
+    pub const ALL: [ChainError; 44] = [
         ChainError::InvalidInstruction,
         ChainError::MissingSignature,
         ChainError::WrongPda,
@@ -86,6 +119,17 @@ impl ChainError {
         ChainError::Retired,
         ChainError::RosterPending,
         ChainError::RosterMismatch,
+        ChainError::NotAlone,
+        ChainError::UndelegationOrder,
+        ChainError::AlreadyDelegated,
+        ChainError::BondTooSmall,
+        ChainError::RandomnessPending,
+        ChainError::WrongOracle,
+        ChainError::Insolvent,
+        ChainError::DelegationOrder,
+        ChainError::WorldRolledBack,
+        ChainError::WrongValidator,
+        ChainError::RulesMismatch,
     ];
 
     /// The error's name, as clients show it. Exhaustive, so a new variant
@@ -125,6 +169,17 @@ impl ChainError {
             ChainError::Retired => "Retired",
             ChainError::RosterPending => "RosterPending",
             ChainError::RosterMismatch => "RosterMismatch",
+            ChainError::NotAlone => "NotAlone",
+            ChainError::UndelegationOrder => "UndelegationOrder",
+            ChainError::AlreadyDelegated => "AlreadyDelegated",
+            ChainError::BondTooSmall => "BondTooSmall",
+            ChainError::RandomnessPending => "RandomnessPending",
+            ChainError::WrongOracle => "WrongOracle",
+            ChainError::Insolvent => "Insolvent",
+            ChainError::DelegationOrder => "DelegationOrder",
+            ChainError::WorldRolledBack => "WorldRolledBack",
+            ChainError::WrongValidator => "WrongValidator",
+            ChainError::RulesMismatch => "RulesMismatch",
         }
     }
 }
@@ -147,8 +202,31 @@ mod tests {
         }
         assert_eq!(
             ChainError::ALL.len() as u32,
-            ChainError::RosterMismatch as u32,
+            ChainError::RulesMismatch as u32,
             "the last variant closes the list"
         );
+    }
+
+    /// Clients hardcode these codes (§1.2 of the v9 contract): append-only.
+    #[test]
+    fn codes_are_pinned() {
+        let pinned = [
+            (ChainError::RosterMismatch, 33),
+            (ChainError::NotAlone, 34),
+            (ChainError::UndelegationOrder, 35),
+            (ChainError::AlreadyDelegated, 36),
+            (ChainError::BondTooSmall, 37),
+            (ChainError::RandomnessPending, 38),
+            (ChainError::WrongOracle, 39),
+            (ChainError::Insolvent, 40),
+            (ChainError::DelegationOrder, 41),
+            (ChainError::WorldRolledBack, 42),
+            (ChainError::WrongValidator, 43),
+            (ChainError::RulesMismatch, 44),
+        ];
+        for (e, code) in pinned {
+            assert_eq!(e as u32, code, "{}", e.name());
+        }
+        assert_eq!(ChainError::ALL.len(), 44);
     }
 }

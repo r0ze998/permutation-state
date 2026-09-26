@@ -122,7 +122,7 @@ fn roster<'a>(
                 .collect();
             let ok = tags.len() == entries.len()
                 && entries.len() == season.ai_count as usize
-                && permutation_rules::roster::roster_chain(&tags) == season.roster_chain;
+                && permutation_rules::roster::roster_chain(&tags) == season.roster_commit;
             let bounties = permutation_rules::roster::bounties(
                 state,
                 &entries.iter().map(|e| (e.civ, e.salt)).collect::<Vec<_>>(),
@@ -154,7 +154,7 @@ fn roster<'a>(
             r.check(
                 "operator AI roster was not revealed in time: bounties and bond joined the pool",
                 season.roster_revealed < season.ai_count
-                    || season.roster_acc != season.roster_chain,
+                    || season.roster_acc != season.roster_commit,
                 format!("{}/{} revealed", season.roster_revealed, season.ai_count),
             );
             Roster::Forfeited

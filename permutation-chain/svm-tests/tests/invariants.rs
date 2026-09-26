@@ -83,7 +83,7 @@ fn flags_move_together() {
                 "{step}: nation {civ}"
             );
             if m.revealing {
-                assert_eq!(n.reveal_deadline, m.deadline, "{step}: nation {civ}");
+                assert_eq!(n.deadline, m.deadline, "{step}: nation {civ}");
             }
         }
     };

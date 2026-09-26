@@ -27,8 +27,14 @@ use crate::error::ChainError;
 use crate::state::*;
 
 /// Refresh a nation account for the open tick from the world: office
-/// holders, their keys and budgets; clear the batches and the inbox.
-pub(super) fn open_nation(n: &mut NationAccount, state: &WorldState, rules: &Ruleset) {
+/// holders, their keys and budgets; clear the batches and the inbox; the
+/// tick's `deadline`.
+pub(super) fn open_nation(
+    n: &mut NationAccount,
+    state: &WorldState,
+    rules: &Ruleset,
+    deadline: i64,
+) {
     let civ = n.civ as usize;
     let nation = &state.nations[civ];
     n.open_tick = state.tick;
@@ -40,6 +46,7 @@ pub(super) fn open_nation(n: &mut NationAccount, state: &WorldState, rules: &Rul
         n.spendable[i] = permutation_rules::orders::spendable(state, rules, civ as u16, role);
     }
     n.clear_tick();
+    n.deadline = deadline;
 }
 
 /// Seal one office's orders for the open tick (commit–reveal): only the
@@ -112,7 +119,7 @@ pub(super) fn reveal_orders(
     if !n.revealing {
         return Err(ChainError::WrongPhase.into());
     }
-    if Clock::get()?.unix_timestamp > n.reveal_deadline {
+    if Clock::get()?.unix_timestamp > n.deadline {
         return Err(ChainError::TickFrozen.into()); // the reveal window is over
     }
     let batch = OrderBatch {
@@ -171,7 +178,7 @@ pub(super) fn close_commits(program_id: &Pubkey, accounts: &[AccountInfo]) -> Pr
             }
         }
         n.revealing = true;
-        n.reveal_deadline = clock.unix_timestamp + reveal_seconds(meta.tick_seconds);
+        n.deadline = clock.unix_timestamp + reveal_seconds(meta.tick_seconds);
         store(&mut info.try_borrow_mut_data()?, &n)?;
     }
     meta.revealing = true;
@@ -393,14 +400,14 @@ pub(super) fn resolve_tick(program_id: &Pubkey, accounts: &[AccountInfo], to: u8
     }
     let completed = state.tick != tick;
     if completed {
-        for info in &nation_infos {
-            let mut n: NationAccount = load(&info.try_borrow_data()?)?;
-            open_nation(&mut n, &state, &rules);
-            store(&mut info.try_borrow_mut_data()?, &n)?;
-        }
         let clock = Clock::get()?;
         meta.deadline = clock.unix_timestamp + meta.tick_seconds as i64;
         meta.finished = state.tick >= rules.ticks_per_season;
+        for info in &nation_infos {
+            let mut n: NationAccount = load(&info.try_borrow_data()?)?;
+            open_nation(&mut n, &state, &rules, meta.deadline);
+            store(&mut info.try_borrow_mut_data()?, &n)?;
+        }
         (meta.frozen, meta.vrf, meta.input_chunks, meta.input_logged) = (false, [0; 32], 0, 0);
         meta.revealing = false;
     }
@@ -427,4 +434,33 @@ pub(super) fn resolve_tick(program_id: &Pubkey, accounts: &[AccountInfo], to: u8
         if completed { "resolved" } else { "partial" }
     );
     Ok(())
+}
+
+/// `StartClock` (lands with unit P1; refused until then).
+pub(super) fn start_clock(_program_id: &Pubkey, _accounts: &[AccountInfo]) -> ProgramResult {
+    Err(ChainError::InvalidInstruction.into())
+}
+
+/// `FreezeTick` (lands with unit P1; refused until then).
+pub(super) fn freeze_tick(_program_id: &Pubkey, _accounts: &[AccountInfo]) -> ProgramResult {
+    Err(ChainError::InvalidInstruction.into())
+}
+
+/// `ConsumeTickRandomness` (lands with unit P1; refused until then).
+pub(super) fn consume_tick_randomness(
+    _program_id: &Pubkey,
+    _accounts: &[AccountInfo],
+    _randomness: [u8; 32],
+    _season_id: u64,
+    _tick: u16,
+) -> ProgramResult {
+    Err(ChainError::InvalidInstruction.into())
+}
+
+/// `RetryTickRandomness` (lands with unit P1; refused until then).
+pub(super) fn retry_tick_randomness(
+    _program_id: &Pubkey,
+    _accounts: &[AccountInfo],
+) -> ProgramResult {
+    Err(ChainError::InvalidInstruction.into())
 }
