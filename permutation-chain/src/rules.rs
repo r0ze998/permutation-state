@@ -18,10 +18,10 @@ pub const PINNED_RULES_VERSION: u16 = 9;
 /// `pinned_hashes_match_the_rules_crate` whenever the rules change (and
 /// `RULES_VERSION` with them).
 pub const PINNED_RULESET_HASHES: [[u8; 32]; 4] = [
-    hex32("3f7be505975f4cb26ee0243a5d9977cc41fd98601fcb837bdcd8297989c62e09"),
-    hex32("391798ef5cb4f6aa123eddb13efb9e9483b884fe38fbab9d35512d12ddd0b4e3"),
-    hex32("d85289f9da20f9a6cacdcaca67ad0d8fd7fd95ddf4014b3fc6ddd35b40011e6c"),
-    hex32("32c343d1fb56ae4a5624d2d79e6641c07be09c0915f0e28cf3155af01532ef98"),
+    hex32("b4af95e1b370a310c02b6d89ee0746baf09c9e104d12d1d21a7f34f2509678ee"),
+    hex32("d0fe02f7042fa20fee5de97bd0226022cd196d82953fbe1a3914be750c9cedff"),
+    hex32("a202a53067ad5e6bd8d9dc5dd6c7bf840042581db09f03d8ad972b791d484490"),
+    hex32("9ab238aabe0683108e277d5933da360f4bce83dae15972e0cb314caa8e5cde56"),
 ];
 /// Version of the outcome- and payout-shaping code in this crate
 /// (`finalize`, `seat`, `payout`, `lifecycle`, `open_nation`). Bump on any
@@ -82,7 +82,6 @@ mod tests {
     /// The pins equal what the rules crate computes. On failure it prints
     /// the replacement table.
     #[test]
-    #[ignore = "PENDING gate 2: unit R bumps RULES_VERSION to 9; regenerate PINNED_RULESET_HASHES from this test's output, then remove this ignore"]
     fn pinned_hashes_match_the_rules_crate() {
         let mut table = String::new();
         let mut ok = PINNED_RULES_VERSION == RULES_VERSION;

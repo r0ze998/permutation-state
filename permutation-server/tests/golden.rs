@@ -175,3 +175,17 @@ fn seasons_replay_exactly_as_recorded() {
         "behaviour changed: if intended, regenerate with UPDATE_GOLDEN=1 and review the diff"
     );
 }
+
+/// The chain pins the same rules the golden file records (contract §2): a
+/// rules change that re-pins golden.json must also regenerate
+/// `PINNED_RULESET_HASHES`.
+#[test]
+fn recorded_ruleset_hashes_are_the_chain_pins() {
+    use permutation_chain::rules::{PINNED_RULESET_HASHES, PINNED_RULES_VERSION};
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden.json");
+    let doc: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(doc["rules_version"].as_u64(), Some(PINNED_RULES_VERSION as u64));
+    let pins: Vec<Value> = PINNED_RULESET_HASHES.iter().map(|h| hex(h).into()).collect();
+    assert_eq!(doc["ruleset_hashes"].as_array().unwrap(), &pins);
+    assert_eq!(ruleset_hashes(), pins);
+}
