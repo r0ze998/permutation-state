@@ -33,7 +33,7 @@ builds into its own `target/`.
 | `RELEASE_CHECK=1` | the coverage guard also fails while any test waits for a fix (PENDING) or any instruction is `Cover::Pending`. CI sets it on tags and `release/*` |
 | `OLD_REF` / `OLD_SO` | `chain::tests::swap_program_mid_season` starts the season on that older program (`run.sh` builds `OLD_REF` into `target/old`). Without it, the binary under test is swapped for itself |
 | `DLP_SO` | `Chain::with_real_dlp` loads a real delegation program instead of the stand-in (opt-in tests) |
-| `SVM_HEAVY=1` | with `--ignored`, `budget::finish_after_played_season_at_the_cap` (a 256-member played season, minutes) |
+| `SVM_HEAVY=1` | with `--ignored`, `budget::finish_after_played_season_at_the_cap` (a 256-member played season, minutes). At this commit it stops at OpenGovernment: 256 bot members voting in the first election exceed 1.4M CU (the election and member-cap work, WP06/WP07) |
 | `PLAYED_TICKS=n` | `lifecycle::bots_play_a_blitz_season_on_the_sbf_build` stops after n ticks |
 | `NEED_EVERY=k` | `budget::played_blitz_15` measures every k-th tick instead of 44, 89, 134 and 179 |
 | `MEMBERS=n` | `budget::idle_at_member_cap` with n members instead of `MAX_MEMBERS` |
