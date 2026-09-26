@@ -99,7 +99,14 @@ budget tests with it. Keep `STOPS` and `LAST_PHASE` literal.
     does not compile until it is listed.
   - `coverage.rs` checks each listed test exists, is not ignored, and
     that its body (comments stripped) contains `E::X`, `assert_token_err(`,
-    the error name, or the builder and `.expect(`/`.unwrap()`.
+    the error name, or the builder with `.expect(`/`.unwrap()` on the
+    statement that sends it (or on a use of the value or closure it is
+    bound to).
+  - These tables are the coverage matrix (WP18 §3.4). `run.sh --test
+    coverage -- --nocapture` prints it, a `matrix:` line per instruction
+    and test with the outcomes asserted. There is no hand-kept copy here:
+    each area's table belongs to the unit that owns the area, and the
+    printed matrix cannot go stale.
   - Every `ChainError` must be asserted by some listed test, unless it is
     on `EXEMPT` (empty).
 - **Ignored tests are on a ledger.**

@@ -190,6 +190,7 @@ fn every_instruction_is_covered() {
                 }
                 Cover::Test(test, codes) => (*test, *codes),
             };
+            println!("matrix: {label}: {test} {codes:?}");
             let Some(t) = by_name.get(test) else {
                 problems.push(format!("{label}: no test {test}"));
                 continue;
