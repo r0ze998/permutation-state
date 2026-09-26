@@ -62,7 +62,8 @@ const shellWord = s => (/^[A-Za-z0-9_./:@%+=,~-]+$/.test(s) ? s : `'${s.replace(
  * (resolved against `href`, this page). `--base` / `--er` are the RPC URLs
  * the view shows; a public deployment usually shows none (the gateway does
  * not give out the operator's RPC), and then placeholders stand in their
- * place and `rpcKnown` is false.
+ * place and `rpcKnown` is false. The view's `seasonId` (a decimal string)
+ * pins the season (`--season`).
  */
 export function verifyCommand(c, href = globalThis.location?.href) {
   if (!c?.gateway) return null;
@@ -71,7 +72,8 @@ export function verifyCommand(c, href = globalThis.location?.href) {
   gateway = gateway.replace(/\/+$/, '');
   const rpc = u => (/^https?:\/\//.test(String(u ?? '')) ? String(u) : null);
   const base = rpc(c.endpoints?.base), er = rpc(c.endpoints?.er);
-  const text = `cargo run --release --bin verify -- \\\n  --gateway ${shellWord(gateway)} \\\n  --base ${base ? shellWord(base) : '<base RPC>'} --er ${er ? shellWord(er) : '<ER RPC>'}`;
+  const season = /^\d+$/.test(String(c.seasonId ?? '')) ? ` --season ${c.seasonId}` : '';
+  const text = `cargo run --release --bin verify -- \\\n  --gateway ${shellWord(gateway)}${season} \\\n  --base ${base ? shellWord(base) : '<base RPC>'} --er ${er ? shellWord(er) : '<ER RPC>'}`;
   return { text, gateway, rpcKnown: !!(base && er) };
 }
 
