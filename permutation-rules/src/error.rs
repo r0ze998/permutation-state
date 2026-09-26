@@ -48,6 +48,9 @@ pub enum RulesError {
     UnknownProposal(u32),
     /// Order `i` is outside the office's domain (V5 §5.1).
     WrongOffice(u16),
+    /// A batch over `MAX_BATCH_ORDERS` orders (adopted proposals' included)
+    /// or `MAX_FREE_ORDERS` zero-cost orders.
+    TooManyOrders,
 }
 
 impl fmt::Display for RulesError {
@@ -85,6 +88,7 @@ impl fmt::Display for RulesError {
                 write!(f, "proposal {id} is not open for this office")
             }
             RulesError::WrongOffice(i) => write!(f, "order {i} belongs to another office"),
+            RulesError::TooManyOrders => write!(f, "the batch holds too many orders"),
         }
     }
 }

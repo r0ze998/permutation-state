@@ -445,6 +445,27 @@ pub fn role_allows_static(role: Role, order: &Order) -> bool {
 pub const MAX_QUEUE: usize = 3;
 pub const MAX_RESEARCH_QUEUE: usize = 3;
 
+/// Orders one office's batch may run at most, its adopted proposals'
+/// orders included. Every order is decoded and copied several times in the
+/// program's non-freeing heap (LogTickInput, ResolveTick phase 0), so the
+/// count is bounded whatever the orders cost. A costed batch never reaches
+/// it (15 spendable + `MAX_FREE_ORDERS` = 23).
+pub const MAX_BATCH_ORDERS: usize = 24;
+/// Zero-cost orders (`ExchangeOrder`, `RevealRationale`, `ConsentWar`,
+/// `ConsentSpend`) one batch may run at most: the budget does not bound them.
+pub const MAX_FREE_ORDERS: usize = 8;
+/// Size limit of a batch that needs no world: its own orders plus its
+/// adopted proposals (each runs at least one order) within
+/// `MAX_BATCH_ORDERS`. The chain program runs it at `RevealOrders`, the
+/// engine in `validate_batch`; `batch_orders` enforces the same bound on the
+/// expanded list before it copies a proposal's orders.
+pub fn check_batch_size(orders: &[Order], adopt: &[u32]) -> Result<(), RulesError> {
+    if orders.len() + adopt.len() > MAX_BATCH_ORDERS {
+        return Err(RulesError::TooManyOrders);
+    }
+    Ok(())
+}
+
 /// Spendable orders of one office this tick: its share of the nation
 /// budget plus its bank (§4.1, V5 §5.2). The budget was fixed when the
 /// previous tick committed (cities counted at the start of this tick).
@@ -460,14 +481,47 @@ pub fn spendable(state: &WorldState, rules: &Ruleset, civ: CivId, role: Role) ->
     }
 }
 
+/// Capacity hint only (the ruleset's `max_proposal_orders`).
+const MAX_PROPOSAL_ORDERS_HINT: usize = 4;
+
 /// The orders a batch runs: its own, then those of the proposals it adopts.
 /// Fails if an adopted proposal does not exist for this civ and office.
+/// An adopted proposal that would take the batch past `MAX_BATCH_ORDERS`
+/// orders or `MAX_FREE_ORDERS` zero-cost orders is skipped (not adopted),
+/// before anything of it is copied (WP04).
 pub fn batch_orders(
     state: &WorldState,
     batch: &OrderBatch,
 ) -> Result<Vec<(Order, Credit)>, RulesError> {
+    expand_batch(state, batch).map(|(orders, _)| orders)
+}
+
+/// `batch_orders` and the ids of the proposals actually adopted.
+pub fn expand_batch(
+    state: &WorldState,
+    batch: &OrderBatch,
+) -> Result<(Vec<(Order, Credit)>, Vec<u32>), RulesError> {
+    let (refs, adopted) = batch_order_refs(state, batch)?;
+    let orders = refs.into_iter().map(|(o, c)| (o.clone(), c)).collect();
+    Ok((orders, adopted))
+}
+
+/// `expand_batch` by reference: nothing is copied (the chain's heap never
+/// frees, so validation must not clone every order it looks at). Returns
+/// the orders the batch runs, with their credits, and the ids of the
+/// proposals actually adopted (the skip rule of `batch_orders`).
+pub fn batch_order_refs<'a>(
+    state: &'a WorldState,
+    batch: &'a OrderBatch,
+) -> Result<(Vec<(&'a Order, Credit)>, Vec<u32>), RulesError> {
+    check_batch_size(&batch.orders, &batch.adopt)?;
     let own = Credit::officer(batch.member);
-    let mut out: Vec<(Order, Credit)> = batch.orders.iter().map(|o| (o.clone(), own)).collect();
+    let mut out: Vec<(&Order, Credit)> = Vec::with_capacity(
+        MAX_BATCH_ORDERS.min(batch.orders.len() + batch.adopt.len() * MAX_PROPOSAL_ORDERS_HINT),
+    );
+    out.extend(batch.orders.iter().map(|o| (o, own)));
+    let mut free = batch.orders.iter().filter(|o| o.cost() == 0).count();
+    let mut adopted = Vec::with_capacity(batch.adopt.len());
     let nation = state
         .nations
         .get(batch.civ as usize)
@@ -480,13 +534,19 @@ pub fn batch_orders(
             .proposal(*id)
             .filter(|p| p.role == batch.role && !p.adopted)
             .ok_or(RulesError::UnknownProposal(*id))?;
+        let pfree = p.orders.iter().filter(|o| o.cost() == 0).count();
+        if out.len() + p.orders.len() > MAX_BATCH_ORDERS || free + pfree > MAX_FREE_ORDERS {
+            continue; // over the caps: not adopted, nothing copied
+        }
+        free += pfree;
+        adopted.push(*id);
         let credit = Credit {
             officer: batch.member,
             proposer: p.proposer,
         };
-        out.extend(p.orders.iter().map(|o| (o.clone(), credit)));
+        out.extend(p.orders.iter().map(|o| (o, credit)));
     }
-    Ok(out)
+    Ok((out, adopted))
 }
 
 /// Validation of one office's batch against the world (the engine runs it
@@ -497,6 +557,18 @@ pub fn validate_batch(
     rules: &Ruleset,
     batch: &OrderBatch,
 ) -> Result<u32, RulesError> {
+    accept_batch(state, rules, batch).map(|(cost, _, _)| cost)
+}
+
+/// `validate_batch`, also returning the orders the batch runs (its own,
+/// then its adopted proposals', with their credits, by reference) and the
+/// ids of the proposals it actually adopts.
+#[allow(clippy::type_complexity)]
+pub fn accept_batch<'a>(
+    state: &'a WorldState,
+    rules: &Ruleset,
+    batch: &'a OrderBatch,
+) -> Result<(u32, Vec<(&'a Order, Credit)>, Vec<u32>), RulesError> {
     if state.tick >= rules.ticks_per_season {
         return Err(RulesError::SeasonOver);
     }
@@ -516,36 +588,41 @@ pub fn validate_batch(
     if batch.member != NOBODY && batch.decision_digest == [0; 32] {
         return Err(RulesError::MissingRationale);
     }
-    let orders: Vec<Order> = batch_orders(state, batch)?
-        .into_iter()
-        .map(|(o, _)| o)
-        .collect();
+    let (orders, adopted) = batch_order_refs(state, batch)?;
     if let Some(i) = orders
         .iter()
-        .position(|o| !role_allows_static(batch.role, o))
+        .position(|(o, _)| !role_allows_static(batch.role, o))
     {
         return Err(RulesError::WrongOffice(i as u16));
     }
-    let cost = check_structure(rules, state.tick, &orders)?;
+    let cost = check_structure(rules, state.tick, orders.iter().map(|(o, _)| *o))?;
     let spendable = spendable(state, rules, batch.civ, batch.role);
     if cost > spendable {
         return Err(RulesError::OverBudget { cost, spendable });
     }
-    Ok(cost)
+    Ok((cost, orders, adopted))
 }
 
 /// The checks on a batch that need no world state (§4.2): freezes, list
 /// lengths, one manual order per unit, reveal timing. Returns the order cost.
 /// `validate_batch` runs these plus the tick and budget; the on-chain
 /// `RevealOrders` runs them to reject malformed batches cheaply.
-pub fn check_structure(
+pub fn check_structure<'a>(
     rules: &Ruleset,
     open_tick: u16,
-    orders: &[Order],
+    orders: impl IntoIterator<Item = &'a Order>,
 ) -> Result<u32, RulesError> {
     let mut seen: Vec<UnitId> = Vec::new();
     let mut cost = 0u32;
+    let (mut count, mut free) = (0usize, 0usize);
     for order in orders {
+        count += 1;
+        if order.cost() == 0 {
+            free += 1;
+        }
+        if count > MAX_BATCH_ORDERS || free > MAX_FREE_ORDERS {
+            return Err(RulesError::TooManyOrders);
+        }
         match order {
             Order::Transfer { .. } if open_tick >= rules.transfer_freeze_tick => {
                 return Err(RulesError::Frozen)

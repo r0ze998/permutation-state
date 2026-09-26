@@ -5,7 +5,7 @@
 use crate::checks::Blocked;
 use crate::gov::{Credit, Path, Role, NOBODY};
 use crate::merit;
-use crate::orders::{batch_orders, role_allows, validate_batch, CivOrders, Order, OrderBatch};
+use crate::orders::{accept_batch, batch_order_refs, role_allows, CivOrders, Order, OrderBatch};
 use crate::params::Ruleset;
 use crate::rng::tick_seed;
 use crate::state::{CivId, WorldState};
@@ -39,11 +39,25 @@ pub(crate) fn phase_seed(state: &mut WorldState, rules: &Ruleset, input: &TickIn
         .collect();
 }
 
-/// An office's accepted batch, its orders with credits, and its cost.
-type Chosen = (OrderBatch, Vec<(Order, Credit)>, u32);
+/// An office's accepted batch: the input's (by reference) or the caretaker's.
+enum Pick<'a> {
+    Input(&'a OrderBatch),
+    Caretaker(OrderBatch),
+}
+
+impl Pick<'_> {
+    fn batch(&self) -> &OrderBatch {
+        match self {
+            Pick::Input(b) => b,
+            Pick::Caretaker(b) => b,
+        }
+    }
+}
 
 /// Pick each office's batch (the first valid one), commit its decision,
 /// and merge the offices' orders in `Role::ALL` order (V5 §5.1–§5.6).
+/// Orders are copied once, into the result (the chain's heap never frees):
+/// batches are picked and inspected by reference.
 fn merge_orders(
     state: &mut WorldState,
     rules: &Ruleset,
@@ -51,14 +65,13 @@ fn merge_orders(
     civ: CivId,
 ) -> CivOrders {
     let tick = state.tick;
-    let mut chosen: [Option<Chosen>; 4] = [None, None, None, None];
+    let mut chosen: [Option<(Pick, u32)>; 4] = [None, None, None, None];
     for role in Role::ALL {
         // A vacant office takes no batch from anyone: the caretaker fills it
         // from the members' top proposal or a minimal default (gov::caretaker).
         if state.nations[civ as usize].holder(role) == NOBODY {
             if let Some((b, cost)) = crate::gov::caretaker::batch(state, rules, civ, role) {
-                let orders = batch_orders(state, &b).unwrap_or_default();
-                chosen[role.index()] = Some((b, orders, cost));
+                chosen[role.index()] = Some((Pick::Caretaker(b), cost));
             }
             continue;
         }
@@ -68,10 +81,9 @@ fn merge_orders(
             .iter()
             .filter(|b| b.civ == civ && b.role == role)
         {
-            match validate_batch(state, rules, b) {
-                Ok(cost) => {
-                    let orders = batch_orders(state, b).unwrap_or_default();
-                    chosen[role.index()] = Some((b.clone(), orders, cost));
+            match accept_batch(state, rules, b) {
+                Ok((cost, _, _)) => {
+                    chosen[role.index()] = Some((Pick::Input(b), cost));
                     break;
                 }
                 Err(_) => rejected = true,
@@ -83,7 +95,8 @@ fn merge_orders(
     }
 
     // Decision commitments enter the event chain before anything resolves (§4.3).
-    for (b, _, _) in chosen.iter().flatten() {
+    for (pick, _) in chosen.iter().flatten() {
+        let b = pick.batch();
         let mut payload = [0u8; 39];
         payload[..2].copy_from_slice(&civ.to_le_bytes());
         payload[2] = b.role as u8;
@@ -93,36 +106,63 @@ fn merge_orders(
     }
 
     // War needs a second officer (V5 §5.6): the general's or the steward's
-    // consent, from a different person than the diplomat.
-    let diplomat = chosen[Role::Diplomat.index()].as_ref().map(|c| c.0.member);
-    let consents: Vec<CivId> = [Role::General, Role::Steward]
-        .iter()
-        .filter_map(|r| chosen[r.index()].as_ref())
-        .filter(|(b, _, _)| diplomat.is_none_or(|d| b.member != d || d == NOBODY))
-        .flat_map(|(_, orders, _)| {
-            orders.iter().filter_map(|(o, _)| match o {
+    // consent, from a different person than the diplomat. The orders are
+    // counted here too, before anything changes the world.
+    let diplomat = chosen[Role::Diplomat.index()]
+        .as_ref()
+        .map(|c| c.0.batch().member);
+    let mut consents: Vec<CivId> = Vec::new();
+    let mut total = 0usize;
+    for (pick, _) in chosen.iter().flatten() {
+        let b = pick.batch();
+        let (refs, _) = batch_order_refs(state, b).unwrap_or_default();
+        total += refs.len();
+        if matches!(b.role, Role::General | Role::Steward)
+            && diplomat.is_none_or(|d| b.member != d || d == NOBODY)
+        {
+            consents.extend(refs.iter().filter_map(|(o, _)| match o {
                 Order::ConsentWar { civ } => Some(*civ),
                 _ => None,
-            })
-        })
-        .collect();
+            }));
+        }
+    }
 
+    // Sized once: three vectors growing in lockstep would each leave their
+    // old buffers behind in the program's bump heap.
     let mut out = CivOrders {
         civ,
-        orders: Vec::new(),
-        credits: Vec::new(),
-        origin: Vec::new(),
+        orders: Vec::with_capacity(total),
+        credits: Vec::with_capacity(total),
+        origin: Vec::with_capacity(total),
         spent: [0; 4],
     };
     for role in Role::ALL {
-        let Some((batch, orders, cost)) = chosen[role.index()].take() else {
+        let Some((pick, cost)) = chosen[role.index()].take() else {
             continue;
         };
+        let batch = pick.batch();
+        let member = batch.member;
+        // Adopted proposals' orders are copied before the proposals are
+        // marked; the batch's own orders are copied one by one below. A
+        // batch that does not expand (never an accepted one) runs nothing.
+        let (own_orders, adopted, adopt): (&[Order], Vec<(Order, Credit)>, Vec<u32>) =
+            match batch_order_refs(state, batch) {
+                Ok((refs, adopt)) => (
+                    &batch.orders,
+                    refs.into_iter()
+                        .skip(batch.orders.len())
+                        .map(|(o, c)| (o.clone(), c))
+                        .collect(),
+                    adopt,
+                ),
+                Err(_) => (&[], Vec::new(), Vec::new()),
+            };
+        let own = Credit::officer(member);
         out.spent[role.index()] = cost as u16;
-        if batch.member != NOBODY {
+        if member != NOBODY {
             state.nations[civ as usize].office_seen[role.index()] = tick;
         }
-        for id in &batch.adopt {
+        for id in &adopt {
             let n = &mut state.nations[civ as usize];
             if let Some(p) = n.proposals.iter_mut().find(|p| p.id == *id && !p.adopted) {
                 p.adopted = true;
@@ -130,7 +170,8 @@ fn merge_orders(
             }
         }
         let mut acted = false;
-        for (i, (order, mut credit)) in orders.into_iter().enumerate() {
+        let orders = own_orders.iter().map(|o| (o.clone(), own)).chain(adopted);
+        for (i, (order, mut credit)) in orders.enumerate() {
             let origin = (role as u8, i as u16);
             if !role_allows(state, role, &order) {
                 state.skip(civ, origin, Blocked::WrongOffice.code());
@@ -150,12 +191,12 @@ fn merge_orders(
             out.origin.push(origin);
         }
         // An office acted this tick (v0.2 C9: reveals alone do not count).
-        if acted && batch.member != NOBODY {
-            crate::gov::mark_active(state, rules, batch.member);
+        if acted && member != NOBODY {
+            crate::gov::mark_active(state, rules, member);
             state.nations[civ as usize].office_last_act[role.index()] = tick;
             merit::credit(
                 state,
-                Credit::officer(batch.member),
+                Credit::officer(member),
                 Path::Common,
                 rules.merit_office_tick as u64,
                 b"office",
