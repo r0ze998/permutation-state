@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtempSync } from 'node:fs';
+import { appendFileSync, mkdtempSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { appendTickLines, assembleInput, LAST_PHASE, nextStops, publishTickInput, readTickLines, resolveInParts, STOPS, tickLine, tickLinesOf } from '../src/ticks.mjs';
@@ -81,6 +81,12 @@ test('tick index lines: one format for the crank and the reindexer', () => {
   appendTickLines(file, [line, { ...line, tick: 4 }]);
   assert.deepEqual(readTickLines(file, 4), [{ ...line, tick: 4 }]);
   assert.deepEqual(readTickLines(`${file}.missing`), []);
+  // A torn last line (a crash mid-append) is skipped, and the next append
+  // starts on a line of its own.
+  appendFileSync(file, '{"tick":5,"to":');
+  assert.deepEqual(readTickLines(file).map(l => l.tick), [3, 4]);
+  appendTickLines(file, [{ ...line, tick: 6 }]);
+  assert.deepEqual(readTickLines(file).map(l => l.tick), [3, 4, 6]);
 });
 
 test('tickLine: `to` is the stop that ran (an outsider may log a raw to above 12)', () => {

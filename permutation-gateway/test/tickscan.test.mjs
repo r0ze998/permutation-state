@@ -67,6 +67,31 @@ test('txRecords: records with the accounts of the instruction that logged them',
   assert.deepEqual(txRecords({ ...t, meta: { ...t.meta, err: { InstructionError: [0, 'x'] } } }, OURS), []);
 });
 
+test('txRecords: a precompile has no frame, so it is skipped; frames that do not line up attribute nothing', () => {
+  const ED25519 = 'Ed25519SigVerify111111111111111111111111111';
+  const keys = ['Outsider', OURS, ED25519, CHUNK0, FOREIGN0];
+  // The attack: [Ed25519, this season's no-op ResolveTick, another season's CloseCommits].
+  const attack = {
+    slot: 9,
+    meta: { err: null, innerInstructions: [], logMessages: [invoke(OURS, 1), ok(OURS), invoke(OURS, 1), commitsLog(5, 1), ok(OURS)] },
+    transaction: { message: { accountKeys: keys, instructions: [
+      { programIdIndex: 2, accounts: [], data: '' },
+      { programIdIndex: 1, accounts: [3, 0], data: '' },
+      { programIdIndex: 1, accounts: [4, 0], data: '' },
+    ] } },
+  };
+  assert.deepEqual(txRecords(attack, OURS)[0].accounts, [FOREIGN0, 'Outsider']);
+  // The index keeps this season's own close as the tick's commitSignature.
+  const txs = outsiderTick();
+  txs.push({ signature: 'attack', slot: 13, cu: 7, emitted: txRecords(attack, OURS) });
+  assert.equal(buildTickLines(txs, { anchor: CHUNK0 })[0].commitSignature, 'sig10-0');
+  // An instruction without a frame that is not a precompile, or a missing frame: nothing is attributable.
+  const silent = { ...attack, transaction: { message: { ...attack.transaction.message, accountKeys: ['Outsider', OURS, 'Silent1111', CHUNK0, FOREIGN0] } } };
+  assert.equal(txRecords(silent, OURS)[0].accounts, null);
+  const short = { ...attack, meta: { ...attack.meta, logMessages: attack.meta.logMessages.slice(2) } };
+  assert.equal(txRecords(short, OURS)[0].accounts, null);
+});
+
 /** An outsider's tick: close, input, then one transaction `[ResolveTick 2, ResolveTick 12]` with a no-op first. */
 function outsiderTick({ tick = 5, from = root(1), foreignClose = false, boundClose = true } = {}) {
   const input = Buffer.from(`input of tick ${tick}`);

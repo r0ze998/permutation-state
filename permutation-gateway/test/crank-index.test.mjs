@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtempSync } from 'node:fs';
+import { appendFileSync, mkdtempSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Crank, INDEX_PAGES } from '../src/crank.mjs';
@@ -42,9 +42,9 @@ function crankWith({ er = {}, lines = [], open = root(0) } = {}) {
   return { crank, er: conn, logs };
 }
 
-/** A snapshot at `openTick`: `step` 'publish' (frozen input) or 'close' (commitments open, deadline passed). */
+/** A snapshot at `openTick`: `step` 'publish' (frozen input), 'close' (commitments open, deadline passed) or 'reveal' (closed, the reveal window open). */
 const snap = (openTick, step) => ({
-  header: { meta: { finished: false, frozen: step === 'publish', revealing: false, deadline: Math.floor(Date.now() / 1000) - 60 } },
+  header: { meta: { finished: false, frozen: step === 'publish', revealing: step === 'reveal', deadline: Math.floor(Date.now() / 1000) - 60 } },
   nations: [0, 1].map(() => ({ openTick, committed: [0, 0, 0, 0].map(() => 65535), submitted: [0, 0, 0, 0].map(() => 65535), commits: [] })),
 });
 
@@ -86,7 +86,42 @@ test('the critical path never waits for the indexer (a scan that hangs on spam)'
   await crank.play({ ...snap(6, 'publish') });
   await new Promise(r => setTimeout(r, 20));
   assert.deepEqual(calls, ['close 6', 'publish 6']);
+  // The reveal phase: the hosted batches are revealed while the scan still hangs.
+  await crank.play(snap(6, 'reveal'));
+  await new Promise(r => setTimeout(r, 20));
+  assert.deepEqual(calls, ['close 6', 'publish 6', 'reveal 6', 'publish 6']);
   assert.equal(listed, 1, 'single-flight: no second scan');
+});
+
+test('a torn or unreadable index never stops the crank', async () => {
+  const { crank, logs } = crankWith({ lines: [tick4()], er: { getSignaturesForAddress: () => new Promise(() => {}) } });
+  const calls = [];
+  crank.closeTick = async open => calls.push(`close ${open}`);
+  // A crash mid-append left a torn last line: skipped.
+  appendFileSync(crank.tickFile, '{"tick":5,"to":');
+  await crank.play(snap(6, 'close'));
+  assert.deepEqual(calls, ['close 6']);
+  assert.equal(crank.head.signature, 't4');
+  // An index that cannot be read at all (here a directory): logged, and the tick still closes.
+  const broken = crankWith({ er: { getSignaturesForAddress: () => new Promise(() => {}) } });
+  broken.crank.tickFile = path.dirname(broken.crank.tickFile);
+  broken.crank.closeTick = async open => calls.push(`close ${open} (no index)`);
+  await broken.crank.play(snap(6, 'close'));
+  assert.deepEqual(calls, ['close 6', 'close 6 (no index)']);
+  assert.match(broken.logs.join('\n'), /tick index: .*EISDIR/);
+  assert.deepEqual(logs, []);
+});
+
+test('a part that cannot be archived is still resolved (the index is logged, not thrown)', async () => {
+  const p5 = published(5);
+  const { crank, logs } = crankWith({
+    er: { getTransaction: async () => ({ slot: 3, meta: { err: null, computeUnitsConsumed: 5, logMessages: [`Program ${programId} invoke [1]`, tickLog(5, 12, root(4), root(5), sha(p5.bytes)), `Program ${programId} success`] } }) },
+  });
+  crank.tickFile = path.dirname(crank.tickFile);
+  crank.publishInput = async () => p5;
+  assert.equal(await crank.publishAndResolve(5, 2, { committed: 2, revealed: 1 }), true);
+  assert.match(logs.join('\n'), /tick index: .*EISDIR/);
+  assert.match(logs.join('\n'), /tick 5 resolved on ER/);
 });
 
 test('a gap whose scan failed is not tried again', async () => {

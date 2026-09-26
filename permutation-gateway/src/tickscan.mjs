@@ -28,16 +28,21 @@ const decode = f => new Uint8Array(Buffer.from(f, 'base64'));
  * `program` is the innermost invocation; without, every line.
  */
 export function programLog(logs, program = null) {
+  return frames(logs, program).out;
+}
+
+/** `programLog`, and the program id of each top-level frame (`invoke [1]`) seen before the logs were cut. */
+function frames(logs, program) {
   const stack = []; // [{id, inner}]
   let top = -1, inner = 0, truncated = false;
-  const out = [];
+  const out = [], tops = [];
   for (const l of logs) {
     if (l === 'Log truncated') { truncated = true; continue; }
     const m = /^Program (\S+) (invoke \[(\d+)\]|success|failed:)/.exec(l);
     if (m && !m[1].includes(':')) {
       if (m[2].startsWith('invoke')) {
         const depth = Number(m[3]);
-        if (depth <= 1) { top++; inner = 0; stack.length = 0; stack.push({ id: m[1], inner: null }); }
+        if (depth <= 1) { if (!truncated) tops.push(m[1]); top++; inner = 0; stack.length = 0; stack.push({ id: m[1], inner: null }); }
         else { stack.length = Math.min(stack.length, depth - 1); stack.push({ id: m[1], inner: inner++ }); }
       } else if (stack.at(-1)?.id === m[1]) stack.pop();
       continue;
@@ -47,7 +52,32 @@ export function programLog(logs, program = null) {
     if (program && frame?.id !== program) continue;
     out.push({ fields: l.slice('Program data: '.length).split(' ').map(decode), top: Math.max(top, 0), inner: frame?.inner ?? null, truncated });
   }
-  return out;
+  return { out, tops, truncated };
+}
+
+/** The precompiles (Ed25519, secp256k1, secp256r1): the runtime runs them without an `invoke [1]` line. */
+export const PRECOMPILES = Object.freeze([
+  'Ed25519SigVerify111111111111111111111111111',
+  'KeccakSecp256k11111111111111111111111111111',
+  'Secp256r1SigVerify1111111111111111111111111',
+]);
+
+/**
+ * The message instruction each top-level frame ran: the instructions in
+ * order with the precompiles skipped, each frame's program its
+ * instruction's. null when they do not line up (then nothing in the
+ * transaction is attributable). Same rule as the Rust `top_instructions`.
+ */
+function topInstructions(ixs, keys, tops, cut) {
+  const run = [];
+  for (const [i, ix] of ixs.entries()) {
+    const id = keys[ixOf(ix)?.programIdIndex];
+    if (id === undefined) return null;
+    if (!PRECOMPILES.includes(id)) run.push({ i, id });
+  }
+  if (cut ? tops.length > run.length : tops.length !== run.length) return null;
+  if (tops.some((id, k) => run[k].id !== id)) return null;
+  return run.slice(0, tops.length).map(r => r.i);
 }
 
 const keyText = k => (typeof k === 'string' ? k : k?.pubkey ? keyText(k.pubkey) : k?.toBase58?.() ?? String(k));
@@ -66,19 +96,24 @@ const ixOf = ix => ix && { programIdIndex: ix.programIdIndex, accounts: ix.accou
  * The program's records in a getTransaction result, each with the account
  * keys of the instruction that logged it (`accounts`, null when not
  * attributable: another program's instruction, no innerInstructions for a
- * CPI, or cut logs). Same rules as the Rust `tx_records`. A failed
+ * CPI, cut logs, or frames that do not line up with the message's
+ * instructions, precompiles skipped). Same rules as the Rust `tx_records`. A failed
  * transaction has none.
  */
 export function txRecords(tx, program) {
   if (!tx || tx.meta?.err) return [];
   const keys = accountKeys(tx);
   const m = tx.transaction?.message ?? {};
-  const tops = m.compiledInstructions ?? m.instructions ?? [];
+  const ixs = m.compiledInstructions ?? m.instructions ?? [];
+  const logs = tx.meta?.logMessages ?? [];
+  const { out: records, tops: topIds } = frames(logs, keyText(program));
+  const tops = topInstructions(ixs, keys, topIds, logs.includes('Log truncated'));
   const out = [];
-  for (const { fields, top, inner, truncated } of programLog(tx.meta?.logMessages ?? [], keyText(program))) {
+  for (const { fields, top, inner, truncated } of records) {
     let ix = null;
-    if (!truncated) {
-      ix = inner === null ? ixOf(tops[top]) : ixOf(tx.meta?.innerInstructions?.find(e => e.index === top)?.instructions?.[inner]);
+    const at = tops?.[top];
+    if (!truncated && at !== undefined) {
+      ix = inner === null ? ixOf(ixs[at]) : ixOf(tx.meta?.innerInstructions?.find(e => e.index === at)?.instructions?.[inner]);
     }
     const accounts = ix && keys[ix.programIdIndex] === keyText(program) ? ix.accounts.map(i => keys[i]) : null;
     let record;

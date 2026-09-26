@@ -9,7 +9,7 @@
 //   reassembling it against the hash the program logged;
 // * the tick index line (.local/ticks/<season>.jsonl), one per resolve part.
 import { createHash } from 'node:crypto';
-import { appendFileSync, existsSync, readFileSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
 import { toHex as hex } from '../client/src/bytes.mjs';
 import { isHeavyError } from '../client/src/retry.mjs';
 
@@ -136,11 +136,36 @@ export function tickLinesOf(result, published, seals) {
   });
 }
 
-/** Read an index file (lines with `tick >= from`). */
+/** Read a line, or null if it does not parse (a line torn by a crash or a full disk). */
+const parseLine = l => { try { return JSON.parse(l); } catch { return null; } };
+
+/**
+ * Read an index file (lines with `tick >= from`). A line that does not
+ * parse is skipped: the index is a hint, and a torn line must not stop its
+ * readers (the crank reads it on every step).
+ */
 export function readTickLines(file, from = 0) {
   if (!existsSync(file)) return [];
-  return readFileSync(file, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l)).filter(r => r.tick >= from);
+  return readFileSync(file, 'utf8').split('\n').filter(Boolean).map(parseLine).filter(r => Number.isInteger(r?.tick) && r.tick >= from);
 }
 
-export const appendTickLines = (file, lines) => { if (lines.length) appendFileSync(file, lines.map(l => JSON.stringify(l) + '\n').join('')); };
+/** Whether `file` exists and does not end with a newline (its last line was torn). */
+function tornTail(file) {
+  if (!existsSync(file)) return false;
+  const size = statSync(file).size;
+  if (!size) return false;
+  const fd = openSync(file, 'r');
+  try {
+    const b = Buffer.alloc(1);
+    readSync(fd, b, 0, 1, size - 1);
+    return b[0] !== 0x0a;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** Append lines, on a line of their own after a torn tail. */
+export const appendTickLines = (file, lines) => {
+  if (lines.length) appendFileSync(file, (tornTail(file) ? '\n' : '') + lines.map(l => JSON.stringify(l) + '\n').join(''));
+};
 export const formatTickLines = lines => lines.map(l => JSON.stringify(l)).join('\n') + '\n';

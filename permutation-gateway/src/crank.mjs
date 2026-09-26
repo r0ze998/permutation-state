@@ -461,7 +461,8 @@ export class Crank {
 
   async play(snap) {
     try {
-      this.noteTail(snap.nations[0]?.openTick);
+      // The index is off the critical path: a bad index file is logged, never a stall.
+      try { this.noteTail(snap.nations[0]?.openTick); } catch (e) { this.log(`tick index: ${e.message}`); }
       return await this.playStep(snap);
     } finally {
       void this.kickIndexer();
@@ -528,7 +529,7 @@ export class Crank {
     const parts = await resolveInParts({
       reach: this.reach,
       resolve: to => send(this.er, this.chain.resolveTick({ nations, to }), [this.crank], `resolve tick ${open} to phase ${to}`),
-      onPart: r => this.archivePart(r, published, seals),
+      onPart: r => { try { this.archivePart(r, published, seals); } catch (e) { this.log(`tick index: ${e.message}`); } },
     });
     this.sealed.dropBefore(open + 1);
     this.log(`tick ${open} resolved on ER (${revealed}/${committed} sealed batches revealed, ${ROLES.length * nations} offices, ${parts.map(r => r.cu).join(' + ')} CU)`);

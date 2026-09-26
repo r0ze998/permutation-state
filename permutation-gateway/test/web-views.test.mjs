@@ -34,6 +34,12 @@ test('verify command: the gateway as an absolute URL, whatever the view gives', 
   assert.match(verifyCommand({ gateway: '/gw', endpoints: { base: 'javascript:alert(1)', er: 'x' } }, 'https://a.example/').text, /<base RPC> --er <ER RPC>/);
   assert.equal(verifyCommand({}, 'https://a.example/'), null);
   assert.equal(verifyCommand(null), null);
+  // The season is pinned when the view names it (decimal only; anything else adds no flag).
+  assert.match(verifyCommand({ gateway: '/gw', seasonId: '7' }, 'https://a.example/').text, /--gateway https:\/\/a\.example\/gw --season 7 \\/);
+  assert.match(verifyCommand({ gateway: '/gw', seasonId: 12 }, 'https://a.example/').text, / --season 12 /);
+  for (const seasonId of [undefined, '', '7; rm -rf ~', '0x7', '-1']) {
+    assert.doesNotMatch(verifyCommand({ gateway: '/gw', seasonId }, 'https://a.example/').text, /--season/, String(seasonId));
+  }
 });
 
 // /api/state?member=M as the play server sends it: `roster` the nation's members, `aiRoster` the AI roster.
