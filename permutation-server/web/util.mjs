@@ -47,6 +47,35 @@ export const short = (s, head = 4, tail = 4, empty = '') => (s ? `${s.slice(0, h
 export const troops = t => (t / 10).toFixed(1);
 export const hexDist = (a, b) => (Math.abs(a.q - b.q) + Math.abs(a.r - b.r) + Math.abs(a.q + a.r - b.q - b.r)) / 2;
 
+/** One shell word: as is when plain, else single-quoted (a URL with `?` or `&`). */
+const shellWord = s => (/^[A-Za-z0-9_./:@%+=,~-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
+
+/**
+ * The `verify` command line for a chain season (`c`: the view's `chain`),
+ * or null without a gateway: `{text, gateway, rpcKnown}`. The view may give
+ * the gateway relative to this page (`/gw`, the play server's proxy);
+ * verify runs on someone's own machine, so it gets the absolute URL
+ * (resolved against `href`, this page). `--base` / `--er` are the RPC URLs
+ * the view shows; a public deployment usually shows none (the gateway does
+ * not give out the operator's RPC), and then placeholders stand in their
+ * place and `rpcKnown` is false.
+ */
+export function verifyCommand(c, href = globalThis.location?.href) {
+  if (!c?.gateway) return null;
+  let gateway = String(c.gateway);
+  try { gateway = new URL(gateway, href).href; } catch { /* no page to resolve against: as given */ }
+  gateway = gateway.replace(/\/+$/, '');
+  const rpc = u => (/^https?:\/\//.test(String(u ?? '')) ? String(u) : null);
+  const base = rpc(c.endpoints?.base), er = rpc(c.endpoints?.er);
+  const text = `cargo run --release --bin verify -- \\\n  --gateway ${shellWord(gateway)} \\\n  --base ${base ? shellWord(base) : '<base RPC>'} --er ${er ? shellWord(er) : '<ER RPC>'}`;
+  return { text, gateway, rpcKnown: !!(base && er) };
+}
+
+/** What to tell whoever copies the verify command (verifyCommand's answer). */
+export const verifyNote = cmd => (cmd?.rpcKnown
+  ? 'verify はゲートウェイの記録を、ベース層と ER の RPC から自分で読み直して照合します。'
+  : 'verify はゲートウェイのほかに、シーズンのベース層と ER の RPC を読みます。このサイトは運営の RPC を公開していないので、<base RPC> と <ER RPC> には同じクラスター（と ER）の RPC の URL を入れてください（運営が公開 RPC を指定しているときは、ここに表示されます）。');
+
 /**
  * A short notice at the top of the screen. `text` is plain text (never
  * parsed as markup); `action` adds one button ({label, run}).

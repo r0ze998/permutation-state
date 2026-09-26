@@ -44,18 +44,12 @@ pub struct ChainLink {
 impl ChainLink {
     /// `url` like `http://127.0.0.1:4191`.
     pub fn new(url: &str) -> Result<ChainLink, String> {
-        let rest = url
-            .strip_prefix("http://")
-            .ok_or("gateway URL must start with http://")?;
-        let (host, port) = rest
-            .trim_end_matches('/')
-            .split_once(':')
-            .ok_or("gateway URL needs a port")?;
+        let (host, port) = parse_http_url(url)?;
         Ok(ChainLink {
             program: None,
             token: None,
-            host: host.to_string(),
-            port: port.parse().map_err(|_| "bad port")?,
+            host,
+            port,
         })
     }
 
@@ -282,7 +276,24 @@ impl ChainLink {
     }
 }
 
-fn dechunk(b: &[u8]) -> Vec<u8> {
+/// Host and port of a gateway URL like `http://127.0.0.1:4191` (plain HTTP,
+/// an explicit port, no path).
+pub fn parse_http_url(url: &str) -> Result<(String, u16), String> {
+    let rest = url
+        .strip_prefix("http://")
+        .ok_or("gateway URL must start with http://")?;
+    let (host, port) = rest
+        .trim_end_matches('/')
+        .rsplit_once(':')
+        .ok_or("gateway URL needs a port")?;
+    if host.is_empty() || host.contains('/') {
+        return Err("gateway URL: bad host".into());
+    }
+    Ok((host.to_string(), port.parse().map_err(|_| "bad port")?))
+}
+
+/// The body of a `Transfer-Encoding: chunked` response.
+pub fn dechunk(b: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     let mut i = 0;
     while let Some(end) = b[i..].windows(2).position(|w| w == b"\r\n") {

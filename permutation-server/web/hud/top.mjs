@@ -2,9 +2,11 @@
 // its path tracker, and the leader ribbon (every nation).
 import * as T from '../i18n.mjs';
 import { $, html, setHtml, fmt, usdc } from '../util.mjs';
-import { S, civN, myNation, held, membersOf, isWatching, secondsLeft } from '../state.mjs';
-import { SUZERAIN_MIN, TECH_COUNT, AUTO_COMMIT_SECONDS } from '../rules.mjs';
+import { S, civN, myNation, held, membersOf, isWatching, secondsLeft, aiRoster } from '../state.mjs';
+import { SUZERAIN_MIN, TECH_COUNT } from '../rules.mjs';
 import { poolUsdc } from '../chain.mjs';
+import { autoSeconds } from '../orders.mjs';
+import { chainPhase } from '../chainplay.mjs';
 
 export function renderTop() {
   const v = S.view, e = v.economy;
@@ -12,8 +14,8 @@ export function renderTop() {
   const badges = isWatching() ? html`<span class="badge">観戦</span>`
     : offices.length ? offices.map(r => html`<span class="badge office">${T.ROLE_GLYPH[r]} ${T.ROLE_JA[r]}</span>`) : html`<span class="badge human">国民</span>`;
   setHtml($('#civ-chip'), html`<span class="swatch" style="background:${T.CIV_COLORS[S.myCiv]}"></span><div><b>${v.member?.name ?? civN(S.myCiv)}</b><small class="nation">${civN(S.myCiv)}</small><div>${badges}</div></div>`);
-  const ms = v.members || [];
-  $('.prototype-label').textContent = `${v.chain ? 'オンチェーン · MagicBlock ER' : 'ローカル'} · 国民${ms.length}人${v.roster?.aiCount ? `（うち運営のAI ${v.roster.aiCount}人）` : ''} · 全員が同じ情報で判断 · 命令は締め切りまで封印 · USDCはテスト用`;
+  const ms = v.members || [], ai = aiRoster(v).aiCount;
+  $('.prototype-label').textContent = `${v.chain ? 'オンチェーン · MagicBlock ER' : 'ローカル'} · 国民${ms.length}人${ai ? `（うち運営のAI ${ai}人）` : ''} · 全員が同じ情報で判断 · 命令は締め切りまで封印 · USDCはテスト用`;
   $('#season-label').textContent = `ONE WORLD · SEASON ${v.chain?.seasonId ?? 0} · ${String(v.season?.preset ?? 'Blitz').toUpperCase()}`;
   if (e) renderResources(e);
   const pause = $('#pause-btn');
@@ -43,18 +45,27 @@ function renderResources(e) {
     <span class="tip panel">${r.tip.map(([k, x, total]) => html`<div class="tip-row ${total ? 'total' : ''}"><span>${k}</span><span>${x}</span></div>`)}</span></button>`));
 }
 
+/** Chain mode after a tick's deadline: what the clock says instead of a countdown. */
+const CLOSED_PHASE = { reveal: '公開中', frozen: '解決中' };
+
 export function renderClock() {
   const v = S.view; if (!v) return;
   const el = $('#clock');
   const secs = secondsLeft();
   const frac = v.tickSeconds ? secs / v.tickSeconds : 1;
   const [, ph, phEn] = T.phaseOf(v.tick, v.season?.phases);
-  el.className = 'clock' + (v.paused ? ' paused' : frac <= .1 ? ' red' : frac <= .25 ? ' amber' : '') + (!v.paused && secs <= 5 ? ' pulse' : '');
+  // Chain mode: the commitments close at the deadline, then the sealed batches are revealed and the tick resolves.
+  const closed = v.chain && !v.over ? CLOSED_PHASE[chainPhase(v)] : null;
+  el.className = 'clock' + (v.paused ? ' paused' : closed ? '' : frac <= .1 ? ' red' : frac <= .25 ? ' amber' : '') + (!v.paused && !closed && secs <= 5 ? ' pulse' : '');
   const mm = Math.floor(secs / 60), ss = Math.floor(secs % 60);
-  const time = v.over ? '終了' : v.paused ? '停止中' : `${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
+  const time = v.over ? '終了' : v.paused ? '停止中' : closed || `${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
+  const auto = Math.round(autoSeconds(v));
+  const rows = v.chain
+    ? html`<div class="tip-row"><span>締切で</span><span>封印を閉じ、公開して全文明を同時に解決</span></div><div class="tip-row"><span>締切${auto}秒前</span><span>下書きを自動確定（表示中のタブ）</span></div>`
+    : html`<div class="tip-row"><span>締切で</span><span>全文明を同時に解決</span></div><div class="tip-row"><span>締切${auto}秒前</span><span>下書きを自動確定</span></div>`;
   setHtml(el, html`<div class="clock-top"><span class="clock-tick">TICK ${String(v.tick).padStart(3, '0')}<span class="clock-of"> / ${v.ticks}</span></span><span class="clock-time">${time}</span></div>
-    <div class="clock-phase">${ph} · ${phEn}</div><div class="clock-bar"><i style="width:${(v.paused ? 1 : frac) * 100}%"></i></div>
-    <span class="tip panel"><div class="tip-row"><span>1ティック</span><span>${v.tickSeconds}秒</span></div><div class="tip-row"><span>締切で</span><span>全文明を同時に解決</span></div><div class="tip-row"><span>締切${AUTO_COMMIT_SECONDS}秒前</span><span>下書きを自動確定</span></div></span>`);
+    <div class="clock-phase">${ph} · ${phEn}</div><div class="clock-bar"><i style="width:${(v.paused ? 1 : closed ? 0 : frac) * 100}%"></i></div>
+    <span class="tip panel"><div class="tip-row"><span>1ティック</span><span>${v.tickSeconds}秒</span></div>${rows}</span>`);
   $('#live-dot').classList.toggle('off', !S.online);
 }
 

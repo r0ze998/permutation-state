@@ -24,6 +24,11 @@ use crate::fog::Fog;
 /// signatures, accounts, blockhash and header (the packet limit is 1232 bytes).
 pub const BATCH_BYTES: usize = 800;
 
+/// The policy id every officer commits its decisions with — this server's
+/// AI members, people in local mode, and the web client alike — so a
+/// revealed decision never tells who is an operator AI (V5 §18.2).
+pub const DEFAULT_POLICY: &str = "officer@2";
+
 fn encoded_len(o: &Order) -> usize {
     borsh::to_vec(o).map_or(usize::MAX / 4, |v| v.len())
 }
@@ -49,8 +54,10 @@ pub struct Record {
     pub text: String,
     /// Tick whose batch carried the reveal, once it has been processed.
     pub revealed_at: Option<u16>,
-    /// Committed by an outside agent: the server only saw the digest on
-    /// chain, and learns policy, salt and text from the agent's reveal.
+    /// Learnt from the chain (a member that signs its own batches, or a
+    /// digest other than the one this server sealed): the server only saw
+    /// the digest, and learns policy, salt and text from the reveal. Never
+    /// served (it would tell this server's AI members apart).
     pub external: bool,
 }
 
@@ -186,16 +193,22 @@ impl Ledger {
         digest
     }
 
-    /// Learn an outside agent's decision from its resolved batch: the digest
-    /// it committed to (against the obs_root this server published for it)
-    /// and the reveals it carries for earlier ticks.
-    pub fn ingest_external(&mut self, batch: &OrderBatch) {
+    /// A batch the program resolved (chain mode). Its decision replaces a
+    /// record with another digest (one this server sealed for a batch that
+    /// never landed) and is learnt when there is none (a member that signs
+    /// its own batches): the digest against the obs_root this server
+    /// published. Its reveals mark this server's records revealed, and fill
+    /// in learnt ones.
+    pub fn land(&mut self, batch: &OrderBatch) {
         let role = batch.role as u8;
-        if batch.decision_digest != [0; 32] {
+        let key = (batch.tick, batch.civ, role);
+        if batch.decision_digest != [0; 32]
+            && self.records.get(&key).map(|r| r.digest) != Some(batch.decision_digest)
+        {
             let obs_root = self.root(batch.tick, batch.civ).unwrap_or([0; 32]);
-            self.records
-                .entry((batch.tick, batch.civ, role))
-                .or_insert(Record {
+            self.records.insert(
+                key,
+                Record {
                     tick: batch.tick,
                     civ: batch.civ,
                     role,
@@ -206,7 +219,8 @@ impl Ledger {
                     text: String::new(),
                     revealed_at: None,
                     external: true,
-                });
+                },
+            );
         }
         for o in &batch.orders {
             if let Order::RevealRationale {
@@ -216,11 +230,12 @@ impl Ledger {
                 text,
             } = o
             {
-                if let Some(r) = self
-                    .records
-                    .get_mut(&(*tick, batch.civ, role))
-                    .filter(|r| r.external && r.revealed_at.is_none())
-                {
+                let Some(r) = self.records.get_mut(&(*tick, batch.civ, role)) else {
+                    continue;
+                };
+                if !r.external {
+                    r.revealed_at = Some(batch.tick);
+                } else if r.revealed_at.is_none() {
                     r.policy = String::from_utf8_lossy(policy).into_owned();
                     r.salt = *salt;
                     r.text = String::from_utf8_lossy(text).into_owned();
@@ -228,6 +243,14 @@ impl Ledger {
                 }
             }
         }
+    }
+
+    /// Tick `tick` resolved with batches (with a decision) for the offices
+    /// `landed` only: the other offices' records of that tick go, since a
+    /// decision the program never saw can never be revealed (chain mode).
+    pub fn keep_landed(&mut self, tick: u16, landed: &[(CivId, u8)]) {
+        self.records
+            .retain(|(t, c, r), _| *t != tick || landed.contains(&(*c, *r)));
     }
 
     pub fn record(&self, tick: u16, civ: CivId, role: u8) -> Option<&Record> {
@@ -238,7 +261,8 @@ impl Ledger {
     /// (oldest first, at most 3) that fit next to `orders` in one Solana
     /// transaction (`BATCH_BYTES` of encoded orders). Whatever does not fit
     /// waits for the next batch; the oldest always goes first, so none is
-    /// skipped.
+    /// skipped. Only decisions this server sealed: it cannot reveal the
+    /// ones it learnt from the chain.
     pub fn reveals(&self, civ: CivId, role: u8, open_tick: u16, orders: &[Order]) -> Vec<Order> {
         let mut used: usize = orders.iter().map(encoded_len).sum();
         let mut out = Vec::new();
@@ -246,7 +270,11 @@ impl Ledger {
             .records
             .values()
             .filter(|r| {
-                r.civ == civ && r.role == role && r.tick < open_tick && r.revealed_at.is_none()
+                r.civ == civ
+                    && r.role == role
+                    && r.tick < open_tick
+                    && r.revealed_at.is_none()
+                    && !r.external
             })
             .take(3)
         {

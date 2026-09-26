@@ -1,24 +1,26 @@
-// Sealed orders the gateway holds for the members it hosts (commit–reveal).
+// Sealed orders the gateway holds until they are revealed (commit–reveal).
 //
 // An office's orders go on chain in two steps: before the tick's deadline
 // only a commitment (`orderCommitment(batch, salt)`, `CommitOrders`); after
 // the commitments close (`CloseCommits`) the batch and its salt
 // (`RevealOrders`). Until then nobody else — other nations, agents watching
-// the chain — can read or react to them (a hosted member's host can: see
-// Trust below).
+// the chain — can read or react to them (the gateway can: see Trust below).
 //
-// For a hosted member the gateway draws the salt, keeps the plaintext here
-// (on disk, written before the commitment is sent, so neither a crash nor a
-// lost confirmation loses it), sends the commitment (POST /submit), and the
-// crank reveals, once the commitments are closed, the kept batch whose
-// commitment is the one on chain.
+// Batches come here two ways, and are kept on disk before their commitment
+// is sent (neither a crash nor a lost confirmation loses them):
+// * the operator's AI members (POST /submit): the gateway draws the salt and
+//   sends the commitment signed with the AI member's session key;
+// * members who sign their own CommitOrders (a browser, an agent) deposit
+//   batch and salt first (POST /seal, signed by the office key).
+// Once the commitments are closed the crank reveals every kept batch whose
+// commitment is the one on chain, signed by the crank alone, the same way
+// for everyone.
 //
-// Trust: a hosted member has handed its session key to this gateway, so
-// the gateway can already sign anything for it; it also sees the member's
-// orders before the deadline and chooses when to reveal them. Sealing
-// protects hosted members from everyone else, not from their host. A member
-// that wants no host signs and reveals itself (the SDK's `submit` and
-// `revealWhenOpen`, relayed through POST /relay).
+// Trust: whoever deposits here lets the operator (who also runs the hidden
+// AI members) read those orders before the deadline, and relies on it to
+// reveal them; the program still checks every reveal against the
+// commitment, so it cannot change them. A member that deposits nothing
+// reveals itself (the SDK's `revealWhenOpen`, relayed through POST /relay).
 import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { fromHex, toHex } from '../client/src/bytes.mjs';

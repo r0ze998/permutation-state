@@ -12,6 +12,7 @@ pub mod finalize;
 pub mod heap;
 pub mod instruction;
 pub mod processor;
+pub mod seat;
 pub mod state;
 pub mod token;
 

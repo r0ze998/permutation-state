@@ -5,19 +5,24 @@
 // after the deadline (CloseCommits), every batch is revealed (RevealOrders),
 // the input is published (LogTickInput: the randomness comes from the
 // revealed salts) and the tick resolved (ResolveTick, in parts when a tick
-// exceeds one transaction, as the crank does) — and finally FinishSeason and
-// the conservation of the vault. Prints the compute used per tick.
+// exceeds one transaction, as the crank does) — and finally the AI roster
+// revealed in its committed order (RevealRoster), FinishSeason and the
+// conservation of the vault. Prints the compute used per tick.
 //
-//   node scripts/e2e-base.mjs [--base http://127.0.0.1:18899] [--ticks 180] [--tick-seconds 2] [--state e2e-base.json]
+// It runs the gateway's dev mode on purpose (no registration window: the AI
+// members register at creation, whatever the environment says).
+//
+//   node scripts/e2e-base.mjs [--base http://127.0.0.1:18899] [--ticks 180] [--tick-seconds 2] [--ai 2] [--state e2e-base.json]
 //
 // Works against the local stack's base validator or a plain
 // solana-test-validator with the program loaded (`--bpf-program`).
 import { createHash, randomBytes } from 'node:crypto';
-import { Connection } from '@solana/web3.js';
+import { Connection, PublicKey } from '@solana/web3.js';
 import { ChainClient, readSeason } from '../client/src/chain.mjs';
 import { chainError, decodeNationHeader, decodeWorldHeader, NOBODY, orderCommitment, ROLES } from '../client/src/codec.mjs';
+import { fromHex } from '../client/src/bytes.mjs';
 import { createStateStore, loadConfig, namedKey, parseArgs } from '../src/config.mjs';
-import { bootstrap, defaultRoster, memberKeyName, startAndDelegate } from '../src/season.mjs';
+import { aiMembers, bootstrap, memberKeyName, startAndDelegate } from '../src/season.mjs';
 import { send } from '../src/send.mjs';
 import { tokenBalance } from '../src/spl.mjs';
 import { publishTickInput, resolveInParts } from '../src/ticks.mjs';
@@ -27,11 +32,13 @@ const args = parseArgs(process.argv.slice(2), { ticks: String(TICKS) });
 const maxTicks = Number(args.ticks);
 if (!Number.isInteger(maxTicks) || maxTicks < 1) throw new Error(`--ticks must be a positive integer, got ${args.ticks}`);
 const cfg = loadConfig({ defaults: { stateFile: 'e2e-base.json', tickSeconds: 2 } });
+// Dev mode, explicitly: every AI member registers now, nobody else is waited for.
+Object.assign(cfg, { registrationSeconds: 0, waitExternal: 0, allowIdentifiableAi: true });
 const base = new Connection(cfg.baseRpc, 'confirmed');
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 
 const store = createStateStore(cfg.stateFile);
-await bootstrap({ base, cfg, store, roster: defaultRoster({ humans: 0, ai: 2 }), log });
+await bootstrap({ base, cfg, store, log });
 const state = await startAndDelegate({ base, er: null, cfg, store, log, delegate: false });
 const chain = new ChainClient(cfg.programId, BigInt(state.seasonId));
 const crank = namedKey('crank');
@@ -82,7 +89,15 @@ log(`${cus.length} ticks on base: ${Math.round(avg)} CU per tick on average, ${M
 let s = await readSeason(base, chain);
 const header = decodeWorldHeader(Buffer.concat((await base.getMultipleAccountsInfo(chain.worldChunks, 'confirmed')).map(a => a.data)));
 if (header.meta.finished && s.status === 'Running') {
-  await send(base, chain.finishSeason(), [crank], 'finishSeason');
+  // The operator's AI roster, in the order the season committed (roster
+  // position, not member index), then the payouts.
+  const ais = aiMembers(state);
+  for (let i = s.rosterRevealed; i < ais.length; i += 8) {
+    const group = ais.slice(i, i + 8);
+    await send(base, chain.revealRoster({ members: group.map(m => new PublicKey(m.wallet)), salts: group.map(m => fromHex(m.salt)) }), [crank], `reveal roster ${i}`);
+  }
+  if (ais.length) log(`AI roster revealed: members ${ais.map(m => m.index).join(', ')} (roster positions ${ais.map(m => m.pos).join(', ')})`);
+  await send(base, chain.finishSeason({ roster: s.aiCount > 0 }), [crank], 'finishSeason');
   s = await readSeason(base, chain);
   const paid = s.payouts.reduce((a, b) => a + b, 0n);
   const vault = await tokenBalance(base, chain.vault);

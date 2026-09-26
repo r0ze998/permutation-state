@@ -1,7 +1,7 @@
 // The chain layer: prize pool chip, the chain beat in the top bar (one pulse
 // per sealed tick) and the chain lens drawer (` key).
 import * as T from './i18n.mjs';
-import { $, html, setHtml, fmt, usdc, short, logOnce } from './util.mjs';
+import { $, html, setHtml, fmt, usdc, short, logOnce, verifyCommand, verifyNote } from './util.mjs';
 import { S, invalidate } from './state.mjs';
 import { poolSharePct } from './rules.mjs';
 
@@ -17,8 +17,9 @@ async function loadChain() {
   const g = S.view?.chain?.gateway; if (!g) return;
   // Not api.tryGet: that sends X-Member-Token, which must not go to the
   // (other-origin) gateway, and would add a CORS preflight.
-  const json = url => fetch(url).then(r => r.json()).catch(() => null);
-  if (!S.season) S.season = await json(`${g}/season`);
+  const json = url => fetch(url, { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).catch(() => null);
+  // Refetched with every sealed tick: members registered later, finalization.
+  S.season = (await json(`${g}/season`)) ?? S.season;
   const from = Math.max(0, S.view.tick - 14);
   const t = await json(`${g}/ticks?from=${from}`);
   if (t?.records) S.ticks = t.records.slice(-14).reverse();
@@ -62,10 +63,11 @@ export function renderChainDrawer() {
   const reg = (S.season?.members || []).find(m => m.index === S.memberId);
   const ticks = (S.ticks || []).map((r, i) => html`<div class="tk ${i === 0 ? 'new' : ''}"><span class="t">T${r.tick}</span><span><span class="m">${fmt(r.cu)} CU · ${r.submitted ?? '?'}/${T.ROLES.length * v.civs.length} offices · root ${String(r.root ?? '').slice(0, 8)}…</span><br><a href="${explorer(r.signature)}" target="_blank" rel="noopener">${short(r.signature)}</a></span><span class="ok">✓</span></div>`);
   const gov = (v.chronicle || []).filter(e => /^(gov|recall|era)\|/.test(e.text)).slice(0, 6).map(e => html`<div class="tk"><span class="t">T${e.tick}</span><span class="m">${T.chronicleText(e.text)[1]}</span></div>`);
+  const verify = verifyCommand(c);
   setHtml(el, html`<header><b>⛓ CHAIN LENS</b><button class="x" type="button" data-close-chain>✕</button></header>
     <div class="sec"><span class="k">SEASON</span>${c.seasonId} · ${c.cluster || 'localnet'}<span class="k">LAYER</span>${c.layer === 'er' ? 'MagicBlock Ephemeral Rollup' : 'Solana base'} · slot ${fmt(c.slot)}</div>
-    <div class="sec"><span class="k">PRIZE VAULT</span>${fmt(poolUsdc())} USDC · ${short(c.accounts?.vault)}<span class="k">YOUR SESSION KEY</span>${reg ? `${short(reg.session)} · scope: orders & governance only · cannot move USDC` : '—'}</div>
+    <div class="sec"><span class="k">PRIZE VAULT</span>${fmt(poolUsdc())} USDC · ${short(c.accounts?.vault)}<span class="k">YOUR SESSION KEY</span>${reg ? `${short(reg.session)} · ${S.session?.publicKey === reg.session ? 'held by this browser' : 'not in this browser (view only)'} · signs orders, votes, talk and, as an officer, treasury spending · cannot claim the prize or move wallet tokens` : '—'}</div>
     <div class="sec"><span class="k">GOVERNANCE ON CHAIN</span></div><div class="ticker">${gov.length ? gov : html`<span class="k" style="padding:6px">選挙・解任・時代の記録はまだありません</span>`}</div>
     <div class="sec"><span class="k">SEALED TICKS</span></div><div class="ticker">${ticks.length ? ticks : html`<span class="k" style="padding:6px">読み込み中…</span>`}</div>
-    <div class="sec"><span class="k">VERIFY IT YOURSELF</span><pre>cargo run --release --bin verify -- \\\n  --gateway ${c.gateway} --base ${c.endpoints?.base} --er ${c.endpoints?.er}</pre></div>`);
+    ${verify ? html`<div class="sec"><span class="k">VERIFY IT YOURSELF</span><pre>${verify.text}</pre><span class="k">${verifyNote(verify)}</span></div>` : ''}`);
 }

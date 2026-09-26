@@ -8,9 +8,9 @@
 // byte for byte, decoders value for value, instruction tags, error codes,
 // constants, magics and names (test/codec.test.mjs, test/constants.test.mjs).
 
-import { createHash } from 'node:crypto';
 import { Writer, Reader } from './borsh.mjs';
 import { fromHex, toHex, u64le } from './bytes.mjs';
+import { sha256 } from './sha256.mjs';
 
 // ------------------------------------------------------------------ constants
 // Mirrors of permutation-chain `state.rs` / `processor.rs`, permutation-rules
@@ -51,6 +51,56 @@ export const SEASON_STATUS = Object.freeze(['Registering', 'Genesis', 'Seating',
 export const MEMBER_KINDS = Object.freeze(['human', 'agent', 'undeclared']);
 /** `u32::MAX`: no member (a vacant office, no vote). */
 export const NOBODY = 0xffffffff;
+
+/**
+ * Member names (Latin-script given names). Everyone's name comes from
+ * `memberName`: the gateway draws its AI members' names with it and the web
+ * client offers the same draw (re-roll, no free text), so a name tells
+ * nothing about who chose it (V5 §18.2).
+ */
+export const MEMBER_NAMES = Object.freeze([
+  'Aarav', 'Abebe', 'Abel', 'Abril', 'Ada', 'Adele', 'Aditi', 'Adrian', 'Afua', 'Agnes', 'Aiko', 'Ailsa', 'Aisha', 'Akira', 'Alba', 'Aldo',
+  'Alina', 'Alma', 'Alvar', 'Amani', 'Amara', 'Amaya', 'Amir', 'Anais', 'Anders', 'Andrei', 'Anika', 'Anja', 'Anouk', 'Ansel', 'Anton',
+  'Anya', 'Aoi', 'Ari', 'Arjun', 'Arlo', 'Arne', 'Asa', 'Asha', 'Astrid', 'Aurel', 'Axel', 'Ayla', 'Ayo', 'Aziz', 'Basil', 'Bayo', 'Bea',
+  'Bela', 'Benno', 'Bianca', 'Bilal', 'Bjorn', 'Bo', 'Bram', 'Brisa', 'Bruno', 'Cai', 'Caio', 'Calla', 'Camila', 'Carmen', 'Carys', 'Cato',
+  'Cecil', 'Ceren', 'Chen', 'Chidi', 'Chloe', 'Cian', 'Clara', 'Cleo', 'Cosima', 'Dag', 'Dalia', 'Dante', 'Dara', 'Daria', 'Darius',
+  'Dawit', 'Delia', 'Dev', 'Diego', 'Dima', 'Dina', 'Dmitri', 'Dora', 'Dunja', 'Ebba', 'Edda', 'Edith', 'Eero', 'Efe', 'Eira', 'Eitan',
+  'Ekow', 'Elena', 'Eli', 'Elif', 'Elin', 'Elio', 'Ella', 'Eloy', 'Elsa', 'Ema', 'Emeka', 'Emi', 'Emil', 'Emre', 'Eno', 'Enzo', 'Erik',
+  'Esme', 'Esra', 'Eun', 'Eva', 'Ezra', 'Fabio', 'Farah', 'Fatima', 'Felix', 'Femi', 'Fenna', 'Fern', 'Filip', 'Finn', 'Fleur', 'Flora',
+  'Florin', 'Freya', 'Frida', 'Gael', 'Gaia', 'Galen', 'Gemma', 'Gia', 'Gideon', 'Gil', 'Goran', 'Greta', 'Gus', 'Hakon', 'Halima', 'Hamza',
+  'Hana', 'Hanne', 'Haru', 'Harun', 'Hassan', 'Hedda', 'Hedy', 'Helga', 'Henrik', 'Hiro', 'Holly', 'Hugo', 'Ida', 'Idris', 'Ike', 'Ilse',
+  'Ilya', 'Imani', 'Indira', 'Ines', 'Ingrid', 'Ira', 'Iris', 'Isa', 'Isak', 'Isla', 'Iva', 'Ivan', 'Ivo', 'Iza', 'Jae', 'Jakub', 'Jalen',
+  'Jana', 'Janek', 'Jarl', 'Jasper', 'Javi', 'Jaya', 'Jens', 'Jin', 'Jiro', 'Joao', 'Jonas', 'Joon', 'Jora', 'Josef', 'Jude', 'Juno', 'Kai',
+  'Kaia', 'Kaito', 'Kaja', 'Kalani', 'Kalle', 'Kamal', 'Kana', 'Karim', 'Kasia', 'Kato', 'Keira', 'Kemal', 'Kenji', 'Kian', 'Kira', 'Kiran',
+  'Kito', 'Klara', 'Kofi', 'Kwame', 'Laila', 'Lale', 'Lani', 'Lars', 'Laszlo', 'Lauri', 'Layla', 'Lea', 'Leila', 'Lena', 'Leni', 'Leon',
+  'Lev', 'Levi', 'Liam', 'Lina', 'Linnea', 'Lior', 'Livia', 'Lola', 'Lorenzo', 'Lotte', 'Luca', 'Lucas', 'Lucia', 'Luna', 'Luz', 'Lyra',
+  'Mads', 'Magnus', 'Maia', 'Mako', 'Malik', 'Malin', 'Mani', 'Manon', 'Mara', 'Marek', 'Mari', 'Marta', 'Mateo', 'Matias', 'Maya', 'Merel',
+  'Mette', 'Mika', 'Milan', 'Milo', 'Mina', 'Minh', 'Mio', 'Mira', 'Miro', 'Mona', 'Musa', 'Nadia', 'Nala', 'Nami', 'Nao', 'Naomi', 'Nasir',
+  'Neha', 'Nell', 'Nico', 'Nika', 'Nils', 'Nina', 'Noa', 'Noel', 'Noor', 'Nora', 'Nuno', 'Oda', 'Odile', 'Ola', 'Olga', 'Oli', 'Olu',
+  'Omar', 'Oona', 'Orin', 'Orla', 'Oskar', 'Otis', 'Otto', 'Oya', 'Pablo', 'Paulo', 'Paz', 'Pedro', 'Petra', 'Pia', 'Pilar', 'Priya',
+  'Quentin', 'Quinn', 'Rafa', 'Rahel', 'Raija', 'Rami', 'Rana', 'Rasmus', 'Ravi', 'Rei', 'Ren', 'Reza', 'Rhea', 'Riko', 'Rin', 'Rio',
+  'Rita', 'Rohan', 'Romy', 'Rosa', 'Rui', 'Rune', 'Ruth', 'Ryo', 'Sade', 'Safiya', 'Saga', 'Sahel', 'Sami', 'Sanna', 'Sanne', 'Santi',
+  'Sara', 'Sasha', 'Selin', 'Selma', 'Senna', 'Seo', 'Shira', 'Signe', 'Silas', 'Sina', 'Siri', 'Sofia', 'Solveig', 'Sora', 'Soren',
+  'Stella', 'Suri', 'Sven', 'Tahir', 'Taiwo', 'Talia', 'Tamar', 'Tariq', 'Taro', 'Tavi', 'Tekla', 'Teo', 'Tess', 'Thabo', 'Thea', 'Theo',
+  'Tiago', 'Tilde', 'Timo', 'Tobi', 'Toma', 'Tomo', 'Toni', 'Tove', 'Tuva', 'Ugo', 'Ulla', 'Uma', 'Umar', 'Una', 'Uri', 'Vali', 'Valo',
+  'Vera', 'Vesna', 'Vida', 'Viggo', 'Vika', 'Vilja', 'Vito', 'Wanja', 'Willa', 'Wim', 'Wren', 'Xavi', 'Ximena', 'Yael', 'Yan', 'Yara',
+  'Yasmin', 'Yoko', 'Yosef', 'Yuki', 'Yuna', 'Yuri', 'Yusuf', 'Zadie', 'Zain', 'Zara', 'Zeno', 'Zoe', 'Zofia', 'Zora', 'Zuri',
+]);
+const NAME_SUFFIXES = Object.freeze(Array.from({ length: 26 }, (_, i) => `${String.fromCharCode(65 + i)}.`));
+
+/**
+ * A member name drawn from random bytes (at least 8; pass 32 fresh ones):
+ * a given name from `MEMBER_NAMES`, then an initial ("Ada K.") or none,
+ * uniformly. Always ASCII and at most MAX_NAME bytes.
+ */
+export function memberName(rand) {
+  const b = rand instanceof Uint8Array ? rand : Uint8Array.from(rand);
+  if (b.length < 8) throw new Error('memberName: pass at least 8 random bytes');
+  const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  const given = MEMBER_NAMES[v.getUint32(0, true) % MEMBER_NAMES.length];
+  const s = v.getUint32(4, true) % (NAME_SUFFIXES.length + 1);
+  return s === 0 ? given : `${given} ${NAME_SUFFIXES[s - 1]}`;
+}
 
 const TECHS = ['Agriculture', 'BronzeWorking', 'Archery', 'HorsebackRiding', 'Masonry', 'Mysticism', 'Writing', 'Currency',
   'IronWorking', 'Mathematics', 'Chivalry', 'Philosophy', 'Engineering', 'Astronomy', 'Physics', 'CelestialMechanics'];
@@ -218,7 +268,6 @@ export const IX = {
  */
 export const encodeBatch = b => new Writer().u16(b.civ).u16(b.tick).u8(roleIndex(b.role)).u32(b.member).fixed(b.decisionDigest, 32)
   .vec(b.orders, encodeOrder).vec(b.adopt ?? [], (w, id) => w.u32(id)).toBytes();
-const sha256 = (...parts) => { const h = createHash('sha256'); for (const p of parts) h.update(p); return new Uint8Array(h.digest()); };
 export const orderCommitment = (b, salt) => sha256(new TextEncoder().encode('permutation-rules/orders'), encodeBatch(b), salt);
 
 /**

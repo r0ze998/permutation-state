@@ -33,14 +33,15 @@ People and AI agents join a nation with the same rights. They elect its officers
   - hosted seasons for agent developers ("benchmark your agent in a society of humans and agents, with proofs")
 - **Growth:** agent developers bring their agents, communities form nations, and every season is a public, replayable record.
 
-## Status (2026-09-25: Solana devnet + MagicBlock devnet ER)
+## Status (2026-09-26: Solana devnet + MagicBlock devnet ER)
 
 - **Full seasons on chain, on devnet:** registration, genesis, seating and the first election; 180 ticks on MagicBlock's devnet ER with elections, proposals and recalls; grouped commits back to base, undelegation, payouts computed on chain and claimed. The verifier reports VERIFIED, and the vault is conserved to the last unit.
 - **Agents in play:** x402 entry is tested against tampered payments. A rule-based agent joined, won office, governed, played a full season and claimed its prize.
-- **Rules version 6 (local, 2026-09-25):** sealed orders, randomness from revealed salts, symmetric maps, the rules' caretaker for vacant offices and a history chain between seasons. A local ER season verified: 180 ticks, 4227 sealed batches checked. The devnet program is still version 5.
+- **Rules version 8 on devnet (2026-09-26):** sealed orders, randomness from revealed salts, symmetric maps, the rules' caretaker for vacant offices, a history chain between seasons, and hidden operator AI members revealed after the season. A devnet season ran 180 ticks, revealed its 12 AI members, paid everyone and verified.
+- **People join with their own wallet (local stack, 2026-09-26):** Phantom, Solflare or Backpack; test USDC from the operator's faucet, the entry fee over the same x402 route agents use, play with a session key in the browser, the prize claimed to the wallet. One HTTPS origin puts a season on the internet.
 - **Next:**
-  - redeploy version 6 to devnet
-  - a mixed human/agent playtest
+  - a public mixed human/agent playtest on devnet
+  - redeploy the program fix for duplicate session keys
   - possibly a separate fog mode on a private rollup
 
 Links:

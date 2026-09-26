@@ -1,7 +1,8 @@
 // Sending transactions with clear failures: every error carries the program
 // logs, and successful sends return the logs so replay records
 // (`Program data:` PS_TICK / PS_GENESIS …) can be archived.
-import { Transaction } from '@solana/web3.js';
+import { Transaction, VersionedTransaction } from '@solana/web3.js';
+import { equal } from '../client/src/bytes.mjs';
 import { parseRecord, RECORD_TAGS } from '../client/src/codec.mjs';
 import { isTransientRpcError, poll, retry, sleep } from '../client/src/retry.mjs';
 
@@ -54,7 +55,16 @@ export async function sendSigned(connection, tx, label, { lastValidBlockHeight }
   return submit(connection, tx.serialize(), label, lastValidBlockHeight);
 }
 
-async function submit(connection, bytes, label, lastValidBlockHeight) {
+/**
+ * Send a fully signed wire transaction (bytes) and wait for confirmation.
+ * `fetch: false` answers once it is confirmed, without waiting for its logs
+ * (relays: the member only needs the signature).
+ */
+export async function sendWire(connection, wire, label, { lastValidBlockHeight, fetch = true } = {}) {
+  return submit(connection, wire, label, lastValidBlockHeight, { fetch });
+}
+
+async function submit(connection, bytes, label, lastValidBlockHeight, { fetch = true } = {}) {
   let signature;
   try {
     signature = await sendRaw(connection, bytes);
@@ -63,7 +73,33 @@ async function submit(connection, bytes, label, lastValidBlockHeight) {
     const t = signature ? await connection.getTransaction(signature, TX_OPTS).catch(() => null) : null;
     throw new SendError(label, e.message || String(e), t?.meta?.logMessages || e.logs);
   }
+  if (!fetch) return { signature, logs: [], cu: null, records: [], fetched: false };
   return fetchResult(connection, signature);
+}
+
+/** A transaction the cluster would refuse (simulated): its error and logs. */
+export class SimulationError extends Error {
+  constructor(err, logs) {
+    super(`simulation failed: ${typeof err === 'string' ? err : JSON.stringify(err)}`);
+    this.err = err;
+    this.logs = logs || [];
+  }
+}
+
+/**
+ * Simulate exactly `wire` (a signed legacy transaction, bytes) with its
+ * signatures checked and its own blockhash, as the cluster would run it.
+ * Throws SimulationError when it would fail. It goes through
+ * VersionedTransaction, which keeps the bytes (a legacy `Transaction` would
+ * be compiled again and could come out different); the round trip is checked.
+ */
+export async function simulateWire(connection, wire) {
+  const vtx = VersionedTransaction.deserialize(wire);
+  if (!equal(vtx.serialize(), wire)) throw new SimulationError('NonCanonicalTransaction');
+  const r = await connection.simulateTransaction(vtx, { sigVerify: true, replaceRecentBlockhash: false, commitment: 'confirmed' });
+  const value = r?.value ?? {};
+  if (value.err) throw new SimulationError(value.err, value.logs);
+  return { logs: value.logs ?? [], unitsConsumed: value.unitsConsumed ?? null };
 }
 
 /**
@@ -117,19 +153,28 @@ export function records(logs) {
  * the current one's expiry: it cannot outlive a newer blockhash.
  */
 export class BlockhashBook {
-  constructor(connection, { max = 512 } = {}) {
+  /** `ttlMs`: how long one fetched blockhash is handed out again (every request would otherwise be an RPC call). */
+  constructor(connection, { max = 512, ttlMs = 1000, now = Date.now } = {}) {
     this.connection = connection;
     this.max = max;
+    this.ttlMs = ttlMs;
+    this.now = now;
     this.known = new Map();
+    this.cached = null; // {at, value}
+    this.pending = null;
   }
 
-  /** The latest blockhash (recorded). */
+  /** The latest blockhash (recorded), at most `ttlMs` old; one request at a time. */
   async latest() {
-    const b = await this.connection.getLatestBlockhash('confirmed');
-    this.known.delete(b.blockhash);
-    this.known.set(b.blockhash, b.lastValidBlockHeight);
-    while (this.known.size > this.max) this.known.delete(this.known.keys().next().value);
-    return b;
+    if (this.cached && this.now() - this.cached.at < this.ttlMs) return this.cached.value;
+    this.pending ??= this.connection.getLatestBlockhash('confirmed').then(b => {
+      this.known.delete(b.blockhash);
+      this.known.set(b.blockhash, b.lastValidBlockHeight);
+      while (this.known.size > this.max) this.known.delete(this.known.keys().next().value);
+      this.cached = { at: this.now(), value: b };
+      return b;
+    }).finally(() => { this.pending = null; });
+    return this.pending;
   }
 
   /** Last valid block height of `blockhash`; `hint` (from the client) can only lower the bound. */

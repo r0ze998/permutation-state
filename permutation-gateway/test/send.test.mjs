@@ -37,3 +37,18 @@ test('program errors and a lasting UnsupportedProgramId still fail', async () =>
   await assert.rejects(send(c, [ix], [payer], 'test'), /UnsupportedProgramId/);
   assert.equal(c.sent.length, 4);
 });
+
+test('BlockhashBook: one blockhash request per second, shared by concurrent callers; expiries of what it handed out are known', async () => {
+  const { BlockhashBook } = await import('../src/send.mjs');
+  let now = 0, calls = 0;
+  const conn = { getLatestBlockhash: async () => { calls++; await new Promise(r => setTimeout(r, 5)); return { blockhash: `bh${calls}`, lastValidBlockHeight: 100 + calls }; } };
+  const book = new BlockhashBook(conn, { now: () => now });
+  const [a, b] = await Promise.all([book.latest(), book.latest()]);
+  assert.deepEqual([a.blockhash, b.blockhash, calls], ['bh1', 'bh1', 1]);
+  now = 999;
+  assert.equal((await book.latest()).blockhash, 'bh1');
+  now = 1000;
+  assert.equal((await book.latest()).blockhash, 'bh2');
+  assert.equal(await book.expiryOf('bh1'), 101);
+  assert.equal(await book.expiryOf('unknown', 50), 50, 'a client hint can only lower the bound');
+});

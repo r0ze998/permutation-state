@@ -306,7 +306,9 @@ impl Bot {
                 }
             }
         }
-        if s.tick % 10 == 7 && me.gold > 100_000 {
+        // Gifts stop at the transfer freeze: on chain a frozen order makes
+        // the whole diplomat batch fail at reveal.
+        if s.tick % 10 == 7 && s.tick < cx.r.transfer_freeze_tick && me.gold > 100_000 {
             let friends: Vec<CivId> = (0..n)
                 .filter(|o| {
                     *o != civ

@@ -60,3 +60,23 @@ test('a PS_HISTORY record is kept as JSON (u64s and bytes survive the state file
   assert.equal(e.record.finalRoot, '01'.repeat(32));
   assert.equal(e.signature, 'sig');
 });
+
+test('Crank.refresh: concurrent callers share one read of the world', async () => {
+  const { mkdtempSync } = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { Crank } = await import('../src/crank.mjs');
+  const { fakeConnection, keyring, programId, seasonData } = await import('./gateway-fixtures.mjs');
+  const { ChainClient } = await import('../client/src/chain.mjs');
+  const chain = new ChainClient(programId, 42n);
+  const base = fakeConnection();
+  base.accounts.set(chain.season.toBase58(), { data: seasonData({ seasonId: 42n }) });
+  let reads = 0;
+  base.getMultipleAccountsInfoAndContext = async keys => { reads++; await new Promise(r => setTimeout(r, 5)); return { context: { slot: 1 }, value: keys.map(() => null) }; };
+  const crank = new Crank({ base, er: fakeConnection(), cfg: { programId }, store: { state: { seasonId: '42', members: [] }, save() {} }, keys: keyring(),
+    ticksDir: mkdtempSync(path.join(os.tmpdir(), 'ticks-')) });
+  const snaps = await Promise.all([crank.refresh(), crank.refresh(), crank.refresh()]);
+  assert.deepEqual([reads, snaps], [1, [null, null, null]]);
+  await crank.refresh();
+  assert.equal(reads, 2, 'a later call reads again');
+});

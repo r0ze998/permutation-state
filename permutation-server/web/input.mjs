@@ -14,10 +14,12 @@ import { quoteAmm, reviewExchange, cancelExchange, confirmExchange } from './dra
 import { proveTile, setProofCiv, setProofTick } from './drawers/decisions.mjs';
 import { goNext, goToBlocker, nextTurnClick, toggleSummary, closeSummary } from './next.mjs';
 import { toggleChain } from './chain.mjs';
-import { pickCiv, pickStand, join, claim, startSeason } from './lobby.mjs';
+import { pickCiv, pickStand, join, startSeason, connectNamed, walletDisconnect, regAction, importKeyFile, claimPastSeason } from './lobby.mjs';
+import { claimPrize } from './claim.mjs';
 import { offerContract } from './drawers/diplomacy.mjs';
 import { sendTalk } from './drawers/talk.mjs';
 import { poll } from './sync.mjs';
+import { refreshFlags } from './chainplay.mjs';
 
 // ================================================================== click registry
 // [data attribute (dataset key), handler(value, element, event)] — the element
@@ -45,8 +47,13 @@ const BY_DATA = {
   closeChain: () => toggleChain(),
   pickCiv: v => pickCiv(+v),
   pickStand: v => pickStand(v),
-  claimCiv: v => claim(+v),
   offerContract: v => offerContract(+v),
+  // chain mode: wallets, registration steps and claims (lobby.mjs, claim.mjs)
+  walletConnect: v => connectNamed(v),
+  walletDisconnect: () => walletDisconnect(),
+  reg: v => regAction(v),
+  claimSeason: v => claimPastSeason(v),
+  claimPrize: () => claimPrize(),
 };
 const BY_ID = {
   'talk-send': () => sendTalk(),
@@ -123,6 +130,7 @@ function onChange(e) {
   if (e.target.id === 'proof-civ') setProofCiv(+e.target.value);
   if (e.target.id === 'proof-tick') setProofTick(+e.target.value);
   if (e.target.id === 'talk-to') S.talkTo = e.target.value;
+  if (e.target.id === 'reg-import-file') importKeyFile(e.target.files?.[0]);
 }
 
 /** Diplomacy rows remember whether they are open across re-renders. */
@@ -132,11 +140,22 @@ function onToggle(e) {
   if (row.open) S.diploOpen.add(id); else S.diploOpen.delete(id);
 }
 
+/**
+ * A tab shown again: its timers may have been throttled while hidden (no
+ * polls, no auto-commit), so catch up at once.
+ */
+function onVisible() {
+  if (document.hidden || !S.view) return;
+  poll();
+  if (S.view.chain) refreshFlags();
+}
+
 export function bindInput() {
   document.addEventListener('click', onClick);
   document.addEventListener('keydown', onKey);
   document.addEventListener('change', onChange);
   document.addEventListener('toggle', onToggle, true);
+  document.addEventListener('visibilitychange', onVisible);
   map.setCallbacks({ onSelect: selectTile, onHover: hoverTile, onMove: quickMove });
   const rationale = $('#rationale');
   rationale.addEventListener('input', () => invalidate('dock'));

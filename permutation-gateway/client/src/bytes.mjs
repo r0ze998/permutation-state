@@ -1,13 +1,141 @@
-// Byte helpers shared by the client and the gateway: hex, little-endian
-// u64s and JSON for values that hold bigints and bytes. One copy, so every
-// module writes the same bytes and the same JSON (test/vectors.json pins the
-// codec's; the state file and HTTP bodies depend on the JSON shape).
+// Byte helpers shared by the client, the gateway and the web client: hex,
+// base64, little-endian integers, and JSON for values that hold bigints and
+// bytes. One copy, so every module writes the same bytes and the same JSON
+// (test/vectors.json pins the codec's; the state file and HTTP bodies depend
+// on the JSON shape). Plain Uint8Arrays only: this runs in the browser too.
+
+const HEX = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, '0'));
+const encoder = new TextEncoder();
+
+/** UTF-8 bytes of a string. */
+export const utf8 = s => encoder.encode(s);
+
+/**
+ * A bytes-like value as a Uint8Array, as `Buffer.from` reads it: bytes as
+ * they are, a string as UTF-8, an array (or another typed array) by value,
+ * each & 0xff. Anything else throws.
+ */
+function asBytes(b) {
+  if (b instanceof Uint8Array) return b;
+  if (typeof b === 'string') return utf8(b);
+  if (b instanceof ArrayBuffer) return new Uint8Array(b);
+  if (b instanceof DataView) return new Uint8Array(b.buffer, b.byteOffset, b.byteLength);
+  if (b !== null && typeof b === 'object' && typeof b.length === 'number') return Uint8Array.from(b, x => x & 0xff);
+  throw new TypeError('expected bytes, a byte array or a string');
+}
+const isBytesLike = b => b instanceof Uint8Array || b instanceof ArrayBuffer || ArrayBuffer.isView(b) || Array.isArray(b);
 
 /** Bytes (Uint8Array, Buffer or byte array) as lowercase hex. */
-export const toHex = b => Buffer.from(b).toString('hex');
+export function toHex(b) {
+  const bytes = asBytes(b);
+  let out = '';
+  for (let i = 0; i < bytes.length; i++) out += HEX[bytes[i]];
+  return out;
+}
 
-/** Hex as a plain Uint8Array (not a Buffer: callers compare and store it as bytes). */
-export const fromHex = h => new Uint8Array(Buffer.from(h, 'hex'));
+const nibble = c => (c >= 48 && c <= 57 ? c - 48 : c >= 97 && c <= 102 ? c - 87 : c >= 65 && c <= 70 ? c - 55 : -1);
+
+/**
+ * Hex as a plain Uint8Array (not a Buffer: callers compare and store it as
+ * bytes). Lenient exactly like Node's `Buffer.from(h, 'hex')`: it stops at
+ * the first pair that is not two hex digits (and ignores an odd last digit),
+ * and never throws: a non-string gives its bytes if it is bytes, else none.
+ */
+export function fromHex(h) {
+  if (typeof h !== 'string') return isBytesLike(h) ? Uint8Array.from(asBytes(h)) : new Uint8Array(0);
+  const out = new Uint8Array(h.length >>> 1);
+  let i = 0;
+  for (; i < out.length; i++) {
+    // Node reads each UTF-16 unit as its low byte.
+    const a = nibble(h.charCodeAt(2 * i) & 0xff);
+    const b = nibble(h.charCodeAt(2 * i + 1) & 0xff);
+    if (a < 0 || b < 0) break;
+    out[i] = (a << 4) | b;
+  }
+  return i === out.length ? out : out.slice(0, i);
+}
+
+const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+const B64_VALUE = new Int8Array(128).fill(-1);
+for (let i = 0; i < 64; i++) B64_VALUE[B64.charCodeAt(i)] = i;
+B64_VALUE[45] = 62; // '-' (base64url)
+B64_VALUE[95] = 63; // '_' (base64url)
+
+/** Bytes as standard base64 with padding. */
+export function toBase64(b) {
+  const bytes = asBytes(b);
+  let out = '';
+  let i = 0;
+  for (; i + 2 < bytes.length; i += 3) {
+    const n = (bytes[i] << 16) | (bytes[i + 1] << 8) | bytes[i + 2];
+    out += B64[n >>> 18] + B64[(n >>> 12) & 63] + B64[(n >>> 6) & 63] + B64[n & 63];
+  }
+  if (i + 1 === bytes.length) {
+    const n = bytes[i] << 16;
+    out += `${B64[n >>> 18]}${B64[(n >>> 12) & 63]}==`;
+  } else if (i + 2 === bytes.length) {
+    const n = (bytes[i] << 16) | (bytes[i + 1] << 8);
+    out += `${B64[n >>> 18]}${B64[(n >>> 12) & 63]}${B64[(n >>> 6) & 63]}=`;
+  }
+  return out;
+}
+
+/**
+ * Base64 (standard or URL-safe, padding optional, whitespace ignored) as
+ * bytes; decoding stops at the first '='. Throws on any other character.
+ */
+export function fromBase64(s) {
+  if (typeof s !== 'string') throw new TypeError('base64: expected a string');
+  const out = new Uint8Array(Math.floor((s.length * 3) / 4));
+  let n = 0, bits = 0, acc = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c === 61) break; // '='
+    if (c === 32 || c === 9 || c === 10 || c === 13) continue;
+    const v = c < 128 ? B64_VALUE[c] : -1;
+    if (v < 0) throw new Error(`base64: invalid character ${JSON.stringify(s[i])}`);
+    acc = ((acc << 6) | v) & 0xffffff;
+    bits += 6;
+    if (bits >= 8) { bits -= 8; out[n++] = (acc >>> bits) & 0xff; }
+  }
+  return out.slice(0, n);
+}
+
+/** Bytes-like parts (see `toHex`) joined into one Uint8Array. */
+export function concat(...parts) {
+  const list = parts.map(asBytes);
+  const out = new Uint8Array(list.reduce((n, p) => n + p.length, 0));
+  let o = 0;
+  for (const p of list) { out.set(p, o); o += p.length; }
+  return out;
+}
+
+/** Whether two bytes-like values hold the same bytes. */
+export function equal(a, b) {
+  const x = asBytes(a), y = asBytes(b);
+  if (x.length !== y.length) return false;
+  for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return false;
+  return true;
+}
+
+/** `n` cryptographically random bytes (WebCrypto, in Node and in browsers). */
+export function randomBytes(n) {
+  const out = new Uint8Array(n);
+  // getRandomValues fills at most 65536 bytes per call.
+  for (let o = 0; o < n; o += 65536) globalThis.crypto.getRandomValues(out.subarray(o, Math.min(n, o + 65536)));
+  return out;
+}
+
+/** An unsigned integer as `bytes` little-endian bytes; throws when it does not fit (as Buffer's writers do). */
+function uintLe(v, bytes, name) {
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 0 || n >= 2 ** (8 * bytes)) throw new RangeError(`${name}: ${v} is not an integer in 0..${2 ** (8 * bytes) - 1}`);
+  const b = new Uint8Array(bytes);
+  for (let i = 0; i < bytes; i++) b[i] = Math.floor(n / 2 ** (8 * i)) & 0xff;
+  return b;
+}
+export const u16le = v => uintLe(v, 2, 'u16');
+export const u32le = v => uintLe(v, 4, 'u32');
 
 /** A u64 (number or bigint) as 8 little-endian bytes, as Borsh and the program's seeds write it. */
 export function u64le(v) {

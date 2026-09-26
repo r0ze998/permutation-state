@@ -64,6 +64,16 @@ export const S = {
   // ---- lobby
   lobbyPick: { civ: null, stand: ['General', 'Steward'] },
   joinName: '',
+
+  // ---- chain membership (chain mode: the browser holds the keys)
+  wallet: null,          // connected wallet (wallet.mjs connected()): {name, address, signMessage, signTransaction}, or null
+  session: null,         // this member's session key (session.mjs): {publicKey, sign(bytes), …}, or null (view only)
+  chainMember: null,     // my member in the gateway's /season: {index, civ, name, wallet, session}, or null
+  claim: null,           // the season-end claim card (claim.mjs)
+  // ---- chain play (chainplay.mjs; the sealed batches themselves are in localStorage, sealbook.mjs)
+  chainSeals: null,      // gateway /tick for my nation: {tick, phase, committed[4], revealed[4], at}
+  govQueue: [],          // governance actions waiting for the next commit phase
+  autoCommit: null,      // chain auto-commit's memory (sealbook.mjs autoCommitStep): the draft state, its attempts, a retry
 };
 
 // ================================================================== selectors
@@ -81,6 +91,19 @@ export const held = () => (S.view?.gov?.offices || []).filter(o => o.holder && o
 export const officeInfo = role => (S.view?.economy?.offices || []).find(o => o.role === role) || { budget: 0, bank: 0, spendable: 0 };
 /** Order slots available to one office, or to all offices held. */
 export const spendable = role => (role ? officeInfo(role).spendable : held().reduce((a, r) => a + officeInfo(r).spendable, 0));
+/**
+ * The operator's AI members as far as they are public (/api/state
+ * `aiRoster`: {aiCount, bountyEach, homeTick, revealed, fallen}). A play
+ * server from before `aiRoster` sent it as `roster` (an object, where the
+ * nation's member list is an array).
+ */
+export function aiRoster(v = S.view) {
+  const obj = x => (x && typeof x === 'object' && !Array.isArray(x) ? x : null);
+  const r = obj(v?.aiRoster) ?? obj(v?.roster) ?? {};
+  return { aiCount: 0, bountyEach: '0', homeTick: null, revealed: false, ...r, fallen: Array.isArray(r.fallen) ? r.fallen : [] };
+}
+/** My nation's members (/api/state `roster`: {id, name, kind, merit, active, activeWindows}); [] when the view has none. */
+export const nationRoster = (v = S.view) => (Array.isArray(v?.roster) ? v.roster : []);
 /** Seconds to the deadline, counted down locally between polls. */
 export function secondsLeft() {
   const v = S.view;

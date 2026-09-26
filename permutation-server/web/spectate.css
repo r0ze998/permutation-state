@@ -34,6 +34,7 @@
 .chainbox .layer { display: inline-block; padding: 1px 7px; border-radius: 99px; background: var(--usdc-bg); color: var(--usdc); font-family: var(--sans); }
 .chainbox pre { margin: 10px 0 0; padding: 8px 10px; background: var(--paper-soft); border-radius: 6px; font-size: 10.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .chainbox .none { color: var(--muted); }
+.chainbox .verify-note { margin: 6px 0 0; color: var(--muted); font-size: 10.5px; line-height: 1.5; }
 
 .feed { right: 16px; bottom: 16px; width: min(420px, 40vw); max-height: 42%; display: flex; flex-direction: column; }
 .feed-tabs { display: flex; gap: 6px; margin-bottom: 8px; }

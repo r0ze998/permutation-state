@@ -9,6 +9,7 @@ import { ROLES } from '../client/src/codec.mjs';
 import { errorCode } from '../client/src/http.mjs';
 import { officeOf, splitByOffice } from '../client/src/offices.mjs';
 import { retry, sleep } from '../client/src/retry.mjs';
+import { randomOffices } from '../client/src/x402-client.mjs';
 import { DEFAULTS, parseArgs } from '../src/config.mjs';
 
 export { parseArgs };
@@ -36,7 +37,9 @@ export async function runAgent({ name, policy, decide, args }) {
   const wallet = await loadOrCreateKeypair(path.join(dir, 'wallet.json'));
   const session = await loadOrCreateKeypair(path.join(dir, 'session.json'));
   game.session = session;
-  const stand = String(args.stand || 'Science,Diplomat').split(',').map(s => s.trim()).filter(Boolean);
+  // 1–2 offices, as everyone stands (the gateway refuses other candidacies
+  // in a season with AI members); default: drawn at random, like theirs.
+  const stand = args.stand ? String(args.stand).split(',').map(s => s.trim()).filter(Boolean) : randomOffices();
   const unknown = stand.filter(r => !ROLES.includes(r));
   if (unknown.length) throw new Error(`--stand: unknown office ${unknown.join(', ')} (offices: ${ROLES.join(', ')})`);
 
@@ -56,16 +59,9 @@ export async function runAgent({ name, policy, decide, args }) {
     log(`already a member on chain (member ${onChain.index}); continuing`);
   } else {
     if (info.season.status !== 'Registering') throw new Error(`season ${seasonId} is ${info.season.status}: registration is closed`);
-    const f = await game.faucet(wallet.publicKey);
-    log(`faucet: ${f.usdcAccount} holds 100 test USDC (test token, no value)`);
     const civ = args.civ !== undefined ? Number(args.civ) : undefined;
-    // Stand for the first election, without pre-season votes: our member
-    // index is only known once the registration lands (others may register
-    // first), so votes are cast in the vote windows once we are a member.
-    const j = await game.joinViaX402({ wallet, session, civ, name, kind: 1, usdcAccount: f.usdcAccount, stand });
-    log(`paid ${Number(j.requirements.maxAmountRequired) / 1e6} USDC over x402 → member ${j.member} of ${j.nation} (${j.signature.slice(0, 16)}…)`);
-    log(`X-PAYMENT-RESPONSE ${JSON.stringify(j.paymentResponse)}`);
-    writeFileSync(seatFile, JSON.stringify({ seasonId, member: j.member, civ: j.civ, signature: j.signature, usdcAccount: f.usdcAccount }, null, 2));
+    const j = await joinSeason({ game, wallet, session, civ, name, stand, log });
+    writeFileSync(seatFile, JSON.stringify({ seasonId, member: j.member, civ: j.civ, signature: j.signature, usdcAccount: j.usdcAccount }, null, 2));
   }
   const decisionsFile = path.join(dir, `decisions-${seasonId}.json`);
   if (existsSync(decisionsFile)) for (const d of JSON.parse(readFileSync(decisionsFile, 'utf8'))) game.decisions.set(`${d.tick}:${d.role}`, d);
@@ -131,20 +127,40 @@ export async function runAgent({ name, policy, decide, args }) {
   if (over) await claimPrize({ game, wallet, seatFile, log });
 }
 
-/** Once the season is finalized on base, claim the prize and treasury share into our own USDC account. */
-async function claimPrize({ game, wallet, seatFile, log }) {
+/**
+ * Register over x402 like everyone else: test USDC from the faucet, then the
+ * x402 client's defaults (kind 2 in a season with AI members, the public
+ * deposit, no pre-season votes: our member index is only known once the
+ * registration lands, so votes are cast in the vote windows). Returns the
+ * join result with `usdcAccount`.
+ */
+export async function joinSeason({ game, wallet, session, civ, name, stand, log = () => {} }) {
+  const f = await game.faucet(wallet.publicKey);
+  log(`faucet: ${f.usdcAccount} ${f.amount === '0' ? 'already funded' : `received ${Number(f.amount) / 1e6} test USDC`} (test token, no value)`);
+  const j = await game.joinViaX402({ wallet, session, civ, name, usdcAccount: f.usdcAccount, stand });
+  log(`paid ${Number(j.requirements.maxAmountRequired) / 1e6} USDC over x402 → member ${j.member} of ${j.nation} (${j.signature.slice(0, 16)}…)`);
+  log(`X-PAYMENT-RESPONSE ${JSON.stringify(j.paymentResponse)}`);
+  return { ...j, usdcAccount: f.usdcAccount };
+}
+
+/**
+ * Once the season is finalized on base, claim the prize and treasury share
+ * into our own USDC account: the one we registered from, else what
+ * GameClient.claim picks (never the faucet, which closes with registration).
+ */
+export async function claimPrize({ game, wallet, seatFile, log, retryOpts = { attempts: 120, delayMs: 5000 } }) {
   const seat = existsSync(seatFile) ? JSON.parse(readFileSync(seatFile, 'utf8')) : {};
-  const usdcAccount = seat.usdcAccount ?? (await game.faucet(wallet.publicKey)).usdcAccount; // the faucet (localnet/devnet) returns our account
   try {
     // Every 5 s for up to 10 minutes while the season is not finalized yet.
-    const r = await retry(() => game.claim({ wallet, usdcAccount }), {
-      attempts: 120, delayMs: 5000,
+    const r = await retry(() => game.claim({ wallet, usdcAccount: seat.usdcAccount }), {
+      ...retryOpts,
       retryIf: (e, i) => {
         if (i === 0 || errorCode(e) !== 'NotFinalized') log(`claim: ${e.message}`);
         return !['NothingToClaim', 'AlreadyClaimed'].includes(errorCode(e));
       },
     });
-    log(`claimed the prize into ${usdcAccount} (${r.signature.slice(0, 16)}…)`);
+    log(`claimed the prize (${r.signature.slice(0, 16)}…)`);
+    return r;
   } catch (e) {
     const code = errorCode(e);
     if (code === 'NothingToClaim' || code === 'AlreadyClaimed') log(`nothing to claim (${code})`);

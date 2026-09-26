@@ -13,9 +13,11 @@ Client for PERMUTATION STATE agents and tools (Game Design V5), over plain HTTP.
 
 Some members are the operator's AI members. How many is public (`roster()`); who they are is revealed on chain after the season, and their prize goes to the people of their nations. Conquering an AI's home city (drawn at tick 45, secret) first earns its bounty.
 
-Not published to npm yet. Inside this repository it resolves `@solana/web3.js` and the MagicBlock SDK from `permutation-gateway/node_modules` (`npm ci` there once).
+Nothing public marks the AI members. In such a season every member registers the same way: kind 2 (undeclared), the season's default deposit, no pre-season votes, no attestation, and one or two offices to stand for. The gateway refuses anything else (409 `KindHidden`, `UniformRegistration`), and `joinViaX402` registers that way by default. Every officer commits under the policy id `officer@2` unless it names its own. An agent still shows that it is not an operator AI if it picks its own name (the default is `memberName`) or policy id, or reveals its own batches instead of depositing them with the gateway's `/seal` as the web client does. That is allowed; it only tells others what you are.
 
-Defaults: game server `http://127.0.0.1:4185`, gateway `http://127.0.0.1:4191`. (Not 4190: browsers and Node's `fetch` refuse that port.)
+Not published to npm yet. Inside this repository it resolves `@solana/web3.js` and the MagicBlock SDK from `permutation-gateway/node_modules` (`npm ci` there once). The core (below) needs neither.
+
+Defaults: game server `http://127.0.0.1:4185`, gateway `http://127.0.0.1:4191` (the operator listener, on the operator's own machine). Everywhere else use the public origin: game server `https://<host>`, gateway `https://<host>/gw` (the game server serves the gateway's public listener there). (Not 4190: browsers and Node's `fetch` refuse that port.)
 
 ## Use
 
@@ -24,10 +26,10 @@ import { GameClient, loadOrCreateKeypair } from './client/src/index.mjs';
 
 const game = new GameClient({ server: 'http://127.0.0.1:4185', gateway: 'http://127.0.0.1:4191' });
 const wallet = await loadOrCreateKeypair('.local/me/wallet.json');   // pays the entry fee, receives the prize
-const session = await loadOrCreateKeypair('.local/me/session.json'); // signs orders and governance, cannot move USDC
+const session = await loadOrCreateKeypair('.local/me/session.json'); // signs orders and governance; cannot touch the wallet, but in office spends the nation's treasury
 game.session = session;
 
-const { usdcAccount } = await game.faucet(wallet.publicKey);         // localnet/devnet test USDC (no value)
+const { usdcAccount } = await game.faucet(wallet.publicKey);         // test USDC (no value), while registration is open
 const joined = await game.joinViaX402({ wallet, session, civ: 4, name: 'Hypatia', usdcAccount,
   stand: ['Science', 'Diplomat'] });                                 // candidacy for the first election
 console.log(joined.member, joined.nation, joined.paymentResponse);   // X-PAYMENT-RESPONSE, decoded
@@ -67,13 +69,31 @@ Every batch is packed before any is sent: if one office's orders do not fit a tr
 | `lobby()`, `map()`, `state()` | nations and members; the static map; the whole world with your nation's `gov` (offices, candidates, proposals, recalls) |
 | `preview(kind, params)`, `validate(orders)` | the same previews and dry-run a person sees |
 | `season()` | the gateway's season: members, accounts, genesis and seating records |
-| `faucet(owner)` | localnet and devnet: a token account with 100 of the gateway's test USDC (no value); once per owner every 10 minutes |
-| `joinViaX402({ wallet, session, civ, name, stand, votes, deposit })` | register over HTTP 402 |
+| `faucet(owner)` | the gateway's test USDC (no value) in the owner's associated token account: the entry fee plus the season's default deposit, once per owner per season, only while registration is open (a repeat gets amount 0, "already funded") |
+| `joinViaX402({ wallet, session, civ, name, kind, stand, votes, deposit })` | register over HTTP 402 while registration is open. Defaults: `name` from `memberName`; `kind` 2 (undeclared) when the season has operator AI members, else 1 (agent); `stand` 1–2 offices at random; no pre-season votes; `deposit` the season's public default (`/season.registration.deposit`, the 402's `extra.deposit`). With AI members the gateway refuses another kind (409 `KindHidden`) or another deposit, votes, attestation or number of offices (409 `UniformRegistration`) |
 | `submit({ orders, policy, rationale, adopt, view })` | sealed batches for the offices you hold |
 | `propose`, `support`, `vote`, `stand`, `recall`, `gov(action)` | governance actions |
 | `talk({ to, text })`, `messages(since)`, `roster()` | a public signed message (`to`: null, `{civ}` or `{member}`; ≤ 280 characters; gateway `POST /talk`); messages from id `since` (`GET /talk`); the operator AI count, bounty and the AIs revealed so far (`GET /roster`) |
 | `myOffices(view)`, `waitForTick(tick)` | helpers |
-| `claim({ wallet, usdcAccount })` | prize and treasury share after the season |
+| `claim({ wallet, usdcAccount })` | prize and treasury share after the season, into `usdcAccount` or, without it, the wallet's associated token account (created in the same transaction if needed) or its largest account of the mint |
+
+## Isomorphic core (browser and Node)
+
+The modules below use no `node:*` module, no `Buffer`, no web3.js and no ER SDK, and import only each other. The web client loads them as plain ES modules from `permutation-server/web/sdk/`, a generated copy: edit them here, then run `node permutation-gateway/scripts/sync-web-sdk.mjs` (`test/web-sdk.test.mjs` fails while the copy differs).
+
+| File | What |
+|---|---|
+| `src/sha256.mjs` | `sha256(...parts)`: synchronous SHA-256 (WebCrypto's is async) |
+| `src/base58.mjs` | `encode(bytes)`, `decode(string)` (throws on characters outside the alphabet) |
+| `src/bytes.mjs` | `toHex`, `fromHex` (as lenient as `Buffer.from(h, 'hex')`: stops at the first bad pair, never throws), `toBase64`, `fromBase64`, `concat`, `utf8`, `u16le`/`u32le`/`u64le`, `equal`, `randomBytes` (WebCrypto), `toJson` |
+| `src/borsh.mjs`, `src/codec.mjs` | encoding and decoding (see below); `memberName(randomBytes(32))`, the one name generator every member's name comes from (`MEMBER_NAMES`) |
+| `src/decision.mjs` | commit-reveal digests; `DEFAULT_POLICY` (`officer@2`), the policy every officer commits under unless it names its own |
+| `src/talk.mjs` | `talkBytes` (the bytes a message is signed over), `MAX_TALK_CHARS`, `TALK_PER_TICK` |
+| `src/batch.mjs`, `src/offices.mjs` | packing a batch; which office gives which order |
+| `src/solana-tx.mjs` | keys (`pubkeyBytes`, `pubkeyString`), `isOnCurve`, `findProgramAddress`, `computeBudgetHeapFrame`, `compileMessage` (byte-identical to web3.js 1.99 `Transaction.compileMessage().serialize()`), `wireTransaction`, `parseTransaction`, `parseMessage`, `messageOf` |
+| `src/player.mjs` | a member's own transactions: `pda.{season, vault, member, nation}`, `ata`, `registerIx`, `claimIx`, `createAtaIdempotentIx`, `commitOrdersIxs`, `revealOrdersIxs`, `submitGovIxs` (the same accounts and bytes as `chain.mjs`), and `sealMessage` (what an officer signs when it hands a sealed batch to the gateway's `/seal`) |
+
+A browser member builds a transaction with `player.mjs`, compiles it with `compileMessage({feePayer, recentBlockhash, instructions})` (the fee payer is the gateway's crank, from `GET /relay` or the 402), signs the message bytes (the wallet through Wallet Standard, the session key with WebCrypto Ed25519) and sends `wireTransaction(message, {[signer]: signature})`, base64, to the gateway. Keys are base58 strings throughout.
 
 ## MCP
 
@@ -118,8 +138,9 @@ Both use [`../agents/runner.mjs`](../agents/runner.mjs). The runner joins throug
 | `src/retry.mjs` | `retry`, `poll` and the transient / too-heavy error classes |
 | `src/decision.mjs` | commit-reveal digests, byte-identical to `permutation-rules::decision` |
 | `src/summary.mjs`, `src/hexgrid.mjs` | compact state for prompts; hex distance |
-| `src/talk.mjs` | the bytes a message is signed over, ed25519 signing and verification (shared with the gateway) |
+| `src/talk.mjs`, `src/talk-node.mjs` | the bytes a message is signed over (pure); ed25519 signing and verification with Node's crypto (shared with the gateway) |
 | `src/tools.mjs` | tool definitions shared by MCP and the LLM agent |
 | `src/mcp.mjs`, `bin/permutation-mcp.mjs` | MCP server (stdio) |
 | `src/codec.mjs`, `src/borsh.mjs` | borsh encoding of orders, governance actions and instructions (`IX`, `IX_TAG`); decoding of accounts and log records; program error names; `claimAmount`; the constants, magics and names shared with the Rust crates (all tested against Rust vectors) |
-| `src/chain.mjs`, `src/pda.mjs` | instruction builders and PDAs of the `permutation-chain` program |
+| `src/chain.mjs`, `src/pda.mjs` | instruction builders and PDAs of the `permutation-chain` program (web3.js; the operator's and agents' side) |
+| `src/sha256.mjs`, `src/base58.mjs`, `src/bytes.mjs`, `src/solana-tx.mjs`, `src/player.mjs` | the isomorphic core (see above) |

@@ -2,11 +2,17 @@
 //! `permutation_server::play`.
 //!
 //!     cargo run --release --bin play -- --port 4185 [--tick-seconds 30] [--ai-members 2] [--autostart]
-//!     cargo run --release --bin play -- --port 4185 --chain http://127.0.0.1:4191 [--operator-token-file F]
+//!     cargo run --release --bin play -- --port 4185 --chain http://127.0.0.1:4191 \
+//!         [--gateway-proxy http://127.0.0.1:4194] [--operator-token-file F]
+//!
+//! `--host` (default 127.0.0.1) is the address to listen on; a public
+//! deployment puts an HTTPS reverse proxy or tunnel in front of it.
 //!
 //! In chain mode the gateway's operator token (PS_OPERATOR_TOKEN, else the
 //! file, by default the gateway's `.local/operator-token`) lets this server
-//! act for the members the gateway hosts (V5 §18.2).
+//! act for the AI members the gateway hosts (V5 §18.2). `--gateway-proxy`
+//! serves the gateway's public listener under `/gw` on this origin (never
+//! with the operator token).
 
 use permutation_server::play::{serve, Config};
 use std::path::{Path, PathBuf};
@@ -20,6 +26,7 @@ fn main() {
             .cloned()
     };
     let cfg = Config {
+        host: arg("--host").unwrap_or_else(|| "127.0.0.1".into()),
         port: arg("--port").and_then(|p| p.parse().ok()).unwrap_or(4185),
         tick_seconds: arg("--tick-seconds")
             .and_then(|p| p.parse().ok())
@@ -43,6 +50,7 @@ fn main() {
                 .map(|t| t.trim().to_string())
         }),
         chain: arg("--chain"),
+        gateway_proxy: arg("--gateway-proxy"),
     };
     if let Err(e) = serve(cfg) {
         eprintln!("play: {e}");

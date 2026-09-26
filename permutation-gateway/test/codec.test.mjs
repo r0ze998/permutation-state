@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { Writer } from '../client/src/borsh.mjs';
 import {
   chainError, CHAIN_ERRORS, claimAmount, claimParts, decodeMember, decodeRoster, parseRecord, rosterChain, rosterTag, encodeBatch, orderCommitment, RETIRED_IX, decodeNationHeader, decodeSeason, decodeWorldHeader, encodeGov, encodeOrder, IX, IX_TAG, NOBODY,
+  MAX_NAME, MEMBER_NAMES, memberName,
 } from '../client/src/codec.mjs';
 import { fromHex, hex, plain, vectors } from './vectors.mjs';
 
@@ -123,4 +124,29 @@ test('PS_TALK records parse (season, tick, count, root)', () => {
   const le = (n, v) => { const b = new Uint8Array(n); const d = new DataView(b.buffer); if (n === 8) d.setBigUint64(0, BigInt(v), true); else if (n === 4) d.setUint32(0, v, true); else d.setUint16(0, v, true); return b; };
   const r = parseRecord([new TextEncoder().encode('PS_TALK'), le(8, 77), le(2, 33), le(4, 12), k(16)]);
   assert.deepEqual({ ...r, root: hex(r.root) }, { tag: 'PS_TALK', seasonId: 77n, tick: 33, count: 12, root: hex(k(16)) });
+});
+
+test('memberName: one generator for everyone, from a large pool, always a valid name', () => {
+  assert.ok(MEMBER_NAMES.length >= 300, `${MEMBER_NAMES.length} given names`);
+  assert.equal(new Set(MEMBER_NAMES).size, MEMBER_NAMES.length, 'no duplicates');
+  for (const n of MEMBER_NAMES) assert.match(n, /^[A-Z][a-z]+$/, n);
+  // Deterministic in its bytes; the first u32 picks the name, the second the initial (0: none).
+  const at = (i, s) => { const b = new Uint8Array(32); const d = new DataView(b.buffer); d.setUint32(0, i, true); d.setUint32(4, s, true); return b; };
+  assert.equal(memberName(at(0, 0)), MEMBER_NAMES[0]);
+  assert.equal(memberName(at(1, 1)), `${MEMBER_NAMES[1]} A.`);
+  assert.equal(memberName(at(MEMBER_NAMES.length + 2, 26)), `${MEMBER_NAMES[2]} Z.`);
+  assert.equal(memberName(at(3, 27)), MEMBER_NAMES[3]);
+  assert.equal(memberName([...at(5, 3)]), `${MEMBER_NAMES[5]} C.`);
+  assert.throws(() => memberName(new Uint8Array(7)), /8 random bytes/);
+  const seen = new Set();
+  for (let i = 0; i < 2000; i++) {
+    const n = memberName(crypto.getRandomValues(new Uint8Array(32)));
+    assert.match(n, /^[A-Z][a-z]+( [A-Z]\.)?$/, n);
+    const len = new TextEncoder().encode(n).length;
+    assert.ok(len >= 1 && len <= MAX_NAME, `${n}: ${len} bytes`);
+    // The name round-trips through Register's borsh string.
+    assert.equal(IX.register({ civ: 0, name: n, kind: 2, session: k(1), tag: k(2) })[3], len);
+    seen.add(n);
+  }
+  assert.ok(seen.size > 1750, `2000 draws gave ${seen.size} distinct names (about 1830 expected)`);
 });

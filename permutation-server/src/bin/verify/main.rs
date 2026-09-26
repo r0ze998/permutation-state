@@ -11,8 +11,9 @@
 //!    same `permutation-rules` crate and compare with `PS_GENESIS`.
 //! 3. Replay the seating of members (from their Member accounts on the base
 //!    layer: each member's nation, key, candidacy and first-election votes,
-//!    checking each `PS_SEAT` root) and the first election (`PS_OPEN`, or
-//!    tick 0's pre-state root).
+//!    with `permutation_chain::seat`, so a session key registered twice gets
+//!    the program's substitute; checking each `PS_SEAT` root and the keys it
+//!    seated) and the first election (`PS_OPEN`, or tick 0's pre-state root).
 //! 4. Replay every tick record and check that each `pre_root` matches the
 //!    previous state and each `post_root` the recomputed one. `PS_TICK`
 //!    carries the roots and the input's hash; the input itself (the tick

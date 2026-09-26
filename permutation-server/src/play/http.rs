@@ -1,10 +1,16 @@
 //! The minimal HTTP/1.1 the play server needs: parse one request, answer it,
 //! close. Routes build a `Response` value; only `write` touches the socket,
 //! so no route ever writes to a client while it holds the game lock.
+//!
+//! Every response carries the same security headers (`SECURITY_HEADERS`):
+//! no framing (a framed page could be clicked into acting), no referrer, no
+//! content sniffing. There is no `script-src` policy: it can break the
+//! scripts wallets inject into the page.
 
 use serde_json::{json, Value};
+use std::borrow::Cow;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpStream;
+use std::net::{IpAddr, TcpStream};
 use std::path::Path;
 use std::time::Duration;
 
@@ -14,13 +20,25 @@ pub const IO_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_BODY: usize = 1 << 20;
 const MAX_HEADERS: usize = 64;
 
+/// Sent with every response.
+pub const SECURITY_HEADERS: [(&str, &str); 4] = [
+    ("X-Frame-Options", "DENY"),
+    ("Content-Security-Policy", "frame-ancestors 'none'"),
+    ("Referrer-Policy", "no-referrer"),
+    ("X-Content-Type-Options", "nosniff"),
+];
+
 pub struct Request {
     pub method: String,
     pub path: String,
     pub query: Vec<(String, String)>,
+    /// The query string as sent (without `?`).
+    pub raw_query: String,
     /// Lower-cased names.
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
+    /// The socket's peer (set by the server; `None` when parsed from bytes).
+    pub peer: Option<IpAddr>,
 }
 
 impl Request {
@@ -87,32 +105,46 @@ impl Request {
             method,
             path: path.to_string(),
             query,
+            raw_query: qs.to_string(),
             headers,
             body,
+            peer: None,
         })
     }
 }
 
 pub struct Response {
-    pub status: &'static str,
-    pub ctype: &'static str,
+    /// Code and reason, e.g. `200 OK`.
+    pub status: Cow<'static, str>,
+    pub ctype: Cow<'static, str>,
     pub body: Vec<u8>,
+    /// Headers besides the ones every response has (`head`).
+    pub headers: Vec<(&'static str, String)>,
 }
 
 const JSON: &str = "application/json; charset=utf-8";
 
 impl Response {
+    pub fn new(
+        status: impl Into<Cow<'static, str>>,
+        ctype: impl Into<Cow<'static, str>>,
+        body: Vec<u8>,
+    ) -> Response {
+        Response {
+            status: status.into(),
+            ctype: ctype.into(),
+            body,
+            headers: Vec::new(),
+        }
+    }
+
     /// `200 OK` with a JSON body.
     pub fn ok(v: &Value) -> Response {
         Response::json("200 OK", v)
     }
 
     pub fn json(status: &'static str, v: &Value) -> Response {
-        Response {
-            status,
-            ctype: JSON,
-            body: v.to_string().into_bytes(),
-        }
+        Response::new(status, JSON, v.to_string().into_bytes())
     }
 
     /// `{"ok": false, "error": …}` with `status`.
@@ -121,11 +153,7 @@ impl Response {
     }
 
     pub fn text(status: &'static str, text: &str) -> Response {
-        Response {
-            status,
-            ctype: "text/plain",
-            body: text.as_bytes().to_vec(),
-        }
+        Response::new(status, "text/plain", text.as_bytes().to_vec())
     }
 
     /// A file of the web client under `web` (`/` is `index.html`).
@@ -156,24 +184,33 @@ impl Response {
                     Some("txt") | Some("md") => "text/plain; charset=utf-8",
                     _ => "application/octet-stream",
                 };
-                Response {
-                    status: "200 OK",
-                    ctype,
-                    body,
-                }
+                Response::new("200 OK", ctype, body)
             }
             Err(_) => Response::text("404 Not Found", "not found"),
         }
     }
 
-    pub fn write(&self, stream: &mut TcpStream) {
-        let head = format!(
-            "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: content-type, x-member-token, x-seat-token\r\nConnection: close\r\n\r\n",
+    /// Status line and headers, up to and including the blank line.
+    pub fn head(&self) -> String {
+        let mut head = format!(
+            "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: content-type, x-member-token\r\nConnection: close\r\n",
             self.status,
             self.ctype,
             self.body.len()
         );
-        let _ = stream.write_all(head.as_bytes());
+        for (k, v) in SECURITY_HEADERS
+            .iter()
+            .map(|(k, v)| (*k, *v))
+            .chain(self.headers.iter().map(|(k, v)| (*k, v.as_str())))
+        {
+            head.push_str(&format!("{k}: {v}\r\n"));
+        }
+        head.push_str("\r\n");
+        head
+    }
+
+    pub fn write(&self, stream: &mut TcpStream) {
+        let _ = stream.write_all(self.head().as_bytes());
         let _ = stream.write_all(&self.body);
     }
 }
@@ -192,6 +229,7 @@ mod tests {
         );
         assert_eq!(r.qi::<u32>("member"), Some(3));
         assert_eq!(r.q("flag"), Some(""));
+        assert_eq!(r.raw_query, "member=3&civ=1&flag");
         assert_eq!(r.header("x-member-token"), Some("abc"));
         assert_eq!(r.json()["a"], true);
     }
@@ -218,5 +256,22 @@ mod tests {
         let index = Response::static_file(&web, "/");
         assert_eq!(index.status, "200 OK");
         assert!(index.ctype.starts_with("text/html"));
+    }
+
+    #[test]
+    fn every_response_forbids_framing_sniffing_and_referrers() {
+        for r in [
+            Response::ok(&json!({"ok": true})),
+            Response::text("404 Not Found", "not found"),
+            Response::error("503 Service Unavailable", "registering"),
+        ] {
+            let head = r.head();
+            assert!(head.starts_with(&format!("HTTP/1.1 {}\r\n", r.status)));
+            for (k, v) in SECURITY_HEADERS {
+                assert!(head.contains(&format!("\r\n{k}: {v}\r\n")), "{k}: {head}");
+            }
+            assert!(!head.contains("x-seat-token"), "{head}");
+            assert!(head.ends_with("\r\n\r\n"));
+        }
     }
 }

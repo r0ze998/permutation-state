@@ -1,14 +1,14 @@
 // The gateway's side of members' messages (V5 §18.7): kept, public, and
 // anchored on chain once per tick (`AnchorTalk` logs the Merkle root of the
 // tick's messages), so anyone can later prove who said what by when. Words
-// bind nothing; contracts do. Signing and the signed bytes: client/src/talk.mjs.
+// bind nothing; contracts do. The signed bytes and the limits:
+// client/src/talk.mjs; signing and verifying: client/src/talk-node.mjs.
 import { createHash } from 'node:crypto';
 import { toHex } from '../client/src/bytes.mjs';
-import { MAX_TALK_CHARS, signTalk, talkBytes, verifyTalk } from '../client/src/talk.mjs';
+import { MAX_TALK_CHARS, TALK_PER_TICK, talkBytes } from '../client/src/talk.mjs';
+import { signTalk, verifyTalk } from '../client/src/talk-node.mjs';
 
-export { MAX_TALK_CHARS, signTalk, talkBytes, verifyTalk };
-/** Messages one member may send in one tick. */
-export const TALK_PER_TICK = 3;
+export { MAX_TALK_CHARS, signTalk, TALK_PER_TICK, talkBytes, verifyTalk };
 
 const sha256 = (...parts) => { const h = createHash('sha256'); for (const p of parts) h.update(p); return new Uint8Array(h.digest()); };
 
@@ -61,8 +61,8 @@ export class TalkBook {
     const sent = this.state.talk.filter(m => m.tick === tick && m.member === member).length;
     if (sent >= TALK_PER_TICK) throw new Error(`at most ${TALK_PER_TICK} messages per member and tick`);
     const bytes = talkBytes({ season, tick, member, to, text });
-    if (!verifyTalk(bytes, signature, publicKey)) throw new Error('the signature is not the member\'s session key over the message');
-    const m = { id: this.state.talk.length, tick, member, to, text, bytes: bytes.toString('hex'), signature: toHex(signature) };
+    if (!verifyTalk(bytes, signature, publicKey)) throw new Error('the signature is not the member\'s key (the one it was seated with) over the message');
+    const m = { id: this.state.talk.length, tick, member, to, text, bytes: toHex(bytes), signature: toHex(signature) };
     this.state.talk.push(m);
     return m;
   }

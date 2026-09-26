@@ -15,9 +15,10 @@ import { S, civN, isWatching, invalidate, registerRenderers } from './state.mjs'
 import { poll, setPollStep } from './sync.mjs';
 import { map } from './world.mjs';
 import { drawMinimap } from './map.mjs';
-import { isDirty, commit, restoreCommitted, resetTick } from './orders.mjs';
+import { restoreTick, resetTick, afterView } from './orders.mjs';
 import { refreshSelection } from './selection.mjs';
-import { pickMember, describeSeason } from './lobby.mjs';
+import { pickMember, chainLobby, describeSeason } from './lobby.mjs';
+import * as chainio from './chainio.mjs';
 import { renderTop, renderClock, renderPlate, renderRibbon } from './hud/top.mjs';
 import { renderDock } from './hud/dock.mjs';
 import { renderInspector } from './inspector/index.mjs';
@@ -26,7 +27,7 @@ import { loadDecisions } from './drawers/decisions.mjs';
 import { renderNextTurn, renderNotifs, renderSummary, tickChanges } from './next.mjs';
 import { renderPool, renderChainBeat, renderChainDrawer, onChainView } from './chain.mjs';
 import { bindInput } from './input.mjs';
-import { AUTO_COMMIT_SECONDS, adoptRules } from './rules.mjs';
+import { adoptRules } from './rules.mjs';
 
 function renderMinimap() {
   S.mini = drawMinimap($('#minimap'), S.map, S.view, map.viewport());
@@ -69,10 +70,11 @@ async function pollOnce() {
 setPollStep(pollOnce);
 
 function applyView(v) {
-  // The server no longer knows this browser's member token (it restarted):
-  // back to the lobby to claim or join again, instead of rendering a view
-  // that belongs to no nation.
-  if (api.memberToken() && !isWatching() && v.viewer !== 'member') {
+  // Local mode: the server no longer knows this browser's member token (it
+  // restarted): back to the lobby to join again, instead of rendering a view
+  // that belongs to no nation. (Chain mode has no tokens: the member is
+  // viewed by id and signs in the browser, so a restart changes nothing.)
+  if (!v.chain && api.memberToken() && !isWatching() && v.viewer !== 'member') {
     api.tokenStore.set(null);
     toast('サーバーが再起動したため、国民として入り直してください。', 'error');
     setTimeout(() => location.reload(), 1200);
@@ -82,17 +84,16 @@ function applyView(v) {
   const prev = S.view;
   const newTick = S.lastTick !== null && v.tick !== S.lastTick;
   S.view = v; S.myCiv = v.me; S.memberId = v.member?.id ?? null;
+  if (v.chain?.gateway) chainio.setGateway(v.chain.gateway);
   S.clockAt = performance.now();
-  if (S.lastTick === null) {
-    const orders = (v.member?.committed || []).flatMap(c => c.orders);
-    if (orders.length) restoreCommitted(orders);
-  }
+  if (S.lastTick === null) restoreTick(v); // what was sealed earlier this tick, after a reload
   if (newTick) onNewTick(v, prev);
   S.lastTick = v.tick;
   map.setView(v, v.me);
   onChainView(v);
-  // Auto-commit a dirty draft just before the deadline (never lose orders silently).
-  if (!v.paused && isDirty() && v.secondsLeft < AUTO_COMMIT_SECONDS && !S.committing) commit(true);
+  // Chain play in step with the chain; auto-commit a dirty draft before the
+  // deadline (never lose orders silently).
+  afterView(v);
   invalidate('all');
 }
 
@@ -132,6 +133,12 @@ function onBeat() {
 }
 
 // ================================================================== boot
+/** Chain mode, watching: wait (with a message) while the season registers or starts. */
+const waitForSeason = lobby => api.untilPlaying(lobby, phase => {
+  $('#loading h2').textContent = 'シーズンの開始を待っています';
+  $('#loading-text').textContent = phase === 'registering' ? '登録を受け付けています。締切でシーズンが始まり、そのあと表示されます。' : 'シーズンを準備しています…';
+});
+
 async function boot() {
   const params = new URLSearchParams(location.search);
   if (params.has('spectate')) { location.replace('spectate.html'); return; }
@@ -143,7 +150,13 @@ async function boot() {
   bindInput();
   try {
     const lobby = await api.get('/api/lobby');
-    if (lobby.you === null && !isWatching()) {
+    if (lobby.mode === 'chain') {
+      // No member tokens on chain: the wallet registers, the browser keeps the
+      // session key, and the game is this member's public view (?member=M).
+      api.setMemberToken(null);
+      if (isWatching()) await waitForSeason(lobby);
+      else api.setViewerMember(await chainLobby(lobby));
+    } else if (lobby.you === null && !isWatching()) {
       api.tokenStore.set(null); api.setMemberToken(null);
       api.setMemberToken(await pickMember(lobby));
     }

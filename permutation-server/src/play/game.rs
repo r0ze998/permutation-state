@@ -22,9 +22,9 @@ use crate::codec::hex;
 use crate::driver::{local_key, Hosting, Planner};
 use crate::events::{diff_events, diff_gov_events};
 use crate::fog::Fog;
-use crate::ledger::Ledger;
+use crate::ledger::{Ledger, DEFAULT_POLICY};
 
-/// How long a claimed human member stays "here" without any request.
+/// How long a person (local mode) stays "here" without any request.
 pub const IDLE: Duration = Duration::from_secs(60);
 /// Test entry fee of local seasons (no real funds).
 pub const LOCAL_FEE: u64 = 10_000_000;
@@ -34,11 +34,12 @@ const CHRONICLE: usize = 500;
 /// Who runs a member's decisions.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Host {
-    /// A person in the browser.
+    /// A person in the browser with a member token (local mode).
     Human,
     /// This server's AI (`driver`).
     Ai,
-    /// An outside agent that signs its own transactions.
+    /// A member that signs its own transactions (chain mode: a person's
+    /// wallet and session key in the browser, or an outside agent).
     External,
 }
 
@@ -56,7 +57,7 @@ pub struct Member {
     pub meta: MemberMeta,
     pub host: Host,
     pub civ: CivId,
-    /// Browser token of whoever holds this human member.
+    /// Browser token of the person who joined as this member (local mode).
     pub token: Option<String>,
     pub last_seen: Option<Instant>,
     /// Orders committed for the open tick, per office held (human officers).
@@ -89,7 +90,7 @@ impl Member {
         }
     }
 
-    /// Claimed by a browser that asked for something within `IDLE`.
+    /// Its person's browser asked for something within `IDLE`.
     pub fn here(&self) -> bool {
         self.token.is_some() && self.last_seen.is_some_and(|t| t.elapsed() < IDLE)
     }
@@ -98,10 +99,11 @@ impl Member {
 /// Who is asking.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Viewer {
-    /// Holds this member's token: may act for it.
+    /// Holds this member's token: may act for it (local mode).
     Member(MemberId),
-    /// Reads this nation's view (the full state).
-    Watch(CivId),
+    /// Reads this nation's view (the full state); with `?member=M`, also
+    /// that member's public block (the same for every member).
+    Watch(CivId, Option<MemberId>),
     Spectator,
 }
 
@@ -318,12 +320,11 @@ impl Game {
         hex(&h.finalize()[..16])
     }
 
+    /// Member tokens exist in local mode only (`X-Member-Token`); in chain
+    /// mode every member signs its own transactions and is viewed by id.
     pub fn viewer(&self, req: &Request) -> Viewer {
-        let t = req
-            .header("x-member-token")
-            .or_else(|| req.header("x-seat-token"))
-            .or_else(|| req.q("token"));
-        if let Some(t) = t.filter(|t| !t.is_empty()) {
+        let t = req.header("x-member-token").filter(|t| !t.is_empty());
+        if let Some(t) = t.filter(|_| self.chain.is_none()) {
             if let Some(i) = self
                 .members
                 .iter()
@@ -336,10 +337,10 @@ impl Game {
             .qi::<MemberId>("member")
             .filter(|m| (*m as usize) < self.state.members.len())
         {
-            return Viewer::Watch(self.state.members[m as usize].civ);
+            return Viewer::Watch(self.state.members[m as usize].civ, Some(m));
         }
         match req.qi::<CivId>("civ") {
-            Some(c) if (c as usize) < self.state.civs.len() => Viewer::Watch(c),
+            Some(c) if (c as usize) < self.state.civs.len() => Viewer::Watch(c, None),
             _ => Viewer::Spectator,
         }
     }
@@ -347,9 +348,24 @@ impl Game {
     pub fn civ_of(&self, v: Viewer) -> Option<CivId> {
         match v {
             Viewer::Member(m) => self.members.get(m as usize).map(|x| x.civ),
-            Viewer::Watch(c) => Some(c),
+            Viewer::Watch(c, _) => Some(c),
             Viewer::Spectator => None,
         }
+    }
+
+    /// Chain mode before the government opened (registration, genesis,
+    /// seating): only the lobby is served.
+    pub fn starting(&self) -> bool {
+        self.chain.is_some() && self.phase == Phase::Lobby
+    }
+
+    /// A chain season with operator AI members: nobody's self-declared kind
+    /// (or attestation) is shown, since only people could declare one
+    /// (V5 §18.2).
+    pub fn hides_kinds(&self) -> bool {
+        self.chain
+            .as_ref()
+            .is_some_and(|c| c.ai_count() > 0 || !self.roster.entries.is_empty())
     }
 
     // -------------------------------------------------------------- lobby (local)
@@ -489,7 +505,7 @@ impl Game {
                 }
                 let digest = match self.ledger.record(tick, civ, r as u8) {
                     Some(rec) => rec.digest,
-                    None => self.ledger.commit(tick, civ, r as u8, "human", ""),
+                    None => self.ledger.commit(tick, civ, r as u8, DEFAULT_POLICY, ""),
                 };
                 orders.extend(reveals);
                 out.push(OrderBatch {
@@ -651,16 +667,26 @@ impl Game {
             .collect()
     }
 
-    /// Split `orders` among the offices `m` holds. Err if an order belongs to
-    /// an office it does not hold (it can be proposed instead).
-    pub fn split_for_member(
+    /// Split `orders` among the offices `m` holds; an order of an office it
+    /// does not hold is refused, with why (it can be proposed instead).
+    #[allow(clippy::type_complexity)]
+    pub fn split_orders(
         &self,
         m: MemberId,
         orders: &[(OrderDto, Order)],
-    ) -> Result<[Vec<(OrderDto, Order)>; 4], String> {
-        let civ = self.members[m as usize].civ;
-        let n = &self.state.nations[civ as usize];
+    ) -> ([Vec<(OrderDto, Order)>; 4], Vec<(OrderDto, String)>) {
         let mut out: [Vec<(OrderDto, Order)>; 4] = Default::default();
+        let mut refused = Vec::new();
+        let Some(civ) = self.state.members.get(m as usize).map(|x| x.civ) else {
+            let why = |d: &OrderDto| (d.clone(), "no such member".to_string());
+            return (out, orders.iter().map(|(d, _)| why(d)).collect());
+        };
+        let n = &self.state.nations[civ as usize];
+        let how = if self.chain.is_some() {
+            "SubmitGov Propose"
+        } else {
+            "POST /api/gov Propose"
+        };
         for (d, o) in orders {
             match Role::ALL
                 .into_iter()
@@ -670,11 +696,25 @@ impl Game {
                 None => {
                     let office =
                         api::office_of(&self.state, o).unwrap_or_else(|| "another office".into());
-                    return Err(format!("{} belongs to the {office}, which you do not hold: propose it instead (POST /api/gov Propose)", d.type_name()));
+                    refused.push((d.clone(), format!("{} belongs to the {office}, which you do not hold: propose it instead ({how})", d.type_name())));
                 }
             }
         }
-        Ok(out)
+        (out, refused)
+    }
+
+    /// Split `orders` among the offices `m` holds. Err if an order belongs to
+    /// an office it does not hold (it can be proposed instead).
+    pub fn split_for_member(
+        &self,
+        m: MemberId,
+        orders: &[(OrderDto, Order)],
+    ) -> Result<[Vec<(OrderDto, Order)>; 4], String> {
+        let (parts, refused) = self.split_orders(m, orders);
+        match refused.into_iter().next() {
+            Some((_, why)) => Err(why),
+            None => Ok(parts),
+        }
     }
 }
 

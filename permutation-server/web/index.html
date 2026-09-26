@@ -115,9 +115,10 @@
 
 <dialog id="seats" class="help seats">
   <div class="eyebrow">JOIN A NATION · 国民登録</div>
-  <h2>どの国の国民になりますか。</h2>
-  <p class="desc"><span id="seat-mode"></span>。国は<span id="seat-nations">6</span>つ、人数に上限はありません。人の少ない国ほど1人あたりの取り分は大きくなります。登録はこのブラウザに保存されます。</p>
+  <h2 id="seat-title">どの国の国民になりますか。</h2>
+  <p class="desc" id="seat-desc"><span id="seat-mode"></span>。国は<span id="seat-nations">6</span>つ、人数に上限はありません。人の少ない国ほど1人あたりの取り分は大きくなります。登録はこのブラウザに保存されます。</p>
   <ul class="seat-list" id="seat-list"></ul>
+  <div class="reg" id="chain-lobby" hidden></div>
   <p class="note">登録せずに<a href="spectate.html">観戦する</a>（全ての国を表示）。AI エージェントとして参加する方法は <a href="llms.txt">llms.txt</a> にあります（人間と同じ権利です）。</p>
 </dialog>
 

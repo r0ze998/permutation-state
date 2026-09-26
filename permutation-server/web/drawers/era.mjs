@@ -1,9 +1,11 @@
 // Milestones of the four paths and the eras (V5 §6), and my merit with the
-// payout if the season ended now (V5 §7).
+// payout if the season ended now (V5 §7). Once the season is over, both
+// drawers open with the result and the prize claim (claim.mjs, chain mode).
 import * as T from '../i18n.mjs';
 import { html, fmt, usdc } from '../util.mjs';
 import { S, civN } from '../state.mjs';
 import { activityWindows, equalSharePct, eraPathsNeeded } from '../rules.mjs';
+import { claimCard } from '../claim.mjs';
 
 export function drawerEra() {
   const v = S.view, A = v.achievements; if (!A) return '';
@@ -18,7 +20,7 @@ export function drawerEra() {
   const next = mine.era + 1;
   const pr = v.projection;
   const tiers = [0, 1, 2, 3, 4];
-  return html`<div class="eyebrow">ERAS · 4つの道と時代</div><h2>${civN(S.myCiv)} · 第${mine.era}時代 · ${mine.points}点</h2>
+  return html`${v.over ? claimCard(v) : ''}<div class="eyebrow">ERAS · 4つの道と時代</div><h2>${civN(S.myCiv)} · 第${mine.era}時代 · ${mine.points}点</h2>
     <p class="drawer-intro">節目を1つ達成するごとに点が入り、同じ段階の節目を${eraPathsNeeded(1)}つの道（第5段階は${eraPathsNeeded(5)}つ）で達成すると新しい時代に入ります。領土・人口・宗主・条約・占領都市は<b>シーズン終了時の状態</b>で判定するので、失えば取り消されます（下は「今終わったら」）。賞金プールは国民のいる国の点の比で分けます。</p>
     <table class="grid era-grid"><thead><tr><th>段階</th>${T.PATH_JA.map(n => html`<th>${n}</th>`)}</tr></thead><tbody>
     ${tiers.map(k => html`<tr><td><b>${k + 1}</b><small> ${A.tierPoints[k]}点</small></td>${T.PATH_JA.map((_, p) => html`<td class="${mine.tiers[p] > k ? 'met' : mine.tiers[p] === k ? 'next' : ''}">${mine.tiers[p] > k ? '✓ ' : ''}${tierText[p](k)}</td>`)}</tr>`)}
@@ -35,7 +37,7 @@ export function drawerMerit() {
   if (!m) return html`<div class="eyebrow">MERIT</div><h2>功績</h2><p class="desc">観戦中は表示されません。</p>`;
   const share = pr?.nationShare?.[S.myCiv] ?? 0, eq = pr?.equalEach?.[S.myCiv] ?? 0;
   const max = Math.max(1, ...MERIT_BARS.map(b => m.merit[b]));
-  return html`<div class="eyebrow">MERIT · 功績と見込み</div><h2>今終わったら ${usdc(m.projectedPayout)} USDC</h2>
+  return html`${v.over ? claimCard(v) : ''}<div class="eyebrow">MERIT · 功績と見込み</div><h2>${v.over ? `シーズン終了時の配分 ${usdc(m.projectedPayout)} USDC` : `今終わったら ${usdc(m.projectedPayout)} USDC`}</h2>
     <p class="drawer-intro">国の取り分は ${usdc(share)} USDC。その${equalSharePct(v)}%は活動した国民で均等（1人 ${usdc(eq)}・上限は参加費の半分）、残りは功績の比で、国が点を取った道の功績ほど重く分けます。活動した国民＝${activityWindows(v)}区間のうち${m.windowsNeeded}区間以上で命令・献策・支持・投票をした人（あなた：${m.activeWindows}区間${m.active ? ' ✓' : ''}）。</p>
     <div class="section-title">あなたの功績 · 合計 ${m.merit.total.toFixed(1)}</div>
     ${MERIT_BARS.map(b => html`<div class="meter"><span>${T.MERIT_JA[b]} ${m.merit[b].toFixed(1)}</span><div class="bar"><i style="width:${(100 * m.merit[b] / max).toFixed(0)}%"></i></div></div>`)}

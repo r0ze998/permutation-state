@@ -1,10 +1,13 @@
 // The nation plaza (V5 §12): offices, election, proposals, recalls, and the
-// governance actions sent from it.
+// governance actions sent from it. In chain mode each action is a SubmitGov
+// signed in this browser (chainplay.mjs), sent only while the tick takes
+// commitments; after the deadline it waits for the next tick.
 import * as T from '../i18n.mjs';
 import * as api from '../api.mjs';
 import { html, attrJson, toast } from '../util.mjs';
-import { S, civN, held, invalidate } from '../state.mjs';
-import { describeOrder } from '../orders.mjs';
+import { S, civN, held, invalidate, nationRoster } from '../state.mjs';
+import { describeOrder, GOV_VERB, reportGov } from '../orders.mjs';
+import * as chainplay from '../chainplay.mjs';
 import { MAX_OFFICES, RECALL_ACTIVE_TICKS, RECALL_TICKS, activityWindows, recallNeeded } from '../rules.mjs';
 import { poll } from '../sync.mjs';
 
@@ -15,7 +18,7 @@ const you = html` <span class="tag positive">あなた</span>`;
 export function drawerNation() {
   const v = S.view, g = v.gov; if (!g) return html`<p class="desc">読み込んでいます…</p>`;
   const me = S.memberId, mine = held();
-  const roster = v.roster || [];
+  const roster = nationRoster(v); // /api/state roster: my nation's members (the AI roster is `aiRoster`)
   const standing = v.member?.standingFor || [];
   const props = [...g.proposals].sort((a, b) => b.supporters - a.supporters);
   const office = o => html`<div class="office-row ${o.holder?.id === me ? 'me' : ''}"><span class="og">${T.ROLE_GLYPH[o.role]}</span><div class="main"><div class="title">${T.ROLE_JA[o.role]} · ${who(o.holder)}${o.holder?.id === me ? you : ''}</div>
@@ -45,9 +48,9 @@ export function drawerNation() {
     <div class="section-title">国民 ${roster.length}人</div>${roster.map(m => html`<div class="list-row" style="cursor:default"><div class="main"><div class="title">${who(m)}${m.id === me ? you : ''}</div><div class="meta">功績 ${m.merit.toFixed(1)} · 活動 ${m.activeWindows}/${windows}区間${m.active ? ' ✓' : ''}</div></div></div>`)}`;
 }
 
-const GOV_VERB = { Vote: '投票', Support: '支持', Stand: '立候補', Recall: 'リコールに賛成', Propose: '献策' };
 /** Send one governance action (vote, support, stand, recall). */
 export async function govAction(action, button) {
+  if (S.view?.chain) return govChain(action, button);
   if (button) button.disabled = true;
   const r = await api.post('/api/gov', { action });
   const what = GOV_VERB[action.type];
@@ -63,4 +66,22 @@ export function toggleStand(role, button) {
   const cur = S.view.member?.standingFor || [];
   const roles = cur.includes(role) ? cur.filter(r => r !== role) : [...cur, role];
   return govAction({ type: 'Stand', roles }, button);
+}
+
+/**
+ * Chain mode: sign and send the action now (with any that waited), or keep
+ * it for the next tick when the commitments are closed.
+ */
+async function govChain(action, button) {
+  if (!S.session) { toast(chainplay.NO_KEY, 'error'); return; }
+  if (chainplay.chainPhase() !== 'commit') {
+    chainplay.queueGov(action);
+    if (action.type === 'Vote') S.myVotes[action.role] = action.candidate;
+    toast(`締切のあと（公開・解決中）なので、${GOV_VERB[action.type]}は次のティックの受付が始まったら送ります。`);
+    invalidate('drawer', 'nextTurn', 'notifs');
+    return;
+  }
+  if (button) button.disabled = true;
+  reportGov(await chainplay.submitGov([action]));
+  poll();
 }

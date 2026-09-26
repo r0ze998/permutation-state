@@ -1,5 +1,6 @@
 //! Views per viewer (seat / watcher / spectator), agent preflight, and the
-//! ledger learning an outside agent's commitment from its batch.
+//! ledger following what landed on chain: an outside member's commitment
+//! learnt from its batch, a stale record replaced, an unsent one dropped.
 
 use permutation_rules::decision::{decision_digest, policy_id, rationale_hash};
 use permutation_rules::genesis::{nation_entries, new_season};
@@ -11,7 +12,7 @@ use permutation_rules::tech::Tech;
 use permutation_rules::{Preset, Ruleset};
 use permutation_server::api::{preflight, world_view};
 use permutation_server::fog::Fog;
-use permutation_server::ledger::Ledger;
+use permutation_server::ledger::{Ledger, DEFAULT_POLICY};
 
 fn season() -> (Ruleset, WorldState) {
     let rules = Ruleset::new(Preset::Blitz);
@@ -135,7 +136,7 @@ fn ledger_verifies_an_outside_agents_reveal() {
         "北へ探索する".as_bytes().to_vec(),
     );
     let digest = decision_digest(0, &obs, &policy_id(&policy), &rationale_hash(&salt, &text));
-    ledger.ingest_external(&OrderBatch {
+    ledger.land(&OrderBatch {
         civ,
         tick: 0,
         role: Role::General,
@@ -145,7 +146,7 @@ fn ledger_verifies_an_outside_agents_reveal() {
         orders: vec![],
     });
     assert!(ledger.record(0, civ, 0).unwrap().revealed_at.is_none());
-    ledger.ingest_external(&OrderBatch {
+    ledger.land(&OrderBatch {
         civ,
         tick: 1,
         role: Role::General,
@@ -174,7 +175,7 @@ fn ledger_verifies_an_outside_agents_reveal() {
         &policy_id(b"x"),
         &rationale_hash(&[1; 16], b"y"),
     );
-    ledger.ingest_external(&OrderBatch {
+    ledger.land(&OrderBatch {
         civ: 4,
         tick: 0,
         role: Role::General,
@@ -183,7 +184,7 @@ fn ledger_verifies_an_outside_agents_reveal() {
         decision_digest: digest2,
         orders: vec![],
     });
-    ledger.ingest_external(&OrderBatch {
+    ledger.land(&OrderBatch {
         civ: 4,
         tick: 1,
         role: Role::General,
@@ -198,6 +199,64 @@ fn ledger_verifies_an_outside_agents_reveal() {
         }],
     });
     assert!(!ledger.record(0, 4, 0).unwrap().verified());
+}
+
+/// Chain mode: the ledger follows what the program resolved. A decision
+/// sealed here whose batch never landed goes; one that landed with another
+/// digest is replaced by what landed, and is never revealed from the stale
+/// rationale.
+#[test]
+fn the_ledger_keeps_what_landed() {
+    let (_, state) = season();
+    let fog = Fog::new(&state);
+    let mut ledger = Ledger::new(b"test");
+    ledger.observe(&state, &fog);
+    let batch = |civ: CivId, role: Role, tick: u16, digest, orders| OrderBatch {
+        civ,
+        tick,
+        role,
+        member: 0,
+        adopt: vec![],
+        decision_digest: digest,
+        orders,
+    };
+    let stale = ledger.commit(0, 1, Role::General as u8, DEFAULT_POLICY, "plan A");
+    ledger.commit(0, 2, Role::Steward as u8, DEFAULT_POLICY, "never sent");
+    let kept = ledger.commit(0, 3, Role::Science as u8, DEFAULT_POLICY, "sent");
+    let obs = ledger.root(0, 1).unwrap();
+    let (salt, text) = ([9u8; 16], b"plan B".to_vec());
+    let landed = decision_digest(
+        0,
+        &obs,
+        &policy_id(DEFAULT_POLICY.as_bytes()),
+        &rationale_hash(&salt, &text),
+    );
+    assert_ne!(landed, stale);
+    ledger.land(&batch(1, Role::General, 0, landed, vec![]));
+    ledger.land(&batch(3, Role::Science, 0, kept, vec![]));
+    ledger.keep_landed(0, &[(1, Role::General as u8), (3, Role::Science as u8)]);
+    let r = ledger.record(0, 1, 0).unwrap();
+    assert_eq!((r.digest, r.external, r.revealed_at), (landed, true, None));
+    assert!(ledger.record(0, 2, Role::Steward as u8).is_none());
+    let r = ledger.record(0, 3, Role::Science as u8).unwrap();
+    assert_eq!(
+        (r.digest, r.external, r.text.as_str()),
+        (kept, false, "sent")
+    );
+    // Only the decision this server sealed is revealed from here.
+    assert!(ledger.reveals(1, Role::General as u8, 1, &[]).is_empty());
+    assert_eq!(ledger.reveals(3, Role::Science as u8, 1, &[]).len(), 1);
+    // The member's own reveal fills the replaced record in, and checks out.
+    let reveal = Order::RevealRationale {
+        tick: 0,
+        policy: DEFAULT_POLICY.as_bytes().to_vec(),
+        salt,
+        text,
+    };
+    ledger.land(&batch(1, Role::General, 1, [0; 32], vec![reveal]));
+    let r = ledger.record(0, 1, 0).unwrap();
+    assert_eq!(r.revealed_at, Some(1));
+    assert!(r.verified() && r.policy == DEFAULT_POLICY);
 }
 
 #[test]
@@ -228,4 +287,56 @@ fn reveals_fit_in_one_transaction_and_keep_their_order() {
         ledger.commit(t, 1, 0, "bot/test", "short");
     }
     assert_eq!(ledger.reveals(1, 0, 3, &[]).len(), 3);
+}
+
+/// `/api/state` for a member or a nation's watcher carries both the
+/// operator's AI roster (`aiRoster`, the object `/api/lobby` and
+/// `/api/roster` serve as `roster`) and the nation's member list (`roster`);
+/// the list never replaces the AI roster. A spectator has no nation.
+#[test]
+fn a_nations_view_has_the_ai_roster_and_its_members() {
+    use permutation_server::play::{Game, Viewer};
+    let g = Game::new(30, 2);
+    let ai = g.roster_json();
+    assert_eq!(ai["aiCount"], 12);
+    for (viewer, civ) in [
+        (Viewer::Member(0), 0),
+        (Viewer::Watch(1, Some(2)), 1),
+        (Viewer::Watch(3, None), 3),
+    ] {
+        let v = g.state_json(viewer);
+        assert_eq!(v["aiRoster"], ai, "{viewer:?}");
+        let r = &v["aiRoster"];
+        assert!(
+            r["aiCount"].is_u64()
+                && r["bountyEach"].is_string()
+                && r["revealed"].is_boolean()
+                && r["fallen"].is_array()
+                && r["homeTick"].is_u64(),
+            "{r}"
+        );
+        let list = v["roster"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{viewer:?}: {}", v["roster"]));
+        let ids: Vec<u64> = g
+            .state
+            .members
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| m.civ == civ)
+            .map(|(i, _)| i as u64)
+            .collect();
+        assert_eq!(
+            list.iter()
+                .map(|x| x["id"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            ids,
+            "{viewer:?}"
+        );
+        assert!(list.iter().all(|x| x["merit"].is_number()));
+    }
+    let s = g.state_json(Viewer::Spectator);
+    assert_eq!(s["aiRoster"], ai);
+    assert_eq!(s["roster"], ai, "a spectator's roster stays the AI roster");
+    assert_eq!(g.lobby_json(Viewer::Member(0))["roster"], ai);
 }

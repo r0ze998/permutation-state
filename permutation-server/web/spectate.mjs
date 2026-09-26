@@ -8,7 +8,7 @@ import { WorldMap } from './map.mjs';
 import * as T from './i18n.mjs';
 import * as V from './verify.mjs';
 import * as api from './api.mjs';
-import { $, $$, html, setHtml, fmtOr, short, usdcFixed, singleFlight, logOnce } from './util.mjs';
+import { $, $$, html, setHtml, fmtOr, short, usdcFixed, singleFlight, logOnce, verifyCommand, verifyNote } from './util.mjs';
 
 // api.get/tryGet: this page never sets a member token, so no X-Member-Token is sent.
 const hash = h => short(h, 8, 6, '—');
@@ -20,8 +20,20 @@ map.setLens('political');
 const civName = id => T.civName(S.view?.civs?.[id]?.name ?? `#${id}`);
 const color = id => T.CIV_COLORS[id % T.CIV_COLORS.length];
 
+/** Chain mode before the season plays: say so (and poll) instead of "cannot connect". */
+async function waitForSeason() {
+  const lobby = await api.tryGet('/api/lobby');
+  await api.untilPlaying(lobby, phase => {
+    $('#loading h2').textContent = 'シーズンの開始を待っています';
+    setHtml($('#loading-text'), phase === 'registering'
+      ? html`登録を受け付けています。締切で、人数に関わらずシーズンが始まります。<br><a href="./">ウォレットで国民として参加する →</a>`
+      : html`シーズンを準備しています（世界の生成と着任）…`);
+  });
+}
+
 async function boot() {
   try {
+    await waitForSeason();
     map.setMap(await api.get('/api/map'));
     await pollOnce();
     $('#loading').hidden = true;
@@ -106,7 +118,7 @@ function renderChain() {
   const t = c.lastTick;
   const er = /^https?:\/\//.test(String(c.endpoints?.er ?? '')) ? c.endpoints.er : null;
   const explorer = sig => (er ? `https://explorer.solana.com/tx/${encodeURIComponent(sig)}?cluster=custom&customUrl=${encodeURIComponent(er)}` : null);
-  const verify = c.gateway ? `cargo run --release --bin verify -- \\\n  --gateway ${c.gateway} \\\n  --base ${c.endpoints?.base} --er ${c.endpoints?.er}` : '';
+  const verify = verifyCommand(c);
   const tx = t && explorer(t.signature);
   setHtml($('#chain'), html`<dl>
     <dt>シーズン</dt><dd>${c.seasonId}</dd>
@@ -115,7 +127,7 @@ function renderChain() {
     <dt>直近の解決</dt><dd>${t ? `ティック ${t.tick} · ${fmtOr(t.cu)} CU` : html`<span class="none">まだありません</span>`}</dd>
     ${t ? html`<dt>取引</dt><dd>${tx ? html`<a href="${tx}" target="_blank" rel="noopener">${hash(t.signature)}</a>` : hash(t.signature)}</dd>
     <dt>前の根</dt><dd>${hash(t.preRoot)}</dd><dt>新しい根</dt><dd>${hash(t.root)}</dd>` : ''}
-  </dl>${verify ? html`<pre title="このシーズンを手元で再計算して、すべての根を照合します">${verify}</pre>` : ''}`);
+  </dl>${verify ? html`<pre title="このシーズンを手元で再計算して、すべての根を照合します">${verify.text}</pre><p class="verify-note">${verifyNote(verify)}</p>` : ''}`);
 }
 
 function renderFeed() {

@@ -1,10 +1,34 @@
 // The order dock: office budgets, drafted orders (chips), the seal state
-// and the commit / end-turn button.
+// and the commit / end-turn button. In chain mode the seal state is each
+// office's own: sent from this browser, seen on chain (the gateway's /tick
+// flags), revealed after the deadline.
 import * as T from '../i18n.mjs';
 import { $, html, setHtml } from '../util.mjs';
 import { S, held, officeInfo, spendable, isWatching } from '../state.mjs';
-import { used, isDirty } from '../orders.mjs';
+import { used, isDirty, turnEnded } from '../orders.mjs';
+import { chainPhase, officeStates, NO_KEY } from '../chainplay.mjs';
 import { BANK_TICKS, BUDGET_TEXT } from '../rules.mjs';
+
+/** One office's seal in chain mode: [mark, what it means]. */
+function sealMark(s) {
+  if (s.revealed) return ['公開', '公開済み（解決を待っています）'];
+  if (s.onChain) return ['✓', 'チェーンで封印を確認'];
+  if (s.committed) return ['送信済', '送信済み（チェーンでの確認待ち）'];
+  if (s.sending) return ['…', '送信中'];
+  if (s.failed) return ['✕', `送れませんでした：${T.errorText(s.failed)}`];
+  return ['—', 'まだ確定していません'];
+}
+
+/** Chain mode: the seal marks of the offices held, and their explanation. */
+function chainSeal(states, dirty) {
+  if (!states.length) return { markup: '', title: '' };
+  const marks = states.map(s => [s, sealMark(s)]);
+  const title = marks.map(([s, [, what]]) => `${T.ROLE_JA[s.role]}：${what}${s.digest ? `\ndecision_digest ${s.digest}` : ''}`).join('\n');
+  const dg = states.find(s => s.digest)?.digest;
+  if (dirty) return { markup: html`<span class="seal">確定で封印</span>`, title };
+  if (!states.some(s => s.committed || s.sending || s.failed)) return { markup: '', title };
+  return { markup: html`<span class="seal">${states.some(s => s.committed) ? '🔒 ' : ''}${dg ? `封印 ${dg.slice(0, 6)}… ` : ''}${marks.map(([s, [m]]) => `${T.ROLE_GLYPH[s.role]}${m}`).join(' ')}</span>`, title };
+}
 
 /** Pips per office held; the bank is a reservoir counter, not more pips. */
 function officePips(role) {
@@ -27,13 +51,14 @@ export function renderDock() {
     : html`<div class="budget-text">役職がないので、命令はすべて<b>献策</b>になります${props ? `（${props}件）` : ''}</div>`);
   setHtml($('#chips'), S.drafts.length
     ? S.drafts.map((d, i) => html`<span class="chip ${d.usdc ? 'usdc' : ''} ${d.proposal ? 'proposal' : ''}" data-chip="${i}" title="${d.label}${d.proposal ? `（${T.ROLE_JA[d.office]}への献策）` : ''}"><span>${d.proposal ? '✎' : d.glyph}</span><span class="t">${d.label}</span>${d.proposal ? html`<span class="pt">献策→${T.ROLE_JA[d.office]}</span>` : ''}<button class="x" type="button" data-remove="${i}" aria-label="取り消す">×</button></span>`)
-    : html`<span class="empty">${offices.length ? '命令はまだありません。地図で部隊や都市を選んでください（Space＝次の判断）。担当外の命令は献策になります。' : 'あなたは役職についていません。地図で選んだ命令は、担当の役職者への献策になります。国の広場で投票・支持・リコールもできます。'}</span>`);
+    : html`<span class="empty">${v.chain && !S.session ? NO_KEY : offices.length ? '命令はまだありません。地図で部隊や都市を選んでください（Space＝次の判断）。担当外の命令は献策になります。' : 'あなたは役職についていません。地図で選んだ命令は、担当の役職者への献策になります。国の広場で投票・支持・リコールもできます。'}</span>`);
   if (S.pulseChip !== null) { // highlight a chip just added
     const chip = $(`#chips [data-chip="${S.pulseChip}"]`);
     S.pulseChip = null;
     if (chip) { chip.classList.add('pulse'); setTimeout(() => chip.classList.remove('pulse'), 900); }
   }
   const dirty = isDirty();
+  if (v.chain) { renderChainCommit(v, offices, dirty); return; }
   const resolving = !v.paused && v.secondsLeft < .6;
   // Nothing drafted and this tick's turn not ended yet: the button ends the turn (an empty sealed batch per office).
   const idle = !dirty && offices.length && !v.member?.ready;
@@ -44,4 +69,22 @@ export function renderDock() {
   $('#digest').title = dg ? `decision_digest ${dg}\nobs_root ${v.decision?.obsRoot}` : '';
   const disabled = S.committing || v.over || v.phase === 'lobby' || isWatching() || (!dirty && !idle);
   setHtml($('#commit'), html`<span class="commit-state ${state[0]}">${state[1]}</span><button class="btn ${dirty ? 'primary' : ''}" type="button" id="commit-btn" ${disabled ? 'disabled' : ''}>${dirty ? (offices.length ? '確定する' : '献策する') : idle ? '命令なしで手番を終える' : '確定済み'}<span class="key" style="margin-left:4px">⌃↵</span></button>`);
+}
+
+/** Chain mode: the seal state per office and the button (closed after the deadline, and without the key). */
+function renderChainCommit(v, offices, dirty) {
+  const states = officeStates();
+  const closed = chainPhase(v) !== 'commit';
+  const sending = S.committing || states.some(s => s.sending);
+  const failed = states.some(s => s.failed && !s.committed);
+  const idle = !dirty && offices.length && !turnEnded();
+  const state = closed ? ['resolving', '解決中'] : sending ? ['draft', '送信中…'] : dirty ? ['draft', '下書き · 未確定']
+    : failed ? ['draft', '送れていない役職があります'] : idle ? ['draft', '命令なし · 未確定'] : S.drafts.length ? ['committed', '確定済み ✓'] : ['committed', '手番を終えました'];
+  const seal = chainSeal(states, dirty && offices.length);
+  setHtml($('#digest'), seal.markup);
+  $('#digest').title = seal.title ? `${seal.title}${v.decision?.obsRoot ? `\nobs_root ${v.decision.obsRoot}` : ''}` : '';
+  const keyless = !S.session;
+  const disabled = sending || v.over || closed || keyless || isWatching() || (!dirty && !idle);
+  const label = keyless ? '鍵がないため見るだけ' : closed ? '締切後（解決中）' : dirty ? (offices.length ? '確定する' : '献策する') : idle ? '命令なしで手番を終える' : '確定済み';
+  setHtml($('#commit'), html`<span class="commit-state ${state[0]}">${state[1]}</span><button class="btn ${dirty && !closed && !keyless ? 'primary' : ''}" type="button" id="commit-btn" ${disabled ? 'disabled' : ''}>${label}<span class="key" style="margin-left:4px">⌃↵</span></button>`);
 }

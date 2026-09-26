@@ -307,6 +307,56 @@
 .seat-form .field input { width: 100%; font: 14px/1.4 var(--sans); padding: 7px 9px; border: 1px solid var(--line-warm); border-radius: 6px; background: #fff; }
 .seat-form .row { display: flex; flex-wrap: wrap; gap: 6px; }
 
+/* chain mode: wallet registration steps (lobby.mjs), the wallet picker (connect.mjs) */
+.help.seats { max-height: 92vh; overflow: auto; }
+.reg { display: grid; gap: 8px; margin: 12px 0; font-size: 12.5px; line-height: 1.7; }
+.reg .desc { margin: 2px 0; }
+.reg code, .claim-card code { font: 11px var(--mono); color: var(--ink-soft); }
+.help .reg-steps { margin: 4px 0; gap: 12px; }
+.help .reg-steps > li > span { display: grid; gap: 4px; min-width: 0; }
+.help .reg-steps > li > span > b { font-size: 13px; }
+.help .reg-steps > li.todo { opacity: .55; }
+.help .reg-steps > li.done::before { content: '✓'; color: var(--good); }
+.help .reg-steps > li.active::before { color: var(--green-deep); }
+.btn.small { padding: 3px 9px; font-size: 11px; }
+.wallet-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.wallet-btn { gap: 7px; }
+.wallet-btn small { font-size: 10px; color: var(--muted); font-weight: 400; }
+.wallet-btn.dev { border-style: dashed; }
+.wallet-icon { width: 18px; height: 18px; border-radius: 4px; flex: none; display: inline-block; vertical-align: -4px; }
+.wallet-line { display: inline-flex; align-items: center; gap: 6px; }
+.reg-nations { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px; }
+.reg-nation { all: unset; box-sizing: border-box; cursor: pointer; display: grid; grid-template-columns: 12px 1fr; column-gap: 6px; align-items: center; padding: 6px 8px; border: 1px solid var(--line-warm); border-radius: 7px; background: #fbf8ee; font-size: 12.5px; }
+.reg-nation small { grid-column: 2; font-size: 10.5px; color: var(--ink-soft); }
+.reg-nation .swatch { width: 12px; height: 12px; border-radius: 3px; }
+.reg-nation:hover { border-color: var(--gold); }
+.reg-nation.picked { outline: 2px solid var(--gold-bright); }
+.reg-name { font: 400 17px/1.3 var(--serif); min-width: 8em; }
+.reg-head { display: grid; grid-template-columns: 14px 1fr auto; align-items: center; gap: 10px; }
+.reg-head .swatch { width: 12px; height: 12px; border-radius: 3px; }
+.reg-head .who { display: grid; gap: 1px; font-size: 14px; }
+.reg-head .who small { font-size: 10.5px; color: var(--ink-soft); }
+.reg-done { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line-warm); border-radius: 8px; background: var(--paper-bright); }
+.reg-backup { display: grid; gap: 4px; padding: 9px 11px; border-radius: 7px; background: #f0ede0; }
+.reg-backup.fresh { background: var(--gold-pale); }
+.reg-backup-text { width: 100%; font: 10.5px/1.5 var(--mono); padding: 6px; border: 1px solid var(--line-warm); border-radius: 5px; background: #fff; resize: vertical; }
+.reg-import summary { cursor: pointer; font-size: 11.5px; color: var(--ink-soft); }
+.reg-import input[type="text"] { width: 100%; margin: 6px 0; font: 11px var(--mono); padding: 6px 8px; border: 1px solid var(--line-warm); border-radius: 5px; background: #fff; }
+.reg .seat-none { display: grid; gap: 10px; justify-items: start; padding: 10px 12px; border-radius: 8px; background: var(--warn-bg); }
+.reg .seat-none .btn { text-decoration: none; }
+.reg .seat-error, .claim-card .seat-error { font-size: 12px; color: #a8483c; margin: 2px 0; }
+.reg-notice { font-size: 12px; color: var(--good); margin: 2px 0; }
+.reg-busy, .claim-busy { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink); margin: 2px 0; }
+.past-claims { border-top: 1px solid var(--line-row); padding-top: 4px; }
+.spinner { display: inline-block; width: 12px; height: 12px; margin-right: 6px; vertical-align: -1px; border: 2px solid var(--line); border-top-color: var(--green); border-radius: 50%; animation: spin .8s linear infinite; }
+.reg-busy .spinner, .claim-busy .spinner { margin-right: 0; }
+
+/* the season's result and the prize claim (claim.mjs, in the era and merit drawers) */
+.claim-card { display: grid; gap: 6px; padding: 11px 12px; margin: 0 0 12px; border: 1px solid #d9c998; border-radius: 8px; background: #fbf5e3; }
+.claim-card.done { border-color: #cfdcc6; background: var(--good-bg); }
+.claim-card h3 { font: 400 20px/1.25 var(--serif); margin: 0; }
+.claim-card .desc { margin: 0; }
+
 /* ------------------------------------------------------------------ responsive */
 @media (max-width: 1280px) {
   :root {
@@ -369,5 +419,8 @@
   .summary { max-height: 18vh; }
   .next-turn .lbl small { display: none; }
   .next-turn .lbl b { font-size: 11px; }
+  .help.seats { padding: 22px 16px; }
+  .help .reg-steps > li { grid-template-columns: 26px 1fr; }
+  .reg-nations { grid-template-columns: 1fr 1fr; }
 }
-@media (prefers-reduced-motion: reduce) { .chip.pulse { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .chip.pulse { animation: none; } .spinner { animation: none; } }

@@ -1,7 +1,7 @@
 {
   "name": "@permutation/game-client",
   "version": "0.1.0",
-  "description": "PERMUTATION STATE client for agents and tools: read the world (perfect information), join through x402, sign and relay your orders, commit and reveal your reasoning. Also an MCP server.",
+  "description": "PERMUTATION STATE client for agents, tools and the web client: read the world (perfect information), join through x402, sign and relay your orders, commit and reveal your reasoning. Its core (codec, digests, Solana messages and a member's transactions) needs neither Node nor web3.js. Also an MCP server.",
   "type": "module",
   "license": "MIT",
   "exports": {
@@ -19,7 +19,14 @@
     "./codec": "./src/codec.mjs",
     "./pda": "./src/pda.mjs",
     "./retry": "./src/retry.mjs",
-    "./tools": "./src/tools.mjs"
+    "./tools": "./src/tools.mjs",
+    "./sha256": "./src/sha256.mjs",
+    "./base58": "./src/base58.mjs",
+    "./bytes": "./src/bytes.mjs",
+    "./talk": "./src/talk.mjs",
+    "./talk-node": "./src/talk-node.mjs",
+    "./solana-tx": "./src/solana-tx.mjs",
+    "./player": "./src/player.mjs"
   },
   "bin": {
     "permutation-mcp": "./bin/permutation-mcp.mjs"

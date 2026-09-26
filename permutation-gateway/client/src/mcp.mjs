@@ -26,7 +26,7 @@ export async function runMcp({ env = process.env, input = process.stdin, output 
       const wallet = await loadOrCreateKeypair(path.join(dir, 'wallet.json'));
       const session = await loadOrCreateKeypair(path.join(dir, 'session.json'));
       const f = await game.faucet(wallet.publicKey);
-      return game.joinViaX402({ wallet, session, civ: args.civ, name: args.name, kind: 1, usdcAccount: f.usdcAccount, stand: args.stand || [] });
+      return game.joinViaX402({ wallet, session, civ: args.civ, name: args.name, usdcAccount: f.usdcAccount, stand: args.stand || [] });
     }
     if (name === 'wait_for_next_tick') {
       const now = await game.state();

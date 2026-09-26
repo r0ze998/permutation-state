@@ -6,7 +6,8 @@
 //! office held by a hosted AI member then takes the part in its domain.
 //! Offices held by people (or outside agents) are left to them.
 //! Every office seals its own decision in the ledger and reveals it later
-//! (V5 D17), exactly like a human officer.
+//! (V5 D17), exactly like a human officer, with the same policy id
+//! (`ledger::DEFAULT_POLICY`).
 //!
 //! Hosted AI members also take part in governance: they vote in the vote
 //! window (the incumbent if active, else the candidate with the most merit;
@@ -19,7 +20,7 @@ use std::borrow::Cow;
 
 use crate::bots::{persona_of, Bot};
 use crate::fog::Fog;
-use crate::ledger::Ledger;
+use crate::ledger::{Ledger, DEFAULT_POLICY};
 use permutation_rules::decision::Hash;
 use permutation_rules::gov::{self, GovAction, GovEntry, MemberId, Role, NOBODY};
 use permutation_rules::orders::{split_by_office, Order, OrderBatch};
@@ -140,16 +141,12 @@ impl Planner {
                 }
                 let mut orders = std::mem::take(&mut parts[role.index()]);
                 let adopt = adopt_one(&view, rules, civ, role, &mut orders);
-                let policy = format!(
-                    "{}/{}@2",
-                    if member == NOBODY { "acting" } else { "agent" },
-                    bot.persona.name().to_lowercase()
-                );
+                // The same policy id as every other officer's (V5 §18.2).
                 let digest = ledger.commit(
                     tick,
                     civ,
                     role as u8,
-                    &policy,
+                    DEFAULT_POLICY,
                     &bot.rationale(&view, &orders),
                 );
                 orders.extend(ledger.reveals(civ, role as u8, tick, &orders));

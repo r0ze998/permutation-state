@@ -5,14 +5,19 @@
 //   digest         = sha256("PS/decision/v1" ‖ tick u16le ‖ obs_root ‖ policy_id ‖ rationale_hash)
 // The batch carries only the digest; the next batches reveal policy, salt
 // and text, and anyone can recompute the digest.
-import { createHash, randomBytes } from 'node:crypto';
-import { fromHex as hexToBytes, toHex } from './bytes.mjs';
+import { fromHex as hexToBytes, randomBytes, toHex } from './bytes.mjs';
+import { sha256 as sha } from './sha256.mjs';
 
 export const MAX_POLICY = 64;
 export const MAX_RATIONALE = 512;
+/**
+ * The policy id every officer commits under when it has no reason to name
+ * its own: the operator's AI members, local-mode people and the web client
+ * alike, so the policy tells nothing about who decided (V5 §18.2).
+ */
+export const DEFAULT_POLICY = 'officer@2';
 
 const enc = new TextEncoder();
-const sha = (...parts) => { const h = createHash('sha256'); for (const p of parts) h.update(p); return new Uint8Array(h.digest()); };
 
 /** Cut `s` to at most `max` UTF-8 bytes on a character boundary (as the server does). */
 export function clip(s, max) {
@@ -30,8 +35,8 @@ export function decisionDigest({ tick, obsRoot, policy, salt, text }) {
   return toHex(sha(enc.encode('PS/decision/v1'), t, hexToBytes(obsRoot), pid, rh));
 }
 
-/** A fresh commitment for `tick` against the observation root the server published. */
-export function commit({ tick, obsRoot, policy, text }) {
+/** A fresh commitment for `tick` against the observation root the server published (policy: DEFAULT_POLICY unless given). */
+export function commit({ tick, obsRoot, policy = DEFAULT_POLICY, text }) {
   const record = { tick, obsRoot, policy: clip(policy, MAX_POLICY), salt: toHex(randomBytes(16)), text: clip(text || '', MAX_RATIONALE) };
   return { ...record, digest: decisionDigest(record) };
 }

@@ -21,9 +21,10 @@
 // This module is the facade; the parts live in http.mjs (transport and
 // errors), offices.mjs (which office gives which order), batch.mjs (packing
 // a batch), x402-client.mjs (registration) and keys.mjs (key files).
-import { signTalk, talkBytes } from './talk.mjs';
+import { talkBytes } from './talk.mjs';
+import { signTalk } from './talk-node.mjs';
 import { randomBytes } from 'node:crypto';
-import { PublicKey, Transaction } from '@solana/web3.js';
+import { PublicKey, Transaction, TransactionInstruction } from '@solana/web3.js';
 import { packBatch } from './batch.mjs';
 import { fromHex, toHex } from './bytes.mjs';
 import { ChainClient } from './chain.mjs';
@@ -31,7 +32,12 @@ import { BATCH_BYTES, orderCommitment } from './codec.mjs';
 import { commit } from './decision.mjs';
 import { DEFAULT_GATEWAY, DEFAULT_SERVER, errorCode, GameError, HttpError, requestJson } from './http.mjs';
 import { splitByOffice } from './offices.mjs';
+import { ata, createAtaIdempotentIx } from './player.mjs';
 import { joinViaX402 } from './x402-client.mjs';
+
+/** A player.mjs instruction (base58 keys, bytes) as web3.js takes it. */
+const web3Ix = ix => new TransactionInstruction({ programId: new PublicKey(ix.programId),
+  keys: ix.keys.map(k => ({ pubkey: new PublicKey(k.pubkey), isSigner: k.isSigner, isWritable: k.isWritable })), data: Buffer.from(ix.data) });
 
 // Re-exported for existing importers of game.mjs.
 export { BATCH_BYTES, GameError, HttpError };
@@ -280,19 +286,39 @@ export class GameClient {
 
   /**
    * After the season is finalized: claim your prize and your share of the
-   * nation treasury into `usdcAccount` (a test-USDC account your wallet
-   * owns, e.g. the one from `faucet`). Your wallet signs; the gateway only
-   * pays the fee.
+   * nation treasury into `usdcAccount` (a token account of the season's
+   * mint your wallet owns). Without one: your associated token account if
+   * you have it, else your largest account of the mint (GET /usdc), else
+   * your associated token account, created in the same transaction with the
+   * gateway paying the rent. Your wallet signs; the gateway only pays the
+   * fee. (The faucet is not needed, and closes with registration.)
    */
   async claim({ wallet, usdcAccount }) {
     const relay = await this.get(this.gateway, '/claim-relay');
     if (relay.status !== 'Finalized') throw new GameError('NotFinalized', `the season is ${relay.status}; claims open once it is Finalized`);
     const chain = await this.chainClient();
-    const tx = new Transaction().add(...chain.claim({ wallet: wallet.publicKey, dest: new PublicKey(usdcAccount), mint: new PublicKey(relay.mint) }));
+    const { dest, create } = usdcAccount ? { dest: String(usdcAccount), create: false } : await this.claimDestination(wallet.publicKey.toBase58(), relay.mint);
+    const prefix = create ? [web3Ix(createAtaIdempotentIx({ payer: relay.feePayer, owner: wallet.publicKey.toBase58(), mint: relay.mint }))] : [];
+    const tx = new Transaction().add(...prefix, ...chain.claim({ wallet: wallet.publicKey, dest: new PublicKey(dest), mint: new PublicKey(relay.mint) }));
     tx.feePayer = new PublicKey(relay.feePayer);
     tx.recentBlockhash = relay.blockhash;
     tx.partialSign(wallet);
     return this.post(this.gateway, '/claim-relay', { tx: tx.serialize({ requireAllSignatures: false }).toString('base64'), lastValidBlockHeight: relay.lastValidBlockHeight });
+  }
+
+  /**
+   * Where a claim of `owner` (base58) pays into, for `mint`: `{dest,
+   * create}` — its associated token account if it exists, else its largest
+   * token account of the mint (GET /usdc), else the associated one, to be
+   * created (`create`).
+   */
+  async claimDestination(owner, mint) {
+    const mine = ata(owner, mint);
+    const u = await this.get(this.gateway, `/usdc?owner=${owner}`).catch(() => null);
+    const accounts = u?.mint === mint ? (u.accounts ?? []) : [];
+    if (accounts.some(a => a.address === mine)) return { dest: mine, create: false };
+    if (accounts.length) return { dest: accounts[0].address, create: false };
+    return { dest: mine, create: true };
   }
 
   /** Sign and relay one governance action (V5 §5): Stand, Vote, Propose, Support, Recall. */

@@ -102,6 +102,102 @@ export function blockedText(b) {
   }
 }
 
+// ------------------------------------------------------------------ chain, gateway and wallet errors
+// Keys are the gateway's `code`s, the program's error names (codec.mjs
+// CHAIN_ERRORS) and the web client's own (wallet.mjs, session.mjs,
+// chainio.mjs). Every one reads the same whoever the member is.
+const TICK_CLOSED = 'このティックは締め切られました。次のティックで出し直してください';
+export const CHAIN_ERROR_JA = {
+  // registration (x402 / program)
+  SessionInUse: 'このゲーム内の鍵はすでに別の国民が使っています。別のウォレットで登録してください。',
+  KindHidden: 'このシーズンは国民の種別を公開しません（「未申告」でだけ登録できます）。',
+  SeasonFull: 'このシーズンは満員です。',
+  RegistrationClosed: '登録は締め切られました。',
+  WrongStatus: 'シーズンが、この操作を受け付ける段階ではありません。',
+  InvalidName: 'この名前は使えません（24バイトまで）。',
+  AlreadyInitialized: 'このウォレットは、すでにこのシーズンの国民です。',
+  AlreadyMember: 'このウォレットは、すでにこのシーズンの国民です。',
+  InsufficientFunds: 'USDC が足りません。テスト USDC を受け取るか、残高を確認してください。',
+  X402Mismatch: '支払いの条件がこのシーズンと合わないため、署名を求めませんでした。',
+  RegistrationInFlight: 'このウォレットの登録を送信中です。少し待ってから確かめてください。',
+  InvalidPayment: 'ゲートウェイが支払いの取引を受け付けませんでした。',
+  SettlementFailed: '支払いを送れませんでした（登録はされていません）。もう一度お試しください。',
+  AlreadyProcessed: 'この取引は送信済みです。',
+  TokenError: 'USDC の口座でエラーが起きました（残高と口座を確かめてください）。',
+  SimulationFailed: 'この取引は失敗する見込みのため、送りませんでした。',
+  NonCanonicalTransaction: 'ゲートウェイが取引の形を受け付けませんでした。',
+  PinMismatch: 'ゲームサーバーとゲートウェイのシーズンが一致しません。',
+  // claims
+  AlreadyClaimed: '賞金はすでに受け取り済みです。',
+  NothingToClaim: '受け取れる賞金はありません。',
+  NotFinalized: 'まだ精算中です（シーズン終了から最長で約1時間）。精算が終わると受け取れます。',
+  SeasonNotOver: 'シーズンはまだ終わっていません。',
+  NoSuchMember: 'このウォレットは、そのシーズンの国民ではありません。',
+  UnknownSeason: 'そのシーズンは、このゲートウェイで受け取れません。',
+  // wallet and keys
+  WalletRejected: 'ウォレットで取り消されました。',
+  WalletError: 'ウォレットでエラーが起きました。',
+  WalletUnsupported: 'このウォレットは使えません。',
+  WalletModified: 'ウォレットが取引を書き換えました。署名は送っていません。',
+  WalletBadSignature: 'ウォレットの署名を確認できませんでした。',
+  NoWallet: 'ウォレットが接続されていません。',
+  NoAccount: 'ウォレットに、このネットワークで使えるアカウントがありません。',
+  SessionMismatch: 'この鍵は、登録されているゲーム内の鍵と一致しません。',
+  BadBackup: '鍵のバックアップを読めませんでした（16進64文字の鍵が必要です）。',
+  InsecureContext: 'https か 127.0.0.1 で開いてください（この接続ではブラウザの暗号機能が使えません）。',
+  NoEd25519: 'このブラウザは Ed25519 署名に対応していません。最新の Chrome・Edge・Firefox・Safari で開いてください。',
+  BlockhashExpired: '取引の有効期限が切れました（承認に時間がかかったため）。もう一度押すと、新しい条件で署名を求めます。',
+  // the gateway
+  RateLimited: 'リクエストが多すぎます。少し待ってからもう一度お試しください。',
+  OperatorLowFunds: '運営の手数料用の SOL が不足しています。しばらくしてからお試しください。',
+  FaucetCooldown: 'テスト USDC は受け取ったばかりです。少し待ってからお試しください。',
+  FaucetBusy: 'テスト USDC の配布が混み合っています。少し待ってからお試しください。',
+  FaucetDisabled: 'このネットワークにはテスト USDC の配布がありません。',
+  RelayMismatch: 'ゲートウェイの応答がこのシーズンと合わないため、署名しませんでした。',
+  RelayRejected: 'ゲートウェイがこの取引を受け付けませんでした。',
+  WorldUnavailable: 'チェーンのシーズンをまだ読めません。少し待ってからお試しください。',
+  Unavailable: 'いまは受け付けていません。少し待ってからお試しください。',
+  NoGateway: 'ゲートウェイの場所がわかりません。',
+  // playing (sealed orders, governance)
+  WrongTick: TICK_CLOSED,
+  TickFrozen: TICK_CLOSED,
+  WrongPhase: 'いまは受け付けていない段階です（確定は各ティックの締切まで）。次のティックで出し直してください。',
+  CommitMismatch: '封印した命令と公開した命令が一致しません。',
+  NotOfficer: 'この役職の担当者ではありません。',
+  BadSignature: '署名を確認できませんでした（鍵が登録と一致しません）。',
+  TooManySeals: 'このティックに確定できる回数の上限に達しました。',
+  BatchTooLarge: '命令が多すぎて1回の確定に収まりません。減らしてください。',
+  MissingRationale: '前に封印した判断メモの公開が抜けています。',
+  WrongOffice: '担当外の役職の命令です。',
+  VacantOffice: 'この役職は空席です。',
+  InvalidSeal: '封印の内容が正しくありません。',
+  TooManyCommits: 'このティックに確定できる回数の上限に達しました。',
+  TalkRefused: 'メッセージを送れませんでした（このティックは締め切られたか、上限に達しました）。',
+  NotAMember: 'このシーズンの国民ではありません。',
+  network: 'サーバーに届きませんでした',
+};
+const CODE_WORD = new RegExp(`\\b(${Object.keys(CHAIN_ERROR_JA).filter(k => /^[A-Z]/.test(k)).join('|')})\\b`);
+
+/**
+ * A chain, gateway or wallet error in Japanese: `{code, error}` (a
+ * chainio.mjs result, a thrown Error with `code`) or a message string. By
+ * code first, then a program error named in the text, then the common
+ * wallet and RPC wordings; anything else passes through.
+ */
+export function errorText(e) {
+  if (e === null || e === undefined || e === '') return '';
+  const code = typeof e === 'object' ? e.code : null;
+  const text = typeof e === 'object' ? String(e.error ?? e.message ?? '') : String(e);
+  if (typeof code === 'string' && CHAIN_ERROR_JA[code]) return CHAIN_ERROR_JA[code];
+  const named = text.match(CODE_WORD);
+  if (named) return CHAIN_ERROR_JA[named[1]];
+  if (text === 'network') return CHAIN_ERROR_JA.network;
+  if (/insufficient (funds|lamports)/i.test(text)) return CHAIN_ERROR_JA.InsufficientFunds;
+  if (/blockhash not found|block height exceeded|blockhash.*expired|expired.*blockhash/i.test(text)) return CHAIN_ERROR_JA.BlockhashExpired;
+  if (code === 4001 || /user rejected|rejected the request|denied/i.test(text)) return CHAIN_ERROR_JA.WalletRejected;
+  return text || String(code ?? '');
+}
+
 export function itemName(item) {
   if (!item) return '';
   if (item.kind === 'Building') return BUILDING[item.building] || item.building;

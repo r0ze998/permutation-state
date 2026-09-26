@@ -1,31 +1,34 @@
 //! Chain mode: the world is the on-chain program's, read through the
-//! gateway; the AI members' batches, and the people's,
-//! go back through it.
+//! gateway; the AI members' batches go back through it. Every other member
+//! signs its own transactions (in the browser, or an agent's SDK); this
+//! server only reads theirs from the chain.
 //!
 //! Every gateway call happens without the game lock: the follower fetches
-//! first (`Poll::fetch`) and then applies what it got (`Game::on_chain`),
-//! and a person's submission is prepared under the lock, sent without it
-//! (`Submission::send`), and its outcome recorded under it again.
+//! first (`Poll::fetch`) and then applies what it got (`Game::on_chain`).
 
 use permutation_chain::state::MAX_GOV_PER_SIGNER;
 use permutation_rules::gov::{GovEntry, MemberId, NOBODY};
 use permutation_rules::orders::OrderBatch;
+use permutation_rules::state::CivId;
 use permutation_rules::tick::TickInput;
 use permutation_rules::{Preset, Ruleset};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::game::{role_name, Game, Host, Member, Phase, LOCAL_FEE};
-use super::{lock, Shared};
+use super::{lock, Shared, Site};
 use crate::api::{self, GovDto, MemberMeta, OrderDto};
 use crate::chainlink::{ChainLink, Snapshot, WorldMeta};
 use crate::codec::hex;
 
 pub struct ChainMode {
     pub link: Arc<ChainLink>,
+    /// The gateway as the browser reaches it (`view.chain.gateway`): `/gw`
+    /// behind this server's proxy, else the `--chain` URL.
+    pub gateway: String,
     pub meta: WorldMeta,
     pub slot: u64,
     pub layer: String,
@@ -35,16 +38,55 @@ pub struct ChainMode {
     pub last_record: Option<Value>,
     /// Tick the AI members already submitted for.
     pub ai_submitted: Option<u16>,
-    pub error: Option<String>,
+}
+
+/// A number the gateway sends as a JSON number or a decimal string.
+pub fn number(v: &Value) -> Option<u64> {
+    v.as_u64()
+        .or_else(|| v.as_str().and_then(|x| x.parse().ok()))
+}
+
+/// The operator AI members a season committed to (the Season account's
+/// `aiCount`, public), from a gateway `/season` answer.
+pub fn ai_count(info: &Value) -> u64 {
+    number(&info["season"]["aiCount"])
+        .or_else(|| number(&info["registration"]["aiCount"]))
+        .unwrap_or(0)
+}
+
+/// The game's phase for the gateway's phase (`X-Phase`): the lobby until
+/// the government opened and the world went to the ER.
+pub fn phase_of(gateway_phase: &str) -> Option<Phase> {
+    match gateway_phase {
+        "" => None,
+        "setup" | "registering" => Some(Phase::Lobby),
+        _ => Some(Phase::Playing),
+    }
 }
 
 impl ChainMode {
     /// The Season account's prize pool (entry fees; in-play income is added by the caller).
     pub fn pool(&self) -> u64 {
-        self.info["season"]["pool"]
-            .as_str()
-            .and_then(|x| x.parse().ok())
-            .unwrap_or(0)
+        number(&self.info["season"]["pool"]).unwrap_or(0)
+    }
+
+    pub fn ai_count(&self) -> u64 {
+        ai_count(&self.info)
+    }
+
+    /// The open tick's sealed-orders phase: `commit`, `reveal` (the
+    /// commitments closed; `meta.deadline` is now the reveal deadline),
+    /// `frozen` (being published and resolved) or `finished`.
+    pub fn tick_phase(&self) -> &'static str {
+        if self.meta.finished {
+            "finished"
+        } else if self.meta.frozen {
+            "frozen"
+        } else if self.meta.revealing {
+            "reveal"
+        } else {
+            "commit"
+        }
     }
 }
 
@@ -56,27 +98,57 @@ pub fn batch_body(b: &OrderBatch) -> Value {
     })
 }
 
-/// Retry `f` every two seconds until it succeeds (the gateway may be starting).
-fn wait_for<T>(what: &str, mut f: impl FnMut() -> Result<Option<T>, String>) -> T {
-    loop {
-        match f() {
-            Ok(Some(v)) => return v,
-            Ok(None) => eprintln!("waiting for {what}…"),
-            Err(e) => eprintln!("waiting for the gateway ({e})…"),
+/// Chain mode: wait for the on-chain world (meanwhile the site serves the
+/// registration lobby with the season the gateway describes), then attach
+/// the game to it and follow the chain. Never gives up: the gateway may be
+/// starting, or the season still registering.
+pub fn attach(site: Arc<Site>, link: Arc<ChainLink>) {
+    let gateway = site.gateway.clone().unwrap_or_else(|| link.url());
+    let mut said = String::new();
+    let (snap, info) = loop {
+        let wait = match link.world() {
+            Ok(Some(snap)) => match link.get_json("/season") {
+                Ok(info) => break (snap, info),
+                Err(e) => format!("waiting for the season ({e})…"),
+            },
+            Ok(None) => {
+                if let Ok(info) = link.get_json("/season") {
+                    site.set_season(info);
+                }
+                "waiting for the on-chain world (registration, genesis or delegation in progress)…"
+                    .to_string()
+            }
+            Err(e) => format!("waiting for the gateway ({e})…"),
+        };
+        if wait != said {
+            eprintln!("{wait}");
+            said = wait;
         }
         std::thread::sleep(Duration::from_secs(2));
+    };
+    let game: Shared = Arc::new(Mutex::new(Game::from_snapshot(link, snap, info, gateway)));
+    {
+        let g = lock(&game);
+        eprintln!(
+            "  the on-chain world: {} nations, {} members, phase {:?}",
+            g.state.civs.len(),
+            g.members.len(),
+            g.phase
+        );
     }
+    site.install(game.clone());
+    follow(game);
 }
 
 impl Game {
-    /// Attach to a running on-chain season through the gateway, waiting for
-    /// it rather than giving up.
-    pub fn from_chain(link: Arc<ChainLink>) -> Game {
-        let snap = wait_for(
-            "the on-chain world (registration, genesis or delegation in progress)",
-            || link.world(),
-        );
-        let info = wait_for("the season", || link.get_json("/season").map(Some));
+    /// A game on a running on-chain season: `snap` is its world, `info` the
+    /// gateway's `/season`.
+    pub fn from_snapshot(
+        link: Arc<ChainLink>,
+        snap: Snapshot,
+        info: Value,
+        gateway: String,
+    ) -> Game {
         let mut rules = match snap.meta.preset {
             1 => Ruleset::new(Preset::Season),
             _ => Ruleset::new(Preset::Blitz),
@@ -87,6 +159,7 @@ impl Game {
         let roster = link.get_json("/operator/roster");
         let chain = ChainMode {
             link,
+            gateway,
             meta: snap.meta,
             slot: snap.slot,
             layer: snap.layer,
@@ -94,13 +167,9 @@ impl Game {
             info: info.clone(),
             last_record: None,
             ai_submitted: None,
-            error: None,
         };
         let mut g = Game::assemble(rules, snap.state, &season_id, tick_seconds, Some(chain));
-        g.entry_fee = info["season"]["entryFee"]
-            .as_str()
-            .and_then(|x| x.parse().ok())
-            .unwrap_or(LOCAL_FEE);
+        g.entry_fee = number(&info["season"]["entryFee"]).unwrap_or(LOCAL_FEE);
         g.sync_registry(&info);
         if let Ok(op) = roster {
             g.sync_operator(&op);
@@ -111,11 +180,12 @@ impl Game {
                 .nations
                 .iter()
                 .any(|n| n.offices.iter().any(|o| *o != NOBODY));
-        g.phase = if started {
+        let phase = g.chain.as_ref().and_then(|c| phase_of(&c.phase));
+        g.phase = phase.unwrap_or(if started {
             Phase::Playing
         } else {
             Phase::Lobby
-        };
+        });
         g
     }
 
@@ -123,15 +193,15 @@ impl Game {
         self.chain.as_ref().map(|c| c.link.clone())
     }
 
-    /// Which members the gateway hosts, and the operator's AI roster (V5
-    /// §18.2), from its operator-only `/operator/roster`.
+    /// Which members are the operator's AI members (run here), and their
+    /// roster (V5 §18.2), from the gateway's operator-only `/operator/roster`.
+    /// Every other member signs its own transactions.
     pub fn sync_operator(&mut self, op: &Value) {
         for m in op["members"].as_array().into_iter().flatten() {
             let Some(i) = m["member"].as_u64().map(|x| x as usize) else {
                 continue;
             };
             let host = match m["hosted"].as_str() {
-                Some("human") => Host::Human,
                 Some("ai") => Host::Ai,
                 _ => Host::External,
             };
@@ -143,15 +213,21 @@ impl Game {
             .merge(super::roster::AiRoster::from_operator(op));
     }
 
-    /// The gateway's public member registry (names, kinds). Who is hosted
-    /// comes from `sync_operator`; a member not known there is external.
+    /// The gateway's public member registry (names, kinds). Who is an AI
+    /// comes from `sync_operator`; a member not known there is external. In
+    /// a season with operator AI members every kind reads "undeclared",
+    /// unattested (V5 §18.2), whatever a member declared.
     pub fn sync_registry(&mut self, info: &Value) {
+        let hide = ai_count(info) > 0 || self.hides_kinds();
         for (i, m) in info["members"].as_array().into_iter().flatten().enumerate() {
             let host = self.members.get(i).map_or(Host::External, |x| x.host);
             let meta = MemberMeta {
                 name: m["name"].as_str().unwrap_or("member").to_string(),
-                kind: m["kind"].as_str().unwrap_or("undeclared").to_string(),
-                attested: m["attested"].as_bool().unwrap_or(false),
+                kind: match m["kind"].as_str() {
+                    Some(k) if !hide => k.to_string(),
+                    _ => "undeclared".to_string(),
+                },
+                attested: !hide && m["attested"].as_bool().unwrap_or(false),
             };
             let civ = m["civ"].as_u64().unwrap_or(0) as u16;
             match self.members.get_mut(i) {
@@ -183,19 +259,18 @@ impl Game {
             if prev.tick != self.state.tick {
                 self.after_tick(&prev);
                 if let Some((input, rec)) = resolved {
+                    // The ledger follows what landed: a decision on chain
+                    // replaces one sealed here for a batch that did not
+                    // land, and a sealed decision whose batch never landed
+                    // goes (it could never be revealed).
+                    let mut landed: Vec<(CivId, u8)> = Vec::new();
                     for b in &input.batches {
-                        let external = b.member != NOBODY
-                            && self
-                                .members
-                                .get(b.member as usize)
-                                .is_some_and(|m| m.host == Host::External);
-                        if external {
-                            self.ledger.ingest_external(b);
-                        } else {
-                            self.ledger
-                                .mark_revealed(b.civ, b.role as u8, &b.orders, prev.tick);
+                        self.ledger.land(b);
+                        if b.tick == prev.tick && b.decision_digest != [0; 32] {
+                            landed.push((b.civ, b.role as u8));
                         }
                     }
+                    self.ledger.keep_landed(prev.tick, &landed);
                     if let Some(c) = self.chain.as_mut() {
                         c.last_record = Some(rec);
                     }
@@ -224,11 +299,7 @@ impl Game {
         c.slot = snap.slot;
         c.layer = snap.layer;
         c.phase = snap.phase;
-        self.phase = if c.phase == "setup" || c.phase == "registering" {
-            Phase::Lobby
-        } else {
-            Phase::Playing
-        };
+        self.phase = phase_of(&c.phase).unwrap_or(Phase::Playing);
         if c.meta.finished
             || c.phase != "playing"
             || tick >= self.rules.ticks_per_season
@@ -260,18 +331,6 @@ impl Game {
             announce,
             talk: replies,
         }
-    }
-
-    /// Chain mode: `m`'s batches for the open tick, ready to send.
-    pub fn submission(&mut self, m: MemberId) -> Option<Submission> {
-        let link = self.chain_link()?;
-        let batches = self.human_batches(Some(m), true);
-        Some(Submission {
-            link,
-            member: m,
-            tick: self.state.tick,
-            batches,
-        })
     }
 }
 
@@ -428,48 +487,16 @@ fn post_all(link: &ChainLink, path: &str, bodies: &[Value]) {
     });
 }
 
-/// A person's batches on their way to the chain (signed by the gateway with
-/// the member's session key).
-pub struct Submission {
-    link: Arc<ChainLink>,
-    member: MemberId,
-    tick: u16,
-    batches: Vec<OrderBatch>,
-}
-
-impl Submission {
-    /// Send every batch (without the lock), then record the outcome: the
-    /// member's turn ends only if every batch went through. Returns the
-    /// signatures, or the first error.
-    pub fn send(self, game: &Shared) -> Result<Vec<Value>, String> {
-        let mut sigs = Vec::new();
-        let mut error = None;
-        for b in &self.batches {
-            match self.link.post_json("/submit", &batch_body(b)) {
-                Ok(res) => sigs.push(res["signature"].clone()),
-                Err(e) => {
-                    error = Some(format!("chain: {e}"));
-                    break;
-                }
-            }
-        }
-        let mut g = lock(game);
-        if error.is_none() {
-            if let Some(x) = g.members.get_mut(self.member as usize) {
-                x.ready = Some(self.tick);
-            }
-        }
-        if let Some(c) = g.chain.as_mut() {
-            c.error = error.clone();
-        }
-        error.map_or(Ok(sigs), Err)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::play::http::{Request, Response};
+    use crate::play::routes::respond;
+    use permutation_chain::state::{WORLD_HEADER, WORLD_MAGIC};
+    use permutation_rules::genesis::{nation_entries, new_season};
     use permutation_rules::gov::{GovAction, Role};
+    use std::net::TcpListener;
+    use std::sync::atomic::AtomicBool;
 
     fn vote(member: MemberId, role: Role) -> GovEntry {
         GovEntry {
@@ -511,5 +538,108 @@ mod tests {
             .map(|a| a["role"].as_str().unwrap())
             .collect();
         assert_eq!(roles, ["General", "Steward", "Science", "Diplomat"]);
+    }
+
+    /// `/world.bin` as the gateway serves it: magic, length, meta, world.
+    fn world_bin(meta: &WorldMeta, state: &permutation_rules::state::WorldState) -> Vec<u8> {
+        let body = borsh::to_vec(state).unwrap();
+        let mut out = WORLD_MAGIC.to_vec();
+        out.extend((body.len() as u32).to_le_bytes());
+        out.extend(borsh::to_vec(meta).unwrap());
+        out.resize(WORLD_HEADER, 0);
+        out.extend(body);
+        out
+    }
+
+    /// Chain mode from start to play without a restart: while there is no
+    /// world the site serves the registration lobby (with what the gateway
+    /// says of the season); once the world exists and the gateway plays,
+    /// the full game.
+    #[test]
+    fn the_site_waits_for_the_world_then_serves_the_game() {
+        let rules = Ruleset::new(Preset::Blitz);
+        let state = new_season(
+            &rules,
+            b"permutation-state/world/test-001",
+            b"permutation-state/season/test-01",
+            &nation_entries(6),
+        )
+        .unwrap();
+        let meta = WorldMeta {
+            season_id: 7,
+            civs: 6,
+            tick_seconds: 30,
+            deadline: super::super::game::unix_now() + 30,
+            ..Default::default()
+        };
+        let world = world_bin(&meta, &state);
+        let season = json!({"season": {"seasonId": "7", "entryFee": "10000000", "pool": "0", "aiCount": 0},
+                            "programId": "PermutationProgram111", "cluster": "localnet", "accounts": {}, "members": []});
+        let exists = Arc::new(AtomicBool::new(false));
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let flag = exists.clone();
+        std::thread::spawn(move || {
+            for mut stream in listener.incoming().flatten() {
+                let Some(req) = Request::read(&stream) else {
+                    continue;
+                };
+                let res = match req.path.as_str() {
+                    "/world.bin" if flag.load(Ordering::SeqCst) => {
+                        let mut r =
+                            Response::new("200 OK", "application/octet-stream", world.clone());
+                        r.headers.push(("X-Phase", "playing".into()));
+                        r.headers.push(("X-Slot", "5".into()));
+                        r
+                    }
+                    "/world.bin" => {
+                        Response::error("503 Service Unavailable", "world not available")
+                    }
+                    "/season" => Response::ok(&season),
+                    "/talk" => Response::ok(&json!({"messages": []})),
+                    "/ticks" => Response::ok(&json!({"records": []})),
+                    _ => Response::error("404 Not Found", "no"),
+                };
+                res.write(&mut stream);
+            }
+        });
+        let web = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web");
+        let site = Arc::new(Site::new(web, None, Some(&url)));
+        let link = Arc::new(ChainLink::new(&url).unwrap());
+        let s = site.clone();
+        std::thread::spawn(move || attach(s, link));
+        let lobby = || {
+            let req = Request::read(&b"GET /api/lobby HTTP/1.1\r\n\r\n"[..]).unwrap();
+            serde_json::from_slice::<Value>(&respond(&req, &site).body).unwrap()
+        };
+        let until = |what: &str, ok: &dyn Fn(&Value) -> bool| {
+            for _ in 0..100 {
+                let l = lobby();
+                if ok(&l) {
+                    return l;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            panic!("{what}: {}", lobby());
+        };
+        let l = until("the season from the gateway", &|l| !l["chain"].is_null());
+        assert_eq!(
+            (l["phase"].as_str(), l["gateway"].as_str()),
+            (Some("registering"), Some(url.as_str()))
+        );
+        assert_eq!(
+            (l["chain"]["seasonId"].as_str(), &l["entryFee"]),
+            (Some("7"), &json!(10_000_000))
+        );
+        exists.store(true, Ordering::SeqCst);
+        let l = until("the game", &|l| l["phase"] == "playing");
+        assert_eq!(l["nations"].as_array().unwrap().len(), 6);
+        assert_eq!(l["chain"]["seasonId"], "7");
+        let req = Request::read(&b"GET /api/state HTTP/1.1\r\n\r\n"[..]).unwrap();
+        let v: Value = serde_json::from_slice(&respond(&req, &site).body).unwrap();
+        assert_eq!(
+            (v["chainPhase"].as_str(), v["chain"]["slot"].as_u64()),
+            (Some("commit"), Some(5))
+        );
     }
 }

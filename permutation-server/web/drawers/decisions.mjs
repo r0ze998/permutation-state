@@ -1,12 +1,17 @@
 // Decision log (§4.3, §7.5): every office commits to what it saw and why
 // before a tick resolves and reveals it after. The browser re-verifies the
-// digests and observation proofs itself (verify.mjs).
+// digests and observation proofs itself (verify.mjs). Nothing here says who
+// decided (a person or an AI, V5 §18.2): every officer commits under the
+// same policy id. In chain mode this member's own decisions come from this
+// browser (chainplay.mjs), including the open tick's, before anyone else
+// can see them.
 import * as T from '../i18n.mjs';
 import * as V from '../verify.mjs';
 import * as api from '../api.mjs';
 import { html } from '../util.mjs';
 import { S, civN, invalidate } from '../state.mjs';
 import { map } from '../world.mjs';
+import { ownDecisions } from '../chainplay.mjs';
 
 const verifiedKey = r => `${r.tick}:${r.civ}:${r.digest}`;
 
@@ -54,21 +59,30 @@ function proofResult(pr) {
     </div>`;
 }
 
-/**
- * Who decided: an outside agent (external), or by the policy id once it is
- * known (revealed, or my own nation's): 'human' or an agent policy.
- */
-const decider = r => (r.external ? 'AI' : r.policy === null || r.policy === undefined ? null : r.policy === 'human' ? 'HUMAN' : 'AI');
-
-/** One committed batch: who (nation, office, AI or human), the commitment, and its reveal. */
-function record(r) {
+/** One committed batch: nation, office, the commitment, and its reveal (`mine`: this member's own text, before its reveal). */
+function record(r, mine = null) {
   const ok = S.verified[verifiedKey(r)];
   const digest = String(r.digest ?? '');
-  const status = !r.reveal ? html`<span class="meta">解決後に公開</span>`
+  const status = !r.reveal ? html`<span class="meta">${mine?.open ? 'ティックの解決後、次の確定で公開' : '解決後に公開'}</span>`
     : html`<span>公開 t${r.reveal.at}</span><span class="arrow">→</span>${ok === true ? html`<span class="vchk ok">✓ 一致</span>` : ok === false ? html`<span class="vchk bad">✗ 不一致</span>` : html`<span class="vchk">検証中</span>`}`;
-  return html`<div class="dec-row"><div class="dec-who"><span class="swatch-s" style="background:${T.CIV_COLORS[r.civ]}"></span><b>${civN(r.civ)}</b>${r.role ? html`<span class="meta">${T.ROLE_GLYPH[r.role] || ''} ${T.ROLE_JA[r.role] || r.role}</span>` : ''}${decider(r) ? html`<span class="badge ${decider(r) === 'AI' ? 'agent' : 'human'}">${decider(r)}</span>` : ''}${r.policy ? html`<code>${r.policy}</code>` : ''}</div>
+  return html`<div class="dec-row"><div class="dec-who"><span class="swatch-s" style="background:${T.CIV_COLORS[r.civ]}"></span><b>${civN(r.civ)}</b>${r.role ? html`<span class="meta">${T.ROLE_GLYPH[r.role] || ''} ${T.ROLE_JA[r.role] || r.role}</span>` : ''}${mine ? html`<span class="tag positive">あなた</span>` : ''}${r.policy ? html`<code>${r.policy}</code>` : ''}</div>
       <div class="dec-steps"><span title="decision_digest ${digest}">約束 <code>${digest.slice(0, 8)}</code></span><span class="arrow">→</span>${status}</div>
-      ${r.reveal ? html`<div class="dec-text">${r.reveal.text ? r.reveal.text : html`<span class="meta">（理由の記入なし）</span>`}</div>` : ''}</div>`;
+      ${r.reveal ? html`<div class="dec-text">${r.reveal.text ? r.reveal.text : html`<span class="meta">（理由の記入なし）</span>`}</div>`
+        : mine ? html`<div class="dec-text"><span class="meta">あなたのメモ（まだ公開されていません・このブラウザだけが知っています）：</span>${mine.text || html`<span class="meta">（記入なし）</span>`}</div>` : ''}</div>`;
+}
+
+/**
+ * Chain mode: the log with this member's own decisions — its text next to
+ * its commitments not yet revealed, and the open tick's commitments (the
+ * play server lists only resolved ticks).
+ */
+function withOwn(records, open) {
+  if (!S.view?.chain) return { rows: records, own: new Map() };
+  const own = new Map(ownDecisions().map(d => [`${d.tick}:${d.civ}:${d.role}:${d.digest}`, d]));
+  const listed = new Set(records.map(r => `${r.tick}:${r.civ}:${r.role}:${r.digest}`));
+  const extra = [...own.values()].filter(d => d.open && d.tick >= open && !listed.has(`${d.tick}:${d.civ}:${d.role}:${d.digest}`))
+    .map(d => ({ tick: d.tick, civ: d.civ, role: d.role, digest: d.digest, obsRoot: d.obsRoot, policy: null, reveal: null }));
+  return { rows: [...extra, ...records], own };
 }
 
 export function drawerDecisions() {
@@ -89,13 +103,14 @@ export function drawerDecisions() {
     <div class="section-title">タイムライン</div>
     <div class="row dec-filter"><button class="btn ${who === 'all' ? 'primary' : ''}" type="button" data-dec="all">全員</button>${civs.map(c => html`<button class="btn ${who !== 'all' && +who === c.id ? 'primary' : ''}" type="button" data-dec="${c.id}"><span class="swatch-s" style="background:${T.CIV_COLORS[c.id]}"></span>${civN(c.id)}</button>`)}</div>`;
   if (!d) return html`${head}<p class="desc">読み込んでいます…</p>`;
-  const rows = d.records.filter(r => who === 'all' || r.civ === +who).slice(0, 120);
+  const { rows: all, own } = withOwn(d.records, d.open);
+  const rows = all.filter(r => who === 'all' || r.civ === +who).slice(0, 120);
   if (!rows.length) return html`${head}<div class="dec-list"><p class="desc">まだ記録はありません。ティックが進むと並びます。</p></div>`;
   const items = [];
   let last = null;
   for (const r of rows) {
     if (r.tick !== last) { items.push(html`<div class="dec-tick">ティック ${r.tick}${r.tick >= d.open ? ' · 解決待ち' : ''}</div>`); last = r.tick; }
-    items.push(record(r));
+    items.push(record(r, r.reveal ? null : own.get(`${r.tick}:${r.civ}:${r.role}:${r.digest}`) ?? null));
   }
   return html`${head}<div class="dec-list">${items}</div>`;
 }

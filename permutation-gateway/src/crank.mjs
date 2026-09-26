@@ -2,11 +2,17 @@
 // operator-only liveness; it cannot change outcomes (see permutation-chain
 // DESIGN.md, "Trust model").
 //
-// * Registration: once the expected outside entrants joined (or at once),
-//   start the season: genesis, seating, the first election, delegation.
+// * Registration: fund and register the operator's AI members at their
+//   planned times, strictly in roster order (season.mjs `planAi`), paused
+//   like people's joins while the crank is low on SOL (the FundsGuard the
+//   routes share, guards.mjs); when the
+//   window closes (dev mode: once enough other members joined) and every AI
+//   member is registered, start the season: genesis, seating, the first
+//   election, delegation.
 // * Move the open tick through its sealed-orders phases on the ER: after
 //   its deadline close the commitments (`CloseCommits`) and reveal the
-//   batches this gateway holds for its hosted members (`RevealOrders`);
+//   batches this gateway holds (its AI members' and those deposited through
+//   POST /seal, `RevealOrders`);
 //   once every commitment is revealed or the reveal window ended, publish
 //   the input (`LogTickInput`; chunk 0 freezes it and draws the randomness
 //   from the revealed salts), resolve it (`ResolveTick`, in parts when it
@@ -20,9 +26,10 @@ import path from 'node:path';
 import { PublicKey } from '@solana/web3.js';
 import { fromHex, jsonSafe, toHex } from '../client/src/bytes.mjs';
 import { ChainClient, readSeason } from '../client/src/chain.mjs';
-import { chainError, decodeNationHeader, decodeWorldHeader, MAGIC, MAX_NATIONS, NATION_TARGET, roleIndex, ROLES, WORLD_CHUNKS } from '../client/src/codec.mjs';
+import { chainError, decodeNationHeader, decodeWorldHeader, MAGIC, MAX_NATIONS, NATION_TARGET, NATIONS, roleIndex, ROLES, WORLD_CHUNKS } from '../client/src/codec.mjs';
 import { LOCAL_DIR, namedKey } from './config.mjs';
-import { aiMembers, startAndDelegate } from './season.mjs';
+import { registrationCost } from './faucet.mjs';
+import { aiMembers, fundPlanned, registerPlanned, registrationOf, respread, RESPREAD_LATE_MS, startAndDelegate, unit } from './season.mjs';
 import { TalkBook } from './talk.mjs';
 import { records, send } from './send.mjs';
 import { SealedStore } from './sealed.mjs';
@@ -102,26 +109,75 @@ export function historyEntry(h, signature) {
   return JSON.parse(JSON.stringify({ prevHistoryRoot: h.prevHistoryRoot, historyRoot: h.historyRoot, record: h.record, signature }, jsonSafe));
 }
 
+/**
+ * Registrations being sent right now (x402 joins and the crank's own), by
+ * session key and wallet: a second one with either is refused while the
+ * first is in flight (a duplicate session key would not be seen on chain
+ * yet), and the season does not start while one is.
+ */
+export class RegistrationDesk {
+  constructor() {
+    this.sessions = new Set();
+    this.wallets = new Set();
+  }
+
+  get busy() { return this.sessions.size > 0; }
+  get size() { return this.sessions.size; }
+
+  /** Reserve (base58 keys); returns a release function, or null if either is taken. */
+  reserve({ wallet, session }) {
+    if (this.sessions.has(session) || this.wallets.has(wallet)) return null;
+    this.sessions.add(session);
+    this.wallets.add(wallet);
+    let done = false;
+    return () => {
+      if (done) return;
+      done = true;
+      this.sessions.delete(session);
+      this.wallets.delete(wallet);
+    };
+  }
+}
+
+/** An AI member's blockhash is fetched this long (ms) before it registers, drawn per member. */
+export const AI_BLOCKHASH_AGE_MS = Object.freeze({ min: 3000, max: 40_000 });
+/** A fetched blockhash older than this is fetched again (it must still land). */
+const BLOCKHASH_STALE_MS = 50_000;
+/** How often (ms) the crank repeats that registration closed with AI members still unregistered. */
+const LATE_LOG_MS = 30_000;
+
 export class Crank {
   /**
    * @param {object} o
    * @param {object} o.store   the season state store (config.mjs createStateStore); its `state` is shared with the routes
    * @param {string} [o.ticksDir] where the tick index (<season>.jsonl) is kept
+   * @param {Function} [o.keys] named key loader (config.mjs namedKey)
+   * @param {Function} [o.now] the clock (ms) registration runs by
+   * @param {object} [o.funds] the FundsGuard the routes share (guards.mjs): while it says the
+   *                           crank is low, the AI members are neither funded nor registered
    */
-  constructor({ base, er, cfg, store, log = console.log, ticksDir = path.join(LOCAL_DIR, 'ticks') }) {
-    Object.assign(this, { base, er, cfg, store, log });
-    this.crank = namedKey('crank');
+  constructor({ base, er, cfg, store, log = console.log, ticksDir = path.join(LOCAL_DIR, 'ticks'), keys = namedKey, now = Date.now, funds = null }) {
+    Object.assign(this, { base, er, cfg, store, log, keys, now, funds });
+    this.crank = keys('crank');
     this.chain = new ChainClient(cfg.programId, BigInt(this.state.seasonId));
     this.program = new PublicKey(cfg.programId);
     this.nations = null; // from the season account (`nationCount`)
     this.snapshot = null; // { world, header, nations: [...headers], slot, at, layer }
     this.busy = false;
     this.phase = this.state.finalized ? 'finalized' : this.state.delegated ? 'playing' : 'registering';
-    this.openedAt = Date.now();
+    this.startedAt = now();
     this.reach = {};
+    /** Registrations in flight (shared with /x402/join). */
+    this.desk = new RegistrationDesk();
+    /** The next AI member's blockhash, fetched ahead: {pos, at, value, sendAt}. */
+    this.aiBlockhash = null;
+    this.aiAges = new Map();
+    /** How a registration whose confirmation failed is looked for on chain. */
+    this.recheck = { attempts: 4, delayMs: 1000 };
+    this.refreshing = null;
     mkdirSync(ticksDir, { recursive: true });
     this.tickFile = path.join(ticksDir, `${this.state.seasonId}.jsonl`);
-    /** Hosted members' sealed batches, revealed after each tick's close. */
+    /** Sealed batches (AI members', and deposits through POST /seal), revealed after each tick's close. */
     this.sealed = new SealedStore(path.join(ticksDir, `${this.state.seasonId}.sealed.json`));
     /** The CloseCommits transaction of a tick: {tick, signature}. */
     this.closed = null;
@@ -137,8 +193,24 @@ export class Crank {
     return this.nations;
   }
 
-  /** Latest world + nation headers from wherever the world lives now. */
-  async refresh() {
+  /** The registration window (season.mjs `registrationOf`; a season from before windows: dev mode from this crank's start). */
+  registration() {
+    const reg = registrationOf(this.state, { fallbackOpenedAt: this.startedAt, entryFee: this.cfg.entryFee });
+    return this.state.registration ? reg : { ...reg, waitExternal: this.cfg.waitExternal ?? 0 };
+  }
+
+  /** Latest world + nation headers from wherever the world lives now; concurrent callers share one read. */
+  refresh() {
+    this.refreshing ??= this.readWorld().finally(() => { this.refreshing = null; });
+    return this.refreshing;
+  }
+
+  /** The snapshot if it is at most `maxAgeMs` old, else a fresh one. */
+  async fresh(maxAgeMs) {
+    return this.snapshot && Date.now() - this.snapshot.at < maxAgeMs ? this.snapshot : this.refresh();
+  }
+
+  async readWorld() {
     const conn = this.phase === 'playing' ? this.er : this.base;
     const chunks = this.chain.worldChunks.length;
     const keys = [...this.chain.worldChunks, ...this.chain.nations(await this.nationCount())];
@@ -182,19 +254,99 @@ export class Crank {
     }
   }
 
-  /** Registration: start once the expected outside entrants joined, or after the wait. */
+  /**
+   * Registration: the AI members' funding and registrations as planned;
+   * then, once the window closed (dev mode: enough other members joined),
+   * every AI member is registered and no registration is in flight, start.
+   * One chain action per step.
+   */
   async registering() {
     const season = await this.season();
-    const hosted = this.state.members.filter(m => m.hosted !== 'external').length;
-    const external = season.memberCount - hosted;
-    const waited = (Date.now() - this.openedAt) / 1000;
-    const enough = external >= this.cfg.waitExternal;
-    // --registration-seconds 0 means no time limit: wait for the entrants.
-    const timedOut = this.cfg.registrationSeconds > 0 && waited >= this.cfg.registrationSeconds;
-    if (!enough && !timedOut) return;
-    this.log(`registration closes: ${season.memberCount} members (${external} from outside)`);
+    // Started already (a restart during genesis or seating): go on.
+    if (season.status !== 'Registering') return this.start(season);
+    const reg = this.registration();
+    const now = this.now();
+    const pending = (this.state.aiPlan ?? []).filter(e => e.registered === undefined).sort((a, b) => a.pos - b.pos);
+    if (pending.length) return this.registerAis(pending, reg, now, season);
+    const others = season.memberCount - this.state.members.filter(m => m.hosted === 'ai').length;
+    const due = reg.closesAt !== null ? now >= reg.closesAt : others >= reg.waitExternal;
+    if (!due || this.desk.busy) return;
+    this.log(`registration closes: ${season.memberCount} members (${others} besides the operator's AI members)`);
+    return this.start(season);
+  }
+
+  async start() {
     await startAndDelegate({ base: this.base, er: this.er, cfg: this.cfg, store: this.store, log: this.log });
     this.phase = 'playing';
+  }
+
+  /**
+   * The next step for the AI members not registered yet (`pending`, in
+   * `pos` order): fund one whose funding time came; else, for the first of
+   * them (strictly in order), fetch its blockhash a drawn 3–40 s ahead and
+   * register it once due. Overdue ones are spread over the rest of the
+   * window first.
+   */
+  async registerAis(pending, reg, now, season) {
+    // Low on SOL: people's joins and faucet grants are paused (503
+    // OperatorLowFunds), so the AI members wait too; otherwise the only
+    // registrations landing would be theirs. Overdue ones are spread again
+    // once it is funded.
+    if (await this.lowFunds()) return;
+    const cost = registrationCost(reg.entryFee ?? season.entryFee, reg.deposit);
+    const next = pending[0];
+    if (reg.seconds && next.dueAt < now - RESPREAD_LATE_MS) {
+      const n = respread(this.state.aiPlan, { now, openedAt: reg.openedAt, seconds: reg.seconds, closesAt: reg.closesAt });
+      this.store.save();
+      this.aiBlockhash = null;
+      this.log(`${n} AI member registrations were overdue: spread over the rest of the window`);
+      return;
+    }
+    const fund = pending.find(e => !e.funded && e.fundAt <= now);
+    if (fund) {
+      await fundPlanned({ base: this.base, store: this.store, entry: fund, amount: cost, keys: this.keys });
+      return;
+    }
+    if (reg.closesAt !== null && now >= reg.closesAt && now - (this.lateLogAt ?? 0) >= LATE_LOG_MS) {
+      this.lateLogAt = now;
+      this.log(`WARNING: registration closed, but ${pending.length} AI members are not registered yet; the season starts once they are (retrying)`);
+    }
+    let bh = this.aiBlockhash?.pos === next.pos && now - this.aiBlockhash.at < BLOCKHASH_STALE_MS ? this.aiBlockhash : null;
+    if (!bh) {
+      // A person's Register carries the 402's blockhash, aged by the wallet's
+      // approval; an AI member's is aged too.
+      if (!this.aiAges.has(next.pos)) this.aiAges.set(next.pos, AI_BLOCKHASH_AGE_MS.min + (AI_BLOCKHASH_AGE_MS.max - AI_BLOCKHASH_AGE_MS.min) * unit());
+      const age = reg.seconds ? this.aiAges.get(next.pos) : 0;
+      if (now < next.dueAt - age) return;
+      const value = await this.base.getLatestBlockhash('confirmed');
+      this.aiBlockhash = { pos: next.pos, at: now, value, sendAt: Math.max(next.dueAt, now + (reg.seconds ? AI_BLOCKHASH_AGE_MS.min : 0)) };
+      return;
+    }
+    if (now < bh.sendAt) return;
+    if (!next.funded) {
+      await fundPlanned({ base: this.base, store: this.store, entry: next, amount: cost, keys: this.keys });
+      return;
+    }
+    try {
+      const index = await registerPlanned({ base: this.base, cfg: this.cfg, store: this.store, entry: next, blockhash: bh.value, keys: this.keys, log: this.log, recheck: this.recheck });
+      this.log(`member ${index} joined ${NATIONS[next.civ] ?? next.civ}`);
+    } catch (e) {
+      this.log(`WARNING: an AI member (roster position ${next.pos}) could not register: ${e.message}; retrying (the season starts only once every AI member is registered)`);
+      throw e;
+    } finally {
+      this.aiBlockhash = null;
+    }
+  }
+
+  /** Whether the shared FundsGuard says the crank is below its minimum SOL (no guard: never). */
+  async lowFunds() {
+    try {
+      await this.funds?.check();
+      return false;
+    } catch (e) {
+      if (e.code === 'OperatorLowFunds') return true;
+      throw e;
+    }
   }
 
   async play(snap) {
@@ -214,7 +366,7 @@ export class Crank {
     await this.maybeCommit(open, nations);
   }
 
-  /** Close the open tick's commitments (`CloseCommits`) and reveal the hosted members' batches at once. */
+  /** Close the open tick's commitments (`CloseCommits`) and reveal the kept batches at once. */
   async closeTick(open, nations, snap) {
     try {
       const r = await send(this.er, this.chain.closeCommits({ nations }), [this.crank], `close tick ${open} commitments`);
@@ -275,10 +427,12 @@ export class Crank {
   }
 
   /**
-   * Reveal the batches this gateway sealed for its hosted members (the
-   * reveal window is open). Offices already revealed are skipped, so it is
-   * safe to call on every snapshot; a failed reveal is logged, not retried
-   * forever (it is retried on the next snapshot while the window is open).
+   * Reveal the batches this gateway keeps (sealed.mjs: its AI members' and
+   * the ones deposited through POST /seal; the reveal window is open), every
+   * one signed by the crank alone. Offices already revealed are skipped, so
+   * it is safe to call on every snapshot; a failed reveal is logged, not
+   * retried forever (it is retried on the next snapshot while the window is
+   * open).
    */
   async revealHosted(tick, nations, headers) {
     // Only the kept batches whose commitment is the one on chain.

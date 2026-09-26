@@ -1,10 +1,11 @@
 // What needs a decision next (the Next Turn button, the notification stack,
 // Space), and the report of what the last tick changed.
 import * as T from './i18n.mjs';
-import { $, html, setHtml, troops } from './util.mjs';
+import { $, html, setHtml, toast, troops } from './util.mjs';
 import { S, civN, held, spendable, myUnits, myCities, unitById, secondsLeft, invalidate } from './state.mjs';
 import { map, key, keyOf } from './world.mjs';
-import { used, draftedUnits, endTurn } from './orders.mjs';
+import { used, draftedUnits, endTurn, turnEnded } from './orders.mjs';
+import { chainPhase, NO_KEY } from './chainplay.mjs';
 import { selectUnit, selectTile } from './selection.mjs';
 import { toggleDrawer } from './drawers/index.mjs';
 import { startSeason } from './lobby.mjs';
@@ -79,9 +80,12 @@ export function renderNextTurn() {
   const C = 2 * Math.PI * 62;
   const ring = html`<svg viewBox="0 0 132 132" aria-hidden="true"><circle cx="66" cy="66" r="62" fill="none" stroke="#ffffff22" stroke-width="5"/><circle cx="66" cy="66" r="62" fill="none" stroke="${frac < .15 ? '#e0674f' : '#f0cf7a'}" stroke-width="5" stroke-linecap="round" stroke-dasharray="${C}" stroke-dashoffset="${C * (1 - frac)}"/></svg>`;
   let cls = '', title, sub;
+  const closed = v.chain && chainPhase(v) !== 'commit';
   if (v.over) { title = 'シーズン終了'; sub = '結果を見る'; }
   else if (v.phase === 'lobby') { title = '開幕する'; sub = '第1回選挙を行い、ティックを始める'; }
-  else if (v.member?.ready) { cls = 'done'; const waiting = v.waiting ?? 0; title = '手番を終えた'; sub = waiting ? `ほか${waiting}人を待っています` : '解決を待っています'; }
+  // Chain mode after the deadline: the gateway reveals the sealed batches, then the tick resolves.
+  else if (closed) { cls = 'done'; title = '解決中'; sub = chainPhase(v) === 'reveal' ? '封印した命令を公開しています' : '全ての国の命令を解決しています'; }
+  else if (turnEnded()) { cls = 'done'; const waiting = v.waiting ?? 0; title = '手番を終えた'; sub = v.chain ? '締切（全員同時）を待っています' : waiting ? `ほか${waiting}人を待っています` : '解決を待っています'; }
   else if (items.length) { cls = 'blocker'; title = shortBlocker(items[0]); sub = items.length > 1 ? `ほか${items.length - 1}件 · クリックで移動` : 'クリックで移動'; }
   else { title = '手番を終える'; sub = v.chain ? '署名してチェーンへ送信' : `${Math.ceil(secs)}秒後に自動で解決`; }
   el.className = `next-turn ${cls}`;
@@ -92,8 +96,10 @@ export function nextTurnClick() {
   const v = S.view;
   if (v.over) { toggleDrawer('era'); return; }
   if (v.phase === 'lobby') { startSeason(); return; }
+  if (v.chain && chainPhase(v) !== 'commit') { toast('締切を過ぎ、解決しています。次のティックで操作できます。'); return; }
   const items = blockers();
-  if (items.length && !v.member?.ready) { goToBlocker(0); return; }
+  if (items.length && !turnEnded()) { goToBlocker(0); return; }
+  if (v.chain && !S.session) { toast(NO_KEY, 'error'); return; }
   endTurn({ commitFirst: true });
 }
 

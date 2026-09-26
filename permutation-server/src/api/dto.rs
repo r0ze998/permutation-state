@@ -136,9 +136,11 @@ pub enum OrderDto {
         usdc: u64,
     },
     /// Escrow treasury USDC for a contract (V5 §18.6). `to` is omitted for
-    /// an open `Capture` offer.
+    /// an open `Capture` offer, and left out when echoed back (never
+    /// `"to": null`), so a client's draft and this server's echo of it
+    /// (`/api/validate`) compare equal.
     OfferContract {
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         to: Option<CivId>,
         term: TermDto,
         usdc: u64,
@@ -629,5 +631,42 @@ impl GovDto {
             },
             GovAction::Recall { role } => GovDto::Recall { role: name(role) },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{json, Value};
+
+    /// An open `Capture` offer has no `to`: echoed back it still has none
+    /// (not `"to": null`), so the client's draft and the echo compare equal;
+    /// an addressed offer keeps its `to`.
+    #[test]
+    fn an_open_offer_is_echoed_without_to() {
+        let open = OrderDto::OfferContract {
+            to: None,
+            term: TermDto::Capture { city: 11 },
+            usdc: 3_000_000,
+            deadline: 90,
+        };
+        let v = serde_json::to_value(&open).unwrap();
+        assert!(v.get("to").is_none(), "{v}");
+        assert!(!serde_json::to_string(&open).unwrap().contains("\"to\""));
+        let draft = json!({"type": "OfferContract", "term": {"kind": "Capture", "city": 11}, "usdc": 3000000, "deadline": 90});
+        let parsed: OrderDto = serde_json::from_value(draft.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), draft);
+        // `"to": null` from an older client still reads as an open offer.
+        let mut null_to = draft.clone();
+        null_to["to"] = Value::Null;
+        let parsed: OrderDto = serde_json::from_value(null_to).unwrap();
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), draft);
+        // Through the engine's order and back.
+        let back = OrderDto::from_order(&open.to_order().unwrap());
+        assert!(serde_json::to_value(&back).unwrap().get("to").is_none());
+
+        let addressed = json!({"type": "OfferContract", "to": 3, "term": {"kind": "Peace"}, "usdc": 4000000, "deadline": 60});
+        let parsed: OrderDto = serde_json::from_value(addressed.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), addressed);
     }
 }

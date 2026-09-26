@@ -8,7 +8,6 @@ import { ChainClient } from '../client/src/chain.mjs';
 import { createApp } from '../src/app.mjs';
 import { DEFAULTS } from '../src/config.mjs';
 import { errorResponse, RouteError } from '../src/routes/errors.mjs';
-import { FaucetLimiter } from '../src/routes/faucet.mjs';
 import { SendError } from '../src/send.mjs';
 import { fromHex, vectors } from './vectors.mjs';
 import { SealedStore } from '../src/sealed.mjs';
@@ -100,13 +99,13 @@ test('/submit and /gov: only the operator, and only for hosted members', async (
 });
 
 test('/roster shows only announced AI members until the roster is revealed; /operator/roster needs the token', async () => {
-  const members = [{ index: 0, civ: 0, hosted: 'human' }, { index: 1, civ: 0, hosted: 'ai', salt: 'aa'.repeat(32) }, { index: 2, civ: 1, hosted: 'ai', salt: 'bb'.repeat(32) }];
+  const members = [{ index: 0, civ: 0, hosted: 'external' }, { index: 1, civ: 0, hosted: 'ai', salt: 'aa'.repeat(32) }, { index: 2, civ: 1, hosted: 'ai', salt: 'bb'.repeat(32) }];
   const { handle } = app({ members, roster: { aiCount: 2, bountyEach: '5000000', bond: '40000000', revealed: false } });
   const pub = await call(handle, 'GET', '/roster');
   assert.deepEqual([pub.json.aiCount, pub.json.ai], [2, []]);
   assert.equal((await call(handle, 'GET', '/operator/roster')).status, 403);
   const op = await call(handle, 'GET', '/operator/roster', { headers: OP });
-  assert.deepEqual(op.json.members.map(m => m.hosted), ['human', 'ai', 'ai']);
+  assert.deepEqual(op.json.members.map(m => m.hosted), ['external', 'ai', 'ai']);
   assert.deepEqual(op.json.ai.map(m => m.member), [1, 2]);
   assert.equal((await call(handle, 'POST', '/roster/announce', { body: { member: 0 }, headers: OP })).status, 404, 'not an AI');
   assert.equal((await call(handle, 'POST', '/roster/announce', { body: { member: 2 } })).status, 403);
@@ -201,9 +200,12 @@ test('/relay: hands out the blockhash expiry; accepts only one CommitOrders/Reve
 });
 
 test('/x402/join: closed season, malformed payments are 400, invalid ones 402', async () => {
-  const { handle } = app();
-  const closed = await call(handle, 'POST', '/x402/join', { body: {} });
+  const closed = await call(app().handle, 'POST', '/x402/join', { body: {} });
   assert.deepEqual([closed.status, closed.json.code], [409, 'RegistrationClosed']);
+  // The rest with the season still registering.
+  const registering = Buffer.from(seasonData);
+  registering[130] = 0; // SeasonStatus::Registering (the status byte of the sample season)
+  const { handle } = app({ base: connection({ getAccountInfo: async () => ({ data: registering }) }) });
   const header = v => ({ 'x-payment': Buffer.from(typeof v === 'string' ? v : JSON.stringify(v)).toString('base64') });
   const notJson = await call(handle, 'POST', '/x402/join', { body: {}, headers: { 'x-payment': '%%%' } });
   assert.equal(notJson.status, 400);
@@ -226,65 +228,6 @@ test('/faucet: devnet and localnet only, owner must be a key', async () => {
   assert.deepEqual([main.status, main.json.code], [403, 'FaucetDisabled']);
   const bad = await call(app().handle, 'POST', '/faucet', { body: { owner: 'nope' } });
   assert.deepEqual([bad.status, bad.json.code], [400, 'InvalidOwner']);
-});
-
-test('FaucetLimiter: cooldown per owner, a cap per hour of requests, failed mints give the slot back', () => {
-  let now = 0;
-  const f = new FaucetLimiter({ cooldownMs: 10 * 60_000, perHour: 3, now: () => now });
-  f.acquire('a');
-  assert.throws(() => f.acquire('a'), e => e.status === 429 && e.code === 'FaucetCooldown');
-  const release = f.acquire('b');
-  release(); // the mint failed: b may retry at once, and it does not count
-  release();
-  f.acquire('b');
-  f.acquire('c');
-  assert.throws(() => f.acquire('d'), e => e.code === 'FaucetBusy', 'three grants this hour');
-  now = 60 * 60_000; // the first grants are an hour old: they no longer count
-  f.acquire('a');
-  now = 71 * 60_000; // a's cooldown is over
-  f.acquire('a');
-  f.acquire('x');
-  assert.throws(() => f.acquire('y'), e => e.code === 'FaucetBusy', 'the hourly cap counts requests (a twice), not distinct owners');
-});
-
-test('/x402/join: a valid payment settles, is saved at once and answered with X-PAYMENT-RESPONSE', async () => {
-  const wallet = Keypair.generate();
-  const memberPda = chain.member(wallet.publicKey);
-  const memberData = Buffer.from(fromHex(vectors.accounts.member.hex)); // member 2 of civ 1
-  const registering = Buffer.from(seasonData);
-  registering[130] = 0; // SeasonStatus::Registering (the status byte of the sample season)
-  const sent = [];
-  const base = connection({
-    getAccountInfo: async key => (key.equals(memberPda) ? { data: memberData } : { data: registering }),
-    sendRawTransaction: async bytes => { sent.push(Transaction.from(bytes)); return 'sig'.padEnd(64, '1'); },
-    getSignatureStatuses: async () => ({ value: [{ confirmationStatus: 'confirmed', err: null }] }),
-    getTransaction: async () => ({ meta: { logMessages: [], computeUnitsConsumed: 1 } }),
-    getBlockHeight: async () => 1,
-  });
-  const saves = [];
-  const store = { state: { seasonId: seasonId.toString(), members: [], mint: '' }, save() { saves.push(JSON.parse(JSON.stringify(this.state))); } };
-  const crank = { crank: crankKey, phase: 'registering' };
-  const invalidated = [];
-  const handle = createApp({ cfg: { programId: DEFAULTS.programId, cluster: 'localnet', port: 4191 }, base, er: connection(), store, crank, keys, log: () => {},
-    registry: { list: async () => [], invalidate: () => invalidated.push(1) } });
-  const first = await call(handle, 'POST', '/x402/join', { body: { civ: 1, name: 'M' } });
-  assert.equal(first.status, 402);
-  const req = first.json.accepts[0];
-  assert.deepEqual([req.scheme, req.network, req.maxAmountRequired, req.payTo], ['exact', 'solana-localnet', '10000000', chain.vault.toBase58()]);
-  const t = tx(chain.register({ wallet: wallet.publicKey, feePayer: crankKey.publicKey, civ: 1, walletToken: Keypair.generate().publicKey, mint: Keypair.generate().publicKey,
-    name: 'M', session: Keypair.generate().publicKey }));
-  t.partialSign(wallet);
-  const payment = Buffer.from(JSON.stringify({ x402Version: 1, scheme: 'exact', network: req.network, payload: { transaction: b64(t) } })).toString('base64');
-  const r = await call(handle, 'POST', '/x402/join', { body: { civ: 1, name: 'M' }, headers: { 'x-payment': payment } });
-  assert.equal(r.status, 200, JSON.stringify(r.json));
-  assert.deepEqual([r.json.member, r.json.civ, r.json.nation], [2, 1, 'Borealis']);
-  assert.equal(sent.length, 1);
-  assert.ok(sent[0].signatures.every(s => s.signature), 'the facilitator co-signed');
-  assert.equal(saves.length, 1, 'the new member is written to the state file immediately');
-  assert.deepEqual(saves[0].members, [{ index: 2, civ: 1, name: 'Hypatia-アステル', kind: 1, hosted: 'external', wallet: wallet.publicKey.toBase58(), session: new PublicKey(Buffer.alloc(32, 8)).toBase58() }]);
-  assert.equal(invalidated.length, 1);
-  const receipt = JSON.parse(Buffer.from(r.headers['X-PAYMENT-RESPONSE'], 'base64').toString());
-  assert.deepEqual([receipt.success, receipt.payer], [true, wallet.publicKey.toBase58()]);
 });
 
 test('/gov sends a member\'s actions in as few packet-sized transactions as fit', async () => {

@@ -5,17 +5,20 @@ use crate::chain::{fields, season_members};
 use crate::report::Report;
 use crate::Ctx;
 use borsh::BorshDeserialize;
+use permutation_chain::seat::{seat_member, Seat};
 use permutation_chain::state::{MemberAccount, Season};
 use permutation_rules::genesis::{nation_entries, new_season};
-use permutation_rules::gov::{self, GovAction, GovEntry, Role, NOBODY};
+use permutation_rules::gov::{self, NOBODY};
 use permutation_rules::state::WorldState;
+use permutation_rules::Ruleset;
 use permutation_server::chainlink::ChainLink;
 use permutation_server::codec::{from_hex, hex};
 use serde_json::Value;
 
-/// One member as a `PS_SEAT` record lists it: nation, session key,
-/// candidacy and first-election votes.
-type Seat = (u16, [u8; 32], u8, [u32; 4]);
+/// A `PS_SEAT` record: the number of members seated once it was logged, the
+/// state root then, and the members it seated (`seat::Seat`: nation, the key
+/// seated, candidacy and votes).
+type SeatRecord = (usize, Vec<u8>, Vec<Seat>);
 
 /// Every nation's officers (member ids, -1 for a vacant office), as printed.
 pub fn officers(state: &WorldState) -> String {
@@ -110,9 +113,9 @@ pub fn genesis(ctx: &mut Ctx) -> WorldState {
     state
 }
 
-/// The state root after each `PS_SEAT` record the gateway indexed, keyed by
-/// the number of members seated by then.
-fn seat_roots(ctx: &Ctx) -> Vec<(usize, Vec<u8>)> {
+/// The `PS_SEAT` records the gateway indexed, re-read from the chain, in
+/// order.
+fn seat_records(ctx: &Ctx) -> Vec<SeatRecord> {
     let mut n = 0usize;
     ctx.info["seating"]
         .as_array()
@@ -125,71 +128,102 @@ fn seat_roots(ctx: &Ctx) -> Vec<(usize, Vec<u8>)> {
                 .flatten()?;
             let seated: Vec<Seat> = Vec::try_from_slice(f.get(2)?).ok()?;
             n += seated.len();
-            Some((n, f.get(1)?.clone()))
+            Some((n, f.get(1)?.clone(), seated))
         })
         .collect()
 }
 
+/// What replaying the seating found: whether every member was seated and
+/// every record matched, the first mismatch, and the members seated with a
+/// substitute key (a session key registered twice).
+#[derive(Debug, Default)]
+struct Replayed {
+    ok: bool,
+    detail: String,
+    substituted: Vec<u32>,
+}
+
+impl Replayed {
+    fn fail(&mut self, why: String) {
+        if self.ok {
+            self.ok = false;
+            self.detail = why;
+        }
+    }
+}
+
+/// Seat `members` (registration order) with `seat::seat_member`, the function
+/// `SeatMembers` runs, so a duplicate session key gets the same substitute.
+/// Each record is checked where it ends: the root, and the members it lists
+/// with the key each was seated with.
+fn replay_seating(
+    state: &mut WorldState,
+    rules: &Ruleset,
+    members: &[MemberAccount],
+    records: &[SeatRecord],
+) -> Replayed {
+    let mut out = Replayed {
+        ok: true,
+        ..Default::default()
+    };
+    let mut seats: Vec<Seat> = Vec::new();
+    for m in members {
+        let Ok(seat) = seat_member(state, rules, m) else {
+            out.fail(format!("member {} could not be seated", m.index));
+            break;
+        };
+        if seat.1 != m.session {
+            out.substituted.push(m.index);
+        }
+        seats.push(seat);
+        let n = state.members.len();
+        if let Some((_, root, listed)) = records.iter().find(|(end, _, _)| *end == n) {
+            if state.state_root().unwrap().to_vec() != *root {
+                out.fail(format!(
+                    "root after seating {n} members differs from PS_SEAT"
+                ));
+            } else if seats[n - listed.len()..] != listed[..] {
+                out.fail(format!(
+                    "PS_SEAT ending at member {} lists other members or keys",
+                    n - 1
+                ));
+            }
+        }
+    }
+    out
+}
+
 /// 3a. The seating of the members. They come from their own accounts on the
 ///     base layer (final once registration closed), in registration order;
-///     each `PS_SEAT` root, when the gateway indexed it, is checked too, and
-///     tick 0's pre-state root anchors the result (see `first_election`).
-///     Returns the members.
+///     each `PS_SEAT` record, when the gateway indexed it, is checked too
+///     (its root and the keys it seated), and tick 0's pre-state root anchors
+///     the result (see `first_election`). Returns the members.
 pub fn seating(ctx: &mut Ctx, state: &mut WorldState) -> Vec<MemberAccount> {
-    let mut seat_ok = true;
-    let mut seat_detail = String::new();
-    let seat_roots = seat_roots(ctx);
+    let records = seat_records(ctx);
     let (season, rules) = (&ctx.season, &ctx.rules);
     let members = season_members(&ctx.base, &ctx.program_id, season.season_id);
+    let mut r = replay_seating(state, rules, &members, &records);
     if members.len() as u32 != season.member_count {
-        seat_ok = false;
-        seat_detail = format!(
+        r.ok = false;
+        r.detail = format!(
             "{} member accounts found for {} registered",
             members.len(),
             season.member_count
         );
     }
-    for m in &members {
-        let (civ, key, stand, votes) = (m.civ, m.session, m.stand, m.votes);
-        let Ok(id) = gov::join(state, rules, civ, key) else {
-            seat_ok = false;
-            break;
-        };
-        let mut e = vec![GovEntry {
-            member: id,
-            signer: key,
-            action: GovAction::Stand { roles: stand },
-        }];
-        for role in Role::ALL {
-            if votes[role.index()] != NOBODY {
-                e.push(GovEntry {
-                    member: id,
-                    signer: key,
-                    action: GovAction::Vote {
-                        role,
-                        candidate: votes[role.index()],
-                    },
-                });
-            }
-        }
-        seat_ok &= gov::apply_pre_season(state, rules, &e).is_ok();
-        if let Some((_, root)) = seat_roots.iter().find(|(n, _)| *n == state.members.len()) {
-            if state.state_root().unwrap().to_vec() != *root {
-                seat_ok = false;
-                seat_detail = format!(
-                    "root after seating {} members differs from PS_SEAT",
-                    state.members.len()
-                );
-            }
-        }
+    if r.ok && !r.substituted.is_empty() {
+        r.detail = format!(
+            "member(s) {:?} seated with a substitute key (session key registered twice)",
+            r.substituted
+        );
     }
     ctx.report.check(
         format!(
             "{} members seated in registration order, with their candidacy and votes",
             state.members.len()
         ),
-        seat_ok && state.members.len() as u32 == season.member_count,
-        seat_detail,
+        r.ok && state.members.len() as u32 == season.member_count,
+        r.detail,
     );
     members
 }
@@ -218,4 +252,107 @@ pub fn first_election(ctx: &mut Ctx, state: &mut WorldState, ticks: Option<&Valu
         anchor.as_ref() == Some(&state.state_root().unwrap().to_vec()),
         format!("officers {}", officers(state)),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use permutation_chain::seat::substitute_key;
+    use permutation_chain::state::MEMBER_MAGIC;
+    use permutation_rules::gov::{GovAction, GovEntry, Role};
+    use permutation_rules::Preset;
+
+    const SEASON: u64 = 7;
+
+    fn member(index: u32, civ: u16, wallet: u8, session: [u8; 32], stand: u8) -> MemberAccount {
+        MemberAccount {
+            magic: MEMBER_MAGIC,
+            season_id: SEASON,
+            bump: 255,
+            index,
+            civ,
+            wallet: [wallet; 32],
+            session,
+            kind: 2,
+            name: format!("m{index}"),
+            attestation: [0; 32],
+            stand,
+            votes: [NOBODY; 4],
+            shares: 0,
+            claimed: false,
+            tag: [0; 32],
+        }
+    }
+
+    /// A genesis world and three members, the second registering the first's
+    /// session key.
+    fn season() -> (Ruleset, WorldState, Vec<MemberAccount>) {
+        let rules = Ruleset::new(Preset::Blitz);
+        let world = new_season(&rules, &[1; 32], &[2; 32], &nation_entries(2)).unwrap();
+        let members = vec![
+            member(0, 0, 10, [1; 32], Role::Steward.bit()),
+            member(1, 0, 11, [1; 32], Role::General.bit()),
+            member(2, 1, 12, [2; 32], 0x0f),
+        ];
+        (rules, world, members)
+    }
+
+    /// The records a program logs that seats `keys` (members 0–1, then 2),
+    /// built with the rules alone.
+    fn logged(rules: &Ruleset, world: &WorldState, keys: [[u8; 32]; 3]) -> Vec<SeatRecord> {
+        let (_, _, members) = season();
+        let mut s = world.clone();
+        let mut out = Vec::new();
+        for range in [0..2, 2..3] {
+            let mut seats = Vec::new();
+            for m in &members[range] {
+                let key = keys[m.index as usize];
+                let id = gov::join(&mut s, rules, m.civ, key).unwrap();
+                let stand = GovEntry {
+                    member: id,
+                    signer: key,
+                    action: GovAction::Stand { roles: m.stand },
+                };
+                gov::apply_pre_season(&mut s, rules, &[stand]).unwrap();
+                seats.push((m.civ, key, m.stand, m.votes));
+            }
+            out.push((s.members.len(), s.state_root().unwrap().to_vec(), seats));
+        }
+        out
+    }
+
+    #[test]
+    fn a_duplicate_session_key_replays_with_its_substitute() {
+        let (rules, world, members) = season();
+        let keys = [[1; 32], substitute_key(SEASON, &[11; 32]), [2; 32]];
+        let records = logged(&rules, &world, keys);
+        let mut s = world.clone();
+        let r = replay_seating(&mut s, &rules, &members, &records);
+        assert!(r.ok, "{}", r.detail);
+        assert_eq!(r.substituted, vec![1]);
+        assert_eq!(s.members.iter().map(|m| m.key).collect::<Vec<_>>(), keys);
+        assert_eq!(s.members[1].standing_for, Role::General.bit());
+        // Without records (none indexed), the replay alone still seats all.
+        let r = replay_seating(&mut world.clone(), &rules, &members, &[]);
+        assert!(r.ok);
+    }
+
+    #[test]
+    fn a_record_with_another_key_or_root_fails() {
+        let (rules, world, members) = season();
+        let keys = [[1; 32], substitute_key(SEASON, &[11; 32]), [2; 32]];
+        // The record lists the session key the member registered, not the
+        // key it was seated with.
+        let mut records = logged(&rules, &world, keys);
+        records[0].2[1].1 = [1; 32];
+        let r = replay_seating(&mut world.clone(), &rules, &members, &records);
+        assert!(!r.ok);
+        assert!(r.detail.contains("keys"), "{}", r.detail);
+        // A program that seated another substitute: the root differs.
+        let other = [[1; 32], substitute_key(SEASON + 1, &[11; 32]), [2; 32]];
+        let records = logged(&rules, &world, other);
+        let r = replay_seating(&mut world.clone(), &rules, &members, &records);
+        assert!(!r.ok);
+        assert!(r.detail.contains("root"), "{}", r.detail);
+    }
 }
