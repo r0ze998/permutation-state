@@ -422,9 +422,14 @@ pub(super) fn require_operator_or_overdue(
     }
 }
 
-/// The accounts of a VRF request: the VRF program (executable), a queue in
-/// `queues` (writable), the system program, the SlotHashes sysvar and our
-/// identity PDA. Returns the identity's bump; any mismatch is `WrongOracle`.
+/// The accounts of a VRF request: the VRF program (executable), exactly
+/// `expected_queue` (writable), the system program, the SlotHashes sysvar
+/// and our identity PDA. Returns the identity's bump; any mismatch is
+/// `WrongOracle`. The caller names one queue, picked from the play mode the
+/// chain recorded (A20: a delegated season's ticks use `VRF_QUEUE_ER`,
+/// base play and the season seed `VRF_QUEUE_BASE`), never both: a request
+/// filed in the other layer's queue is never served, and a crank that could
+/// file one would win every retry race and reach the fallback.
 #[allow(dead_code)] // the handlers of wave 3 call it
 pub(super) fn check_vrf_accounts(
     program_id: &Pubkey,
@@ -433,12 +438,12 @@ pub(super) fn check_vrf_accounts(
     vrf_program: &AccountInfo,
     system: &AccountInfo,
     slot_hashes: &AccountInfo,
-    queues: &[Pubkey],
+    expected_queue: &Pubkey,
 ) -> Result<u8, ProgramError> {
     let (pda, bump) = randomness::program_identity(program_id);
     let ok = vrf_program.key == &randomness::VRF_PROGRAM_ID
         && vrf_program.executable
-        && queues.contains(queue.key)
+        && queue.key == expected_queue
         && queue.is_writable
         && system.key == &system_program::id()
         && slot_hashes.key == &solana_program::sysvar::slot_hashes::id()
@@ -993,60 +998,73 @@ mod tests {
 
     #[test]
     fn vrf_accounts_are_checked() {
+        use crate::randomness::{VRF_QUEUE_BASE, VRF_QUEUE_ER};
         let program = Pubkey::new_unique();
         let (identity, bump) = crate::randomness::program_identity(&program);
         let vrf = crate::randomness::VRF_PROGRAM_ID;
-        let queue = crate::randomness::VRF_QUEUE_ER;
+        let queue = VRF_QUEUE_ER;
         let system = system_program::id();
         let hashes = solana_program::sysvar::slot_hashes::id();
         let owner = Pubkey::default();
-        let run =
-            |identity: Pubkey, queue: Pubkey, vrf: Pubkey, executable: bool, writable: bool| {
-                let (mut l, mut d) = ([0u64; 5], vec![vec![0u8; 0]; 5]);
-                let [l0, l1, l2, l3, l4] = &mut l;
-                let mut it = d.iter_mut();
-                let (d0, d1, d2, d3, d4) = (
-                    it.next().unwrap(),
-                    it.next().unwrap(),
-                    it.next().unwrap(),
-                    it.next().unwrap(),
-                    it.next().unwrap(),
-                );
-                let i = AccountInfo::new(&identity, false, false, l0, d0, &owner, false);
-                let q = AccountInfo::new(&queue, false, writable, l1, d1, &owner, false);
-                let v = AccountInfo::new(&vrf, false, false, l2, d2, &owner, executable);
-                let s = AccountInfo::new(&system, false, false, l3, d3, &owner, false);
-                let h = AccountInfo::new(&hashes, false, false, l4, d4, &owner, false);
-                check_vrf_accounts(
-                    &program,
-                    &i,
-                    &q,
-                    &v,
-                    &s,
-                    &h,
-                    &[
-                        crate::randomness::VRF_QUEUE_ER,
-                        crate::randomness::VRF_QUEUE_BASE,
-                    ],
-                )
-            };
-        assert_eq!(run(identity, queue, vrf, true, true).unwrap(), bump);
-        assert!(run(identity, crate::randomness::VRF_QUEUE_BASE, vrf, true, true).is_ok());
+        let run = |identity: Pubkey,
+                   queue: Pubkey,
+                   vrf: Pubkey,
+                   executable: bool,
+                   writable: bool,
+                   expected: Pubkey| {
+            let (mut l, mut d) = ([0u64; 5], vec![vec![0u8; 0]; 5]);
+            let [l0, l1, l2, l3, l4] = &mut l;
+            let mut it = d.iter_mut();
+            let (d0, d1, d2, d3, d4) = (
+                it.next().unwrap(),
+                it.next().unwrap(),
+                it.next().unwrap(),
+                it.next().unwrap(),
+                it.next().unwrap(),
+            );
+            let i = AccountInfo::new(&identity, false, false, l0, d0, &owner, false);
+            let q = AccountInfo::new(&queue, false, writable, l1, d1, &owner, false);
+            let v = AccountInfo::new(&vrf, false, false, l2, d2, &owner, executable);
+            let s = AccountInfo::new(&system, false, false, l3, d3, &owner, false);
+            let h = AccountInfo::new(&hashes, false, false, l4, d4, &owner, false);
+            check_vrf_accounts(&program, &i, &q, &v, &s, &h, &expected)
+        };
         let wrong: ProgramError = ChainError::WrongOracle.into();
+        // Each layer's queue is accepted only where it is expected (A20):
+        // the other layer's queue is `WrongOracle`, both ways.
         assert_eq!(
-            run(Pubkey::new_unique(), queue, vrf, true, true).unwrap_err(),
+            run(identity, VRF_QUEUE_ER, vrf, true, true, VRF_QUEUE_ER).unwrap(),
+            bump
+        );
+        assert_eq!(
+            run(identity, VRF_QUEUE_BASE, vrf, true, true, VRF_QUEUE_BASE).unwrap(),
+            bump
+        );
+        assert_eq!(
+            run(identity, VRF_QUEUE_BASE, vrf, true, true, VRF_QUEUE_ER).unwrap_err(),
             wrong
         );
         assert_eq!(
-            run(identity, Pubkey::new_unique(), vrf, true, true).unwrap_err(),
+            run(identity, VRF_QUEUE_ER, vrf, true, true, VRF_QUEUE_BASE).unwrap_err(),
+            wrong
+        );
+        let er = |identity, queue, vrf, executable, writable| {
+            run(identity, queue, vrf, executable, writable, VRF_QUEUE_ER)
+        };
+        assert_eq!(
+            er(Pubkey::new_unique(), queue, vrf, true, true).unwrap_err(),
             wrong
         );
         assert_eq!(
-            run(identity, queue, Pubkey::new_unique(), true, true).unwrap_err(),
+            er(identity, Pubkey::new_unique(), vrf, true, true).unwrap_err(),
             wrong
         );
-        assert_eq!(run(identity, queue, vrf, false, true).unwrap_err(), wrong);
-        assert_eq!(run(identity, queue, vrf, true, false).unwrap_err(), wrong);
+        assert_eq!(
+            er(identity, queue, Pubkey::new_unique(), true, true).unwrap_err(),
+            wrong
+        );
+        assert_eq!(er(identity, queue, vrf, false, true).unwrap_err(), wrong);
+        assert_eq!(er(identity, queue, vrf, true, false).unwrap_err(), wrong);
     }
 
     #[test]
