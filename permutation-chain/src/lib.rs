@@ -9,12 +9,13 @@
 //!
 //! * **Always compiled**: the account layouts and the pure modules below
 //!   (`error`, `finalize`, `heap`, `instruction`, `lifecycle`, `payout`,
-//!   `randomness`, `rules`, `seat`, `state`, `token`). They must never `use` the MagicBlock SDK,
-//!   `solana_system_interface` or `crate::processor` (test-only uses are
-//!   gated `#[cfg(all(test, feature = "program"))]`). The play server, the
-//!   replay verifier and the LiteSVM suite (`svm-tests`) build this crate
-//!   without `program`, so code they call must live here, never in
-//!   `processor`. Their builds fail if the rule is broken.
+//!   `randomness`, `rules`, `seat`, `state`, `token`). They must never `use`
+//!   the MagicBlock SDK, `solana_system_interface` or `crate::processor`
+//!   (test-only uses are gated `#[cfg(all(test, feature = "program"))]`).
+//!   The play server, the replay verifier and the LiteSVM suite
+//!   (`svm-tests`) build this crate without `program`, so code they call
+//!   must live here, never in `processor`. Their builds fail if the rule is
+//!   broken.
 //! * **`program`**: the instruction handlers (`processor`) and the
 //!   entrypoint, with the MagicBlock SDK.
 

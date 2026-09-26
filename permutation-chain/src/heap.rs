@@ -12,9 +12,11 @@
 //! The arithmetic is `Bump`, a plain struct tested on the host; the SBF
 //! allocator is `Bump` over the program's heap region.
 //!
-//! Instructions never copy the world: it is streamed from and to the chunks
-//! (`state::Chunks`). `processor::play::scoped` gives back a whole region
-//! (`mark` / `release`); nothing else is ever freed except the last block.
+//! The target is that instructions never copy the world but stream it from
+//! and to the chunks; until P4 lands that streaming, `state::Chunks` still
+//! copies the body (`read_world`, `body`). `processor::play::scoped` gives
+//! back a whole region (`mark` / `release`); nothing else is ever freed
+//! except the last block.
 //! `heap-trace` builds keep a second header word, the high-water mark
 //! (`peak`), for measurements.
 

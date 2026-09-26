@@ -369,6 +369,28 @@ fn every_error_is_asserted() {
         missing.is_empty(),
         "error codes no test asserts: {missing:?}"
     );
+    // An exemption outlives its reason once a test asserts the code: the
+    // unit that added the test must remove the line.
+    let stale: Vec<&str> = cover::EXEMPT
+        .iter()
+        .filter(|(e, _)| asserted(*e))
+        .map(|(e, _)| e.name())
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "exempt error codes a test asserts (remove them from EXEMPT): {stale:?}"
+    );
+    if release_check() {
+        let pending: Vec<&str> = cover::EXEMPT
+            .iter()
+            .filter(|(_, why)| why.starts_with("PENDING"))
+            .map(|(e, _)| e.name())
+            .collect();
+        assert!(
+            pending.is_empty(),
+            "RELEASE_CHECK: error codes still exempt until their unit: {pending:?}"
+        );
+    }
     for (e, why) in cover::EXEMPT {
         println!("exempt: {} ({why})", e.name());
     }

@@ -152,9 +152,7 @@ pub mod mock {
             is_signer: m.is_signer,
             is_writable: m.is_writable,
         }));
-        let mut cb_data = req.callback_discriminator.clone();
-        cb_data.extend_from_slice(&e);
-        cb_data.extend_from_slice(&req.callback_args);
+        let cb_data = super::callback_data(&req, e);
         ic.native_invoke_signed(
             Instruction {
                 program_id: callback,
@@ -200,6 +198,15 @@ impl Chain {
         mock::take();
         self
     }
+}
+
+/// The data the oracle calls the callback program with: `discriminator ‖
+/// E ‖ callback args`.
+pub fn callback_data(request: &Request, e: [u8; 32]) -> Vec<u8> {
+    let mut data = request.callback_discriminator.clone();
+    data.extend_from_slice(&e);
+    data.extend_from_slice(&request.callback_args);
+    data
 }
 
 /// The oracle's answer to `request` with output `e`: the stand-in calls the
@@ -332,10 +339,39 @@ mod tests {
         assert!(requests().is_empty());
     }
 
+    /// The callback data decodes, with the program's own decoder, as the
+    /// `ConsumeTickRandomness` the request names: `tag ‖ E ‖ args` is the
+    /// order the instruction's fields are in.
+    #[test]
+    fn callback_data_is_the_programs_instruction() {
+        use permutation_chain::instruction::ChainInstruction as I;
+        let request = Request {
+            caller_seed: [3; 32],
+            callback_program_id: [4; 32],
+            callback_discriminator: vec![randomness::CONSUME_TICK_TAG],
+            callback_accounts_metas: vec![],
+            callback_args: randomness::tick_callback_args(7, 5).to_vec(),
+        };
+        let ix = I::try_from_slice(&callback_data(&request, [9; 32])).unwrap();
+        let I::ConsumeTickRandomness {
+            randomness,
+            season_id,
+            tick,
+        } = ix
+        else {
+            panic!("{ix:?}");
+        };
+        assert_eq!((randomness, season_id, tick), ([9; 32], 7, 5));
+    }
+
     /// The fulfilment reaches the callback program by CPI, signed as the
-    /// scoped identity, with `tag ‖ E ‖ args`: our program is called
-    /// (depth 2) with `ConsumeTickRandomness`, which refuses it until unit
-    /// P1 implements it.
+    /// scoped identity: our program is called (depth 2). This asserts the
+    /// wave-2 stub: `ConsumeTickRandomness` refuses with
+    /// `InvalidInstruction` (1), the same code a payload that fails to
+    /// decode gets, so the field order is checked host-side
+    /// (`callback_data_is_the_programs_instruction`). PENDING P1: replace it
+    /// with the round trip FreezeTick → `requests()` → fulfil → `PS_RAND`,
+    /// `rand_state == RAND_VRF`.
     #[test]
     fn fulfil_calls_the_program_back() {
         let mut c = Chain::new().with_vrf();

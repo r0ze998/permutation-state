@@ -1,6 +1,8 @@
 //! Instructions. Accounts are listed as (s) signer, (w) writable.
 //! The borsh enum tag is the variant index; never reorder or remove variants.
-//! Base layer: 0–5, 10, 11, 13–16, 18, 24, 27, 31–36. Ephemeral Rollup: 6–9, 12, 17, 19–23, 25, 28–30. StartClock (26): the layer that plays tick 0.
+//! Base layer: 0–5, 10, 11, 13–16, 18, 24, 27, 31–36. Ephemeral Rollup:
+//! 6–9, 12, 17, 19–23, 25, 28–30. StartClock (26): the layer that plays
+//! tick 0.
 //! "The sysvar" is the Instructions sysvar
 //! (`Sysvar1nstructions1111111111111111111111111`); an instruction that takes
 //! it must be the only one of its transaction besides compute-budget ones
@@ -79,10 +81,10 @@ pub enum ChainInstruction {
         /// 32 random bytes, or an operator AI's roster tag (V5 §18.2).
         tag: [u8; 32],
     },
-    /// Close registration (status Seeding) and request the season seed from
-    /// the MagicBlock VRF (the base queue); `ConsumeSeasonSeed` then opens
-    /// genesis. The operator's bond must reach `state::bond_floor`. Admin or
-    /// crank.
+    /// Close registration (status Seeding). It makes no VRF request:
+    /// `RetrySeasonSeed` requests the season seed (the base queue), in the
+    /// same transaction, and `ConsumeSeasonSeed` then opens genesis. The
+    /// operator's bond must reach `state::bond_floor`. Admin or crank.
     /// 0 authority (s,w) · 1 season (w) · 2 program identity PDA `["identity"]`
     /// · 3 VRF base queue (w) · 4 VRF program · 5 system · 6 SlotHashes sysvar
     StartSeason,
@@ -266,10 +268,14 @@ pub enum ChainInstruction {
     PostBond { amount: u64 },
     /// ER: close the reveal window and freeze the open tick's input once
     /// every commitment was revealed or the reveal deadline passed; offices
-    /// that committed but did not reveal are logged (`PS_FREEZE`). Requests
-    /// the tick randomness from the MagicBlock VRF, seeded with the frozen
-    /// salts' hash (`randomness::salts_hash`). Permissionless; not subject
-    /// to the alone rule.
+    /// that committed but did not reveal are logged (`PS_FREEZE`), and the
+    /// tick randomness is pending, seeded with the frozen salts' hash
+    /// (`randomness::salts_hash`). It makes no VRF request (and starts the
+    /// give-up clock): the crank sends `[FreezeTick, RetryTickRandomness]`
+    /// in one transaction, or `FreezeTick` alone if that does not fit.
+    /// Permissionless; not subject to the alone rule. The queue is the one
+    /// of the recorded play mode (delegated: the ER queue; base play: the
+    /// base queue), never either.
     /// 0 payer (s,w) · 1 world chunk 0 (w) · 2 program identity PDA `["identity"]`
     /// · 3 VRF queue (w) · 4 VRF program · 5 system · 6 SlotHashes sysvar
     /// · 7.. nation PDAs of every civ, in civ order (w)
@@ -284,10 +290,11 @@ pub enum ChainInstruction {
         season_id: u64,
         tick: u16,
     },
-    /// ER: no randomness `state::VRF_RETRY_SECONDS` after the last request:
-    /// request again; `state::VRF_GIVEUP_SECONDS` after the freeze: the
-    /// fallback (`randomness::RAND_FALLBACK`, logged; the verifier flags
-    /// it). Permissionless; not subject to the alone rule.
+    /// ER: request the tick randomness from the MagicBlock VRF: the first
+    /// request after `FreezeTick`, and again when none came
+    /// `state::VRF_RETRY_SECONDS` after the last one; `state::VRF_GIVEUP_SECONDS`
+    /// after the freeze: the fallback (`randomness::RAND_FALLBACK`, logged;
+    /// the verifier flags it). Permissionless; not subject to the alone rule.
     /// Accounts 0–6 as `FreezeTick`.
     RetryTickRandomness,
     /// Base: the VRF program's callback with the season seed's randomness
@@ -298,8 +305,9 @@ pub enum ChainInstruction {
         randomness: [u8; 32],
         season_id: u64,
     },
-    /// Base: status Seeding and `state::SEED_RETRY_SECONDS` since the last
-    /// request: request the season seed again. Permissionless.
+    /// Base: status Seeding: request the season seed from the MagicBlock
+    /// VRF (the base queue): the first request after `StartSeason`, and
+    /// again `state::SEED_RETRY_SECONDS` after the last one. Permissionless.
     /// 0 payer (s,w) · 1 season (w) · 2 program identity PDA · 3 VRF base queue (w)
     /// · 4 VRF program · 5 system · 6 SlotHashes sysvar
     RetrySeasonSeed,

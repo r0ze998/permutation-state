@@ -587,8 +587,9 @@ pub struct NationAccount {
     pub gov_quota: u16,
     /// Revealed batches (they match their commitments).
     pub batches: [Option<OrderBatch>; 4],
-    /// Governance actions for the open tick, in arrival order.
-    #[borsh(deserialize_with = "vec_exact")]
+    /// Governance actions for the open tick, in arrival order; decoded into
+    /// exactly its length (the bump heap never frees an outgrown buffer).
+    #[borsh(deserialize_with = "permutation_rules::state::vec_exact")]
     pub inbox: Vec<GovEntry>,
     /// The nation's members and their seated keys (first 8 bytes), set by
     /// `OpenGovernment` from the world: `SubmitGov` accepts only these.
@@ -1098,22 +1099,6 @@ impl<'a, 'info> Chunks<'a, 'info> {
 }
 
 // ------------------------------------------------------------------ small helpers
-
-/// Decode a `Vec` into exactly its length. borsh's own decoder starts small
-/// and doubles, and on the chain's bump heap (which never frees) every
-/// outgrown buffer stays allocated. The encoding is unchanged.
-pub fn vec_exact<R: borsh::io::Read, T: BorshDeserialize>(r: &mut R) -> borsh::io::Result<Vec<T>> {
-    let len = u32::deserialize_reader(r)? as usize;
-    // No account holds more; refuse lengths that could only be garbage.
-    if len > 1 << 16 {
-        return Err(borsh::io::ErrorKind::InvalidData.into());
-    }
-    let mut v = Vec::with_capacity(len);
-    for _ in 0..len {
-        v.push(T::deserialize_reader(r)?);
-    }
-    Ok(v)
-}
 
 pub fn load<T: BorshDeserialize>(data: &[u8]) -> Result<T, ProgramError> {
     T::deserialize(&mut &data[..]).map_err(|_| ChainError::NotInitialized.into())
@@ -1700,6 +1685,55 @@ mod tests {
         assert_eq!(NationAccount::base_len(0) + 12, NationAccount::base_len(1));
     }
 
+    /// The largest revealed batch under the caps (WP04 §4.5): `MAX_REVEAL_BYTES`
+    /// of orders in one order, and the `MAX_BATCH_ORDERS − 1` adopt ids left
+    /// beside it, encodes to 1,092 B, within `REVEAL_ROOM`. Every other split
+    /// of the caps is smaller (an extra order moves no byte cap, it only
+    /// displaces a 4-byte id).
+    #[test]
+    fn reveal_room_holds_the_largest_revealed_batch() {
+        use permutation_rules::{
+            gov::Role,
+            hex::Hex,
+            orders::{OrderBatch, MAX_BATCH_ORDERS},
+        };
+        let batch = |orders: Vec<Order>, adopt: usize| {
+            Some(OrderBatch {
+                civ: u16::MAX,
+                tick: u16::MAX,
+                role: Role::Diplomat,
+                member: u32::MAX,
+                decision_digest: [0xff; 32],
+                orders,
+                adopt: vec![u32::MAX; adopt],
+            })
+        };
+        // Everything but the orders' own bytes, at each split of the order cap.
+        let worst = (0..=MAX_BATCH_ORDERS)
+            .map(|adopt| {
+                let orders = if adopt < MAX_BATCH_ORDERS {
+                    MAX_REVEAL_BYTES
+                } else {
+                    0
+                };
+                borsh::object_length(&batch(vec![], adopt)).unwrap() + orders
+            })
+            .max()
+            .unwrap();
+        assert_eq!(worst, 1092);
+        assert!(worst <= REVEAL_ROOM);
+        // A real one: the longest single move under the byte cap, and 23 ids.
+        let path = (MAX_REVEAL_BYTES - 9) / 8;
+        let long = Order::MoveUnit {
+            unit: u32::MAX,
+            path: vec![Hex { q: -1, r: -1 }; path],
+        };
+        let bytes = borsh::object_length(&long).unwrap();
+        assert!(bytes <= MAX_REVEAL_BYTES && bytes + 8 > MAX_REVEAL_BYTES);
+        let real = borsh::object_length(&batch(vec![long], MAX_BATCH_ORDERS - 1)).unwrap();
+        assert_eq!(real, worst - (MAX_REVEAL_BYTES - bytes));
+    }
+
     #[test]
     fn gov_slots_bound_the_stored_bytes() {
         let stand = GovAction::Stand { roles: 1 };
@@ -1782,6 +1816,11 @@ mod tests {
             (10u32, 0u16, 0u64),
             (0, 3, 0),
             (3, 3, 0),
+            // The step at N == a is not monotone (A7; the chain cannot tell
+            // AIs from people, DOCS residual): one member fewer than the
+            // committed AIs needs a floor. n = 2, a = 3 (1 counted):
+            // p0 = 80 + 15, π = 30: (95 + 60) / 1.
+            (2, 3, 155),
             // n = 10, a = 3: p0 = 80 + 15 = 95, π = 30: (285 + 300) / 7 = 83.57.
             (10, 3, 84),
             // n = 2, a = 1: p0 = 80 + 5, π = 10: (85 + 20) / 1.
