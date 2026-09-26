@@ -60,7 +60,7 @@ pub const UNDELEGATE_PART: &[Cover] = &[Cover::Test(
 /// Ignored tests of this area waiting for their fix: (test, WP).
 pub const PENDING: &[(&str, &str)] = &[
     (
-        "delegation::undelegation_is_the_cranks_until_the_window_closes",
+        "delegation::undelegation_is_anyones_in_the_crank_shape",
         "WP02",
     ),
     (

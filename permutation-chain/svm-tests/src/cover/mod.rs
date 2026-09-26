@@ -17,7 +17,7 @@
 //! | `Chain(X)` | `E::X` (the tests import `ChainError as E` and use `assert_err`) |
 //! | `Token` | `assert_token_err(` |
 //! | `Program(name)` | `name` (e.g. `"IncorrectProgramId"` with `assert_program_err`) |
-//! | `Lands(needle)` | `needle` (a builder or driver call) and `.expect(` or `.unwrap()` |
+//! | `Lands(needle)` | `needle` (a builder or driver call) and `.expect(` or `.unwrap()` in the same statement |
 
 use crate::error::ChainError as E;
 use crate::instruction::ChainInstruction as I;

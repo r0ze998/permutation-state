@@ -160,7 +160,12 @@ fn reveal_roster_needs_the_operator_and_the_end() {
     let mut c = Chain::new();
     let s = ai_season(&mut c);
     let outsider = c.funded();
-    // While Running, before the end: refused, whoever sends it.
+    // While Running, before the end: refused, whoever sends it. At HEAD
+    // RevealRoster names no authority, so the builder cannot tell the two
+    // senders apart: WP09 gives it the authority account (contract §1.3
+    // tag 24) and pins the codes here with assert_err: the outsider
+    // Unauthorized (before and after the end), the operator before the
+    // end SeasonNotOver.
     assert!(c.send(vec![s.reveal_ai_ix(&[0])], &[&outsider]).is_err());
     let admin = s.admin.insecure_clone();
     assert!(c.send(vec![s.reveal_ai_ix(&[0])], &[&admin]).is_err());

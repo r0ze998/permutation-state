@@ -13,6 +13,7 @@
 //! Numbers are printed (`--nocapture`); with the seeded bots they reproduce
 //! for a given tree.
 
+use permutation_chain_svm_tests::error::ChainError;
 use permutation_chain_svm_tests::payout::claim_amount;
 use permutation_chain_svm_tests::state::*;
 use permutation_chain_svm_tests::*;
@@ -241,9 +242,18 @@ fn finish_after_played_season_at_the_cap() {
     );
 }
 
+/// Governance entries the flood must write in each nation's inbox before
+/// SubmitGov refuses with InboxFull (86 at HEAD: 516 across the six).
+/// WP03 (SubmitGov needs a member of the nation, a per-member quota) must
+/// switch the flood to the members' session keys at quota and set this to
+/// its `gov_quota × members` bound, or the flood fills nothing and the
+/// tests below pass without a full inbox.
+const FLOOD_MIN_PER_NATION: usize = 86;
+
 /// 15 members, 10 idle ticks, then every nation's governance inbox filled
 /// to what SubmitGov admits (fresh keys, `MAX_GOV_PER_SIGNER` each), and
-/// the commitments closed.
+/// the commitments closed. The flood stops only on InboxFull, after at
+/// least `FLOOD_MIN_PER_NATION` entries in each nation.
 fn flooded(c: &mut Chain) -> SeasonFx {
     let s = SeasonFx::running(
         c,
@@ -259,16 +269,26 @@ fn flooded(c: &mut Chain) -> SeasonFx {
     let crank = s.crank.insecure_clone();
     let mut entries = 0;
     for civ in 0..6u16 {
+        let mut here = 0;
         'keys: loop {
             let k = Keypair::new();
             for _ in 0..MAX_GOV_PER_SIGNER {
                 let ix = s.submit_gov_ix(&k.pubkey(), civ, 0, GovAction::Stand { roles: 1 });
-                if c.send(vec![ix], &[&crank, &k]).is_err() {
+                let r = c.send(vec![ix], &[&crank, &k]);
+                if r.is_err() {
+                    // Only a full inbox ends the flood; any other refusal
+                    // means the flood no longer fills anything.
+                    assert_err(r, ChainError::InboxFull);
                     break 'keys;
                 }
-                entries += 1;
+                here += 1;
             }
         }
+        assert!(
+            here >= FLOOD_MIN_PER_NATION,
+            "nation {civ}: the flood wrote {here} entries, under {FLOOD_MIN_PER_NATION}"
+        );
+        entries += here;
     }
     println!("{entries} governance entries across the 6 inboxes");
     s.close(c);
@@ -459,11 +479,18 @@ fn light_worst_shapes() {
     );
 }
 
-/// The largest intents HEAD accepts, under Light: Commit (tag 8) over a
-/// six-nation season's 26 accounts (177k CU), and CommitPart and
-/// UndelegatePart at every target (188k CU), over the Light ceiling. The
-/// crank never sends them (one chunk or three nations per intent); WP02
-/// retires Commit and enforces that intent shape.
+/// Nations per intent (`MAX_NATIONS_PER_INTENT` in state.rs from WP02).
+const NATIONS_PER_INTENT: usize = 3;
+
+/// Intents under Light, as WP02 fixes them. At HEAD, Commit (tag 8) over a
+/// six-nation season's 26 accounts (177k CU) and CommitPart and
+/// UndelegatePart at every target (188k CU) land, over the Light ceiling.
+/// Fixed: Commit is Retired; CommitPart and UndelegatePart over every
+/// target are refused (InvalidParams: one world chunk, or at most
+/// `NATIONS_PER_INTENT` nations); the largest shapes the program accepts
+/// land under `LIGHT_CU`: CommitPart of one chunk and of the most nations,
+/// and the whole undelegation in `undelegation_order` (chunks 1..=19 one at
+/// a time, the nations `NATIONS_PER_INTENT` at a time, chunk 0 last).
 #[test]
 #[ignore = "until WP02: intents over every account exceed the Light ceiling (WP02 caps the shape)"]
 fn light_intents_at_every_target() {
@@ -478,28 +505,50 @@ fn light_intents_at_every_target() {
     );
     let crank = b.crank.insecure_clone();
     let cp = crank.pubkey();
-    light(
-        &mut c,
-        "Commit, 26 accounts",
-        vec![b.commit_ix(&cp, false)],
-        &[&crank],
+    assert_err(
+        c.send(vec![b.commit_ix(&cp, false)], &[&crank]),
+        ChainError::Retired,
     );
     let all = b.all_targets();
+    assert_err(
+        c.send(vec![b.part_ix(&cp, all.clone(), false)], &[&crank]),
+        ChainError::InvalidParams,
+    );
+    let nations: Vec<u16> = all
+        .iter()
+        .copied()
+        .filter(|t| *t >= NATION_TARGET)
+        .collect();
     light(
         &mut c,
-        &format!("CommitPart, {} targets", all.len()),
-        vec![b.part_ix(&cp, all.clone(), false)],
+        "CommitPart, one chunk",
+        vec![b.part_ix(&cp, vec![1], false)],
+        &[&crank],
+    );
+    light(
+        &mut c,
+        &format!("CommitPart, {NATIONS_PER_INTENT} nations"),
+        vec![b.part_ix(&cp, nations[..NATIONS_PER_INTENT].to_vec(), false)],
         &[&crank],
     );
     b.fast_forward_to_end(&mut c);
     let mut order = all;
     order.rotate_left(1); // chunk 0 last
-    light(
-        &mut c,
-        &format!("UndelegatePart, {} targets", order.len()),
-        vec![b.part_ix(&cp, order, true)],
-        &[&crank],
+    assert_err(
+        c.send(vec![b.part_ix(&cp, order, true)], &[&crank]),
+        ChainError::InvalidParams,
     );
+    let mut parts: Vec<Vec<u16>> = (1..WORLD_CHUNKS as u16).map(|k| vec![k]).collect();
+    parts.extend(nations.chunks(NATIONS_PER_INTENT).map(|n| n.to_vec()));
+    parts.push(vec![0]);
+    for targets in parts {
+        light(
+            &mut c,
+            &format!("UndelegatePart {targets:?}"),
+            vec![b.part_ix(&cp, targets, true)],
+            &[&crank],
+        );
+    }
 }
 
 /// Every creatable season shape (Blitz, 2 to 6 nations): each GenesisStep
@@ -558,10 +607,11 @@ fn only_buildable_seasons_are_creatable() {
             },
         );
         let admin = s.admin.insecure_clone();
-        if c.send(vec![s.create_ix(&admin.pubkey())], &[&admin])
-            .is_err()
-        {
-            continue; // not creatable: fine
+        let created = c.send(vec![s.create_ix(&admin.pubkey())], &[&admin]);
+        if created.is_err() {
+            // Not creatable: fine, but only as `creatable` refuses it.
+            assert_err(created, ChainError::InvalidParams);
+            continue;
         }
         s.alloc_all(&mut c);
         for i in 0..2 * nations as usize {

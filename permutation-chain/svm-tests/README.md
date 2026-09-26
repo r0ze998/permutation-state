@@ -135,7 +135,7 @@ cover those.
 | Test | Waits for |
 |---|---|
 | `play_gate::seating_attacks_fail` | WP01 |
-| `delegation::undelegation_is_the_cranks_until_the_window_closes`, `delegation::undelegation_intents_have_the_crank_shape` | WP02 |
+| `delegation::undelegation_is_anyones_in_the_crank_shape`, `delegation::undelegation_intents_have_the_crank_shape` | WP02 |
 | `budget::light_intents_at_every_target` (Commit over 26 accounts 174–177k CU, CommitPart at every target 188k CU under Light) | WP02 |
 | `budget::inbox_full_quota_log_input` (LogTickInput#0 at 232 KiB with full inboxes) | WP03/WP07 |
 | `budget::only_buildable_seasons_are_creatable` (the Season preset is creatable but its first GenesisStep runs out of 1.4M CU) | WP13 |

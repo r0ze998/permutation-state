@@ -127,7 +127,9 @@ fn test_index() -> Vec<TestFn> {
 }
 
 /// One instruction per tag: `[tag] ‖ zeros`, deserialized as a prefix, for
-/// `tag = 0..` until a tag fails.
+/// `tag = 0..` up to the first tag that is no variant. A variant whose
+/// payload does not decode from zeros fails here, rather than hiding
+/// itself and every later tag from the covers.
 fn samples() -> Vec<ChainInstruction> {
     let mut out = vec![];
     for tag in 0..=255u8 {
@@ -138,7 +140,8 @@ fn samples() -> Vec<ChainInstruction> {
                 assert_eq!(borsh::to_vec(&ix).unwrap()[0], tag);
                 out.push(ix);
             }
-            Err(_) => break,
+            Err(e) if e.to_string().starts_with("Unexpected variant tag") => break,
+            Err(e) => panic!("tag {tag} is a variant but does not decode from zeros ({e}): give samples() a payload for it"),
         }
     }
     out
@@ -199,15 +202,15 @@ fn every_instruction_is_covered() {
             }
             for code in codes {
                 let n = needle(code);
-                let found = t.body.contains(&n)
-                    && (!matches!(code, Code::Lands(_))
-                        || t.body.contains(".expect(")
-                        || t.body.contains(".unwrap()"));
+                let found = match code {
+                    Code::Lands(_) => lands_in(&t.body, &n),
+                    _ => t.body.contains(&n),
+                };
                 if !found {
                     problems.push(format!(
                         "{label}: {test} does not assert {code:?} (its body needs {n:?}{})",
                         if matches!(code, Code::Lands(_)) {
-                            " and .expect( or .unwrap()"
+                            " and .expect( or .unwrap() in the same statement"
                         } else {
                             ""
                         }
@@ -237,11 +240,115 @@ fn every_instruction_is_covered() {
         );
     }
     assert!(problems.is_empty(), "{problems:#?}");
-    // A variant that does not deserialize from zeros would hide from the samples.
-    assert_eq!(
-        samples().len(),
-        borsh::to_vec(samples().last().unwrap()).unwrap()[0] as usize + 1
-    );
+}
+
+/// `body` with the inside of every string literal blanked (same length), so
+/// brackets and `;` in messages do not count.
+fn mask_strings(body: &str) -> Vec<u8> {
+    let mut out = body.as_bytes().to_vec();
+    let mut i = 0;
+    while i < out.len() {
+        if out[i] == b'"' {
+            i += 1;
+            while i < out.len() && out[i] != b'"' {
+                let skip = if out[i] == b'\\' { 2 } else { 1 };
+                for k in i..(i + skip).min(out.len()) {
+                    out[k] = b' ';
+                }
+                i += skip;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// The end of the statement at `from`: the first `;` outside the brackets
+/// opened after `from`, or a `}` that closes a block around it.
+fn statement_end(b: &[u8], from: usize) -> usize {
+    let mut depth = 0i32;
+    for (i, c) in b.iter().enumerate().skip(from) {
+        match c {
+            b'(' | b'[' | b'{' => depth += 1,
+            b'}' if depth <= 0 => return i,
+            b')' | b']' | b'}' => depth -= 1,
+            b';' if depth <= 0 => return i,
+            _ => {}
+        }
+    }
+    b.len()
+}
+
+/// The start of the statement around `at`: after the `;` or `{` that
+/// precedes it at its own level, climbing out of brackets (and of a closure
+/// or block whose first statement it is).
+fn statement_start(b: &[u8], at: usize) -> usize {
+    let mut depth = 0i32;
+    for i in (0..at).rev() {
+        match b[i] {
+            b')' | b']' | b'}' => depth += 1,
+            b'(' | b'[' | b'{' => depth -= 1,
+            b';' if depth <= 0 => return i + 1,
+            _ => {}
+        }
+    }
+    0
+}
+
+/// Whether the statement at `from` unwraps a result.
+fn unwraps(b: &[u8], from: usize) -> bool {
+    let stmt = String::from_utf8_lossy(&b[from..statement_end(b, from)]).to_string();
+    stmt.contains(".expect(") || stmt.contains(".unwrap()")
+}
+
+/// Whether `body` sends `needle`'s instruction and unwraps that send: the
+/// statement that uses it ends in `.expect(`/`.unwrap()`, or it is bound
+/// (`let x = …needle…`, a value or a closure) and a later statement that
+/// uses `x` does.
+fn lands_in(body: &str, needle: &str) -> bool {
+    let b = mask_strings(body);
+    let text = String::from_utf8_lossy(&b).to_string();
+    let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    text.match_indices(needle).any(|(at, _)| {
+        if unwraps(&b, at) {
+            return true;
+        }
+        let start = statement_start(&b, at);
+        let stmt = text[start..at].trim_start();
+        let Some(rest) = stmt.strip_prefix("let ") else {
+            return false;
+        };
+        let rest = rest.strip_prefix("mut ").unwrap_or(rest);
+        let name: String = rest
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if name.is_empty() {
+            return false;
+        }
+        let after = statement_end(&b, at);
+        text[after..].match_indices(name.as_str()).any(|(k, _)| {
+            let k = after + k;
+            let bounded = !word(b[k - 1]) && b.get(k + name.len()).is_none_or(|c| !word(*c));
+            bounded && unwraps(&b, k)
+        })
+    })
+}
+
+#[test]
+fn lands_needs_the_unwrap_on_its_own_send() {
+    let ok = "c.send(vec![s.part_ix(&cp, [0; 4], true)], &[&k])\n    .expect(\"lands; really\");";
+    assert!(lands_in(ok, "part_ix("));
+    // Bound, then sent and unwrapped: a value or a closure.
+    let bound = "let ix = s.part_ix(&cp, vec![1], true);\nc.send(vec![ix], &[&k]).unwrap();";
+    assert!(lands_in(bound, "part_ix("));
+    let closure = "let go = |c: &mut Chain| {\n    c.send(vec![s.part_ix(&cp, vec![1], true)], &[&k])\n};\nassert_err(go(&mut c), E::X);\ngo(&mut c).expect(\"lands\");";
+    assert!(lands_in(closure, "part_ix("));
+    // The unwrap is on another statement: not a landing.
+    let apart = "let r = c.send(vec![s.part_ix(&cp, vec![1], true)], &[&k]);\nassert!(r.is_err());\nlet x = other().unwrap();";
+    assert!(!lands_in(apart, "part_ix("));
+    let only_refused = "let go = || c.send(vec![s.part_ix(&cp, vec![1], true)], &[&k]);\nassert_err(go(), E::X);\nlet gone = 1;\nx.unwrap();";
+    assert!(!lands_in(only_refused, "part_ix("));
 }
 
 #[test]

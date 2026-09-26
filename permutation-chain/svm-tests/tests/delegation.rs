@@ -275,12 +275,14 @@ fn undelegate_part_after_the_last_tick() {
     }
 }
 
-/// Fixed behaviour (WP02): until the undelegation window closes, only the
-/// crank undelegates, in its own shape: tag 9 is retired and a stranger's
-/// UndelegatePart of several chunks or of more than three nations is refused.
+/// Fixed behaviour (WP02, contract §1.3 tag 12): anyone may send
+/// UndelegatePart, but only in the crank's shape and order; tag 9 is
+/// retired. A stranger's UndelegatePart of several chunks, of more than
+/// three nations or of every target is refused, and its in-shape part
+/// (chunk 1, first in `undelegation_order`) lands. No crank-only check.
 #[test]
-#[ignore = "until WP02: undelegation is the crank's, tag 9 retired"]
-fn undelegation_is_the_cranks_until_the_window_closes() {
+#[ignore = "until WP02: the crank's shape for anyone's UndelegatePart, tag 9 retired"]
+fn undelegation_is_anyones_in_the_crank_shape() {
     let mut c = Chain::new().with_magicblock();
     let s = running(&mut c, 6);
     s.fast_forward_to_end(&mut c);
@@ -290,18 +292,23 @@ fn undelegation_is_the_cranks_until_the_window_closes() {
         c.send(vec![s.commit_ix(&sp, true)], &[&stranger]),
         E::Retired,
     );
-    assert!(c
-        .send(vec![s.part_ix(&sp, vec![1, 2], true)], &[&stranger])
-        .is_err());
+    assert_err(
+        c.send(vec![s.part_ix(&sp, vec![1, 2], true)], &[&stranger]),
+        E::InvalidParams,
+    );
     let nations: Vec<u16> = (0..4).map(|k| NATION_TARGET + k).collect();
-    assert!(c
-        .send(vec![s.part_ix(&sp, nations, true)], &[&stranger])
-        .is_err());
+    assert_err(
+        c.send(vec![s.part_ix(&sp, nations, true)], &[&stranger]),
+        E::InvalidParams,
+    );
     let mut all = s.all_targets();
     all.rotate_left(1);
-    assert!(c
-        .send(vec![s.part_ix(&sp, all, true)], &[&stranger])
-        .is_err());
+    assert_err(
+        c.send(vec![s.part_ix(&sp, all, true)], &[&stranger]),
+        E::InvalidParams,
+    );
+    c.send(vec![s.part_ix(&sp, vec![1], true)], &[&stranger])
+        .expect("anyone's UndelegatePart in the crank's shape");
 }
 
 /// Fixed behaviour (WP02): an undelegation intent is one world chunk or up
@@ -322,7 +329,8 @@ fn undelegation_intents_have_the_crank_shape() {
         ),
         E::InvalidParams,
     );
-    // Chunk 0 before the others, or out of order: refused.
+    // Chunk 0 before the others, or out of order: refused. The code is
+    // UndelegationOrder (35), which WP02 adds: pin it there (assert_err).
     assert!(c
         .send(vec![s.part_ix(&cp, vec![0], true)], &[&crank])
         .is_err());
