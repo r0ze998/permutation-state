@@ -146,15 +146,23 @@ impl Map {
     /// full hexagonal map the tiles of one column are consecutive, so each
     /// column costs one `index_of`, not one per hex.
     pub fn indices_within(&self, center: Hex, radius: u32) -> Vec<usize> {
-        let r = radius as i32;
         let mut out = Vec::with_capacity((3 * radius * (radius + 1) + 1) as usize);
+        self.for_each_within(center, radius, |i| out.push(i));
+        out // (q, r) iteration order is tile-index order
+    }
+
+    /// `indices_within` without allocating: calls `f` with each index, ascending.
+    pub fn for_each_within(&self, center: Hex, radius: u32, mut f: impl FnMut(usize)) {
+        let r = radius as i32;
         let big_r = self.radius as i32;
         let full = self.tiles.len() == (3 * big_r * (big_r + 1) + 1) as usize;
         for dq in -r..=r {
             let q = center.q + dq;
             let (lo, hi) = (center.r + (-r).max(-dq - r), center.r + r.min(-dq + r));
             if !full {
-                out.extend((lo..=hi).filter_map(|rr| self.index_of(Hex::new(q, rr))));
+                (lo..=hi)
+                    .filter_map(|rr| self.index_of(Hex::new(q, rr)))
+                    .for_each(&mut f);
                 continue;
             }
             if q.abs() > big_r {
@@ -171,9 +179,8 @@ impl Map {
             let Some(first) = self.index_of(Hex::new(q, lo)) else {
                 continue;
             };
-            out.extend(first..=first + (hi - lo) as usize);
+            (first..=first + (hi - lo) as usize).for_each(&mut f);
         }
-        out // (q, r) iteration order is tile-index order
     }
 
     /// Claim unowned tiles within `radius` of `center` for `city` (§5.4):

@@ -137,8 +137,11 @@ export default {
   '解除': 'Clear',
   '自動防衛：基点から半径内に入った敵軍のうち最も弱いものを攻撃。撤退：隣の敵の強さが自軍の指定倍を超えたら自分の都市へ1マス下がる。':
     'Auto-defend: attacks the weakest enemy army that comes within the radius of its post. Retreat: steps back 1 tile toward your city when an adjacent enemy is stronger than your army by more than the set multiple.',
-  '{0}巡回：最大{1}地点を順に回り続けます。手動の命令を出したティックはそちらが優先されます。':
-    '{0} Patrol: keeps visiting up to {1} points in order. In a tick when you give the unit a manual order, that order comes first.',
+  '{0}巡回：最大{1}地点を順に回り続けます。各地点へはまっすぐ進みます（水や山を回り込むには地点を足してください）。進めない地点は飛ばします。手動の命令を出したティックはそちらが優先されます。':
+    '{0} Patrol: keeps visiting up to {1} points in order, walking straight toward each (add points to go around water or mountains); a point it cannot step toward is skipped. In a tick when you give the unit a manual order, that order comes first.',
+  '継続命令が動くのは国ごとに{0}部隊まで（番号の小さい順）。': n => plural(n,
+    'Unit rules run for up to {0} unit per nation (lowest unit numbers first).',
+    'Unit rules run for up to {0} units per nation (lowest unit numbers first).'),
   // drawing a patrol
   '巡回の道筋': 'Patrol route',
   '地図で回る地点を順にクリックしてください（最大{0}）。最後の地点のあとは最初に戻ります。':

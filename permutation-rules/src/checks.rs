@@ -637,6 +637,25 @@ pub fn enter(
 pub const MAX_DEFEND_RADIUS: u32 = 3;
 pub const MAX_AUTO_PURCHASE: u32 = 500;
 
+/// Advisory (clients, `preflight`; never called while a tick resolves): a
+/// new unit rule for `civ` would run. Only the first `ruled_units_cap`
+/// living ruled units of a nation (lowest ids) run their rules each tick;
+/// the others wait (§13).
+pub fn ruled_units_below_cap(state: &WorldState, civ: CivId) -> Result<(), Blocked> {
+    let cap = crate::orders::ruled_units_cap(state.civs.len());
+    let ruled = state
+        .units
+        .iter()
+        .filter(|x| {
+            x.alive && x.owner == Owner::Civ(civ) && x.standing != crate::state::StandingRule::None
+        })
+        .count();
+    if ruled >= cap {
+        return Err(Blocked::OverCap { cap: cap as u32 });
+    }
+    Ok(())
+}
+
 /// `SetStanding` (§13).
 pub fn standing(
     state: &WorldState,

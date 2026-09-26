@@ -3,9 +3,9 @@
 
 use permutation_rules::battle::AttackForecast;
 use permutation_rules::checks::Blocked;
-use permutation_rules::orders::{AttackTarget, Order};
+use permutation_rules::orders::{AttackTarget, Order, StandingOrder, StandingTarget};
 use permutation_rules::preview;
-use permutation_rules::state::{CivId, Owner, WorldState};
+use permutation_rules::state::{CivId, Owner, StandingRule, WorldState};
 use permutation_rules::units::UnitType;
 use permutation_rules::Ruleset;
 use serde_json::{json, Value};
@@ -170,6 +170,21 @@ pub fn preflight(s: &WorldState, rules: &Ruleset, civ: CivId, orders: &[Order]) 
             Order::ProposePeace { civ: t } => c::propose_peace(s, civ, *t),
             Order::ProposeNap { civ: t, bond } => c::propose_nap(s, rules, civ, *t, *bond),
             Order::ProposeAlliance { civ: t } => c::propose_alliance(s, rules, civ, *t),
+            // A new unit rule past the nation's cap is stored but waits
+            // unused (only `ruled_units_cap` ruled units per nation run).
+            Order::SetStanding { target, rule } => {
+                c::standing(s, civ, *target, rule).and_then(|()| match target {
+                    StandingTarget::Unit(id)
+                        if !matches!(rule, StandingOrder::Clear)
+                            && s.units
+                                .get(*id as usize)
+                                .is_some_and(|u| u.standing == StandingRule::None) =>
+                    {
+                        c::ruled_units_below_cap(s, civ)
+                    }
+                    _ => Ok(()),
+                })
+            }
             _ => Ok(()),
         };
         if let Err(b) = r {
@@ -182,4 +197,87 @@ pub fn preflight(s: &WorldState, rules: &Ruleset, civ: CivId, orders: &[Order]) 
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use permutation_rules::genesis::{nation_entries, new_season};
+    use permutation_rules::orders::ruled_units_cap;
+    use permutation_rules::state::Unit;
+    use permutation_rules::Preset;
+
+    /// A new unit rule for a nation already at its cap of ruled units is
+    /// flagged `OverCap` (it would wait unused); changing or clearing an
+    /// already ruled unit's rule is not.
+    #[test]
+    fn preflight_flags_a_unit_rule_past_the_cap() {
+        let rules = Ruleset::new(Preset::Blitz);
+        let mut s = new_season(&rules, &[5; 32], &[6; 32], &nation_entries(6)).unwrap();
+        let civ: CivId = 0;
+        let cap = ruled_units_cap(s.civs.len());
+        assert_eq!(cap, 8);
+        let home = s
+            .units
+            .iter()
+            .find(|u| u.owner == Owner::Civ(civ))
+            .unwrap()
+            .hex;
+        for _ in 0..=cap {
+            let id = s.units.len() as u32;
+            s.units.push(Unit {
+                id,
+                owner: Owner::Civ(civ),
+                unit_type: UnitType::Spearman,
+                troops: 1_000,
+                hex: home,
+                path: Vec::new(),
+                last_moved: None,
+                used_full_mp: false,
+                standing: StandingRule::Retreat { ratio_bps: 15_000 },
+                alive: true,
+            });
+        }
+        // `cap` ruled armies and one more without a rule.
+        let free = s.units.len() as u32 - 1;
+        s.units[free as usize].standing = StandingRule::None;
+        let ruled = free - 1;
+        let set = |unit: u32, rule: StandingOrder| Order::SetStanding {
+            target: StandingTarget::Unit(unit),
+            rule,
+        };
+        let w = preflight(
+            &s,
+            &rules,
+            civ,
+            &[set(free, StandingOrder::Retreat { ratio_bps: 20_000 })],
+        );
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert_eq!(w[0]["type"], "SetStanding");
+        assert_eq!(w[0]["blocked"]["code"], "OverCap");
+        assert_eq!(w[0]["blocked"]["cap"], 8);
+        let fine = [
+            set(ruled, StandingOrder::AutoDefend { radius: 2 }),
+            set(ruled, StandingOrder::Clear),
+            set(free, StandingOrder::Clear),
+        ];
+        assert!(preflight(&s, &rules, civ, &fine).is_empty());
+        // The rule itself is still checked.
+        let w = preflight(
+            &s,
+            &rules,
+            civ,
+            &[set(ruled, StandingOrder::AutoDefend { radius: 9 })],
+        );
+        assert_eq!(w[0]["blocked"]["code"], "OutOfBounds");
+        // One ruled army fewer: room for the new rule.
+        s.units[ruled as usize].alive = false;
+        let w = preflight(
+            &s,
+            &rules,
+            civ,
+            &[set(free, StandingOrder::Retreat { ratio_bps: 20_000 })],
+        );
+        assert!(w.is_empty(), "{w:?}");
+    }
 }
