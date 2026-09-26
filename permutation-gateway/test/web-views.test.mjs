@@ -62,7 +62,7 @@ test('the talk drawer shows the AI members, their bounty and the fallen homes to
   const v = memberView();
   Object.assign(S, { view: v, myCiv: 0, memberId: 0, session: null, watch: null });
   const markup = String(drawerTalk());
-  assert.match(markup, /運営のAI国民が <b>4人<\/b>/);
+  assert.match(markup, /運営のAIメンバーが <b>4人<\/b>/);
   assert.match(markup, /懸賞金 <b>5\.00 USDC<\/b>/);
   assert.match(markup, /ティック45に決まる/);
   assert.match(markup, /<b>Ilse<\/b>/, 'the fallen AI member is named');
@@ -71,6 +71,6 @@ test('the talk drawer shows the AI members, their bounty and the fallen homes to
 });
 
 test('the help text counts the AI members from the game view', () => {
-  assert.match(othersText(memberView()), /うち4人は運営のAI国民です/);
-  assert.doesNotMatch(othersText({ ...memberView(), aiRoster: { aiCount: 0, fallen: [] } }), /運営のAI国民/);
+  assert.match(othersText(memberView()), /うち4人は運営のAIメンバーです/);
+  assert.doesNotMatch(othersText({ ...memberView(), aiRoster: { aiCount: 0, fallen: [] } }), /運営のAIメンバー/);
 });

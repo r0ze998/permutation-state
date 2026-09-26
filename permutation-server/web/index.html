@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#243e38">
-  <title data-i18n>PERMUTATION STATE — 6つの国、ひとつの世界</title>
+  <title data-i18n>PERMUTATION STATE — ひとつの文明、6つの勢力</title>
   <link rel="stylesheet" href="base.css">
   <link rel="stylesheet" href="play.css">
 </head>
@@ -16,7 +16,7 @@
   <header class="topbar">
     <div class="brand"><span class="brand-mark">✳</span><span>PERMUTATION<em>STATE</em></span></div>
     <div class="civ-chip" id="civ-chip"></div>
-    <nav class="resources" id="resources" aria-label="あなたの文明の資源" data-i18n-attr="aria-label"></nav>
+    <nav class="resources" id="resources" aria-label="あなたの勢力の資源" data-i18n-attr="aria-label"></nav>
     <div class="clock" id="clock" tabindex="0"></div>
     <button class="chain-beat" id="chain-beat" type="button" title="チェーン（` キー）" data-i18n-attr="title"></button>
     <div class="pool-chip" id="pool-chip" title="賞金プール" data-i18n-attr="title"></div>
@@ -26,21 +26,21 @@
     </div>
   </header>
 
-  <section class="civ-plate" aria-label="あなたの文明" data-i18n-attr="aria-label">
-    <div class="eyebrow"><span class="live-dot" id="live-dot"></span><span id="season-label">ONE WORLD</span></div>
+  <section class="civ-plate" aria-label="あなたの勢力" data-i18n-attr="aria-label">
+    <div class="eyebrow"><span class="live-dot" id="live-dot"></span><span id="season-label">ONE CIVILIZATION</span></div>
     <h1 id="civ-title">—</h1>
     <div class="sub" id="civ-sub"></div>
     <div class="tracker" id="tracker"></div>
   </section>
 
   <nav class="world-nav" aria-label="パネル" data-i18n-attr="aria-label">
-    <button class="nav-btn" data-drawer="nation" type="button"><span class="g">⚖</span><span class="l" data-i18n="国の広場（ナビ）">国の広場</span><span class="dot" id="dot-nation" hidden></span></button>
+    <button class="nav-btn" data-drawer="nation" type="button"><span class="g">⚖</span><span class="l" data-i18n="国の広場（ナビ）">勢力の広場</span><span class="dot" id="dot-nation" hidden></span></button>
     <button class="nav-btn" data-drawer="era" type="button"><span class="g">✺</span><span class="l" data-i18n="時代（ナビ）">時代</span></button>
     <button class="nav-btn" data-drawer="merit" type="button"><span class="g">◈</span><span class="l" data-i18n>功績</span></button>
     <button class="nav-btn" data-drawer="cities" type="button"><span class="g">⌂</span><span class="l" data-i18n="都市・軍（ナビ）">都市・軍</span><span class="dot" id="dot-cities" hidden></span></button>
     <button class="nav-btn" data-drawer="research" type="button"><span class="g">✧</span><span class="l" data-i18n>研究</span><span class="dot" id="dot-research" hidden></span></button>
     <button class="nav-btn" data-drawer="diplomacy" type="button"><span class="g">✉</span><span class="l" data-i18n>外交</span><span class="dot" id="dot-diplomacy" hidden></span></button>
-    <button class="nav-btn" data-drawer="market" type="button"><span class="g">⇄</span><span class="l" data-i18n="国庫・市場（ナビ）">国庫・市場</span></button>
+    <button class="nav-btn" data-drawer="market" type="button"><span class="g">⇄</span><span class="l" data-i18n="国庫・市場（ナビ）">資金・市場</span></button>
     <button class="nav-btn" data-drawer="chronicle" type="button"><span class="g">☷</span><span class="l" data-i18n>年代記</span></button>
     <button class="nav-btn" data-drawer="talk" type="button"><span class="g">✉</span><span class="l" data-i18n>会話</span></button>
     <button class="nav-btn" data-drawer="decisions" type="button"><span class="g">⛓</span><span class="l" data-i18n="判断ログ（ナビ）">判断ログ</span></button>
@@ -86,7 +86,7 @@
     </section>
   </footer>
 
-  <nav class="ribbon" id="ribbon" aria-label="文明" data-i18n-attr="aria-label"></nav>
+  <nav class="ribbon" id="ribbon" aria-label="勢力の一覧" data-i18n-attr="aria-label"></nav>
   <div class="notif-stack" id="notif-stack" aria-live="polite"></div>
   <button class="next-turn" id="next-turn" type="button"></button>
   <aside class="chain-drawer" id="chain-drawer" hidden aria-label="チェーン" data-i18n-attr="aria-label"></aside>
@@ -97,16 +97,16 @@
 
 <dialog id="help" class="help">
   <div class="eyebrow" data-i18n>HOW TO PLAY · 遊び方</div>
-  <h2 id="help-title"><span data-i18n>ひとつの国の国民として、国を動かす。</span></h2>
-  <p class="desc" id="help-desc"><span data-i18n>いくつかの国が同じ地図を共有しています。一定の時間ごとの「ティック」で、全ての国の命令が同時に解決されます。</span></p>
+  <h2 id="help-title"><span data-i18n>ひとつの勢力のメンバーとして、勢力を動かす。</span></h2>
+  <p class="desc" id="help-desc"><span data-i18n>いくつかの勢力が同じ地図を共有しています。一定の時間ごとの「ティック」で、全ての勢力の命令が同時に解決されます。</span></p>
   <ol>
-    <li><span data-i18n><b data-i18n>国民になり、役職を選挙で決める。</b>国民は将軍・内政官・科学官・外交官を選びます（<span data-season="termTicks">30</span>ティックごと、投票は直前の<span data-season="voteWindow">10</span>ティック）。1人2役職まで。立候補者がいない役職はルールの代行が務めます。</span></li>
-    <li><span data-i18n><b data-i18n>役職者は担当の命令を出す。</b>将軍＝軍と斥候、内政官＝都市と開拓者、科学官＝研究、外交官＝他国・都市国家・交易。国の枠（3＋都市数、最大8）を役職ごとに分け、使わない枠は役職ごとに繰り越せます。</span></li>
-    <li><span data-i18n><b data-i18n>国民は献策・支持・投票・リコール。</b>担当外の命令は「献策」になり、役職者が採用すると功績を半分ずつ分けます。働かない役職者は過半数でリコールできます。宣戦には外交官と、別の人の将軍か内政官の同意が必要です。</span></li>
-    <li><span data-i18n><b data-i18n>情報は全員に公開、命令は封印。</b>チェーン上の状態は誰でも読めるので、全ての国の都市・部隊・数値が全員に見えます。代わりに命令は締め切りまでハッシュだけを出し、締め切りの後に公開します（誰も相手の命令を見てから動けません）。役職者は人間もAIも判断メモを封印して後で公開します。</span></li>
-    <li><span data-i18n><b data-i18n>4つの道で時代を進める。</b>覇権・繁栄・科学・協調の節目（各5段階）を達成すると点が入り、2つの道で同じ段階に届くと新しい時代へ。賞金プールは国の点で分け、国の中では20%を活動した国民で均等、残りを功績で分けます。</span></li>
+    <li><span data-i18n><b data-i18n>勢力のメンバーになり、役職を選挙で決める。</b>メンバーは将軍・内政官・科学官・外交官を選びます（<span data-season="termTicks">30</span>ティックごと、投票は直前の<span data-season="voteWindow">10</span>ティック）。1人2役職まで。立候補者がいない役職はルールの代行が務めます。</span></li>
+    <li><span data-i18n><b data-i18n>役職者は担当の命令を出す。</b>将軍＝軍と斥候、内政官＝都市と開拓者、科学官＝研究、外交官＝他の勢力・都市国家・交易。勢力の枠（3＋都市数、最大8）を役職ごとに分け、使わない枠は役職ごとに繰り越せます。</span></li>
+    <li><span data-i18n><b data-i18n>メンバーは献策・支持・投票・リコール。</b>担当外の命令は「献策」になり、役職者が採用すると功績を半分ずつ分けます。働かない役職者は過半数でリコールできます。宣戦には外交官と、別の人の将軍か内政官の同意が必要です。</span></li>
+    <li><span data-i18n><b data-i18n>情報は全員に公開、命令は封印。</b>チェーン上の状態は誰でも読めるので、全ての勢力の都市・部隊・数値が全員に見えます。代わりに命令は締め切りまでハッシュだけを出し、締め切りの後に公開します（誰も相手の命令を見てから動けません）。役職者は人間もAIも判断メモを封印して後で公開します。</span></li>
+    <li><span data-i18n><b data-i18n>4つの道で時代を進める。</b>覇権・繁栄・科学・協調の節目（各5段階）を達成すると点が入り、2つの道で同じ段階に届くと新しい時代へ。賞金プールは勢力の点で分け、勢力の中では20%を活動したメンバーで均等、残りを功績で分けます。</span></li>
   </ol>
-  <p class="note" data-i18n>操作：クリック＝選択 · ダブルクリック＝選択中の部隊を移動 · ドラッグ＝地図移動 · スクロール＝拡大縮小 · Space＝次の判断 · Ctrl+Enter＝確定 · H＝首都へ · Esc＝閉じる。<br><span id="help-mode"><span data-i18n>ローカルでは時計を止められます。「手番を終える」は自分の手番を終える操作で、人間の国民の全員が終えるとすぐに解決されます。</span></span></p>
+  <p class="note" data-i18n>操作：クリック＝選択 · ダブルクリック＝選択中の部隊を移動 · ドラッグ＝地図移動 · スクロール＝拡大縮小 · Space＝次の判断 · Ctrl+Enter＝確定 · H＝首都へ · Esc＝閉じる。<br><span id="help-mode"><span data-i18n>ローカルでは時計を止められます。「手番を終える」は自分の手番を終える操作で、人間のメンバー全員が終えるとすぐに解決されます。</span></span></p>
   <div class="row" style="justify-content:flex-end;margin-top:14px">
     <button class="btn" type="button" data-close-help data-i18n>閉じる</button>
     <button class="btn primary" type="button" data-start><span data-i18n>はじめる（開幕前なら第1回選挙を行う）→</span></button>
@@ -114,12 +114,12 @@
 </dialog>
 
 <dialog id="seats" class="help seats">
-  <div class="eyebrow" data-i18n>JOIN A NATION · 国民登録</div>
-  <h2 id="seat-title"><span data-i18n>どの国の国民になりますか。</span></h2>
-  <p class="desc" id="seat-desc" data-i18n><span id="seat-mode"></span>。国は<span id="seat-nations">6</span>つ、人数に上限はありません。人の少ない国ほど1人あたりの取り分は大きくなります。登録はこのブラウザに保存されます。</p>
+  <div class="eyebrow" data-i18n>CHOOSE YOUR FACTION · 勢力を選ぶ</div>
+  <h2 id="seat-title"><span data-i18n>どの勢力に加わりますか。</span></h2>
+  <p class="desc" id="seat-desc" data-i18n><span id="seat-mode"></span>。勢力は<span id="seat-nations">6</span>つ、人数に上限はありません。人の少ない勢力ほど1人あたりの取り分は大きくなります。登録はこのブラウザに保存されます。</p>
   <ul class="seat-list" id="seat-list"></ul>
   <div class="reg" id="chain-lobby" hidden></div>
-  <p class="note" data-i18n>登録せずに<a href="spectate.html" data-i18n>観戦する</a>（全ての国を表示）。AI エージェントとして参加する方法は <a href="llms.txt">llms.txt</a> にあります（人間と同じ権利です）。</p>
+  <p class="note" data-i18n>登録せずに<a href="spectate.html" data-i18n>観戦する</a>（全ての勢力を表示）。AI エージェントとして参加する方法は <a href="llms.txt">llms.txt</a> にあります（人間と同じ権利です）。</p>
 </dialog>
 
 <script type="module" src="app.mjs"></script>

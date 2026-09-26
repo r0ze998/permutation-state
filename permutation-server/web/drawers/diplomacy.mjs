@@ -41,15 +41,15 @@ function contractsSection(v) {
   const list = v.contracts || [];
   const mine = list.filter(c => c.from === S.myCiv || c.to === S.myCiv || (c.to == null && c.from !== S.myCiv));
   const row = c => {
-    const from = c.from === S.myCiv ? L`あなたの国` : civN(c.from);
-    const to = c.to == null ? L`（落とした国）` : c.to === S.myCiv ? L`あなたの国` : civN(c.to);
+    const from = c.from === S.myCiv ? L`あなたの勢力` : civN(c.from);
+    const to = c.to == null ? L`（落とした勢力）` : c.to === S.myCiv ? L`あなたの勢力` : civN(c.to);
     const act = c.to === S.myCiv && c.accepted == null && c.offered < v.tick
       ? html`<button class="btn primary" type="button" data-order="${attrJson({ type: 'AcceptContract', id: c.id })}">${L`受け入れる（枠1）`}</button>`
       : c.from === S.myCiv && c.accepted == null && c.term.kind !== 'Capture'
         ? html`<button class="btn" type="button" data-order="${attrJson({ type: 'CancelContract', id: c.id })}">${L`取り下げる`}</button>` : '';
     return html`<div class="proposal"><div>${Lh`<b>${from}</b> → <b>${to}</b>：${termText(c.term)}`}</div><div class="when">${L`預かり ${usdcFixed(c.escrow)} / ${usdcFixed(c.total)} USDC · 期限 ティック${c.deadline}${c.accepted != null ? L` · ティック${c.accepted}に成立` : L` · 未成立`}`}</div>${act ? html`<div class="row" style="margin-top:6px">${act}</div>` : ''}</div>`;
   };
-  return html`<div class="section-title">${L`国庫の契約 ${mine.length}`}</div><p class="desc">${L`約束を国庫のUSDCで縛ります。条件がチェーンで確かめられたら相手の国庫へ、期限までに満たされなければ戻ります。受け取ったUSDCは市場では使えず、最後に預けた人へ払い戻されます。`}</p>${mine.length ? mine.map(row) : html`<p class="desc">${L`ありません。`}</p>`}`;
+  return html`<div class="section-title">${L`勢力の資金の契約 ${mine.length}`}</div><p class="desc">${L`約束を勢力の資金のUSDCで縛ります。条件がチェーンで確かめられたら相手の勢力の資金へ、期限までに満たされなければ戻ります。受け取ったUSDCは市場では使えず、最後に預けた人へ払い戻されます。`}</p>${mine.length ? mine.map(row) : html`<p class="desc">${L`ありません。`}</p>`}`;
 }
 
 const actionLabel = a => `${T.DIPLO_ACTION[a]}${a === 'ProposeNap' ? L`（保証金${NAP_BOND}金）` : ''}`;
@@ -61,7 +61,7 @@ const RELATION_TAG = { war: 'bad', alliance: 'positive', nap: 'warning' };
 
 /** The row's always-visible line: name, era, pending proposal, relation. */
 function civHeader(c, hasInbox) {
-  return html`<summary><span class="l1"><span class="swatch-s" style="background:${T.CIV_COLORS[c.id]}"></span><b>${civN(c.id)}</b><span class="badge">${L`第${c.era}時代`}</span>${hasInbox ? html`<span class="tag warning">${L`申し入れ`}</span>` : ''}<span class="grow"></span><span class="tag ${RELATION_TAG[c.relation] || ''}">${T.RELATION[c.relation]}</span></span><span class="l2 meta">${L`国民${membersOf(c.id).length}人 · 確認済み${c.cities}都市 · 目視の兵${c.troopsSeen}`}</span></summary>`;
+  return html`<summary><span class="l1"><span class="swatch-s" style="background:${T.CIV_COLORS[c.id]}"></span><b>${civN(c.id)}</b><span class="badge">${L`第${c.era}時代`}</span>${hasInbox ? html`<span class="tag warning">${L`申し入れ`}</span>` : ''}<span class="grow"></span><span class="tag ${RELATION_TAG[c.relation] || ''}">${T.RELATION[c.relation]}</span></span><span class="l2 meta">${L`メンバー${membersOf(c.id).length}人 · 確認済み${c.cities}都市 · 目視の兵${c.troopsSeen}`}</span></summary>`;
 }
 
 /** What can be proposed to `c`: buttons, then the engine's reasons for the blocked ones. */
@@ -81,7 +81,7 @@ function civActions(c, mine) {
 /** Treasury contract offer to `c` (read back by offerContract). */
 function contractForm(c, v) {
   return html`<div class="row contract-form" style="margin-top:8px">
-          <select id="ct-kind-${c.id}"><option value="Peace">${L`講和したら払う`}</option><option value="KeepNap">${L`不可侵を守る間、分けて払う`}</option><option value="Capture">${L`この国の都市を落とした国に払う`}</option></select>
+          <select id="ct-kind-${c.id}"><option value="Peace">${L`講和したら払う`}</option><option value="KeepNap">${L`不可侵を守る間、分けて払う`}</option><option value="Capture">${L`この勢力の都市を落とした勢力に払う`}</option></select>
           <select id="ct-city-${c.id}">${(v.cities || []).filter(x => x.owner === c.id).map(x => html`<option value="${x.id}">${T.cityName(x.id)}</option>`)}</select>
           <label class="field">USDC<input id="ct-usdc-${c.id}" type="number" min="0.1" step="0.1" value="2"></label>
           <label class="field">${Lh`期限<input id="ct-ticks-${c.id}" type="number" min="1" max="60" value="20">ティック`}</label>
@@ -111,6 +111,6 @@ export function drawerDiplomacy() {
   return html`<div class="eyebrow">${L`DIPLOMACY · 外交官の担当`}</div><h2>${L`外交`}</h2><p class="drawer-intro">${Lh`申し入れは次のティック以降に相手が受ければ成立し、${PROPOSAL_TTL}ティックで失効します。講和すると${TRUCE_TICKS}ティックの休戦になります。<b>宣戦には、外交官とは別の人の将軍か内政官の同意（同じティック）が必要です。</b>${mine.includes('Diplomat') ? '' : L` あなたは外交官ではないので、ここでの命令は外交官への献策になります。`}`}</p>
     <div class="section-title">${L`届いた申し入れ ${inbox.length}`}</div>${inbox.length ? inbox.map(received) : html`<p class="desc">${L`ありません。`}</p>`}
     ${contractsSection(v)}
-    <div class="section-title">${L`文明 · 行をクリックで操作`}</div>${v.civs.filter(c => c.id !== S.myCiv).map(row)}
+    <div class="section-title">${L`勢力 · 行をクリックで操作`}</div>${v.civs.filter(c => c.id !== S.myCiv).map(row)}
     ${v.civs.some(c => c.relation === 'alliance') ? html`<button class="btn wide" type="button" data-order="${attrJson({ type: 'LeaveAlliance' })}">${L`同盟から離脱する（${LEAVE_ALLIANCE_TICKS}ティック後）`}</button>` : ''}`;
 }

@@ -259,7 +259,7 @@ export async function importBackup(text, scope, members) {
   if (!seed) throw codeError('BadBackup', L`鍵のバックアップを読めませんでした（16進64文字の鍵が必要です）`);
   const pub = toBase58(await publicKeyOf(seed));
   const member = (members || []).find(m => m.session === pub);
-  if (!member) throw codeError('SessionMismatch', L`この鍵は、このシーズンのどの国民の鍵とも一致しません`);
+  if (!member) throw codeError('SessionMismatch', L`この鍵は、このシーズンのどのメンバーの鍵とも一致しません`);
   const session = await sessionOf(seed, scope, member.wallet);
   remember(session);
   return { session, member };

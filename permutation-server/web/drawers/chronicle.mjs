@@ -19,7 +19,7 @@ function lineage() {
     const rows = r.nations.map((n, c) => ({ c, ...n })).sort((a, b) => Number(b.points) - Number(a.points));
     const taken = r.cities.filter(c => c.capturedFrom != null).length;
     return html`<details class="diplo-civ"><summary><span class="l1"><b>${L`シーズン ${x.seasonId}`}</b><span class="grow"></span><span class="meta">${L`都市 ${r.cities.length} · 奪われた ${taken}`}</span></span></summary>
-      <div class="civ-body">${rows.map((n, i) => html`<div class="list-row" style="cursor:default"><div class="main"><div class="title" style="font-weight:400">${i + 1}. ${T.civName((x.nations || [])[n.c] || L`国${n.c}`)}</div><div class="meta">${L`第${n.era}時代 · ${n.points}点 · 都市${n.cities} · 国民${n.members}`}</div></div><span class="meta">${usdcFixed(n.share)} USDC</span></div>`)}
+      <div class="civ-body">${rows.map((n, i) => html`<div class="list-row" style="cursor:default"><div class="main"><div class="title" style="font-weight:400">${i + 1}. ${T.civName((x.nations || [])[n.c] || L`勢力${n.c}`)}</div><div class="meta">${L`第${n.era}時代 · ${n.points}点 · 都市${n.cities} · メンバー${n.members}`}</div></div><span class="meta">${usdcFixed(n.share)} USDC</span></div>`)}
       <p class="when">${L`歴史のルート ${String(x.historyRoot).slice(0, 16)}… · チェーンのシーズン口座と照らし合わせられます`}</p></div></details>`;
   });
 }

@@ -326,5 +326,5 @@ test('the chain lens prints an absolute gateway for verify; the top label counts
   assert.match(lens, /&lt;base RPC&gt;/);
   S.view = { ...view(), economy: undefined }; // (the resource bar is not what this is about)
   renderTop();
-  assert.match(document.querySelector('.prototype-label').textContent, /国民2人（うち運営のAI 5人）/);
+  assert.match(document.querySelector('.prototype-label').textContent, /メンバー2人（うち運営のAI 5人）/);
 });

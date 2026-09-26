@@ -32,7 +32,7 @@ import { L, onLangChange } from './lang.mjs';
 
 function renderMinimap() {
   S.mini = drawMinimap($('#minimap'), S.map, S.view, map.viewport());
-  $('#mini-left').textContent = L`${S.map.tiles.length}マス · ${S.view.civs.length}文明`;
+  $('#mini-left').textContent = L`${S.map.tiles.length}マス · 1文明 · ${S.view.civs.length}勢力`;
   $('#mini-right').textContent = L`領土 ${[...S.view.owners].filter(c => c === String(S.myCiv)).length}`;
 }
 
@@ -77,7 +77,7 @@ function applyView(v) {
   // viewed by id and signs in the browser, so a restart changes nothing.)
   if (!v.chain && api.memberToken() && !isWatching() && v.viewer !== 'member') {
     api.tokenStore.set(null);
-    toast(L`サーバーが再起動したため、国民として入り直してください。`, 'error');
+    toast(L`サーバーが再起動したため、メンバーとして入り直してください。`, 'error');
     setTimeout(() => location.reload(), 1200);
     return;
   }

@@ -2,7 +2,7 @@
 // Keys are the Japanese exactly as marked in code (L`…` with values as {0},
 // {1}…; data-i18n text with child elements as {0}, {1}…). Terms: GLOSSARY.md.
 // A value may be a function of the values returning the template (plurals):
-//   '国民 {0}人': n => plural(n, '{0} member', '{0} members'),
+//   'メンバー {0}人': n => plural(n, '{0} member', '{0} members'),
 import { plural } from './helpers.mjs';
 
 export default {
@@ -14,12 +14,12 @@ export default {
   'ありません。': 'None.',
   'まだ記録はありません。': 'Nothing recorded yet.',
 
-  // ---- the nation plaza (drawers/nation.mjs)
-  'NATION · 国の広場': 'NATION',
+  // ---- the faction plaza (drawers/nation.mjs)
+  'FACTION · 勢力の広場': 'FACTION',
   '{0}の政府': 'Government of {0}',
-  '国民は{0}人。役職者だけが担当の命令を出せます。国民は誰でも献策・支持・投票・リコールができます（すべてチェーンに記録されます）。': n => plural(n,
-    "Your nation has {0} member. Only officers can give their offices' orders. Any member can propose, support, vote and recall (all recorded on chain).",
-    "Your nation has {0} members. Only officers can give their offices' orders. Any member can propose, support, vote and recall (all recorded on chain)."),
+  'メンバーは{0}人。役職者だけが担当の命令を出せます。メンバーは誰でも献策・支持・投票・リコールができます（すべてチェーンに記録されます）。': n => plural(n,
+    "Your faction has {0} member. Only officers can give their offices' orders. Any member can propose, support, vote and recall (all recorded on chain).",
+    "Your faction has {0} members. Only officers can give their offices' orders. Any member can propose, support, vote and recall (all recorded on chain)."),
   '登録の証明あり（ERC-8004 など）': 'Registration attested (ERC-8004 etc.)',
   '証明済みAI': 'Verified AI',
   '代行（AI）': 'Caretaker (AI)',
@@ -29,12 +29,12 @@ export default {
   '最後の命令 {0}': 'Last order: {0}',
   '立候補がないため代行が務めます': 'No candidates, so the caretaker serves',
   ' · 次点 {0}': ' · runner-up {0}',
-  '直近{0}ティックに活動した国民の過半数が{1}ティック以内に賛成すると解任': 'Removed if a majority of the members active in the last {0} ticks vote to recall within {1} ticks',
+  '直近{0}ティックに活動したメンバーの過半数が{1}ティック以内に賛成すると解任': 'Removed if a majority of the members active in the last {0} ticks vote to recall within {1} ticks',
   'リコール': 'Recall',
   'リコール投票中': 'Recall votes open',
   '<b>{0}</b>（{1}）のリコール{2}': 'Recall of the <b>{0}</b> ({1}){2}',
   '（{0}ティック命令なしのため自動）': ' (automatic: no orders for {0} ticks)',
-  '賛成 {0} / 必要 {1}（活動中の国民{2}人の過半数） · ティック{3}まで': (yes, need, n) => plural(n,
+  '賛成 {0} / 必要 {1}（活動中のメンバー{2}人の過半数） · ティック{3}まで': (yes, need, n) => plural(n,
     'Yes {0} / needed {1} (a majority of {2} active member) · until tick {3}',
     'Yes {0} / needed {1} (a majority of {2} active members) · until tick {3}'),
   '賛成する': 'Vote to recall',
@@ -68,8 +68,8 @@ export default {
   // ---- eras and merit (drawers/era.mjs)
   'ERAS · 4つの道と時代': 'ERAS',
   '{0} · 第{1}時代 · {2}点': (civ, era, p) => plural(p, '{0} · Era {1} · {2} point', '{0} · Era {1} · {2} points'),
-  '節目を1つ達成するごとに点が入り、同じ段階の節目を{0}つの道（第5段階は{1}つ）で達成すると新しい時代に入ります。領土・人口・宗主・条約・占領都市は<b>シーズン終了時の状態</b>で判定するので、失えば取り消されます（下は「今終わったら」）。賞金プールは国民のいる国の点の比で分けます。':
-    'Every milestone reached scores points; reach the milestones of one tier on {0} paths ({1} for tier 5) to enter a new era. Territory, population, suzerainty, treaties and captured cities are judged by <b>the state at the end of the season</b>, so losing them takes the milestone back (below: “if it ended now”). The prize pool is split by the points of the nations that have members.',
+  '節目を1つ達成するごとに点が入り、同じ段階の節目を{0}つの道（第5段階は{1}つ）で達成すると新しい時代に入ります。領土・人口・宗主・条約・占領都市は<b>シーズン終了時の状態</b>で判定するので、失えば取り消されます（下は「今終わったら」）。賞金プールはメンバーのいる勢力の点の比で分けます。':
+    'Every milestone reached scores points; reach the milestones of one tier on {0} paths ({1} for tier 5) to enter a new era. Territory, population, suzerainty, treaties and captured cities are judged by <b>the state at the end of the season</b>, so losing them takes the milestone back (below: “if it ended now”). The prize pool is split by the points of the factions that have members.',
   '段階': 'Tier',
   '{0}点': n => plural(n, '{0} pt', '{0} pts'),
   '領土 {0}{1}': 'Territory {0}{1}',
@@ -90,20 +90,20 @@ export default {
   '条約相手 {0} · 同盟 {1} · 宗主 {2}{3} · 交易 {4}': 'Treaty partners {0} · alliances {1} · suzerain of {2}{3} · trade {4}',
   '（経験あり）': ' (has been one)',
   '第{0}時代まで：段階{1}の節目を{2}つの道で（いま{3}つ）。': 'To Era {0}: tier {1} milestones on {2} paths (now {3}).',
-  '国ごとの達成と賞金の見込み': 'Progress and projected prize by nation',
-  '国': 'Nation',
+  '勢力ごとの達成と賞金の見込み': 'Progress and projected prize by faction',
+  '勢力名': 'Faction',
   '時代': 'Era',
   '節目': 'Milestones',
   '点': 'Points',
   '取り分': 'Share',
-  '国民がいない・活動した国民がいない・都市がない国は配分の対象外': 'Nations with no members, no active members or no cities get no share',
+  'メンバーがいない・活動したメンバーがいない・都市がない勢力は配分の対象外': 'Factions with no members, no active members or no cities get no share',
   '対象外': 'Excluded',
   '観戦中は表示されません。': 'Not shown while spectating.',
   'MERIT · 功績と見込み': 'MERIT',
   'シーズン終了時の配分 {0} USDC': 'Payout at season end: {0} USDC',
   '今終わったら {0} USDC': 'If it ended now: {0} USDC',
-  '国の取り分は {0} USDC。その{1}%は活動した国民で均等（1人 {2}・上限は参加費の半分）、残りは功績の比で、国が点を取った道の功績ほど重く分けます。活動した国民＝{3}区間のうち{4}区間以上で命令・献策・支持・投票をした人（あなた：{5}区間{6}）。':
-    (share, pct, each, total, need, mine) => `Your nation's share is {0} USDC. {1}% of it is split equally among the active members ({2} each, at most half the entry fee); the rest goes by merit, weighted toward the paths where your nation scored. Active members are those who gave orders, proposed, supported or voted in at least {4} of {3} windows (you: ${plural(mine, '{5} window', '{5} windows')}{6}).`,
+  '勢力の取り分は {0} USDC。その{1}%は活動したメンバーで均等（1人 {2}・上限は参加費の半分）、残りは功績の比で、勢力が点を取った道の功績ほど重く分けます。活動したメンバー＝{3}区間のうち{4}区間以上で命令・献策・支持・投票をした人（あなた：{5}区間{6}）。':
+    (share, pct, each, total, need, mine) => `Your faction's share is {0} USDC. {1}% of it is split equally among the active members ({2} each, at most half the entry fee); the rest goes by merit, weighted toward the paths where your faction scored. Active members are those who gave orders, proposed, supported or voted in at least {4} of {3} windows (you: ${plural(mine, '{5} window', '{5} windows')}{6}).`,
   'あなたの功績 · 合計 {0}': 'Your merit · total {0}',
   '直前のティックで得た功績': 'Merit from the last tick',
   'なし。都市の成長・建物の完成・研究・占領・条約・交易などで、命令を出した人（採用された献策は半分ずつ）に付きます。': 'None. Merit goes to whoever gave the order (half each for an adopted proposal) for city growth, completed buildings, research, captures, treaties, trade and more.',
@@ -138,7 +138,7 @@ export default {
   // ---- diplomacy (drawers/diplomacy.mjs)
   'DIPLOMACY · 外交官の担当': 'DIPLOMACY',
   '申し入れは次のティック以降に相手が受ければ成立し、{0}ティックで失効します。講和すると{1}ティックの休戦になります。<b>宣戦には、外交官とは別の人の将軍か内政官の同意（同じティック）が必要です。</b>{2}':
-    'An offer takes effect when the other nation accepts it in a later tick, and expires after {0} ticks. Making peace starts a {1}-tick truce. <b>Declaring war needs the consent of a General or Steward who is not the Diplomat (in the same tick).</b>{2}',
+    'An offer takes effect when the other faction accepts it in a later tick, and expires after {0} ticks. Making peace starts a {1}-tick truce. <b>Declaring war needs the consent of a General or Steward who is not the Diplomat (in the same tick).</b>{2}',
   ' あなたは外交官ではないので、ここでの命令は外交官への献策になります。': ' You are not the Diplomat, so orders here become proposals to the Diplomat.',
   '届いた申し入れ {0}': 'Offers received {0}',
   '<b>{0}</b>から{1}': '<b>{0}</b> offers {1}',
@@ -146,11 +146,11 @@ export default {
   'ティック{0}に提案 · ティック{1}で失効{2}': 'Offered at tick {0} · expires at tick {1}{2}',
   ' · 破った側の保証金は相手のものに': ' · whoever breaks it loses the bond to the other',
   '受け入れる（枠1）': 'Accept (1 slot)',
-  '国庫の契約 {0}': 'Treasury contracts {0}',
-  '約束を国庫のUSDCで縛ります。条件がチェーンで確かめられたら相手の国庫へ、期限までに満たされなければ戻ります。受け取ったUSDCは市場では使えず、最後に預けた人へ払い戻されます。':
+  '勢力の資金の契約 {0}': 'Treasury contracts {0}',
+  '約束を勢力の資金のUSDCで縛ります。条件がチェーンで確かめられたら相手の勢力の資金へ、期限までに満たされなければ戻ります。受け取ったUSDCは市場では使えず、最後に預けた人へ払い戻されます。':
     'Bind a promise with treasury USDC. When the condition is verified on chain, the USDC goes to the other treasury; if it is not met by the deadline, it comes back. USDC received cannot be used on the market and is refunded to whoever deposited it last.',
-  'あなたの国': 'Your nation',
-  '（落とした国）': '(whoever takes it)',
+  'あなたの勢力': 'Your faction',
+  '（落とした勢力）': '(whoever takes it)',
   '<b>{0}</b> → <b>{1}</b>：{2}': '<b>{0}</b> → <b>{1}</b>: {2}',
   '講和する': 'Make peace',
   '{0}との同盟を抜ける': 'Leave the alliance with {0}',
@@ -160,10 +160,10 @@ export default {
   ' · ティック{0}に成立': ' · made at tick {0}',
   ' · 未成立': ' · not accepted yet',
   '取り下げる': 'Withdraw',
-  '文明 · 行をクリックで操作': 'Nations · click a row to act',
+  '勢力 · 行をクリックで操作': 'Factions · click a row to act',
   '第{0}時代': 'Era {0}',
   '申し入れ': 'Offer',
-  '国民{0}人 · 確認済み{1}都市 · 目視の兵{2}': (m, c) => `${plural(m, '{0} member', '{0} members')} · ${plural(c, '{1} city known', '{1} cities known')} · {2} troops seen`,
+  'メンバー{0}人 · 確認済み{1}都市 · 目視の兵{2}': (m, c) => `${plural(m, '{0} member', '{0} members')} · ${plural(c, '{1} city known', '{1} cities known')} · {2} troops seen`,
   '節目 {0} · スターゲート{1}/3{2}{3}': 'Milestones {0} · Star Gate {1}/3{2}{3}',
   '侵略中': 'aggressor',
   ' · 休戦 ティック{0}まで': ' · truce until tick {0}',
@@ -174,7 +174,7 @@ export default {
   '条約を破棄（保証金を失い宣戦）': 'Break the pact (lose the bond, declare war)',
   '講和したら払う': 'Pay on peace',
   '不可侵を守る間、分けて払う': 'Pay in installments while the NAP holds',
-  'この国の都市を落とした国に払う': 'Pay whoever takes a city of this nation',
+  'この勢力の都市を落とした勢力に払う': 'Pay whoever takes a city of this faction',
   '期限<input id="ct-ticks-{0}" type="number" min="1" max="60" value="20">ティック': 'Deadline<input id="ct-ticks-{0}" type="number" min="1" max="60" value="20">ticks',
   '契約を出す': 'Offer contract',
   '同盟から離脱する（{0}ティック後）': n => plural(n, 'Leave the alliance (after {0} tick)', 'Leave the alliance (after {0} ticks)'),
@@ -194,9 +194,9 @@ export default {
   '手数料 {0}金（{1}）': 'Fee {0} gold ({1})',
   '同じティックの他の注文とまとめて約定するため、実際の価格は変わります。許容：見積もり±2%': "Filled together with the tick's other orders, so the actual price will differ. Tolerance: quote ±2%",
   '命令に追加（枠1）': 'Add to orders (1 slot)',
-  'USDC 市場 · 国庫どうしの一括競売 · テスト資金': 'USDC market · uniform-price auction between treasuries · test funds',
-  '原材料だけを他の国と取引できます（ティックごとに1つの価格でまとめて約定）。買い手は手数料{0}%と<b>関税</b>を払い、どちらも{1}%が賞金プール・{2}%が運営に入ります。関税は国の累計支出とともに上がります。買った物資は{3}ティック後に届き、富・交易量・功績には数えません。スターゲートを建てている都市には届きません。自国・交戦中の国とは取引できません。{4} USDCを超える支出には、外交官とは別の役職者の同意が必要です。':
-    "Only raw goods can be traded with other nations (all filled at one price per tick). Buyers pay a {0}% fee and a <b>tariff</b>; of both, {1}% goes to the prize pool and {2}% to the operator. The tariff rises with the nation's total spending. Goods bought arrive after {3} ticks and do not count toward wealth, trade or merit. They are not delivered to a city building a Star Gate. No trade with your own nation or a nation at war with you. Spending over {4} USDC needs the consent of an officer other than the Diplomat.",
+  'USDC 市場 · 勢力の資金どうしの一括競売 · テスト資金': 'USDC market · uniform-price auction between treasuries · test funds',
+  '原材料だけを他の勢力と取引できます（ティックごとに1つの価格でまとめて約定）。買い手は手数料{0}%と<b>関税</b>を払い、どちらも{1}%が賞金プール・{2}%が運営に入ります。関税は勢力の累計支出とともに上がります。買った物資は{3}ティック後に届き、富・交易量・功績には数えません。スターゲートを建てている都市には届きません。自分の勢力・交戦中の勢力とは取引できません。{4} USDCを超える支出には、外交官とは別の役職者の同意が必要です。':
+    "Only raw goods can be traded with other factions (all filled at one price per tick). Buyers pay a {0}% fee and a <b>tariff</b>; of both, {1}% goes to the prize pool and {2}% to the operator. The tariff rises with the faction's total spending. Goods bought arrive after {3} ticks and do not count toward wealth, trade or merit. They are not delivered to a city building a Star Gate. No trade with your own faction or a faction at war with you. Spending over {4} USDC needs the consent of an officer other than the Diplomat.",
   '累計支出': 'Total spent',
   'いまの関税': 'Tariff now',
   '輸送中': 'In transit',
@@ -224,17 +224,17 @@ export default {
   'このシーズンは、どのシーズンの続きでもありません。': 'This season does not follow any earlier season.',
   'シーズン {0}': 'Season {0}',
   '都市 {0} · 奪われた {1}': n => plural(n, '{0} city · {1} captured', '{0} cities · {1} captured'),
-  '国{0}': 'Nation {0}',
-  '第{0}時代 · {1}点 · 都市{2} · 国民{3}': (era, p, c, m) => `Era {0} · ${plural(p, '{1} point', '{1} points')} · ${plural(c, '{2} city', '{2} cities')} · ${plural(m, '{3} member', '{3} members')}`,
+  '勢力{0}': 'Faction {0}',
+  '第{0}時代 · {1}点 · 都市{2} · メンバー{3}': (era, p, c, m) => `Era {0} · ${plural(p, '{1} point', '{1} points')} · ${plural(c, '{2} city', '{2} cities')} · ${plural(m, '{3} member', '{3} members')}`,
   '歴史のルート {0}… · チェーンのシーズン口座と照らし合わせられます': 'History root {0}… · can be checked against the season account on chain',
 
   // ---- decision log (drawers/decisions.mjs)
   'DECISION LOG · 判断ログ': 'DECISION LOG',
   '判断の証拠': 'Decision proofs',
-  '全文明が毎ティック、解決<b>前</b>に「見えていた世界（観測ルート）・方針・理由」を1つのハッシュで約束し、解決<b>後</b>に理由を公開します。下の ✓ はサーバーではなく、このブラウザが SHA-256 で再計算した結果です。':
-    'Every tick, each nation commits in one hash, <b>before</b> resolution, to “the world it saw (observation root), its policy and its rationale”, and reveals the rationale <b>after</b> resolution. The ✓ marks below are recomputed with SHA-256 by this browser, not by the server.',
+  '全勢力が毎ティック、解決<b>前</b>に「見えていた世界（観測ルート）・方針・理由」を1つのハッシュで約束し、解決<b>後</b>に理由を公開します。下の ✓ はサーバーではなく、このブラウザが SHA-256 で再計算した結果です。':
+    'Every tick, each faction commits in one hash, <b>before</b> resolution, to “the world it saw (observation root), its policy and its rationale”, and reveals the rationale <b>after</b> resolution. The ✓ marks below are recomputed with SHA-256 by this browser, not by the server.',
   '観測の証明 · そのとき何が見えていたか': 'Observation proof · what was in sight then',
-  '文明': 'Nation',
+  // '勢力名' (Faction, the #proof-civ label) is in the eras section above: era.mjs uses the same text.
   'ティック': 'Tick',
   'マス：{0}': 'Tile: {0}',
   '地図で選択': 'pick on the map',
@@ -258,7 +258,7 @@ export default {
   '公開された理由が約束（digest）と一致{0}': 'The revealed rationale matches the commitment (digest){0}',
   '：「{0}」': ': “{0}”',
   '（理由の記入なし）': ' (no rationale given)',
-  'このマスは判断のとき見えていませんでした。ここにいた部隊について、この文明は知り得なかったことになります。': 'This tile was not in sight when the decision was made, so this nation could not have known about any unit on it.',
+  'このマスは判断のとき見えていませんでした。ここにいた部隊について、この勢力は知り得なかったことになります。': 'This tile was not in sight when the decision was made, so this faction could not have known about any unit on it.',
   'ティックの解決後、次の確定で公開': 'Revealed at the next commit, after the tick resolves',
   '解決後に公開': 'Revealed after resolution',
   '公開 t{0}': 'Revealed t{0}',
@@ -271,20 +271,20 @@ export default {
 
   // ---- talk and bounties (drawers/talk.mjs)
   'TALK · 会話と懸賞': 'TALK',
-  '国民どうしの会話は公開です。ティックごとにまとめてチェーンに刻まれ、誰がいつ何を言ったかは後から確かめられます。約束を縛るのは言葉ではなく<b>国庫の契約</b>です（外交の画面）。':
+  'メンバーどうしの会話は公開です。ティックごとにまとめてチェーンに刻まれ、誰がいつ何を言ったかは後から確かめられます。約束を縛るのは言葉ではなく<b>勢力の資金の契約</b>です（外交の画面）。':
     'Talk between members is public. It is written to the chain in one batch per tick, so anyone can later check who said what and when. What binds a promise is not words but a <b>treasury contract</b> (on the diplomacy screen).',
   'メッセージ（280字まで）': 'Message (up to 280 characters)',
   'メッセージはこのブラウザのゲーム内の鍵で署名して送ります（1ティックに3件まで）。': 'Messages are signed with the in-game key in this browser (up to 3 per tick).',
-  '参加すると話せます。': 'Join a nation to talk.',
+  '参加すると話せます。': 'Choose your faction to talk.',
   'メッセージ {0}': 'Messages {0}',
-  '国民{0}': 'Member {0}',
+  'メンバー{0}': 'Member {0}',
   '<b>{0}</b>（{1}） {2}': '<b>{0}</b> ({1}) {2}',
   'ティック{0}{1}': 'Tick {0}{1}',
   ' · チェーンに記録済み': ' · recorded on chain',
   'まだありません。': 'None yet.',
-  '運営のAI国民と懸賞金': "The operator's AI members and bounties",
-  'このシーズンには運営のAI国民が <b>{0}人</b> 混ざっています。誰かは遊んでいる間は分かりません。それぞれ自国のどこかの都市に住んでいて（ティック{1}に決まる）、その都市を最初に落とした国に懸賞金 <b>{2} USDC</b> が入ります（直前10ティック以内に条約があった相手からは出ません）。AI国民の取り分は、同じ国の人に配り直されます。':
-    n => `The operator has mixed ${plural(n, '<b>{0} AI member</b>', '<b>{0} AI members</b>')} into this season. You can't tell who they are while playing. Each lives in a city of its own nation (chosen at tick {1}), and the first nation to take that city earns a bounty of <b>{2} USDC</b> (none if the two nations had a treaty in the previous 10 ticks). An AI member's share is redistributed to the people of its nation.`,
+  '運営のAIメンバーと懸賞金': "The operator's AI members and bounties",
+  'このシーズンには運営のAIメンバーが <b>{0}人</b> 混ざっています。誰かは遊んでいる間は分かりません。それぞれ自分の勢力のどこかの都市に住んでいて（ティック{1}に決まる）、その都市を最初に落とした勢力に懸賞金 <b>{2} USDC</b> が入ります（直前10ティック以内に条約があった相手からは出ません）。AIメンバーの取り分は、同じ勢力の人に配り直されます。':
+    n => `The operator has mixed ${plural(n, '<b>{0} AI member</b>', '<b>{0} AI members</b>')} into this season. You can't tell who they are while playing. Each lives in a city of its own faction (chosen at tick {1}), and the first faction to take that city earns a bounty of <b>{2} USDC</b> (none if the two factions had a treaty in the previous 10 ticks). An AI member's share is redistributed to the people of its faction.`,
   '<b>{0}</b>（{1}）{2}': '<b>{0}</b> ({1}){2}',
   '：{0}を{1}がティック{2}に落とした{3}': ': {1} took {0} at tick {2}{3}',
   '（懸賞金あり）': ' (bounty paid)',

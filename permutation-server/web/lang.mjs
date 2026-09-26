@@ -2,9 +2,9 @@
 // every module) or English (dictionaries in lang/, keyed by the Japanese).
 //
 // Marking text (see lang/GLOSSARY.md for the English of every game term):
-//   L`国民 ${n}人`        plain text. In Japanese: exactly what the template
+//   L`メンバー ${n}人`    plain text. In Japanese: exactly what the template
 //                         literal would give. In English: the entry for the
-//                         key "国民 {0}人" (values numbered {0}, {1}… in
+//                         key "メンバー {0}人" (values numbered {0}, {1}… in
 //                         order; an English entry may reorder them), else
 //                         the Japanese. The result is a string, so html``
 //                         escapes it like any other value.
@@ -14,7 +14,7 @@
 //                         them. Returns html`` markup. Use it only when the
 //                         markup sits inside a sentence; markup around a
 //                         whole sentence stays outside: html`<b>${L`…`}</b>`.
-//   t('国民 {0}人', n)    the same as L for a key that is not a template
+//   t('メンバー {0}人', n) the same as L for a key that is not a template
 //                         literal (a table of keys, a key chosen at run time).
 // Never evaluate L/Lh/t at module top level (the language can change): wrap
 // such constants in functions, or use lazyTable({ k: () => L`…` }).
@@ -32,7 +32,7 @@
 // (lang/en-{lobby,play,inspector,drawers,pages}.mjs), each
 // `export default { 'Japanese key': 'English', … }`. A value may be a
 // function of the values that returns the English template, for plurals:
-//   '国民 {0}人': n => plural(n, '{0} member', '{0} members')
+//   'メンバー {0}人': n => plural(n, '{0} member', '{0} members')
 // (plural is in lang/helpers.mjs). The same key in two files must have the
 // same English (a test checks it).
 //
@@ -152,7 +152,7 @@ export function Lh(strings, ...values) {
   return html(strings, ...values);
 }
 
-/** A key that is not a template literal: t('国民 {0}人', n). */
+/** A key that is not a template literal: t('メンバー {0}人', n). */
 export function t(key, ...args) {
   if (current === 'en') {
     const en = lookup(normalizeKey(key), args);

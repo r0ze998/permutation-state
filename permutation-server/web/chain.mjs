@@ -39,7 +39,7 @@ export function toggleChain() {
 export function renderPool() {
   setHtml($('#pool-chip'), html`<span class="k">${L`賞金プール`}</span><span class="v">${fmt(poolUsdc())}<small>USDC</small></span>`);
   const pct = poolSharePct(S.view);
-  $('#pool-chip').title = `${L`参加費 ${usdc(S.view?.season?.entryFee)} USDC × 国民${(S.view?.members || []).length}人の${pct}%、と市場の手数料・関税の${pct}%`}${S.season ? `\nVault ${S.season.accounts?.vault}` : ''}`;
+  $('#pool-chip').title = `${L`参加費 ${usdc(S.view?.season?.entryFee)} USDC × メンバー${(S.view?.members || []).length}人の${pct}%、と市場の手数料・関税の${pct}%`}${S.season ? `\nVault ${S.season.accounts?.vault}` : ''}`;
 }
 
 export function renderChainBeat() {

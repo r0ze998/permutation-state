@@ -226,7 +226,7 @@ export async function join({ wallet, session, civ, name, stand, onStep = () => {
   if (!s.ok) return s;
   if (s.programId !== p.programId || String(s.season?.seasonId) !== p.seasonId) return fail('X402Mismatch', L`ゲートウェイのシーズンがゲームサーバーのものと一致しません`);
   const members = s.members || [];
-  if (members.some(m => m.wallet === wallet.address)) return fail('AlreadyMember', L`このウォレットはすでにこのシーズンの国民です`);
+  if (members.some(m => m.wallet === wallet.address)) return fail('AlreadyMember', L`このウォレットはすでにこのシーズンのメンバーです`);
   if (members.some(m => m.session === session.publicKey)) return fail('SessionInUse');
   const { deposit } = registrationOf(s);
   const need = p.entryFee + deposit;

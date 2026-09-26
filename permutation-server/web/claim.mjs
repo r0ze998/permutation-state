@@ -77,12 +77,12 @@ export function claimCard(v) {
     if (!projected && !(Number(m.shares ?? 0) > 0)) return '';
     return html`<div class="claim-card"><div class="eyebrow">${L`RESULT · あなたの賞金`}</div>
       <h3>${L`見込み ${usdc(projected)} USDC`}</h3>
-      <p class="desc"><span class="tag warning">${L`精算待ち（最長約1時間）`}</span> ${L`シーズンの精算（運営のAI国民の公開と配分の確定）が終わると、ここから受け取れます。`}</p></div>`;
+      <p class="desc"><span class="tag warning">${L`精算待ち（最長約1時間）`}</span> ${L`シーズンの精算（運営のAIメンバーの公開と配分の確定）が終わると、ここから受け取れます。`}</p></div>`;
   }
   const total = c.parts?.total ?? 0n;
   if (total <= 0n) return '';
   const head = html`<div class="eyebrow">${L`RESULT · あなたの賞金`}</div><h3>${L`あなたの賞金 ${fmtUsdc(total)} USDC`}</h3>
-    <p class="desc">${L`賞金 ${fmtUsdc(c.parts.prize)} USDC${c.parts.refund ? L` ＋ 国庫の残りの返還 ${fmtUsdc(c.parts.refund)} USDC` : ''}。登録したウォレット（${short(m.wallet, 4, 4)}）のトークン口座に届きます。`}</p>`;
+    <p class="desc">${L`賞金 ${fmtUsdc(c.parts.prize)} USDC${c.parts.refund ? L` ＋ 勢力の資金の残りの返還 ${fmtUsdc(c.parts.refund)} USDC` : ''}。登録したウォレット（${short(m.wallet, 4, 4)}）のトークン口座に届きます。`}</p>`;
   if (m.claimed) {
     const sig = sigGet(chainio.pinned()?.seasonId, m.wallet);
     const link = sig && chainio.explorerTx(sig, { base: s.endpoints?.base ?? v.chain?.endpoints?.base });
@@ -153,7 +153,7 @@ export function pastClaimsHtml(list, busy) {
   const known = list.filter(x => x.total !== null), unknown = list.filter(x => x.total === null);
   return html`<div class="past-claims">${known.length ? html`<div class="section-title">${L`前のシーズンの賞金を受け取る`}</div>${known.map(row)}` : ''}
     ${unknown.length ? html`<details><summary class="section-title">${L`前のシーズンの賞金を確かめる（${unknown.length}シーズン）`}</summary>
-      <p class="desc">${L`このウォレットがそのシーズンの国民だったかを、ゲートウェイから読めませんでした。受け取りを試すとわかります（ウォレットの署名が必要です。国民でなかったシーズンでは受け取れません）。`}</p>${unknown.map(row)}</details>` : ''}</div>`;
+      <p class="desc">${L`このウォレットがそのシーズンのメンバーだったかを、ゲートウェイから読めませんでした。受け取りを試すとわかります（ウォレットの署名が必要です。メンバーでなかったシーズンでは受け取れません）。`}</p>${unknown.map(row)}</details>` : ''}</div>`;
 }
 
 /** Claim an earlier season's prize with the connected wallet; returns the chainio result. */

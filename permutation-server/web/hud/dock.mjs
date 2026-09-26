@@ -49,11 +49,11 @@ export function renderDock() {
   const props = S.drafts.filter(d => d.proposal).length;
   setHtml($('#dock-budget'), offices.length
     ? html`<div class="pips" aria-label="${L`命令の枠`}">${offices.map(officePips)}</div><div class="budget-text num">${offices.map(r => `${T.ROLE_JA[r]} ${used(r)}/${spendable(r)}`).join(' · ')}${props ? ` · ${L`献策 ${props}件`}` : ''}</div>
-      <span class="tip panel"><div class="tip-row"><span>${L`国の枠`}</span><span>${BUDGET_TEXT()}</span></div><div class="tip-row"><span>${L`役職ごとの割り当て`}</span><span>${T.ROLES.map(r => T.ROLE_JA[r]).join(listSep())}</span></div><div class="tip-row"><span>${L`繰越`}</span><span>${L`役職ごとに最大${BANK_TICKS}ティック分`}</span></div><div class="tip-row"><span>${L`取引所・同意`}</span><span>${L`枠を使わない`}</span></div></span>`
+      <span class="tip panel"><div class="tip-row"><span>${L`勢力の枠`}</span><span>${BUDGET_TEXT()}</span></div><div class="tip-row"><span>${L`役職ごとの割り当て`}</span><span>${T.ROLES.map(r => T.ROLE_JA[r]).join(listSep())}</span></div><div class="tip-row"><span>${L`繰越`}</span><span>${L`役職ごとに最大${BANK_TICKS}ティック分`}</span></div><div class="tip-row"><span>${L`取引所・同意`}</span><span>${L`枠を使わない`}</span></div></span>`
     : html`<div class="budget-text">${props ? Lh`役職がないので、命令はすべて<b>献策</b>になります（${props}件）` : Lh`役職がないので、命令はすべて<b>献策</b>になります`}</div>`);
   setHtml($('#chips'), S.drafts.length
     ? S.drafts.map((d, i) => html`<span class="chip ${d.usdc ? 'usdc' : ''} ${d.proposal ? 'proposal' : ''}" data-chip="${i}" title="${d.label}${d.proposal ? L`（${T.ROLE_JA[d.office]}への献策）` : ''}"><span>${d.proposal ? '✎' : d.glyph}</span><span class="t">${d.label}</span>${d.proposal ? html`<span class="pt">${L`献策→${T.ROLE_JA[d.office]}`}</span>` : ''}<button class="x" type="button" data-remove="${i}" aria-label="${L`取り消す`}">×</button></span>`)
-    : html`<span class="empty">${v.chain && !S.session ? NO_KEY() : offices.length ? L`命令はまだありません。地図で部隊や都市を選んでください（Space＝次の判断）。担当外の命令は献策になります。` : L`あなたは役職についていません。地図で選んだ命令は、担当の役職者への献策になります。国の広場で投票・支持・リコールもできます。`}</span>`);
+    : html`<span class="empty">${v.chain && !S.session ? NO_KEY() : offices.length ? L`命令はまだありません。地図で部隊や都市を選んでください（Space＝次の判断）。担当外の命令は献策になります。` : L`あなたは役職についていません。地図で選んだ命令は、担当の役職者への献策になります。勢力の広場で投票・支持・リコールもできます。`}</span>`);
   if (S.pulseChip !== null) { // highlight a chip just added
     const chip = $(`#chips [data-chip="${S.pulseChip}"]`);
     S.pulseChip = null;

@@ -18,7 +18,7 @@ export const CIV_NAMES = twin(
   { Aster: 'Aster', Borealis: 'Borealis', Cinder: 'Cinder', Dunmar: 'Dunmar', Ember: 'Ember', Fjordal: 'Fjordal' },
 );
 
-// Offices of a nation (V5 §5), in the engine's order.
+// Offices of a faction (V5 §5), in the engine's order.
 export const ROLES = ['General', 'Steward', 'Science', 'Diplomat'];
 export const ROLE_JA = twin(
   { General: '将軍', Steward: '内政官', Science: '科学官', Diplomat: '外交官' },
@@ -104,7 +104,7 @@ export const RELATION = twin(
 );
 /** Season phases [name, NAME]; their start ticks come from the server (season.phases). */
 export const PHASES = twin(
-  [['建国', 'FOUNDING'], ['拡大', 'EXPANSION'], ['競合', 'CONTENTION'], ['危機', 'CRISIS'], ['決着', 'RESOLUTION']],
+  [['草創', 'FOUNDING'], ['拡大', 'EXPANSION'], ['競合', 'CONTENTION'], ['危機', 'CRISIS'], ['決着', 'RESOLUTION']],
   [['Founding', 'FOUNDING'], ['Expansion', 'EXPANSION'], ['Contention', 'CONTENTION'], ['Crisis', 'CRISIS'], ['Resolution', 'RESOLUTION']],
 );
 const PHASE_STARTS = [0, 18, 60, 120, 162]; // only if a view has no season.phases
@@ -139,18 +139,18 @@ const BLOCKED_JA = {
   InTruce: b => `講和後の休戦中です。ティック${b.until}まで宣戦できません`,
   BondTooSmall: b => `保証金は${b.min}金以上が必要です`,
   NotEnoughGold: b => `金が足りません（必要${b.need}・所持${b.have}）`,
-  AllianceFull: b => `同盟は${b.cap}文明までです`,
+  AllianceFull: b => `同盟は${b.cap}勢力までです`,
   OutOfRange: b => `射程外です（距離${b.distance}・射程${b.range}）`,
   OverCap: b => `上限${b.cap}を超えています`,
   OutOfBounds: b => `${b.min}〜${b.max}の範囲で指定してください`,
   ProtectedCapital: b => `首都の保護区域です${b.until !== null && b.until !== undefined ? `（ティック${b.until}まで）` : ''}`,
-  UnknownUnit: '部隊が見つかりません', UnknownCity: '都市が見つかりません', UnknownCiv: '文明が見つかりません',
-  NotYours: 'あなたのものではありません', SameCiv: '自分の文明です', NotASettler: '開拓者ではありません',
-  Impassable: '通行できない地形です', ForeignTerritory: '他の文明の領土です', InProtectedZone: '他の文明の保護区域内です',
+  UnknownUnit: '部隊が見つかりません', UnknownCity: '都市が見つかりません', UnknownCiv: '勢力が見つかりません',
+  NotYours: 'あなたのものではありません', SameCiv: '自分の勢力です', NotASettler: '開拓者ではありません',
+  Impassable: '通行できない地形です', ForeignTerritory: '他の勢力の領土です', InProtectedZone: '他の勢力の保護区域内です',
   AlreadyBuilt: '建設済みです', AlreadyQueued: 'すでに生産予定です', StarGateInAnotherCity: 'スターゲートは1都市だけに建てられます',
   NeedsPreviousStage: '前の段階を先に完成させてください', InvalidTroopCount: '兵数が正しくありません', AlreadyResearched: '研究済みです',
   NotAtPeace: '平和な関係のときだけできます', AlreadyAtWar: 'すでに戦争中です', NotAtWar: '戦争中ではありません',
-  UnderNap: '不可侵条約中です。宣戦するには先に条約を破棄します', Allied: '同盟国には宣戦できません', NoProposal: '申し入れがありません',
+  UnderNap: '不可侵条約中です。宣戦するには先に条約を破棄します', Allied: '同盟相手には宣戦できません', NoProposal: '申し入れがありません',
   AlreadyInAlliance: 'すでに同盟に加わっています', AllianceLeaving: '離脱手続き中の同盟には加われません',
   CivilianCannotAttack: '非戦闘ユニットは攻撃できません', TargetProtected: '保護区域内の相手は攻撃できません',
   TargetNotHostile: '戦争中の相手ではありません。先に宣戦が必要です', TargetGone: '目標がもういません',
@@ -159,9 +159,9 @@ const BLOCKED_JA = {
   BatchRejected: 'この役職の命令全体が受け付けられませんでした（枠・役職・献策の採用を確認）', WrongOffice: '担当外の役職の命令です',
   NeedsConsent: '宣戦には将軍か内政官（外交官とは別の人）の同意が必要です', AlreadyPurchased: '購入は1都市1ティックに1回までです',
   CannotBuyStarGate: 'スターゲートはお金で買えません', NothingQueued: '生産予定がありません', NotEnoughInfluence: '影響力が足りません',
-  NoCounterparty: '自国・交戦中の国とは取引できません', NeedsSpendConsent: '一定額を超える支出には別の役職者の同意が必要です',
-  NotEnoughUsdc: '国庫のUSDCが足りません',
-  ForeignCity: '他の国の都市には占領しないと入れません',
+  NoCounterparty: '自分の勢力・交戦中の勢力とは取引できません', NeedsSpendConsent: '一定額を超える支出には別の役職者の同意が必要です',
+  NotEnoughUsdc: '勢力の資金（USDC）が足りません',
+  ForeignCity: '他の勢力の都市には占領しないと入れません',
   TooManyContracts: '出している契約が上限に達しています', UnknownContract: 'その契約はありません（受け入れ済み・期限切れ・相手違い）',
   BadContract: '契約の条件が今の世界に合いません（戦争中か・条約があるか・期限・金額を確認）',
 };
@@ -173,14 +173,14 @@ const BLOCKED_EN = {
   InTruce: b => `Truce after peace: no war before tick ${b.until}`,
   BondTooSmall: b => `The bond must be at least ${b.min} gold`,
   NotEnoughGold: b => `Not enough gold (need ${b.need}, have ${b.have})`,
-  AllianceFull: b => `An alliance has at most ${b.cap} nations`,
+  AllianceFull: b => `An alliance has at most ${b.cap} factions`,
   OutOfRange: b => `Out of range (distance ${b.distance}, range ${b.range})`,
   OverCap: b => `Over the limit of ${b.cap}`,
   OutOfBounds: b => `Must be between ${b.min} and ${b.max}`,
   ProtectedCapital: b => `A capital's protected zone${b.until !== null && b.until !== undefined ? ` (until tick ${b.until})` : ''}`,
-  UnknownUnit: 'Unit not found', UnknownCity: 'City not found', UnknownCiv: 'Nation not found',
-  NotYours: 'Not yours', SameCiv: 'That is your own nation', NotASettler: 'Not a Settler',
-  Impassable: 'Impassable terrain', ForeignTerritory: "Another nation's territory", InProtectedZone: "Inside another nation's protected zone",
+  UnknownUnit: 'Unit not found', UnknownCity: 'City not found', UnknownCiv: 'Faction not found',
+  NotYours: 'Not yours', SameCiv: 'That is your own faction', NotASettler: 'Not a Settler',
+  Impassable: 'Impassable terrain', ForeignTerritory: "Another faction's territory", InProtectedZone: "Inside another faction's protected zone",
   AlreadyBuilt: 'Already built', AlreadyQueued: 'Already in production', StarGateInAnotherCity: 'A Star Gate can be built in one city only',
   NeedsPreviousStage: 'Complete the previous stage first', InvalidTroopCount: 'Invalid troop count', AlreadyResearched: 'Already researched',
   NotAtPeace: 'Only possible at peace', AlreadyAtWar: 'Already at war', NotAtWar: 'Not at war',
@@ -193,10 +193,10 @@ const BLOCKED_EN = {
   BatchRejected: "This office's whole batch was refused (check the budget, the office and the adopted proposals)", WrongOffice: "An order of an office you don't hold",
   NeedsConsent: 'War needs the consent of the General or the Steward (someone other than the Diplomat)', AlreadyPurchased: 'One purchase per city per tick',
   CannotBuyStarGate: 'A Star Gate cannot be bought', NothingQueued: 'Nothing in production', NotEnoughInfluence: 'Not enough influence',
-  NoCounterparty: 'No trade with yourself or with a nation at war with you', NeedsSpendConsent: "Spending above the limit needs another officer's consent",
+  NoCounterparty: 'No trade with yourself or with a faction at war with you', NeedsSpendConsent: "Spending above the limit needs another officer's consent",
   NotEnoughUsdc: 'Not enough USDC in the treasury',
-  ForeignCity: "Another nation's city: capture it to enter",
-  TooManyContracts: 'Your open contracts are at the limit', UnknownContract: 'No such contract (accepted, expired, or for another nation)',
+  ForeignCity: "Another faction's city: capture it to enter",
+  TooManyContracts: 'Your open contracts are at the limit', UnknownContract: 'No such contract (accepted, expired, or for another faction)',
   BadContract: "The contract's terms don't fit the world now (check war, treaties, the deadline and the amount)",
 };
 
@@ -216,14 +216,14 @@ const TICK_CLOSED = 'このティックは締め切られました。次のテ�
 const TICK_CLOSED_EN = 'This tick is closed. Send it again next tick.';
 export const CHAIN_ERROR_JA = twin({
   // registration (x402 / program)
-  SessionInUse: 'このゲーム内の鍵はすでに別の国民が使っています。別のウォレットで登録してください。',
-  KindHidden: 'このシーズンは国民の種別を公開しません（「未申告」でだけ登録できます）。',
+  SessionInUse: 'このゲーム内の鍵はすでに別のメンバーが使っています。別のウォレットで登録してください。',
+  KindHidden: 'このシーズンはメンバーの種別を公開しません（「未申告」でだけ登録できます）。',
   SeasonFull: 'このシーズンは満員です。',
   RegistrationClosed: '登録は締め切られました。',
   WrongStatus: 'シーズンが、この操作を受け付ける段階ではありません。',
   InvalidName: 'この名前は使えません（24バイトまで）。',
-  AlreadyInitialized: 'このウォレットは、すでにこのシーズンの国民です。',
-  AlreadyMember: 'このウォレットは、すでにこのシーズンの国民です。',
+  AlreadyInitialized: 'このウォレットは、すでにこのシーズンのメンバーです。',
+  AlreadyMember: 'このウォレットは、すでにこのシーズンのメンバーです。',
   InsufficientFunds: 'USDC が足りません。テスト USDC を受け取るか、残高を確認してください。',
   X402Mismatch: '支払いの条件がこのシーズンと合わないため、署名を求めませんでした。',
   RegistrationInFlight: 'このウォレットの登録を送信中です。少し待ってから確かめてください。',
@@ -239,7 +239,7 @@ export const CHAIN_ERROR_JA = twin({
   NothingToClaim: '受け取れる賞金はありません。',
   NotFinalized: 'まだ精算中です（シーズン終了から最長で約1時間）。精算が終わると受け取れます。',
   SeasonNotOver: 'シーズンはまだ終わっていません。',
-  NoSuchMember: 'このウォレットは、そのシーズンの国民ではありません。',
+  NoSuchMember: 'このウォレットは、そのシーズンのメンバーではありません。',
   UnknownSeason: 'そのシーズンは、このゲートウェイで受け取れません。',
   // wallet and keys
   WalletRejected: 'ウォレットで取り消されました。',
@@ -280,7 +280,7 @@ export const CHAIN_ERROR_JA = twin({
   InvalidSeal: '封印の内容が正しくありません。',
   TooManyCommits: 'このティックに確定できる回数の上限に達しました。',
   TalkRefused: 'メッセージを送れませんでした（このティックは締め切られたか、上限に達しました）。',
-  NotAMember: 'このシーズンの国民ではありません。',
+  NotAMember: 'このシーズンのメンバーではありません。',
   network: 'サーバーに届きませんでした',
 }, {
   // registration (x402 / program)
@@ -439,10 +439,10 @@ const CHRONICLE = [
   [/^(\w+) loses (\w+) (\d)$/, m => `${n(m[1])}が${pathName(m[2])}の第${m[3]}段階を失った`, m => `${n(m[1])} loses ${pathName(m[2])} tier ${m[3]}`],
   [/^(\w+) enters era (\d)$/, m => `${n(m[1])}が第${m[2]}時代に入った`, m => `${n(m[1])} enters Era ${m[2]}`],
   [/^(\w+) conquers the home of (.+) of (\w+), an operator AI member: bounty (\d+) USDC$/,
-    m => `${n(m[1])}が${n(m[3])}の${m[2]}（運営のAI国民）の住む都市を落とした：懸賞金 ${m[4]} USDC`,
+    m => `${n(m[1])}が${n(m[3])}の${m[2]}（運営のAIメンバー）の住む都市を落とした：懸賞金 ${m[4]} USDC`,
     m => `${n(m[1])} takes the home city of ${m[2]} of ${n(m[3])}, an operator AI member: bounty ${m[4]} USDC`],
   [/^(\w+) conquers the home of (.+) of (\w+), an operator AI member: no bounty/,
-    m => `${n(m[1])}が${n(m[3])}の${m[2]}（運営のAI国民）の住む都市を落とした：直前に条約があったため懸賞金なし`,
+    m => `${n(m[1])}が${n(m[3])}の${m[2]}（運営のAIメンバー）の住む都市を落とした：直前に条約があったため懸賞金なし`,
     m => `${n(m[1])} takes the home city of ${m[2]} of ${n(m[3])}, an operator AI member: no bounty (a treaty just before)`],
 ];
 export const KIND_GLYPH = { bounty: '◎', war: '⚔', capture: '⚑', raze: '✕', peace: '☮', ally: '⚭', diplo: '✉', science: '✦', revolt: '!', found: '⌂', tech: '✧', gov: '⚖', recall: '⚠', milestone: '◆', era: '✺' };

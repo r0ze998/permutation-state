@@ -3,7 +3,7 @@
 The canonical English for every game term, so that every screen reads as one
 game. When a Japanese term below appears in a text you translate, use this
 English (and its capitalisation). `llms.txt` (the agents' guide) uses the
-same words; where in doubt, follow it.
+same words (faction, one civilization); where in doubt, follow this glossary.
 
 Enum names (offices, paths, units, buildings, techs, terrain, resources,
 focus, relations, phases, blocked reasons, chain errors, chronicle lines,
@@ -18,7 +18,7 @@ retype their names in a dictionary.
   toasts: normal sentences with periods.
 - **Proper game nouns are capitalised**: offices (General, Steward, Science
   Officer, Diplomat), paths (Hegemony, Prosperity, Science, Concord), unit,
-  building and tech names, Star Gate, Nation Plaza. Generic nouns are not:
+  building and tech names, Star Gate, Faction Plaza. Generic nouns are not:
   tick, era, tier, member, proposal, recall, treasury, city-state.
 - **Numbers with units**: `Tick 12`, `Era 3`, `Tier 2`, `12 tiles`,
   `30 s` (or `30s` in tight labels), `5 USDC`, `12 gold`, `+3 / tick`,
@@ -27,7 +27,7 @@ retype their names in a dictionary.
 - **Counters** (人, 件, マス, 秒, 点, つ) become English nouns with plurals —
   use `plural(n, '{0} member', '{0} members')` in the dictionary.
 - **Spelling and apostrophes**: American spelling (`Defense`, `color`,
-  `in favor`); straight apostrophes (`don't`, `nation's`), curly
+  `in favor`); straight apostrophes (`don't`, `faction's`), curly
   double quotes only for 「X」.
 - **Punctuation**: 「X」 → “X” (or no quotes for a name); （…） → (…);
   ： → `: `; 、 → `, `; 。 → `. `; list separator ・ → `, ` (or ` · ` in
@@ -35,8 +35,8 @@ retype their names in a dictionary.
 - **Keep ALL-CAPS eyebrows as they are** (`YOUR TURN`, `CITY`, `ERAS`): the
   Japanese half after `·` goes away in English (`YOUR TURN · このティック` →
   `YOUR TURN · This tick`, or just `YOUR TURN` when it would repeat).
-- **You / your nation**: address the player as “you”; あなたの国 → “your
-  nation”; 自国 → “your nation”; 自軍 → “your army”.
+- **You / your faction**: address the player as “you”; あなたの勢力 → “your
+  faction”; 自分の勢力 (formerly 自国) → “your faction”; 自軍 → “your army”.
 - **Names are not translated**: member names, AI member names, city-state
   numbers (`City-state 3`), wallet names (Phantom, Solflare, Backpack),
   MagicBlock ER, Solana, USDC, SOL, x402, RPC, CU, slot.
@@ -46,10 +46,10 @@ retype their names in a dictionary.
 | Japanese | English | Notes |
 |---|---|---|
 | 世界 | world | |
-| 国 | nation | the six playable powers |
-| 文明 | nation | same thing in this UI; “civilization” only in existing all-caps eyebrows (`CIVILIZATIONS`) |
-| 国民 | member | a person or agent in a nation; 国民 N人 → `N members` |
-| 人（国民の数） | members / people | |
+| 勢力 | faction | the six playable powers inside the one civilization (formerly 国 / nation) |
+| 文明 | civilization | the one civilization every player lives in (all six factions together); never a single faction; the `ONE CIVILIZATION` label |
+| メンバー（旧: 国民） | member | a person or agent in a faction; メンバー N人 → `N members` |
+| 人（メンバーの数） | members / people | |
 | シーズン | season | |
 | ティック | tick | never “turn”, except in “End turn” |
 | 締切 | deadline | the tick's commit deadline |
@@ -62,22 +62,22 @@ retype their names in a dictionary.
 | 節目 | milestone | |
 | 段階 | tier (a path's milestone level) / stage (Star Gate) | 第N段階 → `tier N` / `stage N` |
 | 点 | points (`pts` in tight labels) | |
-| 取り分 | share | a nation's or member's share of the pool |
+| 取り分 | share | a faction's or member's share of the pool |
 | 見込み | projected | 今の1人あたりの見込み → `projected per member now` |
 | 賞金 | prize | |
 | 賞金プール | prize pool | |
 | 参加費 | entry fee | |
-| 国庫 | treasury | a nation's USDC |
-| 預け入れ（国庫への） | deposit | |
+| 勢力の資金（旧: 国庫） | treasury | a faction's USDC (not 金庫, the prize vault) |
+| 預け入れ（勢力の資金への） | deposit | |
 | 運営 | the operator | |
-| 運営のAI国民 | the operator's AI members | |
+| 運営のAIメンバー | the operator's AI members | |
 | AI の代行 / 代行 | caretaker | the rules acting for a vacant office; `the caretaker` in sentences |
 | 功績 | merit | |
-| 活動した国民 / 活動中 | active members / active | |
+| 活動したメンバー / 活動中 | active members / active | |
 | 区間 | window | activity windows (`9 of 18 windows`) |
 | 歴史 / 歴史の層 | history / earlier seasons | |
 | 歴史のルート | history root | |
-| 建国 / 拡大 / 競合 / 危機 / 決着 | Founding / Expansion / Contention / Crisis / Resolution | season phases (i18n.mjs PHASES) |
+| 草創 / 拡大 / 競合 / 危機 / 決着 | Founding / Expansion / Contention / Crisis / Resolution | season phases (i18n.mjs PHASES) |
 | 開幕 / 開幕する | start (of the season) / Start the season | |
 | 開幕前 | before the start | |
 | シーズン終了 | Season over | |
@@ -112,7 +112,7 @@ retype their names in a dictionary.
 | 賛成 | in favor / yes votes | |
 | 過半数 | majority | |
 | 同意（宣戦・支出への） | consent | ConsentWar, ConsentSpend |
-| 国の広場 | Nation Plaza | the government drawer |
+| 勢力の広場 | Faction Plaza | the government drawer |
 | 政府 | government | 〜の政府 → `Government of …` |
 
 ## Orders and the tick
@@ -121,7 +121,7 @@ retype their names in a dictionary.
 |---|---|---|
 | 命令 | order | |
 | 枠 / 命令の枠 | slot / order slots | the budget; 枠1 → `1 slot` |
-| 国の枠 | national budget | |
+| 勢力の枠 | faction budget | |
 | 繰越 / 繰越の枠 | banked / banked slots | |
 | 下書き | draft | 下書き · 未確定 → `Draft · not committed` |
 | 確定 / 確定する | commit / Commit | 確定済み → `Committed` |
@@ -195,7 +195,7 @@ retype their names in a dictionary.
 | 快適度 / 忠誠 / 防御 | Amenities / Loyalty / Defense | |
 | 産出 | yields | also the lens name |
 | 維持費 | upkeep | |
-| レンズ | lens | 地形 / 勢力 / 産出 / 軍事 / 協調 → Terrain / Political / Yields / Military / Concord |
+| レンズ | lens | 地形 / 勢力 / 産出 / 軍事 / 協調 → Terrain / Factions / Yields / Military / Concord |
 | 住む都市 | home city | where an operator AI member lives |
 | 懸賞金 | bounty | |
 
@@ -222,7 +222,7 @@ retype their names in a dictionary.
 | 不満 | grievance | |
 | 正当な開戦理由 | casus belli | |
 | 侵略 / 侵略中 | aggression / aggressor | |
-| 契約（国庫の契約） | contract (treasury contract) | |
+| 契約（勢力の資金の契約） | contract (treasury contract) | |
 | 預かり | escrow | |
 | 期限（契約） | deadline | `by tick N` |
 | 取り下げる | Withdraw | |
@@ -267,11 +267,11 @@ retype their names in a dictionary.
 | 残高 | balance | |
 | 受け取る | claim (a prize) / get (test USDC) | |
 | 精算 / 精算待ち | settlement / awaiting settlement | |
-| 登録 / 登録済み | registration / registered | 国民登録 → `Join a nation` |
+| 登録 / 登録済み | registration / registered | 勢力を選ぶ → `Choose your faction` |
 | 未申告 | undeclared | member kind |
 | 送信 / 送信中 / 送信済み | send / sending / sent | |
 | 観戦 / 観戦する / 観戦中 | spectate / Spectate / spectating | |
-| 全体表示 | whole world | spectator view of all nations |
+| 全体表示 | whole civilization | spectator view of all factions |
 | エクスプローラー | explorer | |
 | 手数料（SOL） | fees (SOL) | 運営が払う → `paid by the operator` |
 

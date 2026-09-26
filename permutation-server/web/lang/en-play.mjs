@@ -2,7 +2,7 @@
 // Keys are the Japanese exactly as marked in code (L`…` with values as {0},
 // {1}…; data-i18n text with child elements as {0}, {1}…). Terms: GLOSSARY.md.
 // A value may be a function of the values returning the template (plurals):
-//   '国民 {0}人': n => plural(n, '{0} member', '{0} members'),
+//   'メンバー {0}人': n => plural(n, '{0} member', '{0} members'),
 //
 // Files: orders.mjs, next.mjs, hud/dock.mjs, hud/top.mjs, chainplay.mjs,
 // app.mjs, input.mjs, util.mjs, rules.mjs (sealbook.mjs shows no text).
@@ -14,8 +14,8 @@ export default {
   '、': ', ', // list separator (refused orders)
   '＋': '+', // tick report glyph for a new unit
   '{0}：{1}': '{0}: {1}',
-  '{0}人': '{0} ppl', // the member-count pill under a nation badge (a few px wide)
-  '国民 {0}人': n => plural(n, '{0} member', '{0} members'),
+  '{0}人': '{0} ppl', // the member-count pill under a faction badge (a few px wide)
+  'メンバー {0}人': n => plural(n, '{0} member', '{0} members'),
 
   // ---------------------------------------------------------------- orders.mjs: order labels
   '部隊': 'Unit',
@@ -43,7 +43,7 @@ export default {
   'USDC取引所：{0}{1}を売り @{2}': 'USDC exchange: sell {1} {0} @{2}',
   '{0}を破壊': 'Raze {0}',
   '{0}への宣戦に同意': 'Consent to war on {0}',
-  '国庫から{0} USDCまでの支出に同意': 'Consent to spending up to {0} USDC from the treasury',
+  '勢力の資金から{0} USDCまでの支出に同意': 'Consent to spending up to {0} USDC from the faction treasury',
 
   // ---------------------------------------------------------------- orders.mjs: drafting, commit, end turn
   '観戦中は命令を出せません。': "You can't give orders while spectating.",
@@ -93,8 +93,8 @@ export default {
   '立候補': 'Candidacy',
   'リコールに賛成': 'Vote to recall',
   '献策': 'Proposal',
-  'このティックに送れる国の操作の上限に達しました。次のティックで送ってください':
-    "Your nation has reached this tick's limit of governance actions. Send it next tick",
+  'このティックに送れる勢力の操作の上限に達しました。次のティックで送ってください':
+    "Your faction has reached this tick's limit of governance actions. Send it next tick",
   '{0}をチェーンに送りました。次のティックの解決で反映されます。': 'Sent to the chain: {0}. It takes effect when the next tick resolves.',
   '締切を過ぎたため、{0}は次のティックの受付が始まったら送ります。': 'The deadline has passed: {0} will be sent when the next tick opens.',
   '{0}できませんでした：{1}': 'Could not send {0}: {1}', // as in en-drawers.mjs (the governance verbs)
@@ -124,7 +124,7 @@ export default {
   '枠0': '0 slots',
   '命令の枠': 'Order slots',
   '献策 {0}件': n => plural(n, '{0} proposal', '{0} proposals'),
-  '国の枠': 'National budget',
+  '勢力の枠': 'Faction budget',
   '役職ごとの割り当て': 'Split by office',
   '繰越': 'Banked',
   '役職ごとに最大{0}ティック分': n => plural(n, 'Up to {0} tick per office', 'Up to {0} ticks per office'),
@@ -137,8 +137,8 @@ export default {
   '取り消す': 'Remove',
   '命令はまだありません。地図で部隊や都市を選んでください（Space＝次の判断）。担当外の命令は献策になります。':
     'No orders yet. Select a unit or city on the map (Space = next decision). Orders outside your offices become proposals.',
-  'あなたは役職についていません。地図で選んだ命令は、担当の役職者への献策になります。国の広場で投票・支持・リコールもできます。':
-    'You hold no office. Orders you pick on the map become proposals to the officers in charge. In the Nation Plaza you can also vote, support and recall.',
+  'あなたは役職についていません。地図で選んだ命令は、担当の役職者への献策になります。勢力の広場で投票・支持・リコールもできます。':
+    'You hold no office. Orders you pick on the map become proposals to the officers in charge. In the Faction Plaza you can also vote, support and recall.',
   '開幕前': 'Before the start',
   '下書き · 未確定': 'Draft · not committed',
   '命令なし · 未確定': 'No orders · not committed',
@@ -152,8 +152,8 @@ export default {
   '締切後（解決中）': 'Closed (resolving)',
 
   // ---------------------------------------------------------------- hud/top.mjs
-  '国民': 'Member',
-  '{0} · 国民{1}人{2} · 全員が同じ情報で判断 · 命令は締め切りまで封印 · USDCはテスト用': (m, n) => plural(n,
+  'メンバー': 'Member',
+  '{0} · メンバー{1}人{2} · 全員が同じ情報で判断 · 命令は締め切りまで封印 · USDCはテスト用': (m, n) => plural(n,
     '{0} · {1} member{2} · Everyone decides on the same information · Orders sealed until the deadline · Test USDC',
     '{0} · {1} members{2} · Everyone decides on the same information · Orders sealed until the deadline · Test USDC'),
   'オンチェーン · MagicBlock ER': 'On chain · MagicBlock ER',
@@ -184,21 +184,21 @@ export default {
   '公開中': 'Revealing',
   '終了': 'Over',
   '締切で': 'At the deadline',
-  '封印を閉じ、公開して全文明を同時に解決': 'Seals close, are revealed, and every nation resolves at once',
+  '封印を閉じ、公開して全勢力を同時に解決': 'Seals close, are revealed, and every faction resolves at once',
   '締切{0}秒前': '{0} s before the deadline',
   '下書きを自動確定（表示中のタブ）': 'Drafts auto-commit (tab shown)',
-  '全文明を同時に解決': 'Every nation resolves at once',
+  '全勢力を同時に解決': 'Every faction resolves at once',
   '下書きを自動確定': 'Drafts auto-commit',
   '1ティック': '1 tick',
   '{0}秒': '{0} s',
-  '{0}都市 · 人口{1} · 兵{2} · 国民{3}人': (c, p, t, m) =>
+  '{0}都市 · 人口{1} · 兵{2} · メンバー{3}人': (c, p, t, m) =>
     `${plural(c, '{0} city', '{0} cities')} · Pop {1} · {2} troops · ${plural(m, '{3} member', '{3} members')}`,
-  '他の国はあなたの保護区域に入れません': "Other nations can't enter your protected zone",
+  '他の勢力はあなたの保護区域に入れません': "Other factions can't enter your protected zone",
   '保護区域あり': 'Protected zone',
   '4つの道 · 第{0}時代 · {1}点': (e, p) => plural(p, 'Four paths · Era {0} · {1} pt', 'Four paths · Era {0} · {1} pts'),
   '賞金 {0} USDC': 'Prize {0} USDC',
   '第{0}時代 · {1}点': (e, p) => plural(p, 'Era {0} · {1} pt', 'Era {0} · {1} pts'),
-  'あなたの国': 'Your nation',
+  'あなたの勢力': 'Your faction', // also the next.mjs tick report section title
   '都市 {0}': 'Cities {0}',
   '節目 {0}': 'Milestones {0}',
   '今の取り分': 'Current share',
@@ -207,7 +207,7 @@ export default {
   // ---------------------------------------------------------------- next.mjs: the next decision
   '観戦中': 'Spectating',
   '選挙の投票受付中（ティック{0}の任期）': 'Election voting open (term from tick {0})',
-  '国の広場で各役職に投票できます。': 'Vote for each office in the Nation Plaza.',
+  '勢力の広場で各役職に投票できます。': 'Vote for each office in the Faction Plaza.',
   '{0}のリコール投票': 'Recall vote: {0}',
   '賛成{0}件 · ティック{1}まで': y => plural(y, '{0} yes vote · until tick {1}', '{0} yes votes · until tick {1}'),
   'あなた宛ての献策 {0}件': n => plural(n, '{0} proposal for you', '{0} proposals for you'),
@@ -228,8 +228,8 @@ export default {
     'Unused slots are banked per office (up to {0} tick).', 'Unused slots are banked per office (up to {0} ticks).'),
   '急ぎの判断はありません': 'Nothing urgent',
   '地図を眺めて、拡大・研究・外交の次の一手を考えましょう。': 'Look over the map and plan your next move in expansion, research and diplomacy.',
-  '役職外の命令は献策として出せます。国の広場で他の国民の献策を支持しましょう。':
-    "Orders outside your offices go out as proposals. Support other members' proposals in the Nation Plaza.",
+  '役職外の命令は献策として出せます。勢力の広場で他のメンバーの献策を支持しましょう。':
+    "Orders outside your offices go out as proposals. Support other members' proposals in the Faction Plaza.",
   '研究を選ぶ': 'Choose research',
   '外交に返答': 'Answer an offer',
   '生産を選ぶ': 'Choose production',
@@ -239,7 +239,7 @@ export default {
   '開幕する': 'Start the season',
   '第1回選挙を行い、ティックを始める': 'Hold the first election and start the ticks',
   '封印した命令を公開しています': 'Revealing the sealed orders',
-  '全ての国の命令を解決しています': "Resolving every nation's orders",
+  '全ての勢力の命令を解決しています': "Resolving every faction's orders",
   '手番を終えた': 'Turn ended',
   '締切（全員同時）を待っています': 'Waiting for the deadline (all at once)',
   'ほか{0}人を待っています': n => plural(n, 'Waiting for {0} other', 'Waiting for {0} others'),
@@ -266,15 +266,14 @@ export default {
   '{0}が損害 −{1}（残り{2}）': '{0} took −{1} damage ({2} left)',
   'ティック {0} の結果': 'Tick {0} results',
   'ティック {0} の結果 · {1}件': (tk, n) => plural(n, 'Tick {0} results · {1} item', 'Tick {0} results · {1} items'),
-  'あなたの文明': 'Your nation',
   '地図で見る': 'Show on the map',
   '世界': 'World',
   '世界に大きな出来事はありませんでした。': 'Nothing major happened in the world.',
 
   // ---------------------------------------------------------------- app.mjs
-  '{0}マス · {1}文明': (tiles, civs) => `${plural(tiles, '{0} tile', '{0} tiles')} · ${plural(civs, '{1} nation', '{1} nations')}`,
+  '{0}マス · 1文明 · {1}勢力': (tiles, civs) => `${plural(tiles, '{0} tile', '{0} tiles')} · 1 civilization · ${plural(civs, '{1} faction', '{1} factions')}`,
   '領土 {0}': 'Territory {0}',
-  'サーバーが再起動したため、国民として入り直してください。': 'The server restarted. Join as a member again.',
+  'サーバーが再起動したため、メンバーとして入り直してください。': 'The server restarted. Join as a member again.',
   '見送られた命令：{0}の命令全体（{1}）': 'Skipped orders: all {0} orders ({1})',
   '見送られた命令：{0}の{1}件目（{2}）': 'Skipped order: {0} order #{1} ({2})',
   '{0}から{1}の申し入れ（ティック{2}まで有効）': 'Offer from {0}: {1} (valid until tick {2})',

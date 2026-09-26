@@ -84,11 +84,11 @@ function renderLobby(error = '') {
   const picked = pick.civ === null ? null : info.nations[pick.civ];
   setHtml($('#seat-list'), html`${info.nations.map(n => html`<li class="seat nation ${pick.civ === n.civ ? 'picked' : ''}" data-pick-civ="${n.civ}">
         <span class="swatch" style="background:${T.CIV_COLORS[n.civ]}"></span>
-        <span class="who"><b>${T.civName(n.name)}</b><small>${L`国民 ${n.members}人`}${n.perMember ? ` · ${L`今の1人あたりの見込み ${usdc(n.perMember)} USDC`}` : ''}</small></span>
+        <span class="who"><b>${T.civName(n.name)}</b><small>${L`メンバー ${n.members}人`}${n.perMember ? ` · ${L`今の1人あたりの見込み ${usdc(n.perMember)} USDC`}` : ''}</small></span>
         <span class="meta">${pick.civ === n.civ ? L`選択中 ✓` : L`えらぶ`}</span></li>`)}<li class="seat-form"><label class="field">${L`名前`}<input id="join-name" maxlength="24" placeholder="${L`あなたの名前`}" value="${S.joinName}"></label>
          <div class="field">${L`立候補する役職（${MAX_OFFICES}つまで）`}<div class="row">${T.ROLES.map(r => html`<button type="button" class="btn ${pick.stand.includes(r) ? 'primary' : ''}" data-pick-stand="${r}">${T.ROLE_GLYPH[r]} ${T.ROLE_JA[r]}</button>`)}</div></div>
-         <p class="desc">${L`参加費は全員同じ ${usdc(info.entryFee)} USDC（${poolSharePct(null)}%が賞金プール、${opsSharePct(null)}%が運営）。国民がいない役職はルールの代行が務めます。`}</p>
-         <button class="btn primary wide" type="button" id="join-btn" ${picked ? '' : 'disabled'}>${picked ? L`${T.civName(picked.name)}の国民になる` : L`国を選んでください`}</button></li>${err}`);
+         <p class="desc">${L`参加費は全員同じ ${usdc(info.entryFee)} USDC（${poolSharePct(null)}%が賞金プール、${opsSharePct(null)}%が運営）。メンバーがいない役職はルールの代行が務めます。`}</p>
+         <button class="btn primary wide" type="button" id="join-btn" ${picked ? '' : 'disabled'}>${picked ? L`${T.civName(picked.name)}に加わる` : L`勢力を選んでください`}</button></li>${err}`);
 }
 
 const keepName = () => { S.joinName = $('#join-name')?.value ?? S.joinName; };
@@ -129,7 +129,7 @@ const STAGE = lazyTable({
   send: () => L`送信しています…（確認まで15秒ほどかかることがあります）`,
 });
 const PHASE_TITLE = lazyTable({
-  registering: () => L`ウォレットで国民になる`,
+  registering: () => L`ウォレットで勢力に加わる`,
   starting: () => L`シーズンを準備しています`,
   playing: () => L`このシーズンに入る`,
 });
@@ -498,7 +498,7 @@ export async function claimPastSeason(seasonId) {
     C.notice = L`シーズン ${seasonId} の賞金を受け取りました。`;
     C.past = (C.past || []).map(x => (x.seasonId === String(seasonId) ? { ...x, done: true } : x));
   } else if (r.code === 'NoSuchMember' || r.code === 'NotInitialized' || r.code === 'WrongPda') {
-    C.error = L`このウォレットは、シーズン ${seasonId} の国民ではありませんでした。`;
+    C.error = L`このウォレットは、シーズン ${seasonId} のメンバーではありませんでした。`;
     C.past = (C.past || []).filter(x => x.seasonId !== String(seasonId));
   } else C.error = T.errorText(r);
   renderChain();
@@ -523,7 +523,7 @@ function tickClock() {
 
 const registrationOpen = () => C.info.phase === 'registering' && (!C.reg?.closesAt || C.reg.closesAt > serverNow());
 const nationNames = () => C.season?.nations || [];
-const nationName = civ => T.civName(nationNames()[civ] ?? L`国${civ}`);
+const nationName = civ => T.civName(nationNames()[civ] ?? L`勢力${civ}`);
 const deadlineText = () => (C.reg?.closesAt
   ? Lh`締切 <b>${hhmm(C.reg.closesAt)}</b>（あと <b class="num" data-countdown></b>）に、人数に関わらずシーズンが始まります`
   : L`必要な人数がそろうとシーズンが始まります（テスト用の設定）`);
@@ -555,7 +555,7 @@ function renderChain() {
 
 function intro(phase) {
   if (phase !== 'registering' || S.chainMember) return '';
-  return html`<p class="desc">${L`国は${nationNames().length || '—'}つ。自分の Solana ウォレットで参加費（USDC）を払って国民になります。手数料（SOL）は運営が払うので、ウォレットに SOL は要りません。`}</p>`;
+  return html`<p class="desc">${L`勢力は${nationNames().length || '—'}つ。自分の Solana ウォレットで参加費（USDC）を払って、どれかの勢力に加わります。手数料（SOL）は運営が払うので、ウォレットに SOL は要りません。`}</p>`;
 }
 
 function importBox(open) {
@@ -576,22 +576,22 @@ function backupBox() {
 
 function memberBox(phase) {
   const m = S.chainMember;
-  const head = html`<div class="reg-head"><span class="swatch" style="background:${T.CIV_COLORS[m.civ]}"></span><span class="who"><b>${m.name}</b><small>${L`${nationName(m.civ)}の国民（#${m.index}）`}</small></span><span class="tag positive">${L`登録済み ✓`}</span></div>`;
+  const head = html`<div class="reg-head"><span class="swatch" style="background:${T.CIV_COLORS[m.civ]}"></span><span class="who"><b>${m.name}</b><small>${L`${nationName(m.civ)}のメンバー（#${m.index}）`}</small></span><span class="tag positive">${L`登録済み ✓`}</span></div>`;
   let key;
   if (S.session) key = html`<p class="desc">${L`ゲーム内の鍵 ✓`} <code>${short(S.session.publicKey, 6, 6)}</code></p>`;
   else if (C.keyError) {
     key = html`<p class="seat-error">${L`このウォレットの署名から作った鍵が、登録されている鍵と一致しません（ウォレットによっては同じ署名を再現できません）。鍵のバックアップを読み込んでください。観戦と賞金の受け取りはこのままできます。`}</p>${importBox(true)}`;
   } else if (S.wallet && S.wallet.address === m.wallet) {
-    key = html`<p class="desc">${L`このブラウザには、この国民のゲーム内の鍵がありません。ウォレットでもう一度署名すると、登録時と同じ鍵を作り直します（無料・取引ではありません）。`}</p>
+    key = html`<p class="desc">${L`このブラウザには、このメンバーのゲーム内の鍵がありません。ウォレットでもう一度署名すると、登録時と同じ鍵を作り直します（無料・取引ではありません）。`}</p>
       <button class="btn primary" type="button" data-reg="derive" ${C.busy ? 'disabled' : ''}>${L`署名して鍵を作り直す`}</button>${importBox(false)}`;
   } else {
-    key = html`<p class="desc">${L`このブラウザには、この国民のゲーム内の鍵がありません。登録したウォレット（${short(m.wallet, 4, 4)}）を接続して署名するか、鍵のバックアップを読み込んでください。`}</p>${S.wallet ? html`<button class="btn" type="button" data-wallet-disconnect>${L`別のウォレットに切り替える`}</button>` : walletPicker(chainio.pinned()?.cluster)}${importBox(false)}`;
+    key = html`<p class="desc">${L`このブラウザには、このメンバーのゲーム内の鍵がありません。登録したウォレット（${short(m.wallet, 4, 4)}）を接続して署名するか、鍵のバックアップを読み込んでください。`}</p>${S.wallet ? html`<button class="btn" type="button" data-wallet-disconnect>${L`別のウォレットに切り替える`}</button>` : walletPicker(chainio.pinned()?.cluster)}${importBox(false)}`;
   }
   let now;
   if (phase === 'registering') now = html`<p class="desc">${Lh`${deadlineText()}。このページは閉じても大丈夫です（同じブラウザか、同じウォレットで戻れます）。`}</p>`;
   else if (phase === 'starting') now = html`<p class="desc"><span class="spinner"></span>${L`シーズンを準備しています…（世界の生成と着任。数分かかることがあります）`}</p>`;
   else now = S.session ? html`<p class="desc"><span class="spinner"></span>${L`入場しています…`}</p>`
-    : html`<p class="desc">${L`鍵がなくても、自分の国を見ることはできます（命令・投票・会話はできません）。`}</p><button class="btn" type="button" data-reg="view">${L`鍵なしで見る`}</button>`;
+    : html`<p class="desc">${L`鍵がなくても、自分の勢力を見ることはできます（命令・投票・会話はできません）。`}</p><button class="btn" type="button" data-reg="view">${L`鍵なしで見る`}</button>`;
   return html`<div class="reg-done">${head}${key}${now}${S.session ? backupBox() : ''}</div>`;
 }
 
@@ -619,24 +619,24 @@ function steps() {
   }
   const counts = C.season?.season?.nationMembers || [];
   const nations = nationNames().map((n, civ) => html`<button type="button" class="reg-nation ${pick.civ === civ ? 'picked' : ''}" data-pick-civ="${civ}">
-      <span class="swatch" style="background:${T.CIV_COLORS[civ]}"></span><b>${T.civName(n)}</b><small>${L`国民 ${counts[civ] ?? (C.season.members || []).filter(m => m.civ === civ).length}人`}</small></button>`);
+      <span class="swatch" style="background:${T.CIV_COLORS[civ]}"></span><b>${T.civName(n)}</b><small>${L`メンバー ${counts[civ] ?? (C.season.members || []).filter(m => m.civ === civ).length}人`}</small></button>`);
   const s3 = html`<div class="reg-nations">${nations}</div>
     <div class="field">${L`名前（全員が同じ方法でランダムに選びます）`}<div class="row"><b class="reg-name">${C.name}</b><button class="btn small" type="button" data-reg="reroll" title="${L`引き直す`}">🎲 ${L`引き直す`}</button></div></div>
     <div class="field">${L`立候補する役職（1〜${MAX_OFFICES}つ。第1回の選挙は立候補者からランダムに決まります）`}<div class="row">${T.ROLES.map(r => html`<button type="button" class="btn small ${pick.stand.includes(r) ? 'primary' : ''}" data-pick-stand="${r}">${T.ROLE_GLYPH[r]} ${T.ROLE_JA[r]}</button>`)}</div></div>`;
   const dep = C.reg?.deposit ?? 0n;
-  const s4 = html`<p class="desc">${Lh`参加費 <b>${usdc(p.entryFee)} USDC</b>${dep ? L` ＋ 国庫への預け入れ ${usdc(dep)} USDC` : ''}（参加費の${poolSharePct(null)}%が賞金プール、${opsSharePct(null)}%が運営）。`}</p>
+  const s4 = html`<p class="desc">${Lh`参加費 <b>${usdc(p.entryFee)} USDC</b>${dep ? L` ＋ 勢力の資金への預け入れ ${usdc(dep)} USDC` : ''}（参加費の${poolSharePct(null)}%が賞金プール、${opsSharePct(null)}%が運営）。`}</p>
     <p class="desc"><span class="tag bad">${L`参加費は返金されません`}</span></p>
     <p class="desc">${Lh`${deadlineText()}。いま ${C.reg?.members ?? (C.season.members || []).length} 人が登録しています。`}</p>`;
   const s5 = keyed ? html`<p class="desc">${L`✓ ゲーム内の鍵`} <code>${short(C.session.publicKey, 6, 6)}</code></p>`
-    : html`<p class="desc">${Lh`ウォレットでメッセージに署名します（<b>無料</b>・取引ではありません）。この署名から、このシーズン専用の「ゲーム内の鍵」をこのブラウザで作ります。鍵は命令・投票・会話の署名に使います。賞金の受け取りやウォレットのトークンの移動はできませんが、役職者になると国の国庫（市場・契約）は動かせます。`}</p>
+    : html`<p class="desc">${Lh`ウォレットでメッセージに署名します（<b>無料</b>・取引ではありません）。この署名から、このシーズン専用の「ゲーム内の鍵」をこのブラウザで作ります。鍵は命令・投票・会話の署名に使います。賞金の受け取りやウォレットのトークンの移動はできませんが、役職者になると勢力の資金（市場・契約）は動かせます。`}</p>
       <button class="btn primary" type="button" data-reg="derive" ${w && !C.busy ? '' : 'disabled'}>${L`署名して鍵を作る`}</button>`;
   const ready = w && funded && chosen && keyed && !C.busy;
   const s6 = html`<button class="btn primary wide" type="button" data-reg="join" ${ready ? '' : 'disabled'}>${L`参加費を払って参加（${usdc(need)} USDC）`}</button>
-    <p class="desc">${L`ウォレットに ${usdc(need)} USDC を支払う取引の承認を求めます。手数料（SOL）は運営が払います。${pick.civ === null ? L`国を選んでください。` : ''}`}</p>`;
+    <p class="desc">${L`ウォレットに ${usdc(need)} USDC を支払う取引の承認を求めます。手数料（SOL）は運営が払います。${pick.civ === null ? L`勢力を選んでください。` : ''}`}</p>`;
   return html`<ol class="reg-steps">
     <li class="${state(!!w, true)}"><span><b>${L`ウォレットを接続`}</b>${s1}</span></li>
     <li class="${state(funded, !!w)}"><span><b>${L`USDC の残高`}</b>${s2}</span></li>
-    <li class="${state(chosen, true)}"><span><b>${L`国・名前・立候補する役職`}</b>${s3}</span></li>
+    <li class="${state(chosen, true)}"><span><b>${L`勢力・名前・立候補する役職`}</b>${s3}</span></li>
     <li class="active"><span><b>${L`参加費と開始`}</b>${s4}</span></li>
     <li class="${state(keyed, !!w)}"><span><b>${L`署名して鍵を作る`}</b>${s5}</span></li>
     <li class="${state(false, ready)}"><span><b>${L`参加費を払って参加`}</b>${s6}</span></li></ol>`;
@@ -646,8 +646,8 @@ function closedBox(phase) {
   const why = phase === 'registering' ? L`登録は締め切られました。まもなくシーズンが始まります。`
     : phase === 'starting' ? L`登録は締め切られました。シーズンを準備しています…` : L`このシーズンの登録は締め切られました。`;
   const who = S.wallet
-    ? html`<p class="desc">${L`このウォレット（${short(S.wallet.address, 4, 4)}）は、このシーズンの国民ではありません。`}</p><button class="btn" type="button" data-wallet-disconnect>${L`別のウォレットに切り替える`}</button>`
-    : html`<p class="desc">${L`このシーズンの国民の方は、登録したウォレットを接続するか、鍵のバックアップを読み込んでください。`}</p>${walletPicker(chainio.pinned()?.cluster)}${importBox(false)}`;
+    ? html`<p class="desc">${L`このウォレット（${short(S.wallet.address, 4, 4)}）は、このシーズンのメンバーではありません。`}</p><button class="btn" type="button" data-wallet-disconnect>${L`別のウォレットに切り替える`}</button>`
+    : html`<p class="desc">${L`このシーズンのメンバーの方は、登録したウォレットを接続するか、鍵のバックアップを読み込んでください。`}</p>${walletPicker(chainio.pinned()?.cluster)}${importBox(false)}`;
   return html`<div class="seat-none">${why}<a class="btn primary" href="spectate.html">${L`観戦する →`}</a></div>${who}`;
 }
 
@@ -656,16 +656,16 @@ function closedBox(phase) {
 export function othersText(v) {
   const ms = v?.members || [];
   const ai = Number(aiRoster(v).aiCount) || 0;
-  return L`この季節の国民は${ms.length}人。${ai ? L`うち${ai}人は運営のAI国民です（誰かは、住む都市が落ちたときとシーズンの終わりに公開）。` : ''}国民のいない役職はルールの代行が務めます。`;
+  return L`この季節のメンバーは${ms.length}人。${ai ? L`うち${ai}人は運営のAIメンバーです（誰かは、住む都市が落ちたときとシーズンの終わりに公開）。` : ''}メンバーのいない役職はルールの代行が務めます。`;
 }
 
 /** Help texts and titles that match this season (nations, members, clock, terms). */
 export function describeSeason(v) {
   described = true;
   const nations = v.civs.length;
-  document.title = L`PERMUTATION STATE — ${nations}つの国、ひとつの世界`;
-  $('#help-title').textContent = L`${nations}つの国のひとつの国民として、国を動かす。`;
-  $('#help-desc').textContent = L`${nations}つの国が同じ地図を共有しています。${othersText(v)}${v.tickSeconds}秒ごとの「ティック」で、全ての国の命令が同時に解決されます。`;
+  document.title = L`PERMUTATION STATE — ひとつの文明、${nations}つの勢力`;
+  $('#help-title').textContent = L`ひとつの文明、${nations}つの勢力。そのひとつのメンバーとして、勢力を動かす。`;
+  $('#help-desc').textContent = L`${nations}つの勢力が同じ地図を共有しています。${othersText(v)}${v.tickSeconds}秒ごとの「ティック」で、全ての勢力の命令が同時に解決されます。`;
   for (const el of document.querySelectorAll('[data-season]')) {
     const x = v.season?.[el.dataset.season];
     if (x !== undefined && x !== null) el.textContent = String(x);
@@ -675,7 +675,7 @@ export function describeSeason(v) {
     // Sentences side by side: no space between them in Japanese, one in English.
     $('#help-mode').textContent = [
       L`このシーズンはオンチェーンです（MagicBlock ER）。時計は止まりません。`,
-      L`「確定する」で各役職の命令を封印し、中身を運営のゲートウェイに預けてから、封印（ハッシュ）をこのブラウザのゲーム内の鍵で署名してチェーンに送ります。締切のあと数秒でゲートウェイが公開し、全ての国を同時に解決します。`,
+      L`「確定する」で各役職の命令を封印し、中身を運営のゲートウェイに預けてから、封印（ハッシュ）をこのブラウザのゲーム内の鍵で署名してチェーンに送ります。締切のあと数秒でゲートウェイが公開し、全ての勢力を同時に解決します。`,
       L`締切の約${auto}秒前には下書きを自動で確定します（このタブを表示している間だけ）。「手番を終える」は、まだ何も送っていない役職に空の封印を送ります。`,
       L`投票・立候補・献策・支持・リコール・会話も同じ鍵で署名して送ります（締切後の数秒間に出したものは次のティックに送ります）。手数料は運営が払います。`,
       L`ウォレットが署名するのは参加費の支払いと賞金の受け取りだけです。`,

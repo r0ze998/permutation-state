@@ -97,7 +97,7 @@ export function describeOrder(dto) {
     case 'ExchangeOrder': return { dto, glyph: '$', usdc: true, label: dto.side === 'Buy' ? L`USDC取引所：${T.goodName(dto.good)}${dto.amount}を買い @${usdcFixed(dto.price)}` : L`USDC取引所：${T.goodName(dto.good)}${dto.amount}を売り @${usdcFixed(dto.price)}` };
     case 'Raze': return { dto, glyph: '✕', label: L`${T.cityName(dto.city)}を破壊` };
     case 'ConsentWar': return { dto, glyph: '⚖', label: L`${civN(dto.civ)}への宣戦に同意` };
-    case 'ConsentSpend': return { dto, glyph: '⚖', label: L`国庫から${usdc(dto.usdc)} USDCまでの支出に同意` };
+    case 'ConsentSpend': return { dto, glyph: '⚖', label: L`勢力の資金から${usdc(dto.usdc)} USDCまでの支出に同意` };
     default: return { dto, glyph: '•', label: dto.type };
   }
 }
@@ -323,7 +323,7 @@ async function flushGov() {
 /** What a governance action is called, by its type (read in the display language of the moment). */
 export const GOV_VERB = lazyTable({ Vote: () => L`投票`, Support: () => L`支持`, Stand: () => L`立候補`, Recall: () => L`リコールに賛成`, Propose: () => L`献策` });
 const verbs = list => [...new Set(list.map(a => GOV_VERB[a.type] || a.type))].join(listSep());
-const govError = f => (f.code === 'InboxFull' ? L`このティックに送れる国の操作の上限に達しました。次のティックで送ってください` : api.translateError(f));
+const govError = f => (f.code === 'InboxFull' ? L`このティックに送れる勢力の操作の上限に達しました。次のティックで送ってください` : api.translateError(f));
 
 const showError = text => toast(text, 'error');
 

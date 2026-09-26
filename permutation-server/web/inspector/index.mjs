@@ -36,8 +36,8 @@ function introPanel() {
   const cap = S.view.cities.find(c => c.id === myNation().capital);
   const mine = held();
   const others = othersText(S.view);
-  return html`${head(L`YOUR TURN · このティック`, mine.length ? L`あなたは${mine.map(r => T.ROLE_JA[r]).join(L`・`)}` : L`あなたは国民（役職なし）`, L`都市・部隊・土地をクリックすると、ここに詳細と「できること」が出ます。できないことには理由が表示されます。`)}
+  return html`${head(L`YOUR TURN · このティック`, mine.length ? L`あなたは${mine.map(r => T.ROLE_JA[r]).join(L`・`)}` : L`あなたはメンバー（役職なし）`, L`都市・部隊・土地をクリックすると、ここに詳細と「できること」が出ます。できないことには理由が表示されます。`)}
     <div class="explanation">${mine.length ? L`${others}担当の役職の命令は封印して送り、担当外の命令は献策になります。` : L`${others}あなたの命令は担当の役職者への献策になります。採用されると功績を半分ずつ分けます。`}</div>
-    <button class="btn wide" type="button" data-drawer="nation">⚖ ${L`国の広場を開く（選挙・献策・リコール）`}</button>
+    <button class="btn wide" type="button" data-drawer="nation">⚖ ${L`勢力の広場を開く（選挙・献策・リコール）`}</button>
     ${cap ? html`<button class="btn primary wide" type="button" data-focus="${keyOf(cap)}">⌖ ${L`首都 ${T.cityName(cap.id)} を見る`}</button>` : ''}`;
 }

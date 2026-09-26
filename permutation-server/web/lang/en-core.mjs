@@ -7,20 +7,20 @@
 
 export default {
   // panels (the nav, drawer titles, the spectator tabs)
-  '国の広場': 'Nation Plaza',
+  '勢力の広場': 'Faction Plaza',
   '功績': 'Merit',
   '都市・軍': 'Cities & armies',
   '都市と軍': 'Cities and armies',
   '研究': 'Research',
   '外交': 'Diplomacy',
-  '国庫・市場': 'Treasury & markets',
+  '資金・市場': 'Treasury & markets',
   '年代記': 'Chronicle',
   '会話': 'Talk',
   '判断ログ': 'Decision log',
   '遊び方': 'How to play',
   // lenses
   '地形': 'Terrain',
-  '勢力': 'Political',
+  '勢力': 'Factions',
   '産出': 'Yields',
   '軍事': 'Military',
   '協調': 'Concord',
@@ -39,7 +39,7 @@ export default {
   '忠誠': 'Loyalty',
   '宗主': 'Suzerain',
   // money
-  '国庫': 'Treasury',
+  '勢力の資金': 'Treasury',
   '賞金プール': 'Prize pool',
   '関税': 'Tariff',
   '手数料': 'Fee',

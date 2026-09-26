@@ -24,8 +24,8 @@ export function drawerNation() {
   const props = [...g.proposals].sort((a, b) => b.supporters - a.supporters);
   const office = o => html`<div class="office-row ${o.holder?.id === me ? 'me' : ''}"><span class="og">${T.ROLE_GLYPH[o.role]}</span><div class="main"><div class="title">${T.ROLE_JA[o.role]} · ${who(o.holder)}${o.holder?.id === me ? you() : ''}</div>
       <div class="meta">${o.holder ? Lh`ティック${o.since}から · ${o.active ? L`活動中` : html`<span class="idle">${L`最後の命令 ${o.lastAct ?? L`なし`}`}</span>`}` : L`立候補がないため代行が務めます`}${o.runnerUp ? L` · 次点 ${o.runnerUp.name}` : ''}</div></div>
-      ${o.holder && o.holder.id !== me ? html`<button class="btn" type="button" data-gov="${attrJson({ type: 'Recall', role: o.role })}" title="${L`直近${RECALL_ACTIVE_TICKS}ティックに活動した国民の過半数が${RECALL_TICKS}ティック以内に賛成すると解任`}">${L`リコール`}</button>` : ''}</div>`;
-  const recall = r => html`<div class="proposal">${Lh`<b>${T.ROLE_JA[r.role]}</b>（${r.holder?.name || ''}）のリコール${r.automatic ? L`（${g.idleRecallTicks ?? 30}ティック命令なしのため自動）` : ''}`}<div class="when">${L`賛成 ${r.yes} / 必要 ${recallNeeded(g.electorate)}（活動中の国民${g.electorate}人の過半数） · ティック${r.closes}まで`}</div><div class="row" style="margin-top:6px"><button class="btn danger" type="button" data-gov="${attrJson({ type: 'Recall', role: r.role })}">${L`賛成する`}</button></div></div>`;
+      ${o.holder && o.holder.id !== me ? html`<button class="btn" type="button" data-gov="${attrJson({ type: 'Recall', role: o.role })}" title="${L`直近${RECALL_ACTIVE_TICKS}ティックに活動したメンバーの過半数が${RECALL_TICKS}ティック以内に賛成すると解任`}">${L`リコール`}</button>` : ''}</div>`;
+  const recall = r => html`<div class="proposal">${Lh`<b>${T.ROLE_JA[r.role]}</b>（${r.holder?.name || ''}）のリコール${r.automatic ? L`（${g.idleRecallTicks ?? 30}ティック命令なしのため自動）` : ''}`}<div class="when">${L`賛成 ${r.yes} / 必要 ${recallNeeded(g.electorate)}（活動中のメンバー${g.electorate}人の過半数） · ティック${r.closes}まで`}</div><div class="row" style="margin-top:6px"><button class="btn danger" type="button" data-gov="${attrJson({ type: 'Recall', role: r.role })}">${L`賛成する`}</button></div></div>`;
   const candidate = (c, x) => html`<span class="cand-pill">${who(x.member)} <small>${L`${x.votes}票`}</small>${g.voteOpen ? html`<button class="btn ${S.myVotes[c.role] === x.member.id ? 'primary' : ''}" type="button" data-gov="${attrJson({ type: 'Vote', role: c.role, candidate: x.member.id })}">${L`投票`}</button>` : ''}</span>`;
   const proposal = p => {
     const adopted = (S.adopt[p.role] || []).includes(p.id);
@@ -37,8 +37,8 @@ export function drawerNation() {
       ${mine.includes(p.role) ? html`<button class="btn ${adopted ? 'primary' : ''}" type="button" data-adopt="${p.role}:${p.id}">${adopted ? L`採用予定 ✓（確定で送信）` : L`採用する`}</button>` : ''}</div></div>`;
   };
   const windows = activityWindows(v);
-  return html`<div class="eyebrow">${L`NATION · 国の広場`}</div><h2>${L`${civN(S.myCiv)}の政府`}</h2>
-    <p class="drawer-intro">${L`国民は${g.members}人。役職者だけが担当の命令を出せます。国民は誰でも献策・支持・投票・リコールができます（すべてチェーンに記録されます）。`}</p>
+  return html`<div class="eyebrow">${L`FACTION · 勢力の広場`}</div><h2>${L`${civN(S.myCiv)}の政府`}</h2>
+    <p class="drawer-intro">${L`メンバーは${g.members}人。役職者だけが担当の命令を出せます。メンバーは誰でも献策・支持・投票・リコールができます（すべてチェーンに記録されます）。`}</p>
     <div class="section-title">${L`役職者`}</div>${g.offices.map(office)}
     ${g.recalls.length ? html`<div class="section-title">${L`リコール投票中`}</div>${g.recalls.map(recall)}` : ''}
     <div class="section-title">${Lh`選挙 · 次の任期はティック${g.nextElection ?? '—'}から${g.voteOpen ? html` · <span class="tag warning">${L`投票受付中`}</span>` : L` · 投票はティック${g.voteFrom ?? '—'}から`}`}</div>
@@ -46,7 +46,7 @@ export function drawerNation() {
     ${g.candidates.map(c => html`<div class="cand"><span class="og">${T.ROLE_GLYPH[c.role]}</span><b>${T.ROLE_JA[c.role]}</b> ${c.candidates.length ? c.candidates.map(x => candidate(c, x)) : html`<span class="meta">${L`立候補者なし（代行）`}</span>`}</div>`)}
     <div class="section-title">${L`献策 · 支持の多い順`}</div>
     ${props.length ? props.map(proposal) : html`<p class="desc">${L`献策はまだありません。地図で担当外の命令を選んで確定すると、その役職への献策になります。`}</p>`}
-    <div class="section-title">${L`国民 ${roster.length}人`}</div>${roster.map(m => html`<div class="list-row" style="cursor:default"><div class="main"><div class="title">${who(m)}${m.id === me ? you() : ''}</div><div class="meta">${L`功績 ${m.merit.toFixed(1)} · 活動 ${m.activeWindows}/${windows}区間${m.active ? ' ✓' : ''}`}</div></div></div>`)}`;
+    <div class="section-title">${L`メンバー ${roster.length}人`}</div>${roster.map(m => html`<div class="list-row" style="cursor:default"><div class="main"><div class="title">${who(m)}${m.id === me ? you() : ''}</div><div class="meta">${L`功績 ${m.merit.toFixed(1)} · 活動 ${m.activeWindows}/${windows}区間${m.active ? ' ✓' : ''}`}</div></div></div>`)}`;
 }
 
 /** Send one governance action (vote, support, stand, recall). */

@@ -33,8 +33,8 @@ const CHRONICLE = [
   ["milestone|Fjordal reaches Hegemony 2",["milestone","フィヨルダルが覇権の第2段階に到達"]],
   ["milestone|Fjordal loses Concord 1",["milestone","フィヨルダルが協調の第1段階を失った"]],
   ["era|Aster enters era 3",["era","アステルが第3時代に入った"]],
-  ["bounty|Aster conquers the home of agent-7 of Borealis, an operator AI member: bounty 25 USDC",["bounty","アステルがボレアリスのagent-7（運営のAI国民）の住む都市を落とした：懸賞金 25 USDC"]],
-  ["bounty|Cinder conquers the home of Helper Bot of Dunmar, an operator AI member: no bounty (treaty within 10 ticks)",["bounty","シンダーがダンマールのHelper Bot（運営のAI国民）の住む都市を落とした：直前に条約があったため懸賞金なし"]],
+  ["bounty|Aster conquers the home of agent-7 of Borealis, an operator AI member: bounty 25 USDC",["bounty","アステルがボレアリスのagent-7（運営のAIメンバー）の住む都市を落とした：懸賞金 25 USDC"]],
+  ["bounty|Cinder conquers the home of Helper Bot of Dunmar, an operator AI member: no bounty (treaty within 10 ticks)",["bounty","シンダーがダンマールのHelper Bot（運営のAIメンバー）の住む都市を落とした：直前に条約があったため懸賞金なし"]],
   ["other|Something unrecognised happens",["other","Something unrecognised happens"]],
   ["nokind",["nokind",""]],
   ["war|Zorg declares war on Aster",["war","Zorgがアステルに宣戦"]],
@@ -54,7 +54,7 @@ test('i18n: small pure helpers', () => {
   assert.equal(civName('Zorg'), 'Zorg');
   assert.equal(cityName(0), 'ラナ');
   assert.equal(cityName(21), 'ヴェル 2');
-  assert.deepEqual(phaseOf(0), [0, '建国', 'FOUNDING']);
+  assert.deepEqual(phaseOf(0), [0, '草創', 'FOUNDING']);
   assert.deepEqual(phaseOf(130), [120, '危機', 'CRISIS']);
   assert.equal(blockedText(null), '');
   assert.equal(blockedText({ code: 'NotEnoughGold', need: 5, have: 2 }), '金が足りません（必要5・所持2）');

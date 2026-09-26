@@ -14,7 +14,7 @@ export function unitPanel(u) {
   const draft = S.drafts.find(d => slotOf(d.dto) === `u${u.id}`);
   const idle = !u.path?.length && !draft && !u.standing;
   const title = html`${T.UNIT[u.type]}${u.civilian ? '' : html` <span style="font-size:15px;color:var(--muted)">${L`兵 ${troops(u.troops)}`}</span>`}`;
-  const desc = u.type === 'Settler' ? L`都市を建てられる場所（都市から3マス以上、他国の領土・保護区域の外）へ移動して建設します。`
+  const desc = u.type === 'Settler' ? L`都市を建てられる場所（都市から3マス以上、他勢力の領土・保護区域の外）へ移動して建設します。`
     : u.type === 'Scout' ? L`森や丘陵でも1ずつ進める偵察役です。戦闘はできません。` : L`移動先の土地をクリックかダブルクリック。攻撃できる相手は赤い枠で示されます。`;
   const top = html`${head(`${u.civilian ? 'CIVILIAN' : 'ARMY'} · ${u.q}, ${u.r}`, title, desc)}<div class="tags">${idle ? html`<span class="tag warning">${L`待機中`}</span>` : u.path?.length ? html`<span class="tag">${L`移動中 · 残り${u.path.length}マス`}</span>` : ''}${draft ? html`<span class="tag positive">${L`命令あり：${draft.label}`}</span>` : ''}</div>`;
   if (!p) return html`${top}<p class="desc">${L`行動を計算しています…`}</p>`;
@@ -23,7 +23,7 @@ export function unitPanel(u) {
     : html`<button class="btn primary wide" type="button" data-order="${attrJson({ type: 'FoundCity', settler: u.id })}">⌂ ${L`ここに都市を建てる（枠1）`}</button><p class="desc">${L`建設すると開拓者は消え、半径1の土地が領土になります。`}</p>`;
   const attacks = u.civilian ? '' : html`<div class="section-title">${L`攻撃できる相手`}</div>${p.attacks.length ? p.attacks.map(a => attackOption(u, a)) : html`<p class="desc">${L`射程内に相手はいません。戦争中の相手・蛮族・都市国家を攻撃できます（弓兵・弩兵は2マス、ほかは隣接）。`}</p>`}`;
   const now1 = p.reach.filter(r => r[2] <= 1).length, soon = p.reach.filter(r => r[2] > 1 && r[2] <= 3).length;
-  return html`${top}${settler}${attacks}${standingSection(u)}<div class="section-title">${L`移動`}</div><div class="legend-row"><span><span class="sw sw-now"></span>${L`このティック ${now1}マス`}</span><span><span class="sw sw-soon"></span>${L`2〜3ティック ${soon}マス`}</span>${S.view.protectionRadius ? html`<span><span class="sw sw-prot"></span>${L`他国首都の保護区域（半径${S.view.protectionRadius}）`}</span>` : ''}</div>
+  return html`${top}${settler}${attacks}${standingSection(u)}<div class="section-title">${L`移動`}</div><div class="legend-row"><span><span class="sw sw-now"></span>${L`このティック ${now1}マス`}</span><span><span class="sw sw-soon"></span>${L`2〜3ティック ${soon}マス`}</span>${S.view.protectionRadius ? html`<span><span class="sw sw-prot"></span>${L`他勢力の首都の保護区域（半径${S.view.protectionRadius}）`}</span>` : ''}</div>
     <p class="desc">${L`行き先をダブルクリック（または選んで Enter）で下書きに入ります。遠い土地はカーソルを当てると到着ティックが出ます。移動は締切で全員同時に解決されます。`}</p>`;
 }
 
@@ -65,7 +65,7 @@ function attackOption(u, a) {
   const f = a.forecast;
   const detail = f.captureCivilian ? L`非戦闘ユニットを捕獲します` : L`予測：相手 −${(f.toDefender / 1000).toFixed(1)}（残り${((f.defenderTroops - f.toDefender) / 1000).toFixed(1)}）・自軍 −${(f.toAttacker / 1000).toFixed(1)}`;
   const warn = f.neutral ? html`<div class="why">${L`中立への攻撃は侵略扱い：都市国家への影響力をすべて失います`}</div>` : '';
-  return html`<button class="option" type="button" data-order="${attrJson({ type: 'Attack', army: u.id, target: t })}"><span class="ic">⚔</span><span><span class="name">${name}</span><div class="meta">${detail}</div>${warn}<div class="meta">${L`乱数±10%・他の文明も同時に動くため目安です`}</div></span><span class="cost">${L`枠1`}</span></button>`;
+  return html`<button class="option" type="button" data-order="${attrJson({ type: 'Attack', army: u.id, target: t })}"><span class="ic">⚔</span><span><span class="name">${name}</span><div class="meta">${detail}</div>${warn}<div class="meta">${L`乱数±10%・他の勢力も同時に動くため目安です`}</div></span><span class="cost">${L`枠1`}</span></button>`;
 }
 
 /** The selected unit and another tile: move there, attack there, or why not. */

@@ -57,7 +57,7 @@ function proofResult(pr) {
       <div class="pr-row">${check(pr.leafOk)} ${L`このマスの葉 → 観測ルート（経路${pr.steps}段）`}</div>
       <div class="pr-row">${check(pr.rootMatches)} ${L`観測ルートが約束に使われたものと一致`} <code>${String(pr.root).slice(0, 10)}…</code></div>
       <div class="pr-row">${check(pr.digestOk)} ${pr.digestOk === null ? L`理由はまだ非公開です（次のティックで公開され、約束と照合できます）` : L`公開された理由が約束（digest）と一致${pr.text ? L`：「${pr.text}」` : L`（理由の記入なし）`}`}</div>
-      ${pr.tile.fog < 2 ? html`<p class="desc">${L`このマスは判断のとき見えていませんでした。ここにいた部隊について、この文明は知り得なかったことになります。`}</p>` : ''}
+      ${pr.tile.fog < 2 ? html`<p class="desc">${L`このマスは判断のとき見えていませんでした。ここにいた部隊について、この勢力は知り得なかったことになります。`}</p>` : ''}
     </div>`;
 }
 
@@ -93,10 +93,10 @@ export function drawerDecisions() {
   const pt = S.tile && map.tiles.get(S.tile);
   const lastTick = Math.max(0, S.view.tick - 1);
   const head = html`<div class="eyebrow">${L`DECISION LOG · 判断ログ`}</div><h2>${L`判断の証拠`}</h2>
-    <p class="drawer-intro">${Lh`全文明が毎ティック、解決<b>前</b>に「見えていた世界（観測ルート）・方針・理由」を1つのハッシュで約束し、解決<b>後</b>に理由を公開します。下の ✓ はサーバーではなく、このブラウザが SHA-256 で再計算した結果です。`}</p>
+    <p class="drawer-intro">${Lh`全勢力が毎ティック、解決<b>前</b>に「見えていた世界（観測ルート）・方針・理由」を1つのハッシュで約束し、解決<b>後</b>に理由を公開します。下の ✓ はサーバーではなく、このブラウザが SHA-256 で再計算した結果です。`}</p>
     <div class="section-title">${L`観測の証明 · そのとき何が見えていたか`}</div>
     <div class="proof-tool">
-      <label>${L`文明`} <select id="proof-civ">${civs.map(c => html`<option value="${c.id}" ${+(S.proofCiv ?? S.myCiv) === c.id ? 'selected' : ''}>${civN(c.id)}</option>`)}</select></label>
+      <label>${L`勢力名`} <select id="proof-civ">${civs.map(c => html`<option value="${c.id}" ${+(S.proofCiv ?? S.myCiv) === c.id ? 'selected' : ''}>${civN(c.id)}</option>`)}</select></label>
       <label>${L`ティック`} <input id="proof-tick" type="number" min="0" max="${lastTick}" value="${S.proofTick ?? lastTick}"></label>
       <span class="meta">${L`マス：${pt ? `${pt.q}, ${pt.r}` : L`地図で選択`}`}</span>
       <button class="btn primary" type="button" id="prove-tile" ${pt ? '' : 'disabled'}>${L`証明する`}</button>

@@ -33,7 +33,7 @@ function renderLoading() {
   } else if (loadingSays) {
     $('#loading h2').textContent = L`シーズンの開始を待っています`;
     setHtml($('#loading-text'), loadingSays.wait === 'registering'
-      ? html`${L`登録を受け付けています。締切で、人数に関わらずシーズンが始まります。`}<br><a href="./">${L`ウォレットで国民として参加する →`}</a>`
+      ? html`${L`登録を受け付けています。締切で、人数に関わらずシーズンが始まります。`}<br><a href="./">${L`ウォレットでメンバーとして参加する →`}</a>`
       : html`${L`シーズンを準備しています（世界の生成と着任）…`}`);
   }
 }
@@ -107,8 +107,8 @@ function renderTop() {
   const phase = lang() === 'en' ? ph : html`${ph} <small>${phEn}</small>`;
   setHtml($('#clock'), html`<b>${L`ティック ${v.tick}`}</b>/ ${v.ticks} · ${phase} · ${v.over ? L`シーズン終了` : v.paused ? L`停止中` : L`次の解決まで ${Math.ceil(v.secondsLeft)}秒`}`);
   setHtml($('#watch-chip'), S.watch === null
-    ? html`<span class="badge">${L`観戦`}</span><b>${L`全体表示`}</b><span>${L`全ての国`}</span>`
-    : Lh`<span class="badge fog">国</span><b>${civName(S.watch)}</b><span>の立場から見ています（情報は全員に同じです）</span>`);
+    ? html`<span class="badge">${L`観戦`}</span><b>${L`全体表示`}</b><span>${L`全ての勢力`}</span>`
+    : Lh`<span class="badge fog">勢力</span><b>${civName(S.watch)}</b><span>の立場から見ています（情報は全員に同じです）</span>`);
 }
 
 function renderBoard() {
@@ -119,15 +119,15 @@ function renderBoard() {
   const rows = [...v.civs].sort((a, b) => (ach[b.id]?.points ?? 0) - (ach[a.id]?.points ?? 0) || a.id - b.id).map(c => {
     const members = ms.filter(m => m.civ === c.id);
     const a = ach[c.id] || { tiers: [0, 0, 0, 0], era: 0, points: 0 };
-    // The member count is one Lh key with its badge (L`国民${n}` elsewhere names member #n).
+    // The member count is one Lh key with its badge (L`メンバー${n}` elsewhere names member #n).
     return html`<tr class="civ-row ${S.watch === c.id ? 'watching' : ''}" data-civ="${c.id}">
       <td><span class="name"><span class="swatch-s" style="background:${color(c.id)}"></span><b>${T.civName(c.name)}</b>
-        <span class="sub">${members.length ? Lh`<span class="kind">国民${members.length}</span>` : html`<span class="kind">${L`代行のみ`}</span>`}</span></span></td>
+        <span class="sub">${members.length ? Lh`<span class="kind">メンバー${members.length}人</span>` : html`<span class="kind">${L`代行のみ`}</span>`}</span></span></td>
       <td>${fmtOr(c.cities)}</td><td>${fmtOr(c.pop)}</td><td>${fmtOr(c.troops ?? c.troopsSeen)}</td>
       <td>${L`第${a.era}時代`}</td><td title="${L`覇権/繁栄/科学/協調`}">${a.tiers.join('/')}</td><td>${fmtOr(a.points)}</td><td>${pr ? usdcFixed(pr.nationShare[c.id]) : '—'}</td></tr>`;
   });
   // One key for the whole header row: its short column names read together.
-  setHtml($('#board'), html`${Lh`<tr><th>国</th><th>都市</th><th>人口</th><th>兵</th><th>時代</th><th>節目</th><th>点</th><th>取り分 USDC</th></tr>`}${rows}`);
+  setHtml($('#board'), html`${Lh`<tr><th>勢力</th><th>都市</th><th>人口</th><th>兵</th><th>時代</th><th>節目</th><th>点</th><th>取り分 USDC</th></tr>`}${rows}`);
 }
 
 function renderChain() {
