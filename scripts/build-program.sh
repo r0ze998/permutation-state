@@ -24,7 +24,7 @@ have="$(cargo-build-sbf --version | head -1)"
 cargo-build-sbf --manifest-path permutation-chain/Cargo.toml --tools-version v1.52 \
   --sbf-out-dir permutation-chain/target/deploy -- --locked
 so=permutation-chain/target/deploy/permutation_chain.so
-checks="$(LC_ALL=C grep -a -o -E 'attempt to (add|subtract|multiply) with overflow' "$so" | wc -l | tr -d ' ')"
+checks="$({ LC_ALL=C grep -a -o -E 'attempt to (add|subtract|multiply) with overflow' "$so" || true; } | wc -l | tr -d ' ')"
 if [ "$checks" -eq 0 ]; then
   echo "$so: built without overflow checks (no overflow panic message); see [profile.release.package.permutation-chain] in Cargo.toml" >&2
   exit 3
