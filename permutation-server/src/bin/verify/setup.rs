@@ -209,11 +209,25 @@ fn replay_seating(
 
 /// 3a. The seating of the members. They come from their own accounts on the
 ///     base layer (final once registration closed), in registration order;
-///     the `PS_SEAT` records read are matched by root. Returns the members.
-pub fn seating(ctx: &mut Ctx, state: &mut WorldState, prefix: &PrefixData) -> Vec<MemberAccount> {
+///     the `PS_SEAT` records read are matched by root. Returns the members;
+///     `None` (seating incomplete) when their accounts cannot be read.
+pub fn seating(
+    ctx: &mut Ctx,
+    state: &mut WorldState,
+    prefix: &PrefixData,
+) -> Option<Vec<MemberAccount>> {
     let records = seat_records(prefix);
     let (season, rules) = (&ctx.season, &ctx.rules);
-    let members = season_members(&ctx.base, &ctx.program_id, season.season_id);
+    let members = match season_members(&ctx.base, &ctx.program_id, season.season_id) {
+        Ok(m) => m,
+        Err(e) => {
+            ctx.report.incomplete(
+                "seating",
+                format!("the member accounts could not be read: {e}"),
+            );
+            return None;
+        }
+    };
     let mut r = replay_seating(state, rules, &members, &records);
     if members.len() as u32 != season.member_count {
         r.ok = false;
@@ -244,7 +258,7 @@ pub fn seating(ctx: &mut Ctx, state: &mut WorldState, prefix: &PrefixData) -> Ve
         r.ok && state.members.len() as u32 == season.member_count,
         r.detail,
     );
-    members
+    Some(members)
 }
 
 /// The first-election line: a `PS_OPEN` at the recomputed root, or a

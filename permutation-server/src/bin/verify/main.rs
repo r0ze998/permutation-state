@@ -381,7 +381,15 @@ fn main() {
         }
         ctx.report.finish(season_id, Stage::Seating, 0);
     }
-    let members = setup::seating(&mut ctx, &mut state, &prefix);
+    let Some(members) = setup::seating(&mut ctx, &mut state, &prefix) else {
+        // Without the members the world cannot be seated: every later line
+        // would compare against a wrong world, so none is drawn.
+        for what in ["first election", "ticks", "settlement"] {
+            ctx.report
+                .incomplete(what, "the member accounts could not be read");
+        }
+        ctx.report.finish(season_id, Stage::Seating, 0);
+    };
     setup::first_election(&mut ctx, &mut state, &prefix);
 
     // 5–7. Ticks (the index is a hint: a failed /ticks is an empty one).

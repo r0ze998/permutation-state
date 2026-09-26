@@ -91,8 +91,18 @@ pub fn program_records(logs: &[&str], program: &str) -> Result<Vec<(Record, Fram
 
 /// `program_records`, or every record when `program` is `None`.
 pub(crate) fn walk(logs: &[&str], program: Option<&str>) -> Result<Vec<(Record, Frame)>, String> {
+    Ok(frames(logs, program)?.0)
+}
+
+/// `walk`, and the program id of every top-level frame (`invoke [1]`) seen
+/// before the logs were cut, in order.
+fn frames<'a>(
+    logs: &[&'a str],
+    program: Option<&str>,
+) -> Result<(Vec<(Record, Frame)>, Vec<&'a str>), String> {
     // The invocation stack: program id and, inside a CPI, its inner index.
     let mut stack: Vec<(&str, Option<usize>)> = Vec::new();
+    let mut tops: Vec<&str> = Vec::new();
     let mut top: Option<usize> = None;
     let mut inner = 0usize; // inner instructions of the current top-level one so far
     let mut truncated = false;
@@ -112,6 +122,9 @@ pub(crate) fn walk(logs: &[&str], program: Option<&str>) -> Result<Vec<(Record, 
                         .and_then(|d| d.strip_prefix('[')?.strip_suffix(']')?.parse().ok())
                         .unwrap_or(stack.len() + 1);
                     if depth <= 1 {
+                        if !truncated {
+                            tops.push(id);
+                        }
                         top = Some(top.map_or(0, |t| t + 1));
                         inner = 0;
                         stack.clear();
@@ -147,7 +160,42 @@ pub(crate) fn walk(logs: &[&str], program: Option<&str>) -> Result<Vec<(Record, 
             },
         ));
     }
-    Ok(out)
+    Ok((out, tops))
+}
+
+/// The precompiles (Ed25519, secp256k1, secp256r1): the runtime runs them
+/// without an `invoke [1]` line, so they have no top-level frame.
+const PRECOMPILES: [&str; 3] = [
+    "Ed25519SigVerify111111111111111111111111111",
+    "KeccakSecp256k11111111111111111111111111111",
+    "Secp256r1SigVerify1111111111111111111111111",
+];
+
+/// The message instruction each top-level frame ran: the instructions in
+/// order with the precompiles skipped, and each frame's program must be its
+/// instruction's. `None` when they do not line up (then nothing in the
+/// transaction is attributable, so a record cannot be tied to another
+/// instruction's accounts).
+fn top_instructions(tx: &Value, keys: &[String], tops: &[&str], cut: bool) -> Option<Vec<usize>> {
+    let program = |ix: &Value| keys.get(ix["programIdIndex"].as_u64()? as usize);
+    let run: Vec<(usize, &String)> = tx["transaction"]["message"]["instructions"]
+        .as_array()?
+        .iter()
+        .enumerate()
+        .map(|(i, ix)| Some((i, program(ix)?)))
+        .collect::<Option<Vec<_>>>()?
+        .into_iter()
+        .filter(|(_, id)| !PRECOMPILES.contains(&id.as_str()))
+        .collect();
+    let lined_up = if cut {
+        tops.len() <= run.len()
+    } else {
+        tops.len() == run.len()
+    };
+    if !lined_up || tops.iter().zip(&run).any(|(t, (_, id))| *t != id.as_str()) {
+        return None;
+    }
+    Some(run[..tops.len()].iter().map(|(i, _)| *i).collect())
 }
 
 /// The account keys of a `getTransaction` result (encoding `json`, or
@@ -172,23 +220,25 @@ fn account_keys(tx: &Value) -> Vec<String> {
 }
 
 /// The accounts of the instruction that emitted a record in frame `f`, if
-/// that instruction is `program`'s and can be found (a CPI needs
-/// `innerInstructions`).
+/// that instruction is `program`'s and can be found (`tops`: the message
+/// instruction of each top-level frame; a CPI needs `innerInstructions`).
 fn instruction_accounts(
     tx: &Value,
     keys: &[String],
+    tops: &[usize],
     f: Frame,
     program: &str,
 ) -> Option<Vec<String>> {
     if f.truncated {
         return None;
     }
+    let top = *tops.get(f.top)?;
     let ix = match f.inner {
-        None => &tx["transaction"]["message"]["instructions"][f.top],
+        None => &tx["transaction"]["message"]["instructions"][top],
         Some(n) => tx["meta"]["innerInstructions"]
             .as_array()?
             .iter()
-            .find(|e| e["index"].as_u64() == Some(f.top as u64))?["instructions"]
+            .find(|e| e["index"].as_u64() == Some(top as u64))?["instructions"]
             .get(n)?,
     };
     let id = keys.get(ix["programIdIndex"].as_u64()? as usize)?;
@@ -224,10 +274,15 @@ pub fn tx_records(sig: &str, tx: &Value, program: &str) -> Result<TxRecords, Str
         .filter_map(|l| l.as_str())
         .collect();
     let keys = account_keys(tx);
-    out.emitted = program_records(&logs, program)?
+    let (records, top_ids) = frames(&logs, Some(program))?;
+    let cut = logs.contains(&"Log truncated");
+    let tops = top_instructions(tx, &keys, &top_ids, cut);
+    out.emitted = records
         .into_iter()
         .map(|(record, f)| Emitted {
-            accounts: instruction_accounts(tx, &keys, f, program),
+            accounts: tops
+                .as_ref()
+                .and_then(|t| instruction_accounts(tx, &keys, t, f, program)),
             record,
         })
         .collect();
@@ -608,6 +663,11 @@ pub fn follow(
             break;
         }
         let r = c[0];
+        // The format, on every part (the seal check reads it on the first).
+        if !(r.fields.len() == 6 || r.fields.len() >= 9) {
+            out.fail = Some(format_error(r.tick, r.fields.len()));
+            break;
+        }
         if r.tick != tick {
             out.fail = Some(format!(
                 "tick record says tick {}, the replay is at tick {tick}",
@@ -1081,6 +1141,26 @@ mod tests {
         assert_eq!(first.pre, first.post);
     }
 
+    /// A part in neither format (7 or 8 fields) is a contradiction, also
+    /// after a tick's first part.
+    #[test]
+    fn unknown_format_on_a_later_part_fails() {
+        let mut c = Chain::new();
+        let start = c.s.clone();
+        let i0 = c.open("t0", &ALL);
+        let a = c.resolve(&i0, 5);
+        let mut b = c.resolve(&i0, 12);
+        b.record.push(vec![0]);
+        c.tx("a", vec![a]);
+        c.tx("b", vec![b]);
+        let live = c.s.state_root().unwrap();
+        let (out, _) = run(&c, &start, &c.data(&[]), Some(&live));
+        assert!(out
+            .fail
+            .unwrap()
+            .contains("unknown PS_TICK format (7 fields)"));
+    }
+
     #[test]
     fn noop_records_are_ignored() {
         let mut c = Chain::new();
@@ -1549,13 +1629,30 @@ mod tests {
             line("Ours1111", "invoke [1]"),
             tick.clone(),
             line("Ours1111", "success"),
+            line("Wrap1111", "invoke [1]"),
+            line("Wrap1111", "success"),
         ];
-        let r = tx_records("s", &tx(top_level, json!([]), json!(null)), "Ours1111").unwrap();
+        let r = tx_records(
+            "s",
+            &tx(top_level.clone(), json!([]), json!(null)),
+            "Ours1111",
+        )
+        .unwrap();
         assert_eq!(r.slot, 42);
         assert_eq!(
             r.emitted[0].accounts,
             Some(vec![key("ChunkB"), key("Payer")])
         );
+        // Frames that do not line up with the message (one missing, or a
+        // frame of another program): nothing is attributable.
+        let short_logs = top_level[..5].to_vec();
+        let r = tx_records("s", &tx(short_logs, json!([]), json!(null)), "Ours1111").unwrap();
+        assert_eq!(r.emitted[0].accounts, None);
+        let mut other = top_level.clone();
+        other[0] = line("Wrap1111", "invoke [1]");
+        other[1] = line("Wrap1111", "success");
+        let r = tx_records("s", &tx(other, json!([]), json!(null)), "Ours1111").unwrap();
+        assert_eq!(r.emitted[0].accounts, None);
         // A CPI from the wrapper (instruction 2) into our program; a v0
         // transaction's loaded address is key 5.
         let cpi = vec![
@@ -1596,6 +1693,83 @@ mod tests {
             .emitted
             .is_empty());
         assert!(tx_records("s", &Value::Null, "Ours1111").is_err());
+    }
+
+    /// A precompile instruction (Ed25519 here) runs without an `invoke [1]`
+    /// line, so the frames skip it: a record is tied to its own instruction,
+    /// never to the one before it.
+    #[test]
+    fn attribution_skips_precompiles() {
+        const ED25519: &str = "Ed25519SigVerify111111111111111111111111111";
+        let close = data_line(&[b"PS_COMMITS", &[1, 0]]);
+        let tx = json!({
+            "slot": 7,
+            "meta": { "err": null, "innerInstructions": [], "logMessages": [
+                line("Ours1111", "invoke [1]"),
+                line("Ours1111", "success"),
+                line("Ours1111", "invoke [1]"),
+                close,
+                line("Ours1111", "success"),
+            ]},
+            "transaction": { "message": {
+                "accountKeys": ["Payer", "Ours1111", ED25519, "ChunkX", "ChunkY"],
+                "instructions": [
+                    { "programIdIndex": 2, "accounts": [], "data": "" },
+                    { "programIdIndex": 1, "accounts": [3, 0], "data": "" },
+                    { "programIdIndex": 1, "accounts": [4, 0], "data": "" },
+                ],
+            }},
+        });
+        let r = tx_records("s", &tx, "Ours1111").unwrap();
+        assert_eq!(
+            r.emitted[0].accounts,
+            Some(vec!["ChunkY".to_string(), "Payer".to_string()])
+        );
+        // An unknown instruction without a frame (not a listed precompile):
+        // nothing is attributable.
+        let mut unknown = tx.clone();
+        unknown["transaction"]["message"]["accountKeys"][2] = json!("Silent111");
+        let r = tx_records("s", &unknown, "Ours1111").unwrap();
+        assert_eq!(r.emitted[0].accounts, None);
+    }
+
+    /// The attack: an outsider's transaction `[Ed25519, X's instruction on
+    /// X's chunk 0, a CloseCommits of season Y]`. Y's `PS_COMMITS` is Y's (or
+    /// foreign to X); it never counts as X's, so X does not fail.
+    #[test]
+    fn foreign_close_after_a_precompile() {
+        const ED25519: &str = "Ed25519SigVerify111111111111111111111111111";
+        let (mut c, start) = season();
+        let live = c.s.state_root().unwrap();
+        let commits: Vec<Commitment> = vec![(0, 0, 0, [9; 32])];
+        let list = borsh::to_vec(&commits).unwrap();
+        let close = data_line(&[b"PS_COMMITS", &0u16.to_le_bytes(), &list]);
+        let tx = json!({
+            "slot": 11,
+            "meta": { "err": null, "innerInstructions": [], "logMessages": [
+                line("Ours1111", "invoke [1]"),
+                line("Ours1111", "success"),
+                line("Ours1111", "invoke [1]"),
+                close,
+                line("Ours1111", "success"),
+            ]},
+            "transaction": { "message": {
+                "accountKeys": ["Outsider", "Ours1111", ED25519, X, Y],
+                "instructions": [
+                    { "programIdIndex": 2, "accounts": [], "data": "" },
+                    { "programIdIndex": 1, "accounts": [3, 0], "data": "" },
+                    { "programIdIndex": 1, "accounts": [4, 0], "data": "" },
+                ],
+            }},
+        });
+        let r = tx_records("spam", &tx, "Ours1111").unwrap();
+        assert_eq!(r.emitted[0].accounts.as_ref().unwrap()[0], Y);
+        c.txs.push(r);
+        let d = c.data(&[]);
+        assert_eq!(d.foreign, 1);
+        let (out, _) = run(&c, &start, &d, Some(&live));
+        assert_eq!((out.fail, out.missing), (None, None));
+        assert_eq!(out.end_root, live);
     }
 
     #[test]

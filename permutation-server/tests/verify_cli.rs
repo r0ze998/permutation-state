@@ -25,6 +25,9 @@ const SEASON: u64 = 7;
 /// Answers a GET path, or a JSON-RPC method with its params.
 type Handler = Arc<dyn Fn(&str, &Value) -> Value + Send + Sync>;
 
+/// Answers one JSON-RPC method's params.
+type Handler1 = Arc<dyn Fn(&Value) -> Value + Send + Sync>;
+
 /// Serve `h` on an ephemeral port; returns its URL.
 fn serve(h: Handler) -> String {
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -159,23 +162,38 @@ fn gateway(season_id: u64) -> String {
 /// base. ER: the world at tick 2 (every chunk the program's), and `junk`
 /// successful transactions without records in world chunk 0's history.
 fn chain(junk: usize) -> (String, String) {
+    chain_listing(Arc::new(move |_| {
+        json!((0..junk)
+            .map(|i| json!({"signature": format!("junk{i}"), "slot": 1000 - i as u64, "err": null}))
+            .collect::<Vec<_>>())
+    }))
+}
+
+/// `chain`, with world chunk 0's history listed by `listing` (the
+/// `getSignaturesForAddress` params in, a page out).
+fn chain_listing(listing: Handler1) -> (String, String) {
+    chain_with(listing, json!([]))
+}
+
+/// `chain_listing`, with `members` as the base's `getProgramAccounts`
+/// result (`null`: the call fails).
+fn chain_with(listing: Handler1, members: Value) -> (String, String) {
     let data = borsh::to_vec(&season()).unwrap();
     let base = serve(Arc::new(move |method, params| match method {
+        "getProgramAccounts" => members.clone(),
         "getAccountInfo" => json!({"context": {"slot": 1}, "value": account(PROGRAM, &data)}),
         "getMultipleAccounts" => {
             json!({"context": {"slot": 1}, "value": vec![Value::Null; params[0].as_array().unwrap().len()]})
         }
-        "getProgramAccounts" | "getSignaturesForAddress" => json!([]),
+        "getSignaturesForAddress" => json!([]),
         _ => Value::Null,
     }));
     let chunks = world_chunks(2);
-    let er = serve(Arc::new(move |method, _| match method {
+    let er = serve(Arc::new(move |method, params| match method {
         "getMultipleAccounts" => {
             json!({"context": {"slot": 9}, "value": chunks.iter().map(|c| account(PROGRAM, c)).collect::<Vec<_>>()})
         }
-        "getSignaturesForAddress" => json!((0..junk)
-            .map(|i| json!({"signature": format!("junk{i}"), "slot": 1000 - i as u64, "err": null}))
-            .collect::<Vec<_>>()),
+        "getSignaturesForAddress" => listing(params),
         "getTransaction" => json!({
             "slot": 500,
             "meta": {"err": null, "logMessages": ["Program Other111 invoke [1]", "Program Other111 success"]},
@@ -300,4 +318,49 @@ fn scan_budget() {
             .contains("scan limit reached: 100 transactions")),
         "{out}"
     );
+}
+
+/// A listing that never ends (full pages of failed transactions, which are
+/// skipped and never fetched): each page takes a call from the budget, so
+/// the scan stops INCOMPLETE instead of paging forever.
+#[test]
+fn endless_listing_is_bounded() {
+    let page = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let pages = page.clone();
+    let (base, er) = chain_listing(Arc::new(move |_| {
+        let n = pages.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        json!((0..1000)
+            .map(|i| json!({"signature": format!("failed{n}-{i}"), "slot": 1000, "err": {"InstructionError": [0, "Custom"]}}))
+            .collect::<Vec<_>>())
+    }));
+    let o = verify(&[
+        "--gateway",
+        &gateway(SEASON),
+        "--base",
+        &base,
+        "--er",
+        &er,
+        "--max-scan",
+        "20",
+        "--json",
+    ]);
+    let out = text(&o);
+    assert_eq!(o.status.code(), Some(3), "{out}");
+    let v: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["verdict"], "incomplete");
+    assert!(out.contains("scan limit reached: 20 transactions"), "{out}");
+    assert!(page.load(std::sync::atomic::Ordering::SeqCst) <= 20);
+}
+
+/// The member accounts cannot be read (the RPC fails): seating is
+/// incomplete and nothing after it is compared, never a ✗.
+#[test]
+fn unreadable_members_are_incomplete() {
+    let (base, er) = chain_with(Arc::new(|_| json!([])), Value::Null);
+    let o = verify(&["--gateway", &gateway(SEASON), "--base", &base, "--er", &er]);
+    let out = text(&o);
+    assert_eq!(o.status.code(), Some(3), "{out}");
+    assert!(out.contains("? seating"), "{out}");
+    assert!(out.contains("member accounts could not be read"), "{out}");
+    assert!(!out.contains('✗'), "{out}");
 }

@@ -17,7 +17,7 @@ use permutation_rules::state::WorldState;
 use permutation_server::chainlink::ChainLink;
 use permutation_server::codec::{base64, base64_encode};
 use permutation_server::replay::{short, tx_records, ChainData, Missing, Outcome, TxRecords};
-use serde_json::{json, Value};
+use serde_json::json;
 
 /// World chunk `chunk` of a season (`["world", id, [chunk]]`), as base58;
 /// `None` if the program id is not a valid key. For the live-world read and
@@ -296,8 +296,8 @@ mod pda {
     }
 }
 
-/// `getTransaction` calls the scans may make (`--max-scan`), shared by the
-/// fetching threads.
+/// RPC calls the scans may make (`--max-scan`): one per `getTransaction`
+/// and one per page of a listing, shared by the fetching threads.
 pub struct Budget {
     max: usize,
     used: AtomicUsize,
@@ -349,8 +349,9 @@ pub enum ScanError {
 /// Successful transactions listing `address` in slots `lo..=hi` (`hi` None:
 /// up to the newest), newest first, through `getSignaturesForAddress` (1000
 /// per page, paging with `before`, which starts at `start` when given).
-/// Stops at the first entry below `lo`; a listing longer than the budget
-/// can fetch is `Err(Budget)`.
+/// Stops at the first entry below `lo`. Each page takes one call from the
+/// budget, so a long history above `hi` cannot be listed without end; a
+/// listing longer than the budget can fetch is `Err(Budget)`.
 pub fn signatures_in(
     rpc: &ChainLink,
     address: &str,
@@ -362,6 +363,9 @@ pub fn signatures_in(
     let mut out = Vec::new();
     let mut before = start.map(String::from);
     loop {
+        if !budget.take() {
+            return Err(ScanError::Budget);
+        }
         let mut cfg = json!({"limit": 1000, "commitment": "confirmed"});
         if let Some(b) = &before {
             cfg["before"] = json!(b);
@@ -413,8 +417,9 @@ fn retrying<T>(f: impl Fn() -> Result<T, String>) -> Result<T, String> {
 }
 
 /// The records of every transaction in `sigs`, `threads` at a time, each
-/// retried with backoff; a transaction the RPC cannot return is an `Err`
-/// for its signature. With a `budget` (scans), each fetch takes one call and
+/// retried with backoff on an RPC error (a `null`, not found, is final:
+/// retrying it only sleeps); a transaction the RPC cannot return is an
+/// `Err` for its signature. With a `budget` (scans), each fetch takes one call and
 /// fetching stops when it runs out; progress goes to stderr every 500.
 pub fn fetch_many(
     rpc: &ChainLink,
@@ -435,10 +440,8 @@ pub fn fetch_many(
                     break;
                 }
                 let sig = &sigs[i];
-                let r = retrying(|| {
-                    let tx = rpc.transaction(sig)?;
-                    tx_records(sig, &tx, program)
-                });
+                let r =
+                    retrying(|| rpc.transaction(sig)).and_then(|tx| tx_records(sig, &tx, program));
                 out.lock().unwrap().push((i, sig.clone(), r));
                 let n = done.fetch_add(1, Ordering::SeqCst) + 1;
                 if budget.is_some() && n % 500 == 0 {
@@ -715,28 +718,30 @@ pub fn roster_account(base: &ChainLink, program: &str, season_id: u64) -> Option
     Some(r.entries)
 }
 
-/// Every Member account of the season on the base layer, in registration order.
-pub fn season_members(base: &ChainLink, program: &str, season_id: u64) -> Vec<MemberAccount> {
+/// Every Member account of the season on the base layer, in registration
+/// order; `Err` when the RPC call fails (unreadable, not an empty season).
+pub fn season_members(
+    base: &ChainLink,
+    program: &str,
+    season_id: u64,
+) -> Result<Vec<MemberAccount>, String> {
     let id = base64_encode(&season_id.to_le_bytes());
     let magic = base64_encode(&permutation_chain::state::MEMBER_MAGIC);
-    let res = base
-        .rpc(
-            "getProgramAccounts",
-            json!([program, {"encoding": "base64", "commitment": "confirmed", "filters": [
+    let res = base.rpc(
+        "getProgramAccounts",
+        json!([program, {"encoding": "base64", "commitment": "confirmed", "filters": [
                 {"memcmp": {"offset": 0, "bytes": magic, "encoding": "base64"}},
                 {"memcmp": {"offset": 8, "bytes": id, "encoding": "base64"}}]}]),
-        )
-        .unwrap_or(Value::Null);
+    )?;
     let mut out: Vec<MemberAccount> = res
         .as_array()
-        .cloned()
-        .unwrap_or_default()
+        .ok_or("getProgramAccounts returned no list")?
         .iter()
         .filter_map(|a| base64(a["account"]["data"][0].as_str()?).ok())
         .filter_map(|d| MemberAccount::deserialize(&mut &d[..]).ok())
         .collect();
     out.sort_by_key(|m| m.index);
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
