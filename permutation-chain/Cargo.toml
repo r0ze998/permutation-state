@@ -9,7 +9,10 @@ description = "Solana / MagicBlock ER program that runs the permutation-rules en
 crate-type = ["cdylib", "lib"]
 
 [features]
-default = ["custom-heap"]
+default = ["custom-heap", "program"]
+# The on-chain program (processor, entrypoint, MagicBlock SDK). Without it the
+# crate is the account layouts and pure modules only (tests, server, verifier).
+program = ["dep:ephemeral-rollups-sdk", "dep:solana-system-interface"]
 no-entrypoint = []
 custom-heap = []
 custom-panic = []
@@ -20,7 +23,7 @@ cu-trace = ["permutation-rules/cu-trace"]
 # Same pins as permutation-state-solana-receipt-spike (MagicBlock's Native Rust
 # example); upgrading them is an explicit compatibility task.
 borsh = { version = "=1.6.1", features = ["derive"] }
-ephemeral-rollups-sdk = "=0.16.2"
+ephemeral-rollups-sdk = { version = "=0.16.2", optional = true }
 solana-program = "=4.0.0"
-solana-system-interface = { version = "=3.3.0", features = ["bincode"] }
+solana-system-interface = { version = "=3.3.0", features = ["bincode"], optional = true }
 permutation-rules = { path = "../permutation-rules" }

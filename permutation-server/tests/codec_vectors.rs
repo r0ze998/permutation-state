@@ -16,7 +16,6 @@
 use borsh::BorshDeserialize;
 use permutation_chain::error::ChainError;
 use permutation_chain::instruction::ChainInstruction;
-use permutation_chain::processor::{claim_amount, NATION_TARGET};
 use permutation_chain::state::{
     MemberAccount, NationAccount, RosterAccount, RosterEntry, Season, SeasonStatus, WorldMeta,
     CHUNK, GENESIS_MAGIC, INPUT_CHUNK, MAX_AI, MAX_GOV_PER_SIGNER, MAX_MEMBERS, MAX_NAME,
@@ -24,6 +23,7 @@ use permutation_chain::state::{
     ROSTER_MAGIC, ROSTER_SEED, SEASON_MAGIC, SEASON_SEED, VAULT_SEED, WORLD_CHUNKS, WORLD_HEADER,
     WORLD_MAGIC, WORLD_SEED,
 };
+use permutation_chain::{payout::claim_amount, state::NATION_TARGET};
 use permutation_rules::decision::{MAX_POLICY, MAX_RATIONALE};
 use permutation_rules::genesis::NATIONS;
 use permutation_rules::gov::Role;

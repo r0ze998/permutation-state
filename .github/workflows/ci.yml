@@ -70,3 +70,57 @@ jobs:
         run: npm test
       - name: Audit JavaScript dependencies
         run: npm audit --audit-level=moderate
+
+  program:
+    name: Rules, program (host + SBF + LiteSVM), server
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Rust toolchains
+        # The root, crate and svm-tests rust-toolchain.toml files select them;
+        # rustup may not auto-install, so both are installed explicitly.
+        run: rustup toolchain install 1.89.0 1.95.0 --profile minimal --component rustfmt,clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cache/solana
+            permutation-chain/target
+            permutation-server/target
+            permutation-chain/svm-tests/target
+          key: program-${{ hashFiles('**/Cargo.lock', '**/rust-toolchain.toml') }}
+      - name: Install Agave 3.1.9 (cargo-build-sbf, platform-tools v1.52)
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v3.1.9/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+      - name: Rules
+        run: cargo test --locked --release -p permutation-rules
+      - name: Program host tests
+        run: cargo test --locked -p permutation-chain
+      - name: Program layouts build without the program feature
+        run: cd permutation-chain && cargo check --locked --no-default-features --features no-entrypoint
+      - name: Server (golden, codec vectors)
+        run: cd permutation-server && cargo test --locked --release
+      - name: Server binaries (verify, play, replay) outside cargo test
+        run: cd permutation-server && cargo build --locked --release --bins
+      - name: Program tests against the SBF build (builds it with scripts/build-program.sh)
+        run: permutation-chain/svm-tests/run.sh
+        env:
+          RELEASE_CHECK: ${{ (startsWith(github.ref, 'refs/tags/') || startsWith(github.ref, 'refs/heads/release/')) && '1' || '' }}
+
+  gateway:
+    name: Gateway and web client tests
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: permutation-gateway
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: permutation-gateway/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npm test

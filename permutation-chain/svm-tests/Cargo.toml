@@ -1,0 +1,45 @@
+[package]
+name = "permutation-chain-svm-tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Program-level tests: the SBF build of permutation-chain (target/deploy/permutation_chain.so) run in LiteSVM"
+
+# A separate package with its own lock and toolchain (excluded from the root
+# workspace): litesvm 0.16 needs solana-address ~2.6 / solana-instruction
+# ~3.4, while permutation-chain's `program` feature pins
+# solana-system-interface =3.3.0 (solana-address ^2.7). Without that feature
+# the chain crate is layouts and pure modules only and fits LiteSVM's graph.
+[workspace]
+
+[dependencies]
+litesvm = "=0.16.0"
+permutation-rules = { path = "../../permutation-rules", features = ["std"] }
+# The program's layouts and pure modules (no processor, no MagicBlock SDK),
+# and the play server's bots, in the same graph as LiteSVM.
+permutation-chain = { path = "..", default-features = false, features = ["no-entrypoint"] }
+permutation-server = { path = "../../permutation-server" }
+borsh = { version = "=1.6.1", features = ["derive"] }
+solana-program = "4" # AccountInfo for state::Chunks
+solana-account = "4"
+solana-address = "2"
+solana-clock = "3"
+solana-compute-budget-interface = "3"
+solana-instruction = "3"
+solana-keypair = "3"
+solana-signer = "3"
+solana-transaction = { version = "4", features = ["serde"] }
+solana-message = "4"
+solana-signature = "3"
+# Stand-ins for the MagicBlock programs (builtins registered in LiteSVM);
+# must equal litesvm's own solana-program-runtime.
+solana-program-runtime = "=4.2.2"
+magicblock-magic-program-api = "=0.10.1"
+bincode = "1"
+base64 = "0.22"
+# Prints the loaded binary's hash (already in the lock through the server).
+sha2 = "=0.10.9"
+
+# LiteSVM, the rules engine and the bots optimised; the tests stay debug.
+[profile.dev.package."*"]
+opt-level = 3

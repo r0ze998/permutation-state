@@ -1,0 +1,22 @@
+# The on-chain program and the rules engine it links, built from one lock and
+# one toolchain so the SBF build is reproducible at any checkout path
+# (scripts/build-program.sh). The play server and the LiteSVM suite keep
+# their own locks: the suite pins LiteSVM's solana crates, which do not
+# resolve together with the program's MagicBlock SDK.
+[workspace]
+resolver = "2"
+members = ["permutation-chain", "permutation-rules"]
+exclude = [
+    "permutation-server",
+    "permutation-state-solana-receipt-spike",
+    "permutation-chain/svm-tests",
+]
+
+# Audit WP08: overflow in the program's own code (registration, finalize,
+# claims, account handling) aborts the transaction instead of wrapping.
+# The rules engine is excluded for compute (+19% CU measured); its money
+# arithmetic is explicitly checked instead (permutation-rules/src/markets).
+# Member-crate profiles are ignored inside a workspace, so it lives here;
+# scripts/build-program.sh checks that the built .so carries the checks.
+[profile.release.package.permutation-chain]
+overflow-checks = true

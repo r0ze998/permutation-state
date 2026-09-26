@@ -13,5 +13,13 @@ serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 sha2 = "=0.10.9"
 borsh = { version = "=1.6.1", features = ["derive"] }
-# Account layouts (Season) for the replay verifier; no program entrypoint.
-permutation-chain = { path = "../permutation-chain", features = ["no-entrypoint"] }
+# Account layouts (Season) and the always-compiled pure modules for the
+# replay verifier: no processor, no entrypoint, no MagicBlock SDK. There is
+# no dev-dependency on the chain either, so tests build with the same
+# features as the binaries and a `processor::` use cannot hide behind
+# `cargo test` (permutation-chain/src/lib.rs).
+permutation-chain = { path = "../permutation-chain", default-features = false, features = ["no-entrypoint"] }
+
+# Audit WP08: the replay verifier panics where the chain would have wrapped.
+[profile.release]
+overflow-checks = true
