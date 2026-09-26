@@ -763,10 +763,9 @@ mod tests {
         let body: Vec<u8> = (0..2 * CHUNK + 77).map(|i| (i * 7 % 251) as u8).collect();
         let chunks = chunks_with(&body, body.len() as u32);
         assert_eq!(world_body(&chunks).unwrap(), body);
-        assert_eq!(
-            chunks[1][..CHUNK - WORLD_HEADER.min(CHUNK)].len(),
-            CHUNK - WORLD_HEADER
-        );
+        // The body starts after the header, not at chunk 0's first byte.
+        assert_eq!(chunks[0][WORLD_HEADER], body[0]);
+        assert_eq!(chunks[1][0], body[CHUNK - WORLD_HEADER]);
         let too_big = (WORLD_CHUNKS * CHUNK - WORLD_HEADER + 1) as u32;
         assert!(world_body(&chunks_with(&body, too_big)).is_err());
         let mut genesis = chunks.clone();
