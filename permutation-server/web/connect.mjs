@@ -6,6 +6,7 @@ import * as wallet from './wallet.mjs';
 import { html, short } from './util.mjs';
 import { S } from './state.mjs';
 import { codeError } from './session.mjs';
+import { L, Lh } from './lang.mjs';
 
 // The user may switch or remove the account inside the wallet.
 wallet.onChange(() => { S.wallet = wallet.connected(); });
@@ -19,14 +20,17 @@ export function walletPicker(cluster) {
   const buttons = all.map(e => (e.why
     ? html`<button class="btn wallet-btn" type="button" disabled title="${e.why}">${icon(e)}${e.name}<small>${e.why}</small></button>`
     : html`<button class="btn wallet-btn ${e.dev ? 'dev' : ''}" type="button" data-wallet-connect="${e.name}">${icon(e)}${e.name}</button>`));
-  const install = html`<p class="desc">Solana のウォレットが${all.length ? 'ほかに' : ''}必要です：${wallet.INSTALL.map((w, i) => html`${i ? '・' : ''}<a href="${w.url}" target="_blank" rel="noopener">${w.name}</a>`)}。インストール後にページを再読み込みしてください（拡張機能はページを開いたときに読み込まれます）。</p>`;
+  const links = wallet.INSTALL.map((w, i) => html`${i ? L`・` : ''}<a href="${w.url}" target="_blank" rel="noopener">${w.name}</a>`);
+  const install = html`<p class="desc">${all.length
+    ? Lh`Solana のウォレットがほかに必要です：${links}。インストール後にページを再読み込みしてください（拡張機能はページを開いたときに読み込まれます）。`
+    : Lh`Solana のウォレットが必要です：${links}。インストール後にページを再読み込みしてください（拡張機能はページを開いたときに読み込まれます）。`}</p>`;
   let hints = '';
   if (cluster === 'devnet') {
     const names = usable.filter(e => !e.dev).map(e => e.name);
     const list = (names.length ? names : ['Phantom', 'Solflare', 'Backpack']).map(wallet.devnetHint);
-    hints = html`<div class="explanation">このシーズンは devnet（テストネット）です。接続する前に、ウォレットをテストネット/devnet に切り替えてください。${list.map(t => html`<br>${t}`)}</div>`;
+    hints = html`<div class="explanation">${L`このシーズンは devnet（テストネット）です。接続する前に、ウォレットをテストネット/devnet に切り替えてください。`}${list.map(h => html`<br>${h}`)}</div>`;
   } else if (cluster === 'localnet' && !all.some(e => e.dev)) {
-    hints = html`<div class="explanation">ローカルネットです。ふつうのウォレットはこのチェーンに接続できません（ゲートウェイを <code>--dev-wallet</code> 付きで起動すると Dev Wallet が使えます）。</div>`;
+    hints = html`<div class="explanation">${Lh`ローカルネットです。ふつうのウォレットはこのチェーンに接続できません（ゲートウェイを <code>--dev-wallet</code> 付きで起動すると Dev Wallet が使えます）。`}</div>`;
   }
   return html`${buttons.length ? html`<div class="wallet-list">${buttons}</div>` : ''}${usable.length ? '' : install}${hints}`;
 }
@@ -38,7 +42,7 @@ export const walletLine = w => html`<span class="wallet-line">${w.icon ? html`<i
 export async function connectWallet(name, cluster) {
   const chain = wallet.chainOf(cluster);
   const e = wallet.list(chain).find(x => x.name === name && !x.why);
-  if (!e) throw codeError('NoWallet', 'そのウォレットは見つかりません');
+  if (!e) throw codeError('NoWallet', L`そのウォレットは見つかりません`);
   S.wallet = await wallet.connect(e, { chain });
   return S.wallet;
 }

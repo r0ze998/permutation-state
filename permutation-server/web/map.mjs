@@ -4,6 +4,7 @@
  *  decorative entities are invented. */
 import { CIV_COLORS, cityName, itemGlyph, UNIT_GLYPH, STANDING_GLYPH } from './i18n.mjs';
 import { hexDist } from './util.mjs';
+import { L, onLangChange } from './lang.mjs';
 
 const SQRT3 = Math.sqrt(3);
 const RADIUS = 44;
@@ -89,7 +90,8 @@ export class WorldMap {
     this.dirty = true; this.destroyed = false; this.listeners = []; this.lastFrame = 0;
     this.width = 1; this.height = 1; this.dpr = 1;
     canvas.tabIndex = 0;
-    canvas.setAttribute('aria-label', '世界地図。クリックで選択、ダブルクリックで選択中の部隊を移動、ドラッグで地図を移動、ホイールで拡大縮小');
+    const label = () => canvas.setAttribute('aria-label', L`世界地図。クリックで選択、ダブルクリックで選択中の部隊を移動、ドラッグで地図を移動、ホイールで拡大縮小`);
+    label(); this.listeners.push(onLangChange(label)); // canvas text itself is redrawn every frame
     canvas.style.cursor = 'grab';
     this._bind();
     this.resizeObserver = new ResizeObserver(() => this._resize()); this.resizeObserver.observe(canvas);
@@ -597,7 +599,7 @@ export class WorldMap {
   _drawHoverEta(ctx) {
     const ticks = this.hover && this.overlay.reach.get(this.hover); if (!ticks) return;
     const t = this.tiles.get(this.hover); const p = project(t.q, t.r); const z = Math.max(this.zoom, .8);
-    const label = ticks <= 1 ? '→ このティックで到着' : `→ ${ticks}ティックで到着`;
+    const label = ticks <= 1 ? L`→ このティックで到着` : L`→ ${ticks}ティックで到着`;
     ctx.font = `600 ${11 / z}px system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     const w = ctx.measureText(label).width + 14 / z, h = 19 / z, y = p.y - 26 / z - h;
     rounded(ctx, p.x - w / 2, y, w, h, 5 / z); ctx.fillStyle = 'rgba(36,52,46,.9)'; ctx.fill();
@@ -706,11 +708,11 @@ export class WorldMap {
   }
   // ---------------------------------------------------------------- banners and flags (screen space)
   _screen(p) { return { x: p.x * this.zoom + this.offset.x, y: p.y * this.zoom + this.offset.y }; }
-  /** A nation's members as a banner tag: how many, or '代行' (the rules' caretaker only). Never who is an AI (V5 §18.2). */
+  /** A nation's members as a banner tag: how many, or the caretaker (the rules only). Never who is an AI (V5 §18.2). */
   _nationKind(civ) {
     if (!this.view.members) return '';
     const n = this.view.members.filter(m => m.civ === civ).length;
-    return n ? `${n}人` : '代行';
+    return n ? L`${n}人` : L`代行`;
   }
   _drawBanners(ctx, now) {
     const s = clamp(this.zoom, .82, 1.12);
@@ -720,7 +722,7 @@ export class WorldMap {
       const t = this.tiles.get(a.id); if (!t) continue;
       const q = this._screen(project(t.q, t.r));
       const f = a.forecast, win = (f.toDefender ?? 0) >= (f.toAttacker ?? 0) * 1.3;
-      const text = f.captureCivilian ? '捕獲' : `敵 −${((f.toDefender ?? 0) / 10).toFixed(0)} ／ 自 −${((f.toAttacker ?? 0) / 10).toFixed(0)}`;
+      const text = f.captureCivilian ? L`捕獲` : L`敵 −${((f.toDefender ?? 0) / 10).toFixed(0)} ／ 自 −${((f.toAttacker ?? 0) / 10).toFixed(0)}`;
       this._chip(ctx, q.x, q.y - 34 * this.zoom, text, win ? '#2f5a45' : '#8e3b2f', '#fff6e0', 11);
     }
     for (const cs of this.view.cityStates) {
@@ -798,10 +800,10 @@ export class WorldMap {
     ctx.restore();
   }
   _cityStateBanner(ctx, x, y, cs, s) {
-    const glyph = { Scientific: '学', Mercantile: '商', Agrarian: '農' }[cs.specialty] || '◆';
+    const glyph = cs.specialty === 'Scientific' ? L`学` : cs.specialty === 'Mercantile' ? L`商` : cs.specialty === 'Agrarian' ? L`農` : '◆';
     const sz = cs.suzerain !== null && cs.suzerain !== undefined ? CIV_COLORS[cs.suzerain] : null;
-    const text = `都市国家 ${cs.id + 1}`;
-    const inf = cs.myInfluence || cs.topInfluence ? `影響 ${cs.myInfluence}/${cs.topInfluence}` : '';
+    const text = L`都市国家 ${cs.id + 1}`;
+    const inf = cs.myInfluence || cs.topInfluence ? L`影響 ${cs.myInfluence}/${cs.topInfluence}` : '';
     ctx.save(); ctx.translate(x, y); ctx.scale(s, s);
     ctx.font = '600 12px Georgia, "Yu Mincho", serif'; const tw = ctx.measureText(text).width;
     ctx.font = '600 10px system-ui'; const iw = inf ? ctx.measureText(inf).width + 10 : 0;

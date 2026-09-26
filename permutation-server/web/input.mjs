@@ -20,6 +20,7 @@ import { offerContract } from './drawers/diplomacy.mjs';
 import { sendTalk } from './drawers/talk.mjs';
 import { poll } from './sync.mjs';
 import { refreshFlags } from './chainplay.mjs';
+import { L, onLangChange } from './lang.mjs';
 
 // ================================================================== click registry
 // [data attribute (dataset key), handler(value, element, event)] — the element
@@ -106,10 +107,10 @@ function renderLensLegend() {
   const el = $('#lens-legend');
   const civs = S.view?.civs || [];
   const body = {
-    political: html`${civs.map(c => html`<span>${dot(T.CIV_COLORS[c.id])}${civN(c.id)}${c.id === S.myCiv ? '（あなた）' : ''}</span>`)}<span class="hint">斜線＝戦争中の相手</span>`,
-    yields: html`<span>${dot(YIELD_COLORS[0])}食料</span><span>${dot(YIELD_COLORS[1])}生産</span><span>${dot(YIELD_COLORS[2])}金</span><span class="hint">都市が使う土地の基本産出（川・資源込み）</span>`,
-    military: html`<span>${dot(rgba(THREAT_COLOR, .6))}戦争中の敵軍・蛮族から2マス以内</span>`,
-    concord: html`<span>${dot(CONCORD_NEUTRAL)}都市国家の周囲2マス（宗主の色）</span><span class="hint">協調の道：宗主・条約・交易</span>`,
+    political: html`${civs.map(c => html`<span>${dot(T.CIV_COLORS[c.id])}${civN(c.id)}${c.id === S.myCiv ? L`（あなた）` : ''}</span>`)}<span class="hint">${L`斜線＝戦争中の相手`}</span>`,
+    yields: html`<span>${dot(YIELD_COLORS[0])}${L`食料`}</span><span>${dot(YIELD_COLORS[1])}${L`生産`}</span><span>${dot(YIELD_COLORS[2])}${L`金`}</span><span class="hint">${L`都市が使う土地の基本産出（川・資源込み）`}</span>`,
+    military: html`<span>${dot(rgba(THREAT_COLOR, .6))}${L`戦争中の敵軍・蛮族から2マス以内`}</span>`,
+    concord: html`<span>${dot(CONCORD_NEUTRAL)}${L`都市国家の周囲2マス（宗主の色）`}</span><span class="hint">${L`協調の道：宗主・条約・交易`}</span>`,
   }[S.lens];
   el.hidden = !body;
   if (body) setHtml(el, body);
@@ -160,4 +161,5 @@ export function bindInput() {
   const rationale = $('#rationale');
   rationale.addEventListener('input', () => invalidate('dock'));
   rationale.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } });
+  onLangChange(renderLensLegend); // the legend is drawn on a lens change only
 }

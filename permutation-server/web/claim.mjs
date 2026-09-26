@@ -14,11 +14,16 @@ import * as chainio from './chainio.mjs';
 import { html, usdc, short, toast } from './util.mjs';
 import { S, invalidate } from './state.mjs';
 import { walletPicker, walletLine } from './connect.mjs';
+import { L, lazyTable } from './lang.mjs';
 
 const REFRESH_MS = 20_000;
 /** After a failed load. */
 const RETRY_MS = 3_000;
-const STAGE = { status: '精算の状況を確認しています…', sign: 'ウォレットで受け取りを承認してください（手数料は運営が払います）', send: '送信しています…（確認まで15秒ほどかかることがあります）' };
+const STAGE = lazyTable({
+  status: () => L`精算の状況を確認しています…`,
+  sign: () => L`ウォレットで受け取りを承認してください（手数料は運営が払います）`,
+  send: () => L`送信しています…（確認まで15秒ほどかかることがあります）`,
+});
 
 // Claim signatures sent from this browser, for the explorer link after a reload.
 const sigKey = (seasonId, w) => { const p = chainio.pinned(); return `ps-claim:${p?.cluster}:${p?.programId}:${seasonId}:${w}`; };
@@ -63,34 +68,34 @@ export function claimCard(v) {
   const c = card();
   if (due(c)) refreshClaim();
   const s = c.season, m = c.member;
-  if (!s || !m) return html`<div class="claim-card"><div class="eyebrow">RESULT · あなたの賞金</div><p class="desc">結果を読み込んでいます…</p></div>`;
+  if (!s || !m) return html`<div class="claim-card"><div class="eyebrow">${L`RESULT · あなたの賞金`}</div><p class="desc">${L`結果を読み込んでいます…`}</p></div>`;
   const status = s.season?.status;
   const busy = c.busy ? html`<p class="claim-busy"><span class="spinner"></span>${c.busy}</p>` : '';
   const err = c.error ? html`<p class="seat-error">${c.error}</p>` : '';
   if (status !== 'Finalized') {
     const projected = Number(v.member?.projectedPayout ?? 0);
     if (!projected && !(Number(m.shares ?? 0) > 0)) return '';
-    return html`<div class="claim-card"><div class="eyebrow">RESULT · あなたの賞金</div>
-      <h3>見込み ${usdc(projected)} USDC</h3>
-      <p class="desc"><span class="tag warning">精算待ち（最長約1時間）</span> シーズンの精算（運営のAI国民の公開と配分の確定）が終わると、ここから受け取れます。</p></div>`;
+    return html`<div class="claim-card"><div class="eyebrow">${L`RESULT · あなたの賞金`}</div>
+      <h3>${L`見込み ${usdc(projected)} USDC`}</h3>
+      <p class="desc"><span class="tag warning">${L`精算待ち（最長約1時間）`}</span> ${L`シーズンの精算（運営のAI国民の公開と配分の確定）が終わると、ここから受け取れます。`}</p></div>`;
   }
   const total = c.parts?.total ?? 0n;
   if (total <= 0n) return '';
-  const head = html`<div class="eyebrow">RESULT · あなたの賞金</div><h3>あなたの賞金 ${fmtUsdc(total)} USDC</h3>
-    <p class="desc">賞金 ${fmtUsdc(c.parts.prize)} USDC${c.parts.refund ? ` ＋ 国庫の残りの返還 ${fmtUsdc(c.parts.refund)} USDC` : ''}。登録したウォレット（${short(m.wallet, 4, 4)}）のトークン口座に届きます。</p>`;
+  const head = html`<div class="eyebrow">${L`RESULT · あなたの賞金`}</div><h3>${L`あなたの賞金 ${fmtUsdc(total)} USDC`}</h3>
+    <p class="desc">${L`賞金 ${fmtUsdc(c.parts.prize)} USDC${c.parts.refund ? L` ＋ 国庫の残りの返還 ${fmtUsdc(c.parts.refund)} USDC` : ''}。登録したウォレット（${short(m.wallet, 4, 4)}）のトークン口座に届きます。`}</p>`;
   if (m.claimed) {
     const sig = sigGet(chainio.pinned()?.seasonId, m.wallet);
     const link = sig && chainio.explorerTx(sig, { base: s.endpoints?.base ?? v.chain?.endpoints?.base });
-    return html`<div class="claim-card done">${head}<p class="desc"><span class="tag positive">受け取り済み ✓</span>${link ? html` <a href="${link}" target="_blank" rel="noopener">エクスプローラーで見る →</a>` : ''}</p></div>`;
+    return html`<div class="claim-card done">${head}<p class="desc"><span class="tag positive">${L`受け取り済み ✓`}</span>${link ? html` <a href="${link}" target="_blank" rel="noopener">${L`エクスプローラーで見る →`}</a>` : ''}</p></div>`;
   }
   let action;
-  if (!S.wallet) action = html`<p class="desc">受け取るには、登録したウォレットを接続してください。</p>${walletPicker(chainio.pinned()?.cluster)}`;
-  else if (S.wallet.address !== m.wallet) action = html`<p class="seat-error">接続中のウォレット（${short(S.wallet.address, 4, 4)}）は登録したものと違います。${short(m.wallet, 4, 4)} に切り替えてください。</p><button class="btn" type="button" data-wallet-disconnect>接続を切る</button>`;
-  else action = html`<p class="desc">${walletLine(S.wallet)}</p><button class="btn primary" type="button" data-claim-prize ${c.busy ? 'disabled' : ''}>受け取る（${fmtUsdc(total)} USDC）</button>`;
+  if (!S.wallet) action = html`<p class="desc">${L`受け取るには、登録したウォレットを接続してください。`}</p>${walletPicker(chainio.pinned()?.cluster)}`;
+  else if (S.wallet.address !== m.wallet) action = html`<p class="seat-error">${L`接続中のウォレット（${short(S.wallet.address, 4, 4)}）は登録したものと違います。${short(m.wallet, 4, 4)} に切り替えてください。`}</p><button class="btn" type="button" data-wallet-disconnect>${L`接続を切る`}</button>`;
+  else action = html`<p class="desc">${walletLine(S.wallet)}</p><button class="btn primary" type="button" data-claim-prize ${c.busy ? 'disabled' : ''}>${L`受け取る（${fmtUsdc(total)} USDC）`}</button>`;
   return html`<div class="claim-card">${head}${action}${busy}${err}</div>`;
 }
 
-/** "受け取る": the wallet signs Claim for this season. */
+/** "受け取る" (Claim): the wallet signs Claim for this season. */
 export async function claimPrize() {
   const c = card();
   if (c.busy || !S.wallet || !c.member) return;
@@ -99,7 +104,7 @@ export async function claimPrize() {
   c.busy = '';
   if (r.ok) {
     sigSet(chainio.pinned()?.seasonId, S.wallet.address, r.signature);
-    toast(`賞金を受け取りました（${short(r.dest, 4, 4)}）`, 'good');
+    toast(L`賞金を受け取りました（${short(r.dest, 4, 4)}）`, 'good');
   } else c.error = T.errorText(r);
   await refreshClaim(true);
 }
@@ -142,13 +147,13 @@ export async function findPastClaims(walletAddress) {
  */
 export function pastClaimsHtml(list, busy) {
   if (!list?.length) return '';
-  const row = x => html`<div class="list-row" style="cursor:default"><div class="main"><div class="title">シーズン ${x.seasonId}</div>
-      <div class="meta">${x.done ? '受け取り済み ✓' : x.total === null ? '金額をゲートウェイから読めませんでした' : `${fmtUsdc(x.total)} USDC`}</div></div>
-      ${x.done ? '' : html`<button class="btn primary" type="button" data-claim-season="${x.seasonId}" ${busy ? 'disabled' : ''}>受け取る</button>`}</div>`;
+  const row = x => html`<div class="list-row" style="cursor:default"><div class="main"><div class="title">${L`シーズン ${x.seasonId}`}</div>
+      <div class="meta">${x.done ? L`受け取り済み ✓` : x.total === null ? L`金額をゲートウェイから読めませんでした` : `${fmtUsdc(x.total)} USDC`}</div></div>
+      ${x.done ? '' : html`<button class="btn primary" type="button" data-claim-season="${x.seasonId}" ${busy ? 'disabled' : ''}>${L`受け取る`}</button>`}</div>`;
   const known = list.filter(x => x.total !== null), unknown = list.filter(x => x.total === null);
-  return html`<div class="past-claims">${known.length ? html`<div class="section-title">前のシーズンの賞金を受け取る</div>${known.map(row)}` : ''}
-    ${unknown.length ? html`<details><summary class="section-title">前のシーズンの賞金を確かめる（${unknown.length}シーズン）</summary>
-      <p class="desc">このウォレットがそのシーズンの国民だったかを、ゲートウェイから読めませんでした。受け取りを試すとわかります（ウォレットの署名が必要です。国民でなかったシーズンでは受け取れません）。</p>${unknown.map(row)}</details>` : ''}</div>`;
+  return html`<div class="past-claims">${known.length ? html`<div class="section-title">${L`前のシーズンの賞金を受け取る`}</div>${known.map(row)}` : ''}
+    ${unknown.length ? html`<details><summary class="section-title">${L`前のシーズンの賞金を確かめる（${unknown.length}シーズン）`}</summary>
+      <p class="desc">${L`このウォレットがそのシーズンの国民だったかを、ゲートウェイから読めませんでした。受け取りを試すとわかります（ウォレットの署名が必要です。国民でなかったシーズンでは受け取れません）。`}</p>${unknown.map(row)}</details>` : ''}</div>`;
 }
 
 /** Claim an earlier season's prize with the connected wallet; returns the chainio result. */

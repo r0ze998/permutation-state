@@ -4,6 +4,10 @@
 // escaped unless it is itself the result of `html`/`raw` (or an array of
 // those). Build markup only with `html`, never with plain template strings,
 // so server text (member names, errors, chronicle lines) cannot inject markup.
+//
+// lang.mjs imports `html` from here and this module imports `L` from there:
+// neither uses the other while loading, so the cycle is harmless.
+import { L } from './lang.mjs';
 
 export const $ = s => document.querySelector(s);
 export const $$ = s => document.querySelectorAll(s);
@@ -73,8 +77,19 @@ export function verifyCommand(c, href = globalThis.location?.href) {
 
 /** What to tell whoever copies the verify command (verifyCommand's answer). */
 export const verifyNote = cmd => (cmd?.rpcKnown
-  ? 'verify はゲートウェイの記録を、ベース層と ER の RPC から自分で読み直して照合します。'
-  : 'verify はゲートウェイのほかに、シーズンのベース層と ER の RPC を読みます。このサイトは運営の RPC を公開していないので、<base RPC> と <ER RPC> には同じクラスター（と ER）の RPC の URL を入れてください（運営が公開 RPC を指定しているときは、ここに表示されます）。');
+  ? L`verify はゲートウェイの記録を、ベース層と ER の RPC から自分で読み直して照合します。`
+  : L`verify はゲートウェイのほかに、シーズンのベース層と ER の RPC を読みます。このサイトは運営の RPC を公開していないので、<base RPC> と <ER RPC> には同じクラスター（と ER）の RPC の URL を入れてください（運営が公開 RPC を指定しているときは、ここに表示されます）。`);
+
+/**
+ * Text that follows the display language, for a constant other modules
+ * import (chainplay.mjs NO_KEY, rules.mjs AMM_FEE_TEXT…): call it for the
+ * text of the moment, or use it where a string is expected (html``, a
+ * template literal, toast, textContent) — it reads as that same text.
+ */
+export const liveText = fn => Object.assign(() => fn(), { toString: fn, valueOf: fn, toJSON: fn, [Symbol.toPrimitive]: () => fn() });
+
+/** The separator of a short list (office names, verbs): 「・」 in Japanese. */
+export const listSep = () => L`・`;
 
 /**
  * A short notice at the top of the screen. `text` is plain text (never

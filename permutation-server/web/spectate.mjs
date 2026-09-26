@@ -9,6 +9,7 @@ import * as T from './i18n.mjs';
 import * as V from './verify.mjs';
 import * as api from './api.mjs';
 import { $, $$, html, setHtml, fmtOr, short, usdcFixed, singleFlight, logOnce, verifyCommand, verifyNote } from './util.mjs';
+import { L, Lh, lang, onLangChange, mountLangToggle } from './lang.mjs';
 
 // api.get/tryGet: this page never sets a member token, so no X-Member-Token is sent.
 const hash = h => short(h, 8, 6, '—');
@@ -20,14 +21,29 @@ map.setLens('political');
 const civName = id => T.civName(S.view?.civs?.[id]?.name ?? `#${id}`);
 const color = id => T.CIV_COLORS[id % T.CIV_COLORS.length];
 
+/**
+ * What the loading screen says once script has written it (null: the static
+ * markup's text): {wait: phase} before the season plays, or 'down'. Kept so
+ * a language switch can write it again.
+ */
+let loadingSays = null;
+function renderLoading() {
+  if (loadingSays === 'down') {
+    $('#loading-text').textContent = L`ゲームサーバーに接続できません。play サーバーを起動してから再読み込みしてください。`;
+  } else if (loadingSays) {
+    $('#loading h2').textContent = L`シーズンの開始を待っています`;
+    setHtml($('#loading-text'), loadingSays.wait === 'registering'
+      ? html`${L`登録を受け付けています。締切で、人数に関わらずシーズンが始まります。`}<br><a href="./">${L`ウォレットで国民として参加する →`}</a>`
+      : html`${L`シーズンを準備しています（世界の生成と着任）…`}`);
+  }
+}
+
 /** Chain mode before the season plays: say so (and poll) instead of "cannot connect". */
 async function waitForSeason() {
   const lobby = await api.tryGet('/api/lobby');
   await api.untilPlaying(lobby, phase => {
-    $('#loading h2').textContent = 'シーズンの開始を待っています';
-    setHtml($('#loading-text'), phase === 'registering'
-      ? html`登録を受け付けています。締切で、人数に関わらずシーズンが始まります。<br><a href="./">ウォレットで国民として参加する →</a>`
-      : html`シーズンを準備しています（世界の生成と着任）…`);
+    loadingSays = { wait: phase };
+    renderLoading();
   });
 }
 
@@ -38,7 +54,8 @@ async function boot() {
     await pollOnce();
     $('#loading').hidden = true;
   } catch {
-    $('#loading-text').textContent = 'ゲームサーバーに接続できません。play サーバーを起動してから再読み込みしてください。';
+    loadingSays = 'down';
+    renderLoading();
   }
   setInterval(poll, 800);
   setInterval(refreshDecisions, 3000);
@@ -86,10 +103,12 @@ function render() {
 function renderTop() {
   const v = S.view;
   const [, ph, phEn] = T.phaseOf(v.tick, v.season?.phases);
-  setHtml($('#clock'), html`<b>ティック ${v.tick}</b>/ ${v.ticks} · ${ph} <small>${phEn}</small> · ${v.over ? 'シーズン終了' : v.paused ? '停止中' : `次の解決まで ${Math.ceil(v.secondsLeft)}秒`}`);
+  // In English the phase's name and its capitals are the same word: shown once.
+  const phase = lang() === 'en' ? ph : html`${ph} <small>${phEn}</small>`;
+  setHtml($('#clock'), html`<b>${L`ティック ${v.tick}`}</b>/ ${v.ticks} · ${phase} · ${v.over ? L`シーズン終了` : v.paused ? L`停止中` : L`次の解決まで ${Math.ceil(v.secondsLeft)}秒`}`);
   setHtml($('#watch-chip'), S.watch === null
-    ? html`<span class="badge">観戦</span><b>全体表示</b><span>全ての国</span>`
-    : html`<span class="badge fog">国</span><b>${civName(S.watch)}</b><span>の立場から見ています（情報は全員に同じです）</span>`);
+    ? html`<span class="badge">${L`観戦`}</span><b>${L`全体表示`}</b><span>${L`全ての国`}</span>`
+    : Lh`<span class="badge fog">国</span><b>${civName(S.watch)}</b><span>の立場から見ています（情報は全員に同じです）</span>`);
 }
 
 function renderBoard() {
@@ -100,19 +119,21 @@ function renderBoard() {
   const rows = [...v.civs].sort((a, b) => (ach[b.id]?.points ?? 0) - (ach[a.id]?.points ?? 0) || a.id - b.id).map(c => {
     const members = ms.filter(m => m.civ === c.id);
     const a = ach[c.id] || { tiers: [0, 0, 0, 0], era: 0, points: 0 };
+    // The member count is one Lh key with its badge (L`国民${n}` elsewhere names member #n).
     return html`<tr class="civ-row ${S.watch === c.id ? 'watching' : ''}" data-civ="${c.id}">
       <td><span class="name"><span class="swatch-s" style="background:${color(c.id)}"></span><b>${T.civName(c.name)}</b>
-        <span class="sub"><span class="kind">${members.length ? `国民${members.length}` : '代行のみ'}</span></span></span></td>
+        <span class="sub">${members.length ? Lh`<span class="kind">国民${members.length}</span>` : html`<span class="kind">${L`代行のみ`}</span>`}</span></span></td>
       <td>${fmtOr(c.cities)}</td><td>${fmtOr(c.pop)}</td><td>${fmtOr(c.troops ?? c.troopsSeen)}</td>
-      <td>第${a.era}時代</td><td title="覇権/繁栄/科学/協調">${a.tiers.join('/')}</td><td>${fmtOr(a.points)}</td><td>${pr ? usdcFixed(pr.nationShare[c.id]) : '—'}</td></tr>`;
+      <td>${L`第${a.era}時代`}</td><td title="${L`覇権/繁栄/科学/協調`}">${a.tiers.join('/')}</td><td>${fmtOr(a.points)}</td><td>${pr ? usdcFixed(pr.nationShare[c.id]) : '—'}</td></tr>`;
   });
-  setHtml($('#board'), html`<tr><th>国</th><th>都市</th><th>人口</th><th>兵</th><th>時代</th><th>節目</th><th>点</th><th>取り分 USDC</th></tr>${rows}`);
+  // One key for the whole header row: its short column names read together.
+  setHtml($('#board'), html`${Lh`<tr><th>国</th><th>都市</th><th>人口</th><th>兵</th><th>時代</th><th>節目</th><th>点</th><th>取り分 USDC</th></tr>`}${rows}`);
 }
 
 function renderChain() {
   const c = S.view.chain;
   if (!c) {
-    setHtml($('#chain'), html`<p class="none">ローカルモード（エンジンをこのプロセスで実行中）。<code>--chain</code> 付きで起動すると、MagicBlock ER 上のシーズンを表示します。</p>`);
+    setHtml($('#chain'), html`<p class="none">${Lh`ローカルモード（エンジンをこのプロセスで実行中）。<code>--chain</code> 付きで起動すると、MagicBlock ER 上のシーズンを表示します。`}</p>`);
     return;
   }
   const t = c.lastTick;
@@ -120,14 +141,15 @@ function renderChain() {
   const explorer = sig => (er ? `https://explorer.solana.com/tx/${encodeURIComponent(sig)}?cluster=custom&customUrl=${encodeURIComponent(er)}` : null);
   const verify = verifyCommand(c);
   const tx = t && explorer(t.signature);
+  // 取引 here is a chain transaction (a market's 取引 is a trade): a key of its own, <dt> included.
   setHtml($('#chain'), html`<dl>
-    <dt>シーズン</dt><dd>${c.seasonId}</dd>
-    <dt>いまの層</dt><dd><span class="layer">${c.layer === 'er' ? 'MagicBlock ER' : 'Solana base'}</span> slot ${fmtOr(c.slot)}</dd>
-    <dt>プログラム</dt><dd>${hash(c.programId)}</dd>
-    <dt>直近の解決</dt><dd>${t ? `ティック ${t.tick} · ${fmtOr(t.cu)} CU` : html`<span class="none">まだありません</span>`}</dd>
-    ${t ? html`<dt>取引</dt><dd>${tx ? html`<a href="${tx}" target="_blank" rel="noopener">${hash(t.signature)}</a>` : hash(t.signature)}</dd>
-    <dt>前の根</dt><dd>${hash(t.preRoot)}</dd><dt>新しい根</dt><dd>${hash(t.root)}</dd>` : ''}
-  </dl>${verify ? html`<pre title="このシーズンを手元で再計算して、すべての根を照合します">${verify.text}</pre><p class="verify-note">${verifyNote(verify)}</p>` : ''}`);
+    <dt>${L`シーズン`}</dt><dd>${c.seasonId}</dd>
+    <dt>${L`いまの層`}</dt><dd><span class="layer">${c.layer === 'er' ? 'MagicBlock ER' : 'Solana base'}</span> slot ${fmtOr(c.slot)}</dd>
+    <dt>${L`プログラム`}</dt><dd>${hash(c.programId)}</dd>
+    <dt>${L`直近の解決`}</dt><dd>${t ? L`ティック ${t.tick} · ${fmtOr(t.cu)} CU` : html`<span class="none">${L`まだありません`}</span>`}</dd>
+    ${t ? html`${Lh`<dt>取引</dt>`}<dd>${tx ? html`<a href="${tx}" target="_blank" rel="noopener">${hash(t.signature)}</a>` : hash(t.signature)}</dd>
+    <dt>${L`前の根`}</dt><dd>${hash(t.preRoot)}</dd><dt>${L`新しい根`}</dt><dd>${hash(t.root)}</dd>` : ''}
+  </dl>${verify ? html`<pre title="${L`このシーズンを手元で再計算して、すべての根を照合します`}">${verify.text}</pre><p class="verify-note">${verifyNote(verify)}</p>` : ''}`);
 }
 
 function renderFeed() {
@@ -137,16 +159,16 @@ function renderFeed() {
       const [kind, t] = T.chronicleText(text);
       return html`<li><span class="t">${tick}</span><span>${T.KIND_GLYPH[kind] || '·'} ${t}</span></li>`;
     });
-    setHtml(el, lines.length ? lines : html`<li><span></span><span class="empty">まだ出来事はありません。</span></li>`);
+    setHtml(el, lines.length ? lines : html`<li><span></span><span class="empty">${L`まだ出来事はありません。`}</span></li>`);
     return;
   }
   const lines = S.decisions.map(r => {
     const ok = S.verified.get(r.digest);
-    const badge = ok === true ? html`<span class="ok">✓ ブラウザで検証済み</span>` : ok === false ? html`<span class="bad">✕ 約束と一致しません</span>` : '';
+    const badge = ok === true ? html`<span class="ok">${L`✓ ブラウザで検証済み`}</span>` : ok === false ? html`<span class="bad">${L`✕ 約束と一致しません`}</span>` : '';
     return html`<li><span class="t">${r.tick}</span><span><span class="who" style="color:${color(r.civ)}">${civName(r.civ)}</span>
-      <span class="policy">${r.policy}${r.external ? ' · 外部エージェント' : ''}</span><br>${r.reveal.text || '（理由なし）'}<br>${badge}</span></li>`;
+      <span class="policy">${r.policy}${r.external ? ` · ${L`外部エージェント`}` : ''}</span><br>${r.reveal.text || L`（理由なし）`}<br>${badge}</span></li>`;
   });
-  setHtml(el, lines.length ? lines : html`<li><span></span><span class="empty">判断は、解決後の次のティックで公開されます。</span></li>`);
+  setHtml(el, lines.length ? lines : html`<li><span></span><span class="empty">${L`判断は、解決後の次のティックで公開されます。`}</span></li>`);
 }
 
 document.addEventListener('click', e => {
@@ -158,6 +180,15 @@ document.addEventListener('click', e => {
   if (lens) { map.setLens(lens.dataset.lens); for (const b of $$('[data-lens]')) b.setAttribute('aria-pressed', String(b === lens)); return; }
   if (e.target.id === 'zoom-in') map.zoomBy(1.2);
   if (e.target.id === 'zoom-out') map.zoomBy(1 / 1.2);
+});
+
+// The language: a toggle first in the top bar; a switch re-renders what
+// script wrote (the static markup is lang.mjs's). The map canvas redraws
+// its labels every frame by itself.
+mountLangToggle($('.topbar .top-actions'));
+onLangChange(() => {
+  renderLoading();
+  if (S.view) render(); else renderFeed();
 });
 
 boot();

@@ -3,6 +3,8 @@
 // not carry yet and must be kept in step with permutation-rules by hand.
 // Each is a candidate for a server field (see the refactor notes).
 import { TECH } from './i18n.mjs';
+import { L } from './lang.mjs';
+import { liveText } from './util.mjs';
 
 // ---------------------------------------------------------------- from the server
 // Live bindings: `adoptRules` replaces the defaults with the numbers the
@@ -14,10 +16,8 @@ export let NAP_TICKS = 30;                  // length of a non-aggression pact
 export let SUZERAIN_MIN = 60;               // influence needed to become suzerain
 export let SUZERAIN_REVIEW = 45;            // ticks between suzerain reviews (influence halves)
 export let EXCHANGE_FEE = 0.05;             // buyer's fee on the USDC exchange
-export let AMM_FEE_TEXT = '3%：交易拠点の保有者に1%、2%は消滅';
 export let MAX_OFFICES = 2;                 // offices one member may hold
 export let BANK_TICKS = 4;                  // unused office budget carried, per office
-export let BUDGET_TEXT = '3＋都市数（最大8）'; // national order budget
 export let CASUS_BELLI = 30;                // grievance that justifies a war
 export let PROPOSAL_TTL = 6, TRUCE_TICKS = 12, LEAVE_ALLIANCE_TICKS = 6;
 export let RECALL_ACTIVE_TICKS = 10, RECALL_TICKS = 5;
@@ -28,6 +28,13 @@ export let TECH_COUNT = Object.keys(TECH).length;
 let lobbyOpsBps = 2000;
 
 const pct = bps => `${+(bps / 100).toFixed(2)}%`;
+// The market fee (basis points: the whole fee, the trade hub holder's part)
+// and the national order budget (base + cities, capped), for the texts below.
+let ammFee = { amm: 300, hub: 100 }, budget = { base: 3, cap: 8 };
+/** The market fee, in words (in the display language of the moment: call it, or use it as a string). */
+export const AMM_FEE_TEXT = liveText(() => L`${pct(ammFee.amm)}：交易拠点の保有者に${pct(ammFee.hub)}、${pct(ammFee.amm - ammFee.hub)}は消滅`);
+/** The national order budget, in words (like AMM_FEE_TEXT). */
+export const BUDGET_TEXT = liveText(() => L`${budget.base}＋都市数（最大${budget.cap}）`);
 
 /** Take the rule numbers from a view (`/api/state`) or the lobby (`/api/lobby`). */
 export function adoptRules(v) {
@@ -36,9 +43,9 @@ export function adoptRules(v) {
     NAP_BOND = r.napMinBond; NAP_TICKS = r.napTicks;
     SUZERAIN_MIN = r.suzerainThreshold; SUZERAIN_REVIEW = r.suzerainLockTicks;
     EXCHANGE_FEE = r.exchangeFeeBps / 10000;
-    AMM_FEE_TEXT = `${pct(r.ammFeeBps)}：交易拠点の保有者に${pct(r.hubFeeBps)}、${pct(r.ammFeeBps - r.hubFeeBps)}は消滅`;
+    ammFee = { amm: r.ammFeeBps, hub: r.hubFeeBps };
     MAX_OFFICES = r.maxOfficesPerMember; BANK_TICKS = r.bankTicks;
-    BUDGET_TEXT = `${r.budgetBase}＋都市数（最大${r.budgetCap}）`;
+    budget = { base: r.budgetBase, cap: r.budgetCap };
     CASUS_BELLI = r.casusBelliThreshold;
     PROPOSAL_TTL = r.proposalTtl; TRUCE_TICKS = r.truceTicks; LEAVE_ALLIANCE_TICKS = r.allianceLeaveDelay;
     RECALL_ACTIVE_TICKS = r.recallElectorateTicks; RECALL_TICKS = r.recallTicks;

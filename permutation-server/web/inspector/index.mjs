@@ -9,6 +9,7 @@ import { tilePanel } from './tile.mjs';
 import { unitPanel, targetPanel, patrolPanel } from './unit.mjs';
 import { myCityPanel, foreignCityPanel, cityStatePanel } from './city.mjs';
 import { head } from './head.mjs';
+import { L } from '../lang.mjs';
 
 export function renderInspector() {
   const el = $('#inspector');
@@ -34,8 +35,9 @@ function panel() {
 function introPanel() {
   const cap = S.view.cities.find(c => c.id === myNation().capital);
   const mine = held();
-  return html`${head('YOUR TURN · このティック', mine.length ? `あなたは${mine.map(r => T.ROLE_JA[r]).join('・')}` : 'あなたは国民（役職なし）', '都市・部隊・土地をクリックすると、ここに詳細と「できること」が出ます。できないことには理由が表示されます。')}
-    <div class="explanation">${othersText(S.view)}${mine.length ? '担当の役職の命令は封印して送り、担当外の命令は献策になります。' : 'あなたの命令は担当の役職者への献策になります。採用されると功績を半分ずつ分けます。'}</div>
-    <button class="btn wide" type="button" data-drawer="nation">⚖ 国の広場を開く（選挙・献策・リコール）</button>
-    ${cap ? html`<button class="btn primary wide" type="button" data-focus="${keyOf(cap)}">⌖ 首都 ${T.cityName(cap.id)} を見る</button>` : ''}`;
+  const others = othersText(S.view);
+  return html`${head(L`YOUR TURN · このティック`, mine.length ? L`あなたは${mine.map(r => T.ROLE_JA[r]).join(L`・`)}` : L`あなたは国民（役職なし）`, L`都市・部隊・土地をクリックすると、ここに詳細と「できること」が出ます。できないことには理由が表示されます。`)}
+    <div class="explanation">${mine.length ? L`${others}担当の役職の命令は封印して送り、担当外の命令は献策になります。` : L`${others}あなたの命令は担当の役職者への献策になります。採用されると功績を半分ずつ分けます。`}</div>
+    <button class="btn wide" type="button" data-drawer="nation">⚖ ${L`国の広場を開く（選挙・献策・リコール）`}</button>
+    ${cap ? html`<button class="btn primary wide" type="button" data-focus="${keyOf(cap)}">⌖ ${L`首都 ${T.cityName(cap.id)} を見る`}</button>` : ''}`;
 }

@@ -1,6 +1,7 @@
 // The drawer beside the world nav: one panel at a time, and the nav's badges.
 import { $, $$, html, setHtml } from '../util.mjs';
 import { S, held, myCities, invalidate } from '../state.mjs';
+import { L } from '../lang.mjs';
 import { drawerNation } from './nation.mjs';
 import { drawerEra, drawerMerit } from './era.mjs';
 import { drawerCities } from './cities.mjs';
@@ -29,7 +30,7 @@ export const closeDrawer = () => { if (S.drawer) toggleDrawer(S.drawer); };
 
 export function renderDrawer() {
   if (!S.drawer) return;
-  setHtml($('#drawer'), html`<button class="close-x" type="button" data-drawer="${S.drawer}" aria-label="閉じる">×</button>${DRAWERS[S.drawer]()}`);
+  setHtml($('#drawer'), html`<button class="close-x" type="button" data-drawer="${S.drawer}" aria-label="${L`閉じる`}">×</button>${DRAWERS[S.drawer]()}`);
 }
 
 export function renderNavDots() {

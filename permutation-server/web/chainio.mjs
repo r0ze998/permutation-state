@@ -21,6 +21,7 @@ import { compileMessage, parseMessage, parseTransaction, pubkeyString, wireTrans
 import { ata, claimIx, createAtaIdempotentIx, pda, registerIx } from './sdk/player.mjs';
 import { claimParts } from './sdk/codec.mjs';
 import { verify } from './session.mjs';
+import { L } from './lang.mjs';
 
 // ------------------------------------------------------------------ gateway and pins
 let gw = '';
@@ -45,7 +46,7 @@ export function setPin({ programId, cluster, seasonId, entryFee, accounts }) {
   p.season = pda.season(p.programId, p.seasonId);
   p.vault = pda.vault(p.programId, p.seasonId);
   if ((accounts?.season && accounts.season !== p.season) || (accounts?.vault && accounts.vault !== p.vault)) {
-    throw Object.assign(new Error('シーズンの口座がプログラムから導いたものと一致しません'), { code: 'PinMismatch' });
+    throw Object.assign(new Error(L`シーズンの口座がプログラムから導いたものと一致しません`), { code: 'PinMismatch' });
   }
   pin = Object.freeze(p);
   return pin;
@@ -65,7 +66,7 @@ const GET_TIMEOUT_MS = 12_000;
 const POST_TIMEOUT_MS = 45_000;
 
 export async function request(method, path, { body, headers = {} } = {}) {
-  if (!gw) return fail('NoGateway', 'ゲートウェイの場所がわかりません');
+  if (!gw) return fail('NoGateway', L`ゲートウェイの場所がわかりません`);
   let r;
   try {
     r = await fetch(`${gw}${path}`, {
@@ -187,11 +188,11 @@ export function walletMessageProblem(message, { feePayer, wallet, programs }) {
 export async function signByWallet(wallet, message) {
   const signed = await wallet.signTransaction(wireTransaction(message));
   let tx;
-  try { tx = parseTransaction(signed); } catch { throw Object.assign(new Error('ウォレットの応答を取引として読めませんでした'), { code: 'WalletModified' }); }
-  if (!equal(tx.message, message)) throw Object.assign(new Error('ウォレットが取引を書き換えました。署名は送っていません。'), { code: 'WalletModified' });
+  try { tx = parseTransaction(signed); } catch { throw Object.assign(new Error(L`ウォレットの応答を取引として読めませんでした`), { code: 'WalletModified' }); }
+  if (!equal(tx.message, message)) throw Object.assign(new Error(L`ウォレットが取引を書き換えました。署名は送っていません。`), { code: 'WalletModified' });
   const i = tx.signers.indexOf(wallet.address);
   if (i < 0 || !(await verify(wallet.address, message, tx.signatures[i]))) {
-    throw Object.assign(new Error('ウォレットの署名を確認できませんでした'), { code: 'WalletBadSignature' });
+    throw Object.assign(new Error(L`ウォレットの署名を確認できませんでした`), { code: 'WalletBadSignature' });
   }
   return wireTransaction(message, { [wallet.address]: tx.signatures[i] });
 }
@@ -220,12 +221,12 @@ const RETRYABLE = /settlement failed|blockhash|expired/i;
  */
 export async function join({ wallet, session, civ, name, stand, onStep = () => {} }) {
   const p = pin;
-  if (!p) return fail('NoPin', 'シーズンがまだわかりません');
+  if (!p) return fail('NoPin', L`シーズンがまだわかりません`);
   const s = await season();
   if (!s.ok) return s;
-  if (s.programId !== p.programId || String(s.season?.seasonId) !== p.seasonId) return fail('X402Mismatch', 'ゲートウェイのシーズンがゲームサーバーのものと一致しません');
+  if (s.programId !== p.programId || String(s.season?.seasonId) !== p.seasonId) return fail('X402Mismatch', L`ゲートウェイのシーズンがゲームサーバーのものと一致しません`);
   const members = s.members || [];
-  if (members.some(m => m.wallet === wallet.address)) return fail('AlreadyMember', 'このウォレットはすでにこのシーズンの国民です');
+  if (members.some(m => m.wallet === wallet.address)) return fail('AlreadyMember', L`このウォレットはすでにこのシーズンの国民です`);
   if (members.some(m => m.session === session.publicKey)) return fail('SessionInUse');
   const { deposit } = registrationOf(s);
   const need = p.entryFee + deposit;
@@ -237,15 +238,15 @@ export async function join({ wallet, session, civ, name, stand, onStep = () => {
   if (!from) return fail('InsufficientFunds');
   onStep('quote');
   const first = await post('/x402/join', { civ, name });
-  if (first.httpStatus !== 402) return first.ok ? fail('X402Mismatch', 'ゲートウェイが支払い条件を返しませんでした') : first;
+  if (first.httpStatus !== 402) return first.ok ? fail('X402Mismatch', L`ゲートウェイが支払い条件を返しませんでした`) : first;
   const req = first.accepts?.[0];
   const problems = paymentProblems(req, { pin: p, mint, crank, need, wallet: wallet.address });
-  if (problems.length) return fail('X402Mismatch', `支払いの条件がこのシーズンと合いません（${problems.join('、')}）`);
+  if (problems.length) return fail('X402Mismatch', L`支払いの条件がこのシーズンと合いません（${problems.join(L`、`)}）`);
   const ix = registerIx({ programId: p.programId, seasonId: p.seasonId, wallet: wallet.address, feePayer: crank, civ, walletToken: from, mint, name,
     kind: 2, session: session.publicKey, stand, deposit });
   const message = compileMessage({ feePayer: crank, recentBlockhash: req.extra.recentBlockhash, instructions: [ix] });
   const shape = walletMessageProblem(message, { feePayer: crank, wallet: wallet.address, programs: [p.programId] });
-  if (shape) return fail('X402Mismatch', `取引の形が想定と違います（${shape}）`);
+  if (shape) return fail('X402Mismatch', L`取引の形が想定と違います（${shape}）`);
   onStep('sign');
   let wire;
   try { wire = await signByWallet(wallet, message); } catch (e) { return fail(e.code || 'WalletError', e.message); }
@@ -276,7 +277,7 @@ export async function relay(ixs, session) {
   const info = await get('/relay');
   if (!info.ok) return info;
   const crank = await crankKey();
-  if (!crank || info.feePayer !== crank || info.feePayer === session.publicKey) return fail('RelayMismatch', 'ゲートウェイの手数料支払い者がシーズンのものと違います');
+  if (!crank || info.feePayer !== crank || info.feePayer === session.publicKey) return fail('RelayMismatch', L`ゲートウェイの手数料支払い者がシーズンのものと違います`);
   let message;
   try { message = compileMessage({ feePayer: info.feePayer, recentBlockhash: info.blockhash, instructions: ixs }); } catch (e) { return fail('InvalidTransaction', e.message); }
   const signature = await session.sign(message);
@@ -310,9 +311,9 @@ export async function claim({ wallet, seasonId = pin?.seasonId, onStep = () => {
   const info = await claimStatus(seasonId);
   if (!info.ok) return info;
   if (info.status !== 'Finalized') return fail('NotFinalized', null, { seasonStatus: info.status });
-  if (info.programId && info.programId !== p.programId) return fail('RelayMismatch', 'ゲートウェイのプログラムがシーズンのものと違います');
+  if (info.programId && info.programId !== p.programId) return fail('RelayMismatch', L`ゲートウェイのプログラムがシーズンのものと違います`);
   const crank = await crankKey();
-  if (!crank || info.feePayer !== crank || info.feePayer === wallet.address) return fail('RelayMismatch', 'ゲートウェイの手数料支払い者がシーズンのものと違います');
+  if (!crank || info.feePayer !== crank || info.feePayer === wallet.address) return fail('RelayMismatch', L`ゲートウェイの手数料支払い者がシーズンのものと違います`);
   const u = await usdc(wallet.address);
   const { dest, create } = claimDestination(u.ok ? u : null, { owner: wallet.address, mint: info.mint });
   const ixs = [
@@ -321,7 +322,7 @@ export async function claim({ wallet, seasonId = pin?.seasonId, onStep = () => {
   ];
   const message = compileMessage({ feePayer: info.feePayer, recentBlockhash: info.blockhash, instructions: ixs });
   const shape = walletMessageProblem(message, { feePayer: info.feePayer, wallet: wallet.address, programs: [p.programId, ixs[0].programId] });
-  if (shape) return fail('RelayMismatch', `取引の形が想定と違います（${shape}）`);
+  if (shape) return fail('RelayMismatch', L`取引の形が想定と違います（${shape}）`);
   onStep('sign');
   let wire;
   try { wire = await signByWallet(wallet, message); } catch (e) { return fail(e.code || 'WalletError', e.message); }

@@ -15,6 +15,7 @@ import { sha256 } from './sdk/sha256.mjs';
 import { encode as toBase58 } from './sdk/base58.mjs';
 import { concat, equal, fromBase64, fromHex, toHex, utf8 } from './sdk/bytes.mjs';
 import { pubkeyBytes } from './sdk/solana-tx.mjs';
+import { L } from './lang.mjs';
 
 const subtle = () => globalThis.crypto?.subtle;
 const ED25519 = { name: 'Ed25519' };
@@ -117,14 +118,14 @@ export async function verify(publicKey, message, signature) {
  */
 export async function preflight({ secure = globalThis.isSecureContext } = {}) {
   if (!secure || !subtle()) {
-    return { ok: false, code: 'InsecureContext', error: 'https か 127.0.0.1 で開いてください（この接続ではブラウザの暗号機能が使えません）' };
+    return { ok: false, code: 'InsecureContext', error: L`https か 127.0.0.1 で開いてください（この接続ではブラウザの暗号機能が使えません）` };
   }
   try {
     const k = await keyFromSeed(new Uint8Array(32).fill(7));
     const msg = utf8('Permutation State preflight');
     if (!(await verify(k.publicKey, msg, await k.sign(msg)))) throw new Error('verify');
   } catch {
-    return { ok: false, code: 'NoEd25519', error: 'このブラウザは Ed25519 署名に対応していません。最新の Chrome・Edge・Firefox・Safari で開いてください。' };
+    return { ok: false, code: 'NoEd25519', error: L`このブラウザは Ed25519 署名に対応していません。最新の Chrome・Edge・Firefox・Safari で開いてください。` };
   }
   return { ok: true };
 }
@@ -210,7 +211,7 @@ export async function derive({ wallet, cluster, programId, seasonId, host = glob
   const out = await wallet.signMessage(message);
   const signature = Uint8Array.from(out?.signature ?? []);
   const signed = out?.signedMessage?.length ? Uint8Array.from(out.signedMessage) : message;
-  if (!(await verify(wallet.address, signed, signature))) throw codeError('WalletBadSignature', 'ウォレットの署名を確認できませんでした');
+  if (!(await verify(wallet.address, signed, signature))) throw codeError('WalletBadSignature', L`ウォレットの署名を確認できませんでした`);
   return sessionOf(seedOf(signature), { cluster, programId, seasonId }, wallet.address);
 }
 
@@ -255,10 +256,10 @@ export function parseBackup(text) {
  */
 export async function importBackup(text, scope, members) {
   const seed = parseBackup(text);
-  if (!seed) throw codeError('BadBackup', '鍵のバックアップを読めませんでした（16進64文字の鍵が必要です）');
+  if (!seed) throw codeError('BadBackup', L`鍵のバックアップを読めませんでした（16進64文字の鍵が必要です）`);
   const pub = toBase58(await publicKeyOf(seed));
   const member = (members || []).find(m => m.session === pub);
-  if (!member) throw codeError('SessionMismatch', 'この鍵は、このシーズンのどの国民の鍵とも一致しません');
+  if (!member) throw codeError('SessionMismatch', L`この鍵は、このシーズンのどの国民の鍵とも一致しません`);
   const session = await sessionOf(seed, scope, member.wallet);
   remember(session);
   return { session, member };

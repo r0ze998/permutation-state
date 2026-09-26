@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#243e38">
-  <title>PERMUTATION STATE — 観戦</title>
+  <title data-i18n>PERMUTATION STATE — 観戦</title>
   <link rel="stylesheet" href="base.css">
   <link rel="stylesheet" href="spectate.css">
 </head>
@@ -18,43 +18,43 @@
     <div class="watch-chip" id="watch-chip"></div>
     <div class="watch-clock" id="clock" aria-live="polite"></div>
     <div class="top-actions">
-      <a class="icon-btn" href="./" title="国民として参加する">▶</a>
-      <a class="icon-btn" href="llms.txt" title="AI エージェント向けの説明">⌘</a>
+      <a class="icon-btn" href="./" title="国民として参加する" data-i18n-attr="title">▶</a>
+      <a class="icon-btn" href="llms.txt" title="AI エージェント向けの説明" data-i18n-attr="title">⌘</a>
     </div>
   </header>
 
-  <aside class="panel board" aria-label="文明の一覧">
-    <div class="eyebrow">CIVILIZATIONS · 文明</div>
+  <aside class="panel board" aria-label="文明の一覧" data-i18n-attr="aria-label">
+    <div class="eyebrow" data-i18n>CIVILIZATIONS · 文明</div>
     <table id="board"></table>
-    <p class="hint">行をクリックすると、その国の立場（外交関係・経済・視界の表示）で見られます。情報は全ての国に公開されています。もう一度クリックで全体表示に戻ります。</p>
+    <p class="hint" data-i18n>行をクリックすると、その国の立場（外交関係・経済・視界の表示）で見られます。情報は全ての国に公開されています。もう一度クリックで全体表示に戻ります。</p>
   </aside>
 
-  <aside class="panel chainbox" aria-label="チェーン">
-    <div class="eyebrow">ON CHAIN · 検証</div>
+  <aside class="panel chainbox" aria-label="チェーン" data-i18n-attr="aria-label">
+    <div class="eyebrow" data-i18n>ON CHAIN · 検証</div>
     <div id="chain"></div>
   </aside>
 
-  <section class="panel feed" aria-label="出来事と判断">
+  <section class="panel feed" aria-label="出来事と判断" data-i18n-attr="aria-label">
     <div class="feed-tabs" role="tablist">
-      <button type="button" data-tab="decisions" aria-pressed="true">公開された判断</button>
-      <button type="button" data-tab="chronicle" aria-pressed="false">年代記</button>
+      <button type="button" data-tab="decisions" aria-pressed="true" data-i18n>公開された判断</button>
+      <button type="button" data-tab="chronicle" aria-pressed="false" data-i18n>年代記</button>
     </div>
     <ol id="feed"></ol>
   </section>
 
   <div class="map-tools">
-    <button type="button" id="zoom-in" title="拡大">+</button>
-    <button type="button" id="zoom-out" title="縮小">−</button>
+    <button type="button" id="zoom-in" title="拡大" data-i18n-attr="title">+</button>
+    <button type="button" id="zoom-out" title="縮小" data-i18n-attr="title">−</button>
   </div>
   <footer class="bottom-center">
-    <div class="lens-bar" role="group" aria-label="レンズ">
-      <button type="button" data-lens="normal" aria-pressed="false"><span>◈</span>地形</button>
-      <button type="button" data-lens="political" aria-pressed="true"><span>⚑</span>勢力</button>
-      <button type="button" data-lens="military" aria-pressed="false"><span>⚔</span>軍事</button>
-      <button type="button" data-lens="concord" aria-pressed="false"><span>☮</span>協調</button>
+    <div class="lens-bar" role="group" aria-label="レンズ" data-i18n-attr="aria-label">
+      <button type="button" data-lens="normal" aria-pressed="false" data-i18n><span>◈</span>地形</button>
+      <button type="button" data-lens="political" aria-pressed="true" data-i18n><span>⚑</span>勢力</button>
+      <button type="button" data-lens="military" aria-pressed="false" data-i18n><span>⚔</span>軍事</button>
+      <button type="button" data-lens="concord" aria-pressed="false" data-i18n><span>☮</span>協調</button>
     </div>
   </footer>
-  <div class="loading" id="loading"><div class="mark">✳</div><h2>世界を読み込んでいます</h2><p class="desc" id="loading-text">ゲームサーバーに接続しています。</p></div>
+  <div class="loading" id="loading"><div class="mark">✳</div><h2><span data-i18n>世界を読み込んでいます</span></h2><p class="desc" id="loading-text"><span data-i18n>ゲームサーバーに接続しています。</span></p></div>
 </main>
 <script type="module" src="spectate.mjs"></script>
 </body>

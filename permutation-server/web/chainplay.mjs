@@ -29,9 +29,15 @@ import { compileMessage, PACKET_BYTES } from './sdk/solana-tx.mjs';
 import { fromHex, randomBytes, toHex } from './sdk/bytes.mjs';
 import { MAX_TALK_CHARS, talkBytes } from './sdk/talk.mjs';
 import * as book from './sealbook.mjs';
+import { L } from './lang.mjs';
+import { liveText } from './util.mjs';
 
-/** Shown when this browser has no key for the member (entered with 「鍵なしで見る」). */
-export const NO_KEY = 'この端末にはゲーム内の鍵がないため、見るだけです（鍵のバックアップを読み込むと操作できます）。';
+/**
+ * Shown when this browser has no key for the member (entered with 「鍵なしで見る」),
+ * in the display language of the moment: NO_KEY() — other screens may also
+ * use it as a string (util.mjs liveText).
+ */
+export const NO_KEY = liveText(() => L`この端末にはゲーム内の鍵がないため、見るだけです（鍵のバックアップを読み込むと操作できます）。`);
 /** Codes that mean "the tick's commit phase just closed": governance waits for the next tick. */
 export const LATE = new Set(['TickFrozen', 'WrongTick', 'WrongPhase']);
 
@@ -46,8 +52,8 @@ export const chainPhase = (v = S.view) => v?.chainPhase ?? 'commit';
 
 /** Why nothing can be signed now, or null. */
 function notReady() {
-  if (!chainio.pinned()) return fail('NoPin', 'シーズンがまだわかりません');
-  if (!S.session) return fail('NoKey', NO_KEY);
+  if (!chainio.pinned()) return fail('NoPin', L`シーズンがまだわかりません`);
+  if (!S.session) return fail('NoKey', NO_KEY());
   if (S.memberId === null) return fail('NotAMember');
   return null;
 }
@@ -82,7 +88,7 @@ export async function commitOffices(plans, { rationale = '', tick: checked } = {
   if (checked !== undefined && checked !== tick) return everyone(fail('WrongTick'));
   if (chainPhase(v) !== 'commit') return everyone(fail('WrongPhase'));
   const obsRoot = v.decision?.tick === tick ? v.decision.obsRoot : null;
-  if (!obsRoot) return everyone(fail('NoObservation', '観測ルートがまだ届いていません。少し待ってからもう一度確定してください'));
+  if (!obsRoot) return everyone(fail('NoObservation', L`観測ルートがまだ届いていません。少し待ってからもう一度確定してください`));
   if (reconciling) await reconciling; // the reveals below must be the ones still pending
   const b = playBook();
   const packed = plans.map(p => ({
@@ -122,7 +128,7 @@ async function sealAndCommit(b, p, { tick, civ, member, rationale }) {
   try {
     signature = await key.sign(sealMessage({ seasonId: pin.seasonId, tick, civ, role: p.role, commitment }));
   } catch (e) {
-    return failed('seal', fail('SignFailed', `署名できませんでした（${e?.message ?? e}）`));
+    return failed('seal', fail('SignFailed', L`署名できませんでした（${e?.message ?? e}）`));
   }
   const sealed = await chainio.seal({ civ, role: p.role, tick, member, digest: p.decision.digest, orders: p.batch.orders, adopt: p.adopt, salt: toHex(salt), signature: toHex(signature) });
   if (!sealed.ok) return failed('seal', sealed);
@@ -305,7 +311,7 @@ export async function submitGov(actions = []) {
 export async function sendTalk({ to = null, text }) {
   const bad = notReady();
   if (bad) return bad;
-  if (!text || [...text].length > MAX_TALK_CHARS) return fail('TalkRefused', `メッセージは1〜${MAX_TALK_CHARS}字です`);
+  if (!text || [...text].length > MAX_TALK_CHARS) return fail('TalkRefused', L`メッセージは1〜${MAX_TALK_CHARS}字です`);
   const pin = chainio.pinned();
   const t = await chainio.tick();
   if (t.ok) setFlags(t);
@@ -314,7 +320,7 @@ export async function sendTalk({ to = null, text }) {
   try {
     signature = await S.session.sign(talkBytes({ season: BigInt(pin.seasonId), tick, member: S.memberId, to, text }));
   } catch (e) {
-    return fail('SignFailed', `署名できませんでした（${e?.message ?? e}）`);
+    return fail('SignFailed', L`署名できませんでした（${e?.message ?? e}）`);
   }
   return chainio.talk({ member: S.memberId, to, text, tick, signature: toHex(signature) });
 }

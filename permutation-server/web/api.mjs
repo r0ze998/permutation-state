@@ -1,7 +1,8 @@
 // HTTP access to the play server: who is asking (the member token in local
-// mode, the member id in chain mode), JSON get/post, and the Japanese text
-// for server errors.
+// mode, the member id in chain mode), JSON get/post, and the text for
+// server errors (in the current language).
 import { errorText } from './i18n.mjs';
+import { L } from './lang.mjs';
 
 // Member token (local mode only): this browser's membership of one nation
 // (POST /api/join). Kept per origin under this key (unchanged, so existing
@@ -54,7 +55,7 @@ export async function post(path, body) {
 }
 
 /**
- * Server errors → Japanese (unknown ones pass through). Also takes a
+ * Server errors → the current language (unknown ones pass through). Also takes a
  * chainio.mjs result or any `{code, error}`: chain, gateway and wallet
  * codes are translated by i18n.mjs `errorText`.
  */
@@ -62,12 +63,12 @@ export function translateError(error) {
   if (error && typeof error === 'object') return errorText(error);
   const e = String(error ?? '');
   let m;
-  if ((m = e.match(/orders cost (\d+), only (\d+) spendable/))) return `命令の枠が足りません（必要${m[1]}・使える枠${m[2]}）`;
-  if (e.includes('frozen')) return '終盤のため凍結中の命令が含まれています';
-  if (e.includes('more than one manual order')) return '同じ部隊に2つの命令があります';
-  if (e.includes('TickFrozen') || e.includes('WrongTick')) return 'このティックは締め切られました。次のティックで出し直してください';
-  if (e === 'network') return 'サーバーに届きませんでした';
-  if (e === 'chain mode: sign in the browser') return 'オンチェーンのシーズンでは、この操作はこのブラウザのゲーム内の鍵で署名して送ります';
+  if ((m = e.match(/orders cost (\d+), only (\d+) spendable/))) return L`命令の枠が足りません（必要${m[1]}・使える枠${m[2]}）`;
+  if (e.includes('frozen')) return L`終盤のため凍結中の命令が含まれています`;
+  if (e.includes('more than one manual order')) return L`同じ部隊に2つの命令があります`;
+  if (e.includes('TickFrozen') || e.includes('WrongTick')) return L`このティックは締め切られました。次のティックで出し直してください`;
+  if (e === 'network') return L`サーバーに届きませんでした`;
+  if (e === 'chain mode: sign in the browser') return L`オンチェーンのシーズンでは、この操作はこのブラウザのゲーム内の鍵で署名して送ります`;
   return errorText(e);
 }
 

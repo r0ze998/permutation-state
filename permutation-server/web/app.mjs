@@ -28,11 +28,12 @@ import { renderNextTurn, renderNotifs, renderSummary, tickChanges } from './next
 import { renderPool, renderChainBeat, renderChainDrawer, onChainView } from './chain.mjs';
 import { bindInput } from './input.mjs';
 import { adoptRules } from './rules.mjs';
+import { L, onLangChange } from './lang.mjs';
 
 function renderMinimap() {
   S.mini = drawMinimap($('#minimap'), S.map, S.view, map.viewport());
-  $('#mini-left').textContent = `${S.map.tiles.length}マス · ${S.view.civs.length}文明`;
-  $('#mini-right').textContent = `領土 ${[...S.view.owners].filter(c => c === String(S.myCiv)).length}`;
+  $('#mini-left').textContent = L`${S.map.tiles.length}マス · ${S.view.civs.length}文明`;
+  $('#mini-right').textContent = L`領土 ${[...S.view.owners].filter(c => c === String(S.myCiv)).length}`;
 }
 
 // Render order: the top bar first, the map-side panels last.
@@ -76,7 +77,7 @@ function applyView(v) {
   // viewed by id and signs in the browser, so a restart changes nothing.)
   if (!v.chain && api.memberToken() && !isWatching() && v.viewer !== 'member') {
     api.tokenStore.set(null);
-    toast('サーバーが再起動したため、国民として入り直してください。', 'error');
+    toast(L`サーバーが再起動したため、国民として入り直してください。`, 'error');
     setTimeout(() => location.reload(), 1200);
     return;
   }
@@ -97,23 +98,33 @@ function applyView(v) {
   invalidate('all');
 }
 
+/** The two views the tick report was drawn from (to say it again in another language). */
+let reportViews = null;
+// A language switch: the tick report is text, so draw it again from the same
+// two views (state.mjs re-renders every part after this).
+onLangChange(() => { if (reportViews) S.changes = tickChanges(...reportViews); });
+
 /** A tick resolved: reset this tick's work and tell the player what happened. */
 function onNewTick(v, prev) {
   resetTick();
   if (!v.gov?.voteOpen) S.myVotes = {};
-  for (const k of v.skipped || []) toast(`見送られた命令：${T.ROLE_JA[k.role] || ''}${k.index === null ? 'の命令全体' : `の${k.index + 1}件目`}（${T.blockedText({ code: k.reason })}）`, 'error');
+  for (const k of v.skipped || []) {
+    const role = T.ROLE_JA[k.role] || '', why = T.blockedText({ code: k.reason });
+    toast(k.index === null ? L`見送られた命令：${role}の命令全体（${why}）` : L`見送られた命令：${role}の${k.index + 1}件目（${why}）`, 'error');
+  }
   const me = civN(v.me);
   const events = (v.lastSummary || []).map(T.chronicleText);
   for (const [kind, text] of events) {
     if ((kind === 'era' || kind === 'gov' || kind === 'recall') && text.includes(me)) toast(text, kind === 'era' ? 'good' : '');
   }
   if (S.drawer === 'decisions') loadDecisions();
+  reportViews = prev ? [prev, v] : null;
   S.changes = prev ? tickChanges(prev, v) : [];
   S.research = null; S.diplo = {};
   S.summaryOpen = true; S.summaryCollapsed = false; S.summaryPinned = false;
   for (const [kind, text] of events) if ((kind === 'war' || kind === 'capture') && text.includes(me)) toast(text, 'war');
   for (const p of v.proposals.filter(p => p.to === v.me && p.tick === v.tick - 1)) {
-    toast(`${civN(p.from)}から${T.PROPOSAL_KIND[p.kind]}の申し入れ（ティック${p.expires}まで有効）`, '', { label: '外交を開く', run: () => { if (S.drawer !== 'diplomacy') toggleDrawer('diplomacy'); } });
+    toast(L`${civN(p.from)}から${T.PROPOSAL_KIND[p.kind]}の申し入れ（ティック${p.expires}まで有効）`, '', { label: L`外交を開く`, run: () => { if (S.drawer !== 'diplomacy') toggleDrawer('diplomacy'); } });
   }
   refreshSelection();
 }
@@ -133,11 +144,16 @@ function onBeat() {
 }
 
 // ================================================================== boot
+/** What the loading screen says now (a function: said again after a language switch), or null. */
+let loadingSays = null;
+function showLoading(say) { loadingSays = say; say(); }
+onLangChange(() => loadingSays?.());
+
 /** Chain mode, watching: wait (with a message) while the season registers or starts. */
-const waitForSeason = lobby => api.untilPlaying(lobby, phase => {
-  $('#loading h2').textContent = 'シーズンの開始を待っています';
-  $('#loading-text').textContent = phase === 'registering' ? '登録を受け付けています。締切でシーズンが始まり、そのあと表示されます。' : 'シーズンを準備しています…';
-});
+const waitForSeason = lobby => api.untilPlaying(lobby, phase => showLoading(() => {
+  $('#loading h2').textContent = L`シーズンの開始を待っています`;
+  $('#loading-text').textContent = phase === 'registering' ? L`登録を受け付けています。締切でシーズンが始まり、そのあと表示されます。` : L`シーズンを準備しています…`;
+}));
 
 async function boot() {
   const params = new URLSearchParams(location.search);
@@ -164,11 +180,13 @@ async function boot() {
     map.setMap(S.map);
     await poll();
     if (!S.view) throw new Error('no view');
-    describeSeason(S.view);
+    describeSeason(S.view); // lobby.mjs says it again after a language switch
+    loadingSays = null;
     $('#loading').hidden = true;
     if (S.view.phase === 'lobby' || (S.view.paused && S.view.tick === 0)) $('#help').showModal();
   } catch {
-    $('#loading-text').textContent = 'ゲームサーバーに接続できません。`cargo run --release --bin play` を起動してから再読み込みしてください。';
+    const before = loadingSays; // a heading of the wait for the season stays
+    showLoading(() => { before?.(); $('#loading-text').textContent = L`ゲームサーバーに接続できません。\`cargo run --release --bin play\` を起動してから再読み込みしてください。`; });
   }
   setInterval(onBeat, BEAT_MS);
 }

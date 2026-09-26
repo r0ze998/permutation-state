@@ -4,6 +4,7 @@
 // re-rendered once, in a fixed order, at the end of the current task
 // (app.mjs registers the renderers). Renderers only read S and write the DOM.
 import * as T from './i18n.mjs';
+import { onLangChange } from './lang.mjs';
 
 export const S = {
   // ---- server data
@@ -22,7 +23,7 @@ export const S = {
   unitPreview: null,     // /api/preview/unit for `unit`
   cityPreview: null,     // /api/preview/city for the selected own city ({id, …})
   cityLoading: null,     // city id whose preview is being fetched
-  moveWhy: null,         // {key, text}: why the selected unit cannot reach `tile`
+  moveWhy: null,         // {key, text, blocked}: why the selected unit cannot reach `tile` (text rebuilt from blocked on a language switch)
   patrol: null,          // patrol being drawn: {unit, from, route}
 
   // ---- this tick's orders
@@ -127,6 +128,13 @@ export function invalidate(...parts) {
   }
   if (!scheduled) { scheduled = true; queueMicrotask(flush); }
 }
+
+/** Re-render every part (the display language changed, or anything else they all show). */
+export const invalidateAll = () => invalidate('all');
+// A language switch re-renders every part in place: the HUD, the minimap
+// labels, whichever drawer and inspector are open (lang.mjs setLang). The
+// map canvas redraws its banners and flags every frame by itself.
+onLangChange(invalidateAll);
 
 /** Run the renderers of the invalid parts now. */
 export function flush() {

@@ -9,13 +9,14 @@ import { addDraft } from './orders.mjs';
 import { loadResearch } from './drawers/research.mjs';
 import { loadDiplomacy } from './drawers/diplomacy.mjs';
 import { PATROL_MAX } from './rules.mjs';
+import { L } from './lang.mjs';
 
 export function hoverTile(id) {
   const el = $('#hover-label');
   if (!id || !S.view) { el.hidden = true; return; }
   const t = map.tiles.get(id); const o = ownerOf(id);
   el.hidden = false;
-  el.textContent = `${T.TERRAIN[t.terrain]}${t.resource ? '・' + T.RESOURCE[t.resource] : ''}${t.river ? '・川' : ''} · ${t.q}, ${t.r}${o !== null ? ' · ' + civN(o) + 'の領土' : ''}`;
+  el.textContent = `${T.TERRAIN[t.terrain]}${t.resource ? L`・${T.RESOURCE[t.resource]}` : ''}${t.river ? L`・川` : ''} · ${t.q}, ${t.r}${o !== null ? L` · ${civN(o)}の領土` : ''}`;
 }
 
 function clearUnit() { S.unit = null; S.unitPreview = null; map.setOverlay({}); }
@@ -98,8 +99,8 @@ export function refreshSelection() {
 
 // ================================================================== moving
 export function moveBlockedText(b) {
-  if (b?.code === 'ProtectedCapital') return `${civN(b.civ)}の首都の保護区域です${b.until !== null ? `（ティック${b.until}から入れます）` : '（保護が続く間は入れません）'}`;
-  if (b?.code === 'Unreachable') return '途中の道がふさがっているか、12マスより遠い場所です';
+  if (b?.code === 'ProtectedCapital') return L`${civN(b.civ)}の首都の保護区域です${b.until !== null ? L`（ティック${b.until}から入れます）` : L`（保護が続く間は入れません）`}`;
+  if (b?.code === 'Unreachable') return L`途中の道がふさがっているか、12マスより遠い場所です`;
   return T.blockedText(b);
 }
 
@@ -110,7 +111,7 @@ export async function quickMove(id) {
   if (!u || !t) return;
   const res = await api.tryGet(`/api/preview/path?unit=${u.id}&q=${t.q}&r=${t.r}`);
   if (!res) return;
-  if (!res.path) return toast(`そこへは移動できません：${moveBlockedText(res.blocked)}`, 'error');
+  if (!res.path) return toast(L`そこへは移動できません：${moveBlockedText(res.blocked)}`, 'error');
   addDraft({ type: 'MoveUnit', unit: u.id, path: res.path });
 }
 
@@ -126,10 +127,11 @@ function ensureMoveWhy() {
   if (p.reach.some(([q, r]) => q === t.q && r === t.r) || p.attacks.some(a => key(a.q, a.r) === id)) return;
   const k = moveWhyKey(u.id, id);
   if (S.moveWhy?.key === k) return;
-  S.moveWhy = { key: k, text: null };
+  S.moveWhy = { key: k, text: null, blocked: null }; // the inspector re-reads the text from `blocked` (language switches)
   api.tryGet(`/api/preview/path?unit=${u.id}&q=${t.q}&r=${t.r}`).then(res => {
     if (!res || S.moveWhy?.key !== k) return;
     S.moveWhy.text = res.path ? null : moveBlockedText(res.blocked);
+    S.moveWhy.blocked = res.path ? null : res.blocked;
     invalidate('inspector');
   });
 }
@@ -140,7 +142,7 @@ export function startPatrol(unitId) {
   const u = unitById(unitId); if (!u) return;
   S.patrol = { unit: u.id, from: [u.q, u.r], route: [] };
   map.setPatrol(S.patrol); invalidate('inspector');
-  toast(`地図で巡回する地点を順にクリックしてください（最大${PATROL_MAX}）。`);
+  toast(L`地図で巡回する地点を順にクリックしてください（最大${PATROL_MAX}）。`);
 }
 export function cancelPatrol() { S.patrol = null; map.setPatrol(null); invalidate('inspector'); }
 export function finishPatrol(dto) { cancelPatrol(); addDraft(dto); }
@@ -151,6 +153,6 @@ export function removePatrolPoint(i) {
 function addPatrolPoint(id) { // editing a patrol: clicks add waypoints
   const t = map.tiles.get(id);
   if (t && t.terrain !== 'Water' && t.terrain !== 'Mountain' && S.patrol.route.length < PATROL_MAX) { S.patrol.route.push([t.q, t.r]); map.setPatrol(S.patrol); invalidate('inspector'); }
-  else if (S.patrol.route.length >= PATROL_MAX) toast(`巡回の地点は${PATROL_MAX}つまでです。`, 'error');
-  else toast('水域や山岳は巡回の地点にできません。', 'error');
+  else if (S.patrol.route.length >= PATROL_MAX) toast(L`巡回の地点は${PATROL_MAX}つまでです。`, 'error');
+  else toast(L`水域や山岳は巡回の地点にできません。`, 'error');
 }

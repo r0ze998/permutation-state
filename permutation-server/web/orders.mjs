@@ -9,16 +9,17 @@
 // proposals and other governance as SubmitGov (chainplay.mjs).
 import * as T from './i18n.mjs';
 import * as api from './api.mjs';
-import { $, toast, usdc, usdcFixed } from './util.mjs';
+import { $, toast, usdc, usdcFixed, listSep } from './util.mjs';
 import { S, civN, held, spendable, unitById, cityById, isWatching, invalidate } from './state.mjs';
 import { map, keyOf, key } from './world.mjs';
 import { poll } from './sync.mjs';
 import * as chainplay from './chainplay.mjs';
 import { AUTO_RETRY_MS, autoCommitSeconds, autoCommitSettled, autoCommitStarted, autoCommitStep, checkValidation, retryable } from './sealbook.mjs';
 import { AUTO_COMMIT_SECONDS } from './rules.mjs';
+import { L, lazyTable, onLangChange } from './lang.mjs';
 
 /** Chain mode, after a tick's deadline: nothing more is taken until the next tick. */
-const CLOSED = 'このティックの受付は締め切られました（封印を公開して解決しています）。次のティックで出してください。';
+const closedText = () => L`このティックの受付は締め切られました（封印を公開して解決しています）。次のティックで出してください。`;
 
 // ================================================================== costs and offices
 const FREE = new Set(['ExchangeOrder', 'RevealRationale', 'ConsentWar', 'ConsentSpend']);
@@ -63,40 +64,40 @@ export function describe(dto) {
 /** Label (plain text), glyph and map hints of an order. */
 export function describeOrder(dto) {
   const u = unitById, city = cityById;
-  const unitName = x => T.UNIT[x?.type] || '部隊';
+  const unitName = x => T.UNIT[x?.type] || L`部隊`;
   switch (dto.type) {
     case 'MoveUnit': { const x = u(dto.unit); const last = dto.path[dto.path.length - 1];
-      return { dto, glyph: '→', label: `${unitName(x)}を移動（${dto.path.length}マス）`, focus: key(last[0], last[1]), from: x, path: dto.path }; }
-    case 'Attack': { const x = u(dto.army); const t = dto.target; let pos = null, what = '';
-      if (t.kind === 'Unit') { const y = u(t.id); pos = y; what = `${civN(y?.owner)}の${unitName(y)}`; }
+      return { dto, glyph: '→', label: L`${unitName(x)}を移動（${dto.path.length}マス）`, focus: key(last[0], last[1]), from: x, path: dto.path }; }
+    case 'Attack': { const x = u(dto.army); const t = dto.target; let pos = null, what = '', label = null;
+      if (t.kind === 'Unit') { const y = u(t.id); pos = y; label = L`${unitName(x)}で${civN(y?.owner)}の${unitName(y)}を攻撃`; }
       if (t.kind === 'City') { pos = city(t.id); what = T.cityName(t.id); }
-      if (t.kind === 'CityState') { pos = S.view.cityStates.find(c => c.id === t.id); what = `都市国家${t.id + 1}`; }
-      return { dto, glyph: '⚔', label: `${unitName(x)}で${what}を攻撃`, focus: keyOf(pos), from: x, attackAt: pos }; }
-    case 'FoundCity': return { dto, glyph: '⌂', label: '開拓者が都市を建設', focus: keyOf(u(dto.settler)) };
-    case 'SetQueue': return { dto, glyph: '▤', label: `${T.cityName(dto.city)}：${dto.items.map(T.itemName).join(' → ') || '生産なし'}`, focus: keyOf(city(dto.city)) };
-    case 'SetFocus': return { dto, glyph: '◐', label: `${T.cityName(dto.city)}の方針：${T.FOCUS[dto.focus]}`, focus: keyOf(city(dto.city)) };
-    case 'Purchase': return { dto, glyph: '◆', label: `${T.cityName(dto.city)}で生産を購入（${dto.gold}金）`, focus: keyOf(city(dto.city)) };
-    case 'SetResearch': return { dto, glyph: '✧', label: `研究：${dto.techs.map(t => T.TECH[t]).join(' → ')}` };
+      if (t.kind === 'CityState') { pos = S.view.cityStates.find(c => c.id === t.id); what = L`都市国家${t.id + 1}`; }
+      return { dto, glyph: '⚔', label: label ?? L`${unitName(x)}で${what}を攻撃`, focus: keyOf(pos), from: x, attackAt: pos }; }
+    case 'FoundCity': return { dto, glyph: '⌂', label: L`開拓者が都市を建設`, focus: keyOf(u(dto.settler)) };
+    case 'SetQueue': return { dto, glyph: '▤', label: L`${T.cityName(dto.city)}：${dto.items.map(T.itemName).join(' → ') || L`生産なし`}`, focus: keyOf(city(dto.city)) };
+    case 'SetFocus': return { dto, glyph: '◐', label: L`${T.cityName(dto.city)}の方針：${T.FOCUS[dto.focus]}`, focus: keyOf(city(dto.city)) };
+    case 'Purchase': return { dto, glyph: '◆', label: L`${T.cityName(dto.city)}で生産を購入（${dto.gold}金）`, focus: keyOf(city(dto.city)) };
+    case 'SetResearch': return { dto, glyph: '✧', label: L`研究：${dto.techs.map(t => T.TECH[t]).join(' → ')}` };
     case 'SetStanding': {
       const unit = dto.target.kind === 'Unit';
       const who = unit ? unitName(u(dto.target.id)) : T.cityName(dto.target.id);
-      return { dto, glyph: T.STANDING_GLYPH[dto.rule.kind] || '⚙', label: `${who}：${T.standingText(dto.rule)}`, focus: keyOf(unit ? u(dto.target.id) : city(dto.target.id)) };
+      return { dto, glyph: T.STANDING_GLYPH[dto.rule.kind] || '⚙', label: L`${who}：${T.standingText(dto.rule)}`, focus: keyOf(unit ? u(dto.target.id) : city(dto.target.id)) };
     }
-    case 'DeclareWar': return { dto, glyph: '⚔', label: `${civN(dto.civ)}に宣戦` };
-    case 'ProposePeace': return { dto, glyph: '☮', label: `${civN(dto.civ)}に講和を申し入れ` };
-    case 'AcceptPeace': return { dto, glyph: '☮', label: `${civN(dto.civ)}の講和を受諾` };
-    case 'ProposeNap': return { dto, glyph: '✉', label: `${civN(dto.civ)}に不可侵条約（保証金${dto.bond}）` };
-    case 'AcceptNap': return { dto, glyph: '✉', label: `${civN(dto.civ)}の不可侵条約を受諾` };
-    case 'BreakNap': return { dto, glyph: '✕', label: `${civN(dto.civ)}との条約を破棄（宣戦）` };
-    case 'ProposeAlliance': return { dto, glyph: '⚭', label: `${civN(dto.civ)}に同盟を申し入れ` };
-    case 'AcceptAlliance': return { dto, glyph: '⚭', label: `${civN(dto.civ)}の同盟に加わる` };
-    case 'LeaveAlliance': return { dto, glyph: '⚭', label: '同盟から離脱' };
-    case 'SendEnvoy': return { dto, glyph: '✉', label: `都市国家${dto.cityState + 1}に使節（影響力${dto.influence}）`, focus: keyOf(S.view.cityStates.find(c => c.id === dto.cityState)) };
-    case 'MarketTrade': return { dto, glyph: '⇄', label: `金の市場：${T.goodName(dto.good)}を${dto.amount}${dto.side === 'Buy' ? '購入' : '売却'}` };
-    case 'ExchangeOrder': return { dto, glyph: '$', usdc: true, label: `USDC取引所：${T.goodName(dto.good)}${dto.amount}を${dto.side === 'Buy' ? '買い' : '売り'} @${usdcFixed(dto.price)}` };
-    case 'Raze': return { dto, glyph: '✕', label: `${T.cityName(dto.city)}を破壊` };
-    case 'ConsentWar': return { dto, glyph: '⚖', label: `${civN(dto.civ)}への宣戦に同意` };
-    case 'ConsentSpend': return { dto, glyph: '⚖', label: `国庫から${usdc(dto.usdc)} USDCまでの支出に同意` };
+    case 'DeclareWar': return { dto, glyph: '⚔', label: L`${civN(dto.civ)}に宣戦` };
+    case 'ProposePeace': return { dto, glyph: '☮', label: L`${civN(dto.civ)}に講和を申し入れ` };
+    case 'AcceptPeace': return { dto, glyph: '☮', label: L`${civN(dto.civ)}の講和を受諾` };
+    case 'ProposeNap': return { dto, glyph: '✉', label: L`${civN(dto.civ)}に不可侵条約（保証金${dto.bond}）` };
+    case 'AcceptNap': return { dto, glyph: '✉', label: L`${civN(dto.civ)}の不可侵条約を受諾` };
+    case 'BreakNap': return { dto, glyph: '✕', label: L`${civN(dto.civ)}との条約を破棄（宣戦）` };
+    case 'ProposeAlliance': return { dto, glyph: '⚭', label: L`${civN(dto.civ)}に同盟を申し入れ` };
+    case 'AcceptAlliance': return { dto, glyph: '⚭', label: L`${civN(dto.civ)}の同盟に加わる` };
+    case 'LeaveAlliance': return { dto, glyph: '⚭', label: L`同盟から離脱` };
+    case 'SendEnvoy': return { dto, glyph: '✉', label: L`都市国家${dto.cityState + 1}に使節（影響力${dto.influence}）`, focus: keyOf(S.view.cityStates.find(c => c.id === dto.cityState)) };
+    case 'MarketTrade': return { dto, glyph: '⇄', label: dto.side === 'Buy' ? L`金の市場：${T.goodName(dto.good)}を${dto.amount}購入` : L`金の市場：${T.goodName(dto.good)}を${dto.amount}売却` };
+    case 'ExchangeOrder': return { dto, glyph: '$', usdc: true, label: dto.side === 'Buy' ? L`USDC取引所：${T.goodName(dto.good)}${dto.amount}を買い @${usdcFixed(dto.price)}` : L`USDC取引所：${T.goodName(dto.good)}${dto.amount}を売り @${usdcFixed(dto.price)}` };
+    case 'Raze': return { dto, glyph: '✕', label: L`${T.cityName(dto.city)}を破壊` };
+    case 'ConsentWar': return { dto, glyph: '⚖', label: L`${civN(dto.civ)}への宣戦に同意` };
+    case 'ConsentSpend': return { dto, glyph: '⚖', label: L`国庫から${usdc(dto.usdc)} USDCまでの支出に同意` };
     default: return { dto, glyph: '•', label: dto.type };
   }
 }
@@ -116,6 +117,10 @@ function setDrafts(list) {
   map.setDrafts(list);
   invalidate('top', 'dock', 'inspector', 'drawer', 'nextTurn', 'notifs');
 }
+// A language switch: the drafts' labels are text, written when each order was
+// drafted; say them again in the new language (the orders do not change, and
+// state.mjs re-renders every part after this).
+onLangChange(() => { for (const d of S.drafts) d.label = describeOrder(d.dto).label; });
 
 /** Orders sealed earlier this tick, restored after a reload. */
 export function restoreCommitted(orders) {
@@ -158,10 +163,10 @@ export function resetTick() {
 export const autoSeconds = (v = S.view) => (v?.chain ? autoCommitSeconds(v.tickSeconds) : AUTO_COMMIT_SECONDS);
 
 export function addDraft(dto) {
-  if (isWatching()) { toast('観戦中は命令を出せません。', 'error'); return false; }
+  if (isWatching()) { toast(L`観戦中は命令を出せません。`, 'error'); return false; }
   if (S.view?.chain) {
-    if (!S.session) { toast(chainplay.NO_KEY, 'error'); return false; }
-    if (chainplay.chainPhase() !== 'commit') { toast(CLOSED, 'error'); return false; }
+    if (!S.session) { toast(chainplay.NO_KEY(), 'error'); return false; }
+    if (chainplay.chainPhase() !== 'commit') { toast(closedText(), 'error'); return false; }
   }
   const d = describe(dto);
   const slot = slotOf(dto);
@@ -169,16 +174,16 @@ export function addDraft(dto) {
   const replacing = others.length !== S.drafts.length;
   const mine = held().includes(d.office);
   if (mine && !replacing && used(d.office) + costOf(dto) > spendable(d.office)) {
-    toast(`${T.ROLE_JA[d.office]}の命令の枠が足りません（${used(d.office)}/${spendable(d.office)}）。先に他の命令を取り消してください。`, 'error'); return false;
+    toast(L`${T.ROLE_JA[d.office]}の命令の枠が足りません（${used(d.office)}/${spendable(d.office)}）。先に他の命令を取り消してください。`, 'error'); return false;
   }
   setDrafts([...others, d]);
   S.pulseChip = S.drafts.length - 1;
-  if (!mine && !S.hintedPropose) { S.hintedPropose = true; toast(`${T.ROLE_JA[d.office]}はあなたの担当ではないので、この命令は「献策」になります。確定すると${T.ROLE_JA[d.office]}に提案され、採用されれば功績を半分ずつ分けます。`); }
+  if (!mine && !S.hintedPropose) { S.hintedPropose = true; toast(L`${T.ROLE_JA[d.office]}はあなたの担当ではないので、この命令は「献策」になります。確定すると${T.ROLE_JA[d.office]}に提案され、採用されれば功績を半分ずつ分けます。`); }
   else if (!S.hintedDock) {
     S.hintedDock = true;
     toast(S.view?.chain
-      ? `命令は下のドックに貯まります。「確定する」（Ctrl+Enter）で封印してチェーンへ送ります。締切の約${Math.round(autoSeconds())}秒前には自動で確定します（このタブを表示している間）。`
-      : '命令は下のドックに貯まります。「確定する」（Ctrl+Enter）で封印して送信、締切3秒前には自動で確定します。');
+      ? L`命令は下のドックに貯まります。「確定する」（Ctrl+Enter）で封印してチェーンへ送ります。締切の約${Math.round(autoSeconds())}秒前には自動で確定します（このタブを表示している間）。`
+      : L`命令は下のドックに貯まります。「確定する」（Ctrl+Enter）で封印して送信、締切3秒前には自動で確定します。`);
   }
   return true;
 }
@@ -218,8 +223,8 @@ export async function commit(auto = false, { quiet = false } = {}) {
     for (let i = 0; i < list.length; i += 4) {
       const batch = list.slice(i, i + 4);
       const res = await api.post('/api/gov', { action: { type: 'Propose', role, orders: batch } });
-      if (res.ok) msg.push(`${T.ROLE_JA[role]}に献策（${batch.length}件）`);
-      else { ok = false; toast(`献策できませんでした：${api.translateError(res.error)}`, 'error'); }
+      if (res.ok) msg.push(L`${T.ROLE_JA[role]}に献策（${batch.length}件）`);
+      else { ok = false; toast(L`献策できませんでした：${api.translateError(res.error)}`, 'error'); }
     }
   }
   if (held().length) {
@@ -227,10 +232,10 @@ export async function commit(auto = false, { quiet = false } = {}) {
     const nAdopt = Object.values(adopt).reduce((n, l) => n + l.length, 0);
     if (res.ok) {
       S.sealed = res.offices;
-      msg.push(orders.length ? `命令${orders.length}件を封印して確定（${res.offices.map(o => T.ROLE_JA[o.role]).join('・')}）` : nAdopt ? '' : '担当の命令なしで確定');
-      if (nAdopt) msg.push(`献策${nAdopt}件の採用を確定`);
+      msg.push(orders.length ? L`命令${orders.length}件を封印して確定（${res.offices.map(o => T.ROLE_JA[o.role]).join(listSep())}）` : nAdopt ? '' : L`担当の命令なしで確定`);
+      if (nAdopt) msg.push(L`献策${nAdopt}件の採用を確定`);
       msg = msg.filter(Boolean);
-    } else { ok = false; toast(`確定できませんでした：${api.translateError(res.error)}`, 'error'); }
+    } else { ok = false; toast(L`確定できませんでした：${api.translateError(res.error)}`, 'error'); }
   }
   S.committing = false;
   if (ok) {
@@ -238,8 +243,8 @@ export async function commit(auto = false, { quiet = false } = {}) {
     S.committedAdopt = adoptSent;
     if (props.length) setDrafts(S.drafts.filter(d => !props.includes(d))); // proposals are sent: they leave the dock
     S.committedJson = JSON.stringify(orders); // what was sealed (drafts added meanwhile stay unsent)
-    if (!auto) toast(`${msg.join(' / ') || '確定しました'}。締切（全役職の確定）まで変更できます。`);
-    else if (S.drafts.length) toast('締切が近いため、下書きを自動で確定しました。');
+    if (!auto) toast(L`${msg.join(' / ') || L`確定しました`}。締切（全役職の確定）まで変更できます。`);
+    else if (S.drafts.length) toast(L`締切が近いため、下書きを自動で確定しました。`);
   }
   invalidate('dock');
 }
@@ -252,8 +257,8 @@ export async function endTurn({ commitFirst = false } = {}) {
   if (S.view?.chain) return endTurnChain({ commitFirst });
   if (commitFirst && isDirty()) await commit(true);
   const r = await api.post('/api/control', { advance: true });
-  if (r.error) toast(`${commitFirst ? '送信できませんでした' : '手番を終えられませんでした'}：${api.translateError(r.error)}`, 'error');
-  else if (!commitFirst) toast('命令なしで手番を終えました。');
+  if (r.error) toast(L`${commitFirst ? L`送信できませんでした` : L`手番を終えられませんでした`}：${api.translateError(r.error)}`, 'error');
+  else if (!commitFirst) toast(L`命令なしで手番を終えました。`);
   poll();
 }
 
@@ -267,7 +272,7 @@ export function commitOrEndTurn() {
 }
 
 /** Shown once when an auto-commit failed in a way that may pass and is tried again. */
-const AUTO_RETRY_NOTE = `下書きの自動確定が一時的なエラーで届きませんでした。${Math.round(AUTO_RETRY_MS / 1000)}秒ほどでもう一度送ります。`;
+const autoRetryNote = () => L`下書きの自動確定が一時的なエラーで届きませんでした。${Math.round(AUTO_RETRY_MS / 1000)}秒ほどでもう一度送ります。`;
 
 /** Every applied view: auto-commit a dirty draft just before the deadline (never lose orders silently). */
 export function maybeAutoCommit(v) {
@@ -293,7 +298,7 @@ export function maybeAutoCommit(v) {
   autoCommitStarted(a);
   const settle = out => {
     const r = autoCommitSettled(a, key, out, Date.now());
-    if (r === 'retry' && a.attempts === 1) toast(AUTO_RETRY_NOTE);
+    if (r === 'retry' && a.attempts === 1) toast(autoRetryNote());
     else if (r === 'failed') for (const e of out?.errors ?? []) toast(e, 'error');
   };
   commit(true, { quiet: true }).then(settle, () => settle({ ok: false, retry: false, errors: [] }));
@@ -315,9 +320,10 @@ async function flushGov() {
   try { reportGov(await chainplay.submitGov()); } finally { flushing = false; }
 }
 
-export const GOV_VERB = { Vote: '投票', Support: '支持', Stand: '立候補', Recall: 'リコールに賛成', Propose: '献策' };
-const verbs = list => [...new Set(list.map(a => GOV_VERB[a.type] || a.type))].join('・');
-const govError = f => (f.code === 'InboxFull' ? 'このティックに送れる国の操作の上限に達しました。次のティックで送ってください' : api.translateError(f));
+/** What a governance action is called, by its type (read in the display language of the moment). */
+export const GOV_VERB = lazyTable({ Vote: () => L`投票`, Support: () => L`支持`, Stand: () => L`立候補`, Recall: () => L`リコールに賛成`, Propose: () => L`献策` });
+const verbs = list => [...new Set(list.map(a => GOV_VERB[a.type] || a.type))].join(listSep());
+const govError = f => (f.code === 'InboxFull' ? L`このティックに送れる国の操作の上限に達しました。次のティックで送ってください` : api.translateError(f));
 
 const showError = text => toast(text, 'error');
 
@@ -330,22 +336,22 @@ const showError = text => toast(text, 'error');
 export function reportGov(r, { proposals = true, say = showError } = {}) {
   for (const a of [...r.sent, ...(r.requeued || [])]) if (a.type === 'Vote') S.myVotes[a.role] = a.candidate;
   const sent = r.sent.filter(a => proposals || a.type !== 'Propose'), late = r.requeued || [];
-  if (sent.length) toast(`${verbs(sent)}をチェーンに送りました。次のティックの解決で反映されます。`);
-  if (late.length) toast(`締切を過ぎたため、${verbs(late)}は次のティックの受付が始まったら送ります。`);
-  for (const f of r.failed) say(`${verbs(f.actions)}できませんでした：${govError(f)}`);
-  if (r.tooLarge?.length) say(`${verbs(r.tooLarge)}が大きすぎて1つの取引に収まりません。命令を減らしてください。`);
+  if (sent.length) toast(L`${verbs(sent)}をチェーンに送りました。次のティックの解決で反映されます。`);
+  if (late.length) toast(L`締切を過ぎたため、${verbs(late)}は次のティックの受付が始まったら送ります。`);
+  for (const f of r.failed) say(L`${verbs(f.actions)}できませんでした：${govError(f)}`);
+  if (r.tooLarge?.length) say(L`${verbs(r.tooLarge)}が大きすぎて1つの取引に収まりません。命令を減らしてください。`);
   invalidate('drawer', 'nextTurn', 'notifs');
   return !r.failed.length && !r.tooLarge?.length;
 }
 
 /** One message for office results that failed (a shared reason once), to `say`. */
-function reportOffices(failed, what = '確定できませんでした', say = showError) {
+function reportOffices(failed, what = L`確定できませんでした`, say = showError) {
   if (!failed.length) return;
   const same = failed.every(r => r.code === failed[0].code && r.stage === null);
-  if (same) { say(`${what}：${api.translateError(failed[0])}`); return; }
+  if (same) { say(L`${what}：${api.translateError(failed[0])}`); return; }
   for (const r of failed) {
-    const where = r.stage === 'seal' ? '封印をゲートウェイに預けられず、送っていません' : r.stage === 'commit' ? 'チェーンに送れませんでした' : '';
-    say(`${what}（${T.ROLE_JA[r.role]}${where ? `・${where}` : ''}）：${api.translateError(r)}`);
+    const where = r.stage === 'seal' ? L`封印をゲートウェイに預けられず、送っていません` : r.stage === 'commit' ? L`チェーンに送れませんでした` : '';
+    say(where ? L`${what}（${T.ROLE_JA[r.role]}・${where}）：${api.translateError(r)}` : L`${what}（${T.ROLE_JA[r.role]}）：${api.translateError(r)}`);
   }
 }
 
@@ -362,8 +368,8 @@ async function commitChain(auto, quiet = false) {
   const errors = [];
   const say = text => { errors.push(text); if (!quiet) toast(text, 'error'); };
   const result = (ok, retry = false) => ({ ok, retry: !ok && retry, errors });
-  if (!S.session) { if (!auto) say(chainplay.NO_KEY); return result(false); }
-  if (v.over || chainplay.chainPhase(v) !== 'commit') { if (!auto) say(CLOSED); return result(false); }
+  if (!S.session) { if (!auto) say(chainplay.NO_KEY()); return result(false); }
+  if (v.over || chainplay.chainPhase(v) !== 'commit') { if (!auto) say(closedText()); return result(false); }
   S.committing = true;
   invalidate('dock', 'nextTurn');
   try {
@@ -380,20 +386,20 @@ async function commitChain(auto, quiet = false) {
     if (offices.length) {
       const res = await api.post('/api/validate', { member: S.memberId, orders, adopt });
       if (!Array.isArray(res?.offices)) {
-        say(`確定できませんでした：${api.translateError(res?.error ?? 'network')}`);
+        say(L`確定できませんでした：${api.translateError(res?.error ?? 'network')}`);
         return result(false, retryable(res ?? { error: 'network' }));
       }
       const chk = checkValidation(res, { orders, adopt, tick });
       if (chk.problem) {
-        say(chk.problem === 'tick' ? 'ティックが進みました。もう一度確定してください。' : 'ゲームサーバーの確認結果が送った命令と合わないため、何も送っていません。');
+        say(chk.problem === 'tick' ? L`ティックが進みました。もう一度確定してください。` : L`ゲームサーバーの確認結果が送った命令と合わないため、何も送っていません。`);
         return result(false);
       }
       if (chk.refused.length) {
-        say(`担当の役職の命令として受け付けられない命令があります（何も送っていません）：${chk.refused.map(r => describeOrder(r.order).label).join('、')}`);
+        say(L`担当の役職の命令として受け付けられない命令があります（何も送っていません）：${chk.refused.map(r => describeOrder(r.order).label).join(L`、`)}`);
         return result(false);
       }
       const bad = chk.offices.find(o => o.error);
-      if (bad) { say(`確定できませんでした（${T.ROLE_JA[bad.role]}）：${api.translateError(bad.error)}`); return result(false); }
+      if (bad) { say(L`確定できませんでした（${T.ROLE_JA[bad.role]}）：${api.translateError(bad.error)}`); return result(false); }
       plans = chk.offices.map(o => ({ role: o.role, orders: o.orders, adopt: o.adopt }));
     }
     // 2. Proposals to the offices I do not hold, as SubmitGov (with any
@@ -409,8 +415,8 @@ async function commitChain(auto, quiet = false) {
     const done = results.filter(r => r.ok), failed = results.filter(r => !r.ok);
     reportOffices(failed, undefined, say);
     const msg = [];
-    if (done.length) msg.push(orders.length ? `命令${orders.length}件を封印して確定（${done.map(r => T.ROLE_JA[r.role]).join('・')}）` : nAdopt ? '' : '担当の命令なしで確定');
-    if (nAdopt && done.length && !failed.length) msg.push(`献策${nAdopt}件の採用を確定`);
+    if (done.length) msg.push(orders.length ? L`命令${orders.length}件を封印して確定（${done.map(r => T.ROLE_JA[r.role]).join(listSep())}）` : nAdopt ? '' : L`担当の命令なしで確定`);
+    if (nAdopt && done.length && !failed.length) msg.push(L`献策${nAdopt}件の採用を確定`);
     // Proposals sent (or waiting for the next tick) leave the dock.
     let govOk = true;
     if (gov) {
@@ -419,18 +425,18 @@ async function commitChain(auto, quiet = false) {
       const gone = new Set(out.flatMap(a => a.orders));
       if (gone.size) setDrafts(S.drafts.filter(d => !(d.proposal && gone.has(d.dto))));
       const now = gov.sent.filter(a => a.type === 'Propose');
-      if (now.length) msg.push(`${[...new Set(now.map(a => T.ROLE_JA[a.role]))].join('・')}に献策（${now.reduce((n, a) => n + a.orders.length, 0)}件）`);
+      if (now.length) msg.push(L`${[...new Set(now.map(a => T.ROLE_JA[a.role]))].join(listSep())}に献策（${now.reduce((n, a) => n + a.orders.length, 0)}件）`);
     } else if (prop.tooLarge.length) {
       govOk = false;
-      say('献策が大きすぎて1つの取引に収まりません。命令を減らしてください。');
+      say(L`献策が大きすぎて1つの取引に収まりません。命令を減らしてください。`);
     }
     const ok = !failed.length && govOk;
     if (ok) {
       S.committedRationale = rationale;
       S.committedAdopt = adoptSent;
       S.committedJson = JSON.stringify(orders);
-      if (!auto) toast(`${msg.filter(Boolean).join(' / ') || '確定しました'}。締切まで確定し直せます。`);
-      else if (S.drafts.length) toast('締切が近いため、下書きを封印してチェーンへ送りました。');
+      if (!auto) toast(L`${msg.filter(Boolean).join(' / ') || L`確定しました`}。締切まで確定し直せます。`);
+      else if (S.drafts.length) toast(L`締切が近いため、下書きを封印してチェーンへ送りました。`);
     }
     if (results.length) chainplay.refreshFlags();
     // Worth sending again only when everything that failed may pass.
@@ -448,15 +454,15 @@ async function commitChain(auto, quiet = false) {
  * drafts are committed before (and nothing more happens if that fails).
  */
 async function endTurnChain({ commitFirst }) {
-  if (!S.session) { toast(chainplay.NO_KEY, 'error'); return; }
-  if (chainplay.chainPhase() !== 'commit') { toast(CLOSED, 'error'); return; }
+  if (!S.session) { toast(chainplay.NO_KEY(), 'error'); return; }
+  if (chainplay.chainPhase() !== 'commit') { toast(closedText(), 'error'); return; }
   if (commitFirst && isDirty()) {
     await commit(true);
     if (isDirty()) return; // the commit failed and said why
   }
   const tick = S.view.tick;
   const todo = chainplay.officeStates().filter(s => !s.committed && !s.sending).map(s => s.role);
-  if (!todo.length || S.committing) { if (!commitFirst && !S.committing) toast('すでに手番を終えています（締切までは確定し直せます）。'); poll(); return; }
+  if (!todo.length || S.committing) { if (!commitFirst && !S.committing) toast(L`すでに手番を終えています（締切までは確定し直せます）。`); poll(); return; }
   S.committing = true;
   invalidate('dock', 'nextTurn');
   let results = [];
@@ -467,8 +473,8 @@ async function endTurnChain({ commitFirst }) {
     invalidate('dock', 'nextTurn');
   }
   const failed = results.filter(r => !r.ok);
-  reportOffices(failed, commitFirst ? '送信できませんでした' : '手番を終えられませんでした');
-  if (!failed.length && !commitFirst) toast('命令なしで手番を終えました。');
+  reportOffices(failed, commitFirst ? L`送信できませんでした` : L`手番を終えられませんでした`);
+  if (!failed.length && !commitFirst) toast(L`命令なしで手番を終えました。`);
   chainplay.refreshFlags();
   poll();
 }

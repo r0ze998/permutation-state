@@ -15,6 +15,7 @@
 import { fromHex, randomBytes, toHex } from './sdk/bytes.mjs';
 import { parseTransaction, wireTransaction } from './sdk/solana-tx.mjs';
 import { codeError, keyFromSeed } from './session.mjs';
+import { L, lazyTable } from './lang.mjs';
 
 /** Wallet Standard chain id of a cluster. */
 export const chainOf = cluster => ({ localnet: 'solana:localnet', devnet: 'solana:devnet', testnet: 'solana:testnet', mainnet: 'solana:mainnet', 'mainnet-beta': 'solana:mainnet' })[cluster] ?? `solana:${cluster}`;
@@ -25,13 +26,13 @@ export const INSTALL = Object.freeze([
   { name: 'Solflare', url: 'https://solflare.com/download' },
   { name: 'Backpack', url: 'https://backpack.app/downloads' },
 ]);
-/** How to point each wallet at devnet (balances and simulation otherwise run on mainnet). */
-export const DEVNET_HINTS = Object.freeze({
-  Phantom: 'Phantom：設定 → 開発者設定 →「テストネットモード」をオン（Solana Devnet）',
-  Solflare: 'Solflare：設定 → ネットワーク →「Devnet」に切り替える',
-  Backpack: 'Backpack：設定 → Solana → RPC 接続 →「Devnet」に切り替える',
+/** How to point each wallet at devnet (balances and simulation otherwise run on mainnet); read in the current language. */
+export const DEVNET_HINTS = lazyTable({
+  Phantom: () => L`Phantom：設定 → 開発者設定 →「テストネットモード」をオン（Solana Devnet）`,
+  Solflare: () => L`Solflare：設定 → ネットワーク →「Devnet」に切り替える`,
+  Backpack: () => L`Backpack：設定 → Solana → RPC 接続 →「Devnet」に切り替える`,
 });
-export const devnetHint = name => DEVNET_HINTS[name] ?? `${name}：ウォレットのネットワークをテストネット/devnet に切り替える`;
+export const devnetHint = name => DEVNET_HINTS[name] ?? L`${name}：ウォレットのネットワークをテストネット/devnet に切り替える`;
 
 export const DEV_WALLET_NAME = 'Dev Wallet (localnet)';
 const DEV_KEY = 'ps-dev-wallet';
@@ -84,15 +85,15 @@ export function discover(target = globalThis.window) {
   try { target.dispatchEvent(new CustomEvent('wallet-standard:app-ready', { detail: api })); } catch { /* no events here */ }
 }
 
-/** Why a wallet cannot be used on `chain` (Japanese), or null. */
+/** Why a wallet cannot be used on `chain` (in the current language), or null. */
 export function unsupported(w, chain) {
   const f = w?.features || {};
-  if (typeof f['standard:connect']?.connect !== 'function') return '接続に対応していません';
+  if (typeof f['standard:connect']?.connect !== 'function') return L`接続に対応していません`;
   const st = f['solana:signTransaction'];
-  if (typeof st?.signTransaction !== 'function') return '取引の署名に対応していません';
-  if (!(st.supportedTransactionVersions || []).includes('legacy')) return '従来形式（legacy）の取引に対応していません';
-  if (typeof f['solana:signMessage']?.signMessage !== 'function') return 'メッセージの署名に対応していません';
-  if (!(w.chains || []).includes(chain)) return `このネットワーク（${chain}）に対応していません`;
+  if (typeof st?.signTransaction !== 'function') return L`取引の署名に対応していません`;
+  if (!(st.supportedTransactionVersions || []).includes('legacy')) return L`従来形式（legacy）の取引に対応していません`;
+  if (typeof f['solana:signMessage']?.signMessage !== 'function') return L`メッセージの署名に対応していません`;
+  if (!(w.chains || []).includes(chain)) return L`このネットワーク（${chain}）に対応していません`;
   return null;
 }
 
@@ -125,11 +126,11 @@ function setCurrent(next) {
 /** Whether an error is the user saying no in the wallet. */
 export const isRejection = e => e?.code === 4001 || /reject|denied|cancel|closed/i.test(String(e?.message ?? e ?? ''));
 
-/** A wallet's error as `{code, message}` (Japanese): WalletRejected or WalletError. */
+/** A wallet's error as `{code, message}` (in the current language): WalletRejected or WalletError. */
 function walletError(e) {
   if (e?.code && /^Wallet|^NoAccount/.test(e.code)) return e;
-  const err = isRejection(e) ? codeError('WalletRejected', 'ウォレットで取り消されました')
-    : codeError('WalletError', `ウォレットのエラー：${String(e?.message ?? e).slice(0, 200)}`);
+  const err = isRejection(e) ? codeError('WalletRejected', L`ウォレットで取り消されました`)
+    : codeError('WalletError', L`ウォレットのエラー：${String(e?.message ?? e).slice(0, 200)}`);
   err.cause = e;
   return err;
 }
@@ -142,7 +143,7 @@ function walletError(e) {
 export async function connect(entry, { chain, silent = false } = {}) {
   const w = entry?.wallet ?? entry;
   const why = unsupported(w, chain);
-  if (why) { if (silent) return null; throw codeError('WalletUnsupported', `${w?.name ?? 'このウォレット'}は使えません：${why}`); }
+  if (why) { if (silent) return null; throw codeError('WalletUnsupported', L`${w?.name ?? L`このウォレット`}は使えません：${why}`); }
   let accounts;
   try {
     accounts = (await w.features['standard:connect'].connect(silent ? { silent: true } : undefined))?.accounts;
@@ -153,7 +154,7 @@ export async function connect(entry, { chain, silent = false } = {}) {
   const account = [...(accounts?.length ? accounts : w.accounts || [])].find(a => accountOk(a, chain));
   if (!account) {
     if (silent) return null;
-    throw codeError('NoAccount', `${w.name}に、このネットワーク（${chain}）で使えるアカウントがありません`);
+    throw codeError('NoAccount', L`${w.name}に、このネットワーク（${chain}）で使えるアカウントがありません`);
   }
   setCurrent({ wallet: w, account, chain, off: current?.wallet === w ? current.off : null });
   if (!current.off) {
@@ -196,7 +197,7 @@ export async function disconnect() {
 }
 
 function need() {
-  if (!current) throw codeError('NoWallet', 'ウォレットが接続されていません');
+  if (!current) throw codeError('NoWallet', L`ウォレットが接続されていません`);
   return current;
 }
 
@@ -210,7 +211,7 @@ export async function signMessage(bytes) {
   try {
     [out] = await c.wallet.features['solana:signMessage'].signMessage({ account: c.account, message: bytes });
   } catch (e) { throw walletError(e); }
-  if (!out?.signature) throw codeError('WalletError', 'ウォレットが署名を返しませんでした');
+  if (!out?.signature) throw codeError('WalletError', L`ウォレットが署名を返しませんでした`);
   return { signedMessage: Uint8Array.from(out.signedMessage ?? bytes), signature: Uint8Array.from(out.signature) };
 }
 
@@ -225,7 +226,7 @@ export async function signTransaction(wire) {
   try {
     [out] = await c.wallet.features['solana:signTransaction'].signTransaction({ account: c.account, transaction: wire, chain: c.chain });
   } catch (e) { throw walletError(e); }
-  if (!out?.signedTransaction) throw codeError('WalletError', 'ウォレットが署名済みの取引を返しませんでした');
+  if (!out?.signedTransaction) throw codeError('WalletError', L`ウォレットが署名済みの取引を返しませんでした`);
   return Uint8Array.from(out.signedTransaction);
 }
 
