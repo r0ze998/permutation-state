@@ -164,7 +164,8 @@ fn frames<'a>(
 }
 
 /// The precompiles (Ed25519, secp256k1, secp256r1): the runtime runs them
-/// without an `invoke [1]` line, so they have no top-level frame.
+/// without an `invoke [1]` line (Agave's `InvokeContext::process_precompile`
+/// never logs one), so they have no top-level frame.
 const PRECOMPILES: [&str; 3] = [
     "Ed25519SigVerify111111111111111111111111111",
     "KeccakSecp256k11111111111111111111111111111",

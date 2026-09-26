@@ -55,7 +55,7 @@ function frames(logs, program) {
   return { out, tops, truncated };
 }
 
-/** The precompiles (Ed25519, secp256k1, secp256r1): the runtime runs them without an `invoke [1]` line. */
+/** The precompiles (Ed25519, secp256k1, secp256r1): the runtime runs them without an `invoke [1]` line (Agave's `process_precompile` logs none). */
 export const PRECOMPILES = Object.freeze([
   'Ed25519SigVerify111111111111111111111111111',
   'KeccakSecp256k11111111111111111111111111111',
