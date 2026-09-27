@@ -71,7 +71,14 @@ impl DayCfg {
             bots: 100,
             seed: 0x1D_A7,
             play_bells: 144,
-            drain_bells: 8,
+            // integ-W4: the keeper skips an idle Province in 24-bell
+            // batches (keeper `play::SKIP_MAX`; §8.2, ≤ 6 skips a
+            // province-day), so an idle Province may legitimately sit up to
+            // 24 bells + a close behind. The drain covers one whole batch
+            // and its close (24 + 2 bells); a Province still behind after it
+            // is stuck, not batched. (8 bells counted 141 batched
+            // province-bells over 21 idle Provinces as stuck.)
+            drain_bells: 26,
             stubs: false,
             dir: dir.into(),
             herald_every: 5,
@@ -460,6 +467,12 @@ pub async fn run(cfg: DayCfg) -> Result<DayOut, String> {
         if let Ok(rd) = std::fs::read_dir(&clash_dir) {
             for pq in rd.flatten() {
                 for bf in std::fs::read_dir(pq.path()).into_iter().flatten().flatten() {
+                    // The `.gz` siblings (DECISIONS J2) are the same report
+                    // compressed; only the JSON files are read (integ-W4:
+                    // every sibling counted as a `null` mismatch).
+                    if bf.path().extension().is_some_and(|x| x == "gz") {
+                        continue;
+                    }
                     let v: Value = std::fs::read(bf.path())
                         .ok()
                         .and_then(|b| serde_json::from_slice(&b).ok())

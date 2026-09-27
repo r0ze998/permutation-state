@@ -1,7 +1,8 @@
 //! `itest::inproc_day` (M1 contract §12 Gate W4): 100 bots + keeper +
 //! herald fold over `ChainPort::InProcess` with the test-beacon program and
 //! the test key, one game day (144 bells at 20×, 10,800 slots of virtual
-//! time) and a six-bell keeper-only drain.
+//! time) and a 26-bell keeper-only drain (one whole SkipQuiet batch of the
+//! keeper's and its close, `DayCfg::drain_bells`).
 //!
 //! Pass (strict mode, the gate): **zero stuck province-bells**; every
 //! transit settled or routed by rule; every bad seal destroyed at
