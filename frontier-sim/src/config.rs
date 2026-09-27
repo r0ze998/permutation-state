@@ -48,13 +48,16 @@ pub struct Config {
     /// Share of wallets joining on day 0; the rest join uniformly on days
     /// 1..=21.
     pub day0_share: f64,
-    /// Doctrines on (faction k gets `DOCTRINES[(k + rotation) % 6]`).
+    /// Doctrines on (faction k gets doctrine `(k + rotation) % 6` of the
+    /// table `doctrine_set`).
     pub doctrines: bool,
     pub doctrine_rotation: usize,
     /// Factions get identical archetype mixes (true) or random ones.
     pub stratified: bool,
-    /// Use `DOCTRINES_TUNED` instead of the draft table.
-    pub doctrines_tuned: bool,
+    /// Which doctrine table (kernel, draft, M0 proposal) …
+    pub doctrine_set: crate::model::DoctrineSet,
+    /// … with these tuning overrides (`model::apply_tweaks`).
+    pub doctrine_tweaks: String,
     /// Season days (28) and genesis rings (2..=g open at bell 0).
     pub days: u32,
     pub genesis_rings: u32,
@@ -95,7 +98,8 @@ impl Default for Config {
             day0_share: 0.6,
             doctrines: false,
             doctrine_rotation: 0,
-            doctrines_tuned: false,
+            doctrine_set: crate::model::DoctrineSet::Kernel,
+            doctrine_tweaks: String::new(),
             stratified: true,
             days: 28,
             genesis_rings: 3,

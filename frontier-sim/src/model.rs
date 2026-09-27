@@ -1,8 +1,9 @@
 //! Behaviour and economy assumptions of the simulator. **Everything in this
 //! file is an assumption** (labelled [sim] in RESULTS.md): play profiles,
-//! placeholder in-game costs and the draft doctrine knobs. The rules
+//! placeholder in-game costs and the draft doctrine replays. The rules
 //! themselves (clash, siege, holding accrual, laurel index, faction index,
-//! pools, claims) come from `permutation_rules::frontier` unchanged.
+//! pools, claims, and the doctrine table) come from
+//! `permutation_rules::frontier` unchanged.
 
 use permutation_rules::fixed::Bps;
 use permutation_rules::frontier::holding::Tier;
@@ -261,126 +262,197 @@ pub const ENGINE_PER_HOLDING: u64 = 450;
 
 // ------------------------------------------------------------ doctrines [sim]
 
-/// The draft doctrine table of design §4.1, as simulator knobs. Only the
-/// parts with a simulated mechanism are live; the rest are listed in
-/// RESULTS.md as not simulated.
+use permutation_rules::fixed::BPS_ONE;
+pub use permutation_rules::frontier::doctrine::Doctrine as KernelDoctrine;
+use permutation_rules::frontier::doctrine::{DOCTRINES as KERNEL_DOCTRINES, NEUTRAL};
+
+/// A doctrine as the simulator plays it: the kernel's knobs
+/// (`permutation_rules::frontier::doctrine`) plus the draft table's
+/// multipliers on scored facts and growth, which O5 removed from the
+/// kernel. They exist here only to replay the draft (§E1) and the M0
+/// proposal; in the kernel set they are all neutral.
 #[derive(Clone, Copy, Debug)]
 pub struct Doctrine {
-    pub name: &'static str,
-    /// Host unit (the doctrine's unit variant).
-    pub unit: UnitType,
-    /// Stance the unit variant is good at, and the damage multiplier then.
-    pub stance_bonus: Option<(Stance, Bps)>,
-    /// Damage multiplier on the bell a host arrives.
-    pub arrival_bps: Bps,
-    /// Travel time multiplier (roads, Waystones) on top of cavalry.
-    pub travel_bps: Bps,
-    /// Production multipliers.
+    pub k: KernelDoctrine,
+    /// Production multipliers (draft only).
     pub food_bps: Bps,
     pub ore_bps: Bps,
-    /// Troop upkeep multiplier.
-    pub upkeep_bps: Bps,
-    /// Wall cost multiplier.
-    pub wall_cost_bps: Bps,
-    /// Settler (new holding) cost multiplier.
+    /// Settler (new holding) cost multiplier (draft only).
     pub settler_cost_bps: Bps,
-    /// Frontier Grant multiplier for its below-average-size cohorts.
+    /// Frontier Grant multiplier for below-average-size cohorts (draft only).
     pub grant_mult: i64,
-    /// Science production multiplier (research focus slot).
+    /// Science production multiplier (draft only: research focus slot).
     pub science_bps: Bps,
-    /// Science pledges count this much toward Knowledge.
+    /// Science pledges count this much toward Knowledge (draft only).
     pub knowledge_bps: Bps,
 }
 
-pub const NEUTRAL_DOCTRINE: Doctrine = Doctrine {
-    name: "none",
-    unit: UnitType::Spearman,
-    stance_bonus: None,
-    arrival_bps: 10_000,
-    travel_bps: 10_000,
-    food_bps: 10_000,
-    ore_bps: 10_000,
-    upkeep_bps: 10_000,
-    wall_cost_bps: 10_000,
-    settler_cost_bps: 10_000,
-    grant_mult: 1,
-    science_bps: 10_000,
-    knowledge_bps: 10_000,
-};
+impl Doctrine {
+    pub const fn kernel(k: KernelDoctrine) -> Doctrine {
+        Doctrine {
+            k,
+            food_bps: BPS_ONE,
+            ore_bps: BPS_ONE,
+            settler_cost_bps: BPS_ONE,
+            grant_mult: 1,
+            science_bps: BPS_ONE,
+            knowledge_bps: BPS_ONE,
+        }
+    }
+    pub const fn name(&self) -> &'static str {
+        self.k.name
+    }
+}
 
-/// Draft set, design §4.1 (A–F), as knobs.
-pub const DOCTRINES: [Doctrine; 6] = [
-    Doctrine {
-        name: "A Wardens of Stone",
-        stance_bonus: Some((Stance::Brace, 11_000)),
+pub const NEUTRAL_DOCTRINE: Doctrine = Doctrine::kernel(NEUTRAL);
+
+/// Which doctrine table a run plays.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DoctrineSet {
+    /// The rules-v10 table (`permutation_rules::frontier::doctrine::DOCTRINES`).
+    Kernel,
+    /// The draft table of design §4.1 (with its multipliers on scored facts).
+    Draft,
+    /// The M0 proposal: the draft without those multipliers (M0 §E2).
+    M0,
+}
+
+impl DoctrineSet {
+    pub fn parse(s: &str) -> DoctrineSet {
+        match s {
+            "kernel" => DoctrineSet::Kernel,
+            "draft" => DoctrineSet::Draft,
+            "m0" => DoctrineSet::M0,
+            x => panic!("doctrine set {x}: kernel, draft or m0"),
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            DoctrineSet::Kernel => "rules-v10 kernel table",
+            DoctrineSet::Draft => "draft table of design §4.1",
+            DoctrineSet::M0 => "M0 proposal (draft minus multipliers on scored facts)",
+        }
+    }
+}
+
+const fn kd(name: &'static str) -> KernelDoctrine {
+    KernelDoctrine { name, ..NEUTRAL }
+}
+
+/// Draft set, design §4.1 (A–F), as knobs (M0's `DOCTRINES`).
+pub const DRAFT_DOCTRINES: [Doctrine; 6] = [
+    Doctrine::kernel(KernelDoctrine {
+        drill: Some((Stance::Brace, 11_000)),
         wall_cost_bps: 9_000,
-        ..NEUTRAL_DOCTRINE
-    },
-    Doctrine {
-        name: "B Tide",
+        ..kd("A Wardens of Stone")
+    }),
+    Doctrine::kernel(KernelDoctrine {
         unit: UnitType::Horseman,
         travel_bps: 8_000,
-        ..NEUTRAL_DOCTRINE
-    },
-    Doctrine {
-        name: "C Ember",
-        stance_bonus: Some((Stance::Assault, 11_000)),
+        ..kd("B Tide")
+    }),
+    Doctrine::kernel(KernelDoctrine {
+        drill: Some((Stance::Assault, 11_000)),
         arrival_bps: 11_000,
-        ..NEUTRAL_DOCTRINE
-    },
+        ..kd("C Ember")
+    }),
     Doctrine {
-        name: "D Verdant",
-        stance_bonus: Some((Stance::Flank, 11_000)),
         food_bps: 11_000,
         settler_cost_bps: 8_000,
         grant_mult: 2,
-        ..NEUTRAL_DOCTRINE
+        ..Doctrine::kernel(KernelDoctrine {
+            drill: Some((Stance::Flank, 11_000)),
+            ..kd("D Verdant")
+        })
     },
     Doctrine {
-        name: "E Lumen",
-        travel_bps: 7_500,
         science_bps: 12_000,
         knowledge_bps: 12_000,
-        ..NEUTRAL_DOCTRINE
+        ..Doctrine::kernel(KernelDoctrine {
+            travel_bps: 7_500,
+            ..kd("E Lumen")
+        })
     },
     Doctrine {
-        name: "F Iron",
-        unit: UnitType::Knight,
         ore_bps: 11_000,
-        upkeep_bps: 9_000,
-        ..NEUTRAL_DOCTRINE
+        ..Doctrine::kernel(KernelDoctrine {
+            unit: UnitType::Knight,
+            upkeep_bps: 9_000,
+            keeps_walls_on_capture: true,
+            ..kd("F Iron")
+        })
     },
 ];
 
-/// Tuned proposal: the draft set without direct multipliers on scored
-/// facts or on growth (Verdant's food, cheaper settlers and doubled
-/// Frontier Grant; Lumen's science and Knowledge weight; Iron's ore).
-/// Unit variants, stance bonuses, travel, walls and upkeep stay.
-pub const DOCTRINES_TUNED: [Doctrine; 6] = [
-    DOCTRINES[0],
-    DOCTRINES[1],
-    DOCTRINES[2],
-    Doctrine {
-        food_bps: 10_000,
-        settler_cost_bps: 10_000,
-        grant_mult: 1,
-        ..DOCTRINES[3]
-    },
-    Doctrine {
-        science_bps: 10_000,
-        knowledge_bps: 10_000,
-        ..DOCTRINES[4]
-    },
-    Doctrine {
-        ore_bps: 10_000,
-        ..DOCTRINES[5]
-    },
+/// The M0 proposal (M0's `DOCTRINES_TUNED`): the draft set without direct
+/// multipliers on scored facts or on growth.
+pub const M0_DOCTRINES: [Doctrine; 6] = [
+    DRAFT_DOCTRINES[0],
+    DRAFT_DOCTRINES[1],
+    DRAFT_DOCTRINES[2],
+    Doctrine::kernel(DRAFT_DOCTRINES[3].k),
+    Doctrine::kernel(DRAFT_DOCTRINES[4].k),
+    Doctrine::kernel(DRAFT_DOCTRINES[5].k),
 ];
 
-pub fn doctrine_set(tuned: bool) -> &'static [Doctrine; 6] {
-    if tuned {
-        &DOCTRINES_TUNED
-    } else {
-        &DOCTRINES
+/// The table a run plays, with `tweaks` applied (`frontier-sim --dx`).
+pub fn doctrine_table(set: DoctrineSet, tweaks: &str) -> [Doctrine; 6] {
+    let mut t = match set {
+        DoctrineSet::Kernel => KERNEL_DOCTRINES.map(Doctrine::kernel),
+        DoctrineSet::Draft => DRAFT_DOCTRINES,
+        DoctrineSet::M0 => M0_DOCTRINES,
+    };
+    apply_tweaks(&mut t, tweaks);
+    t
+}
+
+/// Tuning overrides: `"C.arrival=10500,D.drill=10500,F.unit=pikeman"`.
+/// Keys: drill (bps of the existing drill), stance (hold/assault/flank/
+/// brace/none), arrival, travel, upkeep, walls, attrition, supply,
+/// keepwalls (0/1), unit (spearman/archer/horseman/pikeman/crossbowman/
+/// knight).
+pub fn apply_tweaks(t: &mut [Doctrine; 6], tweaks: &str) {
+    for tw in tweaks.split(',').map(str::trim).filter(|x| !x.is_empty()) {
+        let (lhs, v) = tw.split_once('=').expect("tweak: X.key=value");
+        let (d, key) = lhs.split_once('.').expect("tweak: X.key=value");
+        let i = (d.as_bytes()[0].to_ascii_uppercase() - b'A') as usize;
+        assert!(i < 6, "tweak doctrine {d}");
+        let k = &mut t[i].k;
+        let num = || v.parse::<u32>().expect("tweak value");
+        match key {
+            "drill" => {
+                let (s, _) = k.drill.expect("tweak drill: doctrine has no drill");
+                k.drill = Some((s, num()));
+            }
+            "stance" => {
+                let bps = k.drill.map_or(11_000, |x| x.1);
+                k.drill = match v {
+                    "none" => None,
+                    "assault" => Some((Stance::Assault, bps)),
+                    "flank" => Some((Stance::Flank, bps)),
+                    "brace" => Some((Stance::Brace, bps)),
+                    x => panic!("stance {x}"),
+                };
+            }
+            "arrival" => k.arrival_bps = num(),
+            "travel" => k.travel_bps = num(),
+            "upkeep" => k.upkeep_bps = num(),
+            "walls" => k.wall_cost_bps = num(),
+            "attrition" => k.attrition_bps = num(),
+            "supply" => k.supply_range_bonus = num() as u8,
+            "keepwalls" => k.keeps_walls_on_capture = num() != 0,
+            "unit" => {
+                k.unit = match v {
+                    "spearman" => UnitType::Spearman,
+                    "archer" => UnitType::Archer,
+                    "horseman" => UnitType::Horseman,
+                    "pikeman" => UnitType::Pikeman,
+                    "crossbowman" => UnitType::Crossbowman,
+                    "knight" => UnitType::Knight,
+                    x => panic!("unit {x}"),
+                }
+            }
+            x => panic!("tweak key {x}"),
+        }
     }
 }

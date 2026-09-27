@@ -10,6 +10,7 @@
 pub const RULES_VERSION_FRONTIER: u16 = 10;
 
 pub mod clash;
+pub mod doctrine;
 pub mod geometry;
 pub mod holding;
 pub mod host;

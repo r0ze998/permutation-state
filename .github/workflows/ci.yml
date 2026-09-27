@@ -109,6 +109,33 @@ jobs:
         env:
           RELEASE_CHECK: ${{ (startsWith(github.ref, 'refs/tags/') || startsWith(github.ref, 'refs/heads/release/')) && '1' || '' }}
 
+  frontier-sim:
+    name: Frontier simulator (conservation, replay, doctrine balance gate)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: frontier-sim
+    steps:
+      - uses: actions/checkout@v7
+      - name: Rust toolchain (rust-toolchain.toml pins 1.89.0)
+        run: rustup toolchain install 1.89.0 --profile minimal --component rustfmt,clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            frontier-sim/target
+          key: frontier-sim-${{ hashFiles('frontier-sim/Cargo.lock', 'rust-toolchain.toml') }}
+      - name: Format and lints
+        run: |
+          cargo fmt -- --check
+          cargo clippy --locked --release --all-targets -- -D warnings
+      # Includes `balance::tests::doctrine_balance_gate` (the rules-v10
+      # doctrine table on a reduced paired harness) and its negative
+      # control `doctrine_balance_gate_rejects_the_draft` (design §4.1, O5).
+      - name: Simulator tests
+        run: cargo test --locked --release
+
   gateway:
     name: Gateway and web client tests
     runs-on: ubuntu-24.04
