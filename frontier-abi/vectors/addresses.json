@@ -1,0 +1,428 @@
+{
+  "generator": "frontier-abi abi-vectors",
+  "abi_version": 1,
+  "contract": "docs/frontier/m1/M1-CONTRACT.md v1.1",
+  "content": "full with-seed addresses (§4.1) for a fixed season PDA and program id",
+  "season_pda": {
+    "hex": "8db97aff8091890a32a3e24f077828f0524400ab35b705c71fdea3d0c49ae27a",
+    "b58": "AYEXTvVjti5wcjDzGV5U9tpW8SfeTsyGf1NJUDp14RWq"
+  },
+  "program_id": {
+    "hex": "fddd3b283f84ab07f18170fe075e8cf0709cbb1a4b5eb73af4244e989f2d2877",
+    "b58": "J5yoiT3bVuC7pLFPJeS2yqLTouT5BHxBivvpqkG2jvAz"
+  },
+  "accounts": [
+    {
+      "kind": "Frontier",
+      "key": null,
+      "seed": "fr",
+      "address_hex": "aa55a1584c1a779a9e86ea878e5294f6ba56d1351c7a532a943fd9570f48c992",
+      "address": "CTv3M5ETrQBWdaNf4YG42vqirAa25ZfQnAX9jMur7DLM"
+    },
+    {
+      "kind": "DefencePool",
+      "key": null,
+      "seed": "dp",
+      "address_hex": "09ef7d2354ddb069e7bcf41867af0c6f7aaf3566485c420f29ec4024ca1f82ad",
+      "address": "fnUWuRskk7iW9agqQvQG2PML72qgHAD3833FXWkiCwn"
+    },
+    {
+      "kind": "RingSeed",
+      "key": {
+        "d": 0
+      },
+      "seed": "rs0000",
+      "address_hex": "15e80e9600eba13aaec4997c9ff30c160a8fcce648032641b585185c4a464ade",
+      "address": "2UWo45gxVxCRyVcVMEN4C6TbmXy1Ajai9MT1rck46Hss"
+    },
+    {
+      "kind": "RingSeed",
+      "key": {
+        "d": 3
+      },
+      "seed": "rs0300",
+      "address_hex": "5ade8f62a5414a3c9b9c1427f97e72690be71453586a151dc02b947cff67fd05",
+      "address": "77iXWjBhZD2H5tseBTZDFBKxzZmnM6KX1UKRwhjK9ePv"
+    },
+    {
+      "kind": "RingSeed",
+      "key": {
+        "d": 65535
+      },
+      "seed": "rsffff",
+      "address_hex": "fc10d4a53a8e870f3a20d51167cccf4e98aaf331cb7b2940ff029aade88695b6",
+      "address": "HxxdFKCbF4VT4UBGqXk9A4xkoy73GYvbt3Bso9MtXwk1"
+    },
+    {
+      "kind": "ProvinceFund",
+      "key": {
+        "w": 0
+      },
+      "seed": "pf00",
+      "address_hex": "9b6fe08c7e084c8b528c46fef24e53cbbf2dd5dd1035009325f5145ffddab85c",
+      "address": "BTm8znKoFzA6szRzuWrNWTMGoMsuouP753PVFwJN7CLb"
+    },
+    {
+      "kind": "ProvinceFund",
+      "key": {
+        "w": 5
+      },
+      "seed": "pf05",
+      "address_hex": "b4103f4de00b85234c24b76360cfe23dfddca36f32b9db0ec7f046f7bbac1bb3",
+      "address": "D7tkn4nFArrHuigdZ3Bwt95hYufbrDdRZ22gZamWeay8"
+    },
+    {
+      "kind": "JoinShard",
+      "key": {
+        "faction": 0,
+        "shard": 0
+      },
+      "seed": "js0000",
+      "address_hex": "c3b0d5a5ee71a53e79f3cc403fa082d4bc4b36bc7c637e5fc82c648d997f07e8",
+      "address": "EAttsvT5QWyeRQ4qQ6Mqy48c8mtXPY4u1CHGcEU2Sgfy"
+    },
+    {
+      "kind": "JoinShard",
+      "key": {
+        "faction": 5,
+        "shard": 7
+      },
+      "seed": "js0507",
+      "address_hex": "455aeba1b59631d726392b956784d04f176908f516e21a15b294ffc434ba98f4",
+      "address": "5fjYR5Wg3qHQb2iLqWdwRubXu1CRWqLcv15SWybTY9oq"
+    },
+    {
+      "kind": "BeaconLog",
+      "key": {
+        "region": 0
+      },
+      "seed": "bl00",
+      "address_hex": "5a13de7582eb2c73966db9f9751f9edcad78b5c471c925fcff3552d98b5b6966",
+      "address": "74dGNYgr5981Ta4EZ7ujAGwTyYdYJeF4WH45ZpAR2sBK"
+    },
+    {
+      "kind": "BeaconLog",
+      "key": {
+        "region": 15
+      },
+      "seed": "bl0f",
+      "address_hex": "1f7608da95a2e1afa6477223de9b64ac3643130786d5ce7f1c34aad3478cd6a2",
+      "address": "37p2gcR4hPJv1c9cUk8tZMG1Bqm2x1hkqE9x8J69M5Gm"
+    },
+    {
+      "kind": "Citizen",
+      "key": {
+        "wallet": "BUXmKobhj6xztuQkFKXhzBKTFSyo8EMDTfF4C2acu3Nz",
+        "tag15": "c2cdfa70a11655312799dcf9aac09a"
+      },
+      "seed": "ctc2cdfa70a11655312799dcf9aac09a",
+      "address_hex": "3d64a5fb9fd9c00ac6a77407d58fc1f47a5f235ce598882d21a55efd3d2690eb",
+      "address": "58etF5335bpBzK5RUVhg2Mm1iinaMUqsnuddCapVS2m8"
+    },
+    {
+      "kind": "Province",
+      "key": {
+        "p": 0,
+        "q": 0
+      },
+      "seed": "pv0000000000000000",
+      "address_hex": "dd6837f3046459306b4b3e9c0c8cfbdc47ddf5e8285a890eafb90b243816b611",
+      "address": "FuHGp6bqtjx9T1FCGn3dCVC7iVtfUGab4KPMnksUuaPa"
+    },
+    {
+      "kind": "Holding",
+      "key": {
+        "p": 0,
+        "q": 0,
+        "site": 11
+      },
+      "seed": "ho00000000000000000b",
+      "address_hex": "45ed8999bd276623a7655ebc8a2b39a7009789d9af1ac392818589a328e5546e",
+      "address": "5hyDDBJuHmsSw7ZQEFT9EbQS1ebyhaJuHeNAxuqECT8h"
+    },
+    {
+      "kind": "Province",
+      "key": {
+        "p": 2,
+        "q": -1
+      },
+      "seed": "pv02000000ffffffff",
+      "address_hex": "de1f278a0bfdb92af086b593d504569e0cc05539765d0587f115614dee872f4b",
+      "address": "Fx54bm12zuLZsBkNsFSWzUYrF3Vz2rufdiKPbvdEgktA"
+    },
+    {
+      "kind": "Holding",
+      "key": {
+        "p": 2,
+        "q": -1,
+        "site": 11
+      },
+      "seed": "ho02000000ffffffff0b",
+      "address_hex": "562e660b77ad992cf02dfd8cddde56c3f59114f849d568cab9da4239b8c5397b",
+      "address": "6oR6du7oTLijYTDVUoRSRwYuLVrizx2V3tw7yB2PXJuY"
+    },
+    {
+      "kind": "Province",
+      "key": {
+        "p": -128,
+        "q": 64
+      },
+      "seed": "pv80ffffff40000000",
+      "address_hex": "8d2e8c97eb63f0989c682dd2339d6cf1fcff9ffdcb3c5eb16d2bf3fae831bfe6",
+      "address": "AW7ev8vYE9zQKX1NeezmXWGm46R5G5XrS6BYLyBLzUQD"
+    },
+    {
+      "kind": "Holding",
+      "key": {
+        "p": -128,
+        "q": 64,
+        "site": 11
+      },
+      "seed": "ho80ffffff400000000b",
+      "address_hex": "ac64e615b20e204409804af2d963362f06288610b3eb29b0b4a1c6134f23f6f5",
+      "address": "CbxMr1jUSgqQsMG1WneSgT593n3eX6nhc7Zo3Y3LcPn4"
+    },
+    {
+      "kind": "Province",
+      "key": {
+        "p": -2147483648,
+        "q": 2147483647
+      },
+      "seed": "pv00000080ffffff7f",
+      "address_hex": "2800ee36a41339bc26571e1da2c19ac79c678c7ba2db0d20059a50e558e6bc5e",
+      "address": "3hA8bEx4PVeSjn2NYGPsKXjgMtjtqiCo9JB5bGRgSYJH"
+    },
+    {
+      "kind": "Holding",
+      "key": {
+        "p": -2147483648,
+        "q": 2147483647,
+        "site": 11
+      },
+      "seed": "ho00000080ffffff7f0b",
+      "address_hex": "4ed94db9042626b781ee20362cc52209879c25092cf3a5ae655c9a4f21e132dc",
+      "address": "6Jnz7z4iKg1xKKPAPeKxuqwTwKyKKXMKX3KcyTyo9EQs"
+    },
+    {
+      "kind": "ArrivalSlot",
+      "key": {
+        "p": 2,
+        "q": -1,
+        "bell": 0,
+        "faction": 5,
+        "i": 3
+      },
+      "seed": "ar02000000ffffffff000000000503",
+      "address_hex": "e9d8b9af9ed92d94134ebf5b711a4dd5d2ffe8a496f52cb26a0113819c66e0b7",
+      "address": "GjqffKg5Waz4FrJ3M1Kp5WGQBW5veSiEsFndepkrMVsc"
+    },
+    {
+      "kind": "ArrivalDay",
+      "key": {
+        "p": 2,
+        "q": -1,
+        "day": 0
+      },
+      "seed": "ad02000000ffffffff00000000",
+      "address_hex": "811d1f588f98d08fa683bf79a72955a75f087136d547df173237fd28d1576c1f",
+      "address": "9h1MFChcFoNxNLktXLJrDeYe4bDtvwxovKutfaMduK34"
+    },
+    {
+      "kind": "ClashInputs",
+      "key": {
+        "p": 2,
+        "q": -1,
+        "bell": 0
+      },
+      "seed": "ci02000000ffffffff00000000",
+      "address_hex": "0d8f6ac8c21f34481f1f7d2c639785cc3f4cf2d5ab5a9755033b69f0116844c3",
+      "address": "uw94GqjB9PuBJF2ZHPUuz6MYXEqnPEpE7zut5cStHCW"
+    },
+    {
+      "kind": "PosturePDA (reserved, M3)",
+      "key": {
+        "p": 2,
+        "q": -1,
+        "bell": 0,
+        "pos": 59
+      },
+      "seed": "po02000000ffffffff000000003b",
+      "address_hex": "665072196ff868be3cd1405f294dbbd29f90c9a9af190e4693caa3bb735ada36",
+      "address": "7tPjSdbNKejfEdrNLrBU12DmZW9JyFFRgQR51BLhx2CV"
+    },
+    {
+      "kind": "ArrivalSlot",
+      "key": {
+        "p": -2147483648,
+        "q": 2147483647,
+        "bell": 4294967295,
+        "faction": 5,
+        "i": 3
+      },
+      "seed": "ar00000080ffffff7fffffffff0503",
+      "address_hex": "798de42d55b13d4f09b65a9bd06d11813967e00d33191e74d6dbbdd7a959f250",
+      "address": "9BVpcGaWjcYxinaNsthuQC4ijpnVzpUzjthgk3o9iU4o"
+    },
+    {
+      "kind": "ArrivalDay",
+      "key": {
+        "p": -2147483648,
+        "q": 2147483647,
+        "day": 4294967295
+      },
+      "seed": "ad00000080ffffff7fffffffff",
+      "address_hex": "9672db885854bc5a0a7254f4fbbab316bfa7b718d378e66e67ebd4ded9e9f47f",
+      "address": "B8HjeRdQZ6jFhGuSs5QFGuui24yody4uTVZto6whNkp6"
+    },
+    {
+      "kind": "ClashInputs",
+      "key": {
+        "p": -2147483648,
+        "q": 2147483647,
+        "bell": 4294967295
+      },
+      "seed": "ci00000080ffffff7fffffffff",
+      "address_hex": "c6a5bc011ba3889901cb6d28be2d3f667d227a77806470f9f60b205a2be93887",
+      "address": "ENSJRroxeM73nWo7yVcEduSpFRBemGQ3ETbMij2Kjqin"
+    },
+    {
+      "kind": "PosturePDA (reserved, M3)",
+      "key": {
+        "p": -2147483648,
+        "q": 2147483647,
+        "bell": 4294967295,
+        "pos": 59
+      },
+      "seed": "po00000080ffffff7fffffffff3b",
+      "address_hex": "de05e1a23657e10732b84368f6e9cadf0a64151dd45608bec2946ee965e872f1",
+      "address": "FwgiCsk2YKo584s6dVGuoBN9TG2Vn8KNwnarKcPfVzWU"
+    },
+    {
+      "kind": "BellAnchor",
+      "key": {
+        "bell": 0,
+        "region": 0
+      },
+      "seed": "an0000000000",
+      "address_hex": "2fbf9d6b89288680c024bc89acef6066e6cdb57a3a1056fae6614318d87f8f77",
+      "address": "4DPdNErxcBBnoar8XCwBwVXSseQshHDULEJ3Ea8oV4xv"
+    },
+    {
+      "kind": "SeedCache",
+      "key": {
+        "bell": 0,
+        "region": 0,
+        "nonce": 255
+      },
+      "seed": "sd0000000000ff",
+      "address_hex": "fe557a1141f5ace655b95b74d44c6f01ed8c951675cc8d10bf3e27b09f2f58c2",
+      "address": "J7p9nCzd4SB2nSYhXg7q5JaovoNPsjhiHg6NUqQ7AU2M"
+    },
+    {
+      "kind": "AnchorArchive",
+      "key": {
+        "region": 0,
+        "day": 0
+      },
+      "seed": "aa0000000000",
+      "address_hex": "ae2a4e0eb2c15b4c456284b46020a3eaa45d0e465f1fba92a87df3dc54a59400",
+      "address": "CisMY9zYRsUYnyYQ7m6qkrkF1Y67s4CXQjTgSawXBEw1"
+    },
+    {
+      "kind": "BellAnchor",
+      "key": {
+        "bell": 4294967295,
+        "region": 15
+      },
+      "seed": "anffffffff0f",
+      "address_hex": "a4ec9d3620a8240758541827a09be9853007a2c6fb59bced1fae1b4d9296c8ec",
+      "address": "C6o8G11vCTX2n5J2PjtAMe3WijWkhCEDggbEhRd6W5EK"
+    },
+    {
+      "kind": "SeedCache",
+      "key": {
+        "bell": 4294967295,
+        "region": 15,
+        "nonce": 255
+      },
+      "seed": "sdffffffff0fff",
+      "address_hex": "b686175c565e1297f26dcbe77a6d6487d2b98be23b062ab7e2e787467f94584f",
+      "address": "DHVnwD4WATFq5DWuVtPkQxtee47XVy62fQpt1kshnNSi"
+    },
+    {
+      "kind": "AnchorArchive",
+      "key": {
+        "region": 15,
+        "day": 4294967295
+      },
+      "seed": "aa0fffffffff",
+      "address_hex": "7c2ce862558015ac2fa19064a6d86bb5f2d3295d54910dcd03d7ed1f846b1b86",
+      "address": "9MjGjCTbBViteFBz3Q99oJHNn3iGSw2Uap6HmVpE6hTB"
+    },
+    {
+      "kind": "SealVerdict (reserved, removed v1.1)",
+      "key": {
+        "host_id": "18446744073709551615",
+        "arrive_bell": 7
+      },
+      "seed": "svffffffffffffffff07000000",
+      "address_hex": "4e0030c7b8b97e6b00d7a9398eb0ecf6318cbed7f32a1eb9804a893e8dcb9ca5",
+      "address": "6FUyCY6swZZJJ8cHB4CG56GFv1tJEQhf3UoPDYSMi4Pv"
+    },
+    {
+      "kind": "DefenceClaim",
+      "key": {
+        "beneficiary": "5qbqYYKPhLYCP2o85Lz21fxFHGWNXwZuaa1axy57R8P1",
+        "keeper_tag8": "8d89b58eae7c1053",
+        "day": 6
+      },
+      "seed": "dc8d89b58eae7c105306000000",
+      "address_hex": "6c9fe06b5e693d55ab180911082238d3513ff45ecbe49434b9791bc8fbde45d1",
+      "address": "8K2Rmf1zmYsytj5rWch5JB8Dr3W3WSV1QvJZLHuP4Atg"
+    }
+  ],
+  "host_ids": [
+    {
+      "p": 0,
+      "q": 0,
+      "site": 0,
+      "gen": 0,
+      "seq": 0,
+      "host_id": "0",
+      "holding_address": "J4pkvrXXXMjS6dXNpZFtfAVm2qm3YvkY9QNjZh4MgKd1"
+    },
+    {
+      "p": 2,
+      "q": -1,
+      "site": 3,
+      "gen": 1,
+      "seq": 42,
+      "host_id": "319962178650154",
+      "holding_address": "8YZKVDY91efz38oNGRPGbtZjMSR1RyLFRth5QNm1D44Z"
+    },
+    {
+      "p": 128,
+      "q": 0,
+      "site": 11,
+      "gen": 255,
+      "seq": 4294967295,
+      "host_id": "857966515339657215",
+      "holding_address": "H1j4iWRTMSyCv9rmYrv5pS6MCDiatNKwzRwbhMYUGyFt"
+    },
+    {
+      "p": -64,
+      "q": -64,
+      "site": 5,
+      "gen": 7,
+      "seq": 12345,
+      "host_id": "865840148170944569",
+      "holding_address": "AMi3cPtZJVjTmcRXmrP1wyov8VH23DdFAAwPfYrkN4mn"
+    }
+  ],
+  "tags": {
+    "wallet": "BUXmKobhj6xztuQkFKXhzBKTFSyo8EMDTfF4C2acu3Nz",
+    "citizen_address": "58etF5335bpBzK5RUVhg2Mm1iinaMUqsnuddCapVS2m8",
+    "citizen_tag_u64": "774858417052673085",
+    "join_shard": 3
+  }
+}

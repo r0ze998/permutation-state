@@ -1,0 +1,2197 @@
+{
+  "generator": "frontier-abi abi-vectors",
+  "abi_version": 1,
+  "contract": "docs/frontier/m1/M1-CONTRACT.md v1.1",
+  "content": "PS2 log records (§6): kinds, field widths, one encoded vector per kind with its chain heads",
+  "prefix": "PS2",
+  "version": 1,
+  "tail_order": "ascending entity_kind; entities of one kind in instruction account order",
+  "entity_kinds": [
+    {
+      "code": 1,
+      "account": "Season"
+    },
+    {
+      "code": 2,
+      "account": "Frontier"
+    },
+    {
+      "code": 3,
+      "account": "JoinShard"
+    },
+    {
+      "code": 4,
+      "account": "Citizen"
+    },
+    {
+      "code": 5,
+      "account": "Holding"
+    },
+    {
+      "code": 6,
+      "account": "Province"
+    },
+    {
+      "code": 7,
+      "account": "ClashInputs"
+    }
+  ],
+  "kinds": [
+    {
+      "kind": 1,
+      "name": "ANNOUNCE",
+      "key": [
+        {
+          "name": "season_id",
+          "len": 8
+        }
+      ],
+      "payload": [
+        {
+          "name": "params_hash",
+          "len": 32
+        },
+        {
+          "name": "t_create_min",
+          "len": 8
+        },
+        {
+          "name": "bond",
+          "len": 8
+        }
+      ],
+      "body_without_tail_len": 62,
+      "vector": {
+        "bell": 1001,
+        "body_without_tail": "0101e903000011304f6e8daccbea5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b5a7998b7d6f514335a7998b7d6f51433",
+        "body": "0101e903000011304f6e8daccbea5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b5a7998b7d6f514335a7998b7d6f51433010106000000000000008cec895968a33c73a5247b1ef07ffeaca75ac58001f23ed410d5e5ac58edba55",
+        "decodes": true,
+        "chains": [
+          {
+            "entity": 1,
+            "who": "Season",
+            "prev_seq": 5,
+            "prev_head": "69147a1bcc71ff2f0d00b7b5a73914e7d5901a1220b9046d49d733ba8f70be3f",
+            "seq": 6,
+            "head": "8cec895968a33c73a5247b1ef07ffeaca75ac58001f23ed410d5e5ac58edba55"
+          }
+        ]
+      }
+    },
+    {
+      "kind": 2,
+      "name": "SEASON_CREATED",
+      "key": [
+        {
+          "name": "season_id",
+          "len": 8
+        }
+      ],
+      "payload": [
+        {
+          "name": "params_hash",
+          "len": 32
+        },
+        {
+          "name": "genesis_round",
+          "len": 8
+        },
+        {
+          "name": "genesis_ts",
+          "len": 8
+        },
+        {
+          "name": "ruleset_hash",
+          "len": 32
+        },
+        {
+          "name": "quicknet_pk_hash",
+          "len": 32
+        },
+        {
+          "name": "reveal_window",
+          "len": 4
+        },
+        {
+          "name": "seed_margin",
+          "len": 4
+        },
+        {
+          "name": "r_max",
+          "len": 2
+        },
+        {
+          "name": "program_version",
+          "len": 2
+        }
+      ],
+      "body_without_tail_len": 138,
+      "vector": {
+        "bell": 1002,
+        "body_without_tail": "0102ea03000011304f6e8daccbea5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b5a7998b7d6f514335a7998b7d6f514335a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b5a7998b75a7998b75a795a79",
+        "body": "0102ea03000011304f6e8daccbea5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b5a7998b7d6f514335a7998b7d6f514335a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b5a7998b75a7998b75a795a7901010600000000000000a4e340a35f863a06712876075794d8ff0249c54e3c78a43a501871676f94fe44",
+        "decodes": true,
+        "chains": [
+          {
+            "entity": 1,
+            "who": "Season",
+            "prev_seq": 5,
+            "prev_head": "ef38c8c1092b08f6ed897ee74881f39ff73cc7c55b7a2c6902981526ca96f4bd",
+            "seq": 6,
+            "head": "a4e340a35f863a06712876075794d8ff0249c54e3c78a43a501871676f94fe44"
+          }
+        ]
+      }
+    },
+    {
+      "kind": 3,
+      "name": "GENESIS_SEED",
+      "key": [
+        {
+          "name": "season_id",
+          "len": 8
+        }
+      ],
+      "payload": [
+        {
+          "name": "round",
+          "len": 8
+        },
+        {
+          "name": "seed",
+          "len": 32
+        }
+      ],
+      "body_without_tail_len": 54,
+      "vector": {
+        "bell": 1003,
+        "body_without_tail": "0103eb03000011304f6e8daccbea5a7998b7d6f514335a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b",
+        "body": "0103eb03000011304f6e8daccbea5a7998b7d6f514335a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b01010600000000000000b93c26c6a5ef3a1c4417654ae983d0523a4d56ffaf316b4b0095d502628ba692",
+        "decodes": true,
+        "chains": [
+          {
+            "entity": 1,
+            "who": "Season",
+            "prev_seq": 5,
+            "prev_head": "c85518d1dc125f431a1e4f666d56f1b7bcb0515a9c16c704f88a2356381d2bf2",
+            "seq": 6,
+            "head": "b93c26c6a5ef3a1c4417654ae983d0523a4d56ffaf316b4b0095d502628ba692"
+          }
+        ]
+      }
+    },
+    {
+      "kind": 4,
+      "name": "RING_OPEN",
+      "key": [
+        {
+          "name": "d",
+          "len": 2
+        }
+      ],
+      "payload": [
+        {
+          "name": "t_open",
+          "len": 8
+        },
+        {
+          "name": "round",
+          "len": 8
+        },
+        {
+          "name": "seed",
+          "len": 32
+        }
+      ],
+      "body_without_tail_len": 56,
+      "vector": {
+        "bell": 1004,
+        "body_without_tail": "0104ec03000011305a7998b7d6f514335a7998b7d6f514335a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b",
+        "body": "0104ec03000011305a7998b7d6f514335a7998b7d6f514335a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b01020600000000000000be3d5ce00f6e862ada06073ddcbb09193f5c2cf71742284f50679aa8f45b7e61",
+        "decodes": true,
+        "chains": [
+          {
+            "entity": 2,
+            "who": "Frontier",
+            "prev_seq": 5,
+            "prev_head": "4aec3dbd99d4a9d7d5ab4c1adf6803d2b35a6608754b57632b1a428bf2f62015",
+            "seq": 6,
+            "head": "be3d5ce00f6e862ada06073ddcbb09193f5c2cf71742284f50679aa8f45b7e61"
+          }
+        ]
+      }
+    },
+    {
+      "kind": 5,
+      "name": "RING_SEED",
+      "key": [
+        {
+          "name": "d",
+          "len": 2
+        }
+      ],
+      "payload": [
+        {
+          "name": "round",
+          "len": 8
+        },
+        {
+          "name": "seed",
+          "len": 32
+        }
+      ],
+      "body_without_tail_len": 48,
+      "vector": {
+        "bell": 1005,
+        "body_without_tail": "0105ed03000011305a7998b7d6f514335a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b",
+        "body": "0105ed03000011305a7998b7d6f514335a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b00",
+        "decodes": true,
+        "chains": []
+      }
+    },
+    {
+      "kind": 6,
+      "name": "PROVINCE_OPEN",
+      "key": [
+        {
+          "name": "p",
+          "len": 4
+        },
+        {
+          "name": "q",
+          "len": 4
+        }
+      ],
+      "payload": [
+        {
+          "name": "ring",
+          "len": 2
+        },
+        {
+          "name": "wedge",
+          "len": 1
+        },
+        {
+          "name": "region",
+          "len": 1
+        },
+        {
+          "name": "terrain_digest",
+          "len": 32
+        },
+        {
+          "name": "site_count",
+          "len": 1
+        },
+        {
+          "name": "camp_tile",
+          "len": 1
+        },
+        {
+          "name": "camp_troops",
+          "len": 4
+        },
+        {
+          "name": "reserved",
+          "len": 1
+        }
+      ],
+      "body_without_tail_len": 57,
+      "vector": {
+        "bell": 1006,
+        "body_without_tail": "0106ee03000002000000ffffffff5a795a5a5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b5a5a5a7998b75a",
+        "body": "0106ee03000002000000ffffffff5a795a5a5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b5a5a5a7998b75a01060600000000000000f0b9bd9f811a5e9d6774c9bc7e5c2191c20439e683a7a03274c31fc65aa0c362",
+        "decodes": true,
+        "chains": [
+          {
+            "entity": 6,
+            "who": "Province { p: 2, q: -1 }",
+            "prev_seq": 5,
+            "prev_head": "f2fad741256c685b4be9fb11d64f7fdd934899eed6adcd74ff8c2ae33f7564ca",
+            "seq": 6,
+            "head": "f0b9bd9f811a5e9d6774c9bc7e5c2191c20439e683a7a03274c31fc65aa0c362"
+          }
+        ]
+      }
+    },
+    {
+      "kind": 7,
+      "name": "FOLD",
+      "key": [
+        {
+          "name": "part",
+          "len": 1
+        }
+      ],
+      "payload": [
+        {
+          "name": "occupied",
+          "len": 4
+        },
+        {
+          "name": "wedge_occupied",
+          "len": 24
+        },
+        {
+          "name": "open_sites",
+          "len": 4
+        },
+        {
+          "name": "wedge_open",
+          "len": 24
+        },
+        {
+          "name": "provinces_opened",
+          "len": 4
+        }
+      ],
+      "body_without_tail_len": 67,
+      "vector": {
+        "bell": 1007,
+        "body_without_tail": "0107ef030000115a7998b75a7998b7d6f51433527190afceed0c2b4a6988a7c6e504235a7998b75a7998b7d6f51433527190afceed0c2b4a6988a7c6e504235a7998b7",
+        "body": "0107ef030000115a7998b75a7998b7d6f51433527190afceed0c2b4a6988a7c6e504235a7998b75a7998b7d6f51433527190afceed0c2b4a6988a7c6e504235a7998b7010206000000000000004542d3467c5f311c6363c2e1008fcca5966ea818a5b26de5f5947be5ab104829",
+        "decodes": true,
+        "chains": [
+          {
+            "entity": 2,
+            "who": "Frontier",
+            "prev_seq": 5,
+            "prev_head": "43704021c4be91ccae47e7b8f7b72775dcfcfe4985c5ba54f3d41c97e1ed7809",
+            "seq": 6,
+            "head": "4542d3467c5f311c6363c2e1008fcca5966ea818a5b26de5f5947be5ab104829"
+          }
+        ]
+      }
+    },
+    {
+      "kind": 8,
+      "name": "SEASON_STATUS",
+      "key": [
+        {
+          "name": "season_id",
+          "len": 8
+        }
+      ],
+      "payload": [
+        {
+          "name": "old",
+          "len": 1
+        },
+        {
+          "name": "new",
+          "len": 1
+        },
+        {
+          "name": "bond_outcome",
+          "len": 1
+        }
+      ],
+      "body_without_tail_len": 17,
+      "vector": {
+        "bell": 1008,
+        "body_without_tail": "0108f003000011304f6e8daccbea5a5a5a",
+        "body": "0108f003000011304f6e8daccbea5a5a5a01010600000000000000201c9cf7224ea8112c55ac8b75ea4e7ca3b06d4c434e8033845da01f5b9dccf9",
+        "decodes": true,
+        "chains": [
+          {
+            "entity": 1,
+            "who": "Season",
+            "prev_seq": 5,
+            "prev_head": "9dd5ee1d7765cdd0687155731b91eb14fb7da4b332df0c8aff4d2e04823f11ac",
+            "seq": 6,
+            "head": "201c9cf7224ea8112c55ac8b75ea4e7ca3b06d4c434e8033845da01f5b9dccf9"
+          }
+        ]
+      }
+    },
+    {
+      "kind": 9,
+      "name": "WINDOW",
+      "key": [
+        {
+          "name": "season_id",
+          "len": 8
+        }
+      ],
+      "payload": [
+        {
+          "name": "window_next",
+          "len": 4
+        },
+        {
+          "name": "window_from_bell",
+          "len": 4
+        }
+      ],
+      "body_without_tail_len": 22,
+      "vector": {
+        "bell": 1009,
+        "body_without_tail": "0109f103000011304f6e8daccbea5a7998b75a7998b7",
+        "body": "0109f103000011304f6e8daccbea5a7998b75a7998b701010600000000000000a0b3055735ff2314b48ab79f7cbad1d659aa687fb4039366d6a774ef2346e033",
+        "decodes": true,
+        "chains": [
+          {
+            "entity": 1,
+            "who": "Season",
+            "prev_seq": 5,
+            "prev_head": "f349d7580a387206c89eb133190c73d6c7ac9f9aa69275813bb44d2c14b4b5f4",
+            "seq": 6,
+            "head": "a0b3055735ff2314b48ab79f7cbad1d659aa687fb4039366d6a774ef2346e033"
+          }
+        ]
+      }
+    },
+    {
+      "kind": 10,
+      "name": "JOIN",
+      "key": [
+        {
+          "name": "citizen_tag15",
+          "len": 15
+        }
+      ],
+      "payload": [
+        {
+          "name": "wallet",
+          "len": 32
+        },
+        {
+          "name": "faction",
+          "len": 1
+        },
+        {
+          "name": "shard",
+          "len": 1
+        },
+        {
+          "name": "session",
+          "len": 32
+        },
+        {
+          "name": "expiry",
+          "len": 8
+        }
+      ],
+      "body_without_tail_len": 95,
+      "vector": {
+        "bell": 1010,
+        "body_without_tail": "010af203000011304f6e8daccbea0928476685a4c35a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b04065a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b5a7998b7d6f51433",
+        "body": "010af203000011304f6e8daccbea0928476685a4c35a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b04065a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b5a7998b7d6f5143302030600000000000000cb97bfd2910b8dc1fc6e21847f7036006a8b28164d94b728d107bdb154ee05a00407000000000000002dc8218fe4c0b00cce9f4dd985031c32a4c64fe2125156248c9eab979676228a",
+        "decodes": true,
+        "chains": [
+          {
+            "entity": 3,
+            "who": "JoinShard { faction: 4, shard: 6 }",
+            "prev_seq": 5,
+            "prev_head": "be24a621aff01733eb737db375ba8792f7b77b5d13c342b3aeaa4a5d2317ee5e",
+            "seq": 6,
+            "head": "cb97bfd2910b8dc1fc6e21847f7036006a8b28164d94b728d107bdb154ee05a0"
+          },
+          {
+            "entity": 4,
+            "who": "Citizen(Tag15([17, 48, 79, 110, 141, 172, 203, 234, 9, 40, 71, 102, 133, 164, 195]))",
+            "prev_seq": 6,
+            "prev_head": "26321f973a2ce43d9fcfe43890e725faf773a3cf056510972b82e4d9db03667d",
+            "seq": 7,
+            "head": "2dc8218fe4c0b00cce9f4dd985031c32a4c64fe2125156248c9eab979676228a"
+          }
+        ]
+      }
+    },
+    {
+      "kind": 11,
+      "name": "SESSION",
+      "key": [
+        {
+          "name": "citizen_tag15",
+          "len": 15
+        }
+      ],
+      "payload": [
+        {
+          "name": "session",
+          "len": 32
+        },
+        {
+          "name": "expiry",
+          "len": 8
+        }
+      ],
+      "body_without_tail_len": 61,
+      "vector": {
+        "bell": 1011,
+        "body_without_tail": "010bf303000011304f6e8daccbea0928476685a4c35a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b5a7998b7d6f51433",
+        "body": "010bf303000011304f6e8daccbea0928476685a4c35a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b5a7998b7d6f514330104060000000000000064fec203a74d929aa62bf24026beb4daa507c623f6c2d7b5b0224e646fa2d1aa",
+        "decodes": true,
+        "chains": [
+          {
+            "entity": 4,
+            "who": "Citizen(Tag15([17, 48, 79, 110, 141, 172, 203, 234, 9, 40, 71, 102, 133, 164, 195]))",
+            "prev_seq": 5,
+            "prev_head": "ea3340ab4895c6a8583d5f4ce847d215be244efabcb052ef956726d9dc4df27d",
+            "seq": 6,
+            "head": "64fec203a74d929aa62bf24026beb4daa507c623f6c2d7b5b0224e646fa2d1aa"
+          }
+        ]
+      }
+    },
+    {
+      "kind": 12,
+      "name": "VIGIL",
+      "key": [
+        {
+          "name": "citizen_tag15",
+          "len": 15
+        }
+      ],
+      "payload": [
+        {
+          "name": "start_min",
+          "len": 2
+        },
+        {
+          "name": "from_ts",
+          "len": 8
+        }
+      ],
+      "body_without_tail_len": 31,
+      "vector": {
+        "bell": 1012,
+        "body_without_tail": "010cf403000011304f6e8daccbea0928476685a4c35a795a7998b7d6f51433",
+        "body": "010cf403000011304f6e8daccbea0928476685a4c35a795a7998b7d6f5143301040600000000000000b5ae728d2cd926541d4e4cd0a8f5adec2e42a3925741784d5b133d48158f3e66",
+        "decodes": true,
+        "chains": [
+          {
+            "entity": 4,
+            "who": "Citizen(Tag15([17, 48, 79, 110, 141, 172, 203, 234, 9, 40, 71, 102, 133, 164, 195]))",
+            "prev_seq": 5,
+            "prev_head": "4b885bac659e40bd7e9824e5ce4306e2583bdd46a9c5cdaeff6a1782e8b57542",
+            "seq": 6,
+            "head": "b5ae728d2cd926541d4e4cd0a8f5adec2e42a3925741784d5b133d48158f3e66"
+          }
+        ]
+      }
+    },
+    {
+      "kind": 13,
+      "name": "TICKET",
+      "key": [
+        {
+          "name": "citizen_tag15",
+          "len": 15
+        }
+      ],
+      "payload": [
+        {
+          "name": "ticket_bell",
+          "len": 4
+        },
+        {
+          "name": "n",
+          "len": 1
+        },
+        {
+          "name": "sites",
+          "len": 15
+        },
+        {
+          "name": "escrow",
+          "len": 8
+        },
+        {
+          "name": "funder",
+          "len": 32
+        }
+      ],
+      "body_without_tail_len": 81,
+      "vector": {
+        "bell": 1013,
+        "body_without_tail": "010df503000011304f6e8daccbea0928476685a4c35a7998b7020200ffff030300feff0000000000005a7998b7d6f514335a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b",
+        "body": "010df503000011304f6e8daccbea0928476685a4c35a7998b7020200ffff030300feff0000000000005a7998b7d6f514335a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b03040600000000000000936687c7cb6aaf29024d85e5c2b6b2ba110be402db645b411b6a490ccf83eae9060700000000000000b1c7bfc076e43c5e8fe59e42176eb2536acaccfb3b31fcd9a1b377446208b1330608000000000000005e1f636cf8b6c10d534bcb60b2662509b7f2ade40208e21b0c23ea708ba86f34",
+        "decodes": true,
+        "chains": [
+          {
+            "entity": 4,
+            "who": "Citizen(Tag15([17, 48, 79, 110, 141, 172, 203, 234, 9, 40, 71, 102, 133, 164, 195]))",
+            "prev_seq": 5,
+            "prev_head": "3d8ae1979a621819a7778effecde025e01f2d6fb370488e00c3354fbfa109510",
+            "seq": 6,
+            "head": "936687c7cb6aaf29024d85e5c2b6b2ba110be402db645b411b6a490ccf83eae9"
+          },
+          {
+            "entity": 6,
+            "who": "Province { p: 2, q: -1 }",
+            "prev_seq": 6,
+            "prev_head": "0e408499e7eb238ce7a70946e9f8af23de181bbe6302f4a149a114190426efa1",
+            "seq": 7,
+            "head": "b1c7bfc076e43c5e8fe59e42176eb2536acaccfb3b31fcd9a1b377446208b133"
+          },
+          {
+            "entity": 6,
+            "who": "Province { p: 3, q: -2 }",
+            "prev_seq": 7,
+            "prev_head": "1bdb11a479eca14c334775412b170a4145d809f60e16056056c8b62044bd802d",
+            "seq": 8,
+            "head": "5e1f636cf8b6c10d534bcb60b2662509b7f2ade40208e21b0c23ea708ba86f34"
+          }
+        ]
+      }
+    },
+    {
+      "kind": 14,
+      "name": "SETTLE",
+      "key": [
+        {
+          "name": "p",
+          "len": 4
+        },
+        {
+          "name": "q",
+          "len": 4
+        },
+        {
+          "name": "site",
+          "len": 1
+        }
+      ],
+      "payload": [
+        {
+          "name": "outcome",
+          "len": 1
+        },
+        {
+          "name": "citizen_tag",
+          "len": 8
+        },
+        {
+          "name": "score",
+          "len": 8
+        },
+        {
+          "name": "displaced_tag",
+          "len": 8
+        },
+        {
+          "name": "gen",
+          "len": 1
+        },
+        {
+          "name": "final_ts",
+          "len": 8
+        },
+        {
+          "name": "ticket_bell",
+          "len": 4
+        }
+      ],
+      "body_without_tail_len": 53,
+      "vector": {
+        "bell": 1014,
+        "body_without_tail": "010ef603000002000000ffffffff03015a7998b7d6f514335a7998b7d6f514335a7998b7d6f514335a5a7998b7d6f514335a7998b7",
+        "body": "010ef603000002000000ffffffff03015a7998b7d6f514335a7998b7d6f514335a7998b7d6f514335a5a7998b7d6f514335a7998b706030600000000000000030ae30c84ceee7352a9edb704c655290fb00dad8769648433e06e70f53ebcac030700000000000000294a428eb37ec53c8be65b758ef3ece75600606b307a716ac09f196faec80852040800000000000000e75c2159af75ea4136c54442d4c7f9da7849931eb74241a225556a80669c848e040900000000000000f01d497f11c5582c6fbefe5207ce0a90869347d12ed3d664fed02b1fb1fd532a050a000000000000009eeede72c38de3051a8cd85874467d266a794cf8e1f0720746b0f547b8b86d3b060b00000000000000ef7373c42c7c7f321c3a9b8aabfc96d4798cae1f931074117772a1e7fdf0fd2a",
+        "decodes": true,
+        "chains": [
+          {
+            "entity": 3,
+            "who": "JoinShardOf(Tag8(3680837098020567386))",
+            "prev_seq": 5,
+            "prev_head": "17d22e51f9c0e518bd280b0ff2f18a8c3d1416f62c20888d9dcb17a1e265ea93",
+            "seq": 6,
+            "head": "030ae30c84ceee7352a9edb704c655290fb00dad8769648433e06e70f53ebcac"
+          },
+          {
+            "entity": 3,
+            "who": "JoinShardOf(Tag8(3680837098020567386))",
+            "prev_seq": 6,
+            "prev_head": "071d2654955cd9ee93f5efc5b3d7a6d3e79e1bde28eea69a451987da9b56114e",
+            "seq": 7,
+            "head": "294a428eb37ec53c8be65b758ef3ece75600606b307a716ac09f196faec80852"
+          },
+          {
+            "entity": 4,
+            "who": "Citizen(Tag8(3680837098020567386))",
+            "prev_seq": 7,
+            "prev_head": "039687b21226299bd4f2c7e9eaa53f3c95903e12a583a3a0cb94f93614916b26",
+            "seq": 8,
+            "head": "e75c2159af75ea4136c54442d4c7f9da7849931eb74241a225556a80669c848e"
+          },
+          {
+            "entity": 4,
+            "who": "Citizen(Tag8(3680837098020567386))",
+            "prev_seq": 8,
+            "prev_head": "4d2b6450b35bb94d0470288aa844731e870d814c3963500ee664ab9fe0fdfb36",
+            "seq": 9,
+            "head": "f01d497f11c5582c6fbefe5207ce0a90869347d12ed3d664fed02b1fb1fd532a"
+          },
+          {
+            "entity": 5,
+            "who": "Holding { p: 2, q: -1, site: 3 }",
+            "prev_seq": 9,
+            "prev_head": "2791e399d191aef15bae5162d354df24fe54061ef259c3e82533881039332240",
+            "seq": 10,
+            "head": "9eeede72c38de3051a8cd85874467d266a794cf8e1f0720746b0f547b8b86d3b"
+          },
+          {
+            "entity": 6,
+            "who": "Province { p: 2, q: -1 }",
+            "prev_seq": 10,
+            "prev_head": "8c1866f0a77e92067f98e9e90c5c2f53970a00c32f133bab6592f4f42efe91d0",
+            "seq": 11,
+            "head": "ef7373c42c7c7f321c3a9b8aabfc96d4798cae1f931074117772a1e7fdf0fd2a"
+          },
+          {
+            "entity": 6,
+            "who": "InTx",
+            "optional": true
+          },
+          {
+            "entity": 6,
+            "who": "InTx",
+            "optional": true
+          }
+        ]
+      }
+    },
+    {
+      "kind": 15,
+      "name": "RELEASE",
+      "key": [
+        {
+          "name": "p",
+          "len": 4
+        },
+        {
+          "name": "q",
+          "len": 4
+        },
+        {
+          "name": "site",
+          "len": 1
+        }
+      ],
+      "payload": [
+        {
+          "name": "citizen_tag",
+          "len": 8
+        }
+      ],
+      "body_without_tail_len": 23,
+      "vector": {
+        "bell": 1015,
+        "body_without_tail": "010ff703000002000000ffffffff035a7998b7d6f51433",
+        "body": "010ff703000002000000ffffffff035a7998b7d6f51433040306000000000000000564b023b9dd7e97ed20fbb582ca20a463b2dc5a5dba150f82419368c879f4fc040700000000000000aec8e4298c4d5bd757066a28c314505e430a0b89cc9ced4ded749f68dbb9b6d305080000000000000009023f3bb47229df22ac1d2a7bf24515819f377c298ebae5766d3d24cb629f00060900000000000000d5c8a47a1b614f1a867594b10f342221dfba2d0a8e473ca8743c35cdb08e47f7",
+        "decodes": true,
+        "chains": [
+          {
+            "entity": 3,
+            "who": "JoinShardOf(OfHolding { p: 2, q: -1, site: 3 })",
+            "prev_seq": 5,
+            "prev_head": "a4c122a2bf851bb39c825c9b61eef8933a8e9b647c33a58b1fa8a13c8cfb993d",
+            "seq": 6,
+            "head": "0564b023b9dd7e97ed20fbb582ca20a463b2dc5a5dba150f82419368c879f4fc"
+          },
+          {
+            "entity": 4,
+            "who": "Citizen(OfHolding { p: 2, q: -1, site: 3 })",
+            "prev_seq": 6,
+            "prev_head": "552249652ee46cdf3979fc99ce640c6619e4354021f4fdb2fff9df369d7e76c9",
+            "seq": 7,
+            "head": "aec8e4298c4d5bd757066a28c314505e430a0b89cc9ced4ded749f68dbb9b6d3"
+          },
+          {
+            "entity": 5,
+            "who": "Holding { p: 2, q: -1, site: 3 }",
+            "prev_seq": 7,
+            "prev_head": "f1a14e0d9bb879597ba8d218c9e5120c61cef202204761f0db9a871f57b129d8",
+            "seq": 8,
+            "head": "09023f3bb47229df22ac1d2a7bf24515819f377c298ebae5766d3d24cb629f00"
+          },
+          {
+            "entity": 6,
+            "who": "Province { p: 2, q: -1 }",
+            "prev_seq": 8,
+            "prev_head": "e889554ca13bd13f735335357fe802d1ae430b2ab44736be16658ca132fac02c",
+            "seq": 9,
+            "head": "d5c8a47a1b614f1a867594b10f342221dfba2d0a8e473ca8743c35cdb08e47f7"
+          }
+        ]
+      }
+    },
+    {
+      "kind": 16,
+      "name": "HOLDING_FINAL",
+      "key": [
+        {
+          "name": "p",
+          "len": 4
+        },
+        {
+          "name": "q",
+          "len": 4
+        },
+        {
+          "name": "site",
+          "len": 1
+        }
+      ],
+      "payload": [
+        {
+          "name": "final_ts",
+          "len": 8
+        }
+      ],
+      "body_without_tail_len": 23,
+      "vector": {
+        "bell": 1016,
+        "body_without_tail": "0110f803000002000000ffffffff035a7998b7d6f51433",
+        "body": "0110f803000002000000ffffffff035a7998b7d6f51433020406000000000000001f3b3d5005eeb11518d738f276ff29923a58d1ef599b847862dca6a02aa79740050700000000000000b15177a1d35c90c0fb012281dfc995d746ead9fb236923aa5353f979aa2451a5",
+        "decodes": true,
+        "chains": [
+          {
+            "entity": 4,
+            "who": "Citizen(OfHolding { p: 2, q: -1, site: 3 })",
+            "prev_seq": 5,
+            "prev_head": "f0a960c7b804821e8814806596b904fef928cba82375c268a03f83549a9e8f9e",
+            "seq": 6,
+            "head": "1f3b3d5005eeb11518d738f276ff29923a58d1ef599b847862dca6a02aa79740"
+          },
+          {
+            "entity": 5,
+            "who": "Holding { p: 2, q: -1, site: 3 }",
+            "prev_seq": 6,
+            "prev_head": "5e8a1405386a583463a2f34c6147b997155a341f1a1626fe485669bd63c5bcb6",
+            "seq": 7,
+            "head": "b15177a1d35c90c0fb012281dfc995d746ead9fb236923aa5353f979aa2451a5"
+          }
+        ]
+      }
+    },
+    {
+      "kind": 20,
+      "name": "HARVEST",
+      "key": [
+        {
+          "name": "p",
+          "len": 4
+        },
+        {
+          "name": "q",
+          "len": 4
+        },
+        {
+          "name": "site",
+          "len": 1
+        }
+      ],
+      "payload": [
+        {
+          "name": "stores_digest",
+          "len": 32
+        }
+      ],
+      "body_without_tail_len": 47,
+      "vector": {
+        "bell": 1020,
+        "body_without_tail": "0114fc03000002000000ffffffff035a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b",
+        "body": "0114fc03000002000000ffffffff035a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b02040600000000000000fc1063dfce47104a44f586b890b5c7887a46e6ce1fc4315c29c80fb46b079f2405070000000000000006e707c475ab0d029f86a35bc3b23ea110d4f890b70ad1d66d554eb277d4dc69",
+        "decodes": true,
+        "chains": [
+          {
+            "entity": 4,
+            "who": "Citizen(OfHolding { p: 2, q: -1, site: 3 })",
+            "prev_seq": 5,
+            "prev_head": "0bd3d77521702093c516c57e679d8be6828f7e0182afdd7099f2de1de7fc0d55",
+            "seq": 6,
+            "head": "fc1063dfce47104a44f586b890b5c7887a46e6ce1fc4315c29c80fb46b079f24"
+          },
+          {
+            "entity": 5,
+            "who": "Holding { p: 2, q: -1, site: 3 }",
+            "prev_seq": 6,
+            "prev_head": "2ccd731b3db3b40bb147ad213e1c37f8085624062b4b8aac6ce03baff3dcbf6d",
+            "seq": 7,
+            "head": "06e707c475ab0d029f86a35bc3b23ea110d4f890b70ad1d66d554eb277d4dc69"
+          }
+        ]
+      }
+    },
+    {
+      "kind": 21,
+      "name": "BUILD",
+      "key": [
+        {
+          "name": "p",
+          "len": 4
+        },
+        {
+          "name": "q",
+          "len": 4
+        },
+        {
+          "name": "site",
+          "len": 1
+        }
+      ],
+      "payload": [
+        {
+          "name": "item",
+          "len": 1
+        },
+        {
+          "name": "cost_digest",
+          "len": 32
+        },
+        {
+          "name": "done_at",
+          "len": 8
+        }
+      ],
+      "body_without_tail_len": 56,
+      "vector": {
+        "bell": 1021,
+        "body_without_tail": "0115fd03000002000000ffffffff035a5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b5a7998b7d6f51433",
+        "body": "0115fd03000002000000ffffffff035a5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b5a7998b7d6f514330204060000000000000051a1031222a5edd2f545890afd487390b11a26f0c82d9fc7369694272ec41a750507000000000000006c1675290c24aea4dccb4e330e41bcdba3b5446935c99a582496fbd504de1599",
+        "decodes": true,
+        "chains": [
+          {
+            "entity": 4,
+            "who": "Citizen(OfHolding { p: 2, q: -1, site: 3 })",
+            "prev_seq": 5,
+            "prev_head": "8b300667b046a794ffe5660aea2cb5d2f93586143532dd2a342839819e72b0fd",
+            "seq": 6,
+            "head": "51a1031222a5edd2f545890afd487390b11a26f0c82d9fc7369694272ec41a75"
+          },
+          {
+            "entity": 5,
+            "who": "Holding { p: 2, q: -1, site: 3 }",
+            "prev_seq": 6,
+            "prev_head": "77eb21f2e857ea32e5232a34092e39d273fa5993d4536228b56e0a31f0973ac3",
+            "seq": 7,
+            "head": "6c1675290c24aea4dccb4e330e41bcdba3b5446935c99a582496fbd504de1599"
+          },
+          {
+            "entity": 6,
+            "who": "Province { p: 2, q: -1 }",
+            "optional": true
+          }
+        ]
+      }
+    },
+    {
+      "kind": 22,
+      "name": "TRAIN",
+      "key": [
+        {
+          "name": "p",
+          "len": 4
+        },
+        {
+          "name": "q",
+          "len": 4
+        },
+        {
+          "name": "site",
+          "len": 1
+        }
+      ],
+      "payload": [
+        {
+          "name": "unit",
+          "len": 1
+        },
+        {
+          "name": "n",
+          "len": 4
+        },
+        {
+          "name": "done_at",
+          "len": 8
+        }
+      ],
+      "body_without_tail_len": 28,
+      "vector": {
+        "bell": 1022,
+        "body_without_tail": "0116fe03000002000000ffffffff035a5a7998b75a7998b7d6f51433",
+        "body": "0116fe03000002000000ffffffff035a5a7998b75a7998b7d6f514330204060000000000000014d754ab7e0ae0292f115b3512cc03f71822e0f47a311657ca78dad83ca98ea8050700000000000000a2197827fe506d4f301fd02902c474cac939c2bb08bc9659435fa7142e7ce0c1",
+        "decodes": true,
+        "chains": [
+          {
+            "entity": 4,
+            "who": "Citizen(OfHolding { p: 2, q: -1, site: 3 })",
+            "prev_seq": 5,
+            "prev_head": "a7790bb0c4d94aaa0be41475db26e1dcbad6ed1f48c94d9b6a1def7eff52ac7b",
+            "seq": 6,
+            "head": "14d754ab7e0ae0292f115b3512cc03f71822e0f47a311657ca78dad83ca98ea8"
+          },
+          {
+            "entity": 5,
+            "who": "Holding { p: 2, q: -1, site: 3 }",
+            "prev_seq": 6,
+            "prev_head": "bfad433bc9fe6a8fd5d73659ea76fbdfc96ad0916bf9d4a1a11ce5c79c413cad",
+            "seq": 7,
+            "head": "a2197827fe506d4f301fd02902c474cac939c2bb08bc9659435fa7142e7ce0c1"
+          }
+        ]
+      }
+    },
+    {
+      "kind": 23,
+      "name": "MUSTER",
+      "key": [
+        {
+          "name": "host_id",
+          "len": 8
+        }
+      ],
+      "payload": [
+        {
+          "name": "unit",
+          "len": 1
+        },
+        {
+          "name": "troops",
+          "len": 4
+        },
+        {
+          "name": "tile",
+          "len": 1
+        },
+        {
+          "name": "entry",
+          "len": 1
+        }
+      ],
+      "body_without_tail_len": 21,
+      "vector": {
+        "bell": 1023,
+        "body_without_tail": "0117ff0300002a000000012301005a5a7998b75a5a",
+        "body": "0117ff0300002a000000012301005a5a7998b75a5a030406000000000000009540e25ec8f3be716f02d94148cd2163cc9db37d261817ca17aceaa2c683777e05070000000000000065507010856d9cdc8579aaf12752ea8c7e3e54144e7b1503372d5ac3ba9ea172060800000000000000b827818e829464c391d1fac3725ee2fbf7d3ce34a754e6fb747eca724e490872",
+        "decodes": true,
+        "chains": [
+          {
+            "entity": 4,
+            "who": "Citizen(OfHolding { p: 2, q: -1, site: 3 })",
+            "prev_seq": 5,
+            "prev_head": "e41fe9915cf13b42a935571372c631152217f6a6ce65a0216418260cb6b80d74",
+            "seq": 6,
+            "head": "9540e25ec8f3be716f02d94148cd2163cc9db37d261817ca17aceaa2c683777e"
+          },
+          {
+            "entity": 5,
+            "who": "Holding { p: 2, q: -1, site: 3 }",
+            "prev_seq": 6,
+            "prev_head": "a29e0a7d43de7a3d961ed246c63222e704125f3d30d91262065be4576dd8a108",
+            "seq": 7,
+            "head": "65507010856d9cdc8579aaf12752ea8c7e3e54144e7b1503372d5ac3ba9ea172"
+          },
+          {
+            "entity": 6,
+            "who": "Province { p: 2, q: -1 }",
+            "prev_seq": 7,
+            "prev_head": "f593d0ad90dca298cbcd60d336c759c28ae070e57966885f4f0afca66cb30c9b",
+            "seq": 8,
+            "head": "b827818e829464c391d1fac3725ee2fbf7d3ce34a754e6fb747eca724e490872"
+          }
+        ]
+      }
+    },
+    {
+      "kind": 24,
+      "name": "DISSOLVE",
+      "key": [
+        {
+          "name": "host_id",
+          "len": 8
+        }
+      ],
+      "payload": [
+        {
+          "name": "pending_bell",
+          "len": 4
+        },
+        {
+          "name": "delta",
+          "len": 8
+        }
+      ],
+      "body_without_tail_len": 26,
+      "vector": {
+        "bell": 1024,
+        "body_without_tail": "0118000400002a000000012301005a7998b75a7998b7d6f51433",
+        "body": "0118000400002a000000012301005a7998b75a7998b7d6f5143303040600000000000000cfdfcac5bad3057089729c45d14e76afc88ce21e1164a3ef111ac46990d00fbc050700000000000000e47af94ed3e3a73999e66e6c86a3913e308eae61b4376bad9aa8249b8d9a7f79060800000000000000ac1028d828221b25f58298f045b88cb0f9b2bb33782a07d56557bfb2c7d168da",
+        "decodes": true,
+        "chains": [
+          {
+            "entity": 4,
+            "who": "Citizen(OfHolding { p: 2, q: -1, site: 3 })",
+            "prev_seq": 5,
+            "prev_head": "1dfee9aa63603bf3a9686abb4077c3754295fb87ec5d2a64cff2c8195a8421aa",
+            "seq": 6,
+            "head": "cfdfcac5bad3057089729c45d14e76afc88ce21e1164a3ef111ac46990d00fbc"
+          },
+          {
+            "entity": 5,
+            "who": "Holding { p: 2, q: -1, site: 3 }",
+            "prev_seq": 6,
+            "prev_head": "7a55f7b5b0fc9fa5d26ad85c91569c3fc7af0301fb32a53b71a18385d5eca190",
+            "seq": 7,
+            "head": "e47af94ed3e3a73999e66e6c86a3913e308eae61b4376bad9aa8249b8d9a7f79"
+          },
+          {
+            "entity": 6,
+            "who": "InTx",
+            "prev_seq": 7,
+            "prev_head": "f0c07915d797f2a6eec93918c5c13d7e65a9a509d4feb64926170680bfbe4df2",
+            "seq": 8,
+            "head": "ac1028d828221b25f58298f045b88cb0f9b2bb33782a07d56557bfb2c7d168da"
+          }
+        ]
+      }
+    },
+    {
+      "kind": 25,
+      "name": "GARRISON",
+      "key": [
+        {
+          "name": "p",
+          "len": 4
+        },
+        {
+          "name": "q",
+          "len": 4
+        },
+        {
+          "name": "site",
+          "len": 1
+        }
+      ],
+      "payload": [
+        {
+          "name": "pending_bell",
+          "len": 4
+        },
+        {
+          "name": "delta",
+          "len": 8
+        }
+      ],
+      "body_without_tail_len": 27,
+      "vector": {
+        "bell": 1025,
+        "body_without_tail": "01190104000002000000ffffffff035a7998b75a7998b7d6f51433",
+        "body": "01190104000002000000ffffffff035a7998b75a7998b7d6f51433030406000000000000005680fb30a9eaf6a0e5e9178344497bcb45bbba29a3c733a9f1663247548dd0b2050700000000000000d13f0f88242dd3095a4ba5a4d744bf668585f0307488e23b0c8c09a840695dd6060800000000000000c0cc603a3bd156b878d3eeeb9d6fb978e7dd795078b4f66e9f7da535fd7d811d",
+        "decodes": true,
+        "chains": [
+          {
+            "entity": 4,
+            "who": "Citizen(OfHolding { p: 2, q: -1, site: 3 })",
+            "prev_seq": 5,
+            "prev_head": "413d936b62621b8f84bb724d4fcbd804a191d33e1e6ee2872c03b5c910a9e3d2",
+            "seq": 6,
+            "head": "5680fb30a9eaf6a0e5e9178344497bcb45bbba29a3c733a9f1663247548dd0b2"
+          },
+          {
+            "entity": 5,
+            "who": "Holding { p: 2, q: -1, site: 3 }",
+            "prev_seq": 6,
+            "prev_head": "4160dfef99983b64669b55b840627647fa86c7de3766859678db21f2e835e032",
+            "seq": 7,
+            "head": "d13f0f88242dd3095a4ba5a4d744bf668585f0307488e23b0c8c09a840695dd6"
+          },
+          {
+            "entity": 6,
+            "who": "Province { p: 2, q: -1 }",
+            "prev_seq": 7,
+            "prev_head": "cd1d7acc4a25e84b877bfebd69fc65b4a9a542b3c62efb5525ed48f5fd929564",
+            "seq": 8,
+            "head": "c0cc603a3bd156b878d3eeeb9d6fb978e7dd795078b4f66e9f7da535fd7d811d"
+          }
+        ]
+      }
+    },
+    {
+      "kind": 26,
+      "name": "EXPLORE",
+      "key": [
+        {
+          "name": "host_id",
+          "len": 8
+        }
+      ],
+      "payload": [
+        {
+          "name": "p",
+          "len": 4
+        },
+        {
+          "name": "q",
+          "len": 4
+        },
+        {
+          "name": "n",
+          "len": 1
+        },
+        {
+          "name": "tiles",
+          "len": 2
+        }
+      ],
+      "body_without_tail_len": 25,
+      "vector": {
+        "bell": 1026,
+        "body_without_tail": "011a020400002a0000000123010002000000ffffffff5a5a79",
+        "body": "011a020400002a0000000123010002000000ffffffff5a5a7903040600000000000000949a8effbd9176ea02cf6771a63e56c3c882689e0aac80bba031ea1f4fbbaa83050700000000000000d830385094698fc88a374e12d19f9bc75d0fa37ed0f50deab4866e9e9989b90d060800000000000000645b04d42da0224b7b344640a1611cbdb060b872554787300a1551dffc893ef2",
+        "decodes": true,
+        "chains": [
+          {
+            "entity": 4,
+            "who": "Citizen(OfHolding { p: 2, q: -1, site: 3 })",
+            "prev_seq": 5,
+            "prev_head": "245e01c5c030917ed69787239359cd8c2521be85408613dc11c5ba1d2b0b7797",
+            "seq": 6,
+            "head": "949a8effbd9176ea02cf6771a63e56c3c882689e0aac80bba031ea1f4fbbaa83"
+          },
+          {
+            "entity": 5,
+            "who": "Holding { p: 2, q: -1, site: 3 }",
+            "prev_seq": 6,
+            "prev_head": "90e19b9104a3cff57c15a97452a55396655fef7dea53aad1651afa6e4c6177ca",
+            "seq": 7,
+            "head": "d830385094698fc88a374e12d19f9bc75d0fa37ed0f50deab4866e9e9989b90d"
+          },
+          {
+            "entity": 6,
+            "who": "Province { p: 2, q: -1 }",
+            "prev_seq": 7,
+            "prev_head": "331ec8661eff902047364a612f455428424e3ead41cee45f43bf9bc85a8fbd4d",
+            "seq": 8,
+            "head": "645b04d42da0224b7b344640a1611cbdb060b872554787300a1551dffc893ef2"
+          }
+        ]
+      }
+    },
+    {
+      "kind": 27,
+      "name": "EXPLORE_RESULT",
+      "key": [
+        {
+          "name": "host_id",
+          "len": 8
+        }
+      ],
+      "payload": [
+        {
+          "name": "works_per_tile",
+          "len": 8
+        },
+        {
+          "name": "works",
+          "len": 4
+        },
+        {
+          "name": "floor_used",
+          "len": 1
+        }
+      ],
+      "body_without_tail_len": 27,
+      "vector": {
+        "bell": 1027,
+        "body_without_tail": "011b030400002a000000012301005a7998b7d6f514335a7998b75a",
+        "body": "011b030400002a000000012301005a7998b7d6f514335a7998b75a02040600000000000000eb3d80a57363528be61e536779348b22504e04bf8b514181d38af66a7766f94d050700000000000000731471f2c60f024512fbd317ff475f8d2b8a049ceed939f40ea55895a8d1f092",
+        "decodes": true,
+        "chains": [
+          {
+            "entity": 4,
+            "who": "Citizen(OfHolding { p: 2, q: -1, site: 3 })",
+            "prev_seq": 5,
+            "prev_head": "f878d098eefe5313fbc0acb01fcd9467070a5d624fe5d9a61a1257139995841a",
+            "seq": 6,
+            "head": "eb3d80a57363528be61e536779348b22504e04bf8b514181d38af66a7766f94d"
+          },
+          {
+            "entity": 5,
+            "who": "Holding { p: 2, q: -1, site: 3 }",
+            "prev_seq": 6,
+            "prev_head": "90e2eb9d6d3fd8780063572730ee8018bb020cdc8e65dc788f6f190b686237ae",
+            "seq": 7,
+            "head": "731471f2c60f024512fbd317ff475f8d2b8a049ceed939f40ea55895a8d1f092"
+          }
+        ]
+      }
+    },
+    {
+      "kind": 28,
+      "name": "STRANDED",
+      "key": [
+        {
+          "name": "host_id",
+          "len": 8
+        }
+      ],
+      "payload": [
+        {
+          "name": "troops_lost",
+          "len": 4
+        }
+      ],
+      "body_without_tail_len": 18,
+      "vector": {
+        "bell": 1028,
+        "body_without_tail": "011c040400002a000000012301005a7998b7",
+        "body": "011c040400002a000000012301005a7998b70106060000000000000013efea82ef4ac994e905115477cc71df02787bf0293628c46e296b0374ca6753",
+        "decodes": true,
+        "chains": [
+          {
+            "entity": 6,
+            "who": "InTx",
+            "prev_seq": 5,
+            "prev_head": "7b197b6bbdafae706558e3686b33df2d6e212e2c294cecc1d988f9bb01a0f728",
+            "seq": 6,
+            "head": "13efea82ef4ac994e905115477cc71df02787bf0293628c46e296b0374ca6753"
+          }
+        ]
+      }
+    },
+    {
+      "kind": 30,
+      "name": "DEPART",
+      "key": [
+        {
+          "name": "host_id",
+          "len": 8
+        }
+      ],
+      "payload": [
+        {
+          "name": "origin_p",
+          "len": 4
+        },
+        {
+          "name": "origin_q",
+          "len": 4
+        },
+        {
+          "name": "origin_tile",
+          "len": 1
+        },
+        {
+          "name": "depart_bell",
+          "len": 4
+        },
+        {
+          "name": "arrive_bell",
+          "len": 4
+        },
+        {
+          "name": "dep_mass",
+          "len": 4
+        },
+        {
+          "name": "march_stamina",
+          "len": 2
+        },
+        {
+          "name": "tip",
+          "len": 8
+        },
+        {
+          "name": "seal_root",
+          "len": 32
+        },
+        {
+          "name": "commit",
+          "len": 32
+        },
+        {
+          "name": "seal",
+          "len": 165
+        }
+      ],
+      "body_without_tail_len": 274,
+      "vector": {
+        "bell": 1030,
+        "body_without_tail": "011e060400002a0000000123010002000000ffffffff5a5a7998b75a7998b75a7998b75a795a7998b7d6f514335a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736",
+        "body": "011e060400002a0000000123010002000000ffffffff5a5a7998b75a7998b75a7998b75a795a7998b7d6f514335a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f8173603040600000000000000214305323ef78342f613b8eaaea5dfaae77030f88b861420abed96ebf445fddf050700000000000000940b2efda0e9969e98e97a6bb1658255f656245eb8527641d91220b1be5fae84060800000000000000425fff70893108fd74b4e12db0465217ef2c27e25e8db7c487233f66744df060",
+        "decodes": true,
+        "chains": [
+          {
+            "entity": 4,
+            "who": "Citizen(OfHolding { p: 2, q: -1, site: 3 })",
+            "prev_seq": 5,
+            "prev_head": "5cd125835e571f02e031c72fd4dcc99e68cb4f2bfbc161df9908b1bc5086336e",
+            "seq": 6,
+            "head": "214305323ef78342f613b8eaaea5dfaae77030f88b861420abed96ebf445fddf"
+          },
+          {
+            "entity": 5,
+            "who": "Holding { p: 2, q: -1, site: 3 }",
+            "prev_seq": 6,
+            "prev_head": "55f27c33f7af8be6b11a44046460219dc6948a2cb0424e657a4e23f21e46daef",
+            "seq": 7,
+            "head": "940b2efda0e9969e98e97a6bb1658255f656245eb8527641d91220b1be5fae84"
+          },
+          {
+            "entity": 6,
+            "who": "Province { p: 2, q: -1 }",
+            "prev_seq": 7,
+            "prev_head": "320c2bbac008d2f1e0bae2fe74145c01c3e7ae57e0f115c8ce5c568222f85abc",
+            "seq": 8,
+            "head": "425fff70893108fd74b4e12db0465217ef2c27e25e8db7c487233f66744df060"
+          }
+        ]
+      }
+    },
+    {
+      "kind": 31,
+      "name": "REVEAL",
+      "key": [
+        {
+          "name": "p",
+          "len": 4
+        },
+        {
+          "name": "q",
+          "len": 4
+        },
+        {
+          "name": "arrive",
+          "len": 4
+        },
+        {
+          "name": "faction",
+          "len": 1
+        },
+        {
+          "name": "i",
+          "len": 1
+        }
+      ],
+      "payload": [
+        {
+          "name": "host_id",
+          "len": 8
+        },
+        {
+          "name": "tile",
+          "len": 1
+        },
+        {
+          "name": "stance",
+          "len": 1
+        },
+        {
+          "name": "retreat",
+          "len": 2
+        },
+        {
+          "name": "displace",
+          "len": 1
+        },
+        {
+          "name": "displaced_host",
+          "len": 8
+        },
+        {
+          "name": "beneficiary",
+          "len": 32
+        },
+        {
+          "name": "ev_slot",
+          "len": 8
+        },
+        {
+          "name": "ev_price",
+          "len": 8
+        },
+        {
+          "name": "ev_limit",
+          "len": 4
+        },
+        {
+          "name": "arrivalday_created",
+          "len": 1
+        }
+      ],
+      "body_without_tail_len": 94,
+      "vector": {
+        "bell": 1031,
+        "body_without_tail": "011f0704000002000000ffffffff11304f6e04112a000000012301005a5a5a795a2a000000012301005a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b5a7998b7d6f514335a7998b7d6f514335a7998b75a",
+        "body": "011f0704000002000000ffffffff11304f6e04112a000000012301005a5a5a795a2a000000012301005a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b5a7998b7d6f514335a7998b7d6f514335a7998b75a00",
+        "decodes": true,
+        "chains": []
+      }
+    },
+    {
+      "kind": 32,
+      "name": "DEPARTURE_SETTLED",
+      "key": [
+        {
+          "name": "host_id",
+          "len": 8
+        }
+      ],
+      "payload": [
+        {
+          "name": "troops_after",
+          "len": 4
+        },
+        {
+          "name": "stamina_after",
+          "len": 2
+        },
+        {
+          "name": "destroyed",
+          "len": 1
+        }
+      ],
+      "body_without_tail_len": 21,
+      "vector": {
+        "bell": 1032,
+        "body_without_tail": "0120080400002a000000012301005a7998b75a795a",
+        "body": "0120080400002a000000012301005a7998b75a795a02050600000000000000376111e9f7a43fcd31469747ddcf4a16429c303cc1d19b8a3b082cd3944143fc0607000000000000007f5c9b591a5c32a2d4ba3e603c39f5b24e4ac5d193df3a316727f70e772e805b",
+        "decodes": true,
+        "chains": [
+          {
+            "entity": 5,
+            "who": "Holding { p: 2, q: -1, site: 3 }",
+            "prev_seq": 5,
+            "prev_head": "ae2a0562daed208b09d915c565694560a60de4592e77dc817e6538fc4b19f3ba",
+            "seq": 6,
+            "head": "376111e9f7a43fcd31469747ddcf4a16429c303cc1d19b8a3b082cd3944143fc"
+          },
+          {
+            "entity": 6,
+            "who": "InTx",
+            "prev_seq": 6,
+            "prev_head": "c03adad9986d5a43f103d570bb13c0f5797474ad1d72c4ea74eb27ee98f1c236",
+            "seq": 7,
+            "head": "7f5c9b591a5c32a2d4ba3e603c39f5b24e4ac5d193df3a316727f70e772e805b"
+          }
+        ]
+      }
+    },
+    {
+      "kind": 34,
+      "name": "TRANSIT_SETTLED",
+      "key": [
+        {
+          "name": "host_id",
+          "len": 8
+        }
+      ],
+      "payload": [
+        {
+          "name": "outcome",
+          "len": 1
+        },
+        {
+          "name": "seal_code",
+          "len": 1
+        },
+        {
+          "name": "troops",
+          "len": 4
+        },
+        {
+          "name": "tip_to",
+          "len": 8
+        },
+        {
+          "name": "tip",
+          "len": 8
+        },
+        {
+          "name": "fee_to",
+          "len": 8
+        },
+        {
+          "name": "fee",
+          "len": 8
+        },
+        {
+          "name": "bond_to",
+          "len": 8
+        },
+        {
+          "name": "bond",
+          "len": 8
+        },
+        {
+          "name": "reward_to",
+          "len": 8
+        },
+        {
+          "name": "reward",
+          "len": 8
+        },
+        {
+          "name": "pool_owed_delta",
+          "len": 8
+        },
+        {
+          "name": "slot_kept",
+          "len": 1
+        }
+      ],
+      "body_without_tail_len": 93,
+      "vector": {
+        "bell": 1034,
+        "body_without_tail": "01220a0400002a00000001230100015a5a7998b75a7998b7d6f514335a7998b7d6f514335a7998b7d6f514335a7998b7d6f514335a7998b7d6f514335a7998b7d6f514335a7998b7d6f514335a7998b7d6f514335a7998b7d6f514335a",
+        "body": "01220a0400002a00000001230100015a5a7998b75a7998b7d6f514335a7998b7d6f514335a7998b7d6f514335a7998b7d6f514335a7998b7d6f514335a7998b7d6f514335a7998b7d6f514335a7998b7d6f514335a7998b7d6f514335a01050600000000000000a4832dad9b7604f386133a911d1afb279946be9fdf3c71622c78681a78c7b482",
+        "decodes": true,
+        "chains": [
+          {
+            "entity": 5,
+            "who": "Holding { p: 2, q: -1, site: 3 }",
+            "prev_seq": 5,
+            "prev_head": "8de1335848f009bb3a7dd1f5147638190003d85380501f90e6c4d6b0aba22b23",
+            "seq": 6,
+            "head": "a4832dad9b7604f386133a911d1afb279946be9fdf3c71622c78681a78c7b482"
+          },
+          {
+            "entity": 6,
+            "who": "InTx",
+            "optional": true
+          },
+          {
+            "entity": 6,
+            "who": "InTx",
+            "optional": true
+          },
+          {
+            "entity": 7,
+            "who": "InTx",
+            "optional": true
+          }
+        ]
+      }
+    },
+    {
+      "kind": 40,
+      "name": "GATHER",
+      "key": [
+        {
+          "name": "p",
+          "len": 4
+        },
+        {
+          "name": "q",
+          "len": 4
+        },
+        {
+          "name": "bell",
+          "len": 4
+        }
+      ],
+      "payload": [
+        {
+          "name": "start",
+          "len": 1
+        },
+        {
+          "name": "n",
+          "len": 1
+        },
+        {
+          "name": "arrivals_mask",
+          "len": 4
+        },
+        {
+          "name": "no_arrivals",
+          "len": 1
+        }
+      ],
+      "body_without_tail_len": 25,
+      "vector": {
+        "bell": 1040,
+        "body_without_tail": "01281004000002000000ffffffff11304f6e5a5a5a7998b75a",
+        "body": "01281004000002000000ffffffff11304f6e5a5a5a7998b75a0107060000000000000064a42cba4181d07f0892f84d10e07c2b3126dada203ed9fb29a6dcf7ec737e0b",
+        "decodes": true,
+        "chains": [
+          {
+            "entity": 7,
+            "who": "ClashInputs { p: 2, q: -1, bell: 1850683409 }",
+            "prev_seq": 5,
+            "prev_head": "f68c269b16b1790bdea38c4c5e80ed120b8563f8038a9f7632abdd190211b200",
+            "seq": 6,
+            "head": "64a42cba4181d07f0892f84d10e07c2b3126dada203ed9fb29a6dcf7ec737e0b"
+          }
+        ]
+      }
+    },
+    {
+      "kind": 41,
+      "name": "CLASH",
+      "key": [
+        {
+          "name": "p",
+          "len": 4
+        },
+        {
+          "name": "q",
+          "len": 4
+        },
+        {
+          "name": "bell",
+          "len": 4
+        }
+      ],
+      "payload": [
+        {
+          "name": "outcome_digest",
+          "len": 32
+        },
+        {
+          "name": "input_digest",
+          "len": 32
+        },
+        {
+          "name": "engagements",
+          "len": 4
+        },
+        {
+          "name": "fates",
+          "len": 9
+        }
+      ],
+      "body_without_tail_len": 95,
+      "vector": {
+        "bell": 1041,
+        "body_without_tail": "01291104000002000000ffffffff11304f6e5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b5a7998b75a7998b7d6f5143352",
+        "body": "01291104000002000000ffffffff11304f6e5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b5a7998b75a7998b7d6f514335202060600000000000000dbb6b8b084b371f2ac8e4e3afc4d95b96b46b69bf87e7dcc8c589ef05fa696d8070700000000000000594d3d972b1c4c4426f6fee71bd1cf82bd0ccd100ee846e16a8b1f4db5efa95e",
+        "decodes": true,
+        "chains": [
+          {
+            "entity": 6,
+            "who": "Province { p: 2, q: -1 }",
+            "prev_seq": 5,
+            "prev_head": "5e2b591fde395d4b515a919e0871056105db1a64f1550c9cf53b5145d292641e",
+            "seq": 6,
+            "head": "dbb6b8b084b371f2ac8e4e3afc4d95b96b46b69bf87e7dcc8c589ef05fa696d8"
+          },
+          {
+            "entity": 7,
+            "who": "ClashInputs { p: 2, q: -1, bell: 1850683409 }",
+            "prev_seq": 6,
+            "prev_head": "4c2788cba78c46db96f77fa5454a6f7bd7faecba18384e812f88692d0c46c8d9",
+            "seq": 7,
+            "head": "594d3d972b1c4c4426f6fee71bd1cf82bd0ccd100ee846e16a8b1f4db5efa95e"
+          }
+        ]
+      }
+    },
+    {
+      "kind": 42,
+      "name": "SKIP",
+      "key": [
+        {
+          "name": "p",
+          "len": 4
+        },
+        {
+          "name": "q",
+          "len": 4
+        }
+      ],
+      "payload": [
+        {
+          "name": "b0",
+          "len": 4
+        },
+        {
+          "name": "n",
+          "len": 1
+        },
+        {
+          "name": "quiet_digest",
+          "len": 32
+        }
+      ],
+      "body_without_tail_len": 51,
+      "vector": {
+        "bell": 1042,
+        "body_without_tail": "012a1204000002000000ffffffff5a7998b75a5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b",
+        "body": "012a1204000002000000ffffffff5a7998b75a5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b010606000000000000002a4cfbb509d0c74bec7c8a5258e7c49d203fa9974876f2c4e0c6c7c2fb5fba0e",
+        "decodes": true,
+        "chains": [
+          {
+            "entity": 6,
+            "who": "Province { p: 2, q: -1 }",
+            "prev_seq": 5,
+            "prev_head": "f6258e9d83f31d1377c7bb89e664117b6b53186fc97c33f07e384bc51820b5f4",
+            "seq": 6,
+            "head": "2a4cfbb509d0c74bec7c8a5258e7c49d203fa9974876f2c4e0c6c7c2fb5fba0e"
+          }
+        ]
+      }
+    },
+    {
+      "kind": 43,
+      "name": "CAMP",
+      "key": [
+        {
+          "name": "p",
+          "len": 4
+        },
+        {
+          "name": "q",
+          "len": 4
+        }
+      ],
+      "payload": [
+        {
+          "name": "tile",
+          "len": 1
+        },
+        {
+          "name": "troops",
+          "len": 4
+        },
+        {
+          "name": "day",
+          "len": 4
+        }
+      ],
+      "body_without_tail_len": 23,
+      "vector": {
+        "bell": 1043,
+        "body_without_tail": "012b1304000002000000ffffffff5a5a7998b75a7998b7",
+        "body": "012b1304000002000000ffffffff5a5a7998b75a7998b701060600000000000000c47e9c418361c4d032ca8fb5028f79c3532da057a58951eac5626507c768f514",
+        "decodes": true,
+        "chains": [
+          {
+            "entity": 6,
+            "who": "Province { p: 2, q: -1 }",
+            "prev_seq": 5,
+            "prev_head": "888ae64ba37083d50378977babf5283c98b7af6d9349f14b7c0f351469636994",
+            "seq": 6,
+            "head": "c47e9c418361c4d032ca8fb5028f79c3532da057a58951eac5626507c768f514"
+          }
+        ]
+      }
+    },
+    {
+      "kind": 50,
+      "name": "ANCHOR",
+      "key": [
+        {
+          "name": "bell",
+          "len": 4
+        },
+        {
+          "name": "region",
+          "len": 1
+        }
+      ],
+      "payload": [
+        {
+          "name": "round",
+          "len": 8
+        },
+        {
+          "name": "a",
+          "len": 8
+        },
+        {
+          "name": "slot",
+          "len": 8
+        },
+        {
+          "name": "beneficiary",
+          "len": 32
+        }
+      ],
+      "body_without_tail_len": 67,
+      "vector": {
+        "bell": 1050,
+        "body_without_tail": "01321a04000011304f6e115a7998b7d6f514335a7998b7d6f514335a7998b7d6f514335a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b",
+        "body": "01321a04000011304f6e115a7998b7d6f514335a7998b7d6f514335a7998b7d6f514335a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b00",
+        "decodes": true,
+        "chains": []
+      }
+    },
+    {
+      "kind": 51,
+      "name": "SEED",
+      "key": [
+        {
+          "name": "bell",
+          "len": 4
+        },
+        {
+          "name": "region",
+          "len": 1
+        },
+        {
+          "name": "nonce",
+          "len": 1
+        }
+      ],
+      "payload": [
+        {
+          "name": "round",
+          "len": 8
+        },
+        {
+          "name": "seed",
+          "len": 32
+        },
+        {
+          "name": "a",
+          "len": 8
+        }
+      ],
+      "body_without_tail_len": 60,
+      "vector": {
+        "bell": 1051,
+        "body_without_tail": "01331b04000011304f6e11115a7998b7d6f514335a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b5a7998b7d6f51433",
+        "body": "01331b04000011304f6e11115a7998b7d6f514335a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b5a7998b7d6f5143300",
+        "decodes": true,
+        "chains": []
+      }
+    },
+    {
+      "kind": 52,
+      "name": "BEACON",
+      "key": [
+        {
+          "name": "region",
+          "len": 1
+        }
+      ],
+      "payload": [
+        {
+          "name": "round",
+          "len": 8
+        }
+      ],
+      "body_without_tail_len": 15,
+      "vector": {
+        "bell": 1052,
+        "body_without_tail": "01341c040000115a7998b7d6f51433",
+        "body": "01341c040000115a7998b7d6f5143300",
+        "decodes": true,
+        "chains": []
+      }
+    },
+    {
+      "kind": 53,
+      "name": "ARCHIVE",
+      "key": [
+        {
+          "name": "region",
+          "len": 1
+        },
+        {
+          "name": "day",
+          "len": 4
+        }
+      ],
+      "payload": [
+        {
+          "name": "bell",
+          "len": 4
+        },
+        {
+          "name": "a_off",
+          "len": 4
+        },
+        {
+          "name": "seed",
+          "len": 32
+        }
+      ],
+      "body_without_tail_len": 51,
+      "vector": {
+        "bell": 1053,
+        "body_without_tail": "01351d0400001111304f6e5a7998b75a7998b75a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b",
+        "body": "01351d0400001111304f6e5a7998b75a7998b75a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b00",
+        "decodes": true,
+        "chains": []
+      }
+    },
+    {
+      "kind": 60,
+      "name": "DIVERT",
+      "key": [
+        {
+          "name": "recipient",
+          "len": 32
+        }
+      ],
+      "payload": [
+        {
+          "name": "amount",
+          "len": 8
+        },
+        {
+          "name": "reason",
+          "len": 1
+        }
+      ],
+      "body_without_tail_len": 47,
+      "vector": {
+        "bell": 1060,
+        "body_without_tail": "013c2404000011304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d25a7998b7d6f514335a",
+        "body": "013c2404000011304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d25a7998b7d6f514335a00",
+        "decodes": true,
+        "chains": []
+      }
+    },
+    {
+      "kind": 61,
+      "name": "DEFENCE_CLAIM",
+      "key": [
+        {
+          "name": "beneficiary",
+          "len": 32
+        }
+      ],
+      "payload": [
+        {
+          "name": "day",
+          "len": 4
+        },
+        {
+          "name": "slots",
+          "len": 1
+        },
+        {
+          "name": "amount",
+          "len": 8
+        },
+        {
+          "name": "partial",
+          "len": 1
+        }
+      ],
+      "body_without_tail_len": 52,
+      "vector": {
+        "bell": 1061,
+        "body_without_tail": "013d2504000011304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d25a7998b75a5a7998b7d6f514335a",
+        "body": "013d2504000011304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d25a7998b75a5a7998b7d6f514335a00",
+        "decodes": true,
+        "chains": []
+      }
+    },
+    {
+      "kind": 62,
+      "name": "POOL_SWEEP",
+      "key": [
+        {
+          "name": "p",
+          "len": 4
+        },
+        {
+          "name": "q",
+          "len": 4
+        },
+        {
+          "name": "site",
+          "len": 1
+        }
+      ],
+      "payload": [
+        {
+          "name": "amount",
+          "len": 8
+        }
+      ],
+      "body_without_tail_len": 23,
+      "vector": {
+        "bell": 1062,
+        "body_without_tail": "013e2604000002000000ffffffff035a7998b7d6f51433",
+        "body": "013e2604000002000000ffffffff035a7998b7d6f51433010506000000000000009361c703a7e5ad05ac12f0799194f62e27992e97752bf3a8e1f279e6240b33a3",
+        "decodes": true,
+        "chains": [
+          {
+            "entity": 5,
+            "who": "Holding { p: 2, q: -1, site: 3 }",
+            "prev_seq": 5,
+            "prev_head": "ed3d85578b739405bd32eedd2a31d7520474f52384af83f2422546f2202fd73a",
+            "seq": 6,
+            "head": "9361c703a7e5ad05ac12f0799194f62e27992e97752bf3a8e1f279e6240b33a3"
+          }
+        ]
+      }
+    },
+    {
+      "kind": 70,
+      "name": "CLOSE",
+      "key": [
+        {
+          "name": "account_kind",
+          "len": 1
+        },
+        {
+          "name": "key",
+          "len": 15
+        }
+      ],
+      "payload": [
+        {
+          "name": "final_seq",
+          "len": 8
+        },
+        {
+          "name": "final_head",
+          "len": 32
+        },
+        {
+          "name": "recipient",
+          "len": 32
+        },
+        {
+          "name": "lamports",
+          "len": 8
+        }
+      ],
+      "body_without_tail_len": 102,
+      "vector": {
+        "bell": 1070,
+        "body_without_tail": "01462e0400000a02000000ffffffff000000000000005a7998b7d6f514335a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b5a7998b7d6f51433",
+        "body": "01462e0400000a02000000ffffffff000000000000005a7998b7d6f514335a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b5a7998b7d6f5143301060600000000000000ab0339b3123e47cc82881542cae64d81243f92041d4cd92f69064b7c26c38c1d",
+        "decodes": true,
+        "chains": [
+          {
+            "entity": 6,
+            "who": "Province { p: 2, q: -1 }",
+            "prev_seq": 5,
+            "prev_head": "c2c3558327bc4f71281fac5c17d0dcdb858af2b4b0d1e0610e0d7d2f9f410f45",
+            "seq": 6,
+            "head": "ab0339b3123e47cc82881542cae64d81243f92041d4cd92f69064b7c26c38c1d"
+          }
+        ]
+      }
+    }
+  ],
+  "fates_vector": {
+    "fates": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      0,
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "packed": "88c6221a8b682ca2b1"
+  }
+}

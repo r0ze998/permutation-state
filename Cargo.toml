@@ -5,7 +5,7 @@
 # resolve together with the program's MagicBlock SDK.
 [workspace]
 resolver = "2"
-members = ["permutation-chain", "permutation-rules"]
+members = ["permutation-chain", "permutation-rules", "frontier-abi"]
 exclude = [
     "frontier-sim",
     "permutation-server",

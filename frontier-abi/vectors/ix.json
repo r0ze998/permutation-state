@@ -1,0 +1,308 @@
+{
+  "generator": "frontier-abi abi-vectors",
+  "abi_version": 1,
+  "contract": "docs/frontier/m1/M1-CONTRACT.md v1.1",
+  "content": "one encoded sample per instruction (data with the tag, hex)",
+  "samples": [
+    {
+      "name": "CreateSeason",
+      "tag": 1,
+      "len": 253,
+      "data": "01100310000100010058020000f4020000f0030000030000002721e664000000000202480496e74fcdd3a118406d3800a4e4935e67450a6befde915d47a0d6a13519cee134580200003c00000000a30200040000001027000000000000204e000000000000b101000090650000000010001e003c00d00700007c15641980f40300c800d007f00300009000000080970600002f0d000034e2300400000000c817a80400000000c2eb0b000000000094357700000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000028230000f401000005000000000000001c2500006900000000000000"
+    },
+    {
+      "name": "InitShards",
+      "tag": 2,
+      "len": 2,
+      "data": "0205"
+    },
+    {
+      "name": "ConsumeGenesisSeed",
+      "tag": 3,
+      "len": 347,
+      "data": "034e61bc0000000000a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a13c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c"
+    },
+    {
+      "name": "EndSeason",
+      "tag": 4,
+      "len": 1,
+      "data": "04"
+    },
+    {
+      "name": "CloseSeason",
+      "tag": 5,
+      "len": 2,
+      "data": "0502"
+    },
+    {
+      "name": "AbortSeason",
+      "tag": 6,
+      "len": 1,
+      "data": "06"
+    },
+    {
+      "name": "SetWindowSchedule",
+      "tag": 7,
+      "len": 9,
+      "data": "07840300002c010000"
+    },
+    {
+      "name": "AnnounceSeason",
+      "tag": 8,
+      "len": 57,
+      "data": "080700000000000000010101010101010101010101010101010101010101010101010101010101010100d2496b0000000000ca9a3b00000000"
+    },
+    {
+      "name": "InitBeaconLogs",
+      "tag": 9,
+      "len": 1,
+      "data": "09"
+    },
+    {
+      "name": "PostAnchor",
+      "tag": 16,
+      "len": 384,
+      "data": "100fe80300006300000000000000a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a13c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c0202020202020202020202020202020202020202020202020202020202020202"
+    },
+    {
+      "name": "PostAnchorMulti",
+      "tag": 17,
+      "len": 385,
+      "data": "11e80300006300000000000000a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a13c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c7f000202020202020202020202020202020202020202020202020202020202020202"
+    },
+    {
+      "name": "PostSeed",
+      "tag": 18,
+      "len": 385,
+      "data": "120fe8030000034a01000000000000a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a13c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c0202020202020202020202020202020202020202020202020202020202020202"
+    },
+    {
+      "name": "PostBeacon",
+      "tag": 19,
+      "len": 348,
+      "data": "13019001000000000000a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a13c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c"
+    },
+    {
+      "name": "ArchiveAnchors",
+      "tag": 20,
+      "len": 19,
+      "data": "140f0700000003f0030000f1030000f2030000"
+    },
+    {
+      "name": "CloseSeedCache",
+      "tag": 21,
+      "len": 7,
+      "data": "15e80300000f03"
+    },
+    {
+      "name": "OpenRing",
+      "tag": 32,
+      "len": 3,
+      "data": "200400"
+    },
+    {
+      "name": "ConsumeRingSeed",
+      "tag": 33,
+      "len": 349,
+      "data": "210400f401000000000000a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a13c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c"
+    },
+    {
+      "name": "OpenProvince",
+      "tag": 34,
+      "len": 5,
+      "data": "220200ffff"
+    },
+    {
+      "name": "FoldOccupancy",
+      "tag": 35,
+      "len": 2,
+      "data": "2301"
+    },
+    {
+      "name": "CloseProvince",
+      "tag": 36,
+      "len": 5,
+      "data": "240200ffff"
+    },
+    {
+      "name": "Join",
+      "tag": 48,
+      "len": 42,
+      "data": "3004090909090909090909090909090909090909090909090909090909090909090980234b6b00000000"
+    },
+    {
+      "name": "SetSession",
+      "tag": 49,
+      "len": 41,
+      "data": "31090909090909090909090909090909090909090909090909090909090909090980234b6b00000000"
+    },
+    {
+      "name": "SetVigil",
+      "tag": 50,
+      "len": 3,
+      "data": "326405"
+    },
+    {
+      "name": "FileTicket",
+      "tag": 51,
+      "len": 12,
+      "data": "33020200ffff030300feff00"
+    },
+    {
+      "name": "SettleTicket",
+      "tag": 52,
+      "len": 2,
+      "data": "3401"
+    },
+    {
+      "name": "ReleaseDormant",
+      "tag": 53,
+      "len": 1,
+      "data": "35"
+    },
+    {
+      "name": "CloseHolding",
+      "tag": 54,
+      "len": 1,
+      "data": "36"
+    },
+    {
+      "name": "CloseCitizen",
+      "tag": 55,
+      "len": 1,
+      "data": "37"
+    },
+    {
+      "name": "Harvest",
+      "tag": 64,
+      "len": 1,
+      "data": "40"
+    },
+    {
+      "name": "Build",
+      "tag": 65,
+      "len": 2,
+      "data": "4102"
+    },
+    {
+      "name": "Train",
+      "tag": 66,
+      "len": 6,
+      "data": "42052c010000"
+    },
+    {
+      "name": "Muster",
+      "tag": 67,
+      "len": 7,
+      "data": "43052c0100001e"
+    },
+    {
+      "name": "Dissolve",
+      "tag": 68,
+      "len": 9,
+      "data": "442a00000001230100"
+    },
+    {
+      "name": "Garrison",
+      "tag": 69,
+      "len": 9,
+      "data": "456affffffffffffff"
+    },
+    {
+      "name": "Explore",
+      "tag": 70,
+      "len": 12,
+      "data": "462b00000001230100010cff"
+    },
+    {
+      "name": "SettleExplore",
+      "tag": 71,
+      "len": 1,
+      "data": "47"
+    },
+    {
+      "name": "DisbandStranded",
+      "tag": 72,
+      "len": 2,
+      "data": "4837"
+    },
+    {
+      "name": "Depart",
+      "tag": 80,
+      "len": 219,
+      "data": "502a0000000123010003030303030303030303030303030303030303030303030303030303030303035e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5ef2030000693800000000000003"
+    },
+    {
+      "name": "Reveal",
+      "tag": 81,
+      "len": 136,
+      "data": "5103022d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d040404040404040404040404040404040404040404040404040404040404040405050505050505050505050505050505050505050505050505050505050505050202020202020202020202020202020202020202020202020202020202020202"
+    },
+    {
+      "name": "SettleDeparture",
+      "tag": 82,
+      "len": 2,
+      "data": "5203"
+    },
+    {
+      "name": "SettleTransit",
+      "tag": 84,
+      "len": 231,
+      "data": "540303030303030303030303030303030303030303030303030303030303030303035e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e0202020202020202020202020202020202020202020202020202020202020202"
+    },
+    {
+      "name": "SweepPoolOwed",
+      "tag": 85,
+      "len": 1,
+      "data": "55"
+    },
+    {
+      "name": "GatherClash",
+      "tag": 96,
+      "len": 43,
+      "data": "60f2030000000cff0f00000202020202020202020202020202020202020202020202020202020202020202"
+    },
+    {
+      "name": "ResolveFromInputs",
+      "tag": 97,
+      "len": 37,
+      "data": "61f20300000202020202020202020202020202020202020202020202020202020202020202"
+    },
+    {
+      "name": "ResolveClash",
+      "tag": 98,
+      "len": 37,
+      "data": "62f20300000202020202020202020202020202020202020202020202020202020202020202"
+    },
+    {
+      "name": "SkipQuiet",
+      "tag": 99,
+      "len": 6,
+      "data": "63f203000018"
+    },
+    {
+      "name": "CloseClashInputs",
+      "tag": 100,
+      "len": 9,
+      "data": "640200fffff2030000"
+    },
+    {
+      "name": "CloseArrivalDay",
+      "tag": 101,
+      "len": 9,
+      "data": "650200ffff07000000"
+    },
+    {
+      "name": "CloseArrivalSlot",
+      "tag": 102,
+      "len": 11,
+      "data": "660200fffff20300000403"
+    },
+    {
+      "name": "ClaimDefence",
+      "tag": 112,
+      "len": 6,
+      "data": "700700000006"
+    }
+  ]
+}
