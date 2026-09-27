@@ -1,0 +1,27 @@
+[package]
+name = "psf-probe"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT"
+description = "Stand-alone probe program of the Frontier harness (never deployable): (1) CreateAccount / CreateAccountWithSeed signed as the Season PDA, which fail on a pre-funded address (G2's regression, §13.2); (2) a no-op of a chosen ELF size for the I-45 loaded-data drill (PSF_PROBE_PAD pads the binary)"
+
+# Its own workspace and lock (built by svm-tests/run.sh with cargo-build-sbf).
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+# Dependency section: owned by the integrator (I-55). solana-program is the
+# version the root lock already carries (permutation-chain).
+[dependencies]
+solana-program = "=4.0.0"
+
+[profile.release]
+overflow-checks = true
+lto = "fat"
+codegen-units = 1
+opt-level = 3
+
+[lints.rust]
+unexpected_cfgs = { level = "allow" }
