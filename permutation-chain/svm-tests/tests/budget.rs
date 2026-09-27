@@ -306,14 +306,9 @@ fn inbox_full_quota_log_input() {
     assert_fits("full inboxes: LogTickInput#0", log, Budget::Heavy);
 }
 
-/// The crank's parts of the flooded tick (green while the LogTickInput
-/// assertion waits, so a regression in the parts is still caught). Waits
-/// too since OpenGovernment writes each nation's roll (WP03, unit P2): the
-/// flood's LogTickInput, which still decodes every nation in full, then
-/// runs out of the 256 KiB heap before any part runs; P1's two-pass
-/// `pending_input` and SubmitGov's roll check replace the flood.
+/// The crank's parts of the flooded tick: every ResolveTick part fits the
+/// Heavy profile with the inboxes full at quota and the rolls written.
 #[test]
-#[ignore = "until WP03/WP07 (unit P1): the flooded LogTickInput runs out of heap with the rolls"]
 fn inbox_full_quota_parts() {
     let mut c = Chain::new();
     let s = flooded(&mut c);

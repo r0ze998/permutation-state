@@ -496,7 +496,6 @@ fn close_season_accounts_gates() {
 /// WP14: a closed account cannot be re-created (AllocWorld refuses after
 /// Registering).
 #[test]
-#[ignore = "until WP14 (unit P2): AllocWorld and AllocNation refuse after Registering"]
 fn a_closed_account_is_not_re_allocated() {
     let mut c = Chain::new();
     let s = twelve(&mut c);

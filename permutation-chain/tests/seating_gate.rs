@@ -247,17 +247,11 @@ fn resolve_tick_cannot_freeze_seating() {
     );
     let mut at = vec![OP, SEASON];
     at.extend(WORLD0..MEMBER0);
-    match s.run(&at, ChainInstruction::OpenGovernment) {
-        Ok(()) => {
-            let season: Season = s.a.load(SEASON);
-            assert_eq!(season.status, SeasonStatus::Running);
-            let n: NationAccount = s.a.load(NATION0);
-            assert_eq!(n.open_tick, 0);
-            assert!(Role::ALL.iter().any(|r| n.officers[r.index()] != NOBODY));
-        }
-        // An OpenGovernment that reads the Clock sysvar itself (no host
-        // clock): the first election passed; only the clock stops it here.
-        Err(ProgramError::UnsupportedSysvar) => {}
-        Err(e) => panic!("OpenGovernment: {e:?}"),
-    }
+    s.run(&at, ChainInstruction::OpenGovernment)
+        .expect("OpenGovernment");
+    let season: Season = s.a.load(SEASON);
+    assert_eq!(season.status, SeasonStatus::Running);
+    let n: NationAccount = s.a.load(NATION0);
+    assert_eq!(n.open_tick, 0);
+    assert!(Role::ALL.iter().any(|r| n.officers[r.index()] != NOBODY));
 }

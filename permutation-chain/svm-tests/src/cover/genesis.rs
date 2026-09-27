@@ -101,4 +101,4 @@ pub const OPEN_GOVERNMENT: &[Cover] = &[
 ];
 
 /// Ignored tests of this area waiting for their fix: (test, WP).
-pub const PENDING: &[(&str, &str)] = &[("budget::inbox_full_quota_parts", "WP03/WP07 (unit P1)")];
+pub const PENDING: &[(&str, &str)] = &[];

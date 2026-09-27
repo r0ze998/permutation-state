@@ -83,7 +83,4 @@ pub const CLOSE_SEASON_ACCOUNTS: &[Cover] = &[Cover::Test(
 )];
 
 /// Ignored tests of this area waiting for their fix: (test, WP).
-pub const PENDING: &[(&str, &str)] = &[(
-    "escape_hatches::a_closed_account_is_not_re_allocated",
-    "WP14 (unit P2)",
-)];
+pub const PENDING: &[(&str, &str)] = &[];
