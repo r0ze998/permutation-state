@@ -893,3 +893,7 @@ export function drawMinimap(canvas, map, view, footprint) {
   if (footprint) { ctx.strokeStyle = '#213f34'; ctx.lineWidth = 1.2; ctx.strokeRect(footprint.x0 * s + ox, footprint.y0 * s + oy, (footprint.x1 - footprint.x0) * s, (footprint.y1 - footprint.y0) * s); }
   return { toWorld: (mx, my) => ({ x: (mx - ox) / s, y: (my - oy) / s }) };
 }
+
+// Painter primitives shared with the Frontier map (web/frontier/map/*):
+// additive exports only, nothing above changes behaviour.
+export { SQRT3, RADIUS, FLATTEN, COLORS, EDGE_NEIGHBOR, project, shade, alpha, rounded, polygon, hexPoints, inverseHex };

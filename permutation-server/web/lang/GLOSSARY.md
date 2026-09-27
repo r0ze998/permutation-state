@@ -286,6 +286,47 @@ retype their names in a dictionary.
 | 出来事 | events | |
 | 戦い / 外交 / 発展 | war / diplomacy / growth | chronicle filters |
 
+## The Frontier
+
+The Sixfold Frontier client (`web/frontier/`, dictionary `en-frontier.mjs`).
+Where a Japanese word already has another English in the v9 dictionaries,
+the Frontier uses its own Japanese term (軍 is v9's army; the Frontier's
+unit on the map is 軍勢, a host), so the merged dictionary stays consistent.
+
+| Japanese | English | Notes |
+|---|---|---|
+| 六重の辺境 | The Sixfold Frontier | the game's name |
+| 鐘 / 第N鐘 / 鐘 N | bell / Bell N | never "tick" or "turn"; the chip reads `Bell 1,034 · 6:12 left` |
+| 州 | province | |
+| 輪 / 第d輪 | ring / Ring d | ring 0 is the Concord |
+| 扇区（本拠の扇区） | wedge (home wedge) | |
+| 辺境区 | March | the 7-province district; capital M |
+| 進軍 | march | the movement; lower case |
+| 拠点（村→町→都市→城塞） | holding (Hamlet → Town → City → Stronghold) | |
+| 軍勢 | host | |
+| 守備隊 | garrison | |
+| 封（時限式の封） | seal (timelock seal) | |
+| 開封（公開） | reveal | |
+| キーパー | keeper | |
+| チップ | tip | |
+| 撤退比 | retreat ratio | "never" = 0 |
+| 構え：待機・突撃・側撃・迎撃・混乱 | stance: Hold, Assault, Flank, Brace, Disarray | |
+| 探索 / 斥候 | Explore / Scout | |
+| 蛮族の野営地 | barbarian camp | |
+| 保護 | Shield | |
+| 夜番の時間 | vigil hours | |
+| 入植希望 | site ticket | |
+| 休眠 | dormant | |
+| 敗走 | routed | the 50% loss of an unrevealed march |
+| 押し戻された | bounced (no loss) | quota or room; ArrivalSlot displacement |
+| ビーコン / ビーコン待ち | beacon / awaiting beacon | the drand round anchored on chain |
+| シード / シード待ち | seed / awaiting seed | the bell's random seed |
+| 決着 / 決着処理中 | resolved / resolving | |
+| 炎 | Flame | doctrine C's display name (I-34) |
+| 練習モード | practice mode | |
+| 観戦 | spectate | as v9 |
+| 中立 | Neutral | faction 6: camps, Free Cities |
+
 ## Never translate
 
 - The wallet session-key message (`session.mjs` `sessionText`) and anything
@@ -295,3 +336,7 @@ retype their names in a dictionary.
 - Engine enum names sent to or from the server (`General`, `SetResearch`,
   error `code`s), localStorage keys, CSS classes, data-* attributes.
 - What people typed (member names, rationales, talk).
+- The Frontier's in-game key text (`frontier/fsession.mjs` `sessionText`),
+  the march plaintext and seal domains (`PS-FRONTIER-MARCH-v1`, `PS-SALT`,
+  `PS-KS`, `PS/frontier-session/v1`), program error names and the
+  `ps-fsession:` / `ps-fmarch:` / `ps-fui:` storage keys.

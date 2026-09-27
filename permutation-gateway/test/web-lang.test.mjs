@@ -8,11 +8,13 @@
 //      attribute has an English entry;
 //  (b) no Japanese outside those, i18n.mjs's tables and comments.
 // The scan reports file:line lists. PS_LANG_ONLY=drawers/,inspector/ narrows
-// it to paths under web/ that start with one of the prefixes.
+// it to paths under web/ that start with one of the prefixes. The Frontier
+// client (web/frontier/**: its .mjs modules and .html pages, dictionaries
+// lang/en-frontier*.mjs) is scanned the same way (M1 W2-E).
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as lang from '../../permutation-server/web/lang.mjs';
 import * as T from '../../permutation-server/web/i18n.mjs';
@@ -561,11 +563,32 @@ function webFiles() {
       const p = join(dir, name), rel = relative(WEB, p);
       if (statSync(p).isDirectory()) { if (rel !== 'sdk' && rel !== 'lang') walk(p); continue; }
       if (rel.endsWith('.mjs') && rel !== 'lang.mjs') out.push(rel);
+      // The Frontier client's pages (web/frontier/**.html) are scanned like v9's two.
+      else if (rel.endsWith('.html') && rel.startsWith(`frontier${sep}`)) out.push(rel);
     }
   };
   walk(WEB);
   return [...out, 'index.html', 'spectate.html'];
 }
+
+// ================================================================== the Frontier client (web/frontier/**)
+test('the scan covers web/frontier/** (pages and modules) and its dictionaries are registered', () => {
+  const files = webFiles();
+  for (const f of ['index.html', 'practice.html', 'spectate.html', 'app.mjs', 'fi18n.mjs', 'fsession.mjs', 'herald.mjs', 'seal.mjs', 'seal-worker.mjs', 'map/fmap.mjs', 'map/layers.mjs']) {
+    assert.ok(files.includes(join('frontier', f)), `web/frontier/${f} is scanned`);
+  }
+  assert.ok(files.filter(f => f.startsWith(`frontier${sep}`)).length >= 20);
+  assert.ok(EN_GROUPS.frontier && EN_GROUPS['frontier-play'], 'en-frontier.mjs and en-frontier-play.mjs are EN groups');
+  // The vendored noble tree and the generated SDK stay out of the scan.
+  assert.ok(!files.some(f => f.startsWith(`sdk${sep}`)));
+});
+
+test('the Frontier session text is never marked for translation', () => {
+  for (const f of webFiles().filter(x => x.startsWith(`frontier${sep}`) && x.endsWith('.mjs'))) {
+    const { keys } = scanJs(readFileSync(join(WEB, f), 'utf8'));
+    assert.ok(!keys.some(k => /Sixfold Frontier wants you/.test(k.key)), `${f}: the signed text must stay untranslated`);
+  }
+});
 const ONLY = (process.env.PS_LANG_ONLY || '').split(',').map(s => s.trim()).filter(Boolean);
 const scanned = () => webFiles().filter(f => !ONLY.length || ONLY.some(p => f.startsWith(p))).map(file => {
   const src = readFileSync(join(WEB, file), 'utf8');

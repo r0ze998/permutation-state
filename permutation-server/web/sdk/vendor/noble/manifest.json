@@ -1,0 +1,39 @@
+{
+  "generator": "scripts/vendor-noble.mjs",
+  "note": "The seal worker imports curves/bls12-381.mjs and hashes/sha2.mjs; every file below is pinned by its sha256.",
+  "packages": {
+    "@noble/curves": {
+      "version": "1.9.7",
+      "resolved": "https://registry.npmjs.org/@noble/curves/-/curves-1.9.7.tgz",
+      "integrity": "sha512-gbKGcRUYIjA3/zCCNaWDciTMFI0dCkvou3TL8Zmy5Nc7sJ47a0jtOeZoTaMxkuqRo9cRhjOdZJXegxYE5FN/xw=="
+    },
+    "@noble/hashes": {
+      "version": "1.8.0",
+      "resolved": "https://registry.npmjs.org/@noble/hashes/-/hashes-1.8.0.tgz",
+      "integrity": "sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A=="
+    }
+  },
+  "entries": [
+    "curves/bls12-381.mjs",
+    "hashes/sha2.mjs",
+    "hashes/utils.mjs"
+  ],
+  "files": {
+    "curves/LICENSE": "4f221aee6e072336700c408c68ab3b96a3fc09f6aebe6f48f1bd99e5ef13faec",
+    "curves/abstract/bls.mjs": "57c5883de291d2532b06651ea6ae146d3770f1e80e8f394b8c0207a84a5da2b9",
+    "curves/abstract/curve.mjs": "121bce251f7cddc0a3f3aa8670cb30710174b59a402a74b4a947a4ef96abcac2",
+    "curves/abstract/hash-to-curve.mjs": "ea4ff7b4e845c5c16c8be7ebe7d96287c27801d38cfc0ee25a72bf33c7ae8808",
+    "curves/abstract/modular.mjs": "7017c0944dcbce814905029574ed57166347048b34899937e932c7a5f79e963f",
+    "curves/abstract/tower.mjs": "546e6d3b17820b3aa0f5a9c95e584eebe47aa8e3e95725dd6e509c211604bf97",
+    "curves/abstract/weierstrass.mjs": "f19c8aed7180a414c4f54dd2149c5c6f99db5a1da78115c7ab406ffd74e41f5a",
+    "curves/bls12-381.mjs": "a6860c2f0466d32bb4daf51e9453a31c32ad18e0a954647d2970bd398dca66cb",
+    "curves/utils.mjs": "c51ec0c9ee2f17c70cae272c89cebe6f2adbda9fa6bb7b821ab0f94d0f7eb225",
+    "hashes/LICENSE": "4f221aee6e072336700c408c68ab3b96a3fc09f6aebe6f48f1bd99e5ef13faec",
+    "hashes/_md.mjs": "b930bded0cbe7a25b7d94ee600d5c1a48a6bfef4914cd0e3e21b804388bcd08d",
+    "hashes/_u64.mjs": "37f1614f1674dfef3d5db8a4b029f1308d443b680162a75669ba14af64de1206",
+    "hashes/crypto.mjs": "1d446b1afd1e1eb459b32daa5331967f895d9b60b365c0e103b78dbddc4457cc",
+    "hashes/hmac.mjs": "2d22e813f301b257850ec4ad2d50985908be5d48087b656c92268fa79520286a",
+    "hashes/sha2.mjs": "c4ed296ea8f25bedb369bbf7e6e52d796232efedb557b232c0f924b0a7f929f7",
+    "hashes/utils.mjs": "feb1407036ecd51657f73a19b85fce7926e6b4bf9e06456a7d8ec1e0a346a0b2"
+  }
+}

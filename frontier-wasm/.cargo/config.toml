@@ -1,0 +1,4 @@
+# Keep the build under frontier-wasm/target: the repository root's
+# .cargo/config.toml would otherwise send it to permutation-chain/target.
+[build]
+target-dir = "target"

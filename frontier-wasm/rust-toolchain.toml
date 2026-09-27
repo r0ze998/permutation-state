@@ -1,0 +1,7 @@
+# frontier-wasm builds on 1.95.0 like frontier-node (contract §3.2). Owned by
+# the integrator (I-55). No `components` or `targets` line on purpose: the
+# wasm32-unknown-unknown target is an install that waits for O-M1-12, and
+# listing it would make rustup download it on first use.
+[toolchain]
+channel = "1.95.0"
+profile = "minimal"

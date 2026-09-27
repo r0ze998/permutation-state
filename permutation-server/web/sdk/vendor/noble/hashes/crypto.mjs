@@ -1,0 +1,2 @@
+// vendored from @noble/hashes@1.8.0 esm/crypto.js by scripts/vendor-noble.mjs — do not edit
+export const crypto = typeof globalThis === 'object' && 'crypto' in globalThis ? globalThis.crypto : undefined;
