@@ -724,6 +724,11 @@ pub fn depart(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
 pub fn settle_departure(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
     check_accounts(Ix::SettleDeparture, a, None)?;
     let x = aix::SettleDeparture::decode(d)?;
+    // v1.5 §21: `transit_slot = 0xFF` is the return settle of hosts that
+    // left a province (Dissolve's `Leave`), W4-A's choice of instruction.
+    if x.transit_slot == super::clash::RETURN_SLOT {
+        return super::clash::settle_return(p, a);
+    }
     let now = prologue::now()?;
     let [_payer, season_ai, province, holding] = a else {
         return Err(FrontierError::TooManyAccounts.into());
