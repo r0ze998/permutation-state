@@ -13,6 +13,10 @@
 //! hexes over ≤ 4 provinces. The chain never searches: the client submits
 //! the path and [`path_cost`] checks it (WP05, B4).
 
+/// Version of this kernel, bound into `RULESET_HASH` (`super::KERNEL_VERSIONS`):
+/// bump it whenever an honest outcome changes. v1: as at M0.
+pub const TRAVEL_VERSION: u16 = 1;
+
 use super::geometry::{check_hex, province_of, ProvinceCoord};
 use crate::fixed::{Bps, BPS_ONE};
 use crate::hex::Hex;

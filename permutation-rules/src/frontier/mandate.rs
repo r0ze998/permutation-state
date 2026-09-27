@@ -53,6 +53,10 @@
 //! them scales every staker's share alike. In an ordinary term more than
 //! half of the active stakers complete, so the floor seldom binds [sim].
 
+/// Version of this kernel, bound into `RULESET_HASH` (`super::KERNEL_VERSIONS`):
+/// bump it whenever an honest outcome changes. v2: M1 CL-15 claim deadline, final sweep.
+pub const MANDATE_VERSION: u16 = 2;
+
 use super::laurel::HOLDING_EMISSION_PER_BELL;
 use super::pools::EconError;
 use super::travel::BELLS_PER_DAY;

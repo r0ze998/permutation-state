@@ -21,6 +21,10 @@
 //! * Completion occupies a first holding (never transferred) and captures
 //!   holdings 2–3 and Free Cities.
 
+/// Version of this kernel, bound into `RULESET_HASH` (`super::KERNEL_VERSIONS`):
+/// bump it whenever an honest outcome changes. v2: M1 CL-09 vigil change rule (midnight switch, first new window skipped unless a day after the last old one).
+pub const SIEGE_VERSION: u16 = 2;
+
 use super::doctrine::bounds::SIEGE_EXTRA_MAX;
 use super::geometry::{is_heartland, march_of, valid_faction, ProvinceCoord};
 use super::holding::{Holding, MAX_WALLS, RESOURCES};

@@ -214,9 +214,22 @@ impl SeedStr {
 }
 
 /// The seed of `kind` for the raw key `raw` (pinned signature). A raw key
-/// longer than 15 bytes is truncated; callers use the typed constructors.
+/// whose length is not `kind.raw_len()` gives `(buf, 0)`: an empty seed
+/// that no address check accepts, never a shorter or truncated seed that
+/// looks valid (integ-W1 review). [`try_seed`] says so with `None`.
 pub fn seed(kind: SeedKind, raw: &[u8]) -> ([u8; 32], usize) {
-    SeedStr::new(kind.tag(), raw).into_parts()
+    match try_seed(kind, raw) {
+        Some(s) => s.into_parts(),
+        None => ([0u8; MAX_SEED_LEN], 0),
+    }
+}
+
+/// [`seed`] that refuses a raw key of the wrong length for `kind`.
+pub fn try_seed(kind: SeedKind, raw: &[u8]) -> Option<SeedStr> {
+    if raw.len() != kind.raw_len() {
+        return None;
+    }
+    Some(SeedStr::new(kind.tag(), raw))
 }
 
 /// Parses a seed back into its kind and raw key; `None` unless it is a

@@ -13,6 +13,10 @@
 //! strictly worse than revealing even a losing stance (no free last look,
 //! design §6.3 and `rev2-results.txt` §B).
 
+/// Version of this kernel, bound into `RULESET_HASH` (`super::KERNEL_VERSIONS`):
+/// bump it whenever an honest outcome changes. v1: as at M0; the damage table is also hashed.
+pub const STANCE_VERSION: u16 = 1;
+
 use crate::fixed::{Bps, BPS_ONE};
 use borsh::{BorshDeserialize, BorshSerialize};
 

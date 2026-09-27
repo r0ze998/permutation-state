@@ -26,6 +26,10 @@
 //! * **Sites:** up to 12 settlement sites by score, at least 2 apart, ties
 //!   to the lower canonical tile index. The Concord has none (neutral).
 
+/// Version of this kernel, bound into `RULESET_HASH` (`super::KERNEL_VERSIONS`):
+/// bump it whenever an honest outcome changes. v1: as at M0.
+pub const TERRAIN_VERSION: u16 = 1;
+
 use super::geometry::{
     tile_index, tile_offset, tile_turned, ProvinceCoord, PROVINCE_TILES, SITES_PER_PROVINCE,
 };

@@ -86,6 +86,10 @@
 //! reference [`resolve_clash_ref`], which host builds keep as the oracle
 //! (`tests/frontier_clash_equiv.rs`).
 
+/// Version of this kernel, bound into `RULESET_HASH` (`super::KERNEL_VERSIONS`):
+/// bump it whenever an honest outcome changes. v2: M1 W1-A CL-10 (one-pass cap recount, civilians never contest), I-43 storage room, Phase A body (digest-identical to the reference).
+pub const CLASH_VERSION: u16 = 2;
+
 #[cfg(any(
     test,
     feature = "std",

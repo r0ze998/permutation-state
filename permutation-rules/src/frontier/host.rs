@@ -15,6 +15,10 @@
 //!   executed after the clash of b ([`Host::settle`]); garrison changes
 //!   likewise ([`GarrisonState`]). The clash of b reads `values_at(b)`.
 
+/// Version of this kernel, bound into `RULESET_HASH` (`super::KERNEL_VERSIONS`):
+/// bump it whenever an honest outcome changes. v2: M1 CL-05 monotone stamina, garrison cap at MAX_HOST_TROOPS (integ-W1).
+pub const HOST_VERSION: u16 = 2;
+
 use crate::fixed::{Bps, MilliTroops, BPS_ONE, MILLI};
 use crate::units::{stats, UnitType};
 use borsh::{BorshDeserialize, BorshSerialize};

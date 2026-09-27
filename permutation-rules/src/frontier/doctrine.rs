@@ -30,6 +30,10 @@
 //! tree, War, heartland sieges); they are kept small and must be re-checked
 //! when their mechanism lands.
 
+/// Version of this kernel, bound into `RULESET_HASH` (`super::KERNEL_VERSIONS`):
+/// bump it whenever an honest outcome changes. v1: the Season 1 table (m0c); the table itself is also hashed.
+pub const DOCTRINE_VERSION: u16 = 1;
+
 use super::siege::required_bells;
 use super::stance::{Posture, Stance};
 use crate::fixed::{Bps, MilliTroops, BPS_ONE};
@@ -200,6 +204,46 @@ pub const DOCTRINES: [Doctrine; 6] = [
         ..NEUTRAL
     },
 ];
+
+/// The doctrine table as bytes for `RULESET_HASH` (every field, in
+/// declaration order, per doctrine A..F; integers little-endian, the name
+/// length-prefixed, `drill` as a presence byte then stance and bps).
+pub fn write_table(out: &mut alloc::vec::Vec<u8>) {
+    out.extend_from_slice(&DOCTRINE_VERSION.to_le_bytes());
+    out.push(DOCTRINES.len() as u8);
+    for d in &DOCTRINES {
+        out.push(d.name.len() as u8);
+        out.extend_from_slice(d.name.as_bytes());
+        out.push(d.unit as u8);
+        match d.drill {
+            Some((s, b)) => {
+                out.push(1);
+                out.push(s as u8);
+                out.extend_from_slice(&b.to_le_bytes());
+            }
+            None => out.push(0),
+        }
+        for x in [
+            d.road_build_bps,
+            d.variant_bps,
+            d.arrival_bps,
+            d.travel_bps,
+            d.upkeep_bps,
+            d.wall_cost_bps,
+            d.attrition_bps,
+            d.caravan_time_bps,
+            d.bourse_fee_bps,
+        ] {
+            out.extend_from_slice(&x.to_le_bytes());
+        }
+        out.extend_from_slice(&d.heartland_siege_extra_bells.to_le_bytes());
+        out.extend_from_slice(&d.war_horn_bells.to_le_bytes());
+        out.push(d.keeps_walls_on_capture as u8);
+        out.push(d.extra_waystones);
+        out.push(d.supply_range_bonus);
+        out.push(d.survey_explore as u8);
+    }
+}
 
 /// Bounds every doctrine knob must stay inside: a doctrine is a flavour,
 /// not a power level. Checked by [`Doctrine::validate`] and in CI.

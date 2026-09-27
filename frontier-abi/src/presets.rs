@@ -86,6 +86,16 @@ pub const QUICKNET_PK_HASH: [u8; 32] = [
     0x45, 0x0a, 0x6b, 0xef, 0xde, 0x91, 0x5d, 0x47, 0xa0, 0xd6, 0xa1, 0x35, 0x19, 0xce, 0xe1, 0x34,
 ];
 
+/// `RULESET_HASH = permutation_rules::frontier::ruleset_hash()` (contract
+/// §3.2): the value the program embeds and CreateSeason writes. A const so
+/// the no_std program can embed it; `ruleset_hash_is_the_kernels` fails the
+/// moment a kernel version, table or bound constant changes, and
+/// `abi-vectors` publishes it in `presets.json`.
+pub const RULESET_HASH: [u8; 32] = [
+    0x1a, 0xc1, 0x1f, 0x85, 0xfd, 0xe3, 0xb8, 0x98, 0xeb, 0xcd, 0x8c, 0x24, 0x69, 0x64, 0xd9, 0xbe,
+    0x2a, 0x29, 0xb4, 0x14, 0x4a, 0x7a, 0x7d, 0xdf, 0xa8, 0x10, 0x06, 0x99, 0x9a, 0x6d, 0xd0, 0x3f,
+];
+
 /// Smallest AnnounceSeason creation bond (1 SOL; test SOL in M1, CL-24).
 pub const MIN_CREATION_BOND: u64 = 1_000_000_000;
 /// AnnounceSeason lead: `t_create_min ≥ now + 24 h`.
@@ -401,6 +411,15 @@ pub const M1_PLAYTEST: SeasonParams = m1_playtest(PLAYTEST_GATE_UNSET);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ruleset_hash_is_the_kernels() {
+        assert_eq!(
+            RULESET_HASH,
+            permutation_rules::frontier::ruleset_hash(),
+            "a kernel changed: update RULESET_HASH and regenerate the vectors"
+        );
+    }
 
     #[test]
     fn quicknet_pk_hash_is_the_hash_of_the_key() {

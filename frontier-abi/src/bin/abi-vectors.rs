@@ -848,6 +848,7 @@ fn presets_file() -> J {
             ("pk_hash", J::S(hex(&presets::QUICKNET_PK_HASH))),
         ]),
     ));
+    v.push(("ruleset_hash", J::S(hex(&presets::RULESET_HASH))));
     v.push(("payout_params_rev3_borsh", J::S(hex(&payout))));
     let mut ps = Vec::new();
     for (name, p) in [

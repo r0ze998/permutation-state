@@ -42,6 +42,10 @@
 //! per faction, so a claim can never draw on another faction's pots even
 //! while the season total is fine.
 
+/// Version of this kernel, bound into `RULESET_HASH` (`super::KERNEL_VERSIONS`):
+/// bump it whenever an honest outcome changes. v2: M1 CL-07/CL-08 per-faction SeasonLedger, CL-11 office ceiling.
+pub const PAYOUT_VERSION: u16 = 2;
+
 use super::index::{citizen_faction_weight, laurel_faction_weight, FACTIONS};
 use super::pools::USDC;
 use super::pools::{civ_share_bps, EconError, Pools, STEWARD_BPS};

@@ -11,6 +11,10 @@
 //! Numbers marked [design] are placeholders for the M0 host simulator to
 //! tune; the kernels do not depend on their values.
 
+/// Version of this kernel, bound into `RULESET_HASH` (`super::KERNEL_VERSIONS`):
+/// bump it whenever an honest outcome changes. v2: M1 CL-02 caps (walls, production, upkeep), CL-03 checked duplicate cost.
+pub const HOLDING_VERSION: u16 = 2;
+
 use crate::economy::upkeep_of_effective;
 use crate::fixed::{Bps, Milli, MilliTroops, BPS_ONE, MILLI};
 use crate::units::{stats, UnitType};

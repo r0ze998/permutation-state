@@ -20,6 +20,10 @@
 //! deterministic binary search over integer powers, so every platform gets
 //! the same bits.
 
+/// Version of this kernel, bound into `RULESET_HASH` (`super::KERNEL_VERSIONS`):
+/// bump it whenever an honest outcome changes. v1: as at M0.
+pub const INDEX_VERSION: u16 = 1;
+
 use super::pools::EconError;
 use crate::fixed::isqrt;
 use borsh::{BorshDeserialize, BorshSerialize};

@@ -20,6 +20,10 @@
 //! province_of(h).rotate()`, which is what makes symmetric terrain possible
 //! (`terrain`).
 
+/// Version of this kernel, bound into `RULESET_HASH` (`super::KERNEL_VERSIONS`):
+/// bump it whenever an honest outcome changes. v1: as at M0 (CL-04 adds refusals only).
+pub const GEOMETRY_VERSION: u16 = 1;
+
 use crate::hash::sha256;
 use crate::hex::{Hex, DIRECTIONS};
 use alloc::vec::Vec;

@@ -25,6 +25,10 @@
 //! 1/12 per bell is exact. Weights: `WEIGHT_ONE` = a Hamlet, first holding,
 //! no garrison.
 
+/// Version of this kernel, bound into `RULESET_HASH` (`super::KERNEL_VERSIONS`):
+/// bump it whenever an honest outcome changes. v1: as at M0.
+pub const LAUREL_VERSION: u16 = 1;
+
 use super::pools::EconError;
 use crate::fixed::{Bps, MilliTroops, BPS_ONE};
 use borsh::{BorshDeserialize, BorshSerialize};

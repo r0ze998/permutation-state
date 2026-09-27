@@ -301,7 +301,10 @@ fn tlock_round_is_at_or_after_bell_end() {
 }
 
 /// CL-20: the roster freeze and posture close are `bell_start(b)`, which
-/// does not depend on the drand phase, while `T(b)` does.
+/// does not depend on the drand phase, while `T(b)` does. **A definition
+/// pin**, not the property: that the program freezes rosters at
+/// `bell_start` rather than at a `T(b)`-derived time is a program-level
+/// test (G-gate, W2-A/W3 owners).
 #[test]
 fn cutoffs_do_not_depend_on_round_phase() {
     let gts = 1_790_000_000;
@@ -641,6 +644,10 @@ fn seed_strings_fit_32_bytes() {
 /// back to exactly their raw bytes (so the map key → seed is injective),
 /// every kind has one fixed length and a distinct tag (so kinds cannot
 /// collide); plus a direct collision check over 20,000 × 18 seeds.
+fn raw_of(k: SeedKind) -> Vec<u8> {
+    vec![7u8; k.raw_len()]
+}
+
 #[test]
 fn seed_strings_are_injective() {
     let mut r = XorShift(0x1234_5678_9abc_def1);
@@ -657,6 +664,19 @@ fn seed_strings_are_injective() {
             assert_eq!(&back[..m], &raw[..m]);
         }
     }
+    // A raw key of the wrong length builds no seed (integ-W1 review): not a
+    // shorter one ("ho01") and not a truncated one.
+    for k in SeedKind::ALL {
+        for len in [0, k.raw_len().saturating_sub(1), k.raw_len() + 1, 40] {
+            if len == k.raw_len() {
+                continue;
+            }
+            let raw = vec![1u8; len];
+            assert_eq!(addr::seed(k, &raw).1, 0, "{k:?} with {len} bytes");
+            assert!(addr::try_seed(k, &raw).is_none());
+        }
+        assert!(addr::try_seed(k, &raw_of(k)).is_some());
+    }
     let tags: HashSet<&[u8; 2]> = SeedKind::ALL.iter().map(|k| k.tag()).collect();
     assert_eq!(tags.len(), SeedKind::ALL.len());
     // Direct check: a seed string never names two kinds.
@@ -669,6 +689,9 @@ fn seed_strings_are_injective() {
     }
 }
 
+/// **A definition pin**: `with_seed_address` is compared with the
+/// expression it is defined as; the independent checks are the SP-V2
+/// transcriptions and frontier-abi's `addresses.json`.
 #[test]
 fn with_seed_addresses_and_tags() {
     let base = sha256(&[b"season-pda"]);
@@ -907,8 +930,9 @@ fn seal_vectors_match_the_kernel() {
     let j = parse_json(&text);
     assert_eq!(j.get("version").i(), 1);
     let cases = j.get("cases").arr();
-    assert!(cases.len() >= 17);
+    assert!(cases.len() >= 24);
     let mut classes = HashSet::new();
+    let mut refusals = HashSet::new();
     for c in cases {
         let name = c.get("name").s();
         let expect = c.get("expect").s();
@@ -934,6 +958,7 @@ fn seal_vectors_match_the_kernel() {
             Err(e) => format!("{e:?}"),
         };
         assert_eq!(v, c.get("validate").s(), "{name}");
+        refusals.insert(v.clone());
         let committed = seal::commit(&plain, &salt) == commit;
         let body_opens = seal::body_xor(&k, &seal::seal_body(&sl)) == plain;
         match expect {
@@ -962,6 +987,24 @@ fn seal_vectors_match_the_kernel() {
     }
     for cl in ["valid", "bad_plaintext", "commit_mismatch", "fo_fail"] {
         assert!(classes.contains(cl), "missing class {cl}");
+    }
+    // Every refusal of `seal::validate` has a vector (integ-W1 review:
+    // Tile, Direction, PathTooLong, HostMismatch, ArriveMismatch were
+    // missing), so every twin (fclient, web) that consumes the file is
+    // checked against each rule.
+    for e in [
+        "Version",
+        "Reserved",
+        "HostMismatch",
+        "ArriveMismatch",
+        "PathTooLong",
+        "PathBits",
+        "Direction",
+        "Tile",
+        "Stance",
+        "Retreat",
+    ] {
+        assert!(refusals.contains(e), "no seal vector for {e}");
     }
 }
 
@@ -1209,11 +1252,41 @@ fn ruleset_hash_binds_versions_and_catalog() {
     let mut t = Vec::new();
     catalog::write_tables(&mut t);
     assert!(a.windows(t.len()).any(|w| w == t.as_slice()));
+    // So are the doctrine table and the kernel constants (integ-W1).
+    let mut d = Vec::new();
+    permutation_rules::frontier::doctrine::write_table(&mut d);
+    assert!(a.windows(d.len()).any(|w| w == d.as_slice()));
+    let k: Vec<u8> = permutation_rules::frontier::KERNEL_CONSTANTS
+        .iter()
+        .flat_map(|x| x.to_le_bytes())
+        .collect();
+    assert!(a.ends_with(&k));
+    // Every module of the frontier tree has a version in the hash.
+    let names: Vec<&str> = permutation_rules::frontier::KERNEL_VERSIONS
+        .iter()
+        .map(|(n, _)| *n)
+        .collect();
+    let src = include_str!("../src/frontier/mod.rs");
+    let mut modules = 0;
+    for line in src.lines() {
+        if let Some(m) = line
+            .strip_prefix("pub mod ")
+            .and_then(|r| r.strip_suffix(';'))
+        {
+            assert!(
+                names.contains(&m),
+                "module {m} has no KERNEL_VERSIONS entry"
+            );
+            modules += 1;
+        }
+    }
+    assert_eq!(modules + 1, names.len(), "one entry per module + frontier");
     // Golden value: a change to any bound constant or table changes it on
-    // purpose (update here, in frontier-abi and in the notes).
+    // purpose (update here, in frontier-abi and in the notes). Moved from
+    // 3c374846… (W1-C, nine versions) when every kernel was bound.
     assert_eq!(
         hex(&ruleset_hash()),
-        "3c374846a12082ad946e7105f9c1478315fe1947d7065d08de05642a16a9c2dc",
+        "1ac11f85fde3b898ebcd8c246964d9be2a29b4144a7a7ddfa81006999a6dd03f",
         "ruleset hash changed"
     );
 }

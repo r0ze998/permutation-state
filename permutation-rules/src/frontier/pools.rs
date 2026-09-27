@@ -13,6 +13,10 @@
 //! allocates nothing, so the Frontier program, the verifier and the host
 //! simulator share it bit for bit.
 
+/// Version of this kernel, bound into `RULESET_HASH` (`super::KERNEL_VERSIONS`):
+/// bump it whenever an honest outcome changes. v1: as at M0.
+pub const POOLS_VERSION: u16 = 1;
+
 use crate::fixed::{Bps, BPS_ONE};
 use borsh::{BorshDeserialize, BorshSerialize};
 

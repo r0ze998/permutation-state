@@ -4,7 +4,8 @@
 // edition 2024) with the manifest below, then run
 //   cargo run --release -- <S-TLOCK results dir> <SP-V2 beacons dir> \
 //       permutation-rules/vectors/seal-vectors-v1.json
-// (the M1 lab copy lives in scratchpad/frontier/m1/lab/w1c-seal-vectors,
+// (the M1 lab copies live in scratchpad/frontier/m1/lab/w1c-seal-vectors and,
+// with the integ-W1 cases, scratchpad/frontier/m1/integ-w1r/seal-vectors,
 // whose Cargo.lock is S-TLOCK rs-interop's). Output is deterministic.
 //
 // [package]
@@ -22,6 +23,25 @@
 // serde_json = "=1.0.151"
 // permutation-rules = { path = "<repo>/permutation-rules", features = ["std"] }
 //
+//! Producer of `permutation-rules/vectors/seal-vectors-v1.json` (unit W1-C).
+//!
+//! Deterministic compact-16 march seals to real quicknet rounds whose
+//! signatures were recorded (S-TLOCK q3/q4, SP-V2 beacon fixtures):
+//!
+//! - the IBE block (U, V, W) is tlock 0.0.10's `ibe::encrypt` with a fixed
+//!   `sigma` instead of a random one (same hashes, same serialisation);
+//! - the body is the 37-byte plaintext XOR `sha256("PS-KS" ‖ k ‖ [c])`;
+//! - every seal is opened again with the **stock** `tlock::decrypt` and
+//!   the recorded signature, and the body/commitment are recomputed here
+//!   with `sha2` independently of the rules kernel, then compared with it.
+//!
+//! `k` and `sigma` are derived from the S-TLOCK q3/q4 commitments
+//! ("seeded from q3/q4"): `k_i = sha256("PSF-SEALVEC-k" ‖ q3.commit ‖
+//! q4.commit ‖ i)[..16]` (last byte forced non-zero: stock `decrypt`
+//! strips trailing zeros), `sigma_i = sha256("PSF-SEALVEC-sigma" ‖ … ‖
+//! i)[..16]`.
+//!
+//! Usage: `cargo run --release -- <S-TLOCK results dir> <SP-V2 beacons dir> <out.json>`
 //! Producer of `permutation-rules/vectors/seal-vectors-v1.json` (unit W1-C).
 //!
 //! Deterministic compact-16 march seals to real quicknet rounds whose
@@ -170,6 +190,9 @@ struct Case {
     tamper: Tamper,
     /// Open with this signature instead (wrong round).
     open_sig: Option<Vec<u8>>,
+    /// The order the seal is judged against (host, arrive bell); the
+    /// plaintext's own values unless a mismatch case overrides them.
+    order: Option<(u64, u32)>,
 }
 
 #[derive(Clone, Copy)]
@@ -243,6 +266,7 @@ fn main() {
             plain,
             tamper,
             open_sig: open_sig.cloned(),
+            order: None,
         })
     };
     add("valid_q3", "valid", r3, &s3, 0, base(host_a, 144, &[0, 0, 1, 2, 5]), Tamper::None, None);
@@ -289,12 +313,49 @@ fn main() {
         p.stance = 4;
         p
     }, Tamper::None, None);
+    // integ-W1 review: the checks the first set missed (kernel I-28 plus
+    // Tile and Direction).
+    add("bad_plaintext_tile_61", "bad_plaintext", r3, &s3, 16, {
+        let mut p = base(host_a, 144, &[0]);
+        p.dest_tile = 61;
+        p
+    }, Tamper::None, None);
+    add("bad_plaintext_tile_255", "bad_plaintext", r4, &s4, 17, {
+        let mut p = base(host_c, 144, &[4]);
+        p.dest_tile = 255;
+        p
+    }, Tamper::None, None);
+    add("bad_plaintext_direction_6", "bad_plaintext", r3, &s3, 18, {
+        let mut p = base(host_a, 144, &[]);
+        p.path_len = 1;
+        p.path[0] = 6;
+        p
+    }, Tamper::None, None);
+    add("bad_plaintext_direction_7", "bad_plaintext", r4, &s4, 19, {
+        let mut p = base(host_a, 144, &[0, 0]);
+        p.path_len = 3;
+        p.path[0] |= 7 << 6; // step 2 spans bytes 0-1: bits 6..9
+        p.path[1] |= 1;
+        p
+    }, Tamper::None, None);
+    add("bad_plaintext_path_33", "bad_plaintext", r3, &s3, 20, {
+        let mut p = base(host_a, 144, &[]);
+        p.path_len = 33;
+        p
+    }, Tamper::None, None);
+    add("bad_plaintext_host_mismatch", "bad_plaintext", r4, &s4, 21, base(host_b, 144, &[1]), Tamper::None, None);
+    add("bad_plaintext_arrive_mismatch", "bad_plaintext", r3, &s3, 22, base(host_a, 145, &[1]), Tamper::None, None);
     add("wrong_round", "fo_fail", r3, &s3, 10, base(host_a, 144, &[2]), Tamper::None, Some(&s4));
     add("tampered_u", "bad_point_or_fo_fail", r3, &s3, 11, base(host_a, 144, &[2]), Tamper::U, None);
     add("tampered_v", "fo_fail", r3, &s3, 12, base(host_a, 144, &[2]), Tamper::V, None);
     add("tampered_w", "fo_fail", r4, &s4, 13, base(host_a, 144, &[2]), Tamper::W, None);
     add("tampered_body", "commit_mismatch", r4, &s4, 14, base(host_a, 144, &[2]), Tamper::Body, None);
     add("forged_commit", "commit_mismatch", r4, &s4, 15, base(host_a, 144, &[2]), Tamper::ForgedCommit, None);
+    for c in cases.iter_mut() {
+        if c.name == "bad_plaintext_host_mismatch" || c.name == "bad_plaintext_arrive_mismatch" {
+            c.order = Some((host_a, 144));
+        }
+    }
 
     let mut vs = vec![];
     for c in &cases {
@@ -324,7 +385,8 @@ fn main() {
         let opens_to_commit = opened
             .map(|k| sha(&[b"PS-FRONTIER-MARCH-v1", &body_ref(&k, s[128..].try_into().unwrap()), &sha(&[b"PS-SALT", &k])]) == commit)
             .unwrap_or(false);
-        let validate = match seal::validate(&c.plain, c.plain.host_id, c.arrive_bell) {
+        let (order_host, order_arrive) = c.order.unwrap_or((c.plain.host_id, c.arrive_bell));
+        let validate = match seal::validate(&c.plain, order_host, order_arrive) {
             Ok(()) => "ok".to_string(),
             Err(e) => format!("{e:?}"),
         };
@@ -339,8 +401,8 @@ fn main() {
         let root = sha(&[&commit, &ct_hash]);
         // A season in which T(arrive) is exactly this round: bell_end(arrive) = round_time(round).
         let rt = beacon::round_time(beacon::QUICKNET.genesis, 3, c.round);
-        let genesis_ts = rt - 600 * (c.arrive_bell as i64 + 1);
-        assert_eq!(beacon::tlock_round(&beacon::QUICKNET, genesis_ts, c.arrive_bell), c.round);
+        let genesis_ts = rt - 600 * (order_arrive as i64 + 1);
+        assert_eq!(beacon::tlock_round(&beacon::QUICKNET, genesis_ts, order_arrive), c.round);
         vs.push(json!({
             "name": c.name,
             "expect": c.expect,
@@ -348,8 +410,8 @@ fn main() {
             "sig": hx(&c.sig),
             "open_sig": hx(&open_sig),
             "genesis_ts": genesis_ts,
-            "arrive_bell": c.arrive_bell,
-            "host_id": c.plain.host_id.to_string(),
+            "arrive_bell": order_arrive,
+            "host_id": order_host.to_string(),
             "k": hx(&c.k),
             "sigma": hx(&c.sigma),
             "plain": hx(&pt),

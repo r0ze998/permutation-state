@@ -156,24 +156,6 @@ fn milli(x: i64) -> Option<Milli> {
     x.checked_mul(MILLI)
 }
 
-/// `holding::duplicate_cost` as `Option<u64>`: CL-03 (unit W1-B) changes
-/// its return type from `u64` to `Option<u64>`; this adapter lets the
-/// catalog build before and after that merge. (Integration: drop it once
-/// W1-B is in.)
-trait IntoChecked {
-    fn into_checked(self) -> Option<u64>;
-}
-impl IntoChecked for u64 {
-    fn into_checked(self) -> Option<u64> {
-        Some(self)
-    }
-}
-impl IntoChecked for Option<u64> {
-    fn into_checked(self) -> Option<u64> {
-        self
-    }
-}
-
 /// Copies of one building kind a holding may reach before the
 /// quadratic cost overflows anything real; the catalog refuses beyond it
 /// (the holding's own caps, CL-02, are tighter).
@@ -183,7 +165,7 @@ fn dup(base: i64, n: u32) -> Option<Milli> {
     if n == 0 || n > MAX_COPIES || base < 0 {
         return None;
     }
-    let c = super::holding::duplicate_cost(base as u64, n).into_checked()?;
+    let c = super::holding::duplicate_cost(base as u64, n)?;
     milli(i64::try_from(c).ok()?)
 }
 
