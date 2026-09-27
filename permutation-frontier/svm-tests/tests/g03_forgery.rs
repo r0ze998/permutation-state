@@ -15,7 +15,7 @@ use common::copy_to_fresh;
 use frontier_abi::layout::beacon::{anchor_archive as AA, bell_anchor as BA, seed_cache as SC};
 use frontier_abi::layout::world::{beacon_log as BL, season as S};
 use permutation_frontier_svm_tests::chain::{
-    assert_code, assert_refused, expect_lands, with_account, Chain, SendResult,
+    assert_code, assert_refused, expect_lands, with_account, Chain, Profile, SendResult,
 };
 use permutation_frontier_svm_tests::ix::beacon::{at, post_anchor_regions, seed_at};
 use permutation_frontier_svm_tests::world::{archive_part, World};
@@ -254,8 +254,14 @@ fn g03_announce_season_addresses_and_authority() {
         l,
     );
     let ix = with_account(w.announce_ix(), 3, fake_pd);
+    // The forged copy doubles the ProgramData the transaction loads: give
+    // the loaded-data limit room for both, so the program decides and not
+    // SIMD-0186 (integ-W3, W3-B finding F5: a release .so above ~418 KB
+    // put two copies over the 1-MiB L(AnnounceSeason)).
+    let p = c.profile_of(std::slice::from_ref(&ix), Profile::ladder);
+    let p = p.with_loaded(2 * p.loaded_limit.unwrap_or(0));
     assert_refused(
-        c.send(&[ix], &[&w.authority]),
+        c.send_with(&p, &[ix], &[&w.authority]),
         "AnnounceSeason with a foreign ProgramData",
     );
     // A signer that is not the upgrade authority (I-51).
