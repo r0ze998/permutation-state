@@ -1,0 +1,25 @@
+[package]
+name = "frontier-abi"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+publish = false
+description = "Sixfold Frontier M1 ABI: account layouts, instruction tags and data, errors, PS2 log records, budgets, presets, prologue tables and the entry codec (no Solana dependencies)"
+license = "MIT"
+
+[lib]
+crate-type = ["rlib"]
+
+# The vector writer (`cargo run -p frontier-abi --bin abi-vectors [-- --check]`)
+# is a plain std binary over the no_std library.
+[[bin]]
+name = "abi-vectors"
+path = "src/bin/abi-vectors.rs"
+
+# Dependency section: owned by the integrator (M1 contract §3.4, I-55).
+# frontier-abi depends only on permutation-rules (I-03).
+[dependencies]
+permutation-rules = { path = "../permutation-rules" }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }

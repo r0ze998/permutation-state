@@ -1,0 +1,57 @@
+{
+  "generator": "frontier-abi abi-vectors",
+  "abi_version": 1,
+  "contract": "docs/frontier/m1/M1-CONTRACT.md v1.1",
+  "content": "Province entry (48 B) <-> kernel Host codec samples (§5.3, I-55)",
+  "entries": [
+    {
+      "case": "none",
+      "host_id": "319962178650154",
+      "encodes": true,
+      "entry": "2a0000000123010004051e014e61bc004d00f82ad2040000d40400008503000000000000000000000000000000000000",
+      "pend_op": 0
+    },
+    {
+      "case": "spend",
+      "host_id": "319962178650154",
+      "encodes": true,
+      "entry": "2a0000000123010004051e014e61bc004d00f82ad2040000d404000085030000d3040000010078000000000000000000",
+      "pend_op": 1
+    },
+    {
+      "case": "split",
+      "host_id": "319962178650154",
+      "encodes": true,
+      "entry": "2a0000000123010004051e014e61bc004d00f82ad2040000d404000085030000d3040000024e61bc404b4c0063000000",
+      "pend_op": 2
+    },
+    {
+      "case": "absorb",
+      "host_id": "319962178650154",
+      "encodes": true,
+      "entry": "2a0000000123010004051e014e61bc004d00f82ad2040000d404000085030000d3040000030000000000000007000000",
+      "pend_op": 3
+    },
+    {
+      "case": "absorbed_into",
+      "host_id": "319962178650154",
+      "encodes": true,
+      "entry": "2a0000000123010004051e014e61bc004d00f82ad2040000d404000085030000d3040000040000000000000008000000",
+      "pend_op": 4
+    },
+    {
+      "case": "leave",
+      "host_id": "319962178650154",
+      "encodes": true,
+      "entry": "2a0000000123010004051e014e61bc004d00f82ad2040000d404000085030000d3040000050000000000000000000000",
+      "pend_op": 5
+    },
+    {
+      "case": "forfeit",
+      "host_id": "319962178650154",
+      "encodes": true,
+      "entry": "2a0000000123010004051e014e61bc004d00f82ad2040000d404000085030000d3040000060000000000000000000000",
+      "pend_op": 6
+    }
+  ]
+}
