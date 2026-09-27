@@ -25,7 +25,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use borsh::BorshDeserialize;
 use permutation_rules::gov::NOBODY;
 use permutation_rules::orders::order_commitment;
-use permutation_rules::rng::{tick_vrf, Salt};
+use permutation_rules::rng::Salt;
 use permutation_rules::state::WorldState;
 use permutation_rules::tick::{run_phase, TickInput, PHASE_COUNT};
 use permutation_rules::Ruleset;
@@ -749,6 +749,27 @@ pub fn follow(
     out
 }
 
+/// The tick randomness of a v8 program (`PS_TICK` with 6 fields): the
+/// pre-state root and every revealed salt, in (civ, role) order. It was
+/// `permutation_rules::rng::tick_vrf` until the rules stopped deriving it
+/// (v9 draws it from the VRF, `permutation_chain::randomness::tick_vrf`);
+/// kept here for the v8 arm.
+pub fn tick_vrf_v8(pre_root: &[u8; 32], salts: &[Salt]) -> [u8; 32] {
+    let parts: Vec<[u8; 35]> = salts
+        .iter()
+        .map(|(civ, role, salt)| {
+            let mut p = [0u8; 35];
+            p[..2].copy_from_slice(&civ.to_le_bytes());
+            p[2] = *role;
+            p[3..].copy_from_slice(salt);
+            p
+        })
+        .collect();
+    let mut all: Vec<&[u8]> = vec![b"permutation-rules/tick-vrf".as_slice(), pre_root];
+    all.extend(parts.iter().map(|p| p.as_slice()));
+    permutation_rules::hash::sha256(&all)
+}
+
 /// The key a tick's `PS_SALTS` is logged on, by `PS_TICK` format: the
 /// pre-state root in v8 (6 fields). v9 records (9 fields) are WP11's arm.
 fn salts_key(rec: &TickRec) -> Result<[u8; 32], SealError> {
@@ -762,7 +783,7 @@ fn salts_key(rec: &TickRec) -> Result<[u8; 32], SealError> {
 /// pre-state root and the revealed salts.
 fn check_randomness(rec: &TickRec, salts: &[Salt], input: &TickInput) -> Result<(), SealError> {
     match rec.fields.len() {
-        6 if tick_vrf(&rec.pre, salts) == input.vrf => Ok(()),
+        6 if tick_vrf_v8(&rec.pre, salts) == input.vrf => Ok(()),
         6 => Err(SealError::Fail(format!(
             "tick {}: the randomness is not derived from the revealed salts",
             rec.tick
@@ -976,7 +997,7 @@ mod tests {
         let pre = s.state_root().unwrap();
         Sealed {
             input: TickInput {
-                vrf: tick_vrf(&pre, &salts),
+                vrf: tick_vrf_v8(&pre, &salts),
                 batches,
                 ..Default::default()
             },
@@ -1335,7 +1356,7 @@ mod tests {
         let mut sd = sealed(&s0, &ALL);
         sd.input.batches.insert(1, sd.input.batches[0].clone());
         sd.salts.insert(1, sd.salts[0]);
-        sd.input.vrf = tick_vrf(&s0.state_root().unwrap(), &sd.salts);
+        sd.input.vrf = tick_vrf_v8(&s0.state_root().unwrap(), &sd.salts);
         let bytes = borsh::to_vec(&sd.input).unwrap();
         let hash = permutation_rules::hash::sha256(&[&bytes]);
         c.txs

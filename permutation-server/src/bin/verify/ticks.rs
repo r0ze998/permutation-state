@@ -485,7 +485,6 @@ mod tests {
     use super::*;
     use permutation_rules::genesis::{nation_entries, new_season};
     use permutation_rules::gov;
-    use permutation_rules::rng::tick_vrf;
     use permutation_rules::tick::{run_phase, TickInput};
     use permutation_rules::{Preset, Ruleset};
     use permutation_server::replay::{Emitted, TxRecords};
@@ -513,7 +512,7 @@ mod tests {
         for t in 0..n {
             let pre = s.state_root().unwrap();
             let input = TickInput {
-                vrf: tick_vrf(&pre, &[]),
+                vrf: permutation_server::replay::tick_vrf_v8(&pre, &[]),
                 ..Default::default()
             };
             let bytes = borsh::to_vec(&input).unwrap();

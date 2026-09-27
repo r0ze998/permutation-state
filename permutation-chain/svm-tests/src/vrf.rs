@@ -189,14 +189,23 @@ pub fn requests() -> Vec<Received> {
 }
 
 impl Chain {
-    /// Registers the VRF stand-in and creates both oracle queues.
+    /// Registers the VRF stand-in and creates both oracle queues (every
+    /// `Chain` has them: `Chain::new` calls `install_vrf`).
     pub fn with_vrf(mut self) -> Self {
+        self.install_vrf();
+        self
+    }
+
+    /// `with_vrf` in place; once is enough (a second call does nothing).
+    pub fn install_vrf(&mut self) {
         use solana_program_runtime::solana_sbpf::program::BuiltinFunctionDefinition;
+        if self.owner(&queue_er()).is_some() {
+            return;
+        }
         self.svm.add_builtin(vrf_program(), mock::MockVrf::register);
         self.put(queue_base(), vrf_program(), vec![0; 1024]);
         self.put(queue_er(), vrf_program(), vec![0; 1024]);
         mock::take();
-        self
     }
 }
 
@@ -296,8 +305,8 @@ mod tests {
 
     /// A builtin stand-in at the VRF's address: a callback program that is
     /// not ours (the system program, which refuses the data) makes the
-    /// fulfilment fail; one that is not in the transaction too. The full
-    /// round trip through the program lands with FreezeTick (unit P1).
+    /// fulfilment fail; one that is not in the transaction too. The round
+    /// trip through the program is `fulfil_calls_the_program_back`.
     #[test]
     fn the_stand_in_answers_only_its_own_instructions() {
         let mut c = Chain::new().with_vrf();
@@ -364,33 +373,36 @@ mod tests {
         assert_eq!((randomness, season_id, tick), ([9; 32], 7, 5));
     }
 
-    /// The fulfilment reaches the callback program by CPI, signed as the
-    /// scoped identity: our program is called (depth 2). This asserts the
-    /// wave-2 stub: `ConsumeTickRandomness` refuses with
-    /// `InvalidInstruction` (1), the same code a payload that fails to
-    /// decode gets, so the field order is checked host-side
-    /// (`callback_data_is_the_programs_instruction`). PENDING P1: replace it
-    /// with the round trip FreezeTick → `requests()` → fulfil → `PS_RAND`,
-    /// `rand_state == RAND_VRF`.
+    /// The round trip through the program: FreezeTick → the first request
+    /// (`RetryTickRandomness`, A19) → the stand-in's fulfilment, a CPI into
+    /// our program (depth 2) signed as the scoped identity →
+    /// `ConsumeTickRandomness` draws the tick (`PS_RAND`, `RAND_VRF`).
     #[test]
     fn fulfil_calls_the_program_back() {
-        let mut c = Chain::new().with_vrf();
-        let chunk0 = Address::new_unique();
-        c.put(chunk0, c.program, vec![0; 64]);
-        let request = Request {
-            caller_seed: [3; 32],
-            callback_program_id: c.program.to_bytes(),
-            callback_discriminator: vec![randomness::CONSUME_TICK_TAG],
-            callback_accounts_metas: vec![Meta {
-                pubkey: chunk0.to_bytes(),
-                is_signer: false,
-                is_writable: true,
-            }],
-            callback_args: randomness::tick_callback_args(7, 0).to_vec(),
-        };
-        let fail = fulfil(&mut c, &request, [9; 32]).unwrap_err();
-        assert_eq!(fail.code, Some(1), "{fail:?}");
+        use crate::season::{Params, SeasonFx};
+        let mut c = Chain::new();
+        let s = SeasonFx::running(&mut c, Params::default(), 2);
+        s.close(&mut c);
+        s.freeze_and_request(&mut c);
+        let got = requests();
+        assert_eq!(got.len(), 1, "{got:?}");
+        let r = &got[0];
+        let m = s.meta(&c);
+        assert_eq!(r.kind, randomness::REQUEST_SCOPED_HIGH_PRIORITY);
+        assert_eq!(r.request.caller_seed, m.rand_pre);
+        assert_eq!(r.request.callback_program_id, c.program.to_bytes());
+        let e = [9; 32];
+        let landed = fulfil(&mut c, &r.request, e).expect("the oracle's callback");
         let ours = format!("Program {} invoke [2]", c.program);
-        assert!(fail.logs.iter().any(|l| l == &ours), "{:?}", fail.logs);
+        assert!(landed.logs.iter().any(|l| l == &ours), "{:?}", landed.logs);
+        let vrf = randomness::tick_vrf(&m.rand_pre, &e, randomness::RAND_VRF).unwrap();
+        let rec = crate::records::record(&landed.logs, b"PS_RAND");
+        assert_eq!(rec[2], vec![randomness::RAND_VRF]);
+        assert_eq!((rec[3].clone(), rec[4].clone()), (e.to_vec(), vrf.to_vec()));
+        let m = s.meta(&c);
+        assert_eq!(
+            (m.rand_state, m.rand_out, m.vrf),
+            (randomness::RAND_VRF, e, vrf)
+        );
     }
 }

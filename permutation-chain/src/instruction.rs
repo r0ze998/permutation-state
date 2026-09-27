@@ -274,11 +274,12 @@ pub enum ChainInstruction {
     /// give-up clock): the crank sends `[FreezeTick, RetryTickRandomness]`
     /// in one transaction, or `FreezeTick` alone if that does not fit.
     /// Permissionless; not subject to the alone rule. The queue is the one
-    /// of the recorded play mode (delegated: the ER queue; base play: the
-    /// base queue), never either.
+    /// of the play mode the season recorded (`Season::delegated`: world
+    /// chunk 0 delegated, the ER queue; base play, the base queue), never
+    /// either.
     /// 0 payer (s,w) · 1 world chunk 0 (w) · 2 program identity PDA `["identity"]`
     /// · 3 VRF queue (w) · 4 VRF program · 5 system · 6 SlotHashes sysvar
-    /// · 7.. nation PDAs of every civ, in civ order (w)
+    /// · 7.. nation PDAs of every civ, in civ order (w) · then the season
     FreezeTick,
     /// ER: the VRF program's callback with the tick's randomness. Only the
     /// VRF program can sign as its scoped identity
@@ -294,8 +295,9 @@ pub enum ChainInstruction {
     /// request after `FreezeTick`, and again when none came
     /// `state::VRF_RETRY_SECONDS` after the last one; `state::VRF_GIVEUP_SECONDS`
     /// after the freeze: the fallback (`randomness::RAND_FALLBACK`, logged;
-    /// the verifier flags it). Permissionless; not subject to the alone rule.
-    /// Accounts 0–6 as `FreezeTick`.
+    /// the verifier flags it; only after a request went unanswered).
+    /// Permissionless; not subject to the alone rule.
+    /// Accounts 0–6 as `FreezeTick` · 7 the season
     RetryTickRandomness,
     /// Base: the VRF program's callback with the season seed's randomness
     /// (status Seeding → Genesis). A stale callback is ignored. Logs

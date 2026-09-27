@@ -1102,6 +1102,7 @@ version = "0.1.0"
 dependencies = [
  "borsh 1.6.1",
  "ephemeral-rollups-sdk",
+ "permutation-chain",
  "permutation-rules",
  "solana-program 4.0.0",
  "solana-system-interface 3.3.0",
