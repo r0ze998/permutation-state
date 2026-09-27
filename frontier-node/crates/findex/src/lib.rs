@@ -2,9 +2,9 @@
 //!
 //! | module | what |
 //! |---|---|
-//! | [`ingest`] | sources: [`ingest::LocalnetFeed`] (any `ChainPort`'s ordered feed) and [`ingest::RpcPoll`] (`getSignaturesForAddress` + `getTransaction`) |
+//! | [`ingest`] | sources: [`ingest::LocalnetFeed`] (any `ChainPort`'s ordered feed), [`ingest::RpcPoll`] (`getSignaturesForAddress` + `getTransaction`) and [`ingest::Enriched`] (post-state fetched for a source without it, before archiving) |
 //! | [`archive`] | append-only segment files with a manifest (sha256 per sealed segment, the source cursor) |
-//! | [`index`] | the SQLite entity index: transactions, PS2 records, chain links and heads, account snapshots |
+//! | [`index`] | the SQLite entity index: transactions, PS2 records, chain links and heads, account snapshots, event numbering; [`index::Reader`] for a second (read-only) connection |
 //!
 //! [`Findex`] ties them together: every pull is archived first (with the
 //! source's cursor), then indexed; on open the index catches up from the
@@ -24,8 +24,8 @@ use frontier_abi::addr::AddrCtx;
 use solana_address::Address;
 
 pub use archive::Archive;
-pub use index::Index;
-pub use ingest::{IngestError, LocalnetFeed, RpcPoll, Source};
+pub use index::{EventRow, Index, Reader};
+pub use ingest::{Enriched, IngestError, LocalnetFeed, RpcPoll, Source};
 
 /// The PS2 records of one transaction, in log order, decoded with the
 /// canonical per-kind lengths of `frontier-abi::log` (W1-F note 5: without
@@ -49,6 +49,9 @@ pub fn addr_ctx(program: &Address, season_id: u64) -> AddrCtx {
     }
 }
 
+/// Records indexed per SQLite transaction while catching up.
+pub const CATCH_UP_BATCH: usize = 2_000;
+
 /// Archive + index in one directory (`archive/`, `index.sqlite`).
 pub struct Findex {
     pub dir: PathBuf,
@@ -70,14 +73,26 @@ impl Findex {
             Archive::open(&dir.join("archive"), segment_bytes).map_err(|e| st(e.to_string()))?;
         let ctx = season_id.map(|id| addr_ctx(&program, id));
         let mut index = Index::open(&dir.join("index.sqlite"), program, ctx).map_err(st)?;
-        let behind = index.last_seq().map_err(st)?;
+        let mut behind = index.last_seq().map_err(st)?;
         if behind > archive.last_seq() {
             // The index is ahead of the archive (restored from elsewhere): rebuild.
-            let all = archive.read_after(0).map_err(|e| st(e.to_string()))?;
-            index.rebuild_from(&all).map_err(st)?;
-        } else if behind < archive.last_seq() {
-            let rest = archive.read_after(behind).map_err(|e| st(e.to_string()))?;
-            index.add(&rest).map_err(st)?;
+            index.rebuild_from(&[]).map_err(st)?;
+            behind = 0;
+        }
+        if behind < archive.last_seq() {
+            // Catch up in batches (a season's archive does not fit in memory).
+            let mut batch = Vec::with_capacity(CATCH_UP_BATCH);
+            archive
+                .for_each_after(behind, |r| {
+                    batch.push(r);
+                    if batch.len() >= CATCH_UP_BATCH {
+                        index.add(&batch).map_err(std::io::Error::other)?;
+                        batch.clear();
+                    }
+                    Ok(())
+                })
+                .map_err(|e| st(e.to_string()))?;
+            index.add(&batch).map_err(st)?;
         }
         Ok(Findex {
             dir: dir.into(),
