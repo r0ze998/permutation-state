@@ -178,7 +178,26 @@ The wave-2 merge, the gate fixes and the Gate W2 record are in `m1/integ-W2-NOTE
 | H2 (§3.3, §5.6) | Every season/keeper prologue recomputes the Season PDA from the stored id and bump with `sol_sha256` (`BadAddress`), right after the structural read and before the status; the player prologue (W3-A) does the same | architect (reverses W2-A's "presence rule" deviation) | `season_pda_is_the_runtimes_program_address`, `g03_season_forged_in_keeper_and_authority_instructions` |
 | H3 | The rustfmt/clippy install is recorded once (part A, W2-A's row); the other wave-2 copies were dropped at merge | integrator | merge commits of W2-B…W2-E |
 | H4 (I-55) | W2-E's optional direct `@noble/curves` devDependency is not added (locked transitively at 1.9.7; `vendor-noble.mjs` pins it); W2-A's `Kind::spec` change in frontier-abi is deferred (not a gate item; the build script refuses the relocation it would cause) | integrator | integ-W2 notes §2 |
-| H5 (open) | W2-A F2 (AnchorArchive above the 10,240-B CPI allocation limit) and F3 (InitBeaconLogs ≈ 80k, InitShards 45k, AnnounceSeason 25k) need a contract amendment before W4-B / W5-A | open (integrator/owner) | W2-A notes §4; integ-W2 notes §5 |
+| H5 (closed by I1, I2) | W2-A F2 (AnchorArchive above the 10,240-B CPI allocation limit) and F3 (InitBeaconLogs ≈ 80k, InitShards 45k, AnnounceSeason 25k) need a contract amendment before W4-B / W5-A | closed in part I (contract v1.3) | W2-A notes §4; integ-W2 notes §5, §6 |
+
+## I. Integration window W2, review response (integrator, 2026-09-28; contract v1.3 §19)
+
+The wave-2 review (six units, verdict needs-fix for each) was answered in the same integration window. The item-by-item response is `m1/integ-W2-NOTES.md` §6.
+
+| # | Decision | Status | Evidence |
+|---|---|---|---|
+| I1 (§4.1, §5.2, §5.3, §5.8) | **AnchorArchive per region and half day** (`part = bell / 72`, 6,144 B, 72 entries). Chosen over "create at 10,240 B and grow in a second instruction" (a half-created archive would be visible to every reader, and `rent_to` sits past 10,240 B) and over shrinking the entry (seed and signature are both needed after the anchor closes, I-44) | architect | W2-A F2 [measured]; frontier-abi `anchor_archive::SIZE ≤ CPI_ALLOC_MAX` const assert; keeper `archive_returns_rent` over two parts |
+| I2 (§5.5) | Budgets AnnounceSeason 25k, InitBeaconLogs 80k, InitShards 45k; gated by `g01_budget_w2a_*` (added to Gate W2) | architect | 18,570 (worst of 64 ids) / 74,688 / 39,313 CU [measured] |
+| I3 (§5.7) | SetWindowSchedule: one change per season (`AlreadyDone`), `from_bell < end_bell` (`BadData`); `reveal_window` never rewritten | architect | `g04_window_schedule_needs_notice_and_range`, `g04_window_schedule_from_bell_inside_the_season` |
+| I4 (§5.3, §13.1) | Seal code 3 reserved and never emitted; a wrong-round seal is code 1 | architect (records W2-A's choice) | W1-C `wrong_round → fo_fail` vector |
+| I5 (§4.2) | `close_to` does not log; each close path emits `CLOSE` first | architect (records W2-A's split) | `proc/mod.rs` hand-over rules |
+| I6 (§5.7) | CreateSeason refuses a `program_version` other than the binary's | architect | `g13_create_season_window_hash_params_status` |
+| I7 (§8.2) | Capped writes whose versions all expired end and are re-planned; the anchor scan window always reaches the newest bell | architect | `capped_write_whose_versions_expired_ends_and_restarts`, `anchor_held_past_the_version_cap_lands_after_the_hold` |
+| I8 (§8.3) | Relay: exact account keys and ABI writability; settle quota on a verified requester citizen else the address bucket; replay key claimed before any await; a failed send charges nothing | architect | `frontier-sdk.test.mjs`, `frontier-relay.test.mjs` |
+| I9 (§8.3, reading) | The daily lamport cap stays one pooled cap per key (24 top-preset Depart escrows + rent(Citizen) + rent(Holding)); the reviewer's "refile after a day-0 displacement waits for the next game day" and "unused rent headroom can pay extra Departs up to the tx quota" are accepted residuals for M1, reported, not changed | integrator (open for the owner if the playtest shows it) | W2-D review minor; `shapes.mjs` `lamportsPerDay` |
+| I10 (§8.7) | `localnet` caps count the §10.1 cost; a transaction not executable at block time gives its cost back | architect | `block_caps_count_the_cost_not_the_cu_limit` |
+| I11 (§9.1, §9.4) | Web clock rate 1 off localnet; staleness against the local clock; `messageProblems` requires blockhash and the expected instruction; `sealMarch` derives T(arrive_bell) | architect | `web-frontier-{clock,chainio,seal}.test.mjs` |
+| I12 | Deferred with owners (not gate items, recorded in integ-W2 notes §6): W2-C snapshot/ledger binding, airdrop pre-balances, snapshot path restriction, `--program` mismatch, WS `Lagged`, archive verify-on-serve (W5 hardening); W2-F nonce duplicates, write-ahead journal, Dead backoff, D-class start bid, payer-care idempotence, daily budget (W3-C keeper land / W5); W2-E herald key checks, beacon NETWORK byte, geometry bounds, `plan_path`, ClashArgs codec, `ps-fui` (W3-F / W4-A / W4-E); W2-B per-(instruction, code) completeness table (W5-A) | integrator | integ-W2 notes §6 |
 
 ## E. Change log
 
@@ -189,3 +208,4 @@ The wave-2 merge, the gate fixes and the Gate W2 record are in `m1/integ-W2-NOTE
 | v1.1 (W1-D) | 2026-09-27 | Moved to `docs/frontier/DECISIONS.md`; the relayed answers to part C recorded; part D updated with the CL-30/32/33 measurements; part F (wave-1 records) added |
 | v1.2 (integ-W1) | 2026-09-27 | Part G (the integration window's decisions after the wave-1 review); F2 wording corrected; contract v1.2 |
 | v1.2 (integ-W2) | 2026-09-28 | Part H (the wave-2 integration window); the rustfmt/clippy install recorded once in part A |
+| v1.3 (integ-W2 review) | 2026-09-28 | Part I (the wave-2 review response); H5 closed; contract v1.3 (§19) |
