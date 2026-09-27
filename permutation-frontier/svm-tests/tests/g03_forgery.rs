@@ -1,0 +1,348 @@
+//! G3 (§13.2) for the keyed accounts W2-A's instructions read or write:
+//! each refused with the pinned code — wrong address (`BadAddress`), wrong
+//! owner, wrong magic, wrong season, wrong key fields (`BadAccount`),
+//! absence claimed at a non-canonical address (`BadAddress`); a forged
+//! anchor or archive where one is read.
+//!
+//! Forged accounts are written with `Chain::put`; on a real chain nobody
+//! but the program can own an account at a with-seed address of the
+//! Season PDA, so these are defence in depth (§3.3: "recompute every keyed
+//! address a reader trusts").
+
+mod common;
+
+use common::copy_to_fresh;
+use frontier_abi::layout::beacon::{anchor_archive as AA, bell_anchor as BA, seed_cache as SC};
+use frontier_abi::layout::world::{beacon_log as BL, season as S};
+use permutation_frontier_svm_tests::chain::{
+    assert_code, assert_refused, expect_lands, with_account, Chain, SendResult,
+};
+use permutation_frontier_svm_tests::ix::beacon::{at, seed_at};
+use permutation_frontier_svm_tests::world::{day_of, World};
+use permutation_frontier_svm_tests::{
+    sha256, Address, FrontierError as E, Instruction, Keypair, Signer,
+};
+
+/// The four "present but not ours" forgeries of an account at its canonical
+/// address: another owner, another magic, another season id, another key
+/// field (`key_off`, one byte flipped).
+fn forgeries(c: &Chain, k: &Address, key_off: usize) -> Vec<(&'static str, Address, Vec<u8>)> {
+    let d = c.data(k);
+    let other_program = Address::new_from_array(sha256(&[b"another program"]));
+    let mut magic = d.clone();
+    magic[0] ^= 0x20;
+    let mut season = d.clone();
+    season[8] ^= 0x01;
+    let mut keyf = d.clone();
+    keyf[key_off] ^= 0x01;
+    vec![
+        ("owner", other_program, d),
+        ("magic", c.program, magic),
+        ("season", c.program, season),
+        ("key fields", c.program, keyf),
+    ]
+}
+
+/// Runs `send` on a fork where `k` holds each forgery; every one is
+/// refused with `want` (§13.2: `BadAccount`).
+fn each_forgery_is(
+    want: E,
+    c: &Chain,
+    k: &Address,
+    key_off: usize,
+    mut send: impl FnMut(&mut Chain) -> SendResult,
+) {
+    for (what, owner, data) in forgeries(c, k, key_off) {
+        let mut f = c.fork();
+        let l = f.lamports(k).max(f.rent(data.len()));
+        f.put(*k, owner, data, l);
+        let r = send(&mut f);
+        match r {
+            Ok(_) => panic!("forged {what} at {k} accepted"),
+            Err(_) => {
+                assert_code(r, want);
+            }
+        }
+    }
+}
+
+fn keeper_send(c: &mut Chain, w: &World, ix: Instruction) -> SendResult {
+    c.send(&[ix], &[&w.keeper])
+}
+
+// ------------------------------------------------------------ Season
+
+#[test]
+fn g03_season_forged_in_keeper_and_authority_instructions() {
+    // The Season's key is its id (a PDA), so "wrong season" and "wrong key
+    // fields" are the non-canonical case: a program-owned copy elsewhere.
+    let (c, w) = common::release();
+    let round = w.beacons.rounds()[3];
+    let from_bell = w.bell_at(c.now).expect("running") + 200;
+    let cases: Vec<(&str, Instruction, &Keypair)> = vec![
+        ("PostBeacon", w.beacon_ix(4, round), &w.keeper),
+        (
+            "SetWindowSchedule",
+            permutation_frontier_svm_tests::ix::season::set_window_schedule(
+                &w.a,
+                w.authority.pubkey(),
+                900,
+                from_bell,
+            ),
+            &w.authority,
+        ),
+    ];
+    for (label, ix, signer) in cases {
+        let mut f = c.fork();
+        let fake = copy_to_fresh(&mut f, &w.a.season, label.as_bytes());
+        let r = f.send(&[with_account(ix.clone(), 1, fake)], &[signer]);
+        assert!(r.is_err(), "{label}: a copied Season accepted");
+        assert_code(r, E::BadAddress);
+        for (what, owner, data) in forgeries(&c, &w.a.season, S::STATUS).into_iter().take(2) {
+            let mut f = c.fork();
+            let l = f.lamports(&w.a.season);
+            f.put(w.a.season, owner, data, l);
+            let r = f.send(std::slice::from_ref(&ix), &[signer]);
+            assert!(r.is_err(), "{label}: Season with a forged {what} accepted");
+            assert_code(r, E::BadAccount);
+        }
+    }
+}
+
+#[test]
+fn g03_announce_season_addresses_and_authority() {
+    let mut c = Chain::release();
+    let w = World::new(&mut c, 3);
+    c.set_time(w.announce_time());
+    // The Season PDA of another id (non-canonical for id 3).
+    let other = permutation_frontier_svm_tests::Addresses::new(c.program, 4).season;
+    let ix = with_account(w.announce_ix(), 1, other);
+    assert_code(c.send(&[ix], &[&w.authority]), E::BadAddress);
+    // A ProgramData that is not the program's canonical LoaderV3 address.
+    let fake_pd = Address::new_from_array(sha256(&[b"fake programdata"]));
+    let d = c.data(&c.programdata);
+    let l = c.lamports(&c.programdata);
+    c.put(
+        fake_pd,
+        permutation_frontier_svm_tests::chain::loader_v3(),
+        d,
+        l,
+    );
+    let ix = with_account(w.announce_ix(), 3, fake_pd);
+    assert_refused(
+        c.send(&[ix], &[&w.authority]),
+        "AnnounceSeason with a foreign ProgramData",
+    );
+    // A signer that is not the upgrade authority (I-51).
+    let stranger = c.funded(b"stranger", 10);
+    let ix = with_account(w.announce_ix(), 0, stranger.pubkey());
+    assert_code(c.send(&[ix], &[&stranger]), E::Auth);
+    // The real one lands.
+    expect_lands(w.announce(&mut c), "AnnounceSeason");
+}
+
+#[test]
+fn g03_create_season_targets_must_be_canonical() {
+    let mut c = Chain::release();
+    let w = World::announced(&mut c, 1);
+    c.set_time(w.t_create_min);
+    let n = w.create_ix().accounts.len();
+    // Positions 2..n-1: Frontier, ProvinceFund × 6, DefencePool.
+    for i in 2..n - 1 {
+        let mut f = c.fork();
+        let wrong = Address::new_from_array(sha256(&[b"non-canonical", &[i as u8]]));
+        let ix = with_account(w.create_ix(), i, wrong);
+        assert_code(f.send(&[ix], &[&w.authority]), E::BadAddress);
+    }
+    // Two funds swapped: each is canonical for another wedge.
+    let mut ix = w.create_ix();
+    ix.accounts.swap(3, 4);
+    assert_code(c.send(&[ix], &[&w.authority]), E::BadAddress);
+    // A signer that is not the season's authority.
+    let stranger = c.funded(b"stranger", 100);
+    let ix = with_account(w.create_ix(), 0, stranger.pubkey());
+    assert_code(c.send(&[ix], &[&stranger]), E::Auth);
+}
+
+#[test]
+fn g03_init_logs_and_shards_targets_must_be_canonical() {
+    let (c, w) = {
+        let mut c = Chain::release();
+        let w = World::created(&mut c, 1);
+        (c, w)
+    };
+    let logs =
+        permutation_frontier_svm_tests::ix::season::init_beacon_logs(&w.a, w.authority.pubkey());
+    let mut f = c.fork();
+    // Region 5's position holds region 6's log (canonical, wrong place).
+    let ix = with_account(logs.clone(), 2 + 5, w.a.beacon_log(6));
+    assert_code(f.send(&[ix], &[&w.authority]), E::BadAddress);
+    let mut f = c.fork();
+    let ix = with_account(logs, 2 + 15, Address::new_from_array(sha256(&[b"x"])));
+    assert_code(f.send(&[ix], &[&w.authority]), E::BadAddress);
+    let shards =
+        permutation_frontier_svm_tests::ix::season::init_shards(&w.a, w.authority.pubkey(), 2);
+    let mut f = c.fork();
+    let ix = with_account(shards.clone(), 2 + 3, w.a.join_shard(3, 3));
+    assert_code(f.send(&[ix], &[&w.authority]), E::BadAddress);
+    let mut f = c.fork();
+    let ix = with_account(shards, 2, w.a.join_shard(2, 1));
+    assert_code(f.send(&[ix], &[&w.authority]), E::BadAddress);
+}
+
+// ------------------------------------------------------------ BeaconLog
+
+#[test]
+fn g03_beacon_log_forged_in_post_beacon() {
+    let (c, w) = common::release();
+    let round = w.beacons.rounds()[5];
+    // Non-canonical: region 9's log for region 8.
+    let mut f = c.fork();
+    let ix = with_account(w.beacon_ix(8, round), 2, w.a.beacon_log(9));
+    assert_code(keeper_send(&mut f, &w, ix), E::BadAddress);
+    // Absent at a non-canonical address.
+    let mut f = c.fork();
+    let ix = with_account(
+        w.beacon_ix(8, round),
+        2,
+        Address::new_from_array(sha256(&[b"nowhere"])),
+    );
+    assert_code(keeper_send(&mut f, &w, ix), E::BadAddress);
+    // Forgeries at the canonical address (key field: the region byte).
+    each_forgery_is(E::BadAccount, &c, &w.a.beacon_log(8), BL::REGION, |f| {
+        let ix = w.beacon_ix(8, round);
+        keeper_send(f, &w, ix)
+    });
+    // The genuine one lands.
+    let mut f = c.fork();
+    expect_lands(w.post_beacon(&mut f, 8, round), "PostBeacon");
+}
+
+// ------------------------------------------------------------ BellAnchor, AnchorArchive (PostAnchor)
+
+#[test]
+fn g03_anchor_and_archive_forged_in_post_anchor() {
+    let (mut c, w) = common::test_beacon();
+    w.to_anchor_time(&mut c, 5);
+    let bell = 5u32;
+    let r = 11u8;
+    // Anchor at a non-canonical address: another bell's canonical anchor.
+    let mut f = c.fork();
+    let ix = with_account(w.anchor_ix(bell, r), at::ANCHOR, w.a.anchor(bell + 1, r));
+    assert_code(keeper_send(&mut f, &w, ix), E::BadAddress);
+    // Archive at a non-canonical address: another day's, and a random one.
+    for wrong in [
+        w.a.archive(r, day_of(bell) + 1),
+        w.a.archive(r + 1, day_of(bell)),
+        Address::new_from_array(sha256(&[b"archive?"])),
+    ] {
+        let mut f = c.fork();
+        let ix = with_account(w.anchor_ix(bell, r), at::ARCHIVE, wrong);
+        assert_code(keeper_send(&mut f, &w, ix), E::BadAddress);
+    }
+    // A forged archive at the canonical address (key field: the day).
+    let mut g = c.fork();
+    w.craft_archive(&mut g, r, day_of(bell), &[]);
+    each_forgery_is(
+        E::BadAccount,
+        &g,
+        &w.a.archive(r, day_of(bell)),
+        AA::DAY,
+        |f| {
+            let ix = w.anchor_ix(bell, r);
+            keeper_send(f, &w, ix)
+        },
+    );
+    // A present anchor at the canonical address that is not THE anchor:
+    // presence is authenticated by owner, magic, season and key fields
+    // (§4.1), so a forgery is refused rather than taken for "present".
+    let mut g = c.fork();
+    expect_lands(w.post_anchor(&mut g, bell, r), "PostAnchor");
+    each_forgery_is(E::BadAccount, &g, &w.a.anchor(bell, r), BA::BELL, |f| {
+        let ix = w.anchor_ix(bell, r);
+        keeper_send(f, &w, ix)
+    });
+    // The genuine path lands (with a present, untombstoned archive).
+    let mut g = c.fork();
+    w.craft_archive(&mut g, r, day_of(bell), &[bell + 1]);
+    expect_lands(
+        w.post_anchor(&mut g, bell, r),
+        "PostAnchor with an archive of other bells",
+    );
+}
+
+#[test]
+fn g03_instructions_sysvar_must_be_the_sysvar() {
+    let (mut c, w) = common::test_beacon();
+    w.to_anchor_time(&mut c, 0);
+    let fake = Address::new_from_array(sha256(&[b"not the instructions sysvar"]));
+    let ix = with_account(w.anchor_ix(0, 0), at::IX_SYSVAR, fake);
+    assert_refused(
+        keeper_send(&mut c, &w, ix),
+        "PostAnchor with a forged instructions sysvar",
+    );
+}
+
+// ------------------------------------------------------------ BellAnchor, SeedCache (PostSeed)
+
+#[test]
+fn g03_anchor_and_cache_forged_in_post_seed() {
+    let (mut c, w) = common::test_beacon();
+    let (bell, r) = (2u32, 6u8);
+    expect_lands(w.post_anchor(&mut c, bell, r), "PostAnchor");
+    expect_lands(
+        w.post_anchor(&mut c, bell + 1, r),
+        "PostAnchor (another bell)",
+    );
+    let round = w.seed_round(&c, bell, r);
+    let t = World::round_time(round);
+    if c.now < t {
+        c.set_time(t);
+    }
+    let seed_ix = |nonce| w.seed_ix(bell, r, nonce, round);
+    // THE anchor at a non-canonical address: another bell's genuine anchor.
+    let mut f = c.fork();
+    let ix = with_account(seed_ix(0), seed_at::ANCHOR, w.a.anchor(bell + 1, r));
+    assert_code(keeper_send(&mut f, &w, ix), E::BadAddress);
+    // Absent THE anchor at a non-canonical address.
+    let mut f = c.fork();
+    let ix = with_account(
+        seed_ix(0),
+        seed_at::ANCHOR,
+        Address::new_from_array(sha256(&[b"no anchor"])),
+    );
+    assert_code(keeper_send(&mut f, &w, ix), E::BadAddress);
+    // Forgeries of THE anchor at its canonical address (key field: bell).
+    each_forgery_is(E::BadAccount, &c, &w.a.anchor(bell, r), BA::BELL, |f| {
+        keeper_send(f, &w, seed_ix(0))
+    });
+    // …and with the region byte changed.
+    each_forgery_is(E::BadAccount, &c, &w.a.anchor(bell, r), BA::REGION, |f| {
+        keeper_send(f, &w, seed_ix(0))
+    });
+    // The cache at a non-canonical address: another nonce's.
+    let mut f = c.fork();
+    let ix = with_account(seed_ix(0), seed_at::CACHE, w.a.seed_cache(bell, r, 1));
+    assert_code(keeper_send(&mut f, &w, ix), E::BadAddress);
+    // A present cache at the canonical address that is not a genuine one.
+    let mut g = c.fork();
+    expect_lands(keeper_send(&mut g, &w, seed_ix(0)), "PostSeed");
+    each_forgery_is(
+        E::BadAccount,
+        &g,
+        &w.a.seed_cache(bell, r, 0),
+        SC::NONCE,
+        |f| keeper_send(f, &w, seed_ix(0)),
+    );
+}
+
+#[test]
+fn g03_ruleset_of_the_season_must_match_the_binary() {
+    // §5.6 step 1: a Running season whose ruleset hash differs from the
+    // binary's is `RulesetMismatch` for every keeper write.
+    let (mut c, w) = common::test_beacon();
+    w.to_anchor_time(&mut c, 0);
+    c.edit(&w.a.season, |d| d[S::RULESET_HASH] ^= 0xFF);
+    let ix = w.anchor_ix(0, 3);
+    assert_code(keeper_send(&mut c, &w, ix), E::RulesetMismatch);
+}

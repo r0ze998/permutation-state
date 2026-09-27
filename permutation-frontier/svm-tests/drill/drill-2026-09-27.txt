@@ -1,0 +1,35 @@
+drill: probe 540704 B (target 540608 B), max_len 679936, small max_len 544768
+3.1.9
+Program Id: E9BRxhWhwParYvRm772s8dqirsmngUjvJtpfRJ6GEnBJ
+Signature: 4YkUNpUsVcnHaywXjL83NB2gkFMw1TpGWdJ1g73QuwJGr7po8PGe58QdYRgM1MLB9b9SwtcjBH2zc5cdcHdx7hgt
+Program Id: 4seERKnXap4W2iyFtvbWQBB3LemHmhY5jv21WuiFkwH8
+Signature: 5vKJB9e7C1qyTRhCahimziKHu4N9434wjYZf4XGeGu7zsmHMFqJC4LQvt1QjY9b7j4oqT5H12wBP8gnEjvee2wxV
+Program Id: E9BRxhWhwParYvRm772s8dqirsmngUjvJtpfRJ6GEnBJ
+Owner: BPFLoaderUpgradeab1e11111111111111111111111
+ProgramData Address: 8ZadQDdVw7wbSSRxcirXhvM7qPEetDpHyRgoxgGwbrjA
+Authority: AagRXtXuRNENLBCwRFEsCxzRZw1GUsRoJ5gSDJ6rCmqt
+Last Deployed In Slot: 16
+Data Length: 679936 (0xa6000) bytes
+Balance: 4.73355864 SOL
+Program Id: 4seERKnXap4W2iyFtvbWQBB3LemHmhY5jv21WuiFkwH8
+Owner: BPFLoaderUpgradeab1e11111111111111111111111
+ProgramData Address: Gq8BzhXwnuuqchWJGLbvEstLuouSGDMPs5u9HbLKhhUo
+Authority: AagRXtXuRNENLBCwRFEsCxzRZw1GUsRoJ5gSDJ6rCmqt
+Last Deployed In Slot: 30
+Data Length: 544768 (0x85000) bytes
+Balance: 3.79278936 SOL
+running 1 test
+drill: validator {"feature-set":1620780344,"solana-core":"3.1.9"}
+drill: programdata 679981 B (small 544813 B), program account 36 B, ComputeBudget account 22 B, System account 14 B, payer 0 B
+drill: base need 680295 B (predicted 680295 B)
+drill: absent account adds 0 B
+drill: pre-funded account (no data) adds 64 B
+drill: 10,000-B account adds 10064 B
+drill: instructions sysvar adds 0 B
+drill: listed System program adds 78 B
+drill: programdata 135168 B less → need 135168 B less
+drill: one byte below the need: err Some(String("MaxLoadedAccountsDataSizeExceeded")), fee 5000, payer 491394403240 → 491394398240
+drill: one page below round_up(need): err Some(String("MaxLoadedAccountsDataSizeExceeded")), fee 5000
+DRILL RESULT: need 680295 B for a 679981-B ProgramData; absent +0, pre-funded +64, ix sysvar +0, System +78; failed load charged 5000 lamports
+test drill_validator_loaded_data ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.52s

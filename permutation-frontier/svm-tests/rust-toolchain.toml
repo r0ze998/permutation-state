@@ -1,0 +1,7 @@
+# LiteSVM 0.16 does not build on 1.89 (contract §3.2); the program, the rules
+# and the ABI stay on 1.89.0. Owned by the integrator (I-55). No `components`
+# line: rustfmt and clippy for 1.95.0 are installed on this machine (owner's
+# OK, 2026-09-27) and listing them would make rustup fetch them elsewhere.
+[toolchain]
+channel = "1.95.0"
+profile = "minimal"

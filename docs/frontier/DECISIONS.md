@@ -25,6 +25,7 @@ Status words: **decided** (by the owner), **architect** (decided in the contract
 | N4 | 2026-09-27 | SP-V2 `RESULTS.md` replaces separate S-BEACON and S-TLOCK reports | M0 close item 8 closed |
 | N5 | 2026-09-27 | Start M1 now; close the remaining M0 items in M1's first week | Wave 1 carries CL-01…CL-38; G0 tasks land before any gameplay instruction links a kernel |
 | D23 | 2026-09-27 | At most one office-term per wallet per season | Simulator default 1 (done, W1-D: `Config::office_term_limit = Some(1)`, vacancies counted); kernel `GovernanceParams` (W1-C); `Citizen.office_terms_used` reserved (W1-E); vacancy rule for small seasons (sim: a seat with no eligible wallet stays vacant, no pay) |
+| — | 2026-09-27 | **rustfmt and clippy for toolchain 1.95.0 installed** by the main session with the owner's explicit OK (a toolchain component install; O-M1-12's list stays unapproved) | The `frontier-node` and `permutation-frontier/svm-tests` fmt/clippy gate lines run as written, no longer `PENDING-OWNER` (W1-F notes §8; recorded by W2-B as the wave-2 task asked) |
 | — | 2026-09-27 | **Answers to part C, as relayed to the M1 units by the M1 workflow:** every working default O-M1-01…O-M1-24 accepted, except **O-M1-12 (downloads and installs: not approved)** and **O-M1-18 (devnet playtest: not approved)**; O-M1-17 as "fix the legacy tests locally, no push" | Part C's status column records this. The integrator confirms it with the owner's own wording at the wave-1 merge; until then it is recorded as relayed, not as the owner's text |
 
 ---
