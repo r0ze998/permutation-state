@@ -1,0 +1,261 @@
+//! What the fleet did and what it saw, for the stack report (E5 criterion
+//! 5: "every persona's expected outcome observed"; criterion 7: bot
+//! outcome statistics, reported). Every sent action is one [`Outcome`];
+//! the report counts them by group (archetype or persona), action and
+//! result, and judges the personas whose expected outcome a bot can see
+//! itself (a refusal it receives). The rest need the chain's final state
+//! and are left `needs-chain` for the stack report and the verifier.
+
+use std::collections::BTreeMap;
+
+use frontier_agents::{Arch, Persona};
+use serde_json::{json, Value};
+
+/// One action's result.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Outcome {
+    pub bot: u32,
+    pub arch: Arch,
+    pub persona: Option<Persona>,
+    /// The intent (`policy::Intent::name`).
+    pub action: &'static str,
+    /// `relay`, `keeper`, `direct`, `herald`, `local`.
+    pub route: &'static str,
+    pub ok: bool,
+    /// HTTP status (0 for a direct transaction).
+    pub status: u16,
+    /// Refusal code (relay code name, keeper code, program error name).
+    pub code: Option<String>,
+    pub signature: Option<String>,
+    /// Persona detail (e.g. `late`, `forged`, `zero_tip`).
+    pub tag: Option<&'static str>,
+}
+
+impl Outcome {
+    pub fn result(&self) -> String {
+        if self.ok {
+            "ok".into()
+        } else {
+            self.code
+                .clone()
+                .unwrap_or_else(|| format!("http_{}", self.status))
+        }
+    }
+}
+
+/// A persona's verdict from what its bots saw.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Verdict {
+    /// The expected refusal was seen and nothing contradicted it.
+    Observed,
+    /// Something the contract says must not happen happened (e.g. a late
+    /// reveal accepted).
+    Violated,
+    /// The persona has not reached its test yet.
+    Pending,
+    /// Only the chain can tell (stack report, verifier).
+    NeedsChain,
+}
+
+impl Verdict {
+    pub fn name(self) -> &'static str {
+        match self {
+            Verdict::Observed => "observed",
+            Verdict::Violated => "violated",
+            Verdict::Pending => "pending",
+            Verdict::NeedsChain => "needs-chain",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Report {
+    /// (group, action, result) → count.
+    pub counts: BTreeMap<(String, String, String), u64>,
+    /// Outcomes of persona bots, kept whole (few: ≤ 1% of bots each).
+    pub persona_outcomes: Vec<Outcome>,
+    pub errors: BTreeMap<String, u64>,
+    pub steps: u64,
+    pub bots: u64,
+}
+
+fn refused_as(o: &Outcome, codes: &[&str]) -> bool {
+    !o.ok && o.code.as_deref().is_some_and(|c| codes.contains(&c))
+}
+
+impl Report {
+    pub fn record(&mut self, o: Outcome) {
+        let group = match o.persona {
+            Some(p) => format!("persona:{}", p.name()),
+            None => format!("arch:{}", o.arch.key()),
+        };
+        *self
+            .counts
+            .entry((group, o.action.to_string(), o.result()))
+            .or_default() += 1;
+        if o.persona.is_some() {
+            self.persona_outcomes.push(o);
+        }
+    }
+
+    pub fn error(&mut self, what: &str) {
+        *self.errors.entry(what.to_string()).or_default() += 1;
+    }
+
+    /// The verdict for `p` from its bots' outcomes (§8.6's brackets).
+    pub fn verdict(&self, p: Persona) -> Verdict {
+        let os: Vec<&Outcome> = self
+            .persona_outcomes
+            .iter()
+            .filter(|o| o.persona == Some(p))
+            .collect();
+        let tagged =
+            |t: &str| -> Vec<&&Outcome> { os.iter().filter(|o| o.tag == Some(t)).collect() };
+        let judge = |xs: Vec<&&Outcome>, codes: &[&str]| {
+            if xs.is_empty() {
+                Verdict::Pending
+            } else if xs.iter().any(|o| o.ok) {
+                Verdict::Violated
+            } else if xs.iter().all(|o| refused_as(o, codes)) {
+                Verdict::Observed
+            } else {
+                // Refused, but not with the code the contract names: the
+                // report lists the codes; the stack report decides.
+                Verdict::NeedsChain
+            }
+        };
+        match p {
+            Persona::SettleRacer => judge(tagged("redepart"), &["HostInTransit"]),
+            Persona::LateRevealer => judge(
+                tagged("late"),
+                &["WindowClosed", "LatchClosed", "Archived", "TooLate"],
+            ),
+            Persona::Forger => judge(
+                tagged("forged"),
+                &[
+                    "BadAccount",
+                    "BadAddress",
+                    "WrongRegion",
+                    "NoAnchor",
+                    "RelayRejected",
+                ],
+            ),
+            Persona::ZeroTip => judge(tagged("zero_tip"), &["TipTooLow", "TipNotPreset"]),
+            Persona::Spammer => {
+                let sp = tagged("spam");
+                if sp.is_empty() {
+                    Verdict::Pending
+                } else if sp.iter().any(|o| {
+                    o.status == 429 || refused_as(o, &["QuotaExceeded", "RateLimited", "Bucket"])
+                }) {
+                    Verdict::Observed
+                } else {
+                    Verdict::Pending
+                }
+            }
+            _ => Verdict::NeedsChain,
+        }
+    }
+
+    pub fn merge(&mut self, other: Report) {
+        for (k, v) in other.counts {
+            *self.counts.entry(k).or_default() += v;
+        }
+        self.persona_outcomes.extend(other.persona_outcomes);
+        for (k, v) in other.errors {
+            *self.errors.entry(k).or_default() += v;
+        }
+        self.steps += other.steps;
+        self.bots += other.bots;
+    }
+
+    pub fn to_json(&self) -> Value {
+        let mut by_group: BTreeMap<&str, BTreeMap<String, BTreeMap<&str, u64>>> = BTreeMap::new();
+        for ((g, a, r), n) in &self.counts {
+            by_group
+                .entry(g)
+                .or_default()
+                .entry(a.clone())
+                .or_default()
+                .insert(r, *n);
+        }
+        let personas: Vec<Value> = Persona::ALL
+            .iter()
+            .map(|&p| {
+                let mut codes: BTreeMap<String, u64> = BTreeMap::new();
+                for o in self
+                    .persona_outcomes
+                    .iter()
+                    .filter(|o| o.persona == Some(p))
+                {
+                    *codes
+                        .entry(format!("{}:{}", o.action, o.result()))
+                        .or_default() += 1;
+                }
+                json!({
+                    "persona": p.name(),
+                    "expected": p.expected(),
+                    "verdict": self.verdict(p).name(),
+                    "locally_checkable": p.locally_checkable(),
+                    "results": codes,
+                })
+            })
+            .collect();
+        json!({
+            "v": 1,
+            "bots": self.bots,
+            "steps": self.steps,
+            "groups": by_group,
+            "personas": personas,
+            "errors": self.errors,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn o(p: Persona, tag: &'static str, ok: bool, code: &str, status: u16) -> Outcome {
+        Outcome {
+            bot: 1,
+            arch: Arch::Bot,
+            persona: Some(p),
+            action: "x",
+            route: "relay",
+            ok,
+            status,
+            code: (!code.is_empty()).then(|| code.to_string()),
+            signature: None,
+            tag: Some(tag),
+        }
+    }
+
+    #[test]
+    fn verdicts() {
+        let mut r = Report::default();
+        assert_eq!(r.verdict(Persona::ZeroTip), Verdict::Pending);
+        r.record(o(Persona::ZeroTip, "zero_tip", false, "TipNotPreset", 400));
+        r.record(o(Persona::ZeroTip, "zero_tip", false, "TipTooLow", 0));
+        assert_eq!(r.verdict(Persona::ZeroTip), Verdict::Observed);
+        r.record(o(Persona::LateRevealer, "late", false, "WindowClosed", 410));
+        assert_eq!(r.verdict(Persona::LateRevealer), Verdict::Observed);
+        r.record(o(Persona::LateRevealer, "late", true, "", 202));
+        assert_eq!(r.verdict(Persona::LateRevealer), Verdict::Violated);
+        r.record(o(Persona::Spammer, "spam", true, "", 200));
+        assert_eq!(r.verdict(Persona::Spammer), Verdict::Pending);
+        r.record(o(Persona::Spammer, "spam", false, "QuotaExceeded", 429));
+        assert_eq!(r.verdict(Persona::Spammer), Verdict::Observed);
+        r.record(o(
+            Persona::SettleRacer,
+            "redepart",
+            false,
+            "NotResident",
+            400,
+        ));
+        assert_eq!(r.verdict(Persona::SettleRacer), Verdict::NeedsChain);
+        assert_eq!(r.verdict(Persona::MinTip), Verdict::NeedsChain);
+        let j = r.to_json();
+        assert_eq!(j["personas"].as_array().unwrap().len(), 13);
+    }
+}
