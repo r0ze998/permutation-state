@@ -1,6 +1,6 @@
 [package]
 name = "agents"
-description = "Frontier bot profiles and policies (skeleton in W1; W3 builds it)"
+description = "Frontier bot profiles (copied from frontier-sim with an equality test), herald observations and policies (M1 contract §8.6, W3-E)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,5 +10,14 @@ license.workspace = true
 [lib]
 name = "frontier_agents"
 
+# Dependency sections belong to the integrator (contract §3.4, I-55). W3-E
+# request R1 (docs/frontier/m1/W3-E-NOTES.md): the workspace crates below,
+# every one already in frontier-node/Cargo.lock through fclient; only the
+# `agents` package's own dependency list in the lock changes.
 [dependencies]
 fclient.workspace = true
+permutation-rules.workspace = true
+sha2.workspace = true
+hex.workspace = true
+base64.workspace = true
+serde_json.workspace = true
