@@ -57,6 +57,14 @@ pub const RING_SEEDS: [[u8; 32]; 3] = [[1; 32], [2; 32], [3; 32]];
 pub const IN_TRANSIT_SEQ: u32 = 5;
 pub const IN_TRANSIT_SLOT: u8 = 3;
 pub const IN_TRANSIT_ARRIVE: u32 = 38;
+/// The in-transit march's arrival at the enemy's home province: its
+/// ArrivalSlot index, the slot's beneficiary and the ClashInputs resolver,
+/// served in the immutable per-bell envelope `/h/province/{P},{Q}/38` (the
+/// latest envelope is bell 40's, as a herald serves it once the province
+/// resolved past 38; wave-3 review, W3-E).
+pub const IN_TRANSIT_SLOT_I: u8 = 2;
+pub const SLOT_BENEFICIARY: [u8; 32] = [0x5B; 32];
+pub const RESOLVER: [u8; 32] = [0x5E; 32];
 /// `L(reveal)` the fixture season records.
 pub const REVEAL_LOADED_LIMIT: u32 = 1_048_576;
 
@@ -476,6 +484,51 @@ pub fn world() -> World {
         });
         files.insert(
             format!("h/province/{},{}/latest.json", p.pc.p, p.pc.q),
+            pretty(&env),
+        );
+    }
+
+    // ---- the arrival bell's own envelope of the in-transit march
+    {
+        let pe = provs.iter().find(|p| p.pc == enemy_home).expect("enemy");
+        let host = fclient::addr::host_id(home.p, home.q, 0, 1, IN_TRANSIT_SEQ).expect("host id");
+        let mut sl = vec![0u8; size::ARRIVAL_SLOT];
+        sl[..8].copy_from_slice(magic::ARRIVAL_SLOT);
+        sl[l::sh::SEASON_ID..l::sh::SEASON_ID + 8].copy_from_slice(&SEASON_ID.to_le_bytes());
+        use l::arrival_slot as sa;
+        sl[sa::P..sa::P + 2].copy_from_slice(&(enemy_home.p as i16).to_le_bytes());
+        sl[sa::Q..sa::Q + 2].copy_from_slice(&(enemy_home.q as i16).to_le_bytes());
+        sl[sa::BELL..sa::BELL + 4].copy_from_slice(&IN_TRANSIT_ARRIVE.to_le_bytes());
+        sl[sa::FACTION] = 0;
+        sl[sa::I] = IN_TRANSIT_SLOT_I;
+        sl[sa::HOST_ID..sa::HOST_ID + 8].copy_from_slice(&host.to_le_bytes());
+        sl[sa::BENEFICIARY..sa::BENEFICIARY + 32].copy_from_slice(&SLOT_BENEFICIARY);
+        let mut ci = vec![0u8; size::CLASH_INPUTS];
+        ci[..8].copy_from_slice(magic::CLASH_INPUTS);
+        ci[l::sh::SEASON_ID..l::sh::SEASON_ID + 8].copy_from_slice(&SEASON_ID.to_le_bytes());
+        use l::clash_inputs as ca;
+        ci[ca::P..ca::P + 2].copy_from_slice(&(enemy_home.p as i16).to_le_bytes());
+        ci[ca::Q..ca::Q + 2].copy_from_slice(&(enemy_home.q as i16).to_le_bytes());
+        ci[ca::BELL..ca::BELL + 4].copy_from_slice(&IN_TRANSIT_ARRIVE.to_le_bytes());
+        ci[ca::FLAGS] = 2;
+        ci[ca::RESOLVER..ca::RESOLVER + 32].copy_from_slice(&RESOLVER);
+        let env = json!({
+            "v": 1,
+            "key": format!("pv:{},{}", enemy_home.p, enemy_home.q),
+            "bell": IN_TRANSIT_ARRIVE,
+            "slot": SLOT - 800,
+            "seq": "8",
+            "head": hex::encode([8u8; 32]),
+            "bytes": b64_encode(&province_bytes(pe)),
+            "slots": [{"bytes": b64_encode(&sl)}],
+            "day": null,
+            "inputs": {"bytes": b64_encode(&ci)},
+        });
+        files.insert(
+            format!(
+                "h/province/{},{}/{}.json",
+                enemy_home.p, enemy_home.q, IN_TRANSIT_ARRIVE
+            ),
             pretty(&env),
         );
     }

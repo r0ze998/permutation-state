@@ -354,6 +354,24 @@ impl Bot {
                 }
             }
         }
+        // The arrival bell's own envelope of every march whose destination
+        // resolved past it (SettleTransit's slot and resolver).
+        let mut province_bells = BTreeMap::new();
+        for m in self.mem.marches.iter().filter(|m| !m.settled) {
+            let pq = (m.dest.0 as i16, m.dest.1 as i16);
+            let past = provinces
+                .get(&pq)
+                .is_some_and(|v: &ProvinceView| v.province.resolved_next > m.arrive_bell);
+            if !past || province_bells.contains_key(&(pq, m.arrive_bell)) {
+                continue;
+            }
+            let path = format!("/h/province/{},{}/{}", pq.0, pq.1, m.arrive_bell);
+            if let Some(v) = json_of(&sh.herald, &path).await {
+                if let Ok(pv) = ProvinceView::from_json(&v) {
+                    province_bells.insert((pq, m.arrive_bell), pv);
+                }
+            }
+        }
         // Bell files: arrival bells of own marches, the explore record's
         // bell, a ticket's bell.
         let bell = season.bell_at(now);
@@ -392,6 +410,7 @@ impl Bot {
             season,
             me,
             provinces,
+            province_bells,
             overviews,
             bells,
         })

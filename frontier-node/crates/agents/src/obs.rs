@@ -262,6 +262,12 @@ impl MeView {
         let mut holdings = vec![];
         if let Some(hs) = v.get("holdings").and_then(|x| x.as_array()) {
             for h in hs {
+                // The herald lists a holding the Citizen names but the fold
+                // has not captured (or closed) as null: skip it (wave-3
+                // review, W3-E), never fail the whole view.
+                if h.is_null() {
+                    continue;
+                }
                 let a = key(string(h, "address")?)?;
                 let bytes = b64(string(h, "bytes_b64")?)?;
                 holdings.push((a, dec("holding", Holding::decode(&bytes))?));
@@ -480,6 +486,9 @@ pub struct CacheRef {
     pub nonce: u8,
     pub round: u64,
     pub seed: [u8; 32],
+    /// The cache account is still on chain (the herald keeps closed
+    /// caches listed with `present: false`); absent in older files = true.
+    pub present: bool,
 }
 
 /// `GET /h/bell/{bell}/region/{r}`: THE anchor, `S`, the seed caches and
@@ -514,6 +523,7 @@ impl BellView {
                     nonce: int(c, "nonce")? as u8,
                     round: int(c, "round")? as u64,
                     seed: hex32(string(c, "seed")?)?,
+                    present: c.get("present").and_then(|x| x.as_bool()).unwrap_or(true),
                 });
             }
         }
@@ -534,13 +544,20 @@ impl BellView {
     /// The seed source a settle names: a cache of THE anchor, else the
     /// archive once archived, else not ready.
     pub fn seed_source(&self) -> Option<fclient::ix::SeedSource> {
-        if let Some(c) = self.caches.first() {
-            if self.anchor.is_some() {
-                return Some(fclient::ix::SeedSource::Cache { nonce: c.nonce });
-            }
-        }
+        // Archived: the archive entry (caches close after the archive;
+        // wave-3 review, W3-E).
         if self.archived && self.s.is_some() {
             return Some(fclient::ix::SeedSource::Archive);
+        }
+        // A cache still present whose round is THE anchor's S.
+        if self.anchor.is_some() {
+            if let Some(c) = self
+                .caches
+                .iter()
+                .find(|c| c.present && self.s.is_none_or(|s| c.round == s))
+            {
+                return Some(fclient::ix::SeedSource::Cache { nonce: c.nonce });
+            }
         }
         None
     }
@@ -565,6 +582,10 @@ pub struct Observation {
     pub season: SeasonView,
     pub me: MeView,
     pub provinces: BTreeMap<(i16, i16), ProvinceView>,
+    /// Immutable per-bell envelopes `/h/province/{P},{Q}/{bell}` of the
+    /// arrival bells of due marches (wave-3 review, W3-E: SettleTransit's
+    /// slot and resolver are the arrival bell's, not the latest bell's).
+    pub province_bells: BTreeMap<((i16, i16), u32), ProvinceView>,
     pub overviews: Vec<Overview>,
     pub bells: BTreeMap<(u32, u8), BellView>,
 }
@@ -578,8 +599,75 @@ impl Observation {
         self.provinces.get(&(p, q)).map(|v| &v.province)
     }
 
+    /// The envelope of `(P, Q)` as of `bell`: the per-bell file, or the
+    /// latest envelope when it is that bell's.
+    pub fn province_at(&self, pq: (i16, i16), bell: u32) -> Option<&ProvinceView> {
+        self.province_bells
+            .get(&(pq, bell))
+            .or_else(|| self.provinces.get(&pq).filter(|v| v.bell == bell))
+    }
+
     /// Every overview record, newest ring file first per ring.
     pub fn overview_recs(&self) -> impl Iterator<Item = &OverviewRec> {
         self.overviews.iter().flat_map(|o| o.provinces.iter())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bell_view(archived: bool, present: bool) -> BellView {
+        BellView {
+            bell: 3,
+            region: 1,
+            anchor: Some({
+                let mut d = vec![0u8; fclient::abi::size::BELL_ANCHOR];
+                d[..8].copy_from_slice(fclient::abi::magic::BELL_ANCHOR);
+                BellAnchor::decode(&d).unwrap()
+            }),
+            s: Some(77),
+            caches: vec![
+                CacheRef {
+                    nonce: 4,
+                    round: 70,
+                    seed: [0; 32],
+                    present: true,
+                },
+                CacheRef {
+                    nonce: 9,
+                    round: 77,
+                    seed: [0; 32],
+                    present,
+                },
+            ],
+            tombstoned: false,
+            archived,
+        }
+    }
+
+    /// Wave-3 review (W3-E): a present cache of round S; the archive once
+    /// archived; a closed cache never.
+    #[test]
+    fn seed_source_is_a_present_cache_of_s_or_the_archive() {
+        use fclient::ix::SeedSource;
+        assert_eq!(
+            bell_view(false, true).seed_source(),
+            Some(SeedSource::Cache { nonce: 9 })
+        );
+        assert_eq!(bell_view(false, false).seed_source(), None);
+        assert_eq!(
+            bell_view(true, true).seed_source(),
+            Some(SeedSource::Archive)
+        );
+    }
+
+    #[test]
+    fn a_null_holding_is_skipped() {
+        let w = Address::new_from_array([3; 32]);
+        let v = serde_json::json!({"v": 1, "wallet": w.to_string(), "citizen": null,
+            "holdings": [null], "quota": null});
+        let m = MeView::from_json(&v).unwrap();
+        assert!(m.holdings.is_empty());
     }
 }

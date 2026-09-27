@@ -181,6 +181,11 @@ pub struct Mix {
     /// The simulator spreads late joins over days 1..=21 of 28; a local
     /// season spreads them over its own join days.
     pub last_join_day: u32,
+    /// The season's `join_close_bell` (wave-3 review, W3-E): when set, late
+    /// joins are drawn uniformly over the bells `[144, join_close_bell)`,
+    /// so every agent joins before the program closes joins (the
+    /// simulator's 21-of-28 days keep its joins before its close too).
+    pub join_close_bell: Option<u32>,
     /// Adversarial personas: agents per persona (`None`: the default rule
     /// of [`Mix::personas_for`]; `Some(0)`: off).
     pub persona_count: Option<u32>,
@@ -193,6 +198,7 @@ impl Mix {
         bot_share: 0.05,
         day0_share: 0.6,
         last_join_day: 21,
+        join_close_bell: None,
         persona_count: None,
     };
 
@@ -201,7 +207,18 @@ impl Mix {
     pub fn for_season_days(days: u32) -> Mix {
         Mix {
             last_join_day: days.saturating_sub(1).clamp(1, 21),
+            // The simulator's ratio: joins close after 21 of 28 days
+            // (M1_LOCAL_7D: 7 × 144 × 21 / 28 = 756, its join_close_bell).
+            join_close_bell: Some((days * BELLS_PER_DAY * 21 / 28).max(BELLS_PER_DAY + 1)),
             ..Mix::SIM_DEFAULT
+        }
+    }
+
+    /// This mix for a season whose joins close at `join_close_bell`.
+    pub fn with_join_close(self, join_close_bell: u32) -> Mix {
+        Mix {
+            join_close_bell: Some(join_close_bell.max(BELLS_PER_DAY + 1)),
+            ..self
         }
     }
 
@@ -239,7 +256,8 @@ impl AgentSpec {
 /// then the bots; a shuffled order; factions stratified (every faction the
 /// same archetype mix: the k-th agent of an archetype joins faction
 /// `k mod 6`); join day 0 with `day0_share`, else uniform over
-/// `1..=last_join_day`; join bell uniform in the day. Personas are then
+/// `1..=last_join_day` (join bell uniform in the day), or with a
+/// `join_close_bell` uniform over `[144, join_close_bell)`. Personas are then
 /// given to `personas_for(n)` agents each, drawn from a separate stream
 /// among the non-idle agents, and join in the first 12 bells of day 0 so a
 /// one-day run observes every persona.
@@ -280,12 +298,18 @@ pub fn roster(n: usize, seed: u64, mix: &Mix) -> Vec<AgentSpec> {
         let c = &mut by_arch[arch.idx()];
         let faction = (*c % 6) as u8;
         *c += 1;
-        let join_day = if rng.chance(mix.day0_share) {
-            0
-        } else {
-            1 + rng.below(last as u64) as u32
+        let day0 = rng.chance(mix.day0_share);
+        let join_bell = match (day0, mix.join_close_bell) {
+            (true, _) => rng.below(BELLS_PER_DAY as u64) as u32,
+            (false, Some(close)) => {
+                BELLS_PER_DAY + rng.below((close - BELLS_PER_DAY) as u64) as u32
+            }
+            (false, None) => {
+                let d = 1 + rng.below(last as u64) as u32;
+                d * BELLS_PER_DAY + rng.below(BELLS_PER_DAY as u64) as u32
+            }
         };
-        let join_bell = join_day * BELLS_PER_DAY + rng.below(BELLS_PER_DAY as u64) as u32;
+        let join_day = join_bell / BELLS_PER_DAY;
         out[i] = Some(AgentSpec {
             index: i as u32,
             arch,

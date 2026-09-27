@@ -1,7 +1,7 @@
 //! `frontier-bots`: N bots in one process against a running season.
 //!
 //! ```text
-//! frontier-bots --herald http://127.0.0.1:41020 --relay http://127.0.0.1:41030
+//! frontier-bots --herald http://127.0.0.1:41040 --relay http://127.0.0.1:41033
 //!               [--rpc http://127.0.0.1:41010]   (personas' own transactions, frontier-localnet)
 //!               [--seed 1] [--bots 1000] [--first-index 0] [--days 7]
 //!               [--personas default|off|<n per persona>]
@@ -110,11 +110,32 @@ fn parse() -> Args {
         .into_iter()
         .flatten()
     {
-        if !u.starts_with("http://127.0.0.1:") && !u.starts_with("http://localhost:") {
+        if !is_loopback_url(u) {
             usage(&format!("{u}: loopback http:// URLs only"));
         }
     }
     a
+}
+
+/// `http://127.0.0.1:<port>` or `http://localhost:<port>` with an optional
+/// path: the authority parsed, so userinfo (`http://127.0.0.1:1@other/`),
+/// a missing or non-numeric port and other hosts are refused (wave-3
+/// review, W3-E).
+fn is_loopback_url(u: &str) -> bool {
+    let Some(rest) = u.strip_prefix("http://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.contains(['@', '\\', '%']) || authority.chars().any(char::is_whitespace) {
+        return false;
+    }
+    let Some((host, port)) = authority.rsplit_once(':') else {
+        return false;
+    };
+    matches!(host, "127.0.0.1" | "localhost")
+        && !port.is_empty()
+        && port.bytes().all(|b| b.is_ascii_digit())
+        && port.parse::<u16>().is_ok()
 }
 
 fn write_report(path: &Option<PathBuf>, v: &serde_json::Value) {
@@ -186,6 +207,15 @@ async fn go<D: frontier_bots::ports::DirectPort + 'static>(a: Args, direct: Opti
             }
         }
     };
+    // Late joins spread before this season's join_close_bell (wave-3
+    // review, W3-E): the roster is dealt again for the season read.
+    let close = season.join_close_bell();
+    if r.iter().any(|s| s.join_bell >= close) {
+        r = roster(a.bots, a.seed, &mix.clone().with_join_close(close));
+        for s in &mut r {
+            s.index += a.first_index;
+        }
+    }
     let end =
         season.genesis_ts + season.end_bell().min(a.days * 144) as i64 * season.bell_secs as i64;
     let until = match a.game_hours {
@@ -267,4 +297,32 @@ async fn main() {
         None => go::<NoDirect>(a, None).await,
     };
     std::process::exit(code);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_loopback_url;
+
+    #[test]
+    fn loopback_urls_only() {
+        for ok in [
+            "http://127.0.0.1:41040",
+            "http://localhost:41033/",
+            "http://127.0.0.1:1/x",
+        ] {
+            assert!(is_loopback_url(ok), "{ok}");
+        }
+        for bad in [
+            "http://127.0.0.1:1@other.host/",
+            "http://127.0.0.1:x",
+            "http://127.0.0.1",
+            "https://127.0.0.1:1",
+            "http://127.0.0.2:1",
+            "http://localhost.evil:1",
+            "http://127.0.0.1:1%40x",
+            "http://127.0.0.1:99999",
+        ] {
+            assert!(!is_loopback_url(bad), "{bad}");
+        }
+    }
 }

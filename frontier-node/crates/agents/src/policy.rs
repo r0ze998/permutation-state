@@ -896,7 +896,10 @@ pub fn settle_args(
         return None;
     }
     let faction = cx.spec.faction;
-    let slot = v
+    // The arrival bell's own envelope (the latest one is a later bell's
+    // once the destination resolved past the arrival); none yet: wait.
+    let at = obs.province_at(dest, m.arrive_bell)?;
+    let slot = at
         .slots
         .iter()
         .find(|s| s.bell == m.arrive_bell && s.host_id == m.key.0);
@@ -904,7 +907,7 @@ pub fn settle_args(
         Some(s) => (s.i, s.beneficiary),
         None => (0, h.rent_payer),
     };
-    let resolver = v
+    let resolver = at
         .inputs
         .as_ref()
         .filter(|i| i.bell == m.arrive_bell)

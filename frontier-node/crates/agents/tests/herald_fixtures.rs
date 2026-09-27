@@ -93,6 +93,7 @@ fn observe(i: u32) -> Observation {
         season,
         me,
         provinces,
+        province_bells: BTreeMap::new(),
         overviews,
         bells,
     }
@@ -539,10 +540,17 @@ fn the_roster_follows_the_mix() {
         let (mn, mx) = (f.iter().min().unwrap(), f.iter().max().unwrap());
         assert!(mx - mn <= 1, "{a:?}: {f:?}");
     }
-    // Join days within the season's join days; ~60% on day 0.
+    // Joins before the preset's join_close_bell (wave-3 review, W3-E: the
+    // program refuses Join from bell 756 of M1_LOCAL_7D); ~60% on day 0.
+    let close = 756; // frontier_abi::presets::M1_LOCAL_7D.join_close_bell
+    assert_eq!(m.join_close_bell, Some(close));
     assert!(r
         .iter()
-        .all(|x| x.join_day <= 6 && x.join_bell / 144 == x.join_day));
+        .all(|x| x.join_bell < close && x.join_bell / 144 == x.join_day));
+    assert!(
+        r.iter().any(|x| x.join_bell >= 5 * 144),
+        "late days are used"
+    );
     let day0 = r.iter().filter(|x| x.join_day == 0).count();
     assert!((550..=700).contains(&day0), "{day0}");
     // Personas: 5 each (≤ 1%), never idle, early on day 0.

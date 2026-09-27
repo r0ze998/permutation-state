@@ -763,4 +763,24 @@ async fn the_settle_racer_redeparts_then_settles_at_the_first_instant() {
     assert_eq!(&ix.data[2..34], &m.commit);
     assert_eq!(&ix.data[34..199], m.seal.as_slice());
     assert!(m.settled && m.redeparted);
+    // Wave-3 review (W3-E): the slot, its beneficiary and the resolver are
+    // the arrival bell's (per-bell envelope), not the latest bell's.
+    let w = fixture::world();
+    let key = |i: usize| t.message.account_keys[ix.accounts[i] as usize];
+    assert_eq!(
+        key(5),
+        a.arrival_slot(
+            w.enemy_home.0 as i32,
+            w.enemy_home.1 as i32,
+            fixture::IN_TRANSIT_ARRIVE,
+            0,
+            fixture::IN_TRANSIT_SLOT_I
+        ),
+        "the arrival's slot"
+    );
+    assert_eq!(
+        key(8),
+        fclient::Address::new_from_array(fixture::SLOT_BENEFICIARY)
+    );
+    assert_eq!(key(9), fclient::Address::new_from_array(fixture::RESOLVER));
 }
