@@ -175,60 +175,6 @@ pub(crate) fn emit_close(
     )
 }
 
-/// `init_funded` (§4.2) in the order the runtime accepts: **allocate first,
-/// then move the lamports**. `init::init_funded` moves the shortfall out of
-/// the fund by direct arithmetic *before* its AllocateWithSeed CPI; the
-/// target's credit is synced into the CPI but the fund's debit is not (the
-/// fund is not a CPI account), so the runtime refuses the caller as
-/// `UnbalancedInstruction` [measured, W3-A notes finding F1]. Here the CPI
-/// runs on the untouched accounts and the lamports move afterwards between
-/// two program-owned accounts. Moves `max(amount, rent − pre-funded)` so the
-/// target ends rent-exempt; returns the lamports moved.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn init_funded_after<'a>(
-    fund: &AccountInfo<'a>,
-    target: &AccountInfo<'a>,
-    season: &AccountInfo<'a>,
-    signer: &SeasonSigner,
-    seed: &addr::Seed,
-    space: usize,
-    program: &Pubkey,
-    amount: u64,
-) -> R<u64> {
-    if fund.owner != program || !init::is_absent(target) {
-        return Err(BAD_ACCOUNT);
-    }
-    let need = init::rent(space)?
-        .saturating_sub(target.lamports())
-        .max(amount);
-    let floor = init::rent(fund.data_len())?;
-    if fund.lamports().saturating_sub(need) < floor {
-        return Err(FrontierError::Insufficient.into());
-    }
-    let s = seed.as_bytes();
-    let mut d = alloc::vec::Vec::with_capacity(4 + 32 + 8 + s.len() + 8 + 32);
-    d.extend_from_slice(&9u32.to_le_bytes()); // SystemInstruction::AllocateWithSeed
-    d.extend_from_slice(season.key.as_ref());
-    d.extend_from_slice(&(s.len() as u64).to_le_bytes());
-    d.extend_from_slice(s);
-    d.extend_from_slice(&(space as u64).to_le_bytes());
-    d.extend_from_slice(program.as_ref());
-    solana_program::program::invoke_signed(
-        &solana_program::instruction::Instruction {
-            program_id: init::SYSTEM,
-            accounts: alloc::vec![
-                solana_program::instruction::AccountMeta::new(*target.key, false),
-                solana_program::instruction::AccountMeta::new_readonly(*season.key, true),
-            ],
-            data: d,
-        },
-        &[target.clone(), season.clone()],
-        &[&signer.seeds()],
-    )?;
-    init::move_lamports(fund, target, need)?;
-    Ok(need)
-}
-
 // ------------------------------------------------------------ terrain encoding
 
 /// Writes the kernel's terrain into the Province's compact block (the
@@ -594,7 +540,7 @@ pub fn open_province(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
     let reserved_ring = ring < camp::CAMP_FIRST_RING as u16;
     let camp_now = camp::place(&ring_seed, coord, &terrain, day, false, true);
     let region = region_of(coord);
-    let spent = init_funded_after(
+    let spent = init::init_funded(
         fund,
         province,
         season_ai,
@@ -892,7 +838,7 @@ pub fn close_province(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
             bell,
         )?;
     }
-    init::close_to(p, province, fund, &Sink::PoolOwed(fund), bell)?;
+    init::close_to(p, province, fund, &Sink::Never, bell)?;
     let mut fdat = fund.try_borrow_mut_data()?;
     let mut w = Rw(&mut fdat);
     let n = w.u32(PF::PROVINCES_OPENED)?;

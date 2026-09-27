@@ -487,7 +487,8 @@ pub fn set_vigil(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
 /// duplicate: `BadData`), its Province present (`BadAccount`, I-48), the
 /// wedge rule (`BadData`); each Province's cohort for `now_bell`
 /// (`CohortFull`); the payer tops the Citizen's Holding-rent escrow up to
-/// `rent(1,280)` (I-47). (`ticket_bell ≠ now_bell` holds by construction:
+/// `rent(1,280)` (I-47); the payer becomes `ticket_funder` only when it
+/// tops up (v1.5), else the stored funder is kept. (`ticket_bell ≠ now_bell` holds by construction:
 /// a ticket settles only after its bell's seed, so no ticket can end in
 /// the bell it was filed.) Log `TICKET` (Citizen, the m Provinces).
 pub fn file_ticket(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
@@ -582,7 +583,10 @@ pub fn file_ticket(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
         cohort_file(&mut pd, now_bell)?;
     }
     crate::heap::trace_checkpoint(303);
-    // Escrow: the payer tops the Holding rent up (I-47).
+    // Escrow: the payer tops the Holding rent up (I-47). v1.5 (§5.9): the
+    // payer becomes the funder only when it tops up; an escrow left by an
+    // expired or exhausted ticket keeps the funder that paid it, so a
+    // refile never redirects someone else's escrow refund.
     let rent_h = init::rent(H::SIZE)?;
     let top = rent_h.saturating_sub(escrow);
     if top > payer.lamports() {
@@ -591,6 +595,11 @@ pub fn file_ticket(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
     init::transfer(payer, citizen, top)?;
     crate::heap::trace_checkpoint(304);
     let mut cd = citizen.try_borrow_mut_data()?;
+    let funder: [u8; 32] = if top > 0 {
+        payer.key.to_bytes()
+    } else {
+        Ro(&cd).arr(C::TICKET_FUNDER)?
+    };
     {
         let mut w = Rw(&mut cd);
         for (i, s) in sites.iter().enumerate() {
@@ -602,7 +611,7 @@ pub fn file_ticket(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
         w.set_u32(C::TICKET_BELL, now_bell)?;
         w.set_u8(C::TICKET_NEXT, 0)?;
         w.set_u64(C::TICKET_ESCROW, escrow.max(rent_h))?;
-        w.set_arr(C::TICKET_FUNDER, payer.key.as_ref())?;
+        w.set_arr(C::TICKET_FUNDER, &funder)?;
     }
     let tag15 = tag15_of(&cd)?;
     let sites_raw: [u8; 15] = Ro(&cd).arr(C::TICKET_SITES)?;
@@ -611,7 +620,7 @@ pub fn file_ticket(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
         .u8(x.n)
         .bytes(&sites_raw)
         .u64(escrow.max(rent_h))
-        .bytes(payer.key.as_ref());
+        .bytes(&funder);
     let mut borrows = Vec::with_capacity(provinces.len());
     for ai in provinces {
         borrows.push(ai.try_borrow_mut_data()?);
@@ -1007,7 +1016,7 @@ pub fn settle_ticket(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
         let mut pool_owed = 0u64;
         if outcome == settle_outcome::FRESH {
             // The whole escrow moves (a pre-funded Holding keeps its extra).
-            let moved = super::map::init_funded_after(
+            let moved = init::init_funded(
                 citizen,
                 holding,
                 season_ai,
@@ -1567,7 +1576,7 @@ pub fn close_citizen(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
     }
     // A whole-account refund (≥ rent(0)) never diverts (§4.2); the sink is
     // never used.
-    init::close_to(p, citizen, rent_payer, &Sink::PoolOwed(rent_payer), bell)?;
+    init::close_to(p, citizen, rent_payer, &Sink::Never, bell)?;
     Ok(())
 }
 

@@ -628,7 +628,10 @@ pub fn chains_of(kind: Kind, key: &[u8], payload: &[u8]) -> Option<Chains> {
             c.push(E::Citizen, R::Citizen(me), false);
             if outcome == settle_outcome::DISPLACE {
                 let d = CitizenRef::Tag8(rd_u64(pay("displaced_tag")?, 0)?);
-                c.push(E::JoinShard, R::JoinShardOf(d), false);
+                // v1.5 (§6, W3-A F4): absent when the displaced citizen
+                // shares the displacer's JoinShard (one account, chained
+                // once); the payload cannot tell, so the link is optional.
+                c.push(E::JoinShard, R::JoinShardOf(d), true);
                 c.push(E::Citizen, R::Citizen(d), false);
             }
             if won {
@@ -850,6 +853,30 @@ mod tests {
             *v = (k % 6) as u8;
         }
         assert_eq!(unpack_fates(&pack_fates(&f)), f);
+    }
+
+    /// v1.5 §6 (W3-A F4): a DISPLACE whose two citizens share a JoinShard
+    /// carries one JoinShard link; the bounds admit it and the two-shard
+    /// tail.
+    #[test]
+    fn settle_displace_admits_one_shared_join_shard() {
+        let spec = SPECS.iter().find(|s| s.kind == Kind::SETTLE).unwrap();
+        let key = std::vec![0u8; spec.key_len()];
+        let mut pl = std::vec![0u8; spec.payload_len()];
+        let (o, _) = field(Kind::SETTLE, "outcome", true).unwrap();
+        pl[o] = settle_outcome::DISPLACE;
+        let c = chains_of(Kind::SETTLE, &key, &pl).unwrap();
+        // JoinShard (me), [JoinShard (displaced)], Citizen × 2, Holding,
+        // Province, [Province × 2]
+        assert_eq!(c.bounds(), (5, 8));
+        let js: std::vec::Vec<_> = c
+            .iter()
+            .filter(|x| x.entity == EntityKind::JoinShard)
+            .map(|x| x.optional)
+            .collect();
+        assert_eq!(js, [false, true]);
+        pl[o] = settle_outcome::FRESH;
+        assert_eq!(chains_of(Kind::SETTLE, &key, &pl).unwrap().bounds(), (4, 6));
     }
 
     #[test]

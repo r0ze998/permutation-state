@@ -234,9 +234,17 @@ pub fn move_lamports(from: &AccountInfo, to: &AccountInfo, amount: u64) -> R<()>
     Ok(())
 }
 
-/// As [`init_with_seed`], the shortfall to the rent-exempt minimum taken
-/// from the program-owned `fund`, which stays rent-exempt
-/// (`Insufficient`). Returns the lamports moved.
+/// As [`init_with_seed`], funded from the program-owned `fund`, which
+/// stays rent-exempt (`Insufficient`): moves `max(amount, rent(space) −
+/// pre-funded)` so the target ends rent-exempt. Returns the lamports moved.
+///
+/// Order (W3-A F1, integ-W3 review): **allocate first, then move the
+/// lamports.** Moving them first by direct arithmetic leaves the fund's
+/// debit outside the AllocateWithSeed CPI (the fund is not a CPI account)
+/// while the target's credit is synced into it, and the runtime refuses the
+/// caller as `UnbalancedInstruction` [measured, W3-A notes]. Here the CPI
+/// runs on untouched accounts and the lamports then move between two
+/// program-owned accounts.
 #[allow(clippy::too_many_arguments)]
 pub fn init_funded<'a>(
     fund: &AccountInfo<'a>,
@@ -246,20 +254,18 @@ pub fn init_funded<'a>(
     seed: &Seed,
     space: usize,
     program: &Pubkey,
+    amount: u64,
 ) -> R<u64> {
-    if fund.owner != program {
+    if fund.owner != program || !is_absent(target) {
         return Err(BAD_ACCOUNT);
     }
-    if !is_absent(target) {
-        return Err(BAD_ACCOUNT);
-    }
-    let need = rent(space)?.saturating_sub(target.lamports());
+    let need = rent(space)?.saturating_sub(target.lamports()).max(amount);
     let floor = rent(fund.data_len())?;
     if fund.lamports().saturating_sub(need) < floor {
         return Err(FrontierError::Insufficient.into());
     }
-    move_lamports(fund, target, need)?;
     allocate_with_seed(target, season, signer, seed, space, program)?;
+    move_lamports(fund, target, need)?;
     Ok(need)
 }
 
@@ -271,6 +277,12 @@ pub enum Sink<'a, 'b> {
     /// Credits the DefencePool (`diverted_total`); N-class instructions
     /// that list it only.
     DefencePool(&'b AccountInfo<'a>),
+    /// No sink: a payment that would divert is refused (`BadAccount`).
+    /// For whole-account closes whose recipient is not a Holding
+    /// (CloseProvince → its ProvinceFund, CloseCitizen → its rent payer):
+    /// a whole-account refund is at least `rent(0)`, so it never diverts
+    /// (§4.2); the variant keeps a wrong-typed `pool_owed` write impossible.
+    Never,
 }
 
 /// Where a payment went.
@@ -323,6 +335,7 @@ pub fn pay_or_divert<'a>(
             let mut d = p.try_borrow_mut_data()?;
             Rw(&mut d).add_u64(DP::DIVERTED_TOTAL, amount)?;
         }
+        Sink::Never => return Err(BAD_ACCOUNT),
     }
     let payload = events::Buf::<9>::new().u64(amount).u8(reason);
     events::emit(Kind::DIVERT, bell, to.key.as_ref(), payload.get()?, &mut [])?;

@@ -757,6 +757,87 @@ fn citizen_cohort_expiry_ends_the_ticket() {
     assert_eq!(one(&l.logs, Kind::TICKET).u64("escrow"), c.rent(H::SIZE));
 }
 
+/// v1.5 §5.9 (wave-3 review, W3-A major): a refile that adds nothing to
+/// the escrow keeps the funder that paid it. A sponsor pays the escrow;
+/// the ticket expires; the player refiles self-paid (fee only): the
+/// funder, and after a fresh settle the Holding's `rent_payer`, stay the
+/// sponsor's. The reverse (a sponsored refile over a self-funded escrow)
+/// keeps the player; a refile over an empty escrow makes the payer the
+/// funder.
+#[test]
+fn citizen_refile_keeps_the_escrow_funder() {
+    let (mut c, w, ring2) = land();
+    let sponsor = c.funded(b"sponsor-pool", 5);
+    let a = w.citizen(&mut c, "a", 0);
+    let p0 = ring2[0];
+    let s = site(p0, 4);
+    let ck = w.a.citizen(&a.key());
+    let funder = |c: &Chain| {
+        let d = c.data(&ck);
+        Address::try_from(&d[C::TICKET_FUNDER..C::TICKET_FUNDER + 32]).unwrap()
+    };
+    let sponsored = |c: &mut Chain, who: &Citizen, sites: &[Site]| {
+        let pl = Player {
+            actor: who.key(),
+            payer: sponsor.pubkey(),
+            wallet: who.key(),
+        };
+        let ix = cix::file_ticket(&w.a, &pl, sites);
+        c.send(&[ix], &[&sponsor, &who.wallet])
+    };
+    let bell = w.now_bell(&c);
+    let l = expect_lands(sponsored(&mut c, &a, &[s]), "sponsored FileTicket");
+    assert_eq!(funder(&c), sponsor.pubkey(), "the sponsor paid the escrow");
+    assert_eq!(
+        one(&l.logs, Kind::TICKET).field("funder", true),
+        sponsor.pubkey().as_ref()
+    );
+    c.set_time(w.genesis_ts() + (bell as i64 + 24) * 600);
+    expect_lands(w.settle_ticket(&mut c, &a, 0, None), "expired");
+    // The self-paid refile adds nothing: the sponsor stays the funder.
+    let b2 = w.now_bell(&c);
+    let before = c.lamports(&a.key());
+    let l = expect_lands(w.file_ticket(&mut c, &a, &[s]), "self-paid refile");
+    assert_eq!(paid(before, &c, &a.wallet, &l), 0);
+    assert_eq!(funder(&c), sponsor.pubkey(), "the refile keeps the funder");
+    assert_eq!(
+        one(&l.logs, Kind::TICKET).field("funder", true),
+        sponsor.pubkey().as_ref()
+    );
+    w.seed_ready(&mut c, b2, region(p0.0, p0.1));
+    expect_lands(w.settle_ticket(&mut c, &a, 0, None), "fresh");
+    let hk = w.a.holding(p0.0 as i32, p0.1 as i32, 4);
+    assert_eq!(
+        &c.data(&hk)[H::RENT_PAYER..H::RENT_PAYER + 32],
+        sponsor.pubkey().as_ref(),
+        "the Holding's rent goes back to the sponsor"
+    );
+    // The reverse: a self-funded escrow is not taken over by a sponsored
+    // refile; and an empty escrow makes the payer the funder.
+    let b = w.citizen(&mut c, "b", 0);
+    let bk = w.a.citizen(&b.key());
+    let bell = w.now_bell(&c);
+    file(&w, &mut c, &b, &[site(p0, 5)]);
+    c.set_time(w.genesis_ts() + (bell as i64 + 24) * 600);
+    expect_lands(w.settle_ticket(&mut c, &b, 0, None), "expired b");
+    expect_lands(sponsored(&mut c, &b, &[site(p0, 5)]), "sponsored refile");
+    let d = c.data(&bk);
+    assert_eq!(
+        &d[C::TICKET_FUNDER..C::TICKET_FUNDER + 32],
+        b.key().as_ref()
+    );
+    let x = w.citizen(&mut c, "x", 0);
+    expect_lands(
+        sponsored(&mut c, &x, &[site(p0, 6)]),
+        "sponsored, empty escrow",
+    );
+    let d = c.data(&w.a.citizen(&x.key()));
+    assert_eq!(
+        &d[C::TICKET_FUNDER..C::TICKET_FUNDER + 32],
+        sponsor.pubkey().as_ref()
+    );
+}
+
 #[test]
 fn citizen_cohort_table_full_refuses_a_ninth_bell() {
     let (mut c, w, ring2) = land();
@@ -890,6 +971,142 @@ fn g03_settle_ticket_refuses_forged_accounts() {
     assert_code(c.send(&[ix], &[&w.keeper]), E::SeedNotReady);
 }
 
+/// G3 for SettleTicket's displaced triple (wave-3 review, W3-A): the
+/// displaced rent payer (the one account that receives the escrow), the
+/// displaced Citizen and its JoinShard, each substituted.
+#[test]
+fn g03_settle_ticket_refuses_a_forged_displaced_triple() {
+    let mut c = Chain::test_beacon();
+    let (w, hi, d) = displacement_setup(&mut c, false);
+    let z = w.citizen(&mut c, "z", 0);
+    let ix = w.settle_ticket_ix(&c, &hi, 0, Some(&d));
+    let n = ix.accounts.len();
+    let (rp, dc, dj) = (n - 4, n - 3, n - 2);
+    assert_eq!(ix.accounts[rp].pubkey, d.rent_payer, "triple position");
+    let send = |c: &mut Chain, ix| c.send(&[ix], &[&w.keeper]);
+    let thief = keypair(b"thief").pubkey();
+    assert_code(
+        send(&mut c, with_account(ix.clone(), rp, thief)),
+        E::BadAddress,
+    );
+    assert_code(
+        send(&mut c, with_account(ix.clone(), rp, z.key())),
+        E::BadAddress,
+    );
+    assert_code(
+        send(&mut c, with_account(ix.clone(), dc, w.a.citizen(&z.key()))),
+        E::BadAddress,
+    );
+    let dd = c.data(&w.a.citizen(&d.wallet));
+    let shard = dd[C::JOIN_SHARD];
+    assert_code(
+        send(
+            &mut c,
+            with_account(ix.clone(), dj, w.a.join_shard(1, shard)),
+        ),
+        E::BadAddress,
+    );
+    assert_code(
+        send(
+            &mut c,
+            with_account(ix.clone(), dj, w.a.join_shard(0, (shard + 1) % 8)),
+        ),
+        E::BadAddress,
+    );
+    let before = c.lamports(&d.rent_payer);
+    expect_lands(send(&mut c, ix), "the genuine displacement");
+    assert_eq!(c.lamports(&d.rent_payer), before + c.rent(H::SIZE));
+}
+
+/// Wave-3 review (W3-B missing item): a Holding founded by the real
+/// SettleTicket (W3-A's writer) runs W3-B's Harvest, Train, Build and
+/// Muster: the two Holding codecs agree (the kernel reading of W3-A's
+/// bytes settles exactly as the program's). The province's
+/// `resolved_next` is moved as W4-A's resolves would (stand-in).
+#[test]
+fn citizen_founded_holding_runs_the_holding_actions() {
+    use permutation_frontier_svm_tests::ix::holding as hx;
+    use permutation_frontier_svm_tests::world::holding::{read_kholding, Estate};
+    let (mut c, w, ring2) = land();
+    let a = w.citizen(&mut c, "a", 0);
+    let p0 = ring2[0];
+    let bell = w.now_bell(&c);
+    file(&w, &mut c, &a, &[site(p0, 0)]);
+    w.seed_ready(&mut c, bell, region(p0.0, p0.1));
+    expect_lands(w.settle_ticket(&mut c, &a, 0, None), "fresh");
+    let hk = w.a.holding(p0.0 as i32, p0.1 as i32, 0);
+    let pk = w.a.province(p0.0 as i32, p0.1 as i32);
+    // F8 twin (wave-3 review, W3-C): the keeper's ticket score is the
+    // program's stored score.
+    let seed = w.bell_seed(&c, bell, region(p0.0, p0.1));
+    assert_eq!(
+        rd_u64(&c.data(&hk), H::TICKET_SCORE),
+        fclient::land::ticket_score(&seed, p0.0 as i32, p0.1 as i32, 0, w.citizen_tag(&a))
+    );
+    let final_ts = rd_i64(&c.data(&hk), H::FINAL_TS);
+    c.set_time(final_ts + 2 * 3_600);
+    let b = w.now_bell(&c);
+    c.edit(&pk, |d| {
+        d[PV::RESOLVED_NEXT..PV::RESOLVED_NEXT + 4].copy_from_slice(&(b - 1).to_le_bytes())
+    });
+    let tile = c.data(&pk)[PV::SITES];
+    let ck = w.a.citizen(&a.key());
+    let e = Estate {
+        wallet: a.wallet,
+        faction: 0,
+        p: p0.0,
+        q: p0.1,
+        site: 0,
+        gen: c.data(&hk)[H::GEN],
+        tile,
+        holding: hk,
+        province: pk,
+        citizen: ck,
+    };
+    let send = |c: &mut Chain, ix| c.send(&[ix], &[&e.wallet]);
+    let mut before = read_kholding(&c.data(&hk));
+    let l = expect_lands(
+        send(&mut c, hx::harvest(&w.a, &e.player(), e.href())),
+        "Harvest on a SettleTicket holding",
+    );
+    one(&l.logs, Kind::HARVEST);
+    before.settle(c.now).unwrap();
+    before.touch_owner(c.now).unwrap();
+    before.commit_walls(c.now);
+    assert_eq!(read_kholding(&c.data(&hk)), before, "the codecs agree");
+    w.enrich(&mut c, &e, 50_000);
+    expect_lands(
+        send(&mut c, hx::train(&w.a, &e.player(), e.href(), 0, 300)),
+        "Train",
+    );
+    expect_lands(
+        send(
+            &mut c,
+            hx::build_item(&w.a, &e.player(), e.href(), 0, false),
+        ),
+        "Build",
+    );
+    let l = expect_lands(
+        send(
+            &mut c,
+            permutation_frontier_svm_tests::ix::host::muster(
+                &w.a,
+                &e.player(),
+                e.href(),
+                0,
+                200,
+                tile,
+            ),
+        ),
+        "Muster",
+    );
+    // The first action carrying the holding's Province flips it final.
+    one(&l.logs, Kind::HOLDING_FINAL);
+    one(&l.logs, Kind::MUSTER);
+    assert_eq!(c.data(&hk)[H::STATE], H::STATE_FINAL);
+    assert_eq!(rd_u32(&c.data(&hk), H::reserve(0)), 100);
+}
+
 // ------------------------------------------------------------ release, closes
 
 #[test]
@@ -927,6 +1144,44 @@ fn citizen_release_dormant_frees_the_site_and_strands_the_gen() {
     f.edit(&hk, |d| d[H::transit(0) + T::STATE] = T::STATE_DEPARTED);
     assert_code(rel(&mut f, a.key()), E::NotDormant);
     assert_code(rel(&mut c, keypair(b"x").pubkey()), E::BadAddress);
+    // G3 (wave-3 review): the Citizen, its JoinShard and the DefencePool
+    // substituted.
+    {
+        let z = w.citizen(&mut c, "z", 0);
+        let h = cix::HoldingRef {
+            p: p0.0,
+            q: p0.1,
+            site: 0,
+        };
+        let ix = cix::release_dormant(&w.a, w.keeper.pubkey(), h, &a.key(), 0, a.key());
+        let send = |c: &mut Chain, ix| c.send(&[ix], &[&w.keeper]);
+        assert_code(
+            send(
+                &mut c,
+                with_account(ix.clone(), cix::release_at::CITIZEN, w.a.citizen(&z.key())),
+            ),
+            E::BadAddress,
+        );
+        let s = c.data(&ck)[C::JOIN_SHARD];
+        assert_code(
+            send(
+                &mut c,
+                with_account(ix.clone(), cix::release_at::JOINSHARD, w.a.join_shard(1, s)),
+            ),
+            E::BadAddress,
+        );
+        let pool_copy = copy_to_fresh(&mut c, &w.a.defence_pool(), b"dpool");
+        assert_code(
+            send(
+                &mut c,
+                with_account(ix.clone(), cix::release_at::DPOOL, pool_copy),
+            ),
+            E::BadAddress,
+        );
+        let mut f = c.fork();
+        f.edit(&w.a.defence_pool(), |d| d[8] ^= 1); // another season's pool
+        assert_code(f.send(&[ix], &[&w.keeper]), E::BadAccount);
+    }
     // pool_owed (crafted with its lamports, W4-B's SettleTransit) is swept.
     let owed = 12_345u64;
     c.edit(&hk, |d| {
@@ -976,10 +1231,16 @@ fn citizen_release_dormant_frees_the_site_and_strands_the_gen() {
     let b_bell = w.now_bell(&c);
     file(&w, &mut c, &b, &[site(p0, 0)]);
     w.seed_ready(&mut c, b_bell, region(p0.0, p0.1));
+    // v1.5 §6: a creation record after CLOSE starts a new chain at the
+    // same address (seq 1 from a zero head).
+    let hw = ChainTrack::new(&c, hk, EntityKind::Holding);
+    assert_eq!(hw.before, (0, [0; 32]));
     let l = expect_lands(
         w.settle_ticket(&mut c, &b, 0, None),
         "fresh on a released site",
     );
+    let links = hw.check(&c, &l.logs, 1);
+    assert_eq!(links[0].seq, 1, "the re-created Holding's chain restarts");
     assert_eq!(
         one(&l.logs, Kind::SETTLE).u64("outcome"),
         settle_outcome::FRESH as u64

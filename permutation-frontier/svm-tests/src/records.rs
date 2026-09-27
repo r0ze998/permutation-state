@@ -88,16 +88,49 @@ pub fn le(b: &[u8]) -> u64 {
 }
 
 /// Every PS2 record in `logs`; panics on a body that does not decode (the
-/// program must never log one).
+/// program must never log one) and on a tail outside
+/// `frontier_abi::log::chains_of(..).bounds()` (v1.5, W3-A F4: what a
+/// verifier or indexer applying the bounds would reject).
 pub fn records(logs: &[String]) -> Vec<Rec> {
     bodies(logs)
         .iter()
         .map(|b| {
             let r = log::decode(b)
                 .unwrap_or_else(|e| panic!("PS2 body does not decode ({e:?}): {}", hex::encode(b)));
-            Rec::of(&r)
+            let rec = Rec::of(&r);
+            check_tail(&rec);
+            rec
         })
         .collect()
+}
+
+/// The record's tail fits `chains_of(..)`: its link count within the
+/// bounds and every link's entity kind one the record may chain.
+#[track_caller]
+pub fn check_tail(r: &Rec) {
+    let Some(c) = log::chains_of(r.kind, &r.key, &r.payload) else {
+        assert!(
+            r.links.is_empty(),
+            "{}: links without chains",
+            r.kind.name()
+        );
+        return;
+    };
+    let (lo, hi) = c.bounds();
+    assert!(
+        (lo..=hi).contains(&r.links.len()),
+        "{}: {} links outside chains_of bounds {lo}..={hi}",
+        r.kind.name(),
+        r.links.len()
+    );
+    for l in &r.links {
+        assert!(
+            c.iter().any(|x| x.entity == l.entity),
+            "{}: link of {:?} not in chains_of",
+            r.kind.name(),
+            l.entity
+        );
+    }
 }
 
 /// The records of one kind.
