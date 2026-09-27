@@ -114,12 +114,7 @@ pub const NOT_AN_INSTRUCTION: &[Cover] = &[Cover::Test(
 /// Errors no test has to assert, with the reason. Every code is reachable:
 /// the v9 codes (34–44) are listed only until the unit named adds the
 /// program behaviour and a covering test, and removes its line.
-pub const EXEMPT: &[(E, &str)] = &[
-    (E::UndelegationOrder, "PENDING WP02 (unit P4)"),
-    (E::AlreadyDelegated, "PENDING WP02/WP14 (unit P4)"),
-    (E::DelegationOrder, "PENDING WP14 (unit P4)"),
-    (E::WrongValidator, "PENDING WP14/WP15 (unit P4)"),
-];
+pub const EXEMPT: &[(E, &str)] = &[];
 
 /// Ignored tests that run only when an environment variable provides what
 /// they need: (test, variable).

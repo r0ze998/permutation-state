@@ -974,7 +974,8 @@ impl<'a, 'info> Chunks<'a, 'info> {
     }
 
     /// The body (after the header), reassembled across chunks. Copies the
-    /// whole body: tests and tools.
+    /// whole body: tests and tools only, never in an instruction (they
+    /// stream it: `decode`, `root`).
     pub fn body(&self, magic: &[u8; 8]) -> Result<Vec<u8>, ProgramError> {
         let len = self.body_len(magic)?;
         let mut out = vec![0u8; len];
@@ -983,7 +984,7 @@ impl<'a, 'info> Chunks<'a, 'info> {
     }
 
     /// Write `bytes` as the body with `magic` (no root trailer). Tests and
-    /// tools; `write_world` / `write_genesis` in instructions.
+    /// tools only; instructions use `write_world` / `write_genesis`.
     pub fn write_body(&self, magic: &[u8; 8], bytes: &[u8]) -> Result<(), ProgramError> {
         if bytes.len() > WORLD_BODY_MAX {
             return Err(ChainError::WorldTooSmall.into());
@@ -995,13 +996,77 @@ impl<'a, 'info> Chunks<'a, 'info> {
         Ok(())
     }
 
+    /// Decode the body with `magic` straight from the chunk accounts (no
+    /// copy of it). The value must take exactly the recorded length
+    /// (`WrongWorld` otherwise, as `try_from_slice`).
+    pub fn decode<T: BorshDeserialize>(&self, magic: &[u8; 8]) -> Result<T, ProgramError> {
+        let len = self.body_len(magic)?;
+        let mut data = Vec::with_capacity(WORLD_CHUNKS);
+        for a in self.accounts {
+            data.push(a.try_borrow_data()?);
+        }
+        let slices: Vec<&[u8]> = data.iter().map(|d| &d[..]).collect();
+        let mut r = ChunkReader::new(&slices, WORLD_HEADER, len);
+        let v = T::deserialize_reader(&mut r).map_err(|_| ChainError::WrongWorld)?;
+        if !r.done() {
+            return Err(ChainError::WrongWorld.into());
+        }
+        Ok(v)
+    }
+
+    /// Encode `value` straight into the chunk accounts as the body with
+    /// `magic` (no buffer) and set the header; returns the body length.
+    /// `WorldTooSmall` if it does not fit. A failed encode may already have
+    /// overwritten chunk bytes: the instruction then fails, so the runtime
+    /// never keeps them.
+    pub fn encode<T: BorshSerialize>(
+        &self,
+        magic: &[u8; 8],
+        value: &T,
+    ) -> Result<usize, ProgramError> {
+        let mut data = Vec::with_capacity(WORLD_CHUNKS);
+        for a in self.accounts {
+            data.push(a.try_borrow_mut_data()?);
+        }
+        let mut slices: Vec<&mut [u8]> = data.iter_mut().map(|d| &mut d[..]).collect();
+        let (head, rest) = slices.split_first_mut().ok_or(ChainError::WorldTooSmall)?;
+        let (header, body0) = head.split_at_mut(WORLD_HEADER);
+        let mut w = ChunkWriter::new(body0, rest.iter_mut());
+        value
+            .serialize(&mut w)
+            .map_err(|_| ChainError::WorldTooSmall)?;
+        let len = w.written(WORLD_BODY_MAX);
+        header[..8].copy_from_slice(magic);
+        header[8..12].copy_from_slice(&(len as u32).to_le_bytes());
+        Ok(len)
+    }
+
+    /// sha256 of the stored body with `magic`, hashed over the chunk slices
+    /// (no copy).
+    pub fn root_of(&self, magic: &[u8; 8]) -> Result<[u8; 32], ProgramError> {
+        let len = self.body_len(magic)?;
+        let mut data = Vec::with_capacity(WORLD_CHUNKS);
+        for a in self.accounts {
+            data.push(a.try_borrow_data()?);
+        }
+        let mut parts: Vec<&[u8]> = Vec::with_capacity(WORLD_CHUNKS);
+        let (mut k, mut off, mut left) = (0, WORLD_HEADER, len);
+        while left > 0 {
+            let take = (CHUNK - off).min(left);
+            parts.push(&data[k][off..off + take]);
+            left -= take;
+            k += 1;
+            off = 0;
+        }
+        Ok(solana_program::hash::hashv(&parts).to_bytes())
+    }
+
     pub fn is_world(&self) -> bool {
         self.magic().map(|m| m == WORLD_MAGIC).unwrap_or(false)
     }
 
     pub fn read_world(&self) -> Result<WorldState, ProgramError> {
-        WorldState::try_from_slice(&self.body(&WORLD_MAGIC)?)
-            .map_err(|_| ChainError::WrongWorld.into())
+        self.decode(&WORLD_MAGIC)
     }
 
     /// Returns the new `state_root` (sha256 of exactly these bytes, §15).
@@ -1011,23 +1076,38 @@ impl<'a, 'info> Chunks<'a, 'info> {
     /// and its trailer left behind is zeroed: the chunks hold this world
     /// and nothing else, whatever wrote them before.
     pub fn write_world(&self, state: &WorldState) -> Result<[u8; 32], ProgramError> {
-        let buf = borsh::to_vec(state).map_err(|_| ChainError::WrongWorld)?;
-        self.write_world_body(&buf)
+        let old_end = self.stored_end()?;
+        let len = self.encode(&WORLD_MAGIC, state)?;
+        self.seal_world(old_end, len)
     }
 
-    /// `write_world` of an encoded world.
+    /// `write_world` of an encoded world (tests: bodies of any length).
+    #[cfg(test)]
     fn write_world_body(&self, buf: &[u8]) -> Result<[u8; 32], ProgramError> {
         if buf.len() + 32 > WORLD_BODY_MAX {
             return Err(ChainError::WorldTooSmall.into());
         }
-        let old_end = {
-            let d = self.accounts[0].try_borrow_data()?;
-            let len = u32::from_le_bytes(d[8..12].try_into().unwrap()) as usize;
-            WORLD_HEADER + len.min(WORLD_BODY_MAX - 32) + 32
-        };
+        let old_end = self.stored_end()?;
         self.write_body(&WORLD_MAGIC, buf)?;
-        let root = solana_program::hash::hashv(&[buf]).to_bytes();
-        let end = WORLD_HEADER + buf.len() + 32;
+        self.seal_world(old_end, buf.len())
+    }
+
+    /// Where the previous content ends, trailer room included (whatever its
+    /// magic).
+    fn stored_end(&self) -> Result<usize, ProgramError> {
+        let d = self.accounts[0].try_borrow_data()?;
+        let len = u32::from_le_bytes(d[8..12].try_into().unwrap()) as usize;
+        Ok(WORLD_HEADER + len.min(WORLD_BODY_MAX - 32) + 32)
+    }
+
+    /// After a world body of `len` bytes was written: its root trailer, and
+    /// zeroes up to `old_end`.
+    fn seal_world(&self, old_end: usize, len: usize) -> Result<[u8; 32], ProgramError> {
+        if len + 32 > WORLD_BODY_MAX {
+            return Err(ChainError::WorldTooSmall.into());
+        }
+        let root = self.root()?;
+        let end = WORLD_HEADER + len + 32;
         self.write_at(end - 32, &root)?;
         if old_end > end {
             self.zero_at(end, old_end - end)?;
@@ -1054,7 +1134,7 @@ impl<'a, 'info> Chunks<'a, 'info> {
 
     /// Root of the stored world (sha256 of its body) without decoding it.
     pub fn root(&self) -> Result<[u8; 32], ProgramError> {
-        Ok(solana_program::hash::hashv(&[&self.body(&WORLD_MAGIC)?]).to_bytes())
+        self.root_of(&WORLD_MAGIC)
     }
 
     /// The root the last `write_world` stored after the body.
@@ -1088,13 +1168,181 @@ impl<'a, 'info> Chunks<'a, 'info> {
     }
 
     pub fn read_genesis(&self) -> Result<GenesisJob, ProgramError> {
-        GenesisJob::try_from_slice(&self.body(&GENESIS_MAGIC)?)
-            .map_err(|_| ChainError::WrongWorld.into())
+        self.decode(&GENESIS_MAGIC)
     }
 
     pub fn write_genesis(&self, job: &GenesisJob) -> Result<(), ProgramError> {
-        let buf = borsh::to_vec(job).map_err(|_| ChainError::WrongWorld)?;
-        self.write_body(&GENESIS_MAGIC, &buf)
+        self.encode(&GENESIS_MAGIC, job).map(|_| ())
+    }
+}
+
+/// Reads a body across the chunks. `pos..end` is what is left of the body
+/// in the current chunk, `left` what is left of it in the chunks after. A
+/// read inside the current chunk (nearly every field) is a bounds check, a
+/// copy the compiler sees the length of and one store: on SBF every
+/// instruction of it is paid once per field of the world (a slice cursor
+/// here cost ~36k CU more per decoded world, pointers ~10k more than
+/// borsh's own slice reader). The fast paths stay `#[inline(always)]` and
+/// the chunk changes `#[cold]` (WP07 §7.3).
+struct ChunkReader<'r> {
+    pos: *const u8,
+    end: *const u8,
+    rest: core::slice::Iter<'r, &'r [u8]>,
+    left: usize,
+}
+
+impl<'r> ChunkReader<'r> {
+    fn new(chunks: &'r [&'r [u8]], start: usize, len: usize) -> Self {
+        let mut rest = chunks.iter();
+        let first = rest.next().map_or(&[][..], |c| &c[start..]);
+        let here = &first[..first.len().min(len)];
+        let range = here.as_ptr_range();
+        ChunkReader {
+            pos: range.start,
+            end: range.end,
+            rest,
+            left: len - here.len(),
+        }
+    }
+
+    /// Bytes left in the current chunk.
+    #[inline(always)]
+    fn here(&self) -> usize {
+        (self.end as usize).wrapping_sub(self.pos as usize)
+    }
+
+    /// Every byte of the body was read.
+    fn done(&self) -> bool {
+        self.here() == 0 && self.left == 0
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn read_across(&mut self, buf: &mut [u8]) -> borsh::io::Result<()> {
+        let mut done = 0;
+        while done < buf.len() {
+            if self.here() == 0 {
+                let c = match self.rest.next() {
+                    Some(c) if self.left > 0 => c,
+                    _ => return Err(borsh::io::ErrorKind::UnexpectedEof.into()),
+                };
+                let here = &c[..c.len().min(self.left)];
+                self.left -= here.len();
+                let range = here.as_ptr_range();
+                (self.pos, self.end) = (range.start, range.end);
+            }
+            let n = (buf.len() - done).min(self.here());
+            // SAFETY: `n` bytes are left at `pos` (inside the current chunk).
+            unsafe {
+                core::ptr::copy_nonoverlapping(self.pos, buf[done..].as_mut_ptr(), n);
+                self.pos = self.pos.add(n);
+            }
+            done += n;
+        }
+        Ok(())
+    }
+}
+
+impl borsh::io::Read for ChunkReader<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> borsh::io::Result<usize> {
+        let n = buf.len().min(self.here() + self.left);
+        self.read_across(&mut buf[..n])?;
+        Ok(n)
+    }
+
+    #[inline(always)]
+    fn read_exact(&mut self, buf: &mut [u8]) -> borsh::io::Result<()> {
+        let n = buf.len();
+        if n <= self.here() {
+            // SAFETY: `n` bytes are left at `pos` (inside the current chunk).
+            unsafe {
+                core::ptr::copy_nonoverlapping(self.pos, buf.as_mut_ptr(), n);
+                self.pos = self.pos.add(n);
+            }
+            return Ok(());
+        }
+        self.read_across(buf)
+    }
+}
+
+/// Writes a body across the chunks: `pos..end` is the free part of the
+/// current chunk, `rest` the chunks after it (as `ChunkReader`).
+struct ChunkWriter<'r, 'b> {
+    pos: *mut u8,
+    end: *mut u8,
+    rest: core::slice::IterMut<'r, &'b mut [u8]>,
+}
+
+impl<'r, 'b> ChunkWriter<'r, 'b> {
+    fn new(first: &'r mut [u8], rest: core::slice::IterMut<'r, &'b mut [u8]>) -> Self {
+        let range = first.as_mut_ptr_range();
+        ChunkWriter {
+            pos: range.start,
+            end: range.end,
+            rest,
+        }
+    }
+
+    /// Bytes free in the current chunk.
+    #[inline(always)]
+    fn here(&self) -> usize {
+        (self.end as usize).wrapping_sub(self.pos as usize)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn write_across(&mut self, buf: &[u8]) -> borsh::io::Result<()> {
+        let mut done = 0;
+        while done < buf.len() {
+            if self.here() == 0 {
+                let c = self.rest.next().ok_or(borsh::io::ErrorKind::WriteZero)?;
+                let range = c.as_mut_ptr_range();
+                (self.pos, self.end) = (range.start, range.end);
+            }
+            let n = (buf.len() - done).min(self.here());
+            // SAFETY: `n` bytes are free at `pos` (inside the current chunk).
+            unsafe {
+                core::ptr::copy_nonoverlapping(buf[done..].as_ptr(), self.pos, n);
+                self.pos = self.pos.add(n);
+            }
+            done += n;
+        }
+        Ok(())
+    }
+
+    /// Bytes written, of a capacity of `total`: all but what is free in the
+    /// current chunk and in every chunk after it.
+    fn written(&self, total: usize) -> usize {
+        total - self.here() - self.rest.len() * CHUNK
+    }
+}
+
+impl borsh::io::Write for ChunkWriter<'_, '_> {
+    fn write(&mut self, buf: &[u8]) -> borsh::io::Result<usize> {
+        let n = buf.len().min(self.here() + self.rest.len() * CHUNK);
+        if n == 0 && !buf.is_empty() {
+            return Err(borsh::io::ErrorKind::WriteZero.into());
+        }
+        self.write_across(&buf[..n])?;
+        Ok(n)
+    }
+
+    #[inline(always)]
+    fn write_all(&mut self, buf: &[u8]) -> borsh::io::Result<()> {
+        let n = buf.len();
+        if n <= self.here() {
+            // SAFETY: `n` bytes are free at `pos` (inside the current chunk).
+            unsafe {
+                core::ptr::copy_nonoverlapping(buf.as_ptr(), self.pos, n);
+                self.pos = self.pos.add(n);
+            }
+            return Ok(());
+        }
+        self.write_across(buf)
+    }
+
+    fn flush(&mut self) -> borsh::io::Result<()> {
+        Ok(())
     }
 }
 
@@ -1558,6 +1806,144 @@ mod tests {
             );
         });
         assert_eq!(WORLD_BODY_MAX - 32, 81_632);
+    }
+
+    /// The streamed reader and writer store exactly what the buffered
+    /// borsh encoding holds, for a world and a genesis job.
+    #[test]
+    fn streamed_world_matches_the_buffered_one() {
+        let rules = crate::rules::rules_for(PRESET_BLITZ, true).unwrap();
+        let entries = permutation_rules::genesis::nation_entries(6);
+        let mut state =
+            permutation_rules::genesis::new_season(&rules, &[1; 32], &[2; 32], &entries).unwrap();
+        for i in 0..40u8 {
+            permutation_rules::gov::join(&mut state, &rules, (i % 6) as u16, [i + 1; 32]).unwrap();
+        }
+        with_chunks(|chunks| {
+            let root = chunks.write_world(&state).unwrap();
+            let bytes = borsh::to_vec(&state).unwrap();
+            assert!(bytes.len() > 2 * CHUNK, "spans chunks");
+            assert_eq!(root, state.state_root().unwrap());
+            assert_eq!(chunks.body(&WORLD_MAGIC).unwrap(), bytes);
+            assert_eq!(chunks.read_world().unwrap(), state);
+            assert_eq!(chunks.root().unwrap(), root);
+            assert_eq!(chunks.stored_root().unwrap(), root);
+        });
+        with_chunks(|chunks| {
+            let job = GenesisJob {
+                world_seed: [3; 32],
+                season_seed: [4; 32],
+                entries: entries.clone(),
+                map: MapJob::new(&rules, entries.len()).unwrap(),
+            };
+            chunks.write_genesis(&job).unwrap();
+            let bytes = borsh::to_vec(&job).unwrap();
+            assert_eq!(chunks.body(&GENESIS_MAGIC).unwrap(), bytes);
+            assert_eq!(
+                borsh::to_vec(&chunks.read_genesis().unwrap()).unwrap(),
+                bytes
+            );
+            assert!(chunks.read_world().is_err(), "a genesis job is no world");
+        });
+    }
+
+    /// Bodies ending at, just before and just after a chunk boundary, and
+    /// fields straddling one, round-trip through `encode`/`decode`, and
+    /// `root_of` hashes exactly the body.
+    #[test]
+    fn streamed_world_spans_chunk_boundaries() {
+        let first = CHUNK - WORLD_HEADER;
+        let mut lens = vec![first - 1, first, first + 1, 5, 4];
+        for k in 2..=WORLD_CHUNKS {
+            lens.extend([k * CHUNK - WORLD_HEADER - 1, k * CHUNK - WORLD_HEADER]);
+        }
+        with_chunks(|chunks| {
+            for len in lens {
+                // A `Vec<u8>` of `len − 4` bytes encodes to `len` bytes.
+                let v: Vec<u8> = (0..len - 4).map(|i| (i % 249) as u8 ^ 0x3c).collect();
+                assert_eq!(chunks.encode(&WORLD_MAGIC, &v).unwrap(), len);
+                let bytes = borsh::to_vec(&v).unwrap();
+                assert_eq!(chunks.body(&WORLD_MAGIC).unwrap(), bytes, "len {len}");
+                assert_eq!(chunks.decode::<Vec<u8>>(&WORLD_MAGIC).unwrap(), v);
+                assert_eq!(
+                    chunks.root_of(&WORLD_MAGIC).unwrap(),
+                    solana_program::hash::hashv(&[&bytes]).to_bytes()
+                );
+            }
+            // A u64, a u32 and a [u8; 32] each straddling a boundary.
+            type Row = (Vec<u8>, u64, u32, [u8; 32]);
+            for (at, pad) in [(1, 3), (1, 7), (2, 5), (3, 1), (4, 30)] {
+                let fill = at * CHUNK - WORLD_HEADER - pad - 4;
+                let row: Row = (
+                    vec![0xee; fill],
+                    0x0102_0304_0506_0708,
+                    0x1112_1314,
+                    core::array::from_fn(|i| i as u8),
+                );
+                chunks.encode(&WORLD_MAGIC, &row).unwrap();
+                assert_eq!(
+                    chunks.body(&WORLD_MAGIC).unwrap(),
+                    borsh::to_vec(&row).unwrap()
+                );
+                assert_eq!(chunks.decode::<Row>(&WORLD_MAGIC).unwrap(), row);
+            }
+        });
+    }
+
+    #[test]
+    fn encode_refuses_a_world_too_large() {
+        with_chunks(|chunks| {
+            chunks.write_body(&WORLD_MAGIC, &[5; 40]).unwrap();
+            // WORLD_BODY_MAX + 1 bytes encoded: refused, header untouched.
+            let big = vec![1u8; WORLD_BODY_MAX - 3];
+            assert_eq!(
+                chunks.encode(&WORLD_MAGIC, &big).unwrap_err(),
+                ChainError::WorldTooSmall.into()
+            );
+            assert_eq!(chunks.magic().unwrap(), WORLD_MAGIC);
+            assert_eq!(chunks.body_len(&WORLD_MAGIC).unwrap(), 40);
+            // Exactly the capacity fits the encoder (not a world: no trailer room).
+            let fits = vec![1u8; WORLD_BODY_MAX - 4];
+            assert_eq!(
+                chunks.encode(&GENESIS_MAGIC, &fits).unwrap(),
+                WORLD_BODY_MAX
+            );
+            assert_eq!(chunks.decode::<Vec<u8>>(&GENESIS_MAGIC).unwrap(), fits);
+            // A world needs its trailer too.
+            assert_eq!(
+                chunks.seal_world(0, WORLD_BODY_MAX - 31).unwrap_err(),
+                ChainError::WorldTooSmall.into()
+            );
+        });
+    }
+
+    /// The header's length must be exactly the value's: a trailing byte or
+    /// a missing one is `WrongWorld`, as is a length past the capacity.
+    #[test]
+    fn decode_refuses_trailing_or_short_bodies() {
+        with_chunks(|chunks| {
+            let v: Vec<u8> = (0..CHUNK as u32).map(|i| i as u8).collect();
+            let len = chunks.encode(&WORLD_MAGIC, &v).unwrap();
+            let set_len = |n: usize| {
+                chunks.accounts[0].try_borrow_mut_data().unwrap()[8..12]
+                    .copy_from_slice(&(n as u32).to_le_bytes())
+            };
+            for n in [len + 1, len - 1, 0, WORLD_BODY_MAX + 1] {
+                set_len(n);
+                assert_eq!(
+                    chunks.decode::<Vec<u8>>(&WORLD_MAGIC).unwrap_err(),
+                    ChainError::WrongWorld.into(),
+                    "length {n} for {len}"
+                );
+            }
+            set_len(len);
+            assert_eq!(chunks.decode::<Vec<u8>>(&WORLD_MAGIC).unwrap(), v);
+            assert_eq!(
+                chunks.decode::<Vec<u8>>(&GENESIS_MAGIC).unwrap_err(),
+                ChainError::WrongWorld.into(),
+                "another magic"
+            );
+        });
     }
 
     #[test]
