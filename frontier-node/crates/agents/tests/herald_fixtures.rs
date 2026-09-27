@@ -611,3 +611,340 @@ fn double_arrival_and_squatter_send_hosts_to_one_province_bell() {
         }
     }
 }
+
+/// The holding flips provisional → final lazily, in the prologue of the
+/// owner's first resident action once `now ≥ final_ts` and its cohort is
+/// closed (I-29, I-47, §5.6 step 5). A bot that waited for the herald to
+/// show `final` would wait forever: it must act on a holding that is final
+/// by rule (found by W4-F's first in-process day: 35 holdings, no economy).
+#[test]
+fn a_provisional_holding_final_by_rule_acts() {
+    let s = spec(PROVISIONAL, Arch::VerySkilled, None);
+    let mem = Memory::default();
+    let o = observe(PROVISIONAL);
+    let h = o.me.holdings[0].1.clone();
+    assert_eq!(h.state, fclient::abi::layout::holding::STATE_PROVISIONAL);
+    assert!(o.now >= h.final_ts, "the fixture's final_ts passed");
+    // Cohort open (a rival ticket unsettled): waits.
+    assert!(decide(&o, &ctx(&s, &mem, false)).is_empty());
+    // Cohort closed: the owner acts (its first resident action flips it).
+    let mut closed = o.clone();
+    let pv = closed
+        .provinces
+        .get_mut(&(h.p, h.q))
+        .expect("home observed");
+    for c in pv
+        .province
+        .cohorts
+        .iter_mut()
+        .filter(|c| c.bell == h.ticket_bell)
+    {
+        c.settled = c.filed;
+    }
+    let v = decide(&closed, &ctx(&s, &mem, false));
+    assert!(!v.is_empty(), "a final-by-rule holding runs its economy");
+    // Cohort closed but final_ts not reached: waits.
+    let mut early = closed.clone();
+    early.me.holdings[0].1.final_ts = early.now + 1;
+    assert!(decide(&early, &ctx(&s, &mem, false)).is_empty());
+    // The cohort expires 24 bells after the ticket bell even if unsettled.
+    let mut expired = o.clone();
+    expired.now = o.season.genesis_ts + (h.ticket_bell as i64 + 24) * 600 + 5;
+    assert!(!decide(&expired, &ctx(&s, &mem, false)).is_empty());
+}
+
+/// A Muster never counts troops trained in the same step: the relay
+/// simulates each transaction against the landed state, so a Muster sent
+/// right behind its Train is refused `Insufficient` (W4-F's in-process day:
+/// 13 of 16 musters). The next step musters them.
+#[test]
+fn a_bot_musters_only_troops_already_in_reserve() {
+    let s = spec(FINAL, Arch::VerySkilled, None);
+    let mem = Memory::default();
+    let mut o = observe(FINAL);
+    for (_, h) in o.me.holdings.iter_mut() {
+        h.reserve = [0; 8];
+    }
+    // Drop the combat host so the bot wants one.
+    let (_, h) = o.me.holdings[0].clone();
+    let pv = o.provinces.get_mut(&(h.p, h.q)).expect("home");
+    pv.province.entries.retain(|e| e.unit == 6);
+    for k in 0..24 {
+        let mut ok = o.clone();
+        ok.now = fixture::NOW + k * 600;
+        let v = decide(&ok, &ctx(&s, &mem, false));
+        let trains = v
+            .iter()
+            .filter(|i| matches!(i, Intent::Train { .. }))
+            .count();
+        let musters: Vec<&Intent> = v
+            .iter()
+            .filter(|i| matches!(i, Intent::Muster { .. }))
+            .collect();
+        assert!(
+            musters.is_empty(),
+            "bell +{k}: trains {trains}, musters {musters:?}"
+        );
+    }
+}
+
+/// A Hamlet has two queue slots (`Tier::queue_slots`): with two items
+/// running the bot does not Build (it did, and got `QueueFull`).
+#[test]
+fn the_build_queue_counts_the_tiers_slots() {
+    let mut o = observe(FINAL);
+    let now = o.now;
+    let h = &mut o.me.holdings[0].1;
+    h.tier = 0;
+    for q in h.queue.iter_mut() {
+        *q = Default::default();
+    }
+    assert!(policy::queue_free(h, now));
+    h.queue[0] = fclient::decode::QueueItem {
+        done_at: now + 600,
+        kind: 1,
+        arg: 0,
+        delta: 1,
+    };
+    assert!(policy::queue_free(h, now), "one of two running");
+    h.queue[1] = h.queue[0];
+    assert!(!policy::queue_free(h, now), "Hamlet: two of two running");
+    h.tier = 2;
+    assert!(policy::queue_free(h, now), "City: two of four");
+    h.tier = 0;
+    h.queue[1].done_at = now;
+    assert!(policy::queue_free(h, now), "a finished item frees its slot");
+}
+
+/// The **recorded** herald fixtures (`fixtures/herald-recorded`, one
+/// producer: `FRONTIER_RECORD_FIXTURES=1 ITEST_STUBS=1 cargo test --release
+/// -p itest --test inproc_day -- --include-ignored`): the answers the real
+/// herald gave at the end of the first in-process day (W3-E notes §2: the
+/// synthetic set is re-recorded from a real herald, and the readers must
+/// accept both). Every file parses with the same readers; the anchors
+/// verify under the season's (test) key at `tlock_round(bell)`; every
+/// recorded wallet is `keys::wallet(seed, index)` and joined; and the
+/// policies decide on the recorded world with every planned march passing
+/// the kernel's own checks.
+#[test]
+fn the_recorded_herald_parses_and_drives_the_policies() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/herald-recorded");
+    let rd = |p: &Path| std::fs::read(p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+    let idx = json(&rd(&dir.join("index.json")));
+    let seed = idx["seed"].as_u64().expect("seed");
+    let season = SeasonView::from_json(&json(&rd(&dir.join("h/season.json")))).expect("season");
+    assert_eq!(season.bell_secs, 600);
+    assert_eq!(
+        season.drand_pk,
+        fclient::beacon::TestKey::new().pk96,
+        "the in-process day seals to the test key"
+    );
+    let mut provinces = BTreeMap::new();
+    let mut bells = BTreeMap::new();
+    let mut overviews = vec![];
+    fn files(d: &Path, out: &mut Vec<std::path::PathBuf>) {
+        for e in std::fs::read_dir(d).unwrap().flatten() {
+            if e.path().is_dir() {
+                files(&e.path(), out);
+            } else {
+                out.push(e.path());
+            }
+        }
+    }
+    let mut all = vec![];
+    files(&dir.join("h"), &mut all);
+    let mut mes = 0;
+    for p in &all {
+        let rel = p
+            .strip_prefix(&dir)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        let b = rd(p);
+        if rel.starts_with("h/overview/") {
+            let ov = Overview::decode(&b).unwrap_or_else(|e| panic!("{rel}: {e:?}"));
+            assert_eq!(Overview::decode(&ov.encode()).unwrap(), ov, "{rel}");
+            overviews.push(ov);
+        } else if rel.starts_with("h/province/") {
+            let v = ProvinceView::from_json(&json(&b)).unwrap_or_else(|e| panic!("{rel}: {e:?}"));
+            let (pp, qq) = v.coord();
+            assert!(rel.contains(&format!("/{pp},{qq}/")), "{rel}");
+            provinces.insert(v.coord(), v);
+        } else if rel.starts_with("h/bell/") {
+            let v = BellView::from_json(&json(&b)).unwrap_or_else(|e| panic!("{rel}: {e:?}"));
+            let a = v.anchor.as_ref().expect("a bell file has THE anchor");
+            assert_eq!(a.round, season.tlock_round(v.bell), "{rel}");
+            assert!(
+                fclient::beacon::verify(a.round, &a.sig48, &season.drand_pk),
+                "{rel}: anchor signature"
+            );
+            bells.insert((v.bell, v.region), v);
+        } else if rel.starts_with("h/me/") {
+            let m = MeView::from_json(&json(&b)).unwrap_or_else(|e| panic!("{rel}: {e:?}"));
+            assert!(m.citizen.is_some(), "{rel}: joined");
+            mes += 1;
+        }
+    }
+    assert!(!overviews.is_empty() && !provinces.is_empty() && !bells.is_empty());
+    let wallets = idx["wallets"].as_array().expect("wallets");
+    assert_eq!(mes, wallets.len(), "one me file per recorded wallet");
+    let mut decided = 0;
+    let mut marches = 0;
+    for w in wallets {
+        let index = w["index"].as_u64().unwrap() as u32;
+        let wallet = keys::wallet(seed, index).pubkey();
+        assert_eq!(w["wallet"].as_str().unwrap(), wallet.to_string());
+        let me = MeView::from_json(&json(&rd(&dir.join(format!("h/me/{wallet}.json"))))).unwrap();
+        let arch = frontier_agents::ARCHS
+            .iter()
+            .copied()
+            .find(|a| a.key() == w["arch"].as_str().unwrap())
+            .expect("arch");
+        let s = AgentSpec {
+            index,
+            arch,
+            faction: w["faction"].as_u64().unwrap() as u8,
+            join_day: 0,
+            join_bell: w["joinBell"].as_u64().unwrap() as u32,
+            persona: w["persona"].as_str().and_then(Persona::parse),
+        };
+        let o = Observation {
+            now: season.latest_unix,
+            season: season.clone(),
+            me,
+            provinces: provinces.clone(),
+            province_bells: BTreeMap::new(),
+            overviews: overviews.clone(),
+            bells: bells.clone(),
+        };
+        let mem = Memory::default();
+        let mut c = ctx(&s, &mem, true);
+        c.seed = seed;
+        c.wallet = wallet;
+        for d in departs(&decide(&o, &c)) {
+            check_march(&o, d);
+            marches += 1;
+        }
+        decided += 1;
+    }
+    println!(
+        "recorded herald: {} provinces, {} bell-region files, {} overviews, {decided} wallets decided, {marches} marches planned and checked",
+        provinces.len(),
+        bells.len(),
+        overviews.len()
+    );
+}
+
+/// Every province opens with a barbarian camp, so on day 0 a camp-free
+/// "stays" province is rare: the settle racer then takes a free tile of a
+/// province with a camp (away from it) rather than never marching (W4-F's
+/// in-process day: its garbage seal never departed).
+#[test]
+fn the_settle_racer_marches_when_every_province_has_a_camp() {
+    let s = spec(FINAL, Arch::Bot, Some(Persona::SettleRacer));
+    let mem = Memory::default();
+    let mut o = observe(FINAL);
+    for pv in o.provinces.values_mut() {
+        if pv.province.camp.state == 0 {
+            pv.province.camp.state = 1;
+            pv.province.camp.troops = 100;
+            pv.province.camp.tile = pv.province.sites[0];
+        }
+    }
+    let mut marched = 0;
+    for k in 0..24 {
+        let mut ok = o.clone();
+        ok.now = fixture::NOW + k * 600;
+        for d in departs(&decide(&ok, &ctx(&s, &mem, true))) {
+            assert_eq!(d.seal, SealKind::Garbage);
+            assert_eq!(d.why, "stay");
+            let pv = ok
+                .province(d.plain.dest_p, d.plain.dest_q)
+                .expect("observed");
+            assert_ne!(d.plain.dest_tile, pv.camp.tile, "not the camp tile");
+            marched += 1;
+        }
+    }
+    assert!(marched > 0, "the settle racer marches");
+}
+
+/// A building's copy number counts the Production items of its resource
+/// (the queue item's `arg` is the resource, W3-B P1), running or finished
+/// but not yet settled into `production` — the program's `copy_number`.
+/// Matching the building index instead mispriced Builds (`Insufficient`).
+#[test]
+fn building_copies_count_production_items_by_resource() {
+    use permutation_rules::frontier::catalog;
+    let o = observe(FINAL);
+    let now = o.now;
+    let mut h = o.me.holdings[0].1.clone();
+    for q in h.queue.iter_mut() {
+        *q = Default::default();
+    }
+    // A building whose resource index differs from its item index.
+    let item = (0..catalog::BUILDINGS.len() as u8)
+        .find(|&i| catalog::BUILDINGS[i as usize].resource as u8 != i)
+        .expect("some building's resource is not its index");
+    let res = catalog::BUILDINGS[item as usize].resource as u8;
+    let base = policy::copies(&h, item, now);
+    h.queue[0] = fclient::decode::QueueItem {
+        done_at: now + 600,
+        kind: policy::QUEUE_PRODUCTION,
+        arg: res,
+        delta: 1,
+    };
+    assert_eq!(policy::copies(&h, item, now), base + 1, "running");
+    h.queue[0].done_at = now - 1;
+    assert_eq!(
+        policy::copies(&h, item, now),
+        base + 1,
+        "finished, not settled"
+    );
+    h.queue[0].arg = item;
+    h.queue[0].kind = policy::QUEUE_PRODUCTION;
+    if item != res {
+        assert_eq!(policy::copies(&h, item, now), base, "another resource");
+    }
+}
+
+/// The settle racer re-departs its host only once the destination resolved
+/// the arrival bell (a Stays host then stands in the destination's roster
+/// with its transit unsettled: `HostInTransit`, §8.6, G12); before that
+/// the host is busy or departed at its origin and a Depart tests nothing.
+#[test]
+fn the_settle_racer_redeparts_only_after_the_arrival() {
+    let o = observe(FINAL);
+    let w = fixture::world();
+    let h = o.me.holdings[0].1.clone();
+    let (_, t) = h
+        .transit
+        .iter()
+        .enumerate()
+        .find(|(_, t)| t.state != 0)
+        .expect("the fixture's march in transit");
+    let mut m = memo(&o, Persona::SettleRacer, fixture::IN_TRANSIT_ARRIVE);
+    m.key = (t.host_id, t.depart_bell);
+    m.dest = (w.enemy_home.0 as i32, w.enemy_home.1 as i32);
+    let s = spec(FINAL, Arch::Bot, Some(Persona::SettleRacer));
+    let mem = Memory {
+        marches: vec![m],
+        ..Memory::default()
+    };
+    let redeparts = |o: &Observation| {
+        decide(o, &ctx(&s, &mem, true))
+            .iter()
+            .filter(|i| matches!(i, Intent::Redepart { .. }))
+            .count()
+    };
+    // Destination resolved past the arrival bell (fixture: 40 > 38).
+    assert_eq!(redeparts(&o), 1);
+    // Not yet resolved: no redepart.
+    let mut early = o.clone();
+    early
+        .provinces
+        .get_mut(&w.enemy_home)
+        .expect("destination observed")
+        .province
+        .resolved_next = fixture::IN_TRANSIT_ARRIVE;
+    assert_eq!(redeparts(&early), 0);
+}

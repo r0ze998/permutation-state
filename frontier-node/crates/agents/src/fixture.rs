@@ -169,6 +169,8 @@ struct Prov {
     /// (site index, faction, gen, shield_until_bell).
     holdings: Vec<(u8, u8, u8, u32)>,
     entries: Vec<[u8; 48]>,
+    /// Ticket cohorts `(ticket_bell, filed, settled)`.
+    cohorts: Vec<(u32, u16, u16)>,
 }
 
 fn terrain_code(t: Terrain) -> u8 {
@@ -228,6 +230,12 @@ fn province_bytes(p: &Prov) -> Vec<u8> {
     }
     for (i, e) in p.entries.iter().enumerate() {
         w.b(o::ENTRIES + i * o::ENTRY_STRIDE, e);
+    }
+    for (i, &(bell, filed, settled)) in p.cohorts.iter().enumerate() {
+        let base = o::TICKET_COHORTS + i * o::COHORT_STRIDE;
+        w.u32(base, bell)
+            .u16(base + 4, filed)
+            .u16(base + 6, settled);
     }
     if let Some(c) = p.camp {
         w.u8(o::CAMP, c.tile)
@@ -429,6 +437,7 @@ pub fn world() -> World {
                 camp,
                 holdings: vec![],
                 entries: vec![],
+                cohorts: vec![],
             });
         }
     }
@@ -461,6 +470,10 @@ pub fn world() -> World {
     let id2 = fclient::addr::host_id(home.p, home.q, 0, 1, 2).expect("host id");
     provs[hi].holdings.push((0, 0, 1, 30));
     provs[hi].holdings.push((1, 0, 1, 30));
+    // The provisional holding's cohort (ticket bell 20) is still open: a
+    // rival ticket of it has not settled, so the holding cannot be final
+    // yet although its `final_ts` passed (I-47).
+    provs[hi].cohorts.push((20, 2, 1));
     provs[hi]
         .entries
         .push(entry(id1, 0, unit0, final_tile, 500));

@@ -80,9 +80,18 @@ fn fold_determinism_same_archive_same_bytes() {
         f3.st.alarms.rewrites, 0,
         "restarts rewrote nothing differently"
     );
-    // No gzip siblings in wave 3 (flate2, W3-D request R3, waits for the
-    // owner; integ-W3).
-    assert!(t1.iter().all(|(p, _)| !p.ends_with(".gz")));
+    // Every per-bell file has its gzip sibling.
+    for (p, b) in &t1 {
+        if let Some(plain) = p.strip_suffix(".gz") {
+            let orig = &t1.iter().find(|(q, _)| q == plain).unwrap().1;
+            let mut dec = vec![];
+            use std::io::Read;
+            flate2::read::GzDecoder::new(&b[..])
+                .read_to_end(&mut dec)
+                .unwrap();
+            assert_eq!(&dec, orig, "{p}");
+        }
+    }
     for d in [d1, d2, d3] {
         let _ = std::fs::remove_dir_all(d);
     }

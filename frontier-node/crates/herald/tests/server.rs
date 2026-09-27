@@ -1,11 +1,12 @@
 //! The herald origin over 127.0.0.1:0 (contract §8.4): `/h/*` answers and
-//! their cache headers, a static gzip sibling, ETag/304, security headers and the
+//! their cache headers, gzip siblings, ETag/304, security headers and the
 //! two CSPs, `/frontier/*` static files, the `/gw/*` proxy (headers passed
 //! and dropped, `X-Forwarded-For`), and `WS /h/ws` (subscribe, diffs in
 //! sequence, heartbeat, a slow socket's gap and drop).
 
 mod common;
 
+use std::io::Read;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -21,9 +22,6 @@ use herald_fold::ws::{self, WsCfg};
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::broadcast;
-
-/// An opaque precompressed sibling: the server serves it as is.
-const GZ_APP: &[u8] = b"\x1f\x8b opaque precompressed app.mjs";
 
 struct Stack {
     addr: SocketAddr,
@@ -100,9 +98,11 @@ async fn stack(name: &str, bells: u32, fold_first: usize, diffs_cap: usize) -> S
     std::fs::create_dir_all(web.join("map")).unwrap();
     std::fs::write(web.join("index.html"), "<!doctype html><title>F</title>").unwrap();
     std::fs::write(web.join("app.mjs"), "export const x = 1;\n".repeat(50)).unwrap();
-    // A precompressed sibling placed by the deploy step (the herald itself
-    // writes none in wave 3: flate2, W3-D request R3, waits for the owner).
-    std::fs::write(web.join("app.mjs.gz"), GZ_APP).unwrap();
+    std::fs::write(
+        web.join("app.mjs.gz"),
+        herald_fold::files::gzip("export const x = 1;\n".repeat(50).as_bytes()),
+    )
+    .unwrap();
     std::fs::write(web.join("map/fmap.1a2b3c4d.mjs"), "export {};").unwrap();
     std::fs::write(dir.join("secret.txt"), "no").unwrap();
     let (relay, relay_seen) = fake_relay().await;
@@ -223,8 +223,7 @@ async fn h_routes_caching_and_headers() {
     let etag = s.h("etag").unwrap().to_string();
     let n = req(a, "GET", "/h/season", &[("If-None-Match", &etag)], &[]).await;
     assert_eq!(n.status, 304);
-    // Per-bell province file: immutable; no gzip sibling in wave 3, so an
-    // Accept-Encoding: gzip request gets the plain bytes.
+    // Per-bell province file: immutable, gzip sibling on request.
     let p = get(a, "/h/province/2,0/0").await;
     assert_eq!(p.status, 200);
     assert_eq!(p.h("cache-control"), Some(server::IMMUTABLE));
@@ -237,8 +236,12 @@ async fn h_routes_caching_and_headers() {
         &[],
     )
     .await;
-    assert_eq!(pz.h("content-encoding"), None);
-    assert_eq!(pz.body, p.body);
+    assert_eq!(pz.h("content-encoding"), Some("gzip"));
+    let mut plain = vec![];
+    flate2::read::GzDecoder::new(&pz.body[..])
+        .read_to_end(&mut plain)
+        .unwrap();
+    assert_eq!(plain, p.body);
     // Latest.
     let l = get(a, "/h/province/2,0/latest").await;
     assert_eq!(l.h("cache-control"), Some("public, max-age=2"));
@@ -329,7 +332,6 @@ async fn frontier_static_and_gw_proxy() {
     .await;
     assert_eq!(m.h("content-type"), Some("text/javascript; charset=utf-8"));
     assert_eq!(m.h("content-encoding"), Some("gzip"));
-    assert_eq!(m.body, GZ_APP);
     let h = get(a, "/frontier/map/fmap.1a2b3c4d.mjs").await;
     assert_eq!(
         h.h("cache-control"),

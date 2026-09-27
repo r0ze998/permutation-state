@@ -1,0 +1,130 @@
+{
+  "citizen": {
+    "address": "7brhhKLSCSkz6v9p5JKAxQtqCx7qG9Wq7Y2fCyxUb1fy",
+    "bytes_b64": "UFNGMUNJVFoHAAAAAAAAAAEAAAAAAAAAKgAAAAAAAAD5NdLaY4PgWsAV2N9zNwAe4QOkHvIDX4VZJD8ZpfeCc6HHKWPGm5/2c0YAtaE/TmUq2Sfwqz9QZS0rTI+IxSgm+BPLqE1mMxsRtNNHY4gDZJE0TEaRIoA6Zo3TDAw2w/ZYyZRqAAAAAAQFAQAAAAAABgAAAAAAAAAAAAAAAAAAAHjmAABPSQAAAQD9/wEBAAAAAAAAAAAAAAAAAAD/////AQD9/wEBAP3/CAIA/f8AAGIUER+yMVjBANduagAAAAAQAAAAAAAAAAYAAAADAAAAXv0IbHYnkgv9zVBus95P5OMPbMOnIQQQwNnx9+ssRMMAAAAAAAAAAAcLqLp1oAtG5F89N7E0IHP+iJLMvyyNNOJCM7/DNVYsAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "head": "f935d2da6383e05ac015d8df7337001ee103a41ef2035f8559243f19a5f78273",
+    "seq": "42",
+    "slot": 2522
+  },
+  "holdings": [
+    {
+      "address": "7pxuRETWyLJr7JquBE2UKfTV4brXwRb91CuxnS4qiWZP",
+      "bytes_b64": "UFNGMUhPTEQHAAAAAAAAAAEAAAAAAAAAKAAAAAAAAABvqTS5iz9sngBOqf07pEJrA3ReEbuw1NBJ1unhJoeY7AEA/f8BARUCYhQRH7IxWMH5uPzPPnTHMqUaM1ioX+yxOGVI4GmlhbS5nzY51Rv+vAQBAAABAAAAGJVuagAAAAAAAAAABAAAAADXbmoAAAAAGDhxagAAAACg6gEAAAAAACDLAAAAAAAAgIQeAAAAAAAA125qAAAAAAAAAAAAAAAAt70EAAAAAABAnAAAAAAAAICEHgAAAAAAANduagAAAACQAQAAAAAAAIVYAgAAAAAAIE4AAAAAAACAhB4AAAAAAADXbmoAAAAAsAQAAAAAAAD0LQEAAAAAAJg6AAAAAAAAgIQeAAAAAAAA125qAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAICEHgAAAAAAANduagAAAAAAAAAAAAAAAIzlAQAAAAAAmDoAAAAAAACAhB4AAAAAAADXbmoAAAAAAAAAAAAAAACJWwAAAAAAAIgTAAAAAAAAgIQeAAAAAAAA125qAAAAALAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAICEHgAAAAAAANduagAAAAAAAAAAAAAAACDLAAAAAAAAQJwAAAAAAAAgTgAAAAAAAJg6AAAAAAAAAAAAAAAAAACYOgAAAAAAAIgTAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4N1uagAAAAABAQAAAAAAABAnAAAAAAAA+PJuagAAAAABAgAAAAAAAEAfAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA125qAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEABBUBAP3/AAAAAAEBAgAHAAAACwAAAJiebmoAAAAAoIYBAEoAECcAAAAAAAAAAHvQNW4kBQ0vXtAeDDwICscRHfakTVKtWwE9om4m2euCnlQAAAAAAAADAAAAAAAAAAEABBUBAP3/AQAAAAEBAgALAAAADgAAAPinbmoAAAAAoIYBAEoAECcAAAAAAAAAACnPH44CKc3Ude6bCcu8xFTsWCkohY5oNeoFQmpXtaczaTgAAAAAAAADAAAAAAAAAAEABBUBAP3/AwAAAAEBAgALAAAADgAAAPinbmoAAAAAoIYBAEoAECcAAAAAAAAAAHTuCV7CtLfHRL8r8RkI3PbG0+y3CpG7rPDOMQ1ucpMZaTgAAAAAAAADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAlAgAAAAAABwuounWgC0bkXz03sTQgc/6Iksy/LI004kIzv8M1Vixcl25qAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "head": "6fa934b98b3f6c9e004ea9fd3ba4426b03745e11bbb0d4d049d6e9e1268798ec",
+      "seq": "40",
+      "slot": 2522
+    }
+  ],
+  "hosts": [
+    {
+      "faction": 4,
+      "fromBell": 6,
+      "id": "564053760016384",
+      "province": [
+        1,
+        -3
+      ],
+      "readyBell": 5,
+      "state": 3,
+      "tile": 21,
+      "troops": 100000,
+      "unit": 0
+    },
+    {
+      "faction": 4,
+      "fromBell": 7,
+      "id": "564053760016385",
+      "province": [
+        1,
+        -3
+      ],
+      "readyBell": 6,
+      "state": 3,
+      "tile": 21,
+      "troops": 100000,
+      "unit": 0
+    },
+    {
+      "faction": 4,
+      "fromBell": 7,
+      "id": "564053760016386",
+      "province": [
+        1,
+        -3
+      ],
+      "readyBell": 6,
+      "state": 1,
+      "tile": 21,
+      "troops": 100000,
+      "unit": 6
+    },
+    {
+      "faction": 4,
+      "fromBell": 8,
+      "id": "564053760016387",
+      "province": [
+        1,
+        -3
+      ],
+      "readyBell": 7,
+      "state": 3,
+      "tile": 21,
+      "troops": 100000,
+      "unit": 0
+    }
+  ],
+  "latestSlot": 10980,
+  "quota": {
+    "lamportsLeft": null,
+    "left": 40,
+    "resetsAt": 1785802929
+  },
+  "seals": [],
+  "slots": [],
+  "transits": [
+    {
+      "arriveBell": 11,
+      "departBell": 7,
+      "holding": [
+        1,
+        -3,
+        1
+      ],
+      "host": "564053760016384",
+      "sealRoot": "7bd0356e24050d2f5ed01e0c3c080ac7111df6a44d52ad5b013da26e26d9eb82",
+      "state": 1,
+      "tip": "21662",
+      "transitSlot": 0
+    },
+    {
+      "arriveBell": 14,
+      "departBell": 11,
+      "holding": [
+        1,
+        -3,
+        1
+      ],
+      "host": "564053760016385",
+      "sealRoot": "29cf1f8e0229cdd475ee9b09cbbcc454ec582928858e6835ea05426a57b5a733",
+      "state": 1,
+      "tip": "14441",
+      "transitSlot": 1
+    },
+    {
+      "arriveBell": 14,
+      "departBell": 11,
+      "holding": [
+        1,
+        -3,
+        1
+      ],
+      "host": "564053760016387",
+      "sealRoot": "74ee095ec2b4b7c744bf2bf11908dcf6c6d3ecb70a91bbacf0ce310d6e729319",
+      "state": 1,
+      "tip": "14441",
+      "transitSlot": 2
+    }
+  ],
+  "v": 1,
+  "wallet": "BtWnBM7uu2Rcwtvuhy5JMoX8h8EKdxsShWDbXaLg18xd"
+}
