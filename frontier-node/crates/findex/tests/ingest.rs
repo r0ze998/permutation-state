@@ -286,3 +286,41 @@ async fn rpc_poll_pages_the_local_node() {
     assert!(findex::Source::pull(&mut poll).await.unwrap().is_empty());
     node.stop();
 }
+
+/// `Enriched` fills the post-state a JSON-RPC poll lacks, before the
+/// batch is archived: the transaction's writable accounts (fee payer and
+/// program ids excluded) read at a slot ≥ the transaction's (W3-D).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn enriched_poll_archives_post_state() {
+    let ip = InProcess::new(Config::default(), None);
+    let payer = Keypair::new_from_array([45; 32]);
+    let to = Address::new_from_array([46; 32]);
+    ip.lock().airdrop(&payer.pubkey(), 50_000_000_000).unwrap();
+    transfers(&ip, &payer, to, 4, 3_000_000).await;
+    let node = server::start(ip.chain.clone(), 0).await.unwrap();
+    let d = tmp("enriched");
+    let mut fx = Findex::open(&d, fclient::addr::system_program(), None, 1 << 20).unwrap();
+    let mut src = findex::Enriched::new(
+        RpcPoll::new(node.url(), to),
+        node.url(),
+        fclient::addr::system_program(),
+    );
+    let got = fx.ingest(&mut src).await.unwrap();
+    assert_eq!(got.len(), 4);
+    for r in got.iter().filter(|r| r.err.is_none()) {
+        assert_eq!(r.post.len(), 1, "the recipient only");
+        assert_eq!(r.post[0].0, to);
+        assert!(r.post[0].1.as_ref().unwrap().lamports >= 3_000_000);
+    }
+    assert!(
+        got.iter()
+            .filter(|r| r.err.is_some())
+            .all(|r| r.post.is_empty()),
+        "failed: none fetched"
+    );
+    // The archive holds the fetched post-state.
+    let back = fx.archive.read_after(0).unwrap();
+    assert_eq!(back.iter().map(|r| r.post.len()).sum::<usize>(), 2);
+    node.stop();
+    let _ = std::fs::remove_dir_all(&d);
+}

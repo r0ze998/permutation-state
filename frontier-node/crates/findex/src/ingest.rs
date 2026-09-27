@@ -176,6 +176,72 @@ impl Source for RpcPoll {
     }
 }
 
+/// A source whose transactions lack post-state (a public RPC) with the
+/// written accounts fetched **before archiving** (offchain design §8.2
+/// step 2, W3-D): for each landed transaction without post-state, the
+/// message's writable accounts are read with `getMultipleAccounts
+/// (minContextSlot = the transaction's slot)`. The bytes are "state at a
+/// slot ≥ s" (a later write can show through); each chained account's
+/// `(event seq, head)` says which version it is. Because the fetched
+/// post-state is archived with the transaction, every later fold of the
+/// archive sees the same bytes (the herald's determinism).
+pub struct Enriched<S: Source> {
+    pub inner: S,
+    pub rpc: RpcClient,
+    /// Keys never fetched (program ids, sysvars).
+    pub skip: HashSet<Address>,
+}
+
+impl<S: Source> Enriched<S> {
+    pub fn new(inner: S, url: impl Into<String>, program: Address) -> Enriched<S> {
+        let mut skip = HashSet::new();
+        skip.insert(program);
+        skip.insert(fclient::addr::system_program());
+        Enriched {
+            inner,
+            rpc: RpcClient::new(url),
+            skip,
+        }
+    }
+
+    /// The writable accounts of a wire transaction (fee payer excluded).
+    pub fn writable_keys(&self, wire: &[u8]) -> Vec<Address> {
+        let Ok(t) = fclient::tx::from_wire(wire) else {
+            return vec![];
+        };
+        let m = &t.message;
+        (1..m.account_keys.len())
+            .filter(|&i| fclient::tx::is_writable_index(m, i))
+            .map(|i| m.account_keys[i])
+            .filter(|k| !self.skip.contains(k))
+            .collect()
+    }
+}
+
+impl<S: Source> Source for Enriched<S> {
+    async fn pull(&mut self) -> PortResult<Vec<TxRecord>> {
+        let mut got = self.inner.pull().await?;
+        for r in got.iter_mut() {
+            if r.err.is_some() || !r.post.is_empty() {
+                continue;
+            }
+            let keys = self.writable_keys(&r.tx);
+            if keys.is_empty() {
+                continue;
+            }
+            let accts = self.rpc.get_multiple_accounts(&keys, r.slot).await?;
+            r.post = keys.into_iter().zip(accts).collect();
+        }
+        Ok(got)
+    }
+    fn cursor(&self) -> Value {
+        self.inner.cursor()
+    }
+    fn restore(&mut self, v: &Value) {
+        self.inner.restore(v)
+    }
+}
+
 /// An error of either the source or the store.
 #[derive(Debug)]
 pub enum IngestError {

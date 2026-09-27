@@ -364,6 +364,23 @@ impl Archive {
     /// Every record with `seq > after`, in order.
     pub fn read_after(&self, after: u64) -> io::Result<Vec<TxRecord>> {
         let mut out = vec![];
+        self.for_each_after(after, |r| {
+            out.push(r);
+            Ok(())
+        })?;
+        Ok(out)
+    }
+
+    /// Streams every record with `seq > after`, in order, one segment in
+    /// memory at a time (a season's archive does not fit in memory as
+    /// records; the herald's catch-up reads it this way). Returns the
+    /// number of records given to `f`; an error of `f` stops the walk.
+    pub fn for_each_after(
+        &self,
+        after: u64,
+        mut f: impl FnMut(TxRecord) -> io::Result<()>,
+    ) -> io::Result<u64> {
+        let mut n = 0;
         for s in &self.manifest.segments {
             if s.records == 0 || s.last_seq <= after {
                 continue;
@@ -373,11 +390,12 @@ impl Archive {
                 let v: Value = serde_json::from_slice(&p).map_err(io_err)?;
                 let r = record_from_json(&v).map_err(io_err)?;
                 if r.seq > after {
-                    out.push(r);
+                    f(r)?;
+                    n += 1;
                 }
             }
         }
-        Ok(out)
+        Ok(n)
     }
 
     /// Checks every segment against the manifest: sealed segments by their

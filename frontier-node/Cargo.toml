@@ -37,6 +37,9 @@ permutation-rules = { path = "../permutation-rules", features = ["std"] }
 frontier-abi = { path = "../frontier-abi" }
 fclient = { path = "crates/fclient" }
 localnet = { path = "crates/localnet" }
+# W3-D (dependency request R1 in docs/frontier/m1/W3-D-NOTES.md): the herald
+# reads the findex archive and index.
+findex = { path = "crates/findex" }
 
 litesvm = "=0.16.0"
 solana-account = "=4.3.2"
@@ -75,6 +78,13 @@ rusqlite = { version = "=0.40.2", features = ["bundled"] }
 # keeper's in-process tests register as a LiteSVM builtin while the program
 # (W2-A) is not on this branch. Test-only; already in this lock through LiteSVM.
 solana-program-runtime = "=4.2.2"
+# W3-D (requests R2, R3): the herald's WebSocket upgrade (hyper's upgrade
+# API under axum, no `ws` feature and no tungstenite: the frames are the
+# herald's own), already in this lock through axum; and the precompressed
+# `.gz` siblings of the herald's files (pure-Rust miniz_oxide backend).
+hyper = { version = "=1.11.1", features = ["http1", "server"] }
+hyper-util = { version = "=0.1.21", features = ["tokio"] }
+flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
 
 [profile.dev.package."*"]
 # The BLS pairing, LiteSVM and tlock are unusably slow unoptimised.

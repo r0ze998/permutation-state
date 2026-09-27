@@ -8,7 +8,8 @@
 //! | `entity` | chained entity: its latest `(seq, head)` from the logs |
 //! | `snapshot` | post-transaction state of a program-owned (or closed) account the transaction wrote |
 //! | `account` | latest snapshot per address |
-//! | `meta` | `last_seq` (the archive sequence indexed through) |
+//! | `event` | PS2 record of a successful transaction, numbered 1, 2, … in archive order (`ev`): the herald's `/h/events?after=` pages (W3-D) |
+//! | `meta` | `last_seq` (the archive sequence indexed through), `schema` |
 //!
 //! A link's address comes from the transaction's post-state (the written
 //! account whose chained header carries exactly the link's `seq` and
@@ -27,6 +28,9 @@ use fclient::ports::TxRecord;
 use frontier_abi::addr::AddrCtx;
 use frontier_abi::layout::AccountKind;
 use frontier_abi::log as plog;
+
+/// Index schema: 2 adds the `event` numbering (W3-D).
+pub const SCHEMA: i64 = 2;
 
 pub struct Index {
     pub conn: Connection,
@@ -88,8 +92,24 @@ impl Index {
              CREATE TABLE IF NOT EXISTS snapshot(address TEXT NOT NULL, seq INTEGER NOT NULL, slot INTEGER NOT NULL,
                  lamports INTEGER, owner TEXT, kind INTEGER, data BLOB NOT NULL, PRIMARY KEY(address, seq));
              CREATE TABLE IF NOT EXISTS account(address TEXT PRIMARY KEY, seq INTEGER NOT NULL, slot INTEGER NOT NULL,
-                 kind INTEGER, present INTEGER NOT NULL);",
+                 kind INTEGER, present INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS event(ev INTEGER PRIMARY KEY, seq INTEGER NOT NULL, idx INTEGER NOT NULL);",
         ))?;
+        // An index written before the `event` table (schema 1) is emptied;
+        // `Findex::open` then rebuilds it from the archive.
+        let schema: Option<i64> = sql(conn
+            .query_row("SELECT v FROM meta WHERE k = 'schema'", [], |r| r.get(0))
+            .optional())?;
+        if schema.unwrap_or(1) < SCHEMA {
+            sql(conn.execute_batch(
+                "DELETE FROM meta; DELETE FROM tx; DELETE FROM record; DELETE FROM link;
+                 DELETE FROM entity; DELETE FROM snapshot; DELETE FROM account; DELETE FROM event;",
+            ))?;
+            sql(conn.execute(
+                "INSERT INTO meta(k, v) VALUES('schema', ?1)",
+                params![SCHEMA],
+            ))?;
+        }
         Ok(Index { conn, ctx, program })
     }
 
@@ -127,7 +147,11 @@ impl Index {
     pub fn rebuild_from(&mut self, recs: &[TxRecord]) -> Result<usize, String> {
         sql(self.conn.execute_batch(
             "DELETE FROM meta; DELETE FROM tx; DELETE FROM record; DELETE FROM link;
-             DELETE FROM entity; DELETE FROM snapshot; DELETE FROM account;",
+             DELETE FROM entity; DELETE FROM snapshot; DELETE FROM account; DELETE FROM event;",
+        ))?;
+        sql(self.conn.execute(
+            "INSERT INTO meta(k, v) VALUES('schema', ?1)",
+            params![SCHEMA],
         ))?;
         self.add(recs)
     }
@@ -224,6 +248,87 @@ impl Index {
         let rows = sql(st.query_map(params![kind as u8], |r| r.get::<_, String>(0)))?;
         let v: Vec<String> = sql(rows.collect())?;
         Ok(v.into_iter().filter_map(|s| s.parse().ok()).collect())
+    }
+}
+
+/// One `/h/events` row: a PS2 record with its number and transaction.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EventRow {
+    /// 1, 2, … over the records of landed transactions, in archive order.
+    pub ev: u64,
+    /// Archive sequence of the transaction.
+    pub seq: u64,
+    pub slot: u64,
+    pub sig: String,
+    pub kind: u8,
+    pub bell: u32,
+    pub body: Vec<u8>,
+}
+
+/// A read-only connection to an index another process (or task) writes
+/// (WAL mode lets readers run beside the writer).
+pub struct Reader {
+    pub conn: Connection,
+}
+
+impl Reader {
+    pub fn open(path: &Path) -> Result<Reader, String> {
+        let conn = sql(Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        ))?;
+        Ok(Reader { conn })
+    }
+
+    /// Up to `limit` events with `ev > after`, in order.
+    pub fn events_after(&self, after: u64, limit: usize) -> Result<Vec<EventRow>, String> {
+        events_after(&self.conn, after, limit)
+    }
+
+    /// The number of the last event (0 = none).
+    pub fn last_event(&self) -> Result<u64, String> {
+        last_event(&self.conn)
+    }
+}
+
+fn events_after(conn: &Connection, after: u64, limit: usize) -> Result<Vec<EventRow>, String> {
+    let mut st = sql(conn.prepare_cached(
+        "SELECT e.ev, e.seq, t.slot, t.sig, r.kind, r.bell, r.body FROM event e
+         JOIN record r ON r.seq = e.seq AND r.idx = e.idx JOIN tx t ON t.seq = e.seq
+         WHERE e.ev > ?1 ORDER BY e.ev LIMIT ?2",
+    ))?;
+    let rows = sql(st.query_map(params![after as i64, limit as i64], |r| {
+        Ok(EventRow {
+            ev: r.get::<_, i64>(0)? as u64,
+            seq: r.get::<_, i64>(1)? as u64,
+            slot: r.get::<_, i64>(2)? as u64,
+            sig: r.get(3)?,
+            kind: r.get::<_, i64>(4)? as u8,
+            bell: r.get::<_, i64>(5)? as u32,
+            body: r.get(6)?,
+        })
+    }))?;
+    sql(rows.collect())
+}
+
+fn last_event(conn: &Connection) -> Result<u64, String> {
+    sql(
+        conn.query_row("SELECT COALESCE(MAX(ev), 0) FROM event", [], |r| {
+            r.get::<_, i64>(0)
+        }),
+    )
+    .map(|v| v as u64)
+}
+
+impl Index {
+    /// Up to `limit` events with `ev > after`, in order.
+    pub fn events_after(&self, after: u64, limit: usize) -> Result<Vec<EventRow>, String> {
+        events_after(&self.conn, after, limit)
+    }
+
+    /// The number of the last event (0 = none).
+    pub fn last_event(&self) -> Result<u64, String> {
+        last_event(&self.conn)
     }
 }
 
@@ -333,6 +438,10 @@ fn index_one(
                 rec.payload,
                 body
             ],
+        ))?;
+        sql(t.execute(
+            "INSERT INTO event(seq, idx) VALUES(?1, ?2)",
+            params![r.seq as i64, idx as i64],
         ))?;
         let expected = plog::chains_of(rec.kind, rec.key, rec.payload);
         for (n, link) in rec.links.iter().take(rec.n_links).flatten().enumerate() {
@@ -500,8 +609,23 @@ mod tests {
             .present_of_kind(AccountKind::BellAnchor)
             .unwrap()
             .is_empty());
+        // Events: the records of landed transactions, numbered in order.
+        let ev = ix.events_after(0, 10).unwrap();
+        assert_eq!(
+            ev.iter().map(|e| (e.ev, e.seq, e.kind)).collect::<Vec<_>>(),
+            vec![
+                (1, 1, Kind::ANCHOR as u8),
+                (2, 2, Kind::GENESIS_SEED as u8),
+                (3, 4, Kind::GENESIS_SEED as u8)
+            ]
+        );
+        assert_eq!(ev[2].body, g2);
+        assert_eq!(ix.events_after(2, 10).unwrap().len(), 1);
+        assert_eq!(ix.events_after(0, 2).unwrap().len(), 2);
+        assert_eq!(ix.last_event().unwrap(), 3);
         // Rebuild gives the same answers.
         assert_eq!(ix.rebuild_from(&recs).unwrap(), 5);
         assert_eq!(ix.entity_head(&season).unwrap(), Some((l2.seq, l2.head)));
+        assert_eq!(ix.last_event().unwrap(), 3, "renumbered from 1");
     }
 }
