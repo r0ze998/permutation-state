@@ -408,7 +408,7 @@ fn constant_vectors() -> Value {
 
 /// Operator AI roster tags and their chain (V5 §18.2), as the gateway computes them.
 fn roster_vectors() -> Value {
-    use permutation_rules::roster::{roster_chain, roster_tag};
+    use permutation_rules::roster::{roster_chain, roster_commit, roster_tag};
     let cases: Vec<(u64, [u8; 32], [u8; 32])> = vec![
         (1_790_000_000_123, [7; 32], [17; 32]),
         (1_790_000_000_123, [8; 32], [18; 32]),
@@ -420,13 +420,12 @@ fn roster_vectors() -> Value {
             "seasonId": s.to_string(), "wallet": hex(w), "salt": hex(x), "tag": hex(t),
         })).collect::<Vec<_>>(),
         "chain": hex(&roster_chain(&tags)),
-        // WP09's blinded commitment `sha256("permutation-rules/roster-commit"
-        // ‖ blind ‖ chain)`, which CreateSeason stores and the completing
-        // RevealRoster opens (the formula of WP09 §4.1).
+        // WP09's blinded commitment (`roster_commit`, WP09 §4.1), which
+        // CreateSeason stores and the completing RevealRoster opens.
         "commits": ([[0u8; 32], [3; 32], [0xa5; 32]]).iter().map(|blind| {
             let chain = roster_chain(&tags);
             json!({"blind": hex(blind), "chain": hex(&chain),
-                   "commit": hex(&permutation_rules::hash::sha256(&[b"permutation-rules/roster-commit", blind, &chain]))})
+                   "commit": hex(&roster_commit(blind, &chain))})
         }).collect::<Vec<_>>(),
     })
 }
