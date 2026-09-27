@@ -3,15 +3,17 @@
 //! core 9%, whale 1%), plus a scripted-bot share.
 
 use permutation_rules::frontier::index::IndexParams;
+use permutation_rules::frontier::payout::PayoutParams;
 
 /// How holdings emit laurels into their province.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Emission {
-    /// Design §5.4: every non-dormant, non-occupied holding emits 1/12.
+    /// Revision 2 (§5.4): every non-dormant, non-occupied holding emits 1/12.
     Full,
     /// Variant: holdings 2–3 collect but do not emit.
     FirstOnly,
-    /// Variant: a holding emits 1/12 × its order factor (1, ½, ¼).
+    /// K3 default (O4 step 3, kernel `laurel::emission_quarters`): a
+    /// holding emits 1/12 × its order factor (1, ½, ¼).
     OrderWeighted,
 }
 
@@ -26,6 +28,22 @@ pub enum LateStake {
     Bots,
     /// Every wallet that would stake does it on the last join day.
     Stakers,
+}
+
+/// How officers are paid (owner decision O3; K3 compares the options).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OfficePay {
+    /// USDC steward rows (§4.3) through the payout kernel, bounded by
+    /// `PayoutParams::office_ceiling_bps` (the K3 choice; `u32::MAX` =
+    /// revision 2, unbounded).
+    Usdc,
+    /// Variant: USDC rows capped at this share (bps) of what the officer
+    /// paid, with no ceiling on the claim ("a share of what the officer
+    /// paid", taken literally).
+    ShareOfPaid(u32),
+    /// Variant: no USDC rows; a seated officer who is a staker gets extra
+    /// shares of the term's Mandate budget (Minister 2, paid Warden 1).
+    Laurels,
 }
 
 #[derive(Clone, Debug)]
@@ -67,8 +85,10 @@ pub struct Config {
     pub bot_aggression: Option<f64>,
     /// Holding emission (design: `Full`).
     pub emission: Emission,
-    /// Relic Sites spawn at Engine stages (design). `false`: a variant
-    /// without them.
+    /// Relic Sites spawn at Engine stages and pay their revision-2 laurels
+    /// (1 a bell to the holder). K3 default `false` (O4 step 4): they mint
+    /// nothing, and with no other modelled purpose the sim does not spawn
+    /// them.
     pub relics: bool,
     /// Works credited per wallet per day at most [sim].
     pub works_cap: u64,
@@ -78,6 +98,15 @@ pub struct Config {
     /// most engaged win): a review variant; by default bots never hold a
     /// paid office.
     pub bot_officers: bool,
+    /// Payout parameters of the settlement (office ceiling, Works rate).
+    pub payout: PayoutParams,
+    /// Laurel-stake accrual ramp, bps (`EntrySchedule::stake_ramp_bps`).
+    pub stake_ramp_bps: u32,
+    /// Officer pay scheme (O3).
+    pub office_pay: OfficePay,
+    /// Mandate reserve pays only completers who staked (O10). `false`: the
+    /// M0 behaviour (every completer, equal split), for comparison.
+    pub mandate_stakers_only: bool,
     /// Print progress to stderr.
     pub verbose: bool,
 }
@@ -103,12 +132,31 @@ impl Default for Config {
             index: IndexParams::REV2,
             bot_q: None,
             bot_aggression: None,
-            emission: Emission::Full,
-            relics: true,
+            emission: Emission::OrderWeighted,
+            relics: false,
             works_cap: crate::model::WORKS_DAY_CAP,
             late_stake: LateStake::None,
             bot_officers: false,
+            payout: PayoutParams::REV3,
+            stake_ramp_bps: permutation_rules::frontier::pools::EntrySchedule::SEASON1
+                .stake_ramp_bps,
+            office_pay: OfficePay::Usdc,
+            mandate_stakers_only: true,
             verbose: false,
         }
+    }
+}
+
+impl Config {
+    /// The economy of revision 2 as the M0 simulator ran it (`cea89be`):
+    /// full emission for every holding, Relic Sites paying 1 laurel a bell,
+    /// 140 Works per USDC, stakes priced by days left, officer pay without
+    /// a ceiling, and the Mandate reserve split among every completer.
+    pub fn set_rev2_economy(&mut self) {
+        self.emission = Emission::Full;
+        self.relics = true;
+        self.payout = PayoutParams::REV2;
+        self.stake_ramp_bps = 0;
+        self.mandate_stakers_only = false;
     }
 }

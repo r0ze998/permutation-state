@@ -15,6 +15,7 @@ pub mod holding;
 pub mod host;
 pub mod index;
 pub mod laurel;
+pub mod mandate;
 pub mod payout;
 pub mod pools;
 pub mod siege;

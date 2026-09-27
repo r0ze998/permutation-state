@@ -9,7 +9,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use crate::config::{Config, Emission, LateStake};
+use crate::config::{Config, Emission, LateStake, OfficePay};
 use crate::model::*;
 use crate::rng::Rng;
 use permutation_rules::fixed::{Bps, Milli, MilliTroops, BPS_ONE, MILLI};
@@ -28,10 +28,11 @@ use permutation_rules::frontier::host::{
 };
 use permutation_rules::frontier::index::{FactionFacts, FACTIONS, PATHS};
 use permutation_rules::frontier::laurel::{
-    capture_transfer, mandate_reserve_split, occupation_split, order_quarters, relic_credit,
-    siege_settle, strength_weight, PairHistory, RewardIndex, Stake, Tier as LTier,
-    HOLDING_EMISSION_PER_BELL, INDEX_SCALE, LAUREL_ONE, SIEGE_STAKE,
+    capture_transfer, emission_quarters, mandate_reserve_split, occupation_split, relic_credit_at,
+    siege_settle, strength_weight, PairHistory, RewardIndex, Stake, Tier as LTier, EMIT_FULL,
+    LAUREL_ONE, RELIC_EMISSION_PER_BELL_REV2, SIEGE_STAKE,
 };
+use permutation_rules::frontier::mandate::{MandateTerm, Reserve, TERM_DAYS};
 use permutation_rules::frontier::pools::{Entry, EntrySchedule, Pools};
 use permutation_rules::frontier::siege::{
     auto_reinforce, completion, may_besiege, BellReport, Completion, Donor, HoldingKind, Relation,
@@ -48,7 +49,6 @@ use permutation_rules::units::UnitType;
 
 pub const NONE: u32 = u32::MAX;
 const HOUR_BELLS: u32 = 6;
-const TERM_DAYS: u32 = 4;
 /// Militia every new holding starts with (troops). [sim]
 const START_GARRISON: i64 = 100;
 /// Garrison of a Free City (a released first holding). [sim]
@@ -102,8 +102,6 @@ pub struct Prov {
     pub stationed: Vec<u32>,
     pub camp: Option<Camp>,
     pub relic: Option<u8>,
-    /// `OrderWeighted` variant: Σ order quarters of emitting holdings.
-    pub emit_q: u64,
 }
 
 impl Prov {
@@ -143,7 +141,6 @@ pub struct Hold {
     pub alive: bool,
     pub explores: u32,
     pub report: Option<(u32, BellReport)>,
-    pub emit_q: u64,
 }
 
 impl Hold {
@@ -278,6 +275,16 @@ pub struct Stats {
     pub disarray: u64,
     pub mandate_paid: u64,
     pub mandate_left: u64,
+    /// Mandate shares registered (stakers who completed) and completions
+    /// by fee-only wallets (no share, O10).
+    pub mandate_shares: u64,
+    pub mandate_unshared: u64,
+    /// Office-terms held: Minister, paid Warden; by bots.
+    pub minister_terms: u64,
+    pub warden_terms: u64,
+    pub bot_office_terms: u64,
+    /// World holding emission per day (laurel units), for the stake ramp.
+    pub emission_by_day: Vec<u128>,
     pub siege_stake_orphaned: u64,
     /// Siege stakes burned: uncounted (fee-only) stakes, pair rules.
     pub laurels_burned: u64,
@@ -331,8 +338,12 @@ pub struct Sim {
     sessions: Vec<Vec<u32>>,
     stationed_provs: BTreeSet<u32>,
     siege_holds: BTreeSet<u32>,
-    pub reserve: [u64; 6],
-    term_completers: Vec<Vec<u32>>,
+    /// Mandate reserve per faction (`mandate::Reserve`).
+    pub reserve: [Reserve; 6],
+    /// The open Mandate term per faction.
+    pub mandate: [MandateTerm; 6],
+    /// Completers of the open term and their shares.
+    term_completers: Vec<Vec<(u32, u64)>>,
     pub engine_total: u64,
     pub engine_stages: u8,
     pub relics: Vec<u32>,
@@ -370,7 +381,10 @@ impl Sim {
             profiles,
             rng: Rng::fork(cfg.seed, 7),
             rules: frontier_ruleset(),
-            sched: EntrySchedule::FRONTIER_28,
+            sched: EntrySchedule {
+                stake_ramp_bps: cfg.stake_ramp_bps,
+                ..EntrySchedule::FRONTIER_28
+            },
             end_bell,
             doctrine,
             provs: (0..n_prov).map(|_| None).collect(),
@@ -395,7 +409,8 @@ impl Sim {
             sessions: vec![Vec::new(); end_bell as usize + 1],
             stationed_provs: BTreeSet::new(),
             siege_holds: BTreeSet::new(),
-            reserve: [0; 6],
+            reserve: [Reserve::default(); 6],
+            mandate: [MandateTerm::new(0); 6],
             term_completers: vec![Vec::new(); 6],
             engine_total: 0,
             engine_stages: 0,
@@ -555,7 +570,6 @@ impl Sim {
                 stationed: Vec::new(),
                 camp: None,
                 relic: None,
-                emit_q: 0,
             };
             pr.camp = None;
             for slot in 0..n_sites {
@@ -706,7 +720,6 @@ impl Sim {
             alive: true,
             explores: 0,
             report: None,
-            emit_q: 0,
         });
         self.prov_mut(pi).site_h[slot as usize] = hid;
         self.take_site(pi, slot);
@@ -730,80 +743,57 @@ impl Sim {
         }
     }
 
-    fn weight_of(&self, hid: u32, b: u32) -> (u64, bool, bool) {
+    /// Strength weight, whether the holding is live (non-dormant), and its
+    /// emission quarters: the order factor (K3 default), 4 for every holding
+    /// (revision 2) or 4 for first holdings only (variant); 0 while occupied.
+    fn weight_of(&self, hid: u32, b: u32) -> (u64, bool, u8) {
         let x = &self.holds[hid as usize];
         let now = now_of(b);
         let dormant = x.free_city() || x.h.is_dormant(now);
-        let w = strength_weight(ltier(x.h.tier), x.garrison, x.h.order.saturating_sub(1));
-        let emits =
-            x.occupier.is_none() && (self.cfg.emission != Emission::FirstOnly || x.h.order <= 1);
-        (w, !dormant, emits)
+        let order = x.h.order.saturating_sub(1);
+        let w = strength_weight(ltier(x.h.tier), x.garrison, order);
+        let q = if x.occupier.is_some() {
+            0
+        } else {
+            match self.cfg.emission {
+                Emission::Full => EMIT_FULL,
+                Emission::FirstOnly => {
+                    if order == 0 {
+                        EMIT_FULL
+                    } else {
+                        0
+                    }
+                }
+                Emission::OrderWeighted => emission_quarters(order),
+            }
+        };
+        (w, !dormant, q)
     }
 
-    /// Accrue a province's index to bell `b`. Under the design every
-    /// emitting holding adds 1/12 laurel a bell (`RewardIndex::accrue`).
-    /// Under the `OrderWeighted` variant the province emits Σ order
-    /// quarters / 4 × 1/12 a bell: this replays the kernel's accrual on
-    /// the index's public fields with that emission (a proposal for K2:
-    /// an emission weight in place of the `emits` flag).
+    /// Accrue a province's index to bell `b` (`RewardIndex::accrue`).
     fn accrue(&mut self, pi: u32, b: u32) {
         let end = self.end_bell as u64;
-        let weighted = self.cfg.emission == Emission::OrderWeighted;
         let p = self.provs[pi as usize].as_mut().expect("prov");
-        if !weighted {
-            p.index.accrue(b as u64, end).expect("accrue");
-            return;
-        }
-        let ix = &mut p.index;
-        let to = (b as u64).min(end);
-        if to <= ix.bell {
-            return;
-        }
-        let e = (to - ix.bell) as u128 * p.emit_q as u128 * HOLDING_EMISSION_PER_BELL as u128 / 4;
-        ix.bell = to;
-        ix.emitted += e;
-        if e > 0 {
-            if ix.total_weight == 0 {
-                ix.orphaned += e;
-            } else {
-                let w = ix.total_weight as u128;
-                let num = e * INDEX_SCALE + ix.carry;
-                ix.acc += num / w;
-                ix.carry = num % w;
-            }
-        }
+        p.index.accrue(b as u64, end).expect("accrue");
     }
 
     /// Bring the holding's stake in its province's index to its current
     /// weight (accruing the index first), crediting what it earned.
     fn reweigh(&mut self, hid: u32, b: u32) {
         let pi = self.holds[hid as usize].prov;
-        let end = self.end_bell as u64;
-        let (w, live, emits_flag) = self.weight_of(hid, b);
+        let (w, live, q) = self.weight_of(hid, b);
         self.accrue(pi, b);
-        let weighted = self.cfg.emission == Emission::OrderWeighted;
-        let emits = emits_flag && !weighted;
         let x = &mut self.holds[hid as usize];
         let p = self.provs[pi as usize].as_mut().expect("prov");
-        if weighted {
-            let q = if live && x.alive && emits_flag {
-                order_quarters(x.h.order.saturating_sub(1))
-            } else {
-                0
-            };
-            p.emit_q = p.emit_q + q - x.emit_q;
-            x.emit_q = q;
-        }
-        let _ = end;
         let credit = if x.attached {
             if live && x.alive {
-                p.index.reweigh(&mut x.stake, w, emits).expect("reweigh")
+                p.index.reweigh(&mut x.stake, w, q).expect("reweigh")
             } else {
                 x.attached = false;
                 p.index.detach(&x.stake).expect("detach")
             }
         } else if live && x.alive {
-            x.stake = p.index.attach(w, emits).expect("attach");
+            x.stake = p.index.attach(w, q).expect("attach");
             x.attached = true;
             0
         } else {
@@ -826,7 +816,9 @@ impl Sim {
         }
         let (owner, occ, faction, pair) = (x.owner, x.occupier, x.faction, x.occ_pair);
         let m = mandate_reserve_split(credit);
-        self.reserve[faction as usize] += m.give;
+        self.reserve[faction as usize]
+            .deposit(m.give)
+            .expect("reserve");
         match occ {
             Some((o, _)) => {
                 let owner_staker = self.agents[owner as usize].stake > 0;
@@ -1070,6 +1062,16 @@ impl Sim {
         if day > 0 && day % TERM_DAYS == 0 {
             self.term_end(day / TERM_DAYS - 1);
         }
+        // World holding emission per bell at the day's start (stake ramp).
+        let per_bell: u128 = self
+            .provs
+            .iter()
+            .flatten()
+            .map(|p| p.index.emission_per_bell() as u128)
+            .sum();
+        self.stats
+            .emission_by_day
+            .push(per_bell * BELLS_PER_DAY as u128);
         // Crisis (V5): from day 14 the top two factions by index pay +10%.
         if day >= 14 {
             let facts = self.faction_facts(false, day);
@@ -1296,7 +1298,16 @@ impl Sim {
         {
             let f = self.agents[a as usize].faction as usize;
             self.agents[a as usize].mandate_term = term;
-            self.term_completers[f].push(a);
+            // O10: a share only for a wallet that is a staker when it
+            // completes (the M0 variant registers everyone).
+            let staker = self.agents[a as usize].stake > 0 || !self.cfg.mandate_stakers_only;
+            let sh = self.mandate[f].complete(staker).expect("mandate");
+            if sh > 0 {
+                self.term_completers[f].push((a, sh));
+                self.stats.mandate_shares += sh;
+            } else {
+                self.stats.mandate_unshared += 1;
+            }
             self.add_works(a, b, WORKS_MANDATE);
             budget -= 3;
         }
@@ -2812,7 +2823,10 @@ impl Sim {
             if total == 0 {
                 continue;
             }
-            let mint = relic_credit(1).expect("relic credit");
+            // Revision-2 comparison runs only: K3 Relic Sites mint nothing
+            // (`laurel::RELIC_EMISSION_PER_BELL`), and the K3 default does
+            // not spawn them (`Config::relics`).
+            let mint = relic_credit_at(1, RELIC_EMISSION_PER_BELL_REV2).expect("relic credit");
             self.stats.relic_minted += mint;
             let mut paid = 0;
             for (i, (h, t)) in holders.iter().enumerate() {
@@ -2825,7 +2839,7 @@ impl Sim {
                 let a = self.hosts[*h as usize].owner;
                 let f = self.agents[a as usize].faction;
                 let m = mandate_reserve_split(c);
-                self.reserve[f as usize] += m.give;
+                self.reserve[f as usize].deposit(m.give).expect("reserve");
                 self.agents[a as usize].laurels += m.keep;
                 self.agents[a as usize].earned.relic += m.keep;
             }
@@ -2938,23 +2952,48 @@ impl Sim {
         facts
     }
 
-    /// End of a term: Mandate reserve paid to completers (capped at 2× the
-    /// average holding's term emission), Ministers and Wardens seated.
+    /// End of a term: Ministers and Wardens seated for the term, then the
+    /// term's Mandate budget closed and claimed through the closed-form
+    /// kernel (`mandate::MandateTerm`: stakers who completed, capped at 2×
+    /// the average holding's term emission, the rest back to the reserve).
     fn term_end(&mut self, term: u32) {
-        let cap = 2 * TERM_DAYS as u64 * BELLS_PER_DAY as u64 * HOLDING_EMISSION_PER_BELL;
+        let officers = self.seat_officers(term);
+        let laurel_pay = self.cfg.office_pay == OfficePay::Laurels;
         for f in 0..6 {
-            let who = std::mem::take(&mut self.term_completers[f]);
-            if who.is_empty() {
-                continue;
+            let mut who = std::mem::take(&mut self.term_completers[f]);
+            if laurel_pay {
+                // Variant (O3): seated staker officers get extra shares.
+                for &(a, sh, _) in officers.iter().filter(|x| x.2 == f as u8) {
+                    let ag = &self.agents[a as usize];
+                    if ag.stake == 0 {
+                        continue;
+                    }
+                    let mut got = 0;
+                    for _ in 0..sh {
+                        got += self.mandate[f].complete(true).expect("office share");
+                    }
+                    who.push((a, got));
+                }
             }
-            let each = (self.reserve[f] / who.len() as u64).min(cap);
-            for a in who {
-                self.agents[a as usize].laurels += each;
-                self.agents[a as usize].earned.mandate += each;
-                self.reserve[f] -= each;
-                self.stats.mandate_paid += each;
+            let mut t = self.mandate[f];
+            t.close(&mut self.reserve[f]).expect("close term");
+            for (a, sh) in who {
+                let pay = t.claim(&mut self.reserve[f], sh).expect("mandate claim");
+                self.agents[a as usize].laurels += pay;
+                self.agents[a as usize].earned.mandate += pay;
+                self.stats.mandate_paid += pay;
             }
+            t.sweep(&mut self.reserve[f], false).expect("sweep term");
+            self.mandate[f] = MandateTerm::new(term + 1);
         }
+    }
+
+    /// Ministers and paid Wardens of the term (they served it: the sim
+    /// seats them at its end from the term's activity). Returns (wallet,
+    /// Mandate shares if offices pay in laurels, faction).
+    fn seat_officers(&mut self, term: u32) -> Vec<(u32, u64, u8)> {
+        let mut out = Vec::new();
+        let bot_officers = self.cfg.bot_officers;
         // Ministers: 4 per faction among active humans who stand (skilled
         // and very skilled), weighted by sessions this term.
         let term_start = term * TERM_DAYS;
@@ -2967,7 +3006,7 @@ impl Sim {
                     a.faction == f
                         && !a.shade
                         && (matches!(a.arch, Arch::Skilled | Arch::VerySkilled)
-                            || (a.arch == Arch::Bot && self.cfg.bot_officers))
+                            || (a.arch == Arch::Bot && bot_officers))
                         && a.last_active_day != NONE
                         && a.last_active_day >= term_start
                 })
@@ -2976,6 +3015,9 @@ impl Sim {
             cands.sort_unstable_by_key(|x| std::cmp::Reverse(x.0));
             for &(_, a) in cands.iter().take(4) {
                 self.agents[a as usize].minister_terms += 1;
+                self.stats.minister_terms += 1;
+                self.stats.bot_office_terms += (self.agents[a as usize].arch == Arch::Bot) as u64;
+                out.push((a, 2, f));
             }
         }
         // Wardens: per (March, faction) with ≥ 3 holdings; paid when ≥ 12
@@ -3011,7 +3053,6 @@ impl Sim {
             }
             // The most engaged non-Shade human stands and wins (bots too in
             // the `bot_officers` variant).
-            let bot_officers = self.cfg.bot_officers;
             let warden = active
                 .iter()
                 .copied()
@@ -3022,15 +3063,19 @@ impl Sim {
                 .max_by_key(|&a| (self.agents[a as usize].sessions, a));
             if let Some(w) = warden {
                 self.agents[w as usize].warden_terms += 1;
+                self.stats.warden_terms += 1;
+                self.stats.bot_office_terms += (self.agents[w as usize].arch == Arch::Bot) as u64;
+                out.push((w, 1, k.1));
             }
         }
+        out
     }
 
     pub fn finish(&mut self) {
         let b = self.end_bell;
         let last_term = self.cfg.days / TERM_DAYS - 1;
-        self.term_end(last_term);
-        // Freeze and bank every holding (BankAfterEnd).
+        // Freeze and bank every holding (BankAfterEnd) first, so the last
+        // credits' 10% reach the last term's Mandate budget.
         for hid in 0..self.holds.len() as u32 {
             let pi = self.holds[hid as usize].prov;
             self.accrue(pi, b);
@@ -3052,7 +3097,8 @@ impl Sim {
             }
         }
         self.siege_holds.clear();
-        self.stats.mandate_left = self.reserve.iter().sum();
+        self.term_end(last_term);
+        self.stats.mandate_left = self.reserve.iter().map(|r| r.balance).sum();
     }
 
     pub fn laurels_minted(&self) -> (u128, u128) {

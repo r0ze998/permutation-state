@@ -15,12 +15,25 @@ cargo run --release -- run --agents 10000 --seed 1     # one season, full report
 cargo run --release -- run --agents 10000 --sizes 3,1,1,1,1,1 --gamma 3/5
 cargo run --release -- run --agents 10000 --doctrines  # draft doctrine table
 cargo run --release -- suite --agents 10000 --seeds 5 --out RESULTS-suite.md
+cargo run --release -- criterion --seeds 5                  # bot criterion (O4), 1/2/5/10% bots, with and without offices
+cargo run --release -- criterion --seeds 5 --rev2-economy   # the same on the M0 economy
 ```
+
+The default economy is K3's (owner decisions O3, O4, O6, O10; see
+`frontier/m0b/sim/ECONOMY.md`): officer pay may lift a claim to at most 95%
+of what the wallet paid, 105 Works per USDC, the laurel stake priced by
+expected accrual left (`EntrySchedule::SEASON1`), holdings emit by their
+order factor, Relic Sites pay no laurels, the Mandate reserve pays only
+staker completers through `frontier::mandate`, γ = 0.6.
 
 Options: `--bots SHARE`, `--bot-q Q`, `--bot-aggression A`, `--day0 SHARE`,
 `--rotation K`, `--doctrines-tuned`, `--emission full|first-only|order-weighted`,
-`--no-relics`, `--works-cap N`, `--verbose`. `suite --only` takes a comma
-list of `payout,variant,herding,bots,decompose,doctrines,determinism`.
+`--relics`, `--no-relics`, `--works-cap N`, `--works-per-usdc N`,
+`--stake-ramp BPS`, `--office-ceiling BPS|none`,
+`--office-pay usdc|share:BPS|laurels`, `--mandate-all`, `--rev2-economy`,
+`--bot-officers`, `--late-stake none|bots|stakers`, `--verbose`.
+`suite --only` takes a comma list of
+`payout,variant,herding,bots,decompose,ladder,doctrines,determinism`.
 
 | File | Contents |
 |---|---|

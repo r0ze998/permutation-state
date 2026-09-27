@@ -9,12 +9,16 @@
 //!    + steward_i )
 //! ```
 //!
-//! * `w̃_i = min(Works_i, 140 Works per USDC of fee_i)` ([`works_weight`]):
+//! * `w̃_i = min(Works_i, 105 Works per USDC of fee_i)` ([`works_weight`]):
 //!   linear, so splitting play over more wallets earns nothing extra (the
 //!   earlier `√Works` paid N wallets √N times one wallet's weight), and
 //!   capped by the fee, so a wallet's Works weight never outgrows what it
-//!   paid. 140 per USDC is the 20-a-day cap over the days a fee buys
-//!   (4 USDC on day 0 = 28 days × 20).
+//!   paid. 105 per USDC is 15 a day over the days a fee buys (4 USDC on
+//!   day 0 = 28 days × 15); revision 2 had 140 (K3, O4 step 1).
+//! * `steward_i` is bounded by the **officer-pay ceiling** (K3, O3):
+//!   officer pay can lift a claim to at most 95% of what the wallet paid,
+//!   so no wallet ends a season in profit because of an office, however
+//!   many offices a farm wins. The cut is swept like the 5× cap's.
 //! * `λ̃_i` ([`CitizenRecord::counted_laurels`]) counts only laurels banked
 //!   **while the wallet was a staker**: a stake added late (`AddStake`,
 //!   priced by its day) does not reach back to laurels banked before it.
@@ -57,16 +61,28 @@ pub fn tenure_units(active_days: u32, days_available: u32) -> u32 {
     TENURE_ONE + bonus.min(2_500) as u32
 }
 
+/// Works weight per USDC of citizen fee before K3 (20 Works a day over the
+/// 28 days a 4-USDC day-0 fee buys). Kept for comparison runs.
+pub const WORKS_PER_USDC_REV2: u64 = 140;
+
 /// Works weight per USDC of citizen fee: the per-wallet cap of the Works
-/// share (20 Works a day over the 28 days a 4-USDC day-0 fee buys).
-pub const WORKS_PER_USDC: u64 = 140;
+/// share. The default is [`PayoutParams::REV3`]'s `works_per_usdc`; this
+/// constant is the value `CitizenRecord::weights` uses.
+pub const WORKS_PER_USDC: u64 = PayoutParams::REV3.works_per_usdc;
+
+/// A wallet's Works weight at the default rate ([`WORKS_PER_USDC`]).
+pub fn works_weight(works: u64, fee: u64) -> u64 {
+    works_weight_at(works, fee, WORKS_PER_USDC)
+}
 
 /// A wallet's Works weight: its season Works (daily-capped at credit
-/// time), linear, capped at `WORKS_PER_USDC` per USDC of fee paid. Linear
-/// so that N wallets with W Works between them weigh what one wallet with
-/// W Works weighs (the earlier `√Works` rewarded splitting by √N).
-pub fn works_weight(works: u64, fee: u64) -> u64 {
-    let cap = (fee as u128 * WORKS_PER_USDC as u128 / USDC as u128) as u64;
+/// time), linear, capped at `per_usdc` per USDC of fee paid. Linear so that
+/// N wallets with W Works between them weigh what one wallet with W Works
+/// weighs (the earlier `√Works` rewarded splitting by √N). The rate is a
+/// season constant (`PayoutParams::works_per_usdc`), fixed before joins
+/// open, because the FactionShards sum these weights incrementally.
+pub fn works_weight_at(works: u64, fee: u64, per_usdc: u64) -> u64 {
+    let cap = (fee as u128 * per_usdc as u128 / USDC as u128) as u64;
     works.min(cap)
 }
 
@@ -151,12 +167,19 @@ impl CitizenRecord {
         Ok(old)
     }
 
-    /// This wallet's contribution to its faction's totals.
+    /// This wallet's contribution to its faction's totals at the default
+    /// Works rate.
     pub fn weights(&self) -> Weights {
+        self.weights_at(WORKS_PER_USDC)
+    }
+
+    /// This wallet's contribution at the season's Works rate
+    /// (`PayoutParams::works_per_usdc`, `Settlement::works_per_usdc`).
+    pub fn weights_at(&self, works_per_usdc: u64) -> Weights {
         Weights {
             fee: self.fee,
             fee_units: self.fee as u128 * self.tenure as u128,
-            works: works_weight(self.works, self.fee),
+            works: works_weight_at(self.works, self.fee, works_per_usdc),
             builder_fee: if self.builder { self.fee } else { 0 },
             stake: self.stake,
             laurels: self.counted_laurels(),
@@ -254,7 +277,7 @@ impl FactionTotals {
     }
 }
 
-/// Payout shares (D11).
+/// Payout shares (D11) and the K3 bounds (owner decisions O3, O4).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PayoutParams {
     /// Part of a faction's citizen pool paid by fee × tenure (90%); the
@@ -264,19 +287,59 @@ pub struct PayoutParams {
     pub steward_bps: Bps,
     /// Wallet cap as a multiple of what the wallet paid (5).
     pub cap_multiple: u64,
+    /// **Officer-pay ceiling (O3)**, in bps of what the wallet paid. Officer
+    /// pay may raise a wallet's claim to at most this share of what it
+    /// paid, and never beyond: `steward_i ≤ max(0, ceiling × paid_i −
+    /// rest_of_claim_i)`. At or below 10,000 no wallet can end the season in
+    /// profit because of an office, however many offices a farm wins. What
+    /// the ceiling cuts is swept to the next season's pools, like the 5×
+    /// cap. `u32::MAX` disables the ceiling (revision 2).
+    pub office_ceiling_bps: u32,
+    /// Works weight per USDC of citizen fee (O4 step 1).
+    pub works_per_usdc: u64,
 }
 
 impl PayoutParams {
+    /// Revision 2 as specified: no officer ceiling, 140 Works per USDC.
     pub const REV2: PayoutParams = PayoutParams {
         fee_units_bps: 9_000,
         steward_bps: STEWARD_BPS,
         cap_multiple: 5,
+        office_ceiling_bps: u32::MAX,
+        works_per_usdc: WORKS_PER_USDC_REV2,
     };
+
+    /// After K3 (owner decisions O3, O4): officer pay may lift a claim to
+    /// at most 95% of what the wallet paid; 105 Works per USDC (15 a day
+    /// over the 28 days a day-0 fee buys). The simulator measurements
+    /// behind both values are in `frontier/m0b/sim/ECONOMY.md`.
+    pub const REV3: PayoutParams = PayoutParams {
+        fee_units_bps: 9_000,
+        steward_bps: STEWARD_BPS,
+        cap_multiple: 5,
+        office_ceiling_bps: 9_500,
+        works_per_usdc: 105,
+    };
+
+    /// Refuse parameters a season must never be created with.
+    pub fn validate(&self) -> Result<(), EconError> {
+        let ok = self.fee_units_bps <= BPS_ONE
+            && self.steward_bps <= 2_000
+            && (1..=10).contains(&self.cap_multiple)
+            && (self.office_ceiling_bps == u32::MAX
+                || self.office_ceiling_bps as u64 <= self.cap_multiple * BPS_ONE as u64)
+            && self.works_per_usdc <= 10_000;
+        if ok {
+            Ok(())
+        } else {
+            Err(EconError::BadParams)
+        }
+    }
 }
 
 impl Default for PayoutParams {
     fn default() -> Self {
-        Self::REV2
+        Self::REV3
     }
 }
 
@@ -324,6 +387,10 @@ pub struct Settlement {
     pub builder_fee: u128,
     pub factions: [FactionPots; FACTIONS],
     pub cap_multiple: u64,
+    /// `PayoutParams::office_ceiling_bps` of the season.
+    pub office_ceiling_bps: u32,
+    /// `PayoutParams::works_per_usdc` of the season.
+    pub works_per_usdc: u64,
     /// Σ of all pots (≤ `prize`); the difference is rounding dust.
     pub allocated: u64,
 }
@@ -348,6 +415,7 @@ pub fn settle(
     engine_stages: u8,
     p: &PayoutParams,
 ) -> Result<Settlement, EconError> {
+    p.validate()?;
     let prize = pools.prize()?;
     let builder_fee = totals
         .iter()
@@ -380,6 +448,8 @@ pub fn settle(
         civ_pot,
         builder_fee,
         cap_multiple: p.cap_multiple,
+        office_ceiling_bps: p.office_ceiling_bps,
+        works_per_usdc: p.works_per_usdc,
         ..Default::default()
     };
     let mut allocated = civ_pot as u128;
@@ -427,12 +497,17 @@ pub struct Claim {
     pub citizen: u64,
     pub civ: u64,
     pub laurel: u64,
+    /// Officer pay after the officer-pay ceiling.
     pub steward: u64,
-    /// Sum of the parts.
+    /// Officer pay the ceiling cut off (part of `swept`).
+    pub office_cut: u64,
+    /// Sum of the parts before the ceiling and the cap.
     pub gross: u64,
-    /// What the wallet receives: `min(gross, cap_multiple × paid)`.
+    /// What the wallet receives:
+    /// `min(citizen + civ + laurel + steward, cap_multiple × paid)`.
     pub paid: u64,
-    /// `gross − paid`, swept to the next season's pools.
+    /// `gross − paid` (officer-ceiling cut and 5×-cap cut), swept to the
+    /// next season's pools.
     pub swept: u64,
 }
 
@@ -456,7 +531,7 @@ pub fn claim(st: &Settlement, rec: &CitizenRecord) -> Result<Claim, EconError> {
     if rec.voided {
         return Ok(Claim::default());
     }
-    let w = rec.weights();
+    let w = rec.weights_at(st.works_per_usdc);
     let t = &f.totals;
     let citizen = share(f.fee_units_pot, w.fee_units, t.fee_units)?
         .checked_add(share(f.works_pot, w.works as u128, t.works)?)
@@ -477,17 +552,27 @@ pub fn claim(st: &Settlement, rec: &CitizenRecord) -> Result<Claim, EconError> {
     } else {
         share(f.steward_pot, w.steward as u128, t.steward)?
     };
-    let gross = [civ, laurel, steward]
+    let base = [civ, laurel]
         .iter()
         .try_fold(citizen, |a, x| a.checked_add(*x))
         .ok_or(EconError::Overflow)?;
+    let gross = base.checked_add(steward).ok_or(EconError::Overflow)?;
+    // O3: officer pay may lift the claim to `ceiling × paid`, never above.
+    let kept = if st.office_ceiling_bps == u32::MAX {
+        steward
+    } else {
+        let ceiling = (rec.paid() as u128 * st.office_ceiling_bps as u128 / BPS_ONE as u128)
+            .min(u64::MAX as u128) as u64;
+        steward.min(ceiling.saturating_sub(base))
+    };
     let cap = rec.paid().saturating_mul(st.cap_multiple);
-    let paid = gross.min(cap);
+    let paid = (base + kept).min(cap);
     Ok(Claim {
         citizen,
         civ,
         laurel,
-        steward,
+        steward: kept,
+        office_cut: steward - kept,
         gross,
         paid,
         swept: gross - paid,
