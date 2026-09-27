@@ -116,7 +116,10 @@ fn hex_key(h: Hex) -> u64 {
 
 /// Terrain and resource of the canonical hex `c` under ring seed `seed`.
 pub fn tile_at(seed: &Seed, c: Hex) -> (Terrain, Option<TileResource>) {
-    let base = rand(seed, b"frontier/terrain", &[]);
+    tile_at_base(seed, rand(seed, b"frontier/terrain", &[]), c)
+}
+
+fn tile_at_base(seed: &Seed, base: u64, c: Hex) -> (Terrain, Option<TileResource>) {
     let at = |salt: u64, cell: i64| {
         let (x, y) = plane(c, cell);
         noise(base, salt, x, y, NO_PERIOD)
@@ -209,12 +212,13 @@ fn canonical(seed: &Seed, pc: ProvinceCoord) -> ProvinceTerrain {
         sites: [0; SITES_PER_PROVINCE],
         site_count: 0,
     };
+    let base = rand(seed, b"frontier/terrain", &[]);
     for i in 0..PROVINCE_TILES as u8 {
         let mut g = pc.tile(i).unwrap_or(Hex::ORIGIN);
         if concord {
             g = g.turned(g.sextant()); // six-fold symmetric by itself
         }
-        let (t, r) = tile_at(seed, g);
+        let (t, r) = tile_at_base(seed, base, g);
         out.terrain[i as usize] = t;
         out.resource[i as usize] = r;
     }

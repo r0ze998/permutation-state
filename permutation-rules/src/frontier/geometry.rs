@@ -326,31 +326,47 @@ pub fn locate(h: Hex) -> (ProvinceCoord, u8) {
 /// Offset from the province centre of tile `idx`, in `hexes_within(4)`
 /// order (sorted by q, then r).
 pub fn tile_offset(idx: u8) -> Option<Hex> {
-    const R: i32 = PROVINCE_RADIUS;
-    let mut i = idx as i32;
-    for q in -R..=R {
-        let r_min = (-R).max(-q - R);
-        let r_max = R.min(-q + R);
-        let n = r_max - r_min + 1;
-        if i < n {
-            return Some(Hex::new(q, r_min + i));
-        }
-        i -= n;
-    }
-    None
+    let (q, r) = *TILE_OFFSETS.get(idx as usize)?;
+    Some(Hex::new(q as i32, r as i32))
 }
+
+const TILE_OFFSETS: [(i8, i8); 61] = {
+    const R: i32 = PROVINCE_RADIUS;
+    let mut t = [(0i8, 0i8); 61];
+    let mut n = 0;
+    let mut q = -R;
+    while q <= R {
+        let r_min = if -R > -q - R { -R } else { -q - R };
+        let r_max = if R < -q + R { R } else { -q + R };
+        let mut r = r_min;
+        while r <= r_max {
+            t[n] = (q as i8, r as i8);
+            n += 1;
+            r += 1;
+        }
+        q += 1;
+    }
+    t
+};
+
+const TILE_INDEX: [[u8; 9]; 9] = {
+    let mut t = [[255u8; 9]; 9];
+    let mut i = 0;
+    while i < 61 {
+        let (q, r) = TILE_OFFSETS[i];
+        t[(q + 4) as usize][(r + 4) as usize] = i as u8;
+        i += 1;
+    }
+    t
+};
 
 /// Tile index of an offset from the province centre.
 pub fn tile_index(o: Hex) -> Option<u8> {
-    const R: i32 = PROVINCE_RADIUS;
-    if o.radius() > R as u32 {
+    if o.q < -4 || o.q > 4 || o.r < -4 || o.r > 4 {
         return None;
     }
-    let mut base = 0;
-    for q in -R..o.q {
-        base += R.min(-q + R) - (-R).max(-q - R) + 1;
-    }
-    Some((base + o.r - (-R).max(-o.q - R)) as u8)
+    let i = TILE_INDEX[(o.q + 4) as usize][(o.r + 4) as usize];
+    (i != 255).then_some(i)
 }
 
 /// Tile index `idx` of a province seen from wedge `k`: the index of the
@@ -419,6 +435,45 @@ mod tests {
         }
         assert_eq!(tile_offset(61), None);
         assert_eq!(tile_index(Hex::new(5, 0)), None);
+    }
+
+    /// The const tables (integ-W3, W3-A F2) equal the loops they replaced,
+    /// for every index and every offset in a wide box.
+    #[test]
+    fn tile_tables_equal_the_former_loops() {
+        const R: i32 = PROVINCE_RADIUS;
+        fn offset_loop(idx: u8) -> Option<Hex> {
+            let mut i = idx as i32;
+            for q in -R..=R {
+                let r_min = (-R).max(-q - R);
+                let r_max = R.min(-q + R);
+                let n = r_max - r_min + 1;
+                if i < n {
+                    return Some(Hex::new(q, r_min + i));
+                }
+                i -= n;
+            }
+            None
+        }
+        fn index_loop(o: Hex) -> Option<u8> {
+            if o.radius() > R as u32 {
+                return None;
+            }
+            let mut base = 0;
+            for q in -R..o.q {
+                base += R.min(-q + R) - (-R).max(-q - R) + 1;
+            }
+            Some((base + o.r - (-R).max(-o.q - R)) as u8)
+        }
+        for idx in 0..=u8::MAX {
+            assert_eq!(tile_offset(idx), offset_loop(idx), "{idx}");
+        }
+        for q in -12..=12 {
+            for r in -12..=12 {
+                let o = Hex::new(q, r);
+                assert_eq!(tile_index(o), index_loop(o), "{q},{r}");
+            }
+        }
     }
 
     #[test]
