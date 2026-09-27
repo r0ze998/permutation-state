@@ -139,8 +139,9 @@ fn smooth(t: i64) -> i64 {
 }
 
 /// Value noise in 0..1024 at (`px`, `py`) (1/1024 lattice units), periodic
-/// in y with `period` cells.
-fn noise(base: u64, salt: u64, px: i64, py: i64, period: i64) -> i64 {
+/// in y with `period` cells. Shared with the Frontier terrain
+/// (`frontier::terrain`).
+pub(crate) fn noise(base: u64, salt: u64, px: i64, py: i64, period: i64) -> i64 {
     let (x0, fx) = (px.div_euclid(1024), smooth(px.rem_euclid(1024)));
     let (y0, fy) = (py.div_euclid(1024), smooth(py.rem_euclid(1024)));
     let (ya, yb) = (y0.rem_euclid(period), (y0 + 1).rem_euclid(period));
