@@ -116,15 +116,15 @@ async fn one_day_beacons() {
     let sig96 = fclient::beacon::decompress_sig(&w.drand.key.sign(g)).unwrap();
     assert_eq!(s.genesis_seed, fclient::beacon::seed_of(g, &sig96));
     let fr = Frontier::decode(&w.ip.lock().account(&w.addrs.frontier()).unwrap().data).unwrap();
-    if k.genesis.rings_unsupported {
+    if k.rings.unsupported {
         println!("genesis rings: the program answers NotImplemented (W3-A's land instructions)");
     } else {
         assert_eq!(fr.rings_opened, s.genesis_ring as u16 + 1);
         let want: usize = (0..=s.genesis_ring as u32)
             .map(|d| permutation_rules::frontier::geometry::ring_provinces(d).len())
             .sum();
-        assert_eq!(k.genesis.opened.len(), want, "every genesis province");
-        assert!(k.genesis.rings_done);
+        assert_eq!(k.rings.opened.len(), want, "every genesis province");
+        assert!(k.rings.genesis_done);
         println!(
             "genesis rings 0..={}: {want} provinces opened",
             s.genesis_ring

@@ -13,6 +13,7 @@
 //! | [`ports`] | `ChainPort`, `DrandPort` and their types |
 //! | [`beacon`] | quicknet info, blstrs verify, SP-V2 hints, seeds, the test-beacon key, drand backends |
 //! | [`seal`] | the 37-B plaintext, tlock seals, the stock opener and seal codes |
+//! | [`land`] | ticket scores and order, cohorts, expiry, the ring crowding rule, dormancy (W3-C) |
 //! | [`clock`] | rule times and the `GameClock` |
 //! | [`payers`] | reveal and delay pools, uniform draws, funders, payer care |
 //! | [`vectors`] | `permutation-gateway/test/frontier-vectors.json` |
@@ -25,6 +26,7 @@ pub mod decode;
 pub mod fees;
 pub mod http;
 pub mod ix;
+pub mod land;
 pub mod log;
 pub mod payers;
 pub mod ports;

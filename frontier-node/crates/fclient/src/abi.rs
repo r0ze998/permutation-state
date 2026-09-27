@@ -356,6 +356,11 @@ pub mod err {
     pub const QUOTA_REFUSED: u32 = 34;
     pub const TIP_TOO_LOW: u32 = 51;
     pub const HOST_IN_TRANSIT: u32 = 58;
+    /// Land (W3-C): a fold part of an older bell; a ticket whose `k` or
+    /// state moved; a holding not dormant (any more).
+    pub const FOLD_STALE: u32 = 44;
+    pub const TICKET_STATE: u32 = 45;
+    pub const NOT_DORMANT: u32 = 46;
     pub const NOT_IMPLEMENTED: u32 = 99;
 
     /// The window of this write is gone for good: stop retrying.
