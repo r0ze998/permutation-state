@@ -126,11 +126,44 @@ pub const SHIELD_SECS: i64 = 48 * HOUR;
 pub const SHIELD_LATE_SECS: i64 = 72 * HOUR;
 pub const SHIELD_LATE_FROM_DAY: u32 = 7;
 
+/// Most copies of one building in one holding (CL-03). The simulator's
+/// busiest holdings build 12 [sim, 20,000 agents]; 64 leaves 5× headroom
+/// and keeps `duplicate_cost` far from overflow for any in-game base.
+pub const MAX_DUPLICATES: u32 = 64;
+
+/// Largest wall points a holding can hold (CL-02). The simulator's
+/// holdings reach 600 [sim, 20,000 agents]; 2× that. With it a siege needs
+/// at most `siege::required_bells(MAX_WALLS, extra)` = 60 + extra bells, so
+/// one large Walls item can no longer make a holding immune (first-pass
+/// §4.8).
+pub const MAX_WALLS: u32 = 1_200;
+
+/// Largest gross production of one resource, milli-units per hour
+/// (CL-02): 1,000 units an hour, over 4× the simulator's highest
+/// (230 units an hour [sim, 20,000 agents]). `rate × 28 days` stays below
+/// 10¹² milli-units, far inside `i64`.
+pub const MAX_PRODUCTION_PER_HOUR: i64 = 1_000 * MILLI;
+
+/// Largest upkeep of one resource, milli-units per hour (CL-02): 10⁸
+/// units an hour. Troop upkeep is quadratic in troops, so this binds only
+/// above ≈ 6 million tier-2 troops on one holding (no economy reaches it;
+/// the simulator's highest is 47.3 units an hour); it exists so that
+/// every rate and product stays far inside `i64`.
+pub const MAX_UPKEEP_PER_HOUR: i64 = 100_000_000 * MILLI;
+
 /// Eternum's quadratic duplicate rule: the n-th copy (n ≥ 1) of a building
-/// in one holding costs `base × (1 + 0.5 (n − 1)²)`.
-pub const fn duplicate_cost(base: u64, n: u32) -> u64 {
+/// in one holding costs `base × (1 + 0.5 (n − 1)²)`. Checked (CL-03):
+/// `None` for `n > MAX_DUPLICATES` or when the cost does not fit in `u64`.
+pub const fn duplicate_cost(base: u64, n: u32) -> Option<u64> {
+    if n > MAX_DUPLICATES {
+        return None;
+    }
     let k = n.saturating_sub(1) as u64;
-    base * (2 + k * k) / 2
+    // k ≤ 63, so 2 + k² ≤ 3,971: only the product with `base` can overflow.
+    match base.checked_mul(2 + k * k) {
+        Some(x) => Some(x / 2),
+        None => None,
+    }
 }
 
 /// Shield length of a holding founded on season day `day`.
@@ -245,6 +278,10 @@ pub enum HoldingError {
     /// Timestamps must not go backwards.
     TimeReversed,
     TopTier,
+    /// The effect would take walls, production or upkeep past its cap
+    /// (`MAX_WALLS`, `MAX_PRODUCTION_PER_HOUR`, `MAX_UPKEEP_PER_HOUR`),
+    /// counting every item already queued (CL-02).
+    AboveCap,
 }
 
 /// What a finished queue item changes, at its completion time.
@@ -342,12 +379,15 @@ impl Holding {
     }
 
     fn net_rate(&self, r: usize, dormant: bool) -> i64 {
+        // Clamped again here (CL-02, second line): a caller that writes the
+        // fields directly cannot push a rate out of range.
+        let prod = self.production[r].clamp(0, MAX_PRODUCTION_PER_HOUR);
         let p = if dormant {
-            self.production[r] * DORMANT_PRODUCTION_BPS as i64 / BPS_ONE as i64
+            prod * DORMANT_PRODUCTION_BPS as i64 / BPS_ONE as i64
         } else {
-            self.production[r]
+            prod
         };
-        p - self.upkeep[r]
+        p - self.upkeep[r].clamp(0, MAX_UPKEEP_PER_HOUR)
     }
 
     fn settle_stores(&mut self, t: i64) {
@@ -368,14 +408,16 @@ impl Holding {
     }
 
     fn apply(&mut self, t: i64, e: Effect) {
+        // `enqueue` refuses effects past the caps; `apply` clamps as the
+        // second line (CL-02).
         match e {
             Effect::Production { resource, delta } => {
                 let p = &mut self.production[resource as usize];
-                *p = (*p + delta).max(0);
+                *p = p.saturating_add(delta).clamp(0, MAX_PRODUCTION_PER_HOUR);
             }
             Effect::Upkeep { resource, delta } => {
                 let u = &mut self.upkeep[resource as usize];
-                *u = (*u + delta).max(0);
+                *u = u.saturating_add(delta).clamp(0, MAX_UPKEEP_PER_HOUR);
             }
             Effect::TierUp => {
                 if let Some(n) = self.tier.next() {
@@ -386,7 +428,43 @@ impl Holding {
                     }
                 }
             }
-            Effect::Walls { delta } => self.walls = self.walls.saturating_add(delta),
+            Effect::Walls { delta } => self.walls = self.walls.saturating_add(delta).min(MAX_WALLS),
+        }
+    }
+
+    /// What `field` would reach if every queued item and then `e` finished:
+    /// the value the caps are checked against (positive deltas summed,
+    /// negative ones ignored, so the order of completion cannot matter).
+    fn projected_after(&self, e: Effect) -> Result<(), HoldingError> {
+        let pos = |d: i64| d.max(0) as i128;
+        let (mut prod, mut upk) = ([0i128; RESOURCES], [0i128; RESOURCES]);
+        for r in 0..RESOURCES {
+            prod[r] = self.production[r].max(0) as i128;
+            upk[r] = self.upkeep[r].max(0) as i128;
+        }
+        let mut walls = self.walls as i128;
+        let items = self.queue.iter().flatten().map(|q| q.effect).chain([e]);
+        for x in items {
+            match x {
+                Effect::Production { resource, delta } => prod[resource as usize] += pos(delta),
+                Effect::Upkeep { resource, delta } => upk[resource as usize] += pos(delta),
+                Effect::Walls { delta } => walls += delta as i128,
+                Effect::TierUp => {}
+            }
+        }
+        let over = walls > MAX_WALLS as i128
+            || prod.iter().any(|p| *p > MAX_PRODUCTION_PER_HOUR as i128)
+            || upk.iter().any(|u| *u > MAX_UPKEEP_PER_HOUR as i128);
+        // A negative delta larger than any cap is garbage, not a demolition.
+        let garbage = match e {
+            Effect::Production { delta, .. } => delta < -MAX_PRODUCTION_PER_HOUR,
+            Effect::Upkeep { delta, .. } => delta < -MAX_UPKEEP_PER_HOUR,
+            _ => false,
+        };
+        if over || garbage {
+            Err(HoldingError::AboveCap)
+        } else {
+            Ok(())
         }
     }
 
@@ -408,7 +486,7 @@ impl Holding {
                 }
             }
         }
-        Ok(w)
+        Ok(w.min(MAX_WALLS))
     }
 
     /// Move finished Walls items into `walls` once no clash can read a bell
@@ -426,7 +504,7 @@ impl Holding {
             }) = *q
             {
                 if done_at < before_ts {
-                    self.walls = self.walls.saturating_add(delta);
+                    self.walls = self.walls.saturating_add(delta).min(MAX_WALLS);
                     *q = None;
                 }
             }
@@ -491,7 +569,9 @@ impl Holding {
     }
 
     /// Queue `effect` to finish `duration` seconds after the last queued
-    /// item (or `now`). Settles first.
+    /// item (or `now`). Settles first. Refused (`AboveCap`, CL-02) if the
+    /// effect, on top of the current values and every queued item, would
+    /// take walls, a production or an upkeep past its cap.
     pub fn enqueue(
         &mut self,
         now: i64,
@@ -506,6 +586,7 @@ impl Holding {
         if matches!(effect, Effect::TierUp) && self.tier.next().is_none() {
             return Err(HoldingError::TopTier);
         }
+        self.projected_after(effect)?;
         let start = self
             .queue
             .iter()
@@ -514,7 +595,7 @@ impl Holding {
             .max()
             .unwrap_or(now)
             .max(now);
-        let done_at = start + duration.max(0);
+        let done_at = start.saturating_add(duration.max(0));
         let slot = self.queue.iter().position(|q| q.is_none());
         match slot {
             Some(s) => {
@@ -560,7 +641,7 @@ impl Holding {
         per_hour: i64,
     ) -> Result<(), HoldingError> {
         self.settle(now)?;
-        self.upkeep[resource as usize] = per_hour.max(0);
+        self.upkeep[resource as usize] = per_hour.clamp(0, MAX_UPKEEP_PER_HOUR);
         self.apply_rates(now);
         Ok(())
     }
@@ -572,9 +653,10 @@ mod tests {
 
     #[test]
     fn duplicate_rule() {
-        assert_eq!(duplicate_cost(100, 1), 100);
-        assert_eq!(duplicate_cost(100, 2), 150);
-        assert_eq!(duplicate_cost(100, 3), 300);
+        assert_eq!(duplicate_cost(100, 1), Some(100));
+        assert_eq!(duplicate_cost(100, 2), Some(150));
+        assert_eq!(duplicate_cost(100, 3), Some(300));
+        assert_eq!(duplicate_cost(100, 0), Some(100));
     }
 
     #[test]

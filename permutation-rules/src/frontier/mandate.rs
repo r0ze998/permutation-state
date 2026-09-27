@@ -22,10 +22,19 @@
 //!    ([`MandateTerm::sweep`]): the per-person cap's cut, rounding dust and
 //!    unclaimed shares all roll into the next term's budget. Nothing is
 //!    ever minted or lost.
+//! 6. **The Reckoning (CL-15).** Claims of a term close at the earlier of
+//!    its end + one term, or the season end + 72 h (the banking window,
+//!    [`claim_deadline`]); the last term closes at the season end; every
+//!    closed term is swept **before** `FinalizeFaction`, and the balance
+//!    then left ([`Reserve::final_sweep`]) joins the faction's laurel pool
+//!    general split, like unbanked accruals (design §8.4). It is not
+//!    carried forward.
 //!
 //! **Conservation** (checked by [`Reserve::outstanding`] and the tests):
-//! `deposited == balance + Σ_open terms (budget − paid) + paid + burned`
-//! exactly, at every step, and `Σ claims of a term ≤ budget − floor_cut`.
+//! `deposited == balance + Σ_open terms (budget − paid) + paid + burned +
+//! final_swept` exactly, at every step, and `Σ claims of a term ≤ budget −
+//! floor_cut`. After the final sweep, `deposited == paid + burned +
+//! final_swept`.
 //!
 //! **Cap.** A wallet earns at most [`MANDATE_CAP_PER_TERM`] per term: 2× the
 //! average holding's term emission (§4.2), so an officer cannot post a
@@ -51,6 +60,24 @@ use borsh::{BorshDeserialize, BorshSerialize};
 
 /// Days per governance term (Mandates, offices).
 pub const TERM_DAYS: u32 = 4;
+/// Seconds per governance term.
+pub const TERM_SECS: i64 = TERM_DAYS as i64 * 86_400;
+/// The banking window after the season end (design §8.4): 72 hours.
+pub const BANKING_WINDOW_SECS: i64 = 72 * 3_600;
+
+/// When the Mandate claims of a term ending at `term_end` close (CL-15):
+/// the earlier of one term later, or the end of the banking window after
+/// the season end `season_end`. A claim at `now > claim_deadline` is
+/// refused. Saturating, so no input overflows.
+pub const fn claim_deadline(term_end: i64, season_end: i64) -> i64 {
+    let a = term_end.saturating_add(TERM_SECS);
+    let b = season_end.saturating_add(BANKING_WINDOW_SECS);
+    if a < b {
+        a
+    } else {
+        b
+    }
+}
 /// Bells per term.
 pub const TERM_BELLS: u64 = TERM_DAYS as u64 * BELLS_PER_DAY as u64;
 /// Per-wallet, per-term ceiling on Mandate pay: 2× what an average holding
@@ -77,11 +104,20 @@ pub struct Reserve {
     pub paid: u128,
     /// Floor cuts burned at sweeps (m0c share floor).
     pub burned: u128,
+    /// The balance moved to the laurel pool general split by
+    /// [`Reserve::final_sweep`] (CL-15).
+    pub final_swept: u128,
+    /// The final sweep ran: nothing more is deposited or closed.
+    pub finalized: bool,
 }
 
 impl Reserve {
     /// 10% of a credit arrives (`mandate_reserve_split(..).give`).
+    /// Refused after the final sweep.
     pub fn deposit(&mut self, amount: u64) -> Result<(), EconError> {
+        if self.finalized {
+            return Err(EconError::TermState);
+        }
         let balance = self
             .balance
             .checked_add(amount)
@@ -96,14 +132,36 @@ impl Reserve {
     }
 
     /// Laurels sitting in closed, not yet swept terms:
-    /// `deposited − balance − paid − burned`. The conservation identity is
-    /// that this equals `Σ (budget − paid)` over those terms.
+    /// `deposited − balance − paid − burned − final_swept`. The
+    /// conservation identity is that this equals `Σ (budget − paid)` over
+    /// those terms.
     pub fn outstanding(&self) -> Result<u128, EconError> {
         self.deposited
             .checked_sub(self.balance as u128)
             .and_then(|x| x.checked_sub(self.paid))
             .and_then(|x| x.checked_sub(self.burned))
+            .and_then(|x| x.checked_sub(self.final_swept))
             .ok_or(EconError::Underflow)
+    }
+
+    /// The Reckoning's sweep (CL-15): once every closed term of the faction
+    /// has been swept (`outstanding() == 0`; otherwise `TermState`), move
+    /// the whole balance out of the reserve and return it: the program adds
+    /// it to the faction's laurel pool general split before
+    /// `FinalizeFaction`. After it `deposited == paid + burned +
+    /// final_swept`, and the reserve takes no more deposits or closes.
+    pub fn final_sweep(&mut self) -> Result<u64, EconError> {
+        if self.finalized || self.outstanding()? != 0 {
+            return Err(EconError::TermState);
+        }
+        let out = self.balance;
+        self.final_swept = self
+            .final_swept
+            .checked_add(out as u128)
+            .ok_or(EconError::Overflow)?;
+        self.balance = 0;
+        self.finalized = true;
+        Ok(out)
     }
 }
 
@@ -137,6 +195,9 @@ pub struct MandateTerm {
     /// The unclaimable part of the budget when the floor binds:
     /// `budget − ⌊budget × shares / divisor⌋`, burned at the sweep.
     pub floor_cut: u64,
+    /// Fixed at close ([`claim_deadline`], CL-15): no claim after it, and
+    /// the term may be swept with unclaimed shares once it has passed.
+    pub claim_deadline: i64,
 }
 
 impl MandateTerm {
@@ -163,21 +224,32 @@ impl MandateTerm {
     }
 
     /// `CloseTerm` without a share floor (tests and the M0 comparison).
-    pub fn close(&mut self, reserve: &mut Reserve) -> Result<u64, EconError> {
-        self.close_with_floor(reserve, 0)
+    pub fn close(
+        &mut self,
+        reserve: &mut Reserve,
+        term_end: i64,
+        season_end: i64,
+    ) -> Result<u64, EconError> {
+        self.close_with_floor(reserve, 0, term_end, season_end)
     }
 
     /// `CloseTerm`: fix the budget and the divisor `max(shares, floor)`
-    /// (`floor` = [`share_floor`] of the term's active stakers). With no
-    /// shares the term closes empty and the reserve keeps its balance.
+    /// (`floor` = [`share_floor`] of the term's active stakers), and the
+    /// claim deadline from the term's end and the season's end (CL-15; the
+    /// last term closes at the season end). With no shares the term closes
+    /// empty and the reserve keeps its balance. Refused after the reserve's
+    /// final sweep.
     pub fn close_with_floor(
         &mut self,
         reserve: &mut Reserve,
         floor: u64,
+        term_end: i64,
+        season_end: i64,
     ) -> Result<u64, EconError> {
-        if self.state != TermState::Open {
+        if self.state != TermState::Open || reserve.finalized {
             return Err(EconError::TermState);
         }
+        self.claim_deadline = claim_deadline(term_end, season_end);
         let budget = if self.shares > 0 { reserve.balance } else { 0 };
         reserve.balance -= budget;
         self.budget = budget;
@@ -207,10 +279,16 @@ impl MandateTerm {
         Ok(pro_rata.min(cap) as u64)
     }
 
-    /// A completer's claim (O(1)). Refused before close, after the sweep,
-    /// or if more shares are claimed than were registered.
-    pub fn claim(&mut self, reserve: &mut Reserve, shares_i: u64) -> Result<u64, EconError> {
-        if self.state != TermState::Closed {
+    /// A completer's claim at `now` (O(1)). Refused before close, after
+    /// the sweep, after the claim deadline (CL-15), or if more shares are
+    /// claimed than were registered.
+    pub fn claim(
+        &mut self,
+        now: i64,
+        reserve: &mut Reserve,
+        shares_i: u64,
+    ) -> Result<u64, EconError> {
+        if self.state != TermState::Closed || now > self.claim_deadline {
             return Err(EconError::TermState);
         }
         let claimed = self
@@ -237,19 +315,17 @@ impl MandateTerm {
         Ok(pay)
     }
 
-    /// `SweepTerm`: return `budget − paid − floor_cut` (cap cuts, rounding,
-    /// unclaimed shares) to the reserve and burn the floor cut.
-    /// `deadline_passed` lets a keeper sweep a term whose shares were not
-    /// all claimed in time. Returns what went back to the reserve.
-    pub fn sweep(
-        &mut self,
-        reserve: &mut Reserve,
-        deadline_passed: bool,
-    ) -> Result<u64, EconError> {
+    /// `SweepTerm` at `now`: return `budget − paid − floor_cut` (cap cuts,
+    /// rounding, unclaimed shares) to the reserve and burn the floor cut.
+    /// Allowed once every share is claimed, or once the claim deadline has
+    /// passed (`now > claim_deadline`), so a keeper can sweep a term whose
+    /// shares were not all claimed in time. Returns what went back to the
+    /// reserve.
+    pub fn sweep(&mut self, now: i64, reserve: &mut Reserve) -> Result<u64, EconError> {
         if self.state != TermState::Closed {
             return Err(EconError::TermState);
         }
-        if self.claimed_shares < self.shares && !deadline_passed {
+        if self.claimed_shares < self.shares && now <= self.claim_deadline {
             return Err(EconError::TermState);
         }
         let back = self.budget - self.paid - self.floor_cut;
@@ -287,12 +363,12 @@ mod tests {
         assert_eq!(t.complete(false).unwrap(), 0);
         assert_eq!(t.complete(true).unwrap(), 1);
         assert_eq!(t.complete(true).unwrap(), 1);
-        assert_eq!(t.close(&mut r).unwrap(), 1_000);
+        assert_eq!(t.close(&mut r, 0, 0).unwrap(), 1_000);
         assert_eq!(t.complete(true), Err(EconError::TermState));
-        let got = [(); 3].map(|_| t.claim(&mut r, 1).unwrap());
+        let got = [(); 3].map(|_| t.claim(0, &mut r, 1).unwrap());
         assert_eq!(got, [333, 333, 333]);
-        assert_eq!(t.claim(&mut r, 1), Err(EconError::Underflow));
-        assert_eq!(t.sweep(&mut r, false).unwrap(), 1);
+        assert_eq!(t.claim(0, &mut r, 1), Err(EconError::Underflow));
+        assert_eq!(t.sweep(0, &mut r).unwrap(), 1);
         assert_eq!(r.balance, 1);
         assert_eq!(r.outstanding().unwrap(), 0);
         assert_eq!(r.deposited, r.balance as u128 + r.paid);
@@ -311,13 +387,13 @@ mod tests {
         // 100 stakers were active in the term; only 4 completed.
         let floor = share_floor(100);
         assert_eq!(floor, 50);
-        assert_eq!(t.close_with_floor(&mut r, floor).unwrap(), 10_000);
-        let got = [(); 4].map(|_| t.claim(&mut r, 1).unwrap());
+        assert_eq!(t.close_with_floor(&mut r, floor, 0, 0).unwrap(), 10_000);
+        let got = [(); 4].map(|_| t.claim(0, &mut r, 1).unwrap());
         assert_eq!(got, [200; 4]); // 10_000 / 50, not 10_000 / 4
                                    // The floor cut is burned, not returned: the next term's budget does
                                    // not grow from it.
         assert_eq!(t.floor_cut, 10_000 - 800);
-        assert_eq!(t.sweep(&mut r, false).unwrap(), 0);
+        assert_eq!(t.sweep(0, &mut r).unwrap(), 0);
         assert_eq!(r.burned, 9_200);
         assert_eq!(r.outstanding().unwrap(), 0);
         assert_eq!(r.deposited, r.balance as u128 + r.paid + r.burned);
@@ -327,7 +403,7 @@ mod tests {
         for _ in 0..60 {
             u.complete(true).unwrap();
         }
-        let budget = u.close_with_floor(&mut r, floor).unwrap();
+        let budget = u.close_with_floor(&mut r, floor, 0, 0).unwrap();
         assert_eq!(u.quote(1).unwrap(), (budget / 60).min(MANDATE_CAP_PER_TERM));
     }
 
@@ -337,9 +413,9 @@ mod tests {
         r.deposit(500).unwrap();
         let mut t = MandateTerm::new(3);
         t.complete(false).unwrap();
-        assert_eq!(t.close(&mut r).unwrap(), 0);
+        assert_eq!(t.close(&mut r, 0, 0).unwrap(), 0);
         assert_eq!(r.balance, 500);
-        assert_eq!(t.claim(&mut r, 1), Err(EconError::Underflow));
-        assert_eq!(t.sweep(&mut r, false).unwrap(), 0);
+        assert_eq!(t.claim(0, &mut r, 1), Err(EconError::Underflow));
+        assert_eq!(t.sweep(0, &mut r).unwrap(), 0);
     }
 }

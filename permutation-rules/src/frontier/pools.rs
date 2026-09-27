@@ -105,15 +105,34 @@ impl EntrySchedule {
 
     /// Expected accrual rate on `day`, in units of `last_join_day` × bps
     /// (integer, so the ratio of two sums is exact).
-    fn accrual_rate(&self, day: u32) -> u128 {
+    pub fn accrual_rate(&self, day: u32) -> u128 {
         let j = self.last_join_day.max(1) as u128;
         j * BPS_ONE as u128 + self.stake_ramp_bps as u128 * day.min(self.last_join_day) as u128
     }
 
-    /// `Σ_{t = day}^{season_days − 1}` of the accrual rate. At most 366
-    /// terms (`validate`).
-    fn accrual_left(&self, day: u32) -> u128 {
-        (day..self.season_days).map(|t| self.accrual_rate(t)).sum()
+    /// `Σ_{t = day}^{season_days − 1}` of the accrual rate, in closed form
+    /// (CL-13; the loop it replaces ran up to 366 terms per Join/AddStake).
+    /// With `J = max(last_join_day, 1)`, `L = last_join_day`, `S =
+    /// season_days`, `R = stake_ramp_bps` and `d = day`:
+    /// `(S − d)·J·10,000 + R·[Σ_{t=d}^{min(L,S)−1} t + L·(S − max(d, L))]`,
+    /// all in `u128` (no term exceeds 2⁶⁴ for `u32` inputs).
+    pub fn accrual_left(&self, day: u32) -> u128 {
+        let (d, s) = (day as u128, self.season_days as u128);
+        if d >= s {
+            return 0;
+        }
+        let j = self.last_join_day.max(1) as u128;
+        let l = self.last_join_day as u128;
+        // Σ_{t=a}^{b−1} t for a ≤ b.
+        let tri = |a: u128, b: u128| {
+            if b > a {
+                (b * (b - 1) - a * a.saturating_sub(1)) / 2
+            } else {
+                0
+            }
+        };
+        let ramp_terms = tri(d, l.min(s)) + l * (s - d.max(l).min(s));
+        (s - d) * j * BPS_ONE as u128 + self.stake_ramp_bps as u128 * ramp_terms
     }
 
     /// `base × max(floor, (season_days − day) / season_days)`, rounded down

@@ -44,6 +44,16 @@ pub const REGIONS: u8 = 16;
 /// Player factions.
 pub const FACTIONS: u8 = 6;
 
+/// Whether `f` is a faction id the rules accept from data (CL-06): a
+/// player faction `0..=5`, or also `clash::NEUTRAL` (6: barbarians and Free
+/// Cities) when `allow_neutral`. Array sizes keep `clash::FACTION_LIMIT`
+/// (8), so id 7 fits every table but is refused wherever a faction is read
+/// from data. `clash` keeps a private copy with the same semantics (W1-A);
+/// `frontier_bounds::faction_ids_are_limited` pins them together.
+pub const fn valid_faction(f: u8, allow_neutral: bool) -> bool {
+    f < FACTIONS || (allow_neutral && f == super::clash::NEUTRAL)
+}
+
 /// A tile coordinate outside the accepted bound.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OutOfBounds;
@@ -121,9 +131,45 @@ impl ProvinceCoord {
         ProvinceCoord { p: h.q, q: h.r }
     }
 
-    /// Ring: province-grid distance from the Concord.
+    /// Ring: province-grid distance from the Concord. Computed in `i64`
+    /// (CL-04), so no `i32` pair overflows; saturates at `u32::MAX` (only
+    /// `(i32::MIN, i32::MIN)` reaches 2³²). Equal to `as_hex().radius()`
+    /// wherever that does not overflow.
     pub fn ring(self) -> u32 {
-        self.as_hex().radius()
+        ring_of(self.p, self.q).min(u32::MAX as u64) as u32
+    }
+
+    /// The only way the program builds a coordinate from data (CL-04):
+    /// `(p, q)` if its ring is at most `r_max`, itself capped at
+    /// [`R_MAX_HARD`] (a larger `r_max` is treated as 128). No `i32` pair
+    /// panics or wraps.
+    pub fn checked(p: i32, q: i32, r_max: u16) -> Result<ProvinceCoord, OutOfBounds> {
+        let limit = r_max.min(R_MAX_HARD) as u64;
+        if ring_of(p, q) <= limit {
+            Ok(ProvinceCoord { p, q })
+        } else {
+            Err(OutOfBounds)
+        }
+    }
+
+    /// [`ProvinceCoord::index`] for a province within [`R_MAX_HARD`], else
+    /// `None` (CL-04).
+    pub fn checked_index(self) -> Option<u32> {
+        if ring_of(self.p, self.q) <= R_MAX_HARD as u64 {
+            Some(self.index())
+        } else {
+            None
+        }
+    }
+
+    /// [`ProvinceCoord::from_index`] for `i < provinces_within(R_MAX_HARD)`
+    /// (49,537), else `None` (CL-04).
+    pub fn checked_from_index(i: u32) -> Option<Self> {
+        if i < provinces_within(R_MAX_HARD as u32) {
+            Some(Self::from_index(i))
+        } else {
+            None
+        }
     }
 
     /// Wedge (= homeland faction) of a province outside the Concord.
@@ -184,7 +230,8 @@ impl ProvinceCoord {
 
     /// Dense index: rings in order, and inside ring d ≥ 1 wedge by wedge,
     /// `k·d + (position in the wedge)`. The Concord is 0; ring d starts at
-    /// `1 + 3d(d − 1)`.
+    /// `1 + 3d(d − 1)`. For coordinates from data use
+    /// [`ProvinceCoord::checked_index`] (ring ≤ 128).
     pub fn index(self) -> u32 {
         let d = self.ring();
         if d == 0 {
@@ -195,7 +242,8 @@ impl ProvinceCoord {
         provinces_within(d - 1) + k as u32 * d + w.r as u32
     }
 
-    /// Inverse of [`ProvinceCoord::index`].
+    /// Inverse of [`ProvinceCoord::index`]. For indices from data use
+    /// [`ProvinceCoord::checked_from_index`] (`i < 49,537`).
     pub fn from_index(i: u32) -> Self {
         if i == 0 {
             return Self::CONCORD;
@@ -213,6 +261,13 @@ impl ProvinceCoord {
         let w = Hex::new(d as i32 - r, r);
         Self::from_hex(w.rotate_by(k))
     }
+}
+
+/// Hex distance of `(p, q)` from the origin in `i64` (no `i32` input
+/// overflows; the largest result is 2³²).
+const fn ring_of(p: i32, q: i32) -> u64 {
+    let (p, q) = (p as i64, q as i64);
+    (p.unsigned_abs() + q.unsigned_abs() + (p + q).unsigned_abs()) / 2
 }
 
 /// Provinces in ring `d`.

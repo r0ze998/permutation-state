@@ -61,6 +61,10 @@ pub enum HostError {
     /// The province has not resolved the bells this needs yet (lag only
     /// waits, design §8.4).
     Unresolved,
+    /// A value was set for a bell before the one it already holds
+    /// (`Stamina::set`, CL-05): a late write must never overwrite a later
+    /// spend.
+    TimeReversed,
 }
 
 /// Lazy stamina: `value` at resolved bell `bell`, +1 per resolved bell.
@@ -104,12 +108,19 @@ impl Stamina {
         Ok(())
     }
 
-    /// Refill to `b`, then set (clash results, routs).
-    pub fn set(&mut self, b: u32, value: u16) {
+    /// Set the value at resolved bell `b` (clash results, routs).
+    /// Monotone in the bell (CL-05): refused for `b < self.bell`, so a set
+    /// for an earlier bell can no longer overwrite a later spend. Setting
+    /// at the stored bell is allowed (it replaces that bell's value).
+    pub fn set(&mut self, b: u32, value: u16) -> Result<(), HostError> {
+        if b < self.bell {
+            return Err(HostError::TimeReversed);
+        }
         *self = Stamina {
             value: value.min(STAMINA_CAP),
-            bell: b.max(self.bell),
+            bell: b,
         };
+        Ok(())
     }
 }
 
@@ -334,8 +345,11 @@ impl Host {
                 return Err(HostError::Unsettled);
             }
         }
+        // Checked before any write, so a refused result changes nothing.
+        let mut st = self.stamina;
+        st.set(b, stamina)?;
         self.troops = troops;
-        self.stamina.set(b, stamina);
+        self.stamina = st;
         if engaged {
             self.ready_bell = self.ready_bell.max(b + 1 + BATTLE_COOLDOWN_BELLS);
         }
@@ -356,7 +370,7 @@ impl Host {
         match p.op {
             PendingOp::Spend { cost } => {
                 let v = self.stamina.at(e).saturating_sub(cost);
-                self.stamina.set(e, v);
+                self.stamina.set(e, v)?;
                 self.pending = None;
                 Ok(None)
             }
@@ -399,9 +413,11 @@ impl Host {
     }
 
     /// An unrevealed arrival: home with half its troops and no stamina.
-    pub fn route(&mut self, b: u32) {
+    /// Refused (nothing changes) for a bell before its stamina's bell.
+    pub fn route(&mut self, b: u32) -> Result<(), HostError> {
+        self.stamina.set(b, 0)?;
         self.troops = rout_survivors(self.troops);
-        self.stamina.set(b, 0);
+        Ok(())
     }
 
     /// Strength for `retreat_ratio` and holding the field.
@@ -434,9 +450,11 @@ pub fn settle_merge(into: &mut Host, from: &mut Host, resolved_next: u32) -> Res
         (false, true) => from.stamina.at(e),
         (false, false) => 0,
     };
+    let mut st = into.stamina;
+    st.set(e, stamina)?;
     let t = into.troops as u64 + from.troops as u64;
     into.troops = t.min(MAX_HOST_TROOPS as u64) as MilliTroops;
-    into.stamina.set(e, stamina);
+    into.stamina = st;
     into.ready_bell = into.ready_bell.max(from.ready_bell);
     into.pending = None;
     from.troops = 0;
