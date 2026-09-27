@@ -60,6 +60,9 @@ use common::*;
 const RELEASE_AFTER: i64 = 3_600;
 const THETA_BPS: u16 = 1_000;
 const KEEP_EVERY: i64 = 1_500;
+/// The gen of a site's first holding: every founding bumps the site's gen
+/// (W3-A's pinned choice in the program; integ-W3).
+const FIRST_GEN: u8 = 1;
 
 type K = Keeper<localnet::InProcess, Gated>;
 /// `(P, Q, site)`.
@@ -396,13 +399,16 @@ async fn land_season() {
         w.addrs.citizen(&plan[winner].0.pubkey()),
         "the lottery winner holds the contested site"
     );
-    assert_eq!(hx.gen, 0, "no displacement: settled in descending score");
+    assert_eq!(
+        hx.gen, FIRST_GEN,
+        "no displacement: settled in descending score"
+    );
     let mut founded: Vec<(i16, i16, u8)> = vec![contested];
     for &(_, _, i) in &contenders[1..] {
         let fb = plan[i].1[1];
         let h = holding(w, fb).expect("fallback founded");
         assert_eq!(h.owner_citizen, w.addrs.citizen(&plan[i].0.pubkey()));
-        assert_eq!(h.gen, 0);
+        assert_eq!(h.gen, FIRST_GEN);
         founded.push(fb);
     }
     for (kp, sites) in &plan[3..] {
@@ -711,7 +717,7 @@ async fn land_season() {
     .await;
     let hz = holding(&run.w, z).unwrap();
     assert_eq!(hz.owner_citizen, hi_c, "the higher score displaces");
-    assert_eq!(hz.gen, 1, "rewritten in place, gen + 1");
+    assert_eq!(hz.gen, FIRST_GEN + 1, "rewritten in place, gen + 1");
     assert_eq!(run.k.tickets.displacing, 1);
     let lc = citizen(&run.w, &lo);
     assert_eq!(lc.flags & l::citizen::FLAG_PROVISIONAL, 0);

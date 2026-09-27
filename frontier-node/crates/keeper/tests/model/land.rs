@@ -1027,11 +1027,10 @@ pub fn settle_ticket(ic: &mut InvokeContext, c: &mut Cursor) -> R<()> {
                 return Err(e(BAD_ACCOUNT));
             }
             outcome = 0;
-            gen = if mstate == l::site::STATE_RELEASED_FREE {
-                pv[mo + l::site::GEN].wrapping_add(1)
-            } else {
-                pv[mo + l::site::GEN]
-            };
+            // Every founding bumps the site's gen, the first holding of a
+            // site included (gen 1), as the program does (W3-A's pinned
+            // choice, citizen.rs module doc; integ-W3).
+            gen = pv[mo + l::site::GEN].wrapping_add(1);
         } else if mstate == l::site::STATE_HOLDING
             && ho == prog
             && hd.len() == fclient::abi::size::HOLDING
