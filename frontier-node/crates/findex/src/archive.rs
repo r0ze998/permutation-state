@@ -12,9 +12,13 @@
 //!
 //! **Crash safety.** Frames are written and synced before the manifest names
 //! them. A crash between the two leaves unnamed bytes at the end of the open
-//! segment; [`Archive::open`] truncates them (their transactions are
-//! re-ingested, because the manifest's cursor is still before them). A
-//! segment shorter than its manifest entry is corruption and refuses to open.
+//! segment, and — when the batch rolled — segment files the manifest does
+//! not name at all; [`Archive::open`] truncates the first and deletes the
+//! second (their transactions are re-ingested, because the manifest's
+//! cursor is still before them), and a new segment is always created empty
+//! (truncate), so a re-used name never keeps an earlier attempt's frames
+//! (integ-W2 review of W2-F). A segment shorter than its manifest entry is
+//! corruption and refuses to open.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
@@ -256,6 +260,18 @@ impl Archive {
                 }
             }
         }
+        // Segment files of a batch that rolled and crashed before its
+        // manifest: not named, so not ours; their records are re-ingested.
+        for e in fs::read_dir(dir)? {
+            let e = e?;
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with("seg-")
+                && name.ends_with(".log")
+                && !manifest.segments.iter().any(|s| s.name == name)
+            {
+                fs::remove_file(e.path())?;
+            }
+        }
         let a = Archive {
             dir: dir.into(),
             manifest,
@@ -314,6 +330,10 @@ impl Archive {
                     bytes: 0,
                     sha256: None,
                 });
+                // Created empty: never append behind an earlier attempt's
+                // unnamed frames under the same name.
+                let s = self.manifest.segments.last().expect("new segment");
+                File::create(self.dir.join(&s.name))?.sync_all()?;
             }
             let s = self.manifest.segments.last_mut().expect("open segment");
             let p = self.dir.join(&s.name);
@@ -485,6 +505,39 @@ mod tests {
         let b = Archive::open(&d, 600).unwrap();
         assert_eq!(b.manifest, a.manifest);
         assert_eq!(b.cursor(), &json!({"after": 9}));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// A crash after a batch rolled into a new segment but before the
+    /// manifest was written: the manifest names neither the new segment nor
+    /// the old segment's new bytes. Reopening drops both, and later appends
+    /// (which re-use the new segment's name) verify and read back.
+    #[test]
+    fn a_crash_across_a_segment_roll_reopens_clean() {
+        let d = tmp("rollcrash");
+        let mut a = Archive::open(&d, 600).unwrap();
+        let recs: Vec<TxRecord> = (1..=12).map(rec).collect();
+        a.append(&recs[..3], json!({"after": 3})).unwrap();
+        let before = fs::read(d.join("manifest.json")).unwrap();
+        let segs_before = a.manifest.segments.len();
+        a.append(&recs[3..9], json!({"after": 9})).unwrap();
+        assert!(a.manifest.segments.len() > segs_before, "the batch rolled");
+        // Crash: the manifest of the rolled batch never reached disk.
+        fs::write(d.join("manifest.json"), &before).unwrap();
+        drop(a);
+        let mut b = Archive::open(&d, 600).unwrap();
+        assert_eq!(b.verify(), Ok(3));
+        assert_eq!(b.cursor(), &json!({"after": 3}));
+        assert_eq!(b.read_after(0).unwrap().len(), 3);
+        // The source re-sends 4..=12: they land under the same names.
+        b.append(&recs[3..], json!({"after": 12})).unwrap();
+        assert_eq!(b.verify(), Ok(12));
+        let back = b.read_after(0).unwrap();
+        assert_eq!(
+            back.iter().map(|r| r.seq).collect::<Vec<_>>(),
+            (1..=12).collect::<Vec<_>>()
+        );
+        assert_eq!(Archive::open(&d, 600).unwrap().verify(), Ok(12));
         let _ = fs::remove_dir_all(&d);
     }
 

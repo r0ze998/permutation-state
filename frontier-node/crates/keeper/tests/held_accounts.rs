@@ -171,3 +171,93 @@ async fn held_anchor_falls_back_and_held_cache_switches_nonce() {
     );
     assert!(w.now() > fclient::clock::bell_end(genesis_ts, sb) + BELL_SECS);
 }
+
+/// A hold longer than the version cap plus blockhash expiry (240 slots of
+/// 64 versions + 151): the capped write ends, is re-planned with a fresh
+/// escalation and the anchor lands once the hold ends; newer bells keep
+/// being anchored meanwhile (integ-W2 review of W2-F: before the fix the
+/// write stayed pending for good and the anchor never landed).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn anchor_held_past_the_version_cap_lands_after_the_hold() {
+    let w = world().await;
+    println!("program: {}", w.which.label());
+    let genesis_ts = w.season().genesis_ts;
+    let attackers: Vec<Keypair> = (0..29u8)
+        .map(|i| Keypair::new_from_array([0xA0 ^ i; 32]))
+        .collect();
+    for a in &attackers {
+        w.airdrop(&a.pubkey(), 1_000_000_000_000);
+    }
+    let cfg = keeper_config(&w);
+    let mut k = Keeper::new(
+        cfg,
+        w.ip.clone(),
+        w.drand.clone(),
+        &[0x32u8; 32],
+        Some(Journal::open(std::path::Path::new(":memory:")).unwrap()),
+    )
+    .unwrap();
+    fund(&w, &k.payers);
+    k.start().await.unwrap();
+    let (hb, hr) = (2u32, 5u8);
+    let hold_from = fclient::clock::bell_end(genesis_ts, hb) - 3 * 8;
+    let hold_len = 240u32;
+    let mut held = 0u32;
+    let mut hold_end_slot = None;
+    let mut landed_at = None;
+    // Run until the anchor lands, at most 600 slots after the hold ends.
+    loop {
+        k.tick().await.unwrap();
+        if w.now() >= hold_from && held < hold_len {
+            hold(&w, w.addrs.anchor(hb, hr), &attackers).await;
+            held += 1;
+            if held == hold_len {
+                hold_end_slot = Some(w.slot());
+            }
+        }
+        w.step();
+        if let Some(e) = hold_end_slot {
+            if landed_at.is_none() {
+                // (The lock is released before `w.slot()` locks again.)
+                let present =
+                    w.ip.lock()
+                        .account(&w.addrs.anchor(hb, hr))
+                        .is_some_and(|a| !a.data.is_empty());
+                if present {
+                    landed_at = Some(w.slot());
+                }
+            }
+            if landed_at.is_some() || w.slot() > e + 600 {
+                break;
+            }
+        }
+    }
+    let e = hold_end_slot.unwrap();
+    let at = landed_at.expect("the held anchor lands after the hold ends");
+    let an =
+        BellAnchor::decode(&w.ip.lock().account(&w.addrs.anchor(hb, hr)).unwrap().data).unwrap();
+    println!(
+        "held anchor ({hb}, {hr}): hold ended at slot {e}, landed at {} (seen {at})",
+        an.slot
+    );
+    assert!(an.slot >= e.saturating_sub(1), "not while held");
+    let expired = k.journal.as_ref().unwrap().alerts("write-expired").unwrap();
+    println!("write-expired alerts: {expired:?}");
+    assert!(
+        expired.iter().any(|a| a.1.contains(&format!(":{hb}:"))),
+        "the capped write was ended and alerted"
+    );
+    // Newer bells were anchored in every region while it was held.
+    let sc = fclient::clock::SeasonClock::from_season(&w.season());
+    let b_now = sc.bell_at(w.now()).unwrap();
+    for b in hb + 1..b_now.saturating_sub(1) {
+        for r in 0..16u8 {
+            assert!(
+                w.ip.lock()
+                    .account(&w.addrs.anchor(b, r))
+                    .is_some_and(|a| !a.data.is_empty()),
+                "bell {b} region {r} anchored"
+            );
+        }
+    }
+}

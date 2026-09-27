@@ -236,6 +236,9 @@ pub fn is_heap_fault(e: &str) -> bool {
 }
 
 const BACKOFF_SLOTS: u64 = 2;
+/// Slots after its send at which a version's blockhash has expired (150
+/// valid blockhashes, one slot of margin).
+pub const EXPIRY_SLOTS: u64 = 151;
 
 impl Engine {
     pub fn new(budgets: Budgets, params: EngineParams) -> Engine {
@@ -515,7 +518,7 @@ impl Engine {
                             let _ = j.set_status(&o.0.to_string(), s, Some(st.slot), st.code);
                         }
                     }
-                    None if slot > o.1 + 151 => {
+                    None if slot > o.1 + EXPIRY_SLOTS => {
                         if let Some(j) = journal {
                             let _ = j.set_status(&o.0.to_string(), "expired", None, None);
                         }
@@ -558,6 +561,47 @@ impl Engine {
                     Outcome::Dead {
                         reason: "deadline".into(),
                         code: None,
+                    },
+                ));
+                continue;
+            }
+            // Every version expired unlanded: the write is at its version or
+            // spend cap (otherwise a new version went out each slot) or its
+            // sends fail. End it with a backoff so the duty re-plans a fresh
+            // escalation; a write that can never send again must not stay
+            // pending (integ-W2 review of W2-F: a hold longer than 64
+            // versions + expiry parked it, and the anchor scan window with
+            // it, until a restart).
+            if !p.versions.is_empty()
+                && p.versions.iter().all(|v| slot > v.sent_slot + EXPIRY_SLOTS)
+            {
+                let p = self.pending.remove(&k).expect("pending");
+                self.orphans.extend(
+                    p.versions
+                        .iter()
+                        .filter(|v| !p.settled.contains(&v.sig))
+                        .map(|v| (v.sig, v.sent_slot)),
+                );
+                self.stats.entry(p.spec.kind).or_default().failed += 1;
+                let n = self.failures.entry(k.clone()).or_default();
+                *n = n.saturating_add(1);
+                let wait = BACKOFF_SLOTS << (*n - 1).min(9);
+                self.backoff.insert(k.clone(), slot + wait);
+                let err = format!(
+                    "{} versions expired unlanded (cap {} versions, {} lamports)",
+                    p.versions.len(),
+                    self.params.max_versions,
+                    self.params.per_write_cap
+                );
+                if let Some(j) = journal {
+                    let _ = j.alert(slot, "write-expired", &format!("{k}: {err}"));
+                }
+                report.outcomes.push((
+                    k,
+                    Outcome::Failed {
+                        code: None,
+                        err,
+                        slot,
                     },
                 ));
                 continue;
@@ -929,6 +973,71 @@ mod tests {
         assert!(matches!(landed, Some(Outcome::Landed { versions: 3, .. })));
         assert_eq!(Budgets::retry_cu(680_000), 1_360_000);
         assert_eq!(Budgets::retry_cu(1_360_000), abi::CU_MAX);
+    }
+
+    /// A write held past its version cap and blockhash expiry ends (Failed,
+    /// with a backoff) instead of staying pending; the re-planned write
+    /// starts a fresh escalation and lands once the hold ends (integ-W2
+    /// review of W2-F: `long_hold`).
+    #[tokio::test]
+    async fn capped_write_whose_versions_expired_ends_and_restarts() {
+        let port = Script::default();
+        let mut payers = payers();
+        payers.refresh(&port, 0).await.unwrap();
+        let mut e = Engine::new(
+            Budgets::placeholder(),
+            EngineParams {
+                max_versions: 3,
+                ..EngineParams::default()
+            },
+        );
+        let j = Journal::open(std::path::Path::new(":memory:")).unwrap();
+        assert!(e.ensure(spec("a", Class::D, abi::tag::POST_ANCHOR), 0));
+        let mut ended = None;
+        let mut sent = 0;
+        let mut end_slot = 0;
+        for s in 0..200 {
+            let r = e.step(&port, &mut payers, Some(&j), s).await;
+            sent += r.sent;
+            if let Some((_, o)) = r.outcomes.into_iter().next() {
+                ended = Some(o);
+                end_slot = s;
+                break;
+            }
+        }
+        assert_eq!(sent, 3, "the version cap");
+        assert_eq!(
+            end_slot,
+            2 + EXPIRY_SLOTS + 1,
+            "ends once the last version expired"
+        );
+        assert!(matches!(ended, Some(Outcome::Failed { code: None, .. })));
+        assert!(!e.is_pending("a"));
+        assert!(
+            !e.ensure(spec("a", Class::D, abi::tag::POST_ANCHOR), end_slot),
+            "backoff"
+        );
+        // The hold ends: the next version lands, and the escalation restarts.
+        *port.answer.lock().unwrap() = Box::new(|_| {
+            Some(Status {
+                slot: 400,
+                err: None,
+                code: None,
+            })
+        });
+        assert!(e.ensure(spec("a", Class::D, abi::tag::POST_ANCHOR), end_slot + 2));
+        let mut landed = false;
+        for s in end_slot + 2..end_slot + 6 {
+            for (_, o) in e.step(&port, &mut payers, Some(&j), s).await.outcomes {
+                landed |= matches!(o, Outcome::Landed { versions: 1, .. });
+            }
+        }
+        assert!(landed, "the re-planned write lands with its first version");
+        let last = port.sent.lock().unwrap().last().map(priority_of).unwrap();
+        assert!(
+            (95..=105).contains(&last),
+            "a fresh escalation starts low: {last}"
+        );
     }
 
     /// AlreadyDone (52) is success; WindowClosed and NotImplemented end the

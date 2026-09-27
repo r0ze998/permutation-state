@@ -103,6 +103,10 @@ pub struct BeaconDuty {
     pub anchor_latency: Vec<u64>,
     /// Slots from `S` available to the first cache's landing.
     pub seed_latency: Vec<u64>,
+    /// Bells the scan window moved past while one of their anchors was
+    /// still missing (`[from, to)`), alerted once each (integ-W2 review of
+    /// W2-F: one missing `(b, r)` must not freeze the scan of every region).
+    pub skipped: Vec<(u32, u32)>,
 }
 
 impl BeaconDuty {
@@ -119,6 +123,7 @@ impl BeaconDuty {
             beacon_log_bell: None,
             anchor_latency: vec![],
             seed_latency: vec![],
+            skipped: vec![],
         }
     }
 
@@ -142,8 +147,18 @@ impl BeaconDuty {
         let Some(b_now) = t.clock.bell_at(t.now) else {
             return Ok(());
         };
+        let skipped = self.skipped.len();
         self.anchors_plan(t, b_now, port, drand, rounds, engine)
             .await?;
+        if let Some(j) = journal {
+            for (from, to) in &self.skipped[skipped..] {
+                let _ = j.alert(
+                    t.slot,
+                    "anchor-missing",
+                    &format!("bells {from}..{to} left the {SCAN_BELLS}-bell scan window with an anchor missing"),
+                );
+            }
+        }
         self.seeds_plan(t, port, drand, rounds, engine, journal)
             .await?;
         self.beacon_log_plan(t, b_now, port, drand, rounds, engine)
@@ -172,9 +187,18 @@ impl BeaconDuty {
             return Ok(()); // bell 0 has not ended
         }
         let last = b_now - 1;
-        let start = *self
+        let mut start = *self
             .next_bell
             .get_or_insert(b_now.saturating_sub(t.cfg.rescan_bells));
+        // The window always reaches the newest bell: a bell older than the
+        // window whose anchor is still missing is left behind (and alerted)
+        // rather than holding every newer bell back.
+        let floor = b_now.saturating_sub(SCAN_BELLS);
+        if start < floor {
+            self.skipped.push((start, floor));
+            start = floor;
+            self.next_bell = Some(start);
+        }
         let end = last.min(start.saturating_add(SCAN_BELLS - 1));
         if start > end {
             return Ok(());
