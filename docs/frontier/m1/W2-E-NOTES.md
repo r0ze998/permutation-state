@@ -122,9 +122,9 @@ A dry run of the merge order was done after the commit, see §7.
 - **W4-E:** `app.mjs` boots every page by `data-mode`; practice and spectate are placeholders. `wasm.mjs` `kernel()` loads lazily and refuses another ruleset hash.
 - **W3-D (herald):** the client expects §9.2 envelopes with base64 `bytes`, the §9.3 overview binary, `/h/season` with `bytes_b64`, `drand {publicKey, chainHash, period, genesis}`, `latestUnix`, `latestSlot`, and (optional) `seasonAddress`; `/h/me` with `citizen.bytes_b64` and `holdings[].bytes_b64`; `/h/bell/{b}/region/{r}` with `anchor.bytes_b64`. The synthetic fixtures show each shape.
 
-## 7. Integration dry run
+## 7. Integration dry run [measured]
 
-See the addendum below (merge of `frontier/m1-W2-D` into a scratch copy of this branch, `npm test`).
+A detached scratch worktree at this unit's commit `87c09b2`, `git merge frontier/m1-W2-D` (W2-D merges before W2-E): clean merge (only `docs/frontier/DECISIONS.md` auto-merged). There, `(cd permutation-gateway && npm ci --ignore-scripts && npm test)`: **438 tests, 437 pass, 0 fail, 1 skipped** (the `frontier.wasm` PENDING-OWNER test); W2-D's noble-manifest test ran against this unit's tree and passed; `node scripts/sync-web-sdk.mjs --check` exit 0. The scratch worktree was removed afterwards (nothing of it is on any branch).
 
 ## Links
 
