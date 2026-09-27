@@ -31,7 +31,8 @@ export function factionCards(FS) {
 function renderFactions(FS) {
   const cards = factionCards(FS).map(c => html`<li><button type="button" class="card" data-act="pick-faction" data-f="${c.faction}" aria-pressed="${c.chosen ? 'true' : 'false'}">
     ${swatch(c.faction)}<strong>${c.name}</strong><span>${L`教義：${c.doctrine}`}</span><span class="muted">${L`本拠の扇区の空き区画 約 ${fmtNum(c.free)}`}</span></button></li>`);
-  const gated = FS.inviteRequired;
+  // The season's join gate (I-51), or a relay that answered InviteRequired.
+  const gated = FS.inviteRequired || !!FS.season?.joinGate?.some?.(x => x !== 0);
   const ready = Number.isInteger(FS.joinDraft?.faction);
   return html`<section aria-labelledby="join-faction"><h3 id="join-faction">${L`勢力を選ぶ`}</h3>
     <p class="muted">${L`M1 では賞金はありません。勢力は本拠の扇区と教義を決めます。`}</p>

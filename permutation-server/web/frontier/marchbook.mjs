@@ -160,9 +160,13 @@ export const materialBytes = e => ({ plain: fromBase64(e.plain_b64), salt: fromB
 export function reconcile(book, { transits = [], revealedHosts = [], complete = false }) {
   const revealed = new Set(revealedHosts.map(h => String(h)));
   return book.map(e => {
-    if (e.state === 'settled' || e.state === 'failed') return e;
+    if (e.state === 'settled' || (e.state === 'failed' && e.mismatch)) return e;
     const r = transits.find(t => t.slot === e.transitSlot);
     const live = r && r.state >= 1 && r.state <= 3 && String(r.hostId) === e.host && r.arriveBell === e.arriveBell;
+    // A send reported as failed that landed anyway (a proxy error after the
+    // RPC took it; wave-3 review, W3-F): the live transit with this seal
+    // root revives it, so self-reveal and settlement are offered again.
+    if (e.state === 'failed') return live && String(r.sealRoot).toLowerCase() === e.sealRoot_hex ? { ...e, state: 'landed', failure: undefined } : e;
     if (live && String(r.sealRoot).toLowerCase() !== e.sealRoot_hex) return { ...e, state: 'failed', mismatch: true };
     if (live) {
       const landed = e.state === 'sealed' || e.state === 'sent' ? { ...e, state: 'landed' } : e;

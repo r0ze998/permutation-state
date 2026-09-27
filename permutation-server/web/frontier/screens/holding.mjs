@@ -71,8 +71,9 @@ export function render(FS) {
     <p class="muted">${L`新しい軍勢は次の鐘から顔ぶれに加わります。`}</p>
     ${blockedLine(m.blocks.Muster)}
     <h4>${L`守備隊`}</h4>
-    <form class="inline" data-form="garrison"><label>${L`増減（控えの兵から）`}<input name="delta" type="number" step="100" value="100" inputmode="numeric"></label>
-      <button type="submit" class="btn" ${raw(m.blocks.Garrison.length ? 'disabled' : '')}>${L`守備隊を変える`}</button></form>
+    <form class="inline" data-form="garrison"><label>${L`増員（控えの兵から）`}<input name="delta" type="number" min="1" step="100" value="100" inputmode="numeric"></label>
+      <button type="submit" class="btn" ${raw(m.blocks.Garrison.length ? 'disabled' : '')}>${L`守備隊を増やす`}</button></form>
+    <p class="muted">${L`M1 の守備隊は増やすだけです（引き上げは次の段階で）。`}</p>
     ${blockedLine(m.blocks.Garrison)}
     <h4>${L`夜番の時間`}</h4>
     <form class="inline" data-form="vigil"><label>${L`開始（UTC の時）`}<input name="hour" type="number" min="0" max="23" value="${Math.floor((FS.citizen?.vigilStartMin ?? 0) / 60)}" inputmode="numeric"></label>

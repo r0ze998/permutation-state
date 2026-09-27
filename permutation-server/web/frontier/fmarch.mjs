@@ -95,8 +95,9 @@ export const hostInTransit = (holding, hostId) => holding.transit.some(t => t.st
  * `{ok, route: {dirs, pathLen, path, secs, hexes, provinces}}` or `{ok: false, code}`.
  * `seeds`: the season's ring seeds `[{ring, seed (hex)}]` (/h/season `rings`).
  * The secs are the unit's pace without the doctrine's travel bias (every
- * M1 doctrine's is ≤ 1.0), so the earliest bell offered is never earlier
- * than the one the program accepts.
+ * M1 doctrine's is ≤ 1.0). The earliest bell also depends on when Depart
+ * lands: the page computes it for a departure DEPART_MARGIN_SECS later and
+ * recomputes it at send time (sendMarch `earliestAtSend`).
  */
 export function planRoute(kernel, { from, to, unit, seeds, blocked = [] }) {
   if (!kernel) return { ok: false, code: 'NoKernel' };
@@ -108,6 +109,15 @@ export function planRoute(kernel, { from, to, unit, seeds, blocked = [] }) {
   if (r.value.provinces.length > 4 || r.value.dirs.length > MAX_PATH_STEPS) return { ok: false, code: 'Path' };
   return { ok: true, route: r.value };
 }
+
+/**
+ * Seconds the page adds to "now" when it computes the earliest arrival bell
+ * (wave-3 review, W3-F): the program uses the Depart's own landing time, so
+ * an earliest bell computed at compose time goes stale if the send is
+ * delayed or lands a few seconds later across a bell boundary. The composer
+ * and the send both assume a departure this much later.
+ */
+export const DEPART_MARGIN_SECS = 90;
 
 /** The earliest arrival bell of a route departing at chain time `departTs` (kernel), or null without a kernel. */
 export function earliestBell(kernel, { genesisTs, departTs, secs }) {
@@ -172,13 +182,18 @@ export const SEND_STEPS = Object.freeze(['sealing', 'saved', 'sent', 'onChain'])
  *   seal(req) → sealMarch result; clock; publicKey (the season's beacon key);
  *   storage, bookKey; submit(req) → fplay.submit; track(sig) → fplay.track;
  *   accounts (fplay.accountsFor('Depart', …)); session (the signing key);
- *   onStep(step, detail)
+ *   onStep(step, detail); earliestAtSend() → the earliest arrival bell for a
+ *   departure now + DEPART_MARGIN_SECS (null: unknown), checked again here
  * → `{ok, step, code?, signature?, entry}`. Never rejects.
  */
 export async function sendMarch(m, deps) {
   const step = (s, d) => { try { deps.onStep?.(s, d); } catch { /* the UI's problem */ } };
+  // The earliest bell again, for a departure at "now + margin" (the compose-time one may be stale).
+  let fresh = null;
+  try { fresh = (await deps.earliestAtSend?.()) ?? null; } catch { fresh = null; }
+  if (fresh !== null && fresh > (m.earliest ?? 0)) m = { ...m, earliest: fresh };
   const problems = checkMarch(m);
-  if (problems.length) return { ok: false, step: 'check', code: problems[0], problems };
+  if (problems.length) return { ok: false, step: 'check', code: problems[0], problems, earliest: m.earliest ?? null };
   let plain;
   try { plain = plaintextOf(m); } catch (e) { return { ok: false, step: 'check', code: 'BadPlaintext', error: e.message }; }
   const transitSlot = freeTransitSlot(m.holding);

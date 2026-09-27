@@ -344,6 +344,26 @@ test('sendMarch: a refusal marks the entry failed (it may be re-sealed); a lost 
   assert.deepEqual([r.ok, r.step, r.code, called], [false, 'sealing', 'SealAuditFailed', false]);
 });
 
+test('sendMarch: an earliest bell gone stale by send time refuses ArrivalBell before sealing (wave-3 review)', async () => {
+  const w = world();
+  let sealed = false, sent = false;
+  const storage = memoryStorage();
+  const r = await march.sendMarch({ ...good(w), holdingAddress: 'h' }, {
+    earliestAtSend: () => 44, // the chosen bell is 43
+    seal: async () => { sealed = true; return { ok: false }; }, clock: CLOCK, publicKey: TEST_BEACON.publicKey,
+    storage, bookKey: 'k', session: {}, accounts: {}, submit: async () => { sent = true; return { ok: true }; }, track: async () => ({ ok: true }),
+  });
+  assert.deepEqual([r.ok, r.step, r.code, r.earliest], [false, 'check', 'ArrivalBell', 44]);
+  assert.deepEqual([sealed, sent, storage.m.size], [false, false, 0], 'nothing sealed, saved or sent');
+  // A fresh earliest bell at or before the chosen one changes nothing.
+  const ok = await march.sendMarch({ ...good(w), holdingAddress: 'h' }, {
+    earliestAtSend: () => 43, seal: req => seal.sealMarch(req, { inline: true }), clock: CLOCK, publicKey: TEST_BEACON.publicKey,
+    storage: memoryStorage(), bookKey: 'k', session: {}, accounts: {}, submit: async () => ({ ok: true, signature: 'S' }), track: async () => ({ ok: true }),
+  });
+  assert.equal(ok.ok, true, ok.code);
+  assert.equal(march.DEPART_MARGIN_SECS, 90);
+});
+
 test('the Depart transaction the page builds is at most 800 bytes (§9.4) and within its budget ceiling', () => {
   io.setPin({ programId: ADDR.program, cluster: 'localnet', seasonId: 1 });
   const A = io.pinned().addresses;

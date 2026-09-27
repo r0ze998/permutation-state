@@ -11,7 +11,7 @@ import * as io from './fchainio.mjs';
 import * as fsession from './fsession.mjs';
 import * as book from './marchbook.mjs';
 import { submit, track, accountsFor } from './fplay.mjs';
-import { sendMarch, planRoute, earliestBell, arrivalWindow, tipOptions, incomingWarnings } from './fmarch.mjs';
+import { sendMarch, planRoute, earliestBell, arrivalWindow, tipOptions, incomingWarnings, DEPART_MARGIN_SECS } from './fmarch.mjs';
 import { landState, hostsIn } from './fland.mjs';
 import { toggleTile } from './screens/explore.mjs';
 import { sealMarch, unpack, ctHash as ctHashOf, sealRoot as sealRootOf } from './seal.mjs';
@@ -20,7 +20,7 @@ import { regionOf } from './fgeo.mjs';
 import { hostParts } from './faddr.mjs';
 import { decodePage } from './flog.mjs';
 import { nextPoll } from './herald.mjs';
-import { kernel as loadKernel } from './wasm.mjs';
+import { kernel as loadKernel, UNITS } from './wasm.mjs';
 import { uiKey, uiStorage, loadUi, saveUi } from './fui.mjs';
 import * as wallet from '../wallet.mjs';
 import { decode as fromBase58, encode as toBase58 } from '../sdk/base58.mjs';
@@ -38,7 +38,10 @@ const bookKey = () => (FS.wallet && scope() ? book.bookKey(scope(), FS.wallet.ad
 const setNotice = n => { FS.notice = n; invalidate('panel'); };
 const busy = text => setNotice({ busy: true, text });
 const done = text => setNotice({ ok: true, text });
-const failed = r => setNotice({ ok: false, ...r, text: r?.text ?? null });
+const failed = r => {
+  if (r?.code === 'InviteRequired') FS.inviteRequired = true;
+  return setNotice({ ok: false, ...r, text: r?.text ?? null });
+};
 
 /** The addresses and signer context of a player action. */
 function ctx(extra = {}) {
@@ -79,6 +82,57 @@ async function act(name, { v = {}, fields = {}, signer, requester = null, label,
   }
 }
 
+// ------------------------------------------------------------------ pure rules of the controller (tested)
+/** Events the chronicle starts behind the head (a fresh page starts near the head, not at event 1). */
+export const CHRONICLE_WINDOW = 500;
+/** Pages of /h/events read per refresh while the answer is `full`. */
+export const CHRONICLE_PAGES = 4;
+/** The chronicle's first cursor for the season record's `headSeq` (wave-3 review, W3-F). */
+export const chronicleStart = headSeq => Math.max(0, Number(headSeq ?? 0) - CHRONICLE_WINDOW);
+/**
+ * The unit the incoming warnings judge a departure with: the fastest pace
+ * (cavalry), so `reachable` stays optimistic — a "no" is certain — whatever
+ * unit the host is (DEPART does not log it).
+ */
+export const WARNING_UNIT = UNITS.indexOf('Horseman');
+/** Seconds between polls while the page is hidden: only the self-reveal step runs (§4.2). */
+export const HIDDEN_POLL = 60;
+/**
+ * Seconds until the next poll (§4.2): 10 s while a march or a transaction is
+ * in flight, else 30 s; hidden, the reveal-only tick every 60 s; doubled per
+ * consecutive error up to 5 min, hidden or not.
+ */
+export function pollDelay({ hidden = false, inFlight = false, errors = 0 }) {
+  const base = hidden ? HIDDEN_POLL : nextPoll({ kind: 'own', inFlight, errors: 0 });
+  return errors > 0 ? Math.min(300, base * 2 ** errors) : base;
+}
+/** The provinces (other than `home`) where /h/me lists a host of the viewer: `[{p, q}]`. */
+export function hostProvinces(meRecord, home = null) {
+  const out = [];
+  for (const h of meRecord?.hosts ?? []) {
+    const [p, q] = Array.isArray(h.province) ? h.province : [];
+    if (!Number.isInteger(p) || !Number.isInteger(q)) continue;
+    if (home && home.p === p && home.q === q) continue;
+    if (!out.some(x => x.p === p && x.q === q)) out.push({ p, q });
+  }
+  return out;
+}
+/**
+ * The seed source a SettleExplore/SettleTicket may name for a bell-region
+ * record: `{archived: true}` once archived, else `{nonce}` of a cache still
+ * present whose round is THE anchor's S and whose A is THE anchor's; null
+ * while neither exists (wave-3 review, W3-F: not `caches[0]`).
+ */
+export function seedSourceOf(record) {
+  if (!record) return null;
+  if (record.archived) return { archived: true };
+  const a = record.anchor?.A;
+  const c = (record.caches ?? []).find(x => x.present !== false && (record.S === undefined || record.S === null || String(x.round) === String(record.S)) && (a === undefined || String(x.A) === String(a)));
+  return c ? { nonce: c.nonce } : null;
+}
+/** Whether a join needs an invite: the season's join gate is set (I-51). */
+export const inviteRequired = season => !!season?.joinGate?.some?.(x => x !== 0);
+
 // ------------------------------------------------------------------ refresh
 const Buffer2hex = b => Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
 let herald = null, refreshTimer = null, cursor = 0;
@@ -94,11 +148,16 @@ async function loadEnvelope(p, q, bell = 'latest') {
   return null;
 }
 
-/** The ArrivalSlot of `host` in its destination's envelope of bell `b` (per-bell file, else latest), or null. */
+/**
+ * The ArrivalSlot of `host` in its destination's envelope of bell `b`: the
+ * per-bell file, or the latest one while it is still that bell's; `env`
+ * null otherwise (SettleTransit is offered only with the arrival bell's own
+ * envelope: its slot and resolver; wave-3 review, W3-F).
+ */
 async function slotOf(dest, b, hostId) {
   let env = await herald.province(dest.p, dest.q, b);
   if (!env.ok) env = await herald.province(dest.p, dest.q, 'latest');
-  if (!env.ok || env.bell !== b) return { env: env.ok ? env : null, slot: null };
+  if (!env.ok || env.bell !== b) return { env: null, slot: null };
   const s = env.slots.find(x => BigInt(x.account.hostId) === BigInt(hostId));
   return { env, slot: s ?? null };
 }
@@ -136,8 +195,15 @@ async function refreshMarches(holding) {
       entries = book.recordAttempt(entries, e, { t: now(), route: 'self', result: r.ok ? 'accepted' : r.code });
       book.saveBook(book.browserStorage, key, entries);
     }
-    const settleReady = !!transit && transit.state >= 2 && pl.state === 'resolved' && pl.close !== null && now() >= pl.close + 600;
+    const settleReady = !!transit && !!env && transit.state >= 2 && pl.state === 'resolved' && pl.close !== null && now() >= pl.close + 600;
     marches.push({ entry: entries.find(x => x.host === e.host && x.arriveBell === e.arriveBell), transit, facts: { nowBell: b, pipeline: pl.state, slotPresent: !!slot, settleReady }, record, slot, env, dest, region });
+  }
+  // A live transit this device has no entry for (another device, cleared
+  // storage): a card with entry null, so the tracker says keepers reveal it.
+  for (const t of transits.filter(x => x.state >= 1 && x.state <= 3)) {
+    if (marches.some(m => m.transit && m.transit.slot === t.slot)) continue;
+    if (entries.some(e => e.transitSlot === t.slot && e.host === String(t.hostId) && e.state !== 'settled')) continue;
+    marches.push({ entry: null, transit: t, facts: { nowBell: b, pipeline: null, slotPresent: false, settleReady: false }, record: null, slot: null, env: null, dest: null, region: null });
   }
   entries = book.reconcile(entries, { transits, revealedHosts: revealed, complete: !!holding });
   book.saveBook(book.browserStorage, key, entries);
@@ -150,11 +216,15 @@ async function refreshMarches(holding) {
 }
 
 async function refreshChronicle() {
-  const r = await herald.events(cursor);
-  if (!r.ok) return;
-  const { records } = decodePage(r.events);
-  FS.chronicle = [...(FS.chronicle ?? []), ...records].slice(-400);
-  if (r.next !== null && r.next !== undefined) cursor = r.next;
+  if (cursor === 0 && FS.record?.headSeq !== undefined) cursor = chronicleStart(FS.record.headSeq);
+  for (let page = 0; page < CHRONICLE_PAGES; page++) {
+    const r = await herald.events(cursor);
+    if (!r.ok) break;
+    const { records } = decodePage(r.events);
+    FS.chronicle = [...(FS.chronicle ?? []), ...records].slice(-400);
+    if (r.next !== null && r.next !== undefined) cursor = r.next;
+    if (!r.full) break;
+  }
   const own = FS.holdings ?? [];
   FS.isMine = rec => {
     if (rec.host_id !== undefined) { const h = hostParts(rec.host_id); return !!h && own.some(o => o.p === h.p && o.q === h.q && o.site === h.site); }
@@ -167,13 +237,18 @@ async function refreshChronicle() {
     return { ...x.record, faction: ov && h ? ov.owners[h.site] : null };
   }).filter(d => d.faction !== null && d.faction < 6);
   const k = FS.kernel ?? null;
-  FS.incoming = FS.citizen ? incomingWarnings({ kernel: k, departures, holdings: own.map(o => ({ p: o.p, q: o.q, site: o.site, tile: o.tile })), faction: FS.citizen.faction, genesisTs: FS.clock.genesisTs, nowBell: nowBell() }) : [];
+  FS.incoming = FS.citizen ? incomingWarnings({ kernel: k, departures, holdings: own.map(o => ({ p: o.p, q: o.q, site: o.site, tile: o.tile })), faction: FS.citizen.faction, genesisTs: FS.clock.genesisTs, nowBell: nowBell(), unitOf: () => WARNING_UNIT }) : [];
 }
+
+/** The herald client this controller reads (startPlay sets it; tests pass a fake). */
+export function useHerald(h) { herald = h; cursor = 0; }
 
 /** Refresh the viewer's accounts, provinces, marches, chronicle and quota. */
 export async function refresh() {
   if (!herald || !FS.clock) return;
   FS.nowBell = nowBell();
+  // A gated season shows the invite field before any refusal (I-51).
+  FS.inviteRequired = FS.inviteRequired || inviteRequired(FS.season);
   if (FS.wallet) {
     const me = await herald.me(FS.wallet.address);
     if (me.ok) {
@@ -192,6 +267,15 @@ export async function refresh() {
     }
     const h = FS.holdings?.[0];
     if (h) await loadEnvelope(h.p, h.q);
+    // Hosts standing in other provinces (after a march that Stays): their
+    // envelopes too, so the Hosts tab can show and command them.
+    if (me.ok) for (const pq of hostProvinces(me.record, h ? { p: h.p, q: h.q } : null)) await loadEnvelope(pq.p, pq.q);
+    // SettleExplore is offered once the explore bell's seed is readable.
+    FS.exploreSeedReady = false;
+    if (h?.explore?.state && nowBell() >= h.explore.bell) {
+      const r = await herald.bellRegion(h.explore.bell, regionOf(h.explore.p, h.explore.q));
+      FS.exploreSeedReady = r.ok && !!seedSourceOf(r.record);
+    }
     await refreshMarches(h ?? null);
     if (FS.citizen && io.pinned()) {
       const q = await io.quota(io.pinned().addresses.of('Citizen', { wallet: FS.wallet.address }));
@@ -220,7 +304,7 @@ async function setDestination(dest) {
   const r = planRoute(k, { from: { p: c.origin.p, q: c.origin.q, tile: c.host.tile }, to: dest, unit: c.host.unit, seeds });
   if (!r.ok) { c.routeError = r.code; invalidate('panel'); return; }
   c.route = r.route;
-  c.earliest = earliestBell(k, { genesisTs: FS.clock.genesisTs, departTs: now(), secs: r.route.secs });
+  c.earliest = earliestBell(k, { genesisTs: FS.clock.genesisTs, departTs: now() + DEPART_MARGIN_SECS, secs: r.route.secs });
   c.arriveBell = arrivalWindow(FS.season, nowBell(), c.earliest).min;
   invalidate('panel');
 }
@@ -251,8 +335,13 @@ async function sendTheMarch() {
       storage: book.browserStorage, bookKey: bookKey(), session: FS.session,
       accounts: accountsFor('Depart', ctx({ holding: { p: h.p, q: h.q, site: h.site }, province: c.origin })),
       submit, track, onStep: s => { c.step = s; invalidate('panel'); },
+      earliestAtSend: () => (FS.kernel && c.route ? earliestBell(FS.kernel, { genesisTs: FS.clock.genesisTs, departTs: now() + DEPART_MARGIN_SECS, secs: c.route.secs }) : null),
     });
-    if (r.ok) { done(() => L`出発しました`); FS.compose = null; FS.tab = 'marches'; } else failed(r);
+    if (r.ok) { done(() => L`出発しました`); FS.compose = null; FS.tab = 'marches'; } else {
+      // A stale earliest bell: show the new window (the player chooses again).
+      if (r.code === 'ArrivalBell' && r.earliest !== null && r.earliest !== undefined) { c.earliest = r.earliest; c.arriveBell = Math.max(c.arriveBell, arrivalWindow(FS.season, nowBell(), r.earliest).min); }
+      failed(r);
+    }
   } finally {
     c.sending = false;
     FS.inFlight -= 1;
@@ -266,9 +355,10 @@ async function settleExplore() {
   const region = regionOf(rec.p, rec.q);
   const r = await herald.bellRegion(rec.bell, region);
   const A = io.pinned().addresses;
-  const archived = r.ok && r.record.archived;
-  const nonce = r.ok ? r.record.caches?.[0]?.nonce : undefined;
-  if (!archived && nonce === undefined) return failed({ code: 'SeedNotReady' });
+  const src = r.ok ? seedSourceOf(r.record) : null;
+  if (!src) return failed({ code: 'SeedNotReady' });
+  const archived = !!src.archived;
+  const nonce = src.nonce;
   const archive = A.of('AnchorArchive', { region, part: archivePartOf(rec.bell) });
   const settle = archived ? { seed: archive, anchor: archive } : { seed: A.of('SeedCache', { bell: rec.bell, region, nonce }), anchor: A.of('BellAnchor', { bell: rec.bell, region }) };
   return act('SettleExplore', { v: ctx({ holding: h, settle }), signer: null, requester: FS.session });
@@ -419,7 +509,7 @@ async function fileTicket(sites) {
  * preferences, the session key kept on this device, and the poll loop.
  */
 export async function startPlay({ herald: h, cfg }) {
-  herald = h;
+  useHerald(h);
   const pin = io.pinned();
   if (pin) herald.pin(pin.seasonId, pin.addresses);
   FS.ui = scope() ? loadUi(uiStorage, uiKey(scope())) : loadUi(uiStorage, '');
@@ -437,13 +527,28 @@ export async function startPlay({ herald: h, cfg }) {
     const c = await wallet.connect(entry, { chain: wallet.chainOf(pin?.cluster ?? 'localnet'), silent: true }).catch(() => null);
     if (c) { FS.wallet = wallet.connected(); FS.session = await fsession.restore(scope(), FS.wallet.address); }
   }
+  // The rules module once (the incoming warnings need it too); a missing
+  // frontier.wasm is tolerated (the page says what needs it).
+  await kernelOrNull();
   await refresh();
   let errors = 0;
+  const hidden = () => !!globalThis.document?.hidden;
   const loop = async () => {
-    const wait = nextPoll({ kind: 'own', hidden: globalThis.document?.hidden, inFlight: (FS.inFlight ?? 0) > 0 || (FS.marches ?? []).length > 0, errors });
-    try { await refresh(); errors = 0; } catch (e) { errors++; console.error('frontier refresh:', e); }
-    setTimeout(loop, (wait ?? 5) * 1000);
+    try {
+      // Hidden: only the marchbook's self-reveal step (§4.2), not the full refresh.
+      if (hidden()) await revealTick(); else await refresh();
+      errors = 0;
+    } catch (e) { errors++; console.error('frontier refresh:', e); }
+    const wait = pollDelay({ hidden: hidden(), inFlight: (FS.inFlight ?? 0) > 0 || (FS.marches ?? []).length > 0, errors });
+    setTimeout(loop, wait * 1000);
   };
+  globalThis.document?.addEventListener?.('visibilitychange', () => { if (!hidden()) refreshSoon(0); });
   setTimeout(loop, 10_000);
+}
+
+/** The hidden page's tick: the self-reveal of the marchbook's due marches only. */
+async function revealTick() {
+  if (!herald || !FS.clock || !FS.wallet || !(FS.book ?? []).some(e => e.state !== 'settled' && e.state !== 'failed')) return;
+  await refreshMarches(FS.holdings?.[0] ?? null);
 }
 

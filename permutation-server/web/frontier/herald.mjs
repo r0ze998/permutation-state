@@ -309,10 +309,13 @@ export function createHerald({ base = '', fetch: f = (...a) => globalThis.fetch(
       const r = await get(f, `${root}/h/me/${wallet}`);
       if (!r.ok) return r;
       return guard(() => {
-        const j = r.json;
+        // A holding the Citizen names that the fold has not captured (or
+        // closed) is listed as null: skipped, never a failed view (wave-3
+        // review, W3-E/W3-F); the checks see the same, aligned list.
+        const j = { ...r.json, holdings: (r.json?.holdings ?? []).filter(h => h !== null && h !== undefined) };
         const opts = { seasonId: pinned ?? undefined };
         const citizen = j.citizen?.bytes_b64 ? decode('Citizen', bytesOf(j.citizen.bytes_b64), opts) : null;
-        const holdings = (j.holdings ?? []).map(h => decode('Holding', bytesOf(h.bytes_b64), opts));
+        const holdings = j.holdings.map(h => decode('Holding', bytesOf(h.bytes_b64), opts));
         if (addrs) checkMe(addrs, wallet, j, citizen, holdings);
         return { record: j, citizen, holdings };
       });
@@ -320,7 +323,7 @@ export function createHerald({ base = '', fetch: f = (...a) => globalThis.fetch(
     /** GET /h/events?after={seq}: a page of PS2 records. */
     async events(after = 0) {
       const r = await get(f, `${root}/h/events?after=${encodeURIComponent(String(after))}`);
-      return r.ok ? { ok: true, events: Array.isArray(r.json?.events) ? r.json.events : [], next: r.json?.next ?? null } : r;
+      return r.ok ? { ok: true, events: Array.isArray(r.json?.events) ? r.json.events : [], next: r.json?.next ?? null, full: r.json?.full === true } : r;
     },
     /** GET /h/clash/{P},{Q}/{bell}: the clash report (immutable). */
     clash(p, q, bell) {
