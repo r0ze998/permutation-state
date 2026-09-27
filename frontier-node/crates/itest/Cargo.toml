@@ -1,16 +1,31 @@
 [package]
 name = "itest"
-description = "Frontier in-process integration tests (skeleton in W1; W4 owns it)"
+description = "Frontier in-process integration tests: inproc_day (bots + keeper + herald fold over ChainPort::InProcess with the test key), the in-process relay and direct ports (M1 contract §3.5, §11 W4-F, I-57)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
 
+# Dependency sections belong to the integrator (contract §3.4, I-55). W4-F
+# request R1 (docs/frontier/m1/W4-F-NOTES.md): workspace crates and crates
+# already in frontier-node/Cargo.lock only; no new external crate.
 [dependencies]
 fclient.workspace = true
+frontier-abi.workspace = true
+permutation-rules.workspace = true
 localnet.workspace = true
+findex.workspace = true
+keeper = { path = "../keeper" }
+herald = { path = "../herald" }
+agents = { path = "../agents" }
+bots = { path = "../bots" }
 tokio.workspace = true
+axum.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+base64.workspace = true
 
 [dev-dependencies]
 drand-replay = { path = "../drand-replay" }

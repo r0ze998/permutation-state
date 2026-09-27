@@ -1,0 +1,175 @@
+{
+  "recordedBell": 144,
+  "seed": 7591,
+  "source": "itest::inproc_day (FRONTIER_RECORD_FIXTURES=1), the herald of the in-process day",
+  "wallets": [
+    {
+      "arch": "idle",
+      "faction": 2,
+      "index": 0,
+      "joinBell": 36,
+      "persona": null,
+      "wallet": "DDTpiR4RBXfYdoeuqqMW1Ax4VZ8EPXHNBhcVvnUyhfbZ"
+    },
+    {
+      "arch": "idle",
+      "faction": 1,
+      "index": 1,
+      "joinBell": 69,
+      "persona": null,
+      "wallet": "3ViBNTYwR3mq83KuCbpTfRn5yuhDsg9Jjy2zRWPD7rXY"
+    },
+    {
+      "arch": "idle",
+      "faction": 0,
+      "index": 2,
+      "joinBell": 108,
+      "persona": null,
+      "wallet": "5cWXWTJe3vQgNN417czSUrHu9YFCDbFiTEDBnGq6Vah"
+    },
+    {
+      "arch": "idle",
+      "faction": 1,
+      "index": 3,
+      "joinBell": 80,
+      "persona": null,
+      "wallet": "9r9CffQT3LpQu8BqUD48H7LrNNEfCaJpHhyt4qGh2gYn"
+    },
+    {
+      "arch": "idle",
+      "faction": 0,
+      "index": 4,
+      "joinBell": 127,
+      "persona": null,
+      "wallet": "uxgnnfMMSLxdgJJK6a4FjouJTXSqqt6EZd7wCKw4fNQ"
+    },
+    {
+      "arch": "idle",
+      "faction": 5,
+      "index": 5,
+      "joinBell": 128,
+      "persona": null,
+      "wallet": "7wfQW9MegwzwFqjNMpCvZTdpe35j4wUaE6fAv6xBJiei"
+    },
+    {
+      "arch": "idle",
+      "faction": 0,
+      "index": 6,
+      "joinBell": 15,
+      "persona": null,
+      "wallet": "it2aUrviTXeXfjUVqiX4Q87P7Fj3QDqyGa1TNJC6EmB"
+    },
+    {
+      "arch": "idle",
+      "faction": 4,
+      "index": 7,
+      "joinBell": 82,
+      "persona": null,
+      "wallet": "HPCWtV7V6E1whkinkUhB5CGoMhUT5638cbcKGoJydS9g"
+    },
+    {
+      "arch": "casual",
+      "faction": 4,
+      "index": 15,
+      "joinBell": 9,
+      "persona": "late_revealer",
+      "wallet": "D8CVRjqQKUoKAnvxwSfsLTNA1C7nnhPEhVQjvMSJtEbU"
+    },
+    {
+      "arch": "casual",
+      "faction": 5,
+      "index": 16,
+      "joinBell": 1,
+      "persona": "bad_plaintext",
+      "wallet": "FhbBsZiAPwmJVuSzp5PpyaPAWVcZ81sFSmJrraUqqHWv"
+    },
+    {
+      "arch": "casual",
+      "faction": 5,
+      "index": 21,
+      "joinBell": 9,
+      "persona": "double_arrival",
+      "wallet": "7wiqWPNBfAgiEBGBTXR8x3MLLEhcZqRzQvK1CEc3HGtE"
+    },
+    {
+      "arch": "casual",
+      "faction": 4,
+      "index": 34,
+      "joinBell": 0,
+      "persona": "squatter",
+      "wallet": "BtWnBM7uu2Rcwtvuhy5JMoX8h8EKdxsShWDbXaLg18xd"
+    },
+    {
+      "arch": "casual",
+      "faction": 3,
+      "index": 40,
+      "joinBell": 9,
+      "persona": "ticket_holder",
+      "wallet": "3QvntgrqgRn1CKrVdeRSA28aYHPUZJXYncU4xFY6NZKG"
+    },
+    {
+      "arch": "casual",
+      "faction": 3,
+      "index": 54,
+      "joinBell": 8,
+      "persona": "spammer",
+      "wallet": "J1gTE59u1LRyi3vpsyFPX527RtGp9Uj46gUjuFPNn3RJ"
+    },
+    {
+      "arch": "daily",
+      "faction": 0,
+      "index": 58,
+      "joinBell": 5,
+      "persona": "zero_tip",
+      "wallet": "9p1jFVjymiJJL25fvbdkefjVa2e8SF8xEdZiGhnCZh8Z"
+    },
+    {
+      "arch": "daily",
+      "faction": 3,
+      "index": 66,
+      "joinBell": 1,
+      "persona": "settle_racer",
+      "wallet": "FcUD22XqSVVgFTzWXzS892r9yvusP8xJKkjoXnRrNoUg"
+    },
+    {
+      "arch": "daily",
+      "faction": 4,
+      "index": 73,
+      "joinBell": 1,
+      "persona": "prefunder",
+      "wallet": "GoP2wEwfq41dFeszkKR8AUHLe3CExEiENkgmA68Tbkey"
+    },
+    {
+      "arch": "daily",
+      "faction": 0,
+      "index": 83,
+      "joinBell": 5,
+      "persona": "self_tip",
+      "wallet": "9ynvir5VNzfkgzCad4zBVNbAJgEGYRMUtj4FpPZdDewV"
+    },
+    {
+      "arch": "skilled",
+      "faction": 1,
+      "index": 86,
+      "joinBell": 10,
+      "persona": "min_tip",
+      "wallet": "Fs5bSSKwxFT3xBxi2Hf2Wq3DErjp7cXbRVfaum7VF1W5"
+    },
+    {
+      "arch": "skilled",
+      "faction": 2,
+      "index": 93,
+      "joinBell": 0,
+      "persona": "garbage_seal",
+      "wallet": "CTzd8Z1F9d8qXLbTC2JJjxhoTmQrZJwjCLNsrxYc3DRS"
+    },
+    {
+      "arch": "bot",
+      "faction": 2,
+      "index": 97,
+      "joinBell": 0,
+      "persona": "forger",
+      "wallet": "4odLEyaApz2eLnDSL8GZutQP3N15ULhaB4AvHDCNBPon"
+    }
+  ]
+}

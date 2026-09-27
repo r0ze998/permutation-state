@@ -11,7 +11,11 @@
 //!   not yet settled.
 //!
 //! [`Fleet::step_all`] runs one decision of every bot at the current clock,
-//! concurrently: the unit tests and W4-F's in-process day drive it.
+//! concurrently (the unit tests). [`Fleet::step_due`] runs the bots that
+//! are due at a clock the caller moves, with the same pacing as
+//! [`Fleet::run`] (W4-F's in-process day, on virtual time).
+//! `Config::eager_personas` gives persona bots a session every bell,
+//! 90–150 game seconds in (off by default).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
