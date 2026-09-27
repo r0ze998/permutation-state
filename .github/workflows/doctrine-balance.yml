@@ -9,6 +9,12 @@
 # has a binomial SE of 1.0 point, and even a perfectly balanced table puts
 # all six in the ± 2 band only ~75% of the time, so the fresh set gates the
 # mean index (±0.12%, ≈ 7 SE) rather than the win-rate band.
+#
+# M1 (CL-31): the simulator's default economy now has D23's office-term
+# limit, so both O5 steps check the Season-1 rules. The CI proxy
+# (`doctrine-gate`) keeps the economy it was calibrated on (no term limit,
+# `balance::gate_config`), because with the limit its Knight control moves
+# inside the ±0.2% bound on the 30 gate seeds.
 name: Doctrine balance (O5, full)
 
 on:

@@ -17,7 +17,10 @@
 //!   max(0, prod_cost − 6)` (sim l. 1606–1640 and 1836–1853: the garrison
 //!   is paid at the Spearman rate, the variant surcharge on ore and gold
 //!   only). The contract text (§7) scales food too; the sim does not, and
-//!   the sim is normative, so this test follows the sim.
+//!   the sim is normative, so this test follows the sim. Units 0..=6 train;
+//!   the Settler (7) is M2 and `train` refuses it.
+//! * walls: exactly one building item has `Effect::Walls`; its item id is
+//!   the rules crate's choice.
 
 #[cfg(not(rules_catalog))]
 #[test]
@@ -45,7 +48,7 @@ mod eq {
     use permutation_rules::units::{stats, UnitType};
 
     const TIERS: [Tier; 4] = [Tier::Hamlet, Tier::Town, Tier::City, Tier::Stronghold];
-    const UNITS: [UnitType; 8] = [
+    const UNITS: [UnitType; 7] = [
         UnitType::Spearman,
         UnitType::Archer,
         UnitType::Horseman,
@@ -53,7 +56,6 @@ mod eq {
         UnitType::Crossbowman,
         UnitType::Knight,
         UnitType::Scout,
-        UnitType::Settler,
     ];
 
     fn n<T: TryInto<i128>>(x: T) -> i128 {
@@ -153,7 +155,24 @@ mod eq {
                     );
                 }
             }
-            assert!(cat::building(model::BUILDINGS.len() as u8 + 1, 1, d).is_none());
+            // Walls (sim l. 1566–1590): `WALL_STEP` points for
+            // `wall_cost(WALL_COST_STONE)` stone, 4 hours.
+            let walls: Vec<_> = (0..16u8)
+                .filter_map(|i| cat::building(i, 1, d))
+                .filter(|(_, e, _)| matches!(e, Effect::Walls { .. }))
+                .collect();
+            assert_eq!(walls.len(), 1, "{}: one walls item", d.name);
+            let (cost, effect, secs) = walls[0];
+            let mut want = vec![0i128; 8];
+            want[2] = n(d.wall_cost(model::WALL_COST_STONE));
+            assert!(same_cost(&v(&cost), &want), "{}: walls cost", d.name);
+            assert_eq!(
+                effect,
+                Effect::Walls {
+                    delta: model::WALL_STEP
+                }
+            );
+            assert_eq!(n(secs), 4 * 3_600);
         }
     }
 
@@ -177,6 +196,10 @@ mod eq {
                 );
             }
         }
+        assert!(
+            cat::train(UnitType::Settler as u8, 100).is_none(),
+            "Settlers are M2"
+        );
         let _ = BPS_ONE;
     }
 }
