@@ -1,4 +1,4 @@
-//! CreateSeason, AllocWorld, AllocNation, Register, UpdateMember.
+//! CreateSeason, AllocWorld, AllocNation, Register, UpdateMember, PostBond.
 
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -102,7 +102,7 @@ impl SeasonFx {
             roster_commit: [0; 32],
             bounty_each: 0,
             bond: 0,
-            deposit: 0,
+            deposit: self.p.deposit,
             start_by: crate::T0 + 7 * 86_400,
             validator: addr(ER_VALIDATOR).to_bytes(),
         }
@@ -191,8 +191,9 @@ impl SeasonFx {
         }
     }
 
-    /// `register` (`chain.mjs:82`): wallet (s), fee payer (s,w), season,
-    /// member PDA, wallet USDC, vault, mint, token program, system.
+    /// `register` (`chain.mjs:82`; contract §1.3 tag 2): wallet (s), fee
+    /// payer (s,w), season, member PDA, wallet USDC, vault, mint, token
+    /// program, system, and the session key named in the data (s, WP17).
     pub fn register_ix_from(&self, m: &MemberFx, payer: &Address, a: &RegisterArgs) -> Instruction {
         self.ix(
             &a.data(),
@@ -206,6 +207,7 @@ impl SeasonFx {
                 r(&self.mint),
                 r(&addr(TOKEN)),
                 r(&addr(SYSTEM)),
+                rs(&Address::new_from_array(a.session)),
             ],
         )
     }
@@ -246,6 +248,22 @@ impl SeasonFx {
         self.ix(
             &I::UpdateMember { stand, votes },
             vec![rs(signer), r(&self.season), w(&self.members[i].member)],
+        )
+    }
+
+    /// `postBond` (contract §1.3 tag 27): authority (s), season, the
+    /// authority's USDC account, vault, mint, token program.
+    pub fn post_bond_ix(&self, authority: &Address, source: &Address, amount: u64) -> Instruction {
+        self.ix(
+            &I::PostBond { amount },
+            vec![
+                rs(authority),
+                w(&self.season),
+                w(source),
+                w(&self.vault),
+                r(&self.mint),
+                r(&addr(TOKEN)),
+            ],
         )
     }
 }

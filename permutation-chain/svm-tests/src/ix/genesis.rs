@@ -1,19 +1,52 @@
-//! StartSeason, GenesisStep, SeatMembers, OpenGovernment.
+//! StartSeason, RetrySeasonSeed, ConsumeSeasonSeed, GenesisStep,
+//! SeatMembers, OpenGovernment.
 
 use solana_address::Address;
-use solana_instruction::Instruction;
+use solana_instruction::{AccountMeta, Instruction};
 
 use crate::instruction::ChainInstruction as I;
 use crate::season::SeasonFx;
-use crate::{addr, r, rs, w, SLOT_HASHES};
+use crate::{addr, r, rs, vrf, w, ws, SLOT_HASHES, SYSTEM};
 
 impl SeasonFx {
-    /// `startSeason` (`chain.mjs:89`): authority (s), season, SlotHashes,
-    /// the world chunks.
+    /// The VRF accounts of StartSeason and RetrySeasonSeed: our identity
+    /// PDA, the base queue (w), the VRF program, system, SlotHashes.
+    pub fn seed_vrf_metas(&self) -> Vec<AccountMeta> {
+        vec![
+            r(&vrf::program_identity(&self.program)),
+            w(&vrf::queue_base()),
+            r(&vrf::vrf_program()),
+            r(&addr(SYSTEM)),
+            r(&addr(SLOT_HASHES)),
+        ]
+    }
+
+    /// `startSeason` (contract §1.3 tag 3): authority (s,w), season, then
+    /// the VRF accounts (`seed_vrf_metas`). No world chunks.
     pub fn start_ix(&self, authority: &Address) -> Instruction {
-        let mut m = vec![rs(authority), w(&self.season), r(&addr(SLOT_HASHES))];
-        m.extend(self.chunk_metas());
+        let mut m = vec![ws(authority), w(&self.season)];
+        m.extend(self.seed_vrf_metas());
         self.ix(&I::StartSeason, m)
+    }
+
+    /// `retrySeasonSeed` (contract §1.3 tag 32): payer (s,w), season, then
+    /// the VRF accounts. Permissionless.
+    pub fn retry_seed_ix(&self, payer: &Address) -> Instruction {
+        let mut m = vec![ws(payer), w(&self.season)];
+        m.extend(self.seed_vrf_metas());
+        self.ix(&I::RetrySeasonSeed, m)
+    }
+
+    /// `ConsumeSeasonSeed` as the VRF would call it (tag 31), but sent
+    /// directly by `signer` (the real callback comes from `vrf::fulfil`).
+    pub fn consume_seed_ix(&self, signer: &Address, e: [u8; 32], season_id: u64) -> Instruction {
+        self.ix(
+            &I::ConsumeSeasonSeed {
+                randomness: e,
+                season_id,
+            },
+            vec![rs(signer), w(&self.season)],
+        )
     }
 
     /// `genesisStep` (`chain.mjs:92`): season, the world chunks. Permissionless.

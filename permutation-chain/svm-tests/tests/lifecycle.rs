@@ -39,8 +39,16 @@ fn finish_and_settle(c: &mut Chain, s: &SeasonFx, roster: bool, vault_in: u64) -
 fn idle_season_with_deposits_conserves_usdc() {
     let started = Instant::now();
     let mut c = Chain::new();
-    let mut s = SeasonFx::create(&mut c, Params::default());
-    let deposits = [0, 5_000_000, 0, 3_000_000];
+    // One deposit per season (WP12).
+    let d = 4_000_000;
+    let mut s = SeasonFx::create(
+        &mut c,
+        Params {
+            deposit: d,
+            ..Params::default()
+        },
+    );
+    let deposits = [d; 4];
     for (i, d) in deposits.iter().enumerate() {
         s.register(&mut c, (i % 2) as u16, *d);
     }
@@ -100,10 +108,16 @@ fn bots_play_a_blitz_season_on_the_sbf_build() {
 /// Two AIs and four people; returns (season, vault in).
 fn ai_season(c: &mut Chain) -> (SeasonFx, u64) {
     let (bounty, bond) = (1_000_000, 4_000_000);
-    let mut s = SeasonFx::create_ai(c, Params::default(), &[0, 1], bounty, bond);
+    // One deposit per season (WP12), the AIs' too.
+    let d = 1_000_000;
+    let p = Params {
+        deposit: d,
+        ..Params::default()
+    };
+    let mut s = SeasonFx::create_ai(c, p, &[0, 1], bounty, bond);
     s.register_ai(c, 0);
     s.register_ai(c, 1);
-    let deposits = [2_000_000, 0, 0, 1_000_000];
+    let deposits = [d; 4];
     for (i, d) in deposits.iter().enumerate() {
         s.register(c, (i % 2) as u16, *d);
     }
@@ -113,7 +127,9 @@ fn ai_season(c: &mut Chain) -> (SeasonFx, u64) {
         s.play_tick(c);
     }
     s.fast_forward_to_end(c);
-    let vault_in = 6 * s.p.fee + deposits.iter().sum::<u64>() + 2 * bounty + bond;
+    // `genesis` topped the bond up to its floor (PostBond, WP09).
+    let bond = s.season(c).bond;
+    let vault_in = 6 * s.p.fee + 6 * d + 2 * bounty + bond;
     assert_eq!(c.balance(&s.vault), vault_in);
     (s, vault_in)
 }

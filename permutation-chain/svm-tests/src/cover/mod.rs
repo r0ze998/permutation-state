@@ -89,12 +89,12 @@ pub fn covered_by(ix: &I) -> &'static [Cover] {
         // handler and its tests land with the unit named (wave 3), which
         // replaces its arm with its area's table.
         I::StartClock => play::START_CLOCK,
-        I::PostBond { .. } => &[Cover::Pending("WP09 (unit P2)")],
+        I::PostBond { .. } => registration::POST_BOND,
         I::FreezeTick => play::FREEZE_TICK,
         I::ConsumeTickRandomness { .. } => play::CONSUME_TICK_RANDOMNESS,
         I::RetryTickRandomness => play::RETRY_TICK_RANDOMNESS,
-        I::ConsumeSeasonSeed { .. } => &[Cover::Pending("WP11 (unit P2)")],
-        I::RetrySeasonSeed => &[Cover::Pending("WP11 (unit P2)")],
+        I::ConsumeSeasonSeed { .. } => genesis::CONSUME_SEASON_SEED,
+        I::RetrySeasonSeed => genesis::RETRY_SEASON_SEED,
         I::Abort => &[Cover::Pending("WP14 (unit P3)")],
         I::RequestUndelegation { .. } => &[Cover::Pending("WP14 (unit P3)")],
         I::RollbackUndelegation { .. } => &[Cover::Pending("WP14 (unit P3)")],
@@ -117,7 +117,6 @@ pub const NOT_AN_INSTRUCTION: &[Cover] = &[Cover::Test(
 pub const EXEMPT: &[(E, &str)] = &[
     (E::UndelegationOrder, "PENDING WP02 (unit P4)"),
     (E::AlreadyDelegated, "PENDING WP02/WP14 (unit P4)"),
-    (E::BondTooSmall, "PENDING WP09 (unit P2)"),
     (E::Insolvent, "PENDING WP12 (unit P3)"),
     (E::DelegationOrder, "PENDING WP14 (unit P4)"),
     (E::WorldRolledBack, "PENDING WP14 (unit P3)"),

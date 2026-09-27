@@ -16,7 +16,7 @@ fn ai_season(c: &mut Chain) -> SeasonFx {
         s.register_ai(c, i);
     }
     s.register(c, 0, 0);
-    s.register(c, 1, 2_000_000);
+    s.register(c, 1, 0);
     s.genesis(c);
     s.seat_and_open(c);
     s

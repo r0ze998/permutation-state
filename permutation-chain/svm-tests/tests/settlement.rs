@@ -9,7 +9,8 @@ use permutation_chain_svm_tests::*;
 use permutation_rules::history::{history_root, season_record};
 use solana_signer::Signer;
 
-const DEP: [u64; 4] = [0, 5_000_000, 0, 3_000_000];
+/// The season's deposit: one per season, every member pays it (WP12).
+const DEP: [u64; 4] = [4_000_000; 4];
 
 /// Four members (two per nation, with deposits), seated and open.
 fn running(c: &mut Chain, id: u64) -> SeasonFx {
@@ -17,6 +18,7 @@ fn running(c: &mut Chain, id: u64) -> SeasonFx {
         c,
         Params {
             id,
+            deposit: DEP[0],
             ..Params::default()
         },
     );
@@ -120,7 +122,7 @@ fn claim_checks() {
     let mut c = Chain::new();
     let s = running(&mut c, 7);
     s.fast_forward_to_end(&mut c);
-    let i = 1; // deposited 5 USDC into nation 1
+    let i = 1; // deposited 4 USDC into nation 1
     let w0 = s.members[i].wallet.insecure_clone();
     let t0 = s.members[i].token;
     let claim = |c: &mut Chain, ix| c.send(vec![ix], &[&w0]);
@@ -188,8 +190,11 @@ fn claim_checks() {
         claim(&mut c, s.claim_ix(i, &w0.pubkey(), &t0)),
         E::AlreadyClaimed,
     );
-    // Nothing owed.
-    c.edit::<Season>(&s.season, |x| x.payouts[0] = 0);
+    // Nothing owed (member 0 deposited too: no treasury left to refund).
+    c.edit::<Season>(&s.season, |x| {
+        x.payouts[0] = 0;
+        x.treasury_final = vec![0; 2];
+    });
     let w = s.members[0].wallet.insecure_clone();
     assert_eq!(claim_amount(&s.season(&c), &s.member(&c, 0)), 0);
     assert_err(

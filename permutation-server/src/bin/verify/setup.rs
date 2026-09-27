@@ -159,12 +159,14 @@ impl Replayed {
 /// replay reaches must list the members just seated with their keys; a
 /// record of this season whose root is never reached fails; others are
 /// ignored. A missing record only lowers the count (`PS_OPEN` anchors the
-/// result, see `first_election`).
+/// result, see `first_election`). `pre_votes`: the members' votes count
+/// (seasons without operator AI members), as `SeatMembers` decides it.
 fn replay_seating(
     state: &mut WorldState,
     rules: &Ruleset,
     members: &[MemberAccount],
     records: &[SeatRecord],
+    pre_votes: bool,
 ) -> Replayed {
     let mut out = Replayed {
         ok: true,
@@ -173,7 +175,7 @@ fn replay_seating(
     let mut seats: Vec<Seat> = Vec::new();
     let mut matched = vec![false; records.len()];
     for m in members {
-        let Ok(seat) = seat_member(state, rules, m) else {
+        let Ok(seat) = seat_member(state, rules, m, pre_votes) else {
             out.fail(format!("member {} could not be seated", m.index));
             break;
         };
@@ -228,7 +230,7 @@ pub fn seating(
             return None;
         }
     };
-    let mut r = replay_seating(state, rules, &members, &records);
+    let mut r = replay_seating(state, rules, &members, &records, season.ai_count == 0);
     if members.len() as u32 != season.member_count {
         r.ok = false;
         r.detail = format!(
@@ -376,13 +378,13 @@ mod tests {
         let keys = [[1; 32], substitute_key(SEASON, &[11; 32]), [2; 32]];
         let records = logged(&rules, &world, keys);
         let mut s = world.clone();
-        let r = replay_seating(&mut s, &rules, &members, &records);
+        let r = replay_seating(&mut s, &rules, &members, &records, true);
         assert!(r.ok, "{}", r.detail);
         assert_eq!(r.substituted, vec![1]);
         assert_eq!(s.members.iter().map(|m| m.key).collect::<Vec<_>>(), keys);
         assert_eq!(s.members[1].standing_for, Role::General.bit());
         // Without records (none indexed), the replay alone still seats all.
-        let r = replay_seating(&mut world.clone(), &rules, &members, &[]);
+        let r = replay_seating(&mut world.clone(), &rules, &members, &[], true);
         assert!(r.ok);
     }
 
@@ -394,13 +396,13 @@ mod tests {
         // key it was seated with.
         let mut records = logged(&rules, &world, keys);
         records[0].1[1].1 = [1; 32];
-        let r = replay_seating(&mut world.clone(), &rules, &members, &records);
+        let r = replay_seating(&mut world.clone(), &rules, &members, &records, true);
         assert!(!r.ok);
         assert!(r.detail.contains("keys"), "{}", r.detail);
         // A program that seated another substitute: the root differs.
         let other = [[1; 32], substitute_key(SEASON + 1, &[11; 32]), [2; 32]];
         let records = logged(&rules, &world, other);
-        let r = replay_seating(&mut world.clone(), &rules, &members, &records);
+        let r = replay_seating(&mut world.clone(), &rules, &members, &records, true);
         assert!(!r.ok);
         assert!(r.detail.contains("root"), "{}", r.detail);
     }
@@ -410,18 +412,18 @@ mod tests {
         let (rules, world, members) = season();
         let keys = [[1; 32], substitute_key(SEASON, &[11; 32]), [2; 32]];
         let records = logged(&rules, &world, keys);
-        let r = replay_seating(&mut world.clone(), &rules, &members, &records[1..]);
+        let r = replay_seating(&mut world.clone(), &rules, &members, &records[1..], true);
         assert!(r.ok, "{}", r.detail);
         assert_eq!(r.matched, 1);
         // A record of this season with a root the replay never reaches fails...
         let mut stray = records.clone();
         stray.push((vec![9; 32], Vec::new(), true));
-        let r = replay_seating(&mut world.clone(), &rules, &members, &stray);
+        let r = replay_seating(&mut world.clone(), &rules, &members, &stray, true);
         assert!(!r.ok);
         assert!(r.detail.contains("never reached"), "{}", r.detail);
         // ...one of another season (not bound) is ignored and counted.
         stray.last_mut().unwrap().2 = false;
-        let r = replay_seating(&mut world.clone(), &rules, &members, &stray);
+        let r = replay_seating(&mut world.clone(), &rules, &members, &stray, true);
         assert!(r.ok, "{}", r.detail);
         assert_eq!((r.matched, r.ignored), (2, 1));
     }

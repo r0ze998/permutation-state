@@ -150,8 +150,16 @@ fn flags_move_together() {
 #[test]
 fn usdc_is_conserved_with_deposits() {
     let mut c = Chain::new();
-    let mut s = SeasonFx::create(&mut c, Params::default());
-    let deposits = [0, 5_000_000, 0, 3_000_000];
+    // One deposit per season (WP12).
+    let d = 4_000_000;
+    let mut s = SeasonFx::create(
+        &mut c,
+        Params {
+            deposit: d,
+            ..Params::default()
+        },
+    );
+    let deposits = [d; 4];
     for (i, d) in deposits.iter().enumerate() {
         s.register(&mut c, (i % 2) as u16, *d);
     }
