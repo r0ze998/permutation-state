@@ -1108,6 +1108,11 @@ fn defence_refund_follows_the_formula() {
         fees::defence_refund(&ev(2 * price_at_tip, false), &s),
         paid - tip_fee
     );
+    // The paid fee rounds up like the runtime's (1 lamport above floor
+    // here: 389,639 µlamports × 294,471 CU).
+    assert_eq!(fees::fee_of_price(389_639, 294_471), 114_738);
+    assert_eq!(fees::fee_of_price(1, 1), 1);
+    assert_eq!(fees::fee_of_price(1_000_000, 1), 1);
     // Capped at priority 2.0: cost 27,576 (+300 with the ArrivalDay).
     let huge = ev(u64::MAX / 1_000_000, false);
     assert_eq!(

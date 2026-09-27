@@ -29,10 +29,49 @@ pub mod arrival_slot {
     );
     /// Settled by SettleTransit but kept open for a defence claim (I-52).
     pub const FLAG_SETTLED: u8 = 1;
+    /// The Reveal that wrote this slot's evidence also created the
+    /// ArrivalDay (`fees::Evidence::created_day`: one more write lock in
+    /// the refund's cost). Set by Reveal, cleared by a displacement with
+    /// the other `ev_*` fields (contract v1.2 §5.3, integ-W1 review).
+    pub const FLAG_CREATED_DAY: u8 = 2;
     /// Slots per `(province, bell, faction)` (the quota).
     pub const SLOTS_PER_FACTION: u8 = 4;
     /// `retreat_bps` meaning "never retreat" (I-27).
     pub const RETREAT_NEVER: u16 = 0;
+
+    /// The defence-refund evidence of a slot's bytes, as
+    /// `fees::defence_refund` takes it (ClaimDefence and the verifier read
+    /// it the same way; `created_day` from [`FLAG_CREATED_DAY`]).
+    pub fn evidence(d: &[u8]) -> Option<permutation_rules::frontier::fees::Evidence> {
+        use crate::bytes::{rd_u32, rd_u64, rd_u8};
+        Some(permutation_rules::frontier::fees::Evidence {
+            price_micro: rd_u64(d, EV_PRICE)?,
+            limit: rd_u32(d, EV_LIMIT)?,
+            loaded: rd_u32(d, EV_LOADED)?,
+            created_day: rd_u8(d, FLAGS)? & FLAG_CREATED_DAY != 0,
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn evidence_reads_the_created_day_flag() {
+            let mut d = [0u8; SIZE];
+            d[EV_PRICE..EV_PRICE + 8].copy_from_slice(&7u64.to_le_bytes());
+            d[EV_LIMIT..EV_LIMIT + 4].copy_from_slice(&26_000u32.to_le_bytes());
+            d[EV_LOADED..EV_LOADED + 4].copy_from_slice(&(1u32 << 20).to_le_bytes());
+            d[FLAGS] = FLAG_SETTLED;
+            let e = evidence(&d).unwrap();
+            assert_eq!((e.price_micro, e.limit, e.loaded), (7, 26_000, 1 << 20));
+            assert!(!e.created_day);
+            d[FLAGS] = FLAG_SETTLED | FLAG_CREATED_DAY;
+            assert!(evidence(&d).unwrap().created_day);
+            assert!(evidence(&d[..100]).is_none());
+            assert_eq!(FLAG_SETTLED & FLAG_CREATED_DAY, 0, "distinct bits");
+        }
+    }
 }
 
 /// ArrivalDay (96): `ad‖P,Q,day`.

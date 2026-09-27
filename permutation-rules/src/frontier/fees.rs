@@ -98,10 +98,12 @@ pub const fn cu_price_micro(fee: u64, cu_limit: u32) -> u64 {
     }
 }
 
-/// The priority fee a compute-unit price pays: `price·limit / 10⁶`
-/// (floor, as the runtime charges).
+/// The priority fee a compute-unit price pays: `⌈price·limit / 10⁶⌉`, as
+/// the runtime charges it (agave `get_prioritization_fee` rounds the
+/// micro-lamports up; contract v1.2 §5.12, integ-W1: the first version
+/// floored and disagreed with `fclient::fees` by 1 lamport).
 pub const fn fee_of_price(price_micro: u64, cu_limit: u32) -> u64 {
-    let q = price_micro as u128 * cu_limit as u128 / 1_000_000;
+    let q = (price_micro as u128 * cu_limit as u128).div_ceil(1_000_000);
     if q > u64::MAX as u128 {
         u64::MAX
     } else {
@@ -187,7 +189,7 @@ pub struct DefenceParams {
 }
 
 /// ClaimDefence's refund for one Reveal (contract §5.12):
-/// `min(price·limit / 10⁶, cap·cost − 2,500) − (tip_min − 2,500)` if
+/// `min(⌈price·limit / 10⁶⌉, cap·cost − 2,500) − (tip_min − 2,500)` if
 /// positive, `cost = limit + 720 + 300·(2 + created_day) + 8·⌈loaded /
 /// 32,768⌉`. `cap·cost` is floored.
 pub const fn defence_refund(ev: &Evidence, s: &DefenceParams) -> u64 {
