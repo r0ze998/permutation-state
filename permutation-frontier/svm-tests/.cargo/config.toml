@@ -1,0 +1,5 @@
+# The harness keeps its own build output (permutation-frontier/svm-tests/
+# target); without this the repository root's config would send it to
+# permutation-chain/target.
+[build]
+target-dir = "target"
