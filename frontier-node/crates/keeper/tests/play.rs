@@ -583,7 +583,14 @@ async fn scenario(o: Opts) -> Option<Run> {
         let ts = slot_of.entry(pi).or_insert(0);
         let transit_slot = *ts;
         *ts += 1;
-        let tip = fclient::fees::min_tip_lamports(433, 26_000, 1_048_576);
+        // The season's own presets (common::season uses M1_LOCAL_7D): the
+        // loaded limit moved with the wave-4 `.so` (integ-W4, v1.6 §22).
+        let pr = frontier_abi::presets::M1_LOCAL_7D;
+        let tip = fclient::fees::min_tip_lamports(
+            pr.min_reveal_priority_milli,
+            pr.reveal_cu_limit,
+            pr.reveal_loaded_limit,
+        );
         w.send(
             &[ix::depart(
                 &w.addrs,
