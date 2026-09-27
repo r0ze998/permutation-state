@@ -5,13 +5,15 @@
 # resolve together with the program's MagicBlock SDK.
 [workspace]
 resolver = "2"
-members = ["permutation-chain", "permutation-rules", "frontier-abi"]
+members = ["permutation-chain", "permutation-rules", "frontier-abi", "permutation-frontier"]
 exclude = [
     "frontier-sim",
     "permutation-server",
     "permutation-state-solana-receipt-spike",
     "permutation-chain/svm-tests",
     "frontier-node",
+    "permutation-frontier/svm-tests",
+    "frontier-wasm",
 ]
 
 # Audit WP08: overflow in the program's own code (registration, finalize,
@@ -21,4 +23,13 @@ exclude = [
 # Member-crate profiles are ignored inside a workspace, so it lives here;
 # scripts/build-program.sh checks that the built .so carries the checks.
 [profile.release.package.permutation-chain]
+overflow-checks = true
+
+# M1 contract §3.1 / §3.3: the Frontier program's own arithmetic aborts on
+# overflow (build-frontier.sh refuses an artefact without the checks);
+# frontier-abi's too (integ-W1 addendum: the profile entry for both lands
+# with W2-A). The rules crate stays unchecked for compute, as for v9.
+[profile.release.package.permutation-frontier]
+overflow-checks = true
+[profile.release.package.frontier-abi]
 overflow-checks = true
