@@ -1,0 +1,34 @@
+# The rules-v10 kernels for the browser (M1 contract §9.5): plain C-ABI
+# exports over linear memory (borsh in, borsh out), no wasm-bindgen glue.
+# Its own workspace, outside the root one (§3.1), toolchain 1.95.0 (§3.2).
+# Built for wasm32-unknown-unknown by scripts/build-wasm.sh; the exports are
+# also an rlib so the host tests call them exactly as the browser does.
+[workspace]
+
+[package]
+name = "frontier-wasm"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.95"
+description = "Sixfold Frontier kernels for the web client (C ABI over linear memory)"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# Dependency sections are owned by the integrator (contract I-55).
+[dependencies]
+permutation-rules = { path = "../permutation-rules", default-features = false }
+borsh = { version = "=1.6.1", default-features = false, features = ["derive"] }
+
+[profile.release]
+opt-level = "s"
+panic = "abort"
+lto = true
+codegen-units = 1
+debug = false
+strip = true
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"

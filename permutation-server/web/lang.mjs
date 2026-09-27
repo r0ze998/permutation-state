@@ -34,7 +34,8 @@
 // function of the values that returns the English template, for plurals:
 //   'メンバー {0}人': n => plural(n, '{0} member', '{0} members')
 // (plural is in lang/helpers.mjs). The same key in two files must have the
-// same English (a test checks it).
+// same English (a test checks it). The Frontier client (web/frontier/) has
+// its own group files, lang/en-frontier.mjs and lang/en-frontier-play.mjs.
 //
 // On a switch (setLang), in this order: the choice is saved (localStorage
 // 'ps-lang'), <html lang> is set, the static markup is translated, the
@@ -49,15 +50,17 @@ import play from './lang/en-play.mjs';
 import inspector from './lang/en-inspector.mjs';
 import drawers from './lang/en-drawers.mjs';
 import pages from './lang/en-pages.mjs';
+import frontier from './lang/en-frontier.mjs';
+import frontierPlay from './lang/en-frontier-play.mjs';
 
 export { plural };
 export const LANGS = ['ja', 'en'];
 export const STORAGE_KEY = 'ps-lang';
 
 /** The English dictionaries by file (a test checks they agree with each other). */
-export const EN_GROUPS = { core, lobby, play, inspector, drawers, pages };
+export const EN_GROUPS = { core, lobby, play, inspector, drawers, pages, frontier, 'frontier-play': frontierPlay };
 /** The merged English dictionary: Japanese key → English template (string or function). */
-export const EN = Object.assign(Object.create(null), core, lobby, play, inspector, drawers, pages);
+export const EN = Object.assign(Object.create(null), core, lobby, play, inspector, drawers, pages, frontier, frontierPlay);
 
 // ================================================================== the current language
 const store = {
