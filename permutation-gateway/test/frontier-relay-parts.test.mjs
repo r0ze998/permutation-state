@@ -151,6 +151,17 @@ test('keeper link bodies and refusals are checked before anything is forwarded o
   assert.deepEqual([r.status, r.code], [429, 'Bucket']);
   assert.deepEqual([frontierRefusal({ err: { InstructionError: [3, { Custom: 51 }] } }).code, frontierRefusal({ err: 'BlockhashNotFound' }).code], ['TipTooLow', 'BlockhashExpired']);
   assert.equal(frontierRefusal({ err: { InstructionError: [0, 'InvalidArgument'] } }).code, 'SimulationFailed');
+  // Attributed by the first failing program (integ-W2 review of W2-D): a
+  // System-program failure inside a CPI is the relay payer's, not BadData.
+  const P = 'Frontier1111111111111111111111111111111111';
+  const sys = frontierRefusal({ err: { InstructionError: [3, { Custom: 1 }] }, logs: [
+    `Program ${P} invoke [1]`, 'Program 11111111111111111111111111111111 invoke [2]', 'Transfer: insufficient lamports 5, need 7',
+    'Program 11111111111111111111111111111111 failed: custom program error: 0x1', `Program ${P} failed: custom program error: 0x1`] }, P);
+  assert.deepEqual([sys.status, sys.code], [503, 'OperatorLowFunds']);
+  const other = frontierRefusal({ err: { InstructionError: [3, { Custom: 1 }] }, logs: ['Program Other111111111111111111111111111111111 failed: custom program error: 0x1'] }, P);
+  assert.equal(other.code, 'ProgramError');
+  const ours = frontierRefusal({ err: { InstructionError: [3, { Custom: 1 }] }, logs: [`Program ${P} failed: custom program error: 0x1`] }, P);
+  assert.equal(ours.code, 'BadData');
   const clock = Buffer.alloc(40);
   clock.writeBigUInt64LE(12n, 0);
   clock.writeBigInt64LE(1_800_000_123n, 32);
@@ -185,4 +196,18 @@ test('the server listens on 127.0.0.1 only and answers over a real socket (ports
     await relay.close();
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('quota: pruning another key never changes what an idle key gets (integ-W2 review of W2-D)', () => {
+  const q = new QuotaBook();
+  q.charge('a', { day: 0 });
+  assert.equal(q.view('a', 3).left, 60, 'idle days refill to the burst');
+  q.charge('b', { day: 3 });
+  assert.equal(q.view('a', 3).left, 60, 'still 60 after another key was charged (prune ran)');
+  // An entry equal to a missing one's view is forgotten: a day spent to 0
+  // refills to exactly the next day's 40.
+  q.entries.c = { day: 0, left: 0, lamports: 0 };
+  q.charge('d', { day: 1 });
+  assert.equal(q.entries.c, undefined);
+  assert.equal(q.view('c', 1).left, 40);
 });

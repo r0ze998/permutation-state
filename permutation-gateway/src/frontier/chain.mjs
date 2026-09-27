@@ -23,12 +23,28 @@ export const FRONTIER_ERROR_STATUS = Object.freeze({
   Auth: 403, NotOwner: 403, JoinGate: 403,
 });
 
-/** The RouteError for a failed simulation: `{err, logs}` (send.mjs SimulationError or an RPC value). */
-export function frontierRefusal(e) {
+const SYSTEM_PROGRAM_ID = '11111111111111111111111111111111';
+
+/**
+ * The RouteError for a failed simulation: `{err, logs}` (send.mjs
+ * SimulationError or an RPC value). A `Custom` code is a Frontier code only
+ * when the first program that failed (its `Program <id> failed` log line)
+ * is the Frontier program `programId`: a System-program failure inside a
+ * CPI (a relay payer short of lamports: Custom 1) is 503 OperatorLowFunds,
+ * any other program's is ProgramError (integ-W2 review of W2-D).
+ */
+export function frontierRefusal(e, programId = null) {
   const logs = (e.logs ?? []).slice(-8);
   if (e.err === 'BlockhashNotFound') return new RouteError(409, 'the transaction\'s blockhash expired; build it again with a fresh one', 'BlockhashExpired', { logs });
   if (e.err === 'AlreadyProcessed') return new RouteError(409, 'this transaction was sent already', 'AlreadyProcessed', { logs });
   if (e.err === 'InsufficientFundsForFee' || e.err === 'InsufficientFundsForRent') return new RouteError(503, 'the relay payer cannot pay this now; try again', 'OperatorLowFunds', { logs });
+  const failed = (e.logs ?? []).map(l => /^Program (\S+) failed: (.*)$/.exec(l)).find(Boolean);
+  if (failed && failed[1] === SYSTEM_PROGRAM_ID) {
+    return new RouteError(503, `the relay payer cannot pay this now (system program: ${failed[2]}); try again`, 'OperatorLowFunds', { logs });
+  }
+  if (failed && programId && failed[1] !== programId) {
+    return new RouteError(400, `the transaction would fail in ${failed[1]}: ${failed[2]}`, 'ProgramError', { logs });
+  }
   const pe = programError(e.err);
   if (pe?.name) return new RouteError(FRONTIER_ERROR_STATUS[pe.name] ?? 400, `the transaction would fail: ${pe.name} (${pe.code})`, pe.name, { programCode: pe.code, logs });
   if (typeof e.err === 'string') return new RouteError(400, `the transaction would fail: ${e.err}`, e.err, { logs });
@@ -40,14 +56,14 @@ export function frontierRefusal(e) {
  * `watch` (base58 keys) after it: `{logs, unitsConsumed, post: [lamports|null]}`.
  * Throws the refusal when it would fail.
  */
-export async function simulateWatching(connection, wire, watch) {
+export async function simulateWatching(connection, wire, watch, programId = null) {
   const vtx = VersionedTransaction.deserialize(wire);
   if (!equal(vtx.serialize(), wire)) throw new RouteError(400, 'the transaction is not in canonical form', 'InvalidTransaction');
   const r = await connection.simulateTransaction(vtx, {
     sigVerify: true, replaceRecentBlockhash: false, commitment: 'confirmed', accounts: { encoding: 'base64', addresses: watch },
   });
   const v = r?.value ?? {};
-  if (v.err) throw frontierRefusal({ err: v.err, logs: v.logs });
+  if (v.err) throw frontierRefusal({ err: v.err, logs: v.logs }, programId);
   return { logs: v.logs ?? [], unitsConsumed: v.unitsConsumed ?? null, post: (v.accounts ?? []).map(a => (a ? BigInt(a.lamports) : null)) };
 }
 

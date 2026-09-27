@@ -318,7 +318,7 @@ test('quotas: 40 a game day for days 0–6 with carry-over to 60, then 20; lampo
   assert.equal(fresh.json.resetsAt, GENESIS + 8 * 86_400);
 });
 
-test('settle shapes are charged to the requester (session or address), never to the citizen they name', async () => {
+test('settle shapes are charged to the requester\'s verified citizen (else the address), never to the citizen they name', async () => {
   const r = relay();
   const buildSettle = feePayer => {
     const pl = pack({ hostId: 1n, arriveBell: 147, destP: 0, destQ: 0, destTile: 0, stance: 0, retreatBps: 0, pathLen: 0, path: new Uint8Array(12) });
@@ -326,26 +326,80 @@ test('settle shapes are charged to the requester (session or address), never to 
       slot: A.arrivalSlot(-2, 7, 147, 3, 0), home_province: A.province(-3, 7), anchor_or_archive: A.bellAnchor(147, 4), slot_beneficiary: feePayer, resolver: feePayer,
       holding_rent_payer: Keypair.generate().publicKey.toBase58(), settle_beneficiary: feePayer };
     const message = shapeMessage({ programId: PROGRAM, name: 'SettleTransit', accounts, fields: { transit_slot: 1, commit: commit(pl, new Uint8Array(32)), seal: new Uint8Array(165), beneficiary: new PublicKey(feePayer).toBytes() },
-      feePayer, recentBlockhash: BLOCKHASH });
+      feePayer, recentBlockhash: Keypair.generate().publicKey.toBase58() });
     return { message, tx: toBase64(wireTransaction(message)) };
   };
-  const requester = Keypair.generate();
-  const fp1 = await feePayerOf(r);
-  const s1 = buildSettle(fp1);
-  const signed = await call(r.public, 'POST', '/f/relay', { body: { tx: s1.tx, requester: requester.publicKey.toBase58(), requesterSig: toBase64(signTalk(s1.message, requester)) }, ip: '203.0.113.9' });
-  assert.equal(signed.json.ok, true, JSON.stringify(signed.json));
-  assert.equal(r.store.state.quota[`session:${requester.publicKey.toBase58()}`].left, 39);
+  // Another player (not the one the settle names) with a live session key.
+  const w2 = Keypair.generate();
+  const s2 = Keypair.generate();
+  const c2 = A.citizen(w2.publicKey.toBase58());
+  r.chain.set(c2, { data: encodeAccount('Citizen', { SEASON_ID, WALLET: w2.publicKey.toBytes(), SESSION: s2.publicKey.toBytes(), SESSION_EXPIRY: BigInt(GENESIS + 7_200) }) });
+  const settleAs = async (key, citizen, ip = '203.0.113.9') => {
+    const s1 = buildSettle(await feePayerOf(r));
+    return call(r.public, 'POST', '/f/relay', { body: { tx: s1.tx, requester: key.publicKey.toBase58(), requesterSig: toBase64(signTalk(s1.message, key)), citizen }, ip });
+  };
+  // The session key and the wallet both charge that citizen.
+  assert.equal((await settleAs(s2, c2)).json.ok, true);
+  assert.equal((await settleAs(w2, c2)).json.ok, true);
+  assert.equal(r.store.state.quota[`citizen:${c2}`].left, 38);
   assert.equal(r.store.state.quota[`citizen:${A.citizen(wallet.publicKey.toBase58())}`], undefined, 'the named citizen is not charged');
+  // Fresh throwaway keys (valid signatures, no citizen) open no bucket of
+  // their own: they all land in the client-address bucket.
+  for (let i = 0; i < 3; i++) {
+    const res = await settleAs(Keypair.generate(), c2, '198.51.100.7');
+    assert.equal(res.json.ok, true, JSON.stringify(res.json));
+  }
+  assert.equal(r.store.state.quota['addr:198.51.100.7'].left, 37);
+  assert.ok(!Object.keys(r.store.state.quota).some(k => k.startsWith('session:')), 'no per-key buckets');
+  assert.equal(r.store.state.quota[`citizen:${c2}`].left, 38, 'a stranger naming c2 does not charge (or use) c2');
+  // An expired session key is anonymous too.
+  r.chain.set(c2, { data: encodeAccount('Citizen', { SEASON_ID, WALLET: w2.publicKey.toBytes(), SESSION: s2.publicKey.toBytes(), SESSION_EXPIRY: BigInt(GENESIS) }) });
+  assert.equal((await settleAs(s2, c2, '198.51.100.8')).json.ok, true);
+  assert.equal(r.store.state.quota['addr:198.51.100.8'].left, 39);
+  // A Citizen at a non-canonical address (its wallet's is elsewhere) is not trusted.
+  const fake = Keypair.generate().publicKey.toBase58();
+  r.chain.set(fake, { data: encodeAccount('Citizen', { SEASON_ID, WALLET: w2.publicKey.toBytes() }) });
+  assert.equal((await settleAs(w2, fake, '198.51.100.9')).json.ok, true);
+  assert.equal(r.store.state.quota['addr:198.51.100.9'].left, 39);
   // Anonymous: the client-address bucket.
-  const fp2 = await feePayerOf(r);
-  const anon = await call(r.public, 'POST', '/f/relay', { body: { tx: buildSettle(fp2).tx }, ip: '203.0.113.9' });
+  const anon = await call(r.public, 'POST', '/f/relay', { body: { tx: buildSettle(await feePayerOf(r)).tx }, ip: '203.0.113.9' });
   assert.equal(anon.json.ok, true);
   assert.equal(r.store.state.quota['addr:203.0.113.9'].left, 39);
   // A requester signature over another message is refused.
-  const fp3 = await feePayerOf(r);
-  const s3 = buildSettle(fp3);
-  const bad = await call(r.public, 'POST', '/f/relay', { body: { tx: s3.tx, requester: requester.publicKey.toBase58(), requesterSig: toBase64(signTalk(s1.message, requester)) }, ip: '203.0.113.9' });
+  const s1 = buildSettle(await feePayerOf(r));
+  const s3 = buildSettle(await feePayerOf(r));
+  const bad = await call(r.public, 'POST', '/f/relay', { body: { tx: s3.tx, requester: s2.publicKey.toBase58(), requesterSig: toBase64(signTalk(s1.message, s2)), citizen: c2 }, ip: '203.0.113.9' });
   assert.equal(bad.json.code, 'BadSignature');
+});
+
+test('identical concurrent submissions: one is sent and charged, the rest are Duplicate', async () => {
+  const chain = fakeChain();
+  // A slow chain: every read waits, so the requests interleave at each await.
+  const slow = f => async (...a) => { await new Promise(res => setTimeout(res, 5)); return f(...a); };
+  chain.getAccountInfo = slow(chain.getAccountInfo);
+  chain.getBalance = slow(chain.getBalance);
+  const r = relay({ chain });
+  const feePayer = await feePayerOf(r);
+  const tx = playerTx({ name: 'Harvest', feePayer });
+  const res = await Promise.all([0, 1, 2].map(() => call(r.public, 'POST', '/f/relay', { body: { tx }, ip: '203.0.113.9' })));
+  assert.deepEqual(res.map(x => x.json.ok === true).sort(), [false, false, true], JSON.stringify(res.map(x => x.json)));
+  assert.equal(res.filter(x => x.json.code === 'Duplicate').length, 2);
+  assert.equal(chain.sent.length, 1);
+  assert.equal((await call(r.public, 'GET', `/f/quota?citizen=${A.citizen(wallet.publicKey.toBase58())}`, { ip: '203.0.113.9' })).json.left, 39);
+});
+
+test('a send that throws charges nothing and the same bytes may be sent again', async () => {
+  const chain = fakeChain();
+  const send = chain.sendRawTransaction;
+  chain.sendRawTransaction = async () => { throw new Error('node down'); };
+  const r = relay({ chain });
+  const feePayer = await feePayerOf(r);
+  const tx = playerTx({ name: 'Harvest', feePayer });
+  const res = await call(r.public, 'POST', '/f/relay', { body: { tx }, ip: '203.0.113.9' });
+  assert.notEqual(res.json.ok, true);
+  assert.equal((await call(r.public, 'GET', `/f/quota?citizen=${A.citizen(wallet.publicKey.toBase58())}`, { ip: '203.0.113.9' })).json.left, 40, 'not charged');
+  chain.sendRawTransaction = send;
+  assert.equal((await call(r.public, 'POST', '/f/relay', { body: { tx }, ip: '203.0.113.9' })).json.ok, true, 'not a Duplicate');
 });
 
 test('POST /f/join: open seasons sponsor the Join; gated seasons need a one-time invite and the relay co-signs with the gate key', async () => {

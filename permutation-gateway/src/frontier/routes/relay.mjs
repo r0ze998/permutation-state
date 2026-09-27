@@ -1,7 +1,9 @@
 // Sponsored player transactions (contract §8.3, §9.4):
 //
 //   GET  /f/relay [?citizen=]  {feePayer, blockhash, lastValidBlockHeight, programId, quota: {left, resetsAt}}
-//   POST /f/relay {tx, requester?, requesterSig?}   one player shape (not Join) or one settle shape → {ok, signature}
+//   POST /f/relay {tx, requester?, requesterSig?, citizen?}   one player shape (not Join) or one settle shape → {ok, signature}
+//                   (a settle is charged to `citizen` when `requester` signed the message and is, on chain,
+//                   that Citizen's wallet or unexpired session key; else to the client-address bucket)
 //   POST /f/join  {tx, invite?}                     the wallet-signed Join → {ok, signature}
 //
 // Order of checks (each refusal costs nobody anything): exact parse → shape
@@ -52,6 +54,26 @@ function requesterOf(tx, b) {
   return String(b.requester);
 }
 
+/**
+ * The Citizen a verified requester acts for: `citizenAddr` (from the body)
+ * is this season's canonical Citizen of its stored wallet, and the
+ * requester is that wallet or its unexpired session key. Anything else is
+ * null: the request is then anonymous (the client-address bucket), never a
+ * bucket of the requester's own (integ-W2 review of W2-D).
+ */
+async function requesterCitizen(ctx, requester, citizenAddr) {
+  if (!requester || typeof citizenAddr !== 'string') return null;
+  let c;
+  try { c = await ctx.chain.citizen(citizenAddr); } catch { return null; }
+  if (!c) return null;
+  const wallet = base58(c.WALLET);
+  if (ctx.addresses.citizen(wallet) !== citizenAddr) return null;
+  if (wallet === requester) return citizenAddr;
+  const clock = await ctx.chain.clock();
+  const sessionLive = base58(c.SESSION) === requester && BigInt(c.SESSION_EXPIRY) > BigInt(clock.unixTimestamp);
+  return sessionLive ? citizenAddr : null;
+}
+
 /** The game day and the lamport cap for quotas, from the chain. */
 async function quotaFrame(ctx) {
   const season = await ctx.chain.season();
@@ -65,25 +87,38 @@ async function quotaFrame(ctx) {
  * keys that sign besides the fee payer (the join gate); `onSent`: after the
  * send (consumes an invite).
  */
-async function sponsor(ctx, req, { tx, wire, shape, requester = null, extraSigners = [], limitKind = 'relay', lastValidBlockHeight, onSent }) {
+async function sponsor(ctx, req, { tx, wire, shape, requester = null, requesterCitizenAddr = null, extraSigners = [], limitKind = 'relay', lastValidBlockHeight, onSent }) {
   const { pool, connection, chain, quota, relayed, limiter, blockhashes } = ctx;
   checkRelayShape(shape, { pool, addresses: ctx.addresses });
   // Signature first: a forged transaction naming someone's key costs that key nothing.
   if (shape.authority && !signedBy(tx, shape.authority)) throw new RouteError(400, 'the authority\'s signature is missing or invalid', 'BadSignature');
   const replayKey = shape.authority ? `sig:${base58(tx.signatures[tx.signers.indexOf(shape.authority)])}` : `msg:${createHash('sha256').update(tx.message).digest('hex')}`;
+  // Claimed before any await: identical concurrent submissions cannot all
+  // pass (integ-W2 review of W2-D); released on every refusal below.
   relayed.refuseRepeat(replayKey);
-  const signerKey = shape.authority ?? requester;
-  if (signerKey) limiter.check(`f-${limitKind}:${signerKey}`, FRONTIER_SIGNER_LIMITS[limitKind], 'relays for this key');
-  const frame = await quotaFrame(ctx);
-  const citizen = shape.name === 'FileTicket' ? await chain.citizen(shape.accounts.citizen) : null;
-  const allowance = allowanceFor(shape, { season: frame.season, citizen });
-  const key = quotaKeyOf(shape, { requester, ip: req.ip });
-  quota.check(key, { day: frame.day, lamports: allowance, lamportsCap: frame.lamportsCap, genesisTs: frame.genesisTs });
-  // Held while in flight (so concurrent requests cannot both pass the last
-  // unit of a quota or send the same bytes twice), given back in full when
-  // anything below refuses: a refused transaction is never charged.
-  quota.charge(key, { day: frame.day, lamports: allowance });
   relayed.add(replayKey);
+  const release = () => relayed.seen.delete(replayKey); // guards.mjs ReplayCache keeps its keys in `seen`
+  let frame;
+  let key;
+  let allowance;
+  try {
+    // A settle's requester counts only once verified on chain (its citizen).
+    const settleCitizen = shape.kind === 'settle' ? await requesterCitizen(ctx, requester, requesterCitizenAddr) : null;
+    const signerKey = shape.authority ?? (settleCitizen ? `citizen:${settleCitizen}` : null);
+    if (signerKey) limiter.check(`f-${limitKind}:${signerKey}`, FRONTIER_SIGNER_LIMITS[limitKind], 'relays for this key');
+    frame = await quotaFrame(ctx);
+    const citizen = shape.name === 'FileTicket' ? await chain.citizen(shape.accounts.citizen) : null;
+    allowance = allowanceFor(shape, { season: frame.season, citizen });
+    key = quotaKeyOf(shape, { requesterCitizen: settleCitizen, ip: req.ip });
+    quota.check(key, { day: frame.day, lamports: allowance, lamportsCap: frame.lamportsCap, genesisTs: frame.genesisTs });
+  } catch (e) {
+    release();
+    throw e;
+  }
+  // Held while in flight (so concurrent requests cannot both pass the last
+  // unit of a quota), given back in full when anything below refuses: a
+  // refused transaction is never charged.
+  quota.charge(key, { day: frame.day, lamports: allowance });
   let moved;
   let post;
   let signed;
@@ -93,20 +128,30 @@ async function sponsor(ctx, req, { tx, wire, shape, requester = null, extraSigne
     // top-up landing in between can never hide a drain (it can only refuse).
     const balance = async () => BigInt(await connection.getBalance(new PublicKey(shape.feePayer), 'confirmed'));
     const before = await balance();
-    const sim = await simulateWatching(connection, signed, [shape.feePayer]);
+    const sim = await simulateWatching(connection, signed, [shape.feePayer], ctx.programId);
     const after = await balance();
     post = sim.post[0];
     moved = drainGuard({ pre: before > after ? before : after, post, fee: feeOf(shape), allowance });
   } catch (e) {
     quota.refund(key, { day: frame.day, lamports: allowance });
-    relayed.seen.delete(replayKey); // guards.mjs ReplayCache keeps its keys in `seen`
+    release();
     throw e;
   }
   // Charged: the transaction and the lamports it really moves.
   quota.refund(key, { day: frame.day, lamports: allowance - moved, txs: 0 });
   if (post !== null) pool.note(shape.feePayer, post);
-  const expiry = await blockhashes.expiryOf(tx.recentBlockhash, lastValidBlockHeight);
-  const signature = await connection.sendRawTransaction(signed, { skipPreflight: true, maxRetries: 5 });
+  let expiry;
+  let signature;
+  try {
+    expiry = await blockhashes.expiryOf(tx.recentBlockhash, lastValidBlockHeight);
+    signature = await connection.sendRawTransaction(signed, { skipPreflight: true, maxRetries: 5 });
+  } catch (e) {
+    // Nothing was sent: nothing is charged, the bytes may be sent again
+    // (and a Join's invite is not consumed; the caller releases it).
+    quota.refund(key, { day: frame.day, lamports: moved });
+    release();
+    throw e;
+  }
   ctx.sent.set(signature, { lastValidBlockHeight: expiry, kind: shape.name });
   onSent?.();
   ctx.log?.(`f/relay ${shape.name} ${signature} (fee payer ${shape.feePayer}, quota ${key}, moved ${moved})`);
@@ -140,7 +185,7 @@ export const relayRoutes = {
     const { wire, tx, shape } = parseAndClassify(ctx, b);
     if (shape.tag === JOIN_TAG) throw new RouteError(400, 'relay refused: a Join goes through POST /f/join', 'RelayRejected');
     const requester = shape.kind === 'settle' ? requesterOf(tx, b) : null;
-    return { body: await sponsor(ctx, req, { tx, wire, shape, requester, lastValidBlockHeight: b.lastValidBlockHeight }) };
+    return { body: await sponsor(ctx, req, { tx, wire, shape, requester, requesterCitizenAddr: b.citizen ?? null, lastValidBlockHeight: b.lastValidBlockHeight }) };
   },
 
   'POST /f/join': async (ctx, req) => {

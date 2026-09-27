@@ -9,9 +9,10 @@
 //   the fee plus the kind's allowance — Join: rent(Citizen); FileTicket: the
 //   Holding-rent escrow shortfall `max(0, rent(1,280) − citizen.ticket_escrow)`;
 //   Depart: `tip + march_fee + seal_bond`; every other kind: 0;
-// * who is charged: a player shape its citizen, a settle shape its requester
-//   (a session key that signed the request, else the client-address bucket),
-//   never the citizen the settle names.
+// * who is charged: a player shape its citizen, a settle shape its
+//   requester's citizen (the requester signed the request and is, on chain,
+//   that citizen's wallet or unexpired session key), else the client-address
+//   bucket; never the citizen the settle names.
 import { addressBucket } from '../guards.mjs';
 import { baseFee, departEscrow, rent, seasonTipMin, tipPresets } from '../../client/src/frontier/fees.mjs';
 import { layoutOf } from '../../client/src/frontier/codec.mjs';
@@ -76,8 +77,15 @@ export function lamportsPerDay(season, departs = 24) {
   return BigInt(departs) * departEscrow(season, top) + CITIZEN_RENT + HOLDING_RENT;
 }
 
-/** The quota key a shape is charged to. */
-export function quotaKeyOf(shape, { requester = null, ip }) {
+/**
+ * The quota key a shape is charged to: a player shape its citizen; a settle
+ * shape the citizen its requester was verified against (`requesterCitizen`,
+ * the Citizen address whose wallet or unexpired session key signed the
+ * request), else the client-address bucket. A requester key alone never
+ * opens a bucket of its own (integ-W2 review of W2-D: a fresh key per
+ * request escaped the quota).
+ */
+export function quotaKeyOf(shape, { requesterCitizen = null, ip }) {
   if (shape.kind === 'player') return `citizen:${shape.accounts.citizen}`;
-  return requester ? `session:${requester}` : `addr:${addressBucket(ip)}`;
+  return requesterCitizen ? `citizen:${requesterCitizen}` : `addr:${addressBucket(ip)}`;
 }

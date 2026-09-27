@@ -12,9 +12,10 @@
 // In both, the instruction's `payer` account is the fee payer. A Reveal
 // (0x51) never goes through the relay as a transaction: `UseRevealRoute`
 // (I-24). Accounts are checked against the ABI's list (count, order of
-// signers and writability, the system program); the program recomputes
-// every address itself, so the relay does not.
-import { budgetOf, budgetPrefix, PACKET_BYTES, parseComputeBudgetIx } from './budgets.mjs';
+// signers and writability, the system program), and the message carries no
+// other key and no other writability (v1.3); the program recomputes every
+// address itself, so the relay does not.
+import { budgetOf, budgetPrefix, COMPUTE_BUDGET_PROGRAM, PACKET_BYTES, parseComputeBudgetIx } from './budgets.mjs';
 import { accountSpec, decodeIxData, encodeIxData, ixOf, TAGS } from './codec.mjs';
 import { SYSTEM_PROGRAM } from './addresses.mjs';
 import { compileMessage } from '../solana-tx.mjs';
@@ -83,6 +84,31 @@ export function classify(tx, { programId, wireBytes } = {}) {
     else accounts[want.name] = [accounts[want.name], have.pubkey].flat();
   }
   if (accounts.payer !== feePayer) return refuse('RelayRejected', 'the instruction\'s payer account must be the fee payer');
+  // The message's account keys are exactly the fee payer, the instruction's
+  // accounts and the two programs, and every key's writability is what the
+  // ABI gives it (writable iff the fee payer or at a writable position):
+  // an unreferenced key, or a read-only account marked writable, would be a
+  // relay-paid write lock the program never sees (integ-W2 review of W2-D).
+  const wantWritable = new Map([[feePayer, true]]);
+  for (let i = 0; i < spec.length; i++) {
+    const k = ix.keys[i].pubkey;
+    wantWritable.set(k, (wantWritable.get(k) ?? false) || spec[i].writable === 'w');
+  }
+  for (const prog of [COMPUTE_BUDGET_PROGRAM, programId]) {
+    if (wantWritable.has(prog)) return refuse('RelayRejected', `${abi.name} may not pass a program id (${prog}) as an account`);
+    wantWritable.set(prog, false);
+  }
+  if (tx.accountKeys.length !== wantWritable.size || tx.accountKeys.some(k => !wantWritable.has(k))) {
+    return refuse('RelayRejected', 'the message names account keys no instruction of the shape uses');
+  }
+  const { numRequiredSignatures: ns, numReadonlySignedAccounts: rs, numReadonlyUnsignedAccounts: ru } = tx.header;
+  const n = tx.accountKeys.length;
+  for (let i = 0; i < n; i++) {
+    const writable = i < ns ? i < ns - rs : i - ns < n - ns - ru;
+    if (writable !== wantWritable.get(tx.accountKeys[i])) {
+      return refuse('RelayRejected', `account ${tx.accountKeys[i]} must be ${wantWritable.get(tx.accountKeys[i]) ? 'writable' : 'read-only'} (the ABI's flags)`);
+    }
+  }
   const authority = kind === 'player' ? ix.keys[0].pubkey : null;
   if (authority === feePayer) return refuse('RelayRejected', 'the fee payer cannot also be the authority');
   // Exactly the fee payer and the instruction's own signers sign.

@@ -4,9 +4,10 @@
 //   lamports      ≤ 24 Depart escrows at the largest tip preset + the Citizen's rent (Join) + the
 //                 Holding's rent escrow (FileTicket, I-47)
 //
-// A settle shape is charged to its requester (a session key that signed the
-// request, else the client-address bucket), never to the citizen it names
-// (I-51). Nothing is charged for a transaction whose simulation failed: the
+// A settle shape is charged to its requester's citizen (the requester signed
+// the request and is that citizen's wallet or unexpired session key, checked
+// on chain), else the client-address bucket, never to the citizen the
+// transaction names (I-51; v1.3: an unverified key gets no bucket of its own). Nothing is charged for a transaction whose simulation failed: the
 // routes hold one transaction and the kind's allowance while they check,
 // give it all back on a refusal, and keep only what they send (the lamports
 // the simulation really moved). The game
@@ -81,8 +82,17 @@ export class QuotaBook {
     this.store.save?.();
   }
 
-  /** Forget entries that would be full again (their allowance has refilled to the burst). */
+  /**
+   * Forget entries whose view equals a missing entry's (`dailyTxs(day)`
+   * left, no lamports): forgetting one never changes what its key gets. An
+   * idle key refilled to the burst (60) is kept, since a missing entry
+   * would give it only the day's 40 (integ-W2 review of W2-D).
+   */
   prune(day) {
-    for (const [k, e] of Object.entries(this.entries)) if (day - e.day >= 2 && this.view(k, day).left >= QUOTA.burst) delete this.entries[k];
+    for (const [k, e] of Object.entries(this.entries)) {
+      if (e.day >= day) continue;
+      const v = this.view(k, day);
+      if (v.left === dailyTxs(day) && v.lamports === 0) delete this.entries[k];
+    }
   }
 }
