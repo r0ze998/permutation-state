@@ -4,9 +4,10 @@
 //! against the province's **roster frozen at the start of b** (hosts and
 //! garrisons whose `host::Presence` covers b). [`resolve_clash`] is a pure
 //! function of that roster, the bell's revealed arrivals and postures, the
-//! diplomatic relations and the bell seed `S(b, r)`. Nothing in it depends
-//! on when the reveals or the resolve landed, or on the order of any list
-//! it is given, so lag only waits and never changes an outcome (§8.4).
+//! diplomatic relations, the province's storage room ([`Occupancy`]) and
+//! the bell seed `S(b, r)`. Nothing in it depends on when the reveals or
+//! the resolve landed, or on the order of any list it is given, so lag only
+//! waits and never changes an outcome (§8.4).
 //!
 //! Steps:
 //! 1. **Retreat orders.** An arrival with a `retreat_ratio` r withdraws
@@ -23,6 +24,18 @@
 //!    (shared by the same rule) and the owner's side the rest, the owner's
 //!    own hosts first. Ties go by `tie_key(seed, host_id)`. Hosts that find
 //!    no room bounce home with no loss.
+//!    - **(2a) The room** (I-43): the province caps count the residents and
+//!      the musters still pending (they join after this clash), and an
+//!      arrival is admitted only while the province stores fewer than
+//!      `Occupancy::storage_free` new entries, so a Province never holds
+//!      more than its 56 entries and a faction never more than 8 hosts once
+//!      its musters join. Arrivals are taken in mass order.
+//!    - **(2b)** the hex fair share above.
+//!    - **(2c) The recount** (CL-10): a host the hex fair share bounced
+//!      frees its province, faction and storage slot; the arrivals the room
+//!      refused are re-admitted in mass order into the free slots of their
+//!      hexes (never displacing a host the fair share admitted), in one
+//!      pass.
 //! 3. **Engagements.** On every hex each hostile pair of combatants fights
 //!    one `combat::resolve_engagement`, reused unchanged **with both of its
 //!    halves** (the attack and the defender's retaliation, with v9's
@@ -38,7 +51,11 @@
 //!    engagement are drawn from the bell seed.
 //! 4. **All damage applies at once.** Hosts below 0.5 troops are destroyed.
 //! 5. **One side holds the field;** hosts hostile to it withdraw to an
-//!    adjacent friendly hex of the province, or bounce home.
+//!    adjacent friendly hex of the province, or bounce home. Units with no
+//!    attack and no defence (Scouts; CL-10) never contest a hex, never
+//!    count in the ranking and never hold a holding's hex for a siege or
+//!    defend it; they withdraw when their faction loses the hex or when
+//!    they are hostile to the side that holds it.
 //! 6. **Damage-ratio refund:** a faction whose damage ratio on the hex is
 //!    ≥ 10 pays no engagement stamina.
 //!
@@ -48,6 +65,13 @@
 //! (`host::Host::values_at`, `host::GarrisonState::at`), walls
 //! (`holding::Holding::walls_at`) and relations ([`RelationsLog::at`]).
 //!
+//! **Bounds** (CL-01, CL-06, CL-14, I-27): [`resolve_clash`] refuses input
+//! an honest program never builds (troops above `MAX_HOST_TROOPS`, stamina
+//! above `STAMINA_CAP`, a doctrine multiplier outside
+//! `[BPS_ONE, COMBAT_MAX_BPS]`, a retreat ratio above [`RETREAT_MAX_BPS`],
+//! a faction above [`NEUTRAL`]), so the damage arithmetic cannot overflow
+//! ([`MAX_DAMAGE_PRODUCT_BPS`]); honest outcomes are unchanged.
+//!
 //! **Quiet bells.** A bell with no arrivals in which resolving would change
 //! nothing ([`is_quiet`]: no hostile combatants share a hex and no hex is
 //! over its fair share) needs no resolution: skipping it gives the same
@@ -55,21 +79,44 @@
 //! (`siege::Siege::advance_quiet`). Hostile residents sharing a hex (for
 //! example besiegers and a garrison that still has troops) fight every
 //! bell, so such a bell is never quiet.
+//!
+//! **Two bodies, one rule set** (I-14): [`resolve_clash`] is the M1 lab's
+//! Phase A rewrite (tile buckets, per-hex damage arrays, an occupancy
+//! table for the withdraw search), digest-identical to the step-by-step
+//! reference [`resolve_clash_ref`], which host builds keep as the oracle
+//! (`tests/frontier_clash_equiv.rs`).
 
-use super::geometry::{tile_index, tile_offset, ProvinceCoord, PROVINCE_TILES};
+#[cfg(any(
+    test,
+    feature = "std",
+    not(any(target_os = "solana", target_arch = "wasm32"))
+))]
+use super::geometry::{tile_index, tile_offset};
+use super::geometry::{ProvinceCoord, PROVINCE_TILES};
 use super::host::{
     city_strength, strength, BATTLE_COOLDOWN_BELLS, DESTROYED_BELOW, ENGAGE_STAMINA,
-    FACTION_RESIDENT_CAP, HEX_HOST_CAP, OWNER_HEX_SLOTS, PROVINCE_HOST_CAP,
+    FACTION_RESIDENT_CAP, HEX_HOST_CAP, MAX_HOST_TROOPS, OWNER_HEX_SLOTS, PROVINCE_HOST_CAP,
+    STAMINA_CAP,
 };
-use super::stance::{damage_bps, Posture};
+use super::stance::{damage_bps, Posture, Stance};
 use super::terrain::ProvinceTerrain;
 use crate::combat::{resolve_engagement, variance, Combatant, Situation};
 use crate::fixed::{Bps, MilliTroops, BPS_ONE};
 use crate::hash::{sha256, Digest32};
+#[cfg(any(
+    test,
+    feature = "std",
+    not(any(target_os = "solana", target_arch = "wasm32"))
+))]
 use crate::hex::Hex;
 use crate::params::{Preset, Ruleset};
 use crate::rng::{rand, rand_id, tie_key, Seed};
 use crate::units::UnitType;
+#[cfg(any(
+    test,
+    feature = "std",
+    not(any(target_os = "solana", target_arch = "wasm32"))
+))]
 use alloc::vec;
 use alloc::vec::Vec;
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -78,12 +125,72 @@ use borsh::{BorshDeserialize, BorshSerialize};
 pub const MAX_ARRIVALS: usize = 24;
 /// Holdings (sites) per province.
 pub const MAX_GARRISONS: usize = 12;
-/// Barbarians and Free Cities: hostile to everyone, never at peace.
+/// Barbarians and Free Cities: hostile to everyone, never at peace. The
+/// largest faction id a clash accepts (factions 0..=5 are the six
+/// doctrines, CL-06).
 pub const NEUTRAL: u8 = 6;
-/// Faction ids are below this.
+/// Faction ids are below this (array sizes; valid ids stop at [`NEUTRAL`]).
 pub const FACTION_LIMIT: u8 = 8;
 /// A side whose damage ratio reaches this pays no stamina.
 pub const REFUND_RATIO: u64 = 10;
+
+/// The largest retreat ratio (bps) a march may carry: `retreat_bps` in the
+/// sealed plaintext is 0 for "never retreat" and `1..=RETREAT_MAX_BPS` for
+/// a ratio; anything above is an invalid plaintext (I-27, re-exported by
+/// `frontier::seal`).
+pub const RETREAT_MAX_BPS: u16 = 60_000;
+
+/// Largest stance multiplier (bps) `stance::damage_bps` gives any pairing
+/// (a stance against a defender in Disarray, ×1.25).
+pub const MAX_STANCE_BPS: Bps = {
+    let all = [
+        Posture::Stance(Stance::Hold),
+        Posture::Stance(Stance::Assault),
+        Posture::Stance(Stance::Flank),
+        Posture::Stance(Stance::Brace),
+        Posture::Disarray,
+    ];
+    let mut m = 0;
+    let mut i = 0;
+    while i < all.len() {
+        let mut j = 0;
+        while j < all.len() {
+            let d = damage_bps(all[i], all[j]);
+            if d > m {
+                m = d;
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+    m
+};
+
+/// Largest damage multiplier (bps) of one engagement half (CL-14): the
+/// stance maximum times the largest doctrine multiplier (`Fighter::
+/// dealt_bps`, which already folds the variant weight, the drill and the
+/// arrival bonus) that `validate` accepts. `doctrine::validate_table`
+/// refuses a table whose doctrines could deal more.
+pub const MAX_DAMAGE_PRODUCT_BPS: u64 =
+    MAX_STANCE_BPS as u64 * super::doctrine::bounds::COMBAT_MAX_BPS as u64 / BPS_ONE as u64;
+
+// The damage arithmetic of step 3 cannot overflow: the largest host at the
+// largest product fits (the CL-14 statement), and so does each intermediate
+// product of `scale` for any raw damage a `MilliTroops` can hold.
+const _: () = assert!(
+    MAX_HOST_TROOPS as u128 * MAX_DAMAGE_PRODUCT_BPS as u128 <= u64::MAX as u128,
+    "CL-14: MAX_HOST_TROOPS × MAX_DAMAGE_PRODUCT_BPS must fit u64"
+);
+const _: () = assert!(
+    MilliTroops::MAX as u128 * MAX_STANCE_BPS as u128 / BPS_ONE as u128
+        * super::doctrine::bounds::COMBAT_MAX_BPS as u128
+        <= u64::MAX as u128,
+    "CL-14: raw × stance × doctrine must fit u64"
+);
+const _: () = assert!(
+    RETREAT_MAX_BPS as u32 >= BPS_ONE,
+    "a ratio ≥ 1 must be expressible"
+);
 
 /// The combat constants the clash reuses from `combat` (identical in
 /// every preset).
@@ -116,9 +223,11 @@ impl Relations {
         self.peaceful & Self::bit(a, b) == 0
     }
 
-    /// Mark a pair peaceful (or hostile again). `NEUTRAL` cannot be.
+    /// Mark a pair peaceful (or hostile again). Only the six doctrine
+    /// factions 0..=5 can be: `NEUTRAL` and ids above it are refused
+    /// (a no-op, CL-06).
     pub fn set_peaceful(&mut self, a: u8, b: u8, peaceful: bool) {
-        if a == b || a == NEUTRAL || b == NEUTRAL || a >= FACTION_LIMIT || b >= FACTION_LIMIT {
+        if a == b || a >= NEUTRAL || b >= NEUTRAL {
             return;
         }
         let m = Self::bit(a, b) | Self::bit(b, a);
@@ -227,8 +336,10 @@ pub struct Fighter {
     pub posture: Posture,
     /// Arrivals only: withdraw without fighting if the frozen hostile
     /// strength on the target hex exceeds this share (bps) of its own.
+    /// At most [`RETREAT_MAX_BPS`].
     pub retreat_bps: Option<Bps>,
-    /// Doctrine hook on damage dealt (`BPS_ONE` = none).
+    /// Doctrine hook on damage dealt (`BPS_ONE` = none), in
+    /// `[BPS_ONE, doctrine::bounds::COMBAT_MAX_BPS]`.
     pub dealt_bps: Bps,
 }
 
@@ -242,6 +353,39 @@ pub struct Garrison {
     pub troops: MilliTroops,
     pub walls: bool,
     pub posture: Posture,
+}
+
+/// The province's storage room at the clash (I-43): what the Province's
+/// entries hold besides the frozen roster. Musters pending at this bell
+/// (entry state 2) join the roster after the clash, and departed entries
+/// (state 3) keep their slot until SettleDeparture, so both limit the
+/// arrivals that can stay.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct Occupancy {
+    /// Pending musters per faction (entries in state 2): they count against
+    /// the province cap and the faction cap as if they were residents.
+    pub pending: [u8; FACTION_LIMIT as usize],
+    /// Entries the Province can still store: `56 − entries in states 1–3`.
+    /// At most this many arrivals are admitted.
+    pub storage_free: u8,
+}
+
+impl Occupancy {
+    /// Entries a Province stores (the frozen roster's 48 hosts and 8 more
+    /// for musters and departures in flight).
+    pub const STORAGE: u8 = 56;
+    /// No pending musters, no departed entries, an empty store: the room
+    /// is the caps alone (the kernel before I-43, bit for bit).
+    pub const EMPTY: Occupancy = Occupancy {
+        pending: [0; FACTION_LIMIT as usize],
+        storage_free: Occupancy::STORAGE,
+    };
+}
+
+impl Default for Occupancy {
+    fn default() -> Self {
+        Occupancy::EMPTY
+    }
 }
 
 /// Everything one clash reads.
@@ -260,6 +404,9 @@ pub struct ClashInput<'a> {
     /// not here).
     pub arrivals: &'a [Fighter],
     pub relations: Relations,
+    /// The storage room (I-43); [`Occupancy::EMPTY`] where nothing is
+    /// pending or departed.
+    pub occupancy: Occupancy,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -268,12 +415,22 @@ pub enum ClashError {
     TooManyArrivals,
     TooManyGarrisons,
     BadTile(u64),
+    /// A faction id above [`NEUTRAL`] (CL-06).
     BadFaction(u64),
     DuplicateId(u64),
     /// Two garrisons on one tile.
     SharedTile(u8),
     /// An arrival's stance comes from its revealed commitment.
     ArrivalWithoutStance(u64),
+    /// A host or garrison above `MAX_HOST_TROOPS` (CL-01).
+    TroopsAboveCap(u64),
+    /// A host above `STAMINA_CAP` (CL-01).
+    StaminaAboveCap(u64),
+    /// A doctrine multiplier outside `[BPS_ONE, COMBAT_MAX_BPS]` (CL-01,
+    /// CL-14).
+    BadMultiplier(u64),
+    /// A retreat ratio above [`RETREAT_MAX_BPS`] (CL-01, I-27).
+    BadRetreat(u64),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -310,11 +467,13 @@ pub struct GarrisonResult {
     pub id: u64,
     pub troops: MilliTroops,
     /// Hosts hostile to the owner hold the holding's hex (siege input).
+    /// Scouts never count.
     pub attackers_hold: bool,
     /// Bit f set: faction f, hostile to the owner, holds the hex with a
     /// host of its own (a siege advances only while its declarer does).
     pub holders: u8,
-    /// A host of the owner or a non-hostile faction stands on the hex.
+    /// A host of the owner or a non-hostile faction stands on the hex
+    /// (scouts never count).
     pub defender_present: bool,
 }
 
@@ -403,8 +562,14 @@ impl Unit {
             },
         }
     }
+    /// A unit with attack or defence: a garrison, or a host of a fighting
+    /// unit type (not a Scout or Settler). Only these contest a hex, rank
+    /// for the field and hold or defend a holding's hex (CL-10).
+    fn holds(&self) -> bool {
+        self.unit.is_none_or(|u| !u.is_civilian())
+    }
     fn fights(&self) -> bool {
-        self.troops > 0 && self.unit.is_none_or(|u| !u.is_civilian())
+        self.troops > 0 && self.holds()
     }
     fn key(&self) -> [u8; 9] {
         let mut k = [0u8; 9];
@@ -416,6 +581,29 @@ impl Unit {
     fn order(&self) -> (core::cmp::Reverse<MilliTroops>, u64, u64) {
         (core::cmp::Reverse(self.troops), self.tie, self.id)
     }
+}
+
+fn check_fighter(f: &Fighter) -> Result<(), ClashError> {
+    use super::doctrine::bounds::COMBAT_MAX_BPS;
+    if f.tile as usize >= PROVINCE_TILES {
+        return Err(ClashError::BadTile(f.id));
+    }
+    if f.faction > NEUTRAL {
+        return Err(ClashError::BadFaction(f.id));
+    }
+    if f.troops > MAX_HOST_TROOPS {
+        return Err(ClashError::TroopsAboveCap(f.id));
+    }
+    if f.stamina > STAMINA_CAP {
+        return Err(ClashError::StaminaAboveCap(f.id));
+    }
+    if !(BPS_ONE..=COMBAT_MAX_BPS).contains(&f.dealt_bps) {
+        return Err(ClashError::BadMultiplier(f.id));
+    }
+    if f.retreat_bps.is_some_and(|r| r > RETREAT_MAX_BPS as Bps) {
+        return Err(ClashError::BadRetreat(f.id));
+    }
+    Ok(())
 }
 
 fn validate(inp: &ClashInput) -> Result<(), ClashError> {
@@ -430,12 +618,7 @@ fn validate(inp: &ClashInput) -> Result<(), ClashError> {
     }
     let mut ids: Vec<u64> = Vec::with_capacity(inp.residents.len() + inp.arrivals.len());
     for f in inp.residents.iter().chain(inp.arrivals.iter()) {
-        if f.tile as usize >= PROVINCE_TILES {
-            return Err(ClashError::BadTile(f.id));
-        }
-        if f.faction >= FACTION_LIMIT {
-            return Err(ClashError::BadFaction(f.id));
-        }
+        check_fighter(f)?;
         ids.push(f.id);
     }
     for a in inp.arrivals {
@@ -453,8 +636,11 @@ fn validate(inp: &ClashInput) -> Result<(), ClashError> {
         if g.tile as usize >= PROVINCE_TILES {
             return Err(ClashError::BadTile(g.id));
         }
-        if g.faction >= FACTION_LIMIT {
+        if g.faction > NEUTRAL {
             return Err(ClashError::BadFaction(g.id));
+        }
+        if g.troops > MAX_HOST_TROOPS {
+            return Err(ClashError::TroopsAboveCap(g.id));
         }
         if tiles.contains(&g.tile) {
             return Err(ClashError::SharedTile(g.tile));
@@ -509,7 +695,7 @@ fn fair_share(units: &[Unit], cands: &[usize], cap: usize, rel: Relations) -> Ve
     sides.sort_unstable();
     sides.dedup();
     let g = cap / sides.len();
-    let mut taken = vec![false; cands.len()];
+    let mut taken = vec_of(false, cands.len());
     let mut n = 0;
     for s in &sides {
         let mut k = 0;
@@ -539,6 +725,163 @@ fn fair_share(units: &[Unit], cands: &[usize], cap: usize, rel: Relations) -> Ve
         .filter(|(_, t)| *t)
         .map(|(i, _)| *i)
         .collect()
+}
+
+fn vec_of<T: Clone>(v: T, n: usize) -> Vec<T> {
+    let mut x = Vec::with_capacity(n);
+    x.resize(n, v);
+    x
+}
+
+/// Step 2b on one hex: `cands` are its hosts still in, sorted by mass
+/// order, `garrison` the holding on it. Bounces the hosts the fair share
+/// leaves out; returns whether it bounced any.
+fn share_hex(units: &mut [Unit], cands: &[usize], garrison: Option<usize>, rel: Relations) -> bool {
+    if cands.len() <= OWNER_HEX_SLOTS {
+        return false;
+    }
+    let admitted = match garrison {
+        Some(g) => {
+            let owner = units[g].faction;
+            let others: Vec<usize> = cands
+                .iter()
+                .copied()
+                .filter(|&i| rel.hostile(units[i].faction, owner))
+                .collect();
+            let mut a = fair_share(units, &others, OWNER_HEX_SLOTS, rel);
+            let room = HEX_HOST_CAP - a.len();
+            // The owner's side: its own hosts first, then its friends,
+            // each by mass.
+            let mut own: Vec<usize> = cands
+                .iter()
+                .copied()
+                .filter(|&i| !rel.hostile(units[i].faction, owner))
+                .collect();
+            own.sort_by_key(|&i| (units[i].faction != owner, units[i].order()));
+            a.extend(own.into_iter().take(room));
+            a
+        }
+        None => fair_share(units, cands, HEX_HOST_CAP, rel),
+    };
+    let mut any = false;
+    for &i in cands {
+        if !admitted.contains(&i) {
+            units[i].st = St::Out(Fate::Bounced);
+            any = true;
+        }
+    }
+    any
+}
+
+/// Step 2a: admit the arrivals marked `capped`, in mass order (`order`),
+/// while the room allows — fewer than `PROVINCE_HOST_CAP` hosts and
+/// `FACTION_RESIDENT_CAP` of the arrival's faction, counting the pending
+/// musters and every host still in, and fewer than
+/// `occupancy.storage_free` arrivals in (I-43).
+fn admit_by_room(
+    units: &mut [Unit],
+    n_hosts: usize,
+    occ: &Occupancy,
+    order: &[usize],
+    capped: &mut [bool],
+) {
+    let (mut per_faction, mut total, mut stored) = room_counts(units, n_hosts, occ);
+    for &i in order {
+        if !capped[i] {
+            continue;
+        }
+        let f = units[i].faction as usize;
+        if total < PROVINCE_HOST_CAP
+            && per_faction[f] < FACTION_RESIDENT_CAP
+            && stored < occ.storage_free as usize
+        {
+            units[i].st = St::In;
+            capped[i] = false;
+            per_faction[f] += 1;
+            total += 1;
+            stored += 1;
+        }
+    }
+}
+
+/// The room's counts: hosts per faction and in all (pending musters and
+/// every host still in), and arrivals in.
+fn room_counts(
+    units: &[Unit],
+    n_hosts: usize,
+    occ: &Occupancy,
+) -> ([usize; FACTION_LIMIT as usize], usize, usize) {
+    let mut per_faction = [0usize; FACTION_LIMIT as usize];
+    let mut total = 0usize;
+    for (f, &m) in occ.pending.iter().enumerate() {
+        per_faction[f] = m as usize;
+        total += m as usize;
+    }
+    let mut stored = 0usize;
+    for u in units[..n_hosts].iter().filter(|u| u.st == St::In) {
+        per_faction[u.faction as usize] += 1;
+        total += 1;
+        stored += u.arrival as usize;
+    }
+    (per_faction, total, stored)
+}
+
+/// Step 2c, the recount (CL-10), run once the hex fair share has bounced a
+/// host: the room's counts are rebuilt from the hosts still in, and the
+/// arrivals the room refused are re-admitted in mass order where both the
+/// room (as in 2a) and their hex have a free slot — fewer than
+/// `HEX_HOST_CAP` hosts, and on a holding's hex, for an arrival hostile to
+/// the owner, fewer than `OWNER_HEX_SLOTS` hosts hostile to it. Exactly
+/// the arrivals the hex fair share would admit without bouncing anyone, so
+/// a re-admitted arrival never displaces a host already admitted and one
+/// pass reaches stable counts. Returns the tiles that gained a host.
+fn readmit_free_slots(
+    units: &mut [Unit],
+    n_hosts: usize,
+    occ: &Occupancy,
+    order: &[usize],
+    capped: &mut [bool],
+    rel: Relations,
+) -> u64 {
+    const NONE: u8 = 0xff;
+    let (mut per_faction, mut total, mut stored) = room_counts(units, n_hosts, occ);
+    let mut owner = [NONE; PROVINCE_TILES];
+    for g in &units[n_hosts..] {
+        owner[g.tile as usize] = g.faction;
+    }
+    let mut hosts = [0u8; PROVINCE_TILES];
+    let mut hostile = [0u8; PROVINCE_TILES];
+    for u in units[..n_hosts].iter().filter(|u| u.st == St::In) {
+        let t = u.tile as usize;
+        hosts[t] += 1;
+        if owner[t] != NONE && rel.hostile(u.faction, owner[t]) {
+            hostile[t] += 1;
+        }
+    }
+    let mut gained = 0u64;
+    for &i in order {
+        if !capped[i] {
+            continue;
+        }
+        let (f, t) = (units[i].faction as usize, units[i].tile as usize);
+        let h = owner[t] != NONE && rel.hostile(units[i].faction, owner[t]);
+        if total < PROVINCE_HOST_CAP
+            && per_faction[f] < FACTION_RESIDENT_CAP
+            && stored < occ.storage_free as usize
+            && (hosts[t] as usize) < HEX_HOST_CAP
+            && (!h || (hostile[t] as usize) < OWNER_HEX_SLOTS)
+        {
+            units[i].st = St::In;
+            capped[i] = false;
+            per_faction[f] += 1;
+            total += 1;
+            stored += 1;
+            hosts[t] += 1;
+            hostile[t] += h as u8;
+            gained |= 1 << t;
+        }
+    }
+    gained
 }
 
 /// Whether the clash of `inp.bell` is quiet: no arrivals, and resolving
@@ -573,13 +916,8 @@ pub fn is_quiet(rules: &Ruleset, inp: &ClashInput) -> Result<bool, ClashError> {
     Ok(same)
 }
 
-/// Resolve the clash of `inp.province` at `inp.bell`.
-pub fn resolve_clash(rules: &Ruleset, inp: &ClashInput) -> Result<ClashOutcome, ClashError> {
-    validate(inp)?;
-    let cs = clash_seed(&inp.seed, inp.province, inp.bell);
-    let rel = inp.relations;
-
-    // Hosts in id order, then garrisons in id order.
+/// Hosts in id order, then garrisons in id order (both bodies).
+fn build_units(inp: &ClashInput, cs: &Seed) -> (Vec<Unit>, usize) {
     let mut units: Vec<Unit> =
         Vec::with_capacity(inp.residents.len() + inp.arrivals.len() + inp.garrisons.len());
     let mut hosts: Vec<(&Fighter, bool)> = inp
@@ -603,7 +941,7 @@ pub fn resolve_clash(rules: &Ruleset, inp: &ClashInput) -> Result<ClashOutcome, 
             retreat_bps: if arrival { f.retreat_bps } else { None },
             dealt_bps: f.dealt_bps,
             walls: false,
-            tie: tie_key(&cs, f.id),
+            tie: tie_key(cs, f.id),
             st: St::In,
         });
     }
@@ -628,6 +966,57 @@ pub fn resolve_clash(rules: &Ruleset, inp: &ClashInput) -> Result<ClashOutcome, 
             st: St::In,
         });
     }
+    (units, n_hosts)
+}
+
+/// Step 2a's first pass: every arrival still in (not retreated) starts
+/// refused and is admitted by room in mass order. Returns the mass order
+/// and the refused marks.
+fn first_admission(
+    units: &mut [Unit],
+    n_hosts: usize,
+    occ: &Occupancy,
+) -> (Vec<usize>, [bool; MAX_UNITS]) {
+    let mut order: Vec<usize> = (0..n_hosts)
+        .filter(|&i| units[i].arrival && units[i].st == St::In)
+        .collect();
+    order.sort_by_key(|&i| units[i].order());
+    let mut capped = [false; MAX_UNITS];
+    for &i in &order {
+        units[i].st = St::Out(Fate::Bounced);
+        capped[i] = true;
+    }
+    admit_by_room(units, n_hosts, occ, &order, &mut capped);
+    (order, capped)
+}
+
+/// Engagement damage of one half: `raw` scaled by the stance table, the
+/// dealer's doctrine multiplier, its number of engagements on the hex and
+/// the half weight. Cannot overflow (CL-14 asserts above).
+fn scale(raw: MilliTroops, from: &Unit, to: &Unit, n: u64, half: u64) -> u64 {
+    raw as u64 * damage_bps(from.posture, to.posture) as u64 / BPS_ONE as u64
+        * from.dealt_bps as u64
+        / BPS_ONE as u64
+        / n.max(1)
+        / half
+}
+
+// ------------------------------------------------------------ the reference body
+
+/// The clash, step by step: the original (pre-Phase A) body with the M1
+/// rules (I-43 room, CL-10 recount and scouts). Kept on host builds as the
+/// oracle `resolve_clash` is proved identical to
+/// (`tests/frontier_clash_equiv.rs`); never linked on chain.
+#[cfg(any(
+    test,
+    feature = "std",
+    not(any(target_os = "solana", target_arch = "wasm32"))
+))]
+pub fn resolve_clash_ref(rules: &Ruleset, inp: &ClashInput) -> Result<ClashOutcome, ClashError> {
+    validate(inp)?;
+    let cs = clash_seed(&inp.seed, inp.province, inp.bell);
+    let rel = inp.relations;
+    let (mut units, n_hosts) = build_units(inp, &cs);
     let garrison_on = |units: &[Unit], tile: u8| -> Option<usize> {
         (n_hosts..units.len()).find(|&g| units[g].tile == tile)
     };
@@ -649,72 +1038,40 @@ pub fn resolve_clash(rules: &Ruleset, inp: &ClashInput) -> Result<ClashOutcome, 
         }
     }
 
-    // 2a. Province caps: arrivals by mass order.
-    let mut per_faction = [0usize; FACTION_LIMIT as usize];
-    let mut total = 0;
-    for u in units[..n_hosts].iter().filter(|u| !u.arrival) {
-        per_faction[u.faction as usize] += 1;
-        total += 1;
-    }
-    let mut arrivals: Vec<usize> = (0..n_hosts)
-        .filter(|&i| units[i].arrival && units[i].st == St::In)
-        .collect();
-    arrivals.sort_by_key(|&i| units[i].order());
-    for i in arrivals {
-        let f = units[i].faction as usize;
-        if total >= PROVINCE_HOST_CAP || per_faction[f] >= FACTION_RESIDENT_CAP {
-            units[i].st = St::Out(Fate::Bounced);
-        } else {
-            per_faction[f] += 1;
-            total += 1;
-        }
-    }
+    // 2a. Province caps and the storage room: arrivals by mass order.
+    let (order, mut capped) = first_admission(&mut units, n_hosts, &inp.occupancy);
 
-    // 2b. Hex fair share.
-    let mut tiles: Vec<u8> = units[..n_hosts]
-        .iter()
-        .filter(|u| u.st == St::In)
-        .map(|u| u.tile)
-        .collect();
-    tiles.sort_unstable();
-    tiles.dedup();
-    for &t in &tiles {
+    // 2b. Hex fair share; 2c. the cap recount (CL-10).
+    let tiles_in = |units: &[Unit]| -> Vec<u8> {
+        let mut t: Vec<u8> = units[..n_hosts]
+            .iter()
+            .filter(|u| u.st == St::In)
+            .map(|u| u.tile)
+            .collect();
+        t.sort_unstable();
+        t.dedup();
+        t
+    };
+    let mut bounced = false;
+    for t in tiles_in(&units) {
         let mut cands: Vec<usize> = (0..n_hosts)
             .filter(|&i| units[i].st == St::In && units[i].tile == t)
             .collect();
-        if cands.len() <= OWNER_HEX_SLOTS {
-            continue;
-        }
         cands.sort_by_key(|&i| units[i].order());
-        let admitted = match garrison_on(&units, t) {
-            Some(g) => {
-                let owner = units[g].faction;
-                let others: Vec<usize> = cands
-                    .iter()
-                    .copied()
-                    .filter(|&i| rel.hostile(units[i].faction, owner))
-                    .collect();
-                let mut a = fair_share(&units, &others, OWNER_HEX_SLOTS, rel);
-                let room = HEX_HOST_CAP - a.len();
-                // The owner's side: its own hosts first, then its friends,
-                // each by mass.
-                let mut own: Vec<usize> = cands
-                    .iter()
-                    .copied()
-                    .filter(|&i| !rel.hostile(units[i].faction, owner))
-                    .collect();
-                own.sort_by_key(|&i| (units[i].faction != owner, units[i].order()));
-                a.extend(own.into_iter().take(room));
-                a
-            }
-            None => fair_share(&units, &cands, HEX_HOST_CAP, rel),
-        };
-        for i in cands {
-            if !admitted.contains(&i) {
-                units[i].st = St::Out(Fate::Bounced);
-            }
-        }
+        let g = garrison_on(&units, t);
+        bounced |= share_hex(&mut units, &cands, g, rel);
     }
+    if bounced {
+        readmit_free_slots(
+            &mut units,
+            n_hosts,
+            &inp.occupancy,
+            &order,
+            &mut capped,
+            rel,
+        );
+    }
+    let tiles = tiles_in(&units);
 
     // 3. Engagements from pre-clash counts.
     let n = units.len();
@@ -783,15 +1140,8 @@ pub fn resolve_clash(rules: &Ruleset, inp: &ClashInput) -> Result<ClashOutcome, 
                     let vd = variance(rules, &cs, eid, 1);
                     let (to_def, to_att) =
                         resolve_engagement(rules, a.combatant(), d.combatant(), sit, va, vd);
-                    let scale = |raw: MilliTroops, from: &Unit, to: &Unit, n: u64| -> u64 {
-                        raw as u64 * damage_bps(from.posture, to.posture) as u64 / BPS_ONE as u64
-                            * from.dealt_bps as u64
-                            / BPS_ONE as u64
-                            / n.max(1)
-                            / half
-                    };
-                    let x_def = scale(to_def, a, d, count(ai));
-                    let x_att = scale(to_att, d, a, count(di));
+                    let x_def = scale(to_def, a, d, count(ai), half);
+                    let x_att = scale(to_att, d, a, count(di), half);
                     let (tile, fa, fd) = (t, a.faction, d.faction);
                     dmg[di] += x_def;
                     dmg[ai] += x_att;
@@ -834,7 +1184,7 @@ pub fn resolve_clash(rules: &Ruleset, inp: &ClashInput) -> Result<ClashOutcome, 
         }
     }
 
-    // 5. One side holds the field.
+    // 5. One side holds the field (only units that hold count, CL-10).
     let mut withdrawing: Vec<usize> = Vec::new();
     for &t in &tiles {
         let here: Vec<usize> = (0..n)
@@ -844,7 +1194,11 @@ pub fn resolve_clash(rules: &Ruleset, inp: &ClashInput) -> Result<ClashOutcome, 
                     && (!units[i].city || units[i].troops > 0)
             })
             .collect();
-        let mut factions: Vec<u8> = here.iter().map(|&i| units[i].faction).collect();
+        let mut factions: Vec<u8> = here
+            .iter()
+            .filter(|&&i| units[i].holds())
+            .map(|&i| units[i].faction)
+            .collect();
         factions.sort_unstable();
         factions.dedup();
         let contested = factions
@@ -859,12 +1213,12 @@ pub fn resolve_clash(rules: &Ruleset, inp: &ClashInput) -> Result<ClashOutcome, 
             .map(|&f| {
                 let s: u64 = here
                     .iter()
-                    .filter(|&&i| units[i].faction == f)
+                    .filter(|&&i| units[i].faction == f && units[i].holds())
                     .map(|&i| units[i].strength())
                     .sum();
                 let defender = here
                     .iter()
-                    .any(|&i| units[i].faction == f && !units[i].arrival);
+                    .any(|&i| units[i].faction == f && units[i].holds() && !units[i].arrival);
                 (
                     core::cmp::Reverse(s),
                     !defender,
@@ -881,7 +1235,18 @@ pub fn resolve_clash(rules: &Ruleset, inp: &ClashInput) -> Result<ClashOutcome, 
             }
         }
         for &i in &here {
-            if !units[i].city && !kept.contains(&units[i].faction) {
+            if units[i].city {
+                continue;
+            }
+            let f = units[i].faction;
+            // A faction that ranked withdraws unless kept; one that only
+            // has scouts here withdraws if it is hostile to the holders.
+            let out = if factions.contains(&f) {
+                !kept.contains(&f)
+            } else {
+                kept.iter().any(|&k| rel.hostile(k, f))
+            };
+            if out {
                 withdrawing.push(i);
             }
         }
@@ -942,7 +1307,10 @@ pub fn resolve_clash(rules: &Ruleset, inp: &ClashInput) -> Result<ClashOutcome, 
     let mut garrisons = Vec::with_capacity(n - n_hosts);
     for g in &units[n_hosts..] {
         let stay = |u: &Unit| {
-            !u.city && u.tile == g.tile && matches!(u.st, St::In | St::Out(Fate::Withdrew { .. }))
+            !u.city
+                && u.holds()
+                && u.tile == g.tile
+                && matches!(u.st, St::In | St::Out(Fate::Withdrew { .. }))
         };
         let attackers_hold = units
             .iter()
@@ -962,6 +1330,465 @@ pub fn resolve_clash(rules: &Ruleset, inp: &ClashInput) -> Result<ClashOutcome, 
             defender_present,
         });
     }
+    Ok(ClashOutcome {
+        province: inp.province,
+        bell: inp.bell,
+        fighters,
+        garrisons,
+        engagements,
+    })
+}
+
+// ------------------------------------------------------------ the Phase A body
+//
+// Same rules, same outcome digest as `resolve_clash_ref`: only the
+// bookkeeping changes (M1 lab `m1/lab/clash-opt/phaseA.patch`).
+// * units are bucketed by tile once (tiles do not change before step 5),
+//   so no step scans every unit per tile;
+// * dealt/taken per (tile, faction) are per-tile arrays, and the stamina
+//   refund is decided when the tile's engagements are done;
+// * the field step's withdraw search reads an occupancy table (host count
+//   and faction mask per tile) updated as hosts withdraw, and a const
+//   neighbour table, instead of re-scanning every unit per neighbour;
+// * the field tie key `rand_id(cs, "field", f)` does not depend on the
+//   tile, so it is hashed once per faction;
+// * garrison results read a per-tile mask of staying hosts.
+// Argument order of every `Relations::hostile` call is kept, so the result
+// is identical even for an asymmetric `peaceful` matrix.
+
+const NO_TILE: u8 = 0xff;
+const NO_UNIT: u8 = 0xff;
+const MAX_UNITS: usize = PROVINCE_HOST_CAP + MAX_ARRIVALS + MAX_GARRISONS;
+const _: () = assert!(MAX_UNITS < NO_UNIT as usize && PROVINCE_TILES < NO_TILE as usize);
+
+const fn c_offset(idx: u8) -> (i32, i32) {
+    let r = super::geometry::PROVINCE_RADIUS;
+    let mut i = idx as i32;
+    let mut q = -r;
+    while q <= r {
+        let r_min = if -r > -q - r { -r } else { -q - r };
+        let r_max = if r < -q + r { r } else { -q + r };
+        let n = r_max - r_min + 1;
+        if i < n {
+            return (q, r_min + i);
+        }
+        i -= n;
+        q += 1;
+    }
+    (i32::MAX, i32::MAX)
+}
+
+const fn c_index(q: i32, rr: i32) -> u8 {
+    let r = super::geometry::PROVINCE_RADIUS;
+    let s = -q - rr;
+    let aq = if q < 0 { -q } else { q };
+    let ar = if rr < 0 { -rr } else { rr };
+    let as_ = if s < 0 { -s } else { s };
+    if (aq + ar + as_) / 2 > r {
+        return NO_TILE;
+    }
+    let mut base = 0;
+    let mut x = -r;
+    while x < q {
+        let r_min = if -r > -x - r { -r } else { -x - r };
+        let r_max = if r < -x + r { r } else { -x + r };
+        base += r_max - r_min + 1;
+        x += 1;
+    }
+    let r_min = if -r > -q - r { -r } else { -q - r };
+    (base + rr - r_min) as u8
+}
+
+/// `NB0[t][j]`: the tile in direction `DIRECTIONS[j]` of tile `t`, or
+/// `NO_TILE`. `Hex::neighbors_in(k)[j]` is direction `(j + 6 − k) mod 6`.
+const NB0: [[u8; 6]; PROVINCE_TILES] = {
+    let mut t = [[NO_TILE; 6]; PROVINCE_TILES];
+    let mut i = 0;
+    while i < PROVINCE_TILES {
+        let (q, r) = c_offset(i as u8);
+        let mut j = 0;
+        while j < 6 {
+            let (dq, dr) = crate::hex::DIRECTIONS[j];
+            t[i][j] = c_index(q + dq, r + dr);
+            j += 1;
+        }
+        i += 1;
+    }
+    t
+};
+
+/// Resolve the clash of `inp.province` at `inp.bell` (Phase A body).
+pub fn resolve_clash(rules: &Ruleset, inp: &ClashInput) -> Result<ClashOutcome, ClashError> {
+    validate(inp)?;
+    let cs = clash_seed(&inp.seed, inp.province, inp.bell);
+    let rel = inp.relations;
+    // hostile_to[f]: bit g set iff rel.hostile(g, f) (argument order kept).
+    let mut hostile_to = [0u8; FACTION_LIMIT as usize];
+    for f in 0..FACTION_LIMIT {
+        for g in 0..FACTION_LIMIT {
+            if rel.hostile(g, f) {
+                hostile_to[f as usize] |= 1 << g;
+            }
+        }
+    }
+
+    let (mut units, n_hosts) = build_units(inp, &cs);
+    let n = units.len();
+    // Tile buckets, each in increasing unit index (singly linked, built
+    // backwards). Valid until step 5 moves withdrawing hosts.
+    let mut first = [NO_UNIT; PROVINCE_TILES];
+    let mut next = [NO_UNIT; MAX_UNITS];
+    for i in (0..n).rev() {
+        let t = units[i].tile as usize;
+        next[i] = first[t];
+        first[t] = i as u8;
+    }
+    macro_rules! bucket {
+        ($t:expr, $i:ident, $body:block) => {{
+            let mut __c = first[$t as usize];
+            while __c != NO_UNIT {
+                let $i = __c as usize;
+                $body
+                __c = next[$i];
+            }
+        }};
+    }
+    crate::probe::probe("K1 validate+units");
+
+    // 1. Retreat orders against the frozen roster.
+    for a in 0..n_hosts {
+        let Some(r) = units[a].retreat_bps else {
+            continue;
+        };
+        let (tile, fa) = (units[a].tile, units[a].faction);
+        let mut defending: u64 = 0;
+        bucket!(tile, i, {
+            let u = &units[i];
+            if !u.arrival && rel.hostile(u.faction, fa) {
+                defending += u.strength();
+            }
+        });
+        let mine = units[a].strength();
+        if defending as u128 * BPS_ONE as u128 > r as u128 * mine as u128 {
+            units[a].st = St::Out(Fate::Retreated);
+        }
+    }
+
+    // 2a. Province caps and the storage room: arrivals by mass order.
+    let (order, mut capped) = first_admission(&mut units, n_hosts, &inp.occupancy);
+    crate::probe::probe("K2 retreat+caps");
+
+    // 2b. Hex fair share; 2c. the cap recount (CL-10).
+    let mut on_tile = [false; PROVINCE_TILES];
+    for u in units[..n_hosts].iter().filter(|u| u.st == St::In) {
+        on_tile[u.tile as usize] = true;
+    }
+    let mut cands: Vec<usize> = Vec::with_capacity(MAX_UNITS);
+    let mut bounced = false;
+    for t in 0..PROVINCE_TILES as u8 {
+        if !on_tile[t as usize] {
+            continue;
+        }
+        cands.clear();
+        let mut garrison: Option<usize> = None;
+        bucket!(t, i, {
+            if i < n_hosts {
+                if units[i].st == St::In {
+                    cands.push(i);
+                }
+            } else if garrison.is_none() {
+                garrison = Some(i);
+            }
+        });
+        if cands.len() <= OWNER_HEX_SLOTS {
+            continue;
+        }
+        cands.sort_by_key(|&i| units[i].order());
+        bounced |= share_hex(&mut units, &cands, garrison, rel);
+    }
+    if bounced {
+        let gained = readmit_free_slots(
+            &mut units,
+            n_hosts,
+            &inp.occupancy,
+            &order,
+            &mut capped,
+            rel,
+        );
+        for (t, on) in on_tile.iter_mut().enumerate() {
+            *on |= gained & (1 << t) != 0;
+        }
+    }
+    let tiles: Vec<u8> = (0..PROVINCE_TILES as u8)
+        .filter(|&t| on_tile[t as usize])
+        .collect();
+    crate::probe::probe("K3 fair share");
+
+    // 3. Engagements from pre-clash counts.
+    let mut dmg = [0u64; MAX_UNITS];
+    let mut engaged = [false; MAX_UNITS];
+    let mut refund = [false; MAX_UNITS];
+    let mut engagements = 0u32;
+    let mut part: Vec<usize> = Vec::with_capacity(MAX_UNITS);
+    let mut cnt: Vec<u64> = Vec::with_capacity(MAX_UNITS);
+    for &t in &tiles {
+        part.clear();
+        bucket!(t, i, {
+            if units[i].st == St::In && units[i].fights() {
+                part.push(i);
+            }
+        });
+        cnt.clear();
+        for &i in &part {
+            let c = part
+                .iter()
+                .filter(|&&j| rel.hostile(units[i].faction, units[j].faction))
+                .count() as u64;
+            cnt.push(c);
+        }
+        let rough = inp
+            .terrain
+            .terrain
+            .get(t as usize)
+            .is_some_and(|x| x.info().defense_bps < BPS_ONE);
+        // Damage dealt and taken per faction on this hex.
+        let mut dealt = [0u64; FACTION_LIMIT as usize];
+        let mut taken = [0u64; FACTION_LIMIT as usize];
+        for (x, &i) in part.iter().enumerate() {
+            for (y, &j) in part.iter().enumerate().skip(x + 1) {
+                if !rel.hostile(units[i].faction, units[j].faction) {
+                    continue;
+                }
+                let (ui, uj) = (&units[i], &units[j]);
+                // (attacker, defender, attacker's position, defender's
+                // position, half)
+                let pairs: &[(usize, usize, usize, usize, u64)] = if uj.city {
+                    &[(i, j, x, y, 1)]
+                } else if ui.city {
+                    &[(j, i, y, x, 1)]
+                } else if ui.arrival != uj.arrival {
+                    if ui.arrival {
+                        &[(i, j, x, y, 1)]
+                    } else {
+                        &[(j, i, y, x, 1)]
+                    }
+                } else {
+                    &[(i, j, x, y, 2), (j, i, y, x, 2)]
+                };
+                for &(ai, di, ax, dx, half) in pairs {
+                    let (a, d) = (&units[ai], &units[di]);
+                    let sit = Situation {
+                        defender_on_rough_terrain: rough && !d.arrival,
+                        city_walls: d.city && d.walls,
+                        attacker_exhausted: a.stamina < ENGAGE_STAMINA,
+                        ..Situation::default()
+                    };
+                    let mut id = [0u8; 18];
+                    id[..9].copy_from_slice(&a.key());
+                    id[9..].copy_from_slice(&d.key());
+                    let eid = rand(&cs, b"eng", &id) as u32;
+                    let va = variance(rules, &cs, eid, 0);
+                    let vd = variance(rules, &cs, eid, 1);
+                    let (to_def, to_att) =
+                        resolve_engagement(rules, a.combatant(), d.combatant(), sit, va, vd);
+                    let x_def = scale(to_def, a, d, cnt[ax], half);
+                    let x_att = scale(to_att, d, a, cnt[dx], half);
+                    let (fa, fd) = (a.faction as usize, d.faction as usize);
+                    dmg[di] += x_def;
+                    dmg[ai] += x_att;
+                    engaged[ai] = true;
+                    engaged[di] = true;
+                    dealt[fa] += x_def;
+                    taken[fd] += x_def;
+                    dealt[fd] += x_att;
+                    taken[fa] += x_att;
+                    engagements += 1;
+                }
+            }
+        }
+        for &i in &part {
+            let f = units[i].faction as usize;
+            let (d, tk) = (dealt[f], taken[f]);
+            refund[i] = d > 0 && d >= REFUND_RATIO * tk;
+        }
+    }
+    crate::probe::probe("K4 engagements");
+
+    // 4. Apply all damage at once; 6. stamina with the damage-ratio refund.
+    for i in 0..n {
+        if units[i].st != St::In {
+            continue;
+        }
+        let u = &mut units[i];
+        u.troops = (u.troops as u64).saturating_sub(dmg[i]) as MilliTroops;
+        if !u.city {
+            if engaged[i] && !refund[i] {
+                u.stamina = u.stamina.saturating_sub(ENGAGE_STAMINA);
+            }
+            if u.troops < DESTROYED_BELOW {
+                u.troops = 0;
+                u.st = St::Out(Fate::Destroyed);
+            }
+        }
+    }
+    crate::probe::probe("K5 apply+stamina");
+
+    // 5. One side holds the field (only units that hold count, CL-10).
+    let mut field_key: [Option<u64>; FACTION_LIMIT as usize] = [None; FACTION_LIMIT as usize];
+    let mut withdrawing: Vec<usize> = Vec::new();
+    let mut here: Vec<usize> = Vec::with_capacity(MAX_UNITS);
+    for &t in &tiles {
+        here.clear();
+        // Factions that hold the field here (garrisons with troops and
+        // fighting hosts).
+        let mut hmask = 0u8;
+        bucket!(t, i, {
+            let u = &units[i];
+            if u.st == St::In && (!u.city || u.troops > 0) {
+                here.push(i);
+                if u.holds() {
+                    hmask |= 1 << u.faction;
+                }
+            }
+        });
+        // contested: some a, b holding with hostile(a, b)
+        let mut contested = false;
+        for a in 0..FACTION_LIMIT {
+            if hmask & (1 << a) != 0 && hmask & hostile_to[a as usize] != 0 {
+                // hostile_to[a] holds g with hostile(g, a); scanning every a
+                // covers every ordered pair.
+                contested = true;
+                break;
+            }
+        }
+        if !contested {
+            continue;
+        }
+        let mut ranked: Vec<(core::cmp::Reverse<u64>, bool, u64, u8)> = Vec::with_capacity(8);
+        for f in 0..FACTION_LIMIT {
+            if hmask & (1 << f) == 0 {
+                continue;
+            }
+            let mut s: u64 = 0;
+            let mut defender = false;
+            for &i in &here {
+                if units[i].faction == f && units[i].holds() {
+                    s += units[i].strength();
+                    defender |= !units[i].arrival;
+                }
+            }
+            let key =
+                *field_key[f as usize].get_or_insert_with(|| rand_id(&cs, b"field", f as u64));
+            ranked.push((core::cmp::Reverse(s), !defender, key, f));
+        }
+        ranked.sort();
+        let mut kept: u8 = 0;
+        for (_, _, _, f) in ranked {
+            let mut ok = true;
+            for k in 0..FACTION_LIMIT {
+                if kept & (1 << k) != 0 && rel.hostile(k, f) {
+                    ok = false;
+                    break;
+                }
+            }
+            if ok {
+                kept |= 1 << f;
+            }
+        }
+        for &i in &here {
+            let u = &units[i];
+            if u.city {
+                continue;
+            }
+            let f = u.faction as usize;
+            let out = if hmask & (1 << f) != 0 {
+                kept & (1 << f) == 0
+            } else {
+                kept & hostile_to[f] != 0
+            };
+            if out {
+                withdrawing.push(i);
+            }
+        }
+    }
+    withdrawing.sort_by_key(|&i| units[i].order());
+    for &i in &withdrawing {
+        units[i].st = St::Out(Fate::Bounced);
+    }
+    if !withdrawing.is_empty() {
+        // Occupancy after the losers left: hosts per tile and the factions
+        // present (hosts, and garrisons that still have troops).
+        let mut hosts_at = [0u8; PROVINCE_TILES];
+        let mut mask_at = [0u8; PROVINCE_TILES];
+        for u in units.iter() {
+            if matches!(u.st, St::In | St::Out(Fate::Withdrew { .. })) && (!u.city || u.troops > 0)
+            {
+                mask_at[u.tile as usize] |= 1 << u.faction;
+                if !u.city {
+                    hosts_at[u.tile as usize] += 1;
+                }
+            }
+        }
+        let k = (inp.province.wedge().unwrap_or(0) % 6) as usize;
+        for &i in &withdrawing {
+            if units[i].arrival {
+                continue;
+            }
+            let (f, from) = (units[i].faction, units[i].tile as usize);
+            for j in 0..6 {
+                let nt = NB0[from][(j + 6 - k) % 6];
+                if nt == NO_TILE || !inp.terrain.passable(nt) {
+                    continue;
+                }
+                let m = mask_at[nt as usize];
+                let friendly = m & (1 << f) != 0;
+                let hostile = m & hostile_to[f as usize] != 0;
+                if friendly && !hostile && (hosts_at[nt as usize] as usize) < HEX_HOST_CAP {
+                    units[i].tile = nt;
+                    units[i].st = St::Out(Fate::Withdrew { tile: nt });
+                    hosts_at[nt as usize] += 1;
+                    mask_at[nt as usize] |= 1 << f;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Results.
+    let mut fighters = Vec::with_capacity(n_hosts);
+    for (i, u) in units[..n_hosts].iter().enumerate() {
+        let fate = match u.st {
+            St::In => Fate::Stays { tile: u.tile },
+            St::Out(f) => f,
+        };
+        fighters.push(FighterResult {
+            id: u.id,
+            arrival: u.arrival,
+            troops: u.troops,
+            stamina: u.stamina,
+            fate,
+            engaged: engaged[i],
+        });
+    }
+    let mut staying = [0u8; PROVINCE_TILES];
+    for u in units.iter() {
+        if !u.city && u.holds() && matches!(u.st, St::In | St::Out(Fate::Withdrew { .. })) {
+            staying[u.tile as usize] |= 1 << u.faction;
+        }
+    }
+    let mut garrisons = Vec::with_capacity(n - n_hosts);
+    for g in &units[n_hosts..] {
+        let s = staying[g.tile as usize];
+        let h = hostile_to[g.faction as usize];
+        garrisons.push(GarrisonResult {
+            id: g.id,
+            troops: g.troops,
+            attackers_hold: s & h != 0,
+            holders: s & h,
+            defender_present: s & !h != 0,
+        });
+    }
+    crate::probe::probe("K6 field");
     Ok(ClashOutcome {
         province: inp.province,
         bell: inp.bell,

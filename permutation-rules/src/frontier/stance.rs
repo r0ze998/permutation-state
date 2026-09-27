@@ -121,4 +121,23 @@ mod tests {
             }
         }
     }
+
+    /// CL-14: the clash's damage bound covers every pairing of this table
+    /// (the largest is a stance against Disarray, ×1.25).
+    #[test]
+    fn the_stance_table_is_inside_the_damage_bound() {
+        let all = [
+            Posture::Stance(Stance::Hold),
+            Posture::Stance(Stance::Assault),
+            Posture::Stance(Stance::Flank),
+            Posture::Stance(Stance::Brace),
+            Posture::Disarray,
+        ];
+        for a in all {
+            for d in all {
+                assert!(damage_bps(a, d) <= crate::frontier::clash::MAX_STANCE_BPS);
+            }
+        }
+        assert_eq!(crate::frontier::clash::MAX_STANCE_BPS, DISARRAY_TAKEN_BPS);
+    }
 }
