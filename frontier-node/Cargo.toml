@@ -79,10 +79,14 @@ rusqlite = { version = "=0.40.2", features = ["bundled"] }
 solana-program-runtime = "=4.2.2"
 # integ-W3 (W3-D request R2): the herald's WebSocket upgrade (hyper's upgrade
 # API under axum, no `ws` feature and no tungstenite), already in this lock
-# through axum. W3-D request R3 (flate2 for `.gz` siblings) is NOT applied:
-# outside the contract's expected dependency set; it waits for the owner.
+# through axum. (W3-D request R3, flate2, was held for DECISIONS J2 in wave 3;
+# J2 is decided and flate2 is applied below for W4-F.)
 hyper = { version = "=1.11.1", features = ["http1", "server"] }
 hyper-util = { version = "=0.1.21", features = ["tokio"] }
+# W4-F request R2 (DECISIONS J2, decided by the main session 2026-09-28):
+# the herald's `.gz` siblings (pure-Rust miniz_oxide backend); brotli not
+# needed now.
+flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
 
 [profile.dev.package."*"]
 # The BLS pairing, LiteSVM and tlock are unusably slow unoptimised.
