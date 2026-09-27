@@ -6,6 +6,7 @@
 //! doctrine table's bounds.
 
 use permutation_rules::fixed::{BPS_ONE, MILLI};
+use permutation_rules::frontier::clash::Occupancy;
 use permutation_rules::frontier::clash::{
     admit_arrival, apply_slot, clash_seed, frontier_ruleset, is_quiet, quota_set, resolve_clash,
     reveal_close, reveal_open, seed_round, BeaconClock, ClashInput, ClashOutcome, FactionSlots,
@@ -127,6 +128,7 @@ fn clash(
             garrisons,
             arrivals,
             relations,
+            occupancy: Occupancy::EMPTY,
         },
     )
     .expect("valid clash")
@@ -1265,6 +1267,7 @@ fn resolve_next(s: &Script, p: &mut Province, rng: &mut Rng) {
             garrisons: &garrisons,
             arrivals: &arrivals,
             relations,
+            occupancy: Occupancy::EMPTY,
         },
     )
     .unwrap();
@@ -1539,6 +1542,7 @@ fn arrivals_carry_the_origin_clash_whatever_the_lag() {
                         garrisons: &g,
                         arrivals: &arr,
                         relations: rel,
+                        occupancy: Occupancy::EMPTY,
                     },
                 )
                 .unwrap();
@@ -2421,6 +2425,7 @@ fn quiet_bells_change_nothing() {
             garrisons: &s.garrisons,
             arrivals: &[],
             relations: s.relations,
+            occupancy: Occupancy::EMPTY,
         };
         let q = is_quiet(&rules, &inp(9)).unwrap();
         for bell in [9, 10, 11] {
@@ -2443,6 +2448,7 @@ fn quiet_bells_change_nothing() {
         garrisons: &[],
         arrivals: &[fighter(1, 0, UnitType::Scout, 100, 3)],
         relations: Relations::ALL_HOSTILE,
+        occupancy: Occupancy::EMPTY,
     };
     assert!(!is_quiet(&rules, &with_arrival).unwrap());
 }

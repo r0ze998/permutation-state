@@ -238,6 +238,12 @@ pub enum DoctrineError {
     /// Two doctrines field the same army (unit line, drill and variant
     /// weight), however their other knobs differ.
     SameArmy,
+    /// The doctrine's combined damage multiplier (variant × drill ×
+    /// arrival, in its best posture) passes the clash's bound
+    /// `clash::MAX_DAMAGE_PRODUCT_BPS` (CL-14): each knob is inside
+    /// [`bounds`] but together they are not, so `clash::validate` would
+    /// refuse the doctrine's own hosts.
+    DamageProduct,
 }
 
 impl Doctrine {
@@ -258,6 +264,32 @@ impl Doctrine {
             m = m * self.arrival_bps as u64 / BPS_ONE as u64;
         }
         m as Bps
+    }
+
+    /// The largest [`Doctrine::dealt_bps`] over every posture, arriving or
+    /// not (the drilled stance on the bell it arrives).
+    pub const fn max_dealt_bps(&self) -> Bps {
+        let all = [
+            Posture::Stance(Stance::Hold),
+            Posture::Stance(Stance::Assault),
+            Posture::Stance(Stance::Flank),
+            Posture::Stance(Stance::Brace),
+            Posture::Disarray,
+        ];
+        let mut m = 0;
+        let mut i = 0;
+        while i < all.len() {
+            let a = self.dealt_bps(all[i], false);
+            let b = self.dealt_bps(all[i], true);
+            if a > m {
+                m = a;
+            }
+            if b > m {
+                m = b;
+            }
+            i += 1;
+        }
+        m
     }
 
     /// March time in seconds after the doctrine's travel bias.
@@ -373,13 +405,25 @@ impl Doctrine {
     }
 }
 
-/// The whole table: every doctrine valid, each with a tech bias, a unit
-/// variant and a civic power, no two alike, and no two fielding the same
-/// army (unit line, drill, variant weight): knobs such as caravans or a
-/// Bourse fee do not make two armies different.
+/// The whole table: every doctrine valid, its combined damage multiplier
+/// inside the clash's bound (CL-14), each with a tech bias, a unit variant
+/// and a civic power, no two alike, and no two fielding the same army
+/// (unit line, drill, variant weight): knobs such as caravans or a Bourse
+/// fee do not make two armies different.
 pub fn validate_table(t: &[Doctrine; 6]) -> Result<(), DoctrineError> {
+    use super::clash::{MAX_DAMAGE_PRODUCT_BPS, MAX_STANCE_BPS};
     for (i, d) in t.iter().enumerate() {
         d.validate()?;
+        // One engagement half deals at most stance × doctrine: the product
+        // must stay inside the clash's bound, i.e. `max_dealt_bps` inside
+        // `[BPS_ONE, COMBAT_MAX_BPS]`, which `clash::validate` enforces on
+        // every fighter.
+        let dealt = d.max_dealt_bps() as u64;
+        if dealt * MAX_STANCE_BPS as u64 / BPS_ONE as u64 > MAX_DAMAGE_PRODUCT_BPS
+            || dealt > bounds::COMBAT_MAX_BPS as u64
+        {
+            return Err(DoctrineError::DamageProduct);
+        }
         if !(d.has_tech_bias() && d.has_unit_variant() && d.has_civic_power()) {
             return Err(DoctrineError::Shape);
         }
