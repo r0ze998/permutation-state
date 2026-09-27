@@ -12,106 +12,39 @@
 //! [`open`] and judge with [`judge`], which returns SettleTransit's seal
 //! code (0 valid, 1–5 bad) as the stock opener sees it.
 //!
-//! **Integration note.** `Plain`, `pack`/`unpack`/`validate`, `salt_of`,
-//! `commit`, `seal_root` and `body_xor` are the kernel's
-//! (`permutation_rules::frontier::seal`, W1-C); this is their twin and W2-F
-//! points it at the kernel once merged. The layout is DESIGN §6.2's.
+//! **One rule set (integ-W1, D2 resolved).** `Plain`, `PlainError`,
+//! `pack`/`unpack`/`validate`, `salt_of`, `seal_root`, the domains and
+//! `RETREAT_MAX_BPS` are the kernel's (`permutation_rules::frontier::seal`,
+//! W1-C), re-exported: the keeper, verifier and bots judge a plaintext
+//! exactly as the program does (the first twin had no `dest_tile < 61`
+//! check). `commit`, `ct_hash` and `body_xor` stay here because they take
+//! slices of any length (the S-TLOCK q4 vector's 69-byte plaintext);
+//! `twins_equal_the_kernel` pins them to the kernel's on 37-byte input and
+//! `kernel_seal_vectors_judge_as_recorded` runs the kernel's
+//! `seal-vectors-v1.json` through [`judge`].
 
 use sha2::{Digest, Sha256};
 
 use crate::abi::seal_code;
 
-pub const DOMAIN_MARCH: &[u8] = b"PS-FRONTIER-MARCH-v1";
-pub const DOMAIN_POSTURE: &[u8] = b"PS-FRONTIER-POSTURE-v1";
-pub const DOMAIN_SALT: &[u8] = b"PS-SALT";
-pub const DOMAIN_KS: &[u8] = b"PS-KS";
-/// `clash::RETREAT_MAX_BPS` (defined by W1-A in `clash.rs`, I-27).
-pub const RETREAT_MAX_BPS: u16 = 60_000;
-pub const PLAIN_LEN: usize = 37;
+pub use permutation_rules::frontier::seal::{
+    pack, salt_of, seal_root, unpack, validate, Plain, PlainError, DOMAIN_KS, DOMAIN_MARCH,
+    DOMAIN_POSTURE, DOMAIN_SALT, PLAIN_LEN, RETREAT_MAX_BPS,
+};
 pub const IBE_LEN: usize = 128;
 pub const SEAL_LEN: usize = IBE_LEN + PLAIN_LEN;
 pub const KEY_LEN: usize = 16;
 pub const MAX_PATH: u8 = 32;
 /// Stances: Hold, Assault, Flank, Brace (kernel `stance::Stance` order).
-pub const STANCES: u8 = 4;
-
-/// The 37-byte march plaintext (DESIGN §6.2, pinned):
-/// `version u8 = 1 | host_id u64 | arrive_bell u32 | dest P i16 | dest Q i16 |
-/// dest tile u8 | stance u8 | retreat_bps u16 | path_len u8 | path 12 B | reserved 3 B`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Plain {
-    pub version: u8,
-    pub host_id: u64,
-    pub arrive_bell: u32,
-    pub dest_p: i16,
-    pub dest_q: i16,
-    pub dest_tile: u8,
-    pub stance: u8,
-    /// 0 = never retreat; 1..=60,000 the ratio in bps (I-27).
-    pub retreat_bps: u16,
-    pub path_len: u8,
-    /// ≤ 32 steps × 3-bit hex directions, little-endian bit order
-    /// (0 = E, then counter-clockwise, as `hex`).
-    pub path: [u8; 12],
-    pub reserved: [u8; 3],
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PlainError {
-    Version,
-    Reserved,
-    PathLen,
-    PathBits,
-    Direction,
-    Stance,
-    Retreat,
-    Host,
-    Arrive,
-}
-
-pub fn pack(p: &Plain) -> [u8; PLAIN_LEN] {
-    let mut b = [0u8; PLAIN_LEN];
-    b[0] = p.version;
-    b[1..9].copy_from_slice(&p.host_id.to_le_bytes());
-    b[9..13].copy_from_slice(&p.arrive_bell.to_le_bytes());
-    b[13..15].copy_from_slice(&p.dest_p.to_le_bytes());
-    b[15..17].copy_from_slice(&p.dest_q.to_le_bytes());
-    b[17] = p.dest_tile;
-    b[18] = p.stance;
-    b[19..21].copy_from_slice(&p.retreat_bps.to_le_bytes());
-    b[21] = p.path_len;
-    b[22..34].copy_from_slice(&p.path);
-    b[34..37].copy_from_slice(&p.reserved);
-    b
-}
-
-pub fn unpack(b: &[u8; PLAIN_LEN]) -> Plain {
-    Plain {
-        version: b[0],
-        host_id: u64::from_le_bytes(b[1..9].try_into().expect("8")),
-        arrive_bell: u32::from_le_bytes(b[9..13].try_into().expect("4")),
-        dest_p: i16::from_le_bytes(b[13..15].try_into().expect("2")),
-        dest_q: i16::from_le_bytes(b[15..17].try_into().expect("2")),
-        dest_tile: b[17],
-        stance: b[18],
-        retreat_bps: u16::from_le_bytes(b[19..21].try_into().expect("2")),
-        path_len: b[21],
-        path: b[22..34].try_into().expect("12"),
-        reserved: b[34..37].try_into().expect("3"),
-    }
-}
+pub const STANCES: u8 = permutation_rules::frontier::seal::STANCE_MAX + 1;
 
 /// Direction of step `i` (3 bits, little-endian across the 12 bytes).
 pub fn step(path: &[u8; 12], i: u8) -> u8 {
-    let bits = u128::from_le_bytes({
-        let mut w = [0u8; 16];
-        w[..12].copy_from_slice(path);
-        w
-    });
-    ((bits >> (3 * i as u32)) & 7) as u8
+    permutation_rules::frontier::seal::path_step(path, i as usize)
 }
 
-/// Packs directions (each < 6) into the 12-byte path.
+/// Packs directions into the 12-byte path (each masked to 3 bits, so a
+/// test can build an invalid direction 6 or 7).
 pub fn path_of(dirs: &[u8]) -> [u8; 12] {
     assert!(dirs.len() <= MAX_PATH as usize);
     let mut bits = 0u128;
@@ -121,54 +54,6 @@ pub fn path_of(dirs: &[u8]) -> [u8; 12] {
     bits.to_le_bytes()[..12].try_into().expect("12")
 }
 
-/// `Plain::validate` (I-28): version 1, reserved zero, `path_len ≤ 32`,
-/// unused path bits zero, every step a hex direction (< 6), stance one of
-/// the four, retreat ≤ 60,000, host and arrival bell equal to the transit's.
-pub fn validate(p: &Plain, host_id: u64, arrive_bell: u32) -> Result<(), PlainError> {
-    if p.version != 1 {
-        return Err(PlainError::Version);
-    }
-    if p.reserved != [0; 3] {
-        return Err(PlainError::Reserved);
-    }
-    if p.path_len > MAX_PATH {
-        return Err(PlainError::PathLen);
-    }
-    let bits = u128::from_le_bytes({
-        let mut w = [0u8; 16];
-        w[..12].copy_from_slice(&p.path);
-        w
-    });
-    if p.path_len < MAX_PATH && bits >> (3 * p.path_len as u32) != 0 {
-        return Err(PlainError::PathBits);
-    }
-    if (0..p.path_len).any(|i| step(&p.path, i) >= 6) {
-        return Err(PlainError::Direction);
-    }
-    if p.stance >= STANCES {
-        return Err(PlainError::Stance);
-    }
-    if p.retreat_bps > RETREAT_MAX_BPS {
-        return Err(PlainError::Retreat);
-    }
-    if p.host_id != host_id {
-        return Err(PlainError::Host);
-    }
-    if p.arrive_bell != arrive_bell {
-        return Err(PlainError::Arrive);
-    }
-    Ok(())
-}
-
-/// `sha256("PS-SALT" ‖ k)`.
-pub fn salt_of(k: &[u8; KEY_LEN]) -> [u8; 32] {
-    Sha256::new()
-        .chain_update(DOMAIN_SALT)
-        .chain_update(k)
-        .finalize()
-        .into()
-}
-
 /// `sha256("PS-FRONTIER-MARCH-v1" ‖ plain ‖ salt)` (any plaintext length:
 /// the S-TLOCK q4 vector uses the older 69-byte form).
 pub fn commit(plain: &[u8], salt: &[u8; 32]) -> [u8; 32] {
@@ -176,15 +61,6 @@ pub fn commit(plain: &[u8], salt: &[u8; 32]) -> [u8; 32] {
         .chain_update(DOMAIN_MARCH)
         .chain_update(plain)
         .chain_update(salt)
-        .finalize()
-        .into()
-}
-
-/// `sha256(commit ‖ ct_hash)`.
-pub fn seal_root(commit: &[u8; 32], ct_hash: &[u8; 32]) -> [u8; 32] {
-    Sha256::new()
-        .chain_update(commit)
-        .chain_update(ct_hash)
         .finalize()
         .into()
 }
@@ -376,8 +252,13 @@ mod tests {
         let mut q = p;
         q.path = path_of(&[0, 6, 0, 0, 0]);
         assert_eq!(validate(&q, 9, 44), Err(PlainError::Direction));
-        assert_eq!(validate(&p, 8, 44), Err(PlainError::Host));
-        assert_eq!(validate(&p, 9, 45), Err(PlainError::Arrive));
+        assert_eq!(validate(&p, 8, 44), Err(PlainError::HostMismatch));
+        assert_eq!(validate(&p, 9, 45), Err(PlainError::ArriveMismatch));
+        // The kernel's tile bound (the first twin missed it: judge said 0,
+        // the program says 5).
+        let mut q = p;
+        q.dest_tile = 61;
+        assert_eq!(validate(&q, 9, 44), Err(PlainError::Tile));
         let mut full = p;
         full.path_len = 32;
         full.path = path_of(&[5u8; 32]);
@@ -450,5 +331,71 @@ mod tests {
         );
         // Root binds commit and ciphertext.
         assert_eq!(seal_root(&s.commit, &ct_hash(&s.seal)), s.seal_root);
+    }
+
+    /// The slice-based twins equal the kernel's on 37-byte input.
+    #[test]
+    fn twins_equal_the_kernel() {
+        use permutation_rules::frontier::seal as k;
+        let mut x = 0x1234_5678_9abc_def1u64;
+        for _ in 0..2_000 {
+            let mut pt = [0u8; PLAIN_LEN];
+            let mut key = [0u8; KEY_LEN];
+            for b in pt.iter_mut().chain(key.iter_mut()) {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                *b = x as u8;
+            }
+            let salt = salt_of(&key);
+            assert_eq!(commit(&pt, &salt), k::commit(&pt, &salt));
+            assert_eq!(body_xor(&key, &pt), k::body_xor(&key, &pt).to_vec());
+            let mut sl = [0u8; SEAL_LEN];
+            sl[..PLAIN_LEN].copy_from_slice(&pt);
+            assert_eq!(ct_hash(&sl), k::ct_hash(&sl));
+        }
+    }
+
+    /// The kernel's seal vectors (W1-C, `permutation-rules/vectors/
+    /// seal-vectors-v1.json`, 24 cases incl. every `PlainError`) judged with
+    /// the stock opener: the code matches the recorded class and the
+    /// plaintext verdict matches the kernel's.
+    #[test]
+    fn kernel_seal_vectors_judge_as_recorded() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../permutation-rules/vectors/seal-vectors-v1.json");
+        let j: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).expect("vectors")).expect("json");
+        let cases = j["cases"].as_array().expect("cases");
+        assert!(cases.len() >= 24);
+        let hx = |c: &serde_json::Value, f: &str| hex::decode(c[f].as_str().unwrap()).unwrap();
+        let mut tiles = 0;
+        for c in cases {
+            let name = c["name"].as_str().unwrap();
+            let seal: [u8; SEAL_LEN] = hx(c, "seal").try_into().unwrap();
+            let commit: [u8; 32] = hx(c, "commit").try_into().unwrap();
+            let sig: [u8; 48] = hx(c, "open_sig").try_into().unwrap();
+            let host: u64 = c["host_id"].as_str().unwrap().parse().unwrap();
+            let arrive = c["arrive_bell"].as_u64().unwrap() as u32;
+            let (code, p) = judge(&seal, &commit, &sig, host, arrive);
+            let want: &[u8] = match c["expect"].as_str().unwrap() {
+                "valid" => &[seal_code::VALID],
+                "bad_plaintext" => &[seal_code::PLAINTEXT_INVALID],
+                "commit_mismatch" => &[seal_code::COMMIT_MISMATCH],
+                "fo_fail" => &[seal_code::FO_FAILED],
+                "bad_point_or_fo_fail" => &[seal_code::FO_FAILED, seal_code::BAD_POINT],
+                e => panic!("{name}: class {e}"),
+            };
+            assert!(want.contains(&code), "{name}: code {code}");
+            if let Some(p) = p {
+                let v = match validate(&p, host, arrive) {
+                    Ok(()) => "ok".to_string(),
+                    Err(e) => format!("{e:?}"),
+                };
+                assert_eq!(v, c["validate"].as_str().unwrap(), "{name}");
+                tiles += (v == "Tile") as u32;
+            }
+        }
+        assert_eq!(tiles, 2, "the tile cases reach the plaintext check");
     }
 }

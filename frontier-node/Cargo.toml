@@ -32,6 +32,9 @@ license = "MIT"
 
 [workspace.dependencies]
 permutation-rules = { path = "../permutation-rules", features = ["std"] }
+# The canonical ABI tables (layouts, tags, errors), for fclient's twin test
+# (integ-W1, contract §3.3); path only, no new external crate.
+frontier-abi = { path = "../frontier-abi" }
 fclient = { path = "crates/fclient" }
 localnet = { path = "crates/localnet" }
 

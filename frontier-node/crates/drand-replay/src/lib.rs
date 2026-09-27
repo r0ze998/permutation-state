@@ -86,7 +86,12 @@ pub enum ClockSource {
     Fixed(i64),
     /// `g0 + (wall − start) × scale` (standalone runs without a chain).
     Wall { g0: i64, scale: f64, start: Instant },
-    /// The chain's Clock sysvar, polled every `poll` and extrapolated.
+    /// The chain's Clock sysvar, polled every `poll`: the **last observed**
+    /// `unix_timestamp`, never extrapolated (integ-W1 review: the
+    /// extrapolation ran up to one slot of game time ahead of any Clock the
+    /// program can read, 8 s at 20×, 800 s at 2,000×, and after a pause it
+    /// kept running and later stepped back). A round is served at most one
+    /// poll late, never early; the value is monotone while the chain's is.
     Chain { clock: Arc<Mutex<GameClock>> },
 }
 
@@ -97,7 +102,11 @@ impl ClockSource {
             ClockSource::Wall { g0, scale, start } => {
                 Some(g0 + (start.elapsed().as_secs_f64() * scale).floor() as i64)
             }
-            ClockSource::Chain { clock } => clock.lock().unwrap_or_else(|p| p.into_inner()).now(),
+            ClockSource::Chain { clock } => clock
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .last()
+                .map(|c| c.unix_timestamp),
         }
     }
 }
@@ -260,6 +269,9 @@ pub async fn start(r: Arc<Replay>, port: u16) -> Result<Running, String> {
             "port {port}: M1 services use 41000-41999 and never a reserved port"
         ));
     }
+    if port != 0 && fclient::ports::port_in_use(port) {
+        return Err(format!("port {port} is busy (a listener on some address)"));
+    }
     let l = tokio::net::TcpListener::bind(("127.0.0.1", port))
         .await
         .map_err(|e| format!("bind 127.0.0.1:{port}: {e}"))?;
@@ -284,6 +296,37 @@ mod tests {
 
     fn fixture() -> Source {
         Source::archive(&beacon::fixture_dir(), beacon::quicknet_info()).unwrap()
+    }
+
+    /// The chain source never runs ahead of the last observed Clock, even
+    /// long after it (a paused chain): no round is served early.
+    #[test]
+    fn chain_clock_never_extrapolates() {
+        let info = beacon::quicknet_info();
+        let src = fixture();
+        let r = match &src {
+            Source::Archive { rounds, .. } => *rounds.keys().nth(3).unwrap(),
+            _ => unreachable!(),
+        };
+        let t = info.round_time(r);
+        let gc = Arc::new(Mutex::new(GameClock::new(2_000.0)));
+        let seen = |ts: i64| fclient::ports::ClockSysvar {
+            slot: 10,
+            unix_timestamp: ts,
+            ..Default::default()
+        };
+        let then = Instant::now() - Duration::from_secs(30);
+        gc.lock().unwrap().observe(seen(t), then);
+        let rep = Replay {
+            source: src,
+            clock: ClockSource::Chain { clock: gc.clone() },
+            delay_ms: 1_000,
+        };
+        // 30 wall seconds at 2,000× would be 60,000 game seconds ahead.
+        assert_eq!(rep.clock.now(), Some(t));
+        assert_eq!(rep.round(r), Err(Refusal::TooEarly));
+        gc.lock().unwrap().observe(seen(t + 1), Instant::now());
+        assert!(rep.round(r).is_ok());
     }
 
     #[test]

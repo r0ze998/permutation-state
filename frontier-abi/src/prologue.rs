@@ -421,7 +421,9 @@ pub fn accounts_of(ix: Ix) -> &'static [Group] {
                         HOLDING_W,
                         PROVINCE_W,
                         s!("joinshard", Kind(K::JoinShard), false, W),
-                        s!("seedcache", Kind(K::SeedCache), false, R),
+                        // v1.2: `seedcache|archive` like SettleExplore
+                        // (§5.9's text already allows "the archive entry")
+                        CACHE_OR_ARCHIVE,
                         ANCHOR_OR_ARCHIVE,
                     ]),
                     rep!(&[s!("other_province", Kind(K::Province), false, W)], 0, 2),

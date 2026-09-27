@@ -218,6 +218,35 @@ pub fn custom_code(err: &str) -> Option<u32> {
     None
 }
 
+/// Whether any process listens on TCP port `p`, on any address (loopback
+/// or wildcard, IPv4 or IPv6): contract §10.3's rule, `lsof -nP
+/// -iTCP:<p> -sTCP:LISTEN` (integ-W1 review: a probe bind of 127.0.0.1
+/// succeeds beside a 0.0.0.0 or `[::]` listener, because Rust's bind sets
+/// `SO_REUSEADDR`). Without `lsof` it falls back to probe binds on the
+/// loopback addresses only (never a wildcard bind, which would expose a
+/// listener).
+pub fn port_in_use(p: u16) -> bool {
+    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener};
+    if let Ok(o) = std::process::Command::new("lsof")
+        .args(["-nP", &format!("-iTCP:{p}"), "-sTCP:LISTEN"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+    {
+        // lsof exits 0 and prints the listeners when there are any.
+        if o.status.success() && !o.stdout.is_empty() {
+            return true;
+        }
+    }
+    let probes: [SocketAddr; 2] = [
+        (Ipv4Addr::LOCALHOST, p).into(),
+        (Ipv6Addr::LOCALHOST, p).into(),
+    ];
+    probes.iter().any(
+        |a| matches!(TcpListener::bind(a), Err(e) if e.kind() == std::io::ErrorKind::AddrInUse),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,5 +267,20 @@ mod tests {
             Some(51)
         );
         assert_eq!(custom_code("AccountNotFound"), None);
+    }
+
+    /// §10.3: a listener on either loopback family is seen (the wildcard
+    /// case is lsof's; tests bind loopback only).
+    #[test]
+    fn port_in_use_sees_v4_and_v6_listeners() {
+        let l4 = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let p4 = l4.local_addr().unwrap().port();
+        assert!(port_in_use(p4));
+        if let Ok(l6) = std::net::TcpListener::bind(("::1", 0)) {
+            let p6 = l6.local_addr().unwrap().port();
+            assert!(port_in_use(p6), "an IPv6-only loopback listener");
+            drop(l6);
+        }
+        drop(l4);
     }
 }

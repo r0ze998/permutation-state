@@ -1550,8 +1550,8 @@
               "writable": "w"
             },
             {
-              "name": "seedcache",
-              "kind": "SeedCache",
+              "name": "seedcache_or_archive",
+              "kind": "SeedCache|AnchorArchive",
               "signer": false,
               "writable": "r"
             },

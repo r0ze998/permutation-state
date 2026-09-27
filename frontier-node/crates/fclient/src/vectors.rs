@@ -283,6 +283,7 @@ fn seal_vectors(existing: Option<&Value>) -> Value {
             "direction",
             Box::new(|x: &mut seal::Plain| x.path = seal::path_of(&[0, 0, 7, 0, 0, 0, 0])),
         ),
+        ("tile", Box::new(|x: &mut seal::Plain| x.dest_tile = 61)),
         ("stance", Box::new(|x: &mut seal::Plain| x.stance = 4)),
         (
             "retreat",

@@ -70,6 +70,18 @@ fn loaded_data_control_one_page_below_fails_at_the_need_passes() {
         need > 602_112,
         "ProgramData counts toward the limit: need {need}"
     );
+    // The total, independently of `loaded_size` (integ-W1 review: the
+    // control used to take `need` from the code under test only):
+    // SIMD-0186 charges each loaded account its data + 64 B. ProgramData
+    // = 45-B LoaderV3 metadata + the 602,112-B max_len, + 64; the program
+    // account 36 + 64; the payer 0 + 64; the ComputeBudget builtin (its
+    // 22-B name "compute_budget_program") + 64. No instructions sysvar in
+    // this message.
+    let max_len = fees::deploy_max_len(480_512) as u64;
+    assert_eq!(max_len, 602_112);
+    let expect = (45 + max_len + 64) + (36 + 64) + 64 + (22 + 64);
+    assert_eq!(expect, 602_471);
+    assert_eq!(need, expect, "loaded_size against the SIMD-0186 sum");
     let at_need = fees::round_up_page(need) as u32;
     let below = at_need - fees::PAGE;
 

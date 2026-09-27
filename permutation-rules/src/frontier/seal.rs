@@ -69,8 +69,9 @@ pub const SEAL_BODY: usize = 128;
 /// Stance byte values (`stance::Stance as u8`).
 pub const STANCE_MAX: u8 = 3;
 
-/// A march plaintext, field for field.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// A march plaintext, field for field (`Default` is all zero, which is
+/// not a valid plaintext: `version` must be set).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Plain {
     pub version: u8,
     pub host_id: u64,

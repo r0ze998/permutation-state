@@ -63,13 +63,16 @@ impl Budgets {
         self.by_tag.insert(tag, b);
     }
 
-    /// Loads `{"budgets": [{tag, cu_limit, loaded_limit}]}` over the placeholder.
+    /// Loads rows `{tag, cu_limit, loaded_limit}` over the placeholder:
+    /// the canonical `frontier-abi/vectors/budgets.json` (rows under
+    /// `instructions`, §10.2) or this type's own `to_json` (`budgets`).
     pub fn from_json(v: &serde_json::Value) -> Result<Budgets, String> {
         let mut out = Budgets::placeholder();
         let rows = v
-            .get("budgets")
+            .get("instructions")
+            .or_else(|| v.get("budgets"))
             .and_then(|b| b.as_array())
-            .ok_or("missing `budgets` array")?;
+            .ok_or("missing `instructions` (or `budgets`) array")?;
         for r in rows {
             let tag = r
                 .get("tag")
@@ -83,7 +86,7 @@ impl Budgets {
                 .get("loaded_limit")
                 .and_then(|x| x.as_u64())
                 .ok_or("row without loaded_limit")? as u32;
-            if l % crate::fees::PAGE != 0 {
+            if !l.is_multiple_of(crate::fees::PAGE) {
                 return Err(format!(
                     "tag {tag:#x}: loaded_limit {l} is not a multiple of 32 KiB"
                 ));
@@ -137,5 +140,21 @@ mod tests {
         assert!(Budgets::from_json(&bad).is_err());
         assert_eq!(Budgets::retry_cu(26_000), 52_000);
         assert_eq!(Budgets::retry_cu(900_000), 1_400_000);
+    }
+
+    /// §10.2: the canonical budgets file loads (W2-F consumes it).
+    #[test]
+    fn loads_frontier_abis_budgets_json() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../frontier-abi/vectors/budgets.json");
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).expect("budgets.json"))
+                .expect("json");
+        let b = Budgets::from_json(&v).expect("loads");
+        let reveal = b.get(crate::abi::tag::REVEAL);
+        assert_eq!(reveal.cu_limit, 26_000);
+        assert_eq!(reveal.loaded_limit % crate::fees::PAGE, 0);
+        let again = Budgets::from_json(&b.to_json()).expect("round trip");
+        assert_eq!(again.get(crate::abi::tag::REVEAL), reveal);
     }
 }

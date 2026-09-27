@@ -212,4 +212,52 @@ mod tests {
         let c = 26_000 + 720 + 900 + 256;
         assert_eq!(defence_refund(&hot, &s), 2 * c - 2_500 - (14_441 - 2_500));
     }
+
+    /// The keeper's refund prediction equals the kernel's (the program's):
+    /// both round the paid fee up like the runtime (integ-W1 review; they
+    /// differed by 1 lamport in 38% of cases when the kernel floored).
+    #[test]
+    fn defence_refund_equals_the_kernels() {
+        use permutation_rules::frontier::fees as k;
+        let mut x = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        for _ in 0..200_000 {
+            let price = next() % 20_000_000;
+            let limit = (next() % 400_000) as u32 + 1;
+            let loaded = (next() % (4 << 20)) as u32;
+            let day = next() % 2 == 0;
+            let cap = (next() % 4_001) as u32;
+            let tip = 2_500 + next() % 40_000;
+            let ours = defence_refund(
+                &Evidence {
+                    ev_price: price,
+                    ev_limit: limit,
+                    ev_loaded: loaded,
+                    created_day: day,
+                },
+                &DefenceParams {
+                    defence_cap_milli: cap,
+                    tip_min: tip,
+                },
+            );
+            let kernel = k::defence_refund(
+                &k::Evidence {
+                    price_micro: price,
+                    limit,
+                    loaded,
+                    created_day: day,
+                },
+                &k::DefenceParams {
+                    defence_cap_milli: cap,
+                    tip_min: tip,
+                },
+            );
+            assert_eq!(ours, kernel, "{price} {limit} {loaded} {day} {cap} {tip}");
+        }
+    }
 }

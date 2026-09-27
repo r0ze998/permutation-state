@@ -51,6 +51,9 @@ pub fn check_port(p: u16) -> Result<(), String> {
     if !(41_000..=41_999).contains(&p) {
         return Err(format!("port {p} is outside 41000-41999"));
     }
+    if fclient::ports::port_in_use(p) {
+        return Err(format!("port {p} is busy (a listener on some address)"));
+    }
     Ok(())
 }
 

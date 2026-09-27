@@ -273,27 +273,28 @@ pub fn province_index(p: i32, q: i32) -> u32 {
     permutation_rules::frontier::geometry::ProvinceCoord::new(p, q).index()
 }
 
-/// `(province_index << 44) | (site << 40) | (gen << 32) | seq` (§4.1).
+/// `(province_index << 44) | (site << 40) | (gen << 32) | seq` (§4.1): the
+/// kernel's `addr::host_id` (ring ≤ 128; the first twin accepted ring 129).
 pub fn host_id(p: i32, q: i32, site: u8, gen: u8, seq: u32) -> Result<u64, HostIdError> {
-    let idx = province_index(p, q);
-    if idx >= 1 << 20 {
-        return Err(HostIdError::ProvinceIndex);
-    }
     if site >= 12 {
         return Err(HostIdError::Site);
     }
-    Ok(((idx as u64) << 44) | ((site as u64) << 40) | ((gen as u64) << 32) | seq as u64)
+    let id = permutation_rules::frontier::addr::host_id(p, q, site, gen, seq);
+    if id == permutation_rules::frontier::addr::HOST_ID_INVALID {
+        return Err(HostIdError::ProvinceIndex);
+    }
+    Ok(id)
 }
 
-/// Inverse of [`host_id`]: `(P, Q, site, gen, seq)`.
+/// Inverse of [`host_id`]: `(P, Q, site, gen, seq)` (the kernel's
+/// `addr::host_parts`: an index beyond ring 128 is refused).
 pub fn host_parts(id: u64) -> Result<(i32, i32, u8, u8, u32), HostIdError> {
-    let idx = (id >> 44) as u32;
     let site = ((id >> 40) & 0xF) as u8;
     if site >= 12 {
         return Err(HostIdError::Site);
     }
-    let c = permutation_rules::frontier::geometry::ProvinceCoord::from_index(idx);
-    Ok((c.p, c.q, site, ((id >> 32) & 0xFF) as u8, id as u32))
+    let h = permutation_rules::frontier::addr::host_parts(id).ok_or(HostIdError::ProvinceIndex)?;
+    Ok((h.p, h.q, h.site, h.gen, h.seq))
 }
 
 // ---------------------------------------------------------------- per season
@@ -492,5 +493,36 @@ mod tests {
             assert_eq!(host_parts(id).unwrap(), (p, q, 11, 255, u32::MAX));
         }
         assert_eq!(host_id(0, 0, 12, 0, 0), Err(HostIdError::Site));
+    }
+
+    /// The kernel's address vectors (W1-C): every host id row, incl. ring
+    /// 129 and site 12 (refused), through fclient's codec.
+    #[test]
+    fn host_id_vectors_match_the_kernels() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../permutation-rules/vectors/addr-vectors-v1.json");
+        let j: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).expect("vectors")).expect("json");
+        for r in j["host_ids"].as_array().unwrap() {
+            let (p, q) = (
+                r["p"].as_i64().unwrap() as i32,
+                r["q"].as_i64().unwrap() as i32,
+            );
+            let (site, gen) = (
+                r["site"].as_u64().unwrap() as u8,
+                r["gen"].as_u64().unwrap() as u8,
+            );
+            let seq = r["seq"].as_u64().unwrap() as u32;
+            let want: u64 = r["host_id"].as_str().unwrap().parse().unwrap();
+            match host_id(p, q, site, gen, seq) {
+                Ok(id) => {
+                    assert_eq!(id, want, "({p},{q})");
+                    assert_eq!(host_parts(id), Ok((p, q, site, gen, seq)));
+                }
+                Err(_) => assert_eq!(want, u64::MAX, "({p},{q}) site {site} refused"),
+            }
+        }
+        assert!(host_id(129, 0, 0, 0, 0).is_err());
+        assert!(host_parts(u64::MAX).is_err());
     }
 }

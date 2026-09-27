@@ -438,7 +438,7 @@
       "builder_limited": false,
       "accounts": [9, 14],
       "write_locks_worst": 10,
-      "loaded_need_placeholder": 706369,
+      "loaded_need_placeholder": 718417,
       "loaded_limit": 1048576,
       "heap": 28672
     },

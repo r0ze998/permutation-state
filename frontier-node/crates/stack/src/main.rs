@@ -7,11 +7,11 @@
 //! frontier-stack check-ports --ports 41010,41020,41030
 //! ```
 //! A port fails if it is reserved (4185, 4190, 4191, 4194, 18899, 17799,
-//! 28899, 27799, 26699, 5185, 5191), outside 41000–41999, or already bound on
-//! 127.0.0.1 (checked by trying to bind it). It never requires the reserved
-//! ports to be idle (I-26). `--config <file>` (the stack TOML) arrives with W5.
-
-use std::net::TcpListener;
+//! 28899, 27799, 26699, 5185, 5191), outside 41000–41999, or already has a
+//! listener on any address (`fclient::ports::port_in_use`, the §10.3 `lsof`
+//! rule; a probe bind of 127.0.0.1 alone missed wildcard and IPv6
+//! listeners). It never requires the reserved ports to be idle (I-26).
+//! `--config <file>` (the stack TOML) arrives with W5.
 
 pub const RESERVED: [u16; 11] = [
     4185, 4190, 4191, 4194, 18899, 17799, 28899, 27799, 26699, 5185, 5191,
@@ -24,9 +24,10 @@ fn check(p: u16) -> Result<(), String> {
     if !(41_000..=41_999).contains(&p) {
         return Err(format!("M1 port {p} is outside 41000-41999"));
     }
-    TcpListener::bind(("127.0.0.1", p))
-        .map(|_| ())
-        .map_err(|_| format!("M1 port {p} is busy"))
+    if fclient::ports::port_in_use(p) {
+        return Err(format!("M1 port {p} is busy"));
+    }
+    Ok(())
 }
 
 fn main() {
@@ -68,7 +69,7 @@ mod tests {
     fn port_rule() {
         assert!(check(4185).is_err());
         assert!(check(38_810).is_err());
-        let l = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let p = l.local_addr().unwrap().port();
         if (41_000..=41_999).contains(&p) {
             assert!(check(p).is_err(), "busy");

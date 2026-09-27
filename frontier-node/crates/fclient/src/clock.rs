@@ -14,39 +14,17 @@
 use std::collections::VecDeque;
 use std::time::Instant;
 
-use permutation_rules::frontier::clash::BeaconClock;
-
 use crate::abi::BELL_SECS;
 use crate::ports::ClockSysvar;
 
-/// The first round scheduled at or after `t` (1 before genesis).
-pub fn first_round_from(genesis: i64, period: u32, t: i64) -> u64 {
-    BeaconClock {
-        genesis,
-        period: period as i64,
-    }
-    .first_round_from(t)
-}
-
-/// `round_time(r) = genesis + (r − 1) × period`.
-pub fn round_time(genesis: i64, period: u32, r: u64) -> i64 {
-    BeaconClock {
-        genesis,
-        period: period as i64,
-    }
-    .round_time(r)
-}
-
-/// `b(t) = ⌊(t − genesis_ts) / 600⌋` for `t ≥ genesis_ts`.
-pub fn bell_at(genesis_ts: i64, t: i64) -> Option<u32> {
-    (t >= genesis_ts).then(|| ((t - genesis_ts) / BELL_SECS) as u32)
-}
-pub fn bell_start(genesis_ts: i64, b: u32) -> i64 {
-    genesis_ts + b as i64 * BELL_SECS
-}
-pub fn bell_end(genesis_ts: i64, b: u32) -> i64 {
-    bell_start(genesis_ts, b + 1)
-}
+/// The kernel's clock functions (`permutation_rules::frontier::beacon`,
+/// W1-C), re-exported (integ-W1 review: the first twin computed
+/// `bell_end(u32::MAX)` as `b + 1` unchecked, and `bell_at` truncated past
+/// bell `u32::MAX`; the kernel saturates and returns `None`).
+/// `clock_vectors_match_the_kernels` runs `clock-vectors-v1.json`.
+pub use permutation_rules::frontier::beacon::{
+    bell_at, bell_end, bell_start, first_round_from, round_time,
+};
 
 /// The drand clock of a season.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -84,10 +62,8 @@ impl Drand {
     }
 }
 
-/// `close(b, r) = A + W(b)`.
-pub fn reveal_close(a: i64, w: u32) -> i64 {
-    a + w as i64
-}
+/// `close(b, r) = A + W(b)` (saturating, the kernel's).
+pub use permutation_rules::frontier::beacon::reveal_close;
 
 /// A season's clock parameters as the off-chain side needs them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -342,5 +318,43 @@ mod tests {
             at,
         );
         assert_eq!(g.last().unwrap().slot, 105);
+    }
+
+    fn kernel_vectors(name: &str) -> serde_json::Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../permutation-rules/vectors")
+            .join(name);
+        serde_json::from_str(&std::fs::read_to_string(path).expect("vectors")).expect("json")
+    }
+
+    /// The kernel's clock vectors (W1-C) through fclient's clock, including
+    /// the bell `u32::MAX` rows (the first twin panicked there in debug).
+    #[test]
+    fn clock_vectors_match_the_kernels() {
+        let j = kernel_vectors("clock-vectors-v1.json");
+        let d = Drand {
+            genesis: j["clock"]["genesis"].as_i64().unwrap(),
+            period: j["clock"]["period"].as_u64().unwrap() as u32,
+        };
+        assert_eq!(d, Drand::QUICKNET);
+        let rows = j["bells"].as_array().unwrap();
+        assert!(rows
+            .iter()
+            .any(|r| r["bell"].as_u64() == Some(u32::MAX as u64)));
+        for r in rows {
+            let g = r["genesis_ts"].as_i64().unwrap();
+            let b = r["bell"].as_u64().unwrap() as u32;
+            assert_eq!(bell_start(g, b), r["bell_start"].as_i64().unwrap());
+            assert_eq!(bell_end(g, b), r["bell_end"].as_i64().unwrap());
+            assert_eq!(d.tlock_round(g, b), r["tlock_round"].as_u64().unwrap());
+            assert_eq!(bell_at(g, bell_start(g, b)), Some(b));
+        }
+        // Past bell u32::MAX: None, not a truncated bell.
+        assert_eq!(bell_at(0, (u32::MAX as i64 + 1) * 600), None);
+        for r in j["seed_rounds"].as_array().unwrap() {
+            let close = r["close"].as_i64().unwrap();
+            let m = r["margin"].as_u64().unwrap() as u32;
+            assert_eq!(d.seed_round(close, m), r["seed_round"].as_u64().unwrap());
+        }
     }
 }

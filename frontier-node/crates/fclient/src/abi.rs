@@ -278,7 +278,7 @@ pub const ERRORS: [(u32, &str); 62] = [
     (1, "BadData"),
     (2, "BadAccount"),
     (3, "BadAddress"),
-    (4, "NotSigner"),
+    (4, "Auth"),
     (5, "WrongStatus"),
     (6, "RulesetMismatch"),
     (7, "WrongRound"),
@@ -288,7 +288,7 @@ pub const ERRORS: [(u32, &str); 62] = [
     (11, "SiteTaken"),
     (12, "WindowClosed"),
     (13, "TooEarly"),
-    (14, "ReservedSealValid"),
+    (14, "Reserved14"),
     (15, "Kernel"),
     (16, "Archived"),
     (17, "Bucket"),
@@ -1022,5 +1022,85 @@ mod tests {
         assert_eq!(rent(size::CITIZEN) + rent(size::HOLDING), 9_753_600);
         assert_eq!(rent(size::ANCHOR_ARCHIVE), 62_585_600);
         assert_eq!(rent(size::PROVINCE), 21_457_920);
+    }
+}
+
+/// The transcription equals the canonical tables in `frontier-abi`
+/// (contract §3.3: hand-copied tables are a review failure unless a test
+/// ties them; integ-W1). A dev-dependency only: fclient's runtime keeps its
+/// Solana-typed glue.
+#[cfg(test)]
+mod twin_tests {
+    use super::*;
+    use frontier_abi::error::FrontierError;
+    use frontier_abi::layout::AccountKind;
+    use frontier_abi::tags::{Class as AbiClass, Ix};
+
+    #[test]
+    fn errors_are_frontier_abis() {
+        let abi: Vec<(u32, &str)> = FrontierError::ALL
+            .iter()
+            .map(|e| (e.code(), e.name()))
+            .collect();
+        assert_eq!(ERRORS.to_vec(), abi);
+    }
+
+    #[test]
+    fn instructions_are_frontier_abis() {
+        assert_eq!(INSTRUCTIONS.len(), Ix::ALL.len());
+        for ix in Ix::ALL {
+            let row = ix_info(ix.tag()).unwrap_or_else(|| panic!("{}", ix.name()));
+            assert_eq!(row.name, ix.name());
+            let class = match ix.class() {
+                AbiClass::W => Class::W,
+                AbiClass::D => Class::D,
+                AbiClass::N => Class::N,
+                AbiClass::P => Class::P,
+                AbiClass::O => Class::O,
+                AbiClass::Test => Class::Test,
+            };
+            assert_eq!(row.class, class, "{}", ix.name());
+            assert_eq!(row.top_level, ix.top_level_only(), "{}", ix.name());
+            let b = frontier_abi::budgets::budget(*ix);
+            if b.cu_budget == 0 {
+                // Recorded, not gated (the oracle ResolveClash): fclient
+                // requests the transaction maximum.
+                assert_eq!(row.cu_budget, CU_MAX, "{}", ix.name());
+            } else {
+                assert_eq!(row.cu_budget, b.cu_budget, "{}", ix.name());
+            }
+            assert_eq!(row.tx_max as u32, b.tx_contract, "{}", ix.name());
+        }
+    }
+
+    #[test]
+    fn magics_and_rent_are_frontier_abis() {
+        let ours = [
+            magic::SEASON,
+            magic::FRONTIER,
+            magic::RING_SEED,
+            magic::PROVINCE_FUND,
+            magic::JOIN_SHARD,
+            magic::BEACON_LOG,
+            magic::DEFENCE_POOL,
+            magic::CITIZEN,
+            magic::HOLDING,
+            magic::PROVINCE,
+            magic::ARRIVAL_SLOT,
+            magic::ARRIVAL_DAY,
+            magic::CLASH_INPUTS,
+            magic::BELL_ANCHOR,
+            magic::SEED_CACHE,
+            magic::ANCHOR_ARCHIVE,
+            magic::DEFENCE_CLAIM,
+        ];
+        for k in AccountKind::ALL {
+            assert!(ours.contains(&&k.magic()), "{k:?}");
+            assert_eq!(
+                rent(k.size()),
+                frontier_abi::layout::rent(k.size()),
+                "{k:?}"
+            );
+        }
     }
 }

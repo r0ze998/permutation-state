@@ -123,7 +123,10 @@ pub fn message(
 
 /// Signs `msg` with every signer (the fee payer first).
 pub fn sign(msg: Message, signers: &[&Keypair]) -> Result<Transaction, String> {
-    let bh = msg.recent_blockhash.clone();
+    // Not `.clone()` (clippy's clone_on_copy fires when the workspace turns
+    // on solana-hash's `copy` feature) and not a move (without it, Hash is
+    // not Copy): rebuild it from its bytes.
+    let bh = Hash::new_from_array(msg.recent_blockhash.to_bytes());
     let mut tx = Transaction::new_unsigned(msg);
     tx.try_sign(signers, bh).map_err(|e| e.to_string())?;
     Ok(tx)

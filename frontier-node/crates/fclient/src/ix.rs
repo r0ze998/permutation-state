@@ -144,7 +144,8 @@ pub fn announce_season(
 
 /// 0x01 CreateSeason: `[authority s,w] [season w] [frontier w] [pfund × 6 w] [dpool w] [system]`.
 /// `season_params` is the fixed `SeasonParams` layout of `frontier-abi`
-/// (≤ 256 B) and `payout_params` the borsh `PayoutParams` (≤ 128 B).
+/// (224 B, `frontier_abi::presets::SEASON_PARAMS_LEN`) and `payout_params`
+/// the borsh `PayoutParams` (≤ 128 B).
 pub fn create_season(
     a: &Addresses,
     authority: Address,
@@ -1085,16 +1086,26 @@ pub fn resolve_from_inputs(
     )
 }
 
-/// 0x62 ResolveClash (`oracle` builds only): K + the caller's account list.
+/// 0x62 ResolveClash (`oracle` builds only), frontier-abi's shape:
+/// `[fee_payer s,w] [season] [province w] [any × ≤ 60]`, data
+/// `bell u32 ‖ beneficiary [32]` (integ-W1: the first builder passed raw
+/// bytes and omitted the province).
 pub fn resolve_clash_oracle(
     a: &Addresses,
     fee_payer: Address,
+    dest: (i32, i32),
+    bell: u32,
+    beneficiary: &Address,
     accounts: Vec<AccountMeta>,
-    data: &[u8],
 ) -> Instruction {
-    let mut m = vec![ws(fee_payer), r(a.season)];
+    let (p, q) = dest;
+    let mut m = vec![ws(fee_payer), r(a.season), w(a.province(p, q))];
     m.extend(accounts);
-    build(a, m, Data::new(tag::RESOLVE_CLASH).bytes(data))
+    build(
+        a,
+        m,
+        Data::new(tag::RESOLVE_CLASH).u32(bell).key(beneficiary),
+    )
 }
 
 /// 0x63 SkipQuiet(b0, n): `[payer s] [season] [province w] [arrivalday_0 r] [arrivalday_1 r] [anchor_or_archive × n r]`.
@@ -1467,7 +1478,7 @@ mod tests {
         let shards: Vec<(u8, u8)> = (0..8).map(|i| (0, i)).collect();
         let all = vec![
             announce_season(&a, k, [1; 32], 5, 6),
-            create_season(&a, k, &[0; 256], &[0; 128]),
+            create_season(&a, k, &[0; 224], &[0; 128]),
             init_beacon_logs(&a, k),
             init_shards(&a, k, 5),
             consume_genesis_seed(&a, k, &b),
@@ -1532,7 +1543,7 @@ mod tests {
                 &k,
             ),
             resolve_from_inputs(&a, k, (3, 0), 10, SeedSource::Cache { nonce: 0 }, &k),
-            resolve_clash_oracle(&a, k, vec![], &[0; 8]),
+            resolve_clash_oracle(&a, k, (2, 0), 7, &k, vec![]),
             skip_quiet(&a, k, (3, 0), 140, 24, &[AnchorSource::Anchor; 24]),
             close_clash_inputs(&a, k, 3, 0, 10, k),
             close_arrival_day(&a, k, 3, 0, 0, k),
@@ -1559,6 +1570,21 @@ mod tests {
             );
             let sh = crate::tx::shape(&msg);
             let name = crate::abi::ix_info(ixn.data[0]).unwrap().name;
+            // frontier-abi's table accepts the shape (integ-W1: data length
+            // and account count inside the canonical bounds).
+            let aix = frontier_abi::tags::Ix::from_tag(ixn.data[0]).expect("abi tag");
+            let (dlo, dhi) = frontier_abi::ix::data_len_range(aix);
+            assert!(
+                (dlo..=dhi).contains(&ixn.data.len()),
+                "{name}: data {} not in {dlo}..={dhi}",
+                ixn.data.len()
+            );
+            let (alo, ahi) = frontier_abi::prologue::count_bounds(aix);
+            assert!(
+                (alo..=ahi).contains(&ixn.accounts.len()),
+                "{name}: {} accounts not in {alo}..={ahi}",
+                ixn.accounts.len()
+            );
             assert!(
                 sh.locks <= crate::abi::LOCK_LIMIT,
                 "{name}: {} locks",
