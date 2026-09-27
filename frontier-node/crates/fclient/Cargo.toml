@@ -1,0 +1,32 @@
+[package]
+name = "fclient"
+description = "Frontier off-chain spine: ABI glue, addresses, instruction builders, decoders, PS2 logs, fees, transactions, RPC, beacons, seals, game clock, payer pools (M1 contract §8.1)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+permutation-rules.workspace = true
+solana-address.workspace = true
+solana-hash.workspace = true
+solana-instruction.workspace = true
+solana-keypair.workspace = true
+solana-message.workspace = true
+solana-signature.workspace = true
+solana-signer.workspace = true
+solana-transaction.workspace = true
+blstrs.workspace = true
+group.workspace = true
+ark-ff.workspace = true
+ark-ec.workspace = true
+ark-bls12-381.workspace = true
+tlock.workspace = true
+sha2.workspace = true
+hex.workspace = true
+bincode.workspace = true
+base64.workspace = true
+serde_json.workspace = true
+rand.workspace = true
+tokio.workspace = true

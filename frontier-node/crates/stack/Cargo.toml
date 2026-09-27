@@ -1,0 +1,15 @@
+[package]
+name = "stack"
+description = "Frontier local stack orchestrator (skeleton in W1; W5 builds it)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "frontier-stack"
+path = "src/main.rs"
+
+[dependencies]
+fclient.workspace = true

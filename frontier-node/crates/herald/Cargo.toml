@@ -1,0 +1,18 @@
+[package]
+name = "herald"
+description = "Frontier herald: fold and cached read path (skeleton in W1; W3 builds it)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+name = "herald_fold"
+
+[[bin]]
+name = "frontier-herald"
+path = "src/main.rs"
+
+[dependencies]
+fclient.workspace = true
