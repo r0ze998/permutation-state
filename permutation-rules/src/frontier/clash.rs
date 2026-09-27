@@ -134,6 +134,22 @@ pub const FACTION_LIMIT: u8 = 8;
 /// A side whose damage ratio reaches this pays no stamina.
 pub const REFUND_RATIO: u64 = 10;
 
+/// Whether `f` is a faction id the clash accepts from data: a player
+/// faction `0..=5`, or also [`NEUTRAL`] when `allow_neutral`. A private
+/// copy of `geometry::valid_faction` (contract §7; the clash keeps no
+/// dependency on geometry's faction rule), pinned to it for every `u8` by
+/// `frontier_clash_bounds::clash_faction_rule_equals_geometry`.
+/// Rule 6: a faction that dealt damage on a hex and at least
+/// [`REFUND_RATIO`] times what it took there pays no engagement stamina
+/// (the one definition both bodies use).
+const fn refunded(dealt: u64, taken: u64) -> bool {
+    dealt > 0 && dealt >= REFUND_RATIO.saturating_mul(taken)
+}
+
+pub(crate) const fn valid_faction(f: u8, allow_neutral: bool) -> bool {
+    f < NEUTRAL || (allow_neutral && f == NEUTRAL)
+}
+
 /// The largest retreat ratio (bps) a march may carry: `retreat_bps` in the
 /// sealed plaintext is 0 for "never retreat" and `1..=RETREAT_MAX_BPS` for
 /// a ratio; anything above is an invalid plaintext (I-27, re-exported by
@@ -227,7 +243,7 @@ impl Relations {
     /// factions 0..=5 can be: `NEUTRAL` and ids above it are refused
     /// (a no-op, CL-06).
     pub fn set_peaceful(&mut self, a: u8, b: u8, peaceful: bool) {
-        if a == b || a >= NEUTRAL || b >= NEUTRAL {
+        if a == b || !valid_faction(a, false) || !valid_faction(b, false) {
             return;
         }
         let m = Self::bit(a, b) | Self::bit(b, a);
@@ -588,7 +604,7 @@ fn check_fighter(f: &Fighter) -> Result<(), ClashError> {
     if f.tile as usize >= PROVINCE_TILES {
         return Err(ClashError::BadTile(f.id));
     }
-    if f.faction > NEUTRAL {
+    if !valid_faction(f.faction, true) {
         return Err(ClashError::BadFaction(f.id));
     }
     if f.troops > MAX_HOST_TROOPS {
@@ -636,7 +652,7 @@ fn validate(inp: &ClashInput) -> Result<(), ClashError> {
         if g.tile as usize >= PROVINCE_TILES {
             return Err(ClashError::BadTile(g.id));
         }
-        if g.faction > NEUTRAL {
+        if !valid_faction(g.faction, true) {
             return Err(ClashError::BadFaction(g.id));
         }
         if g.troops > MAX_HOST_TROOPS {
@@ -1172,7 +1188,7 @@ pub fn resolve_clash_ref(rules: &Ruleset, inp: &ClashInput) -> Result<ClashOutco
                         .map_or(0, |x| x.2)
                 };
                 let (d, tk) = (get(&dealt), get(&taken));
-                let refund = d > 0 && d >= REFUND_RATIO * tk;
+                let refund = refunded(d, tk);
                 if !refund {
                     u.stamina = u.stamina.saturating_sub(ENGAGE_STAMINA);
                 }
@@ -1609,7 +1625,7 @@ pub fn resolve_clash(rules: &Ruleset, inp: &ClashInput) -> Result<ClashOutcome, 
         for &i in &part {
             let f = units[i].faction as usize;
             let (d, tk) = (dealt[f], taken[f]);
-            refund[i] = d > 0 && d >= REFUND_RATIO * tk;
+            refund[i] = refunded(d, tk);
         }
     }
     crate::probe::probe("K4 engagements");
@@ -2011,4 +2027,24 @@ pub const fn seed_round(clock: &BeaconClock, anchor_ts: i64) -> u64 {
 /// fast Clock and an early beacon both refuse late reveals.
 pub const fn reveal_open(clock: &BeaconClock, now: i64, anchor_ts: i64, latest_round: u64) -> bool {
     now < reveal_close(anchor_ts) && latest_round < seed_round(clock, anchor_ts)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Rule 6 at its edges: the `refund-strict` mutant (`>=` → `>`) and the
+    /// `d > 0` guard are both killed here (W1-A notes: no generated fill
+    /// hit a ratio of exactly 10).
+    #[test]
+    fn the_refund_starts_at_exactly_ten_times() {
+        assert!(refunded(10, 1));
+        assert!(refunded(10_000, 1_000));
+        assert!(!refunded(9_999, 1_000));
+        assert!(refunded(1, 0));
+        assert!(!refunded(0, 0));
+        assert!(!refunded(0, 1));
+        assert!(refunded(u64::MAX, u64::MAX / 10));
+        assert!(!refunded(u64::MAX - 1, u64::MAX));
+    }
 }

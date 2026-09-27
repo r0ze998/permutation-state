@@ -122,22 +122,17 @@ mod tests {
         }
     }
 
-    /// CL-14: the clash's damage bound covers every pairing of this table
-    /// (the largest is a stance against Disarray, ×1.25).
+    /// CL-14: the clash's damage bound is pinned by value. `MAX_STANCE_BPS`
+    /// is computed from this table, so comparing the table with it would be
+    /// a tautology; the literals below force a conscious review of CL-14
+    /// (and of the const asserts in `clash`) whenever a stance multiplier
+    /// or the doctrine ceiling changes. The largest pairing is a stance
+    /// against Disarray, ×1.25.
     #[test]
     fn the_stance_table_is_inside_the_damage_bound() {
-        let all = [
-            Posture::Stance(Stance::Hold),
-            Posture::Stance(Stance::Assault),
-            Posture::Stance(Stance::Flank),
-            Posture::Stance(Stance::Brace),
-            Posture::Disarray,
-        ];
-        for a in all {
-            for d in all {
-                assert!(damage_bps(a, d) <= crate::frontier::clash::MAX_STANCE_BPS);
-            }
-        }
-        assert_eq!(crate::frontier::clash::MAX_STANCE_BPS, DISARRAY_TAKEN_BPS);
+        use crate::frontier::clash::{MAX_DAMAGE_PRODUCT_BPS, MAX_STANCE_BPS};
+        assert_eq!(MAX_STANCE_BPS, 12_500);
+        assert_eq!(MAX_STANCE_BPS, DISARRAY_TAKEN_BPS);
+        assert_eq!(MAX_DAMAGE_PRODUCT_BPS, 14_375);
     }
 }

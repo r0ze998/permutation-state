@@ -28,7 +28,9 @@ use permutation_rules::frontier::clash::{
     Fighter, Garrison, Occupancy, Relations, FACTION_LIMIT,
 };
 use permutation_rules::frontier::geometry::{ProvinceCoord, PROVINCE_TILES};
-use permutation_rules::frontier::host::{ENGAGE_STAMINA, STAMINA_CAP};
+use permutation_rules::frontier::host::{
+    ENGAGE_STAMINA, FACTION_RESIDENT_CAP, PROVINCE_HOST_CAP, STAMINA_CAP,
+};
 use permutation_rules::frontier::stance::{posture_of, Posture, Stance};
 use permutation_rules::frontier::terrain::{generate_province, ProvinceTerrain};
 use permutation_rules::hash::sha256;
@@ -394,7 +396,9 @@ fn phase_a_equals_the_reference_with_occupancy() {
     let mut rng = Rng(0x5EED_0CC0_u64 | 1);
     let mut cases = 0u32;
     let mut room_bounced = 0u64;
+    let mut honest_cases = 0u32;
     lab_cases(|c| {
+        let mut honest_caps = true;
         // Thin the residents so that pending musters and departed entries
         // fit beside them, then fill the room so that it often binds.
         let mut sc = c.sc.clone();
@@ -426,10 +430,50 @@ fn phase_a_equals_the_reference_with_occupancy() {
             stays <= occ.storage_free as usize,
             "{what}: {stays} arrivals stay"
         );
+        // The two cap invariants (I-43, G8): per faction, the hosts that
+        // stay (residents and arrivals) plus its pending musters ≤ 8, and
+        // in all ≤ 48 counting every pending muster. The generator thins
+        // residents without regard to faction, so a faction can enter
+        // already over 8 with its pending musters (an input Muster never
+        // builds); there the bound is that arrivals add nothing to it.
+        let mut before = [0usize; FACTION_LIMIT as usize];
+        for x in &sc.residents {
+            before[x.faction as usize] += 1;
+        }
+        let mut per = [0usize; FACTION_LIMIT as usize];
+        for r in &o.fighters {
+            if matches!(r.fate, Fate::Stays { .. } | Fate::Withdrew { .. }) {
+                let f = sc
+                    .residents
+                    .iter()
+                    .chain(sc.arrivals.iter())
+                    .find(|x| x.id == r.id)
+                    .expect("known id")
+                    .faction;
+                per[f as usize] += 1;
+            }
+        }
+        for f in 0..6 {
+            let cap = FACTION_RESIDENT_CAP.max(before[f] + occ.pending[f] as usize);
+            honest_caps &= before[f] + occ.pending[f] as usize <= FACTION_RESIDENT_CAP;
+            assert!(
+                per[f] + occ.pending[f] as usize <= cap,
+                "{what}: faction {f} holds {} + {} pending",
+                per[f],
+                occ.pending[f]
+            );
+        }
+        let total: usize = per.iter().sum::<usize>() + m;
+        assert!(
+            total <= PROVINCE_HOST_CAP,
+            "{what}: {total} hosts counting pending musters"
+        );
         room_bounced += (sc.arrivals.len() - stays) as u64;
+        honest_cases += honest_caps as u32;
         cases += 1;
     });
     assert_eq!(cases, 4_320);
+    assert!(honest_cases > 1_500, "{honest_cases} cases inside the caps");
     assert!(room_bounced > 1_000);
 }
 

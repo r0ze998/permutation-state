@@ -1082,3 +1082,112 @@ fn pending_musters_and_departed_entries_bound_the_stays() {
         .iter()
         .all(|a| matches!(o.fighter(a.id).unwrap().fate, Fate::Stays { .. })));
 }
+
+// ------------------------------------------------------------ integ-W1 review
+
+/// §7: the clash's private faction rule equals `geometry::valid_faction`
+/// for every `u8`, through `clash::validate` (hosts, arrivals and
+/// garrisons accept NEUTRAL) and `Relations::set_peaceful` (only the six
+/// player factions can make peace).
+#[test]
+fn clash_faction_rule_equals_geometry() {
+    use permutation_rules::frontier::geometry::valid_faction;
+    let t = flat();
+    for f in 0..=u8::MAX {
+        let r = resolve_one(&t, &[fighter(1, f, UnitType::Spearman, 100, 30)], &[], &[]);
+        assert_eq!(
+            r.is_ok(),
+            valid_faction(f, true),
+            "resident faction {f}: {r:?}"
+        );
+        if !valid_faction(f, true) {
+            assert_eq!(r, Err(ClashError::BadFaction(1)));
+        }
+        let a = resolve_one(&t, &[], &[], &[arrival(2, f, UnitType::Spearman, 100, 30)]);
+        assert_eq!(a.is_ok(), valid_faction(f, true), "arrival faction {f}");
+        let g = resolve_one(&t, &[], &[garrison(3, f, 31, 100)], &[]);
+        assert_eq!(g.is_ok(), valid_faction(f, true), "garrison faction {f}");
+        for other in 0..6u8 {
+            let mut rel = Relations::ALL_HOSTILE;
+            rel.set_peaceful(other, f, true);
+            let made = rel != Relations::ALL_HOSTILE;
+            assert_eq!(
+                made,
+                other != f && valid_faction(f, false),
+                "peace {other} {f}"
+            );
+        }
+    }
+}
+
+fn resolve_one(
+    t: &ProvinceTerrain,
+    residents: &[Fighter],
+    garrisons: &[Garrison],
+    arrivals: &[Fighter],
+) -> Result<ClashOutcome, ClashError> {
+    clash_with(
+        t,
+        residents,
+        garrisons,
+        arrivals,
+        Relations::ALL_HOSTILE,
+        Occupancy::EMPTY,
+    )
+}
+
+/// CL-01 review (integ-W1): a garrison can never be built above the cap
+/// the clash enforces, so a Garrison top-up cannot wedge a province. A
+/// garrison exactly at `MAX_HOST_TROOPS` resolves against besiegers and
+/// its quiet bell is recognised; the reviewer's sequence (`new(MAX)`, then
+/// `+1,000,000` milli, then `settle`) is refused and leaves the garrison
+/// at the cap.
+#[test]
+fn a_garrison_at_the_cap_resolves_and_cannot_pass_it() {
+    use permutation_rules::frontier::clash::is_quiet;
+    use permutation_rules::frontier::host::{GarrisonState, HostError};
+    let cap = MAX_HOST_TROOPS / 1000;
+    let t = flat();
+    let g = [garrison(3, 2, 31, cap)];
+    let besiegers = [fighter(1, 0, UnitType::Spearman, cap, 31)];
+    let o = resolve_one(&t, &besiegers, &g, &[]).expect("a garrison at the cap resolves");
+    assert!(o.engagements > 0);
+    let quiet = ClashInput {
+        province: P,
+        bell: 11,
+        seed: sha256(&[b"bounds"]),
+        terrain: &t,
+        residents: &[],
+        garrisons: &g,
+        arrivals: &[],
+        relations: Relations::ALL_HOSTILE,
+        occupancy: Occupancy::EMPTY,
+    };
+    assert_eq!(is_quiet(&frontier_ruleset(), &quiet), Ok(true));
+    assert_eq!(
+        resolve_one(&t, &[], &[garrison(3, 2, 31, cap + 1)], &[]).err(),
+        Some(ClashError::TroopsAboveCap(3)),
+        "the clash still refuses a garrison above the cap"
+    );
+
+    let mut gs = GarrisonState::new(MAX_HOST_TROOPS);
+    assert_eq!(gs.room(), 0);
+    assert_eq!(gs.change(1, 1_000_000, 0), Err(HostError::TooLarge));
+    assert_eq!(gs.change(1, 1, 0), Err(HostError::TooLarge));
+    gs.change(1, -5_000, 0).unwrap();
+    assert_eq!(gs.room(), 5_000);
+    assert_eq!(gs.change(1, 5_001, 0), Err(HostError::TooLarge));
+    gs.change(1, 5_000, 0).unwrap();
+    gs.settle(2);
+    assert_eq!(gs.at(2), Ok(MAX_HOST_TROOPS));
+    // Clamped even if built from an out-of-range value.
+    assert_eq!(GarrisonState::new(u32::MAX).at(0), Ok(MAX_HOST_TROOPS));
+    // Two bells pending: the projection counts both.
+    let mut gs = GarrisonState::new(MAX_HOST_TROOPS - 3_000);
+    gs.change(5, 2_000, 4).unwrap();
+    gs.change(6, 1_000, 5).unwrap();
+    assert_eq!(gs.change(6, 1, 5), Err(HostError::TooLarge));
+    let mut t = GarrisonState::new(MAX_HOST_TROOPS - 3_000);
+    t.change(5, 2_000, 4).unwrap();
+    assert_eq!(t.change(6, 1_001, 5), Err(HostError::TooLarge));
+}

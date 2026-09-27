@@ -533,9 +533,9 @@ Joining a bigger faction never raises expectation in the new index, and the pick
 ### 6.1 Hosts
 
 - A host is up to 30,000 troops of one unit type (the 8 types of `units.rs` minus Settlers, plus the faction's doctrine variant). Stamina (cap 120, lazy), a battle cooldown.
-- **Minimum host size 100 troops**; each march costs stamina. **Scouts** explore and fight but do not count for holding the field or for siege progress, since they cannot capture (revision 3; kernel fix before the M1 gates).
+- **Minimum host size 100 troops**; each march costs stamina. **Scouts** explore but do not fight: a civilian host (Scout, Settler) never engages, contests a hex, holds the field or counts for siege progress in either direction (it neither advances a siege nor pauses one as a defender), and it withdraws when its faction loses the hex or when it is hostile to the side that holds it (revision 3; kernel CL-10, M1 W1-A D3).
 - **Hex capacity:** ≤ 6 hosts per hex. **Fair-share rule, allocated by side (revision 3):** a *side* is a connected group of mutually non-hostile factions (allies, or factions at Peace/NAP) present on or arriving at a hex. At resolve each side is guaranteed `min(its hosts, ⌊6 / sides present⌋)` slots, and the rest are filled by mass. On **a holding's hex the owner's side always keeps 3 slots**, with the owner's own hosts first, and the hostile sides together share at most 3. Allocating by faction (revision 2's wording) let two allied factions take two shares against a third; by side they share one (kernel test `allies_cannot_pool_hex_slots`). Bounced hosts return home with no loss.
-- ≤ 48 hosts per province, ≤ 8 per faction per province (residents). Province caps are recounted after the hex fair share (kernel fix before the M1 gates).
+- ≤ 48 hosts per province, ≤ 8 per faction per province (residents). Province caps are recounted after the hex fair share, in **one pass**: arrivals the caps refused are re-admitted in mass order only where the recounted room and a free hex slot allow, never displacing a host the fair share admitted, so the counts are stable after it (kernel CL-10, M1 W1-A D1). A garrison never exceeds 30,000 troops either: a reinforcement past it is refused (M1 integ-W1).
 - A marching host is stored in its owner holding's transit slot (4 per holding).
 
 ### 6.2 Marching with a sealed destination

@@ -49,7 +49,9 @@ pub const FACTIONS: u8 = 6;
 /// Cities) when `allow_neutral`. Array sizes keep `clash::FACTION_LIMIT`
 /// (8), so id 7 fits every table but is refused wherever a faction is read
 /// from data. `clash` keeps a private copy with the same semantics (W1-A);
-/// `frontier_bounds::faction_ids_are_limited` pins them together.
+/// `frontier_clash_bounds::clash_faction_rule_equals_geometry` pins them
+/// together for every `u8` (through `clash::validate` and
+/// `Relations::set_peaceful`).
 pub const fn valid_faction(f: u8, allow_neutral: bool) -> bool {
     f < FACTIONS || (allow_neutral && f == super::clash::NEUTRAL)
 }

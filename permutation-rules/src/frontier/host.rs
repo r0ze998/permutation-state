@@ -468,6 +468,14 @@ pub fn settle_merge(into: &mut Host, from: &mut Host, resolved_next: u32) -> Res
 /// host changes. Changes may be issued while the province is resolved
 /// through `b − 2`, so at most two bells (`b − 1` and `b`) have changes
 /// pending; each slot sums the changes of one bell.
+///
+/// **Cap (CL-01, integ-W1):** a garrison never holds more than
+/// [`MAX_HOST_TROOPS`], because `clash::validate` refuses a garrison above
+/// it and a refused clash input would freeze the province. [`Self::change`]
+/// refuses a delta that could take the garrison past the cap (counted as if
+/// the pending clashes cost nothing), [`Self::room`] says how much a
+/// program path that must not fail (a host returning home) may add, and
+/// [`Self::settle`] clamps to the cap as a last guard.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct GarrisonState {
     pub troops: MilliTroops,
@@ -476,11 +484,31 @@ pub struct GarrisonState {
 }
 
 impl GarrisonState {
+    /// A garrison of `troops`, clamped to [`MAX_HOST_TROOPS`].
     pub const fn new(troops: MilliTroops) -> GarrisonState {
         GarrisonState {
-            troops,
+            troops: if troops > MAX_HOST_TROOPS {
+                MAX_HOST_TROOPS
+            } else {
+                troops
+            },
             pending: [None, None],
         }
+    }
+
+    /// The largest value the garrison can reach once every pending change
+    /// is settled, if no clash costs it anything.
+    fn projected(&self) -> i64 {
+        self.pending
+            .iter()
+            .flatten()
+            .fold(self.troops as i64, |t, (_, d)| t.saturating_add(*d))
+    }
+
+    /// Troops a change issued now may still add without passing
+    /// [`MAX_HOST_TROOPS`] (0 when full).
+    pub fn room(&self) -> MilliTroops {
+        (MAX_HOST_TROOPS as i64 - self.projected()).clamp(0, MAX_HOST_TROOPS as i64) as MilliTroops
     }
 
     /// Troops the clash of bell `b` reads (the value at the start of `b`):
@@ -493,12 +521,16 @@ impl GarrisonState {
     }
 
     /// A change of `delta` issued during bell `b` (the province resolved up
-    /// to, not including, `resolved_next ≥ b − 1`).
+    /// to, not including, `resolved_next ≥ b − 1`). A positive delta above
+    /// [`Self::room`] is refused with [`HostError::TooLarge`].
     pub fn change(&mut self, b: u32, delta: i64, resolved_next: u32) -> Result<(), HostError> {
         if resolved_next.saturating_add(1) < b {
             return Err(HostError::Unresolved);
         }
         self.settle(resolved_next);
+        if delta > 0 && delta > self.room() as i64 {
+            return Err(HostError::TooLarge);
+        }
         if let Some(slot) = self.pending.iter_mut().flatten().find(|(pb, _)| *pb == b) {
             slot.1 = slot.1.checked_add(delta).ok_or(HostError::TooLarge)?;
             return Ok(());
@@ -515,7 +547,7 @@ impl GarrisonState {
     /// The garrison's troops after the clash of bell `b`.
     pub fn apply_clash(&mut self, b: u32, troops: MilliTroops) -> Result<(), HostError> {
         self.at(b)?;
-        self.troops = troops;
+        self.troops = troops.min(MAX_HOST_TROOPS);
         Ok(())
     }
 
@@ -526,7 +558,9 @@ impl GarrisonState {
         for x in self.pending.iter_mut() {
             if let Some((b, d)) = *x {
                 if b < resolved_next {
-                    let v = (self.troops as i64 + d).clamp(0, MilliTroops::MAX as i64);
+                    let v = (self.troops as i64)
+                        .saturating_add(d)
+                        .clamp(0, MAX_HOST_TROOPS as i64);
                     self.troops = v as MilliTroops;
                     *x = None;
                 }

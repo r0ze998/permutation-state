@@ -39,10 +39,16 @@ pub mod province {
     pub const SITES_N: usize = 12;
     /// Entry storage (I-43): ≤ 48 in the roster, ≤ 8 per faction; the rest
     /// muster-pending or departed.
-    pub const ENTRIES_N: usize = 56;
-    pub const ROSTER_CAP: usize = 48;
-    pub const FACTION_CAP: usize = 8;
+    /// Taken from the kernel (§3.3: no hand-copied rules constants);
+    /// storage_free in `clash::Occupancy` is computed against it.
+    pub const ENTRIES_N: usize = permutation_rules::frontier::clash::Occupancy::STORAGE as usize;
+    pub const ROSTER_CAP: usize = permutation_rules::frontier::host::PROVINCE_HOST_CAP;
+    pub const FACTION_CAP: usize = permutation_rules::frontier::host::FACTION_RESIDENT_CAP;
     pub const COHORTS_N: usize = 8;
+    // The byte layout above is literal (x12, x56): tie it to the kernel.
+    const _: () = assert!(ENTRIES_N * super::entry::SIZE == 2_688);
+    const _: () = assert!(SITES_N == permutation_rules::frontier::clash::MAX_GARRISONS);
+    const _: () = assert!(SITES_N * super::site::SIZE == 768);
     /// Bells after which a ticket cohort expires (I-47).
     pub const COHORT_BELLS: u32 = 24;
 
