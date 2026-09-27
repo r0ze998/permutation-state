@@ -149,3 +149,11 @@ cargo fmt -- --check; cargo clippy --offline --locked --all-targets -- -D warnin
 (cd probe && cargo fmt -- --check && cargo clippy --offline --locked --all-targets -- -D warnings)   # pass
 cargo test --offline --test coverage               # 2 pass
 ```
+
+## 9. Post-merge addendum (integrator, integ-W2 window, 2026-09-28)
+
+Written by the integrator after the wave-2 review; the sections above are kept as submitted.
+
+- **Seal codes.** The kit produces codes 0, 1, 2, 4 and 5; "every seal code 0–5" above is corrected: code 3 (wrong round) is indistinguishable from 1 and contract v1.3 reserves it (§5.3, §13.1 lists 0, 1, 2, 4, 5). `SealCase::WrongRound` → 1 is right.
+- **Deviations not listed above:** (1) most G2–G5 tests run on the `test-beacon` build (any round, I-53); the release build runs G1, G2 and the season parts, and G2–G5 move to the release build with real rounds once O-M1-12 allows them (W6); (2) the I-45 drill ran on a probe padded to the 540,608-B placeholder, not the release `.so` size (237,384 B now); the size-independence argument (two `max_len` measured) stands and a re-run stays optional; (3) `check()` accepts `L(kind) == tight + PAGE` (finding 3) until W5-A regenerates `L(kind)`; (4) `assert_within` checks heap only on the trace build (a plain build reports no heap).
+- **Added by the integrator:** `g03_anchor_and_archive_forged_in_post_anchor_multi`, `g03_season_copy_and_id_flip_in_every_w2a_instruction`, `g03_forged_present_targets_of_the_init_instructions`, `g01_loaded_limit_*_present` (no-op paths), `g01_budget_w2a_*`, and the tighter `assert_refused` (a program code is required) and `RELEASE_CHECK=1` NotImplemented panic in `chain.rs`. The per-(instruction, code) completeness table stays W5-A's.

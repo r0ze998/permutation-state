@@ -134,3 +134,7 @@ A detached scratch worktree at this unit's commit `87c09b2`, `git merge frontier
 - Vendored: `permutation-server/web/sdk/vendor/noble/` (+ `manifest.json`)
 - Language: `permutation-server/web/lang/{en-frontier.mjs,en-frontier-play.mjs,GLOSSARY.md}`, `permutation-server/web/lang.mjs`, `permutation-server/web/map.mjs`
 - Tests: `permutation-gateway/test/web-frontier-{seal,codec,clock,herald,marchbook,session,wasm,chainio,map,shell}.test.mjs`, `permutation-gateway/test/web-lang.test.mjs`, fixtures `permutation-gateway/test/fixtures/frontier/`
+
+## Post-merge addendum (integrator, integ-W2 window, 2026-09-28)
+
+After the wave-2 review (contract v1.3 §9.1, §9.4): `ChainClock` runs at rate 1 except on a localnet season and `behind()` (against the local clock) drives the staleness banner; `messageProblems` requires the blockhash and the expected instruction and runs the relay's `classify`; `sealMarch` derives the round from the season clock (`sealRound`) and the worker's audit refuses any round other than T(arrive_bell). Deferred (DECISIONS I12): herald key checks (`me`, envelope bells), the beacon check on the Season's NETWORK byte, `reachable`'s signature (§9.5 deviation, to be amended or aligned by W3-F) and geometry bounds, `plan_path` optimality, the ClashArgs/ClashOut codec (W4-A/W4-E), D5's wording, `ps-fui` (W3-F). Measurement method for the page gzip figure: not stated above; the review measured 47,922 B, so the figure is to be re-stated with its command when W3-F re-measures.

@@ -98,3 +98,7 @@ None. The relay uses `@solana/web3.js` (Connection, Keypair, VersionedTransactio
 - Live run of the relay against `frontier-localnet` with the real program: needs W2-A's program and W2-C's localnet on the integration branch (first possible in the wave-2 integration window or wave 3). Not run here.
 - The noble manifest test runs for real once W2-E's `web/sdk/vendor/noble/` is merged (it skips until then).
 - No O-M1-12 item is needed by this unit.
+
+## Post-merge addendum (integrator, integ-W2 window, 2026-09-28)
+
+After the wave-2 review (contract v1.3 §8.3): `classify` requires the message's account keys to be exactly the fee payer, the instruction's accounts and the two program ids, with the ABI's writability; settle shapes are charged to a requester's on-chain-verified Citizen (`POST /f/relay {…, citizen}`), else the client-address bucket — no `session:<key>` buckets any more; the replay key is claimed before any await; a send that throws charges nothing; quota pruning keeps idle keys at the burst; simulation failures are attributed to the failing program. **Size figure corrected:** 31,437 B is `gzip -9` of the twelve files concatenated; gzipped one by one they total ≈ 36.2 KB (zlib default) / 36.1 KB (-9); raw 148,765 B at the time of the review (the v1.3 regeneration changes the ABI data modules slightly). The pooled daily lamport cap is kept as an accepted M1 residual (DECISIONS I9).
