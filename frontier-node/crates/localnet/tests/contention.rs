@@ -92,8 +92,11 @@ fn a_held_key_admits_only_higher_priorities_and_ties_lose() {
     assert!(c.status(&s_read).is_some(), "readers are not held");
     assert!(c.status(&s_lo).is_none() && c.status(&s_tie).is_none());
     // The filler took the rest of the account's 40M (minus the winner's
-    // 50k) and that much of the block.
-    assert_eq!(r.hold_cu, ACCOUNT_CU - 50_000);
+    // §10.1 cost: 50k CU + 720 + 2 × 300 + 16 = 51,336, v1.3) and that much
+    // of the block.
+    let winner = tx::priority(&t_hi.message).1;
+    assert_eq!(winner, 51_336);
+    assert_eq!(r.hold_cu, ACCOUNT_CU - winner);
     for _ in 0..2 {
         let r = c.produce_block();
         assert_eq!((r.landed, r.deferred), (0, 2), "still held: {r:?}");
