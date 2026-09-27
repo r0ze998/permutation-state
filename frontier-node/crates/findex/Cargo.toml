@@ -1,0 +1,12 @@
+[package]
+name = "findex"
+description = "Frontier ingest and index: ordered transaction feed, PS2 records, archive (skeleton in W1; W2-F builds it)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+fclient.workspace = true
+serde_json.workspace = true

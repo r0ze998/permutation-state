@@ -1,0 +1,32 @@
+[package]
+name = "localnet"
+description = "frontier-localnet: LiteSVM-backed local chain node with real 400-ms slots, a scaled Clock, SIMD-0186 loaded-data enforcement and an ordered transaction feed (M1 contract §8.7, I-45, I-54)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+name = "localnet"
+
+[[bin]]
+name = "frontier-localnet"
+path = "src/main.rs"
+
+[dependencies]
+fclient.workspace = true
+litesvm.workspace = true
+solana-account.workspace = true
+solana-address.workspace = true
+solana-clock.workspace = true
+solana-hash.workspace = true
+solana-message.workspace = true
+solana-rent.workspace = true
+solana-signature.workspace = true
+solana-transaction.workspace = true
+agave-feature-set.workspace = true
+base64.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+axum.workspace = true

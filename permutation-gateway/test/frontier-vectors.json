@@ -1,0 +1,1951 @@
+{
+  "addresses": {
+    "bump": 254,
+    "citizen": {
+      "address": "793kDNPGRR99SA2cPLN8PQR6oD6aQ4qqjJrCSC4GMH3h",
+      "citizen_tag": "10619237491256800603",
+      "join_shard": 0,
+      "keeper_tag8": "e1fb16ba1d33447b",
+      "tag15": "c3baab1025d2f15a177d8f419b82dd",
+      "wallet": "75hbt6uvDqjPZ9WgFtMhBnTeyHw7cinoHiz4FD2vEz2d"
+    },
+    "host_ids": [
+      {
+        "gen": 0,
+        "holding": "AfZ7beD99Pttongtq1EKEiM34yUUcjJwwpAt9PJnT51F",
+        "id": "0",
+        "p": 0,
+        "q": 0,
+        "seq": 0,
+        "site": 0
+      },
+      {
+        "gen": 255,
+        "holding": "BwogNEkTvKcmnHfVL3su2QdBx6ii1rcNRS1TaESCEMf3",
+        "id": "2423323627618303",
+        "p": -3,
+        "q": 7,
+        "seq": 4294967295,
+        "site": 11
+      },
+      {
+        "gen": 1,
+        "holding": "K7CUbAscWN8wPtmrHBiXAF63a1LRcJ6RTnj4ajAfd41",
+        "id": "870341523005243399",
+        "p": 128,
+        "q": -64,
+        "seq": 7,
+        "site": 3
+      }
+    ],
+    "program": "4ZjDxeRE37J6DarUc1s3VZjXjBP325xEboBz7BQ1dCCQ",
+    "programdata": "3Cxb8DQKbye65vMwteUfXUkx2Y5L2muYcs68FRGof2Y6",
+    "season": "F1rbAbDSTqXBr3jG67BQFwP5nkLm1hPkHax4tqRL3VLK",
+    "season_id": 1,
+    "seeds": [
+      {
+        "address": "5jV74eREv3QjFU5aaw1KJaeSjfyvuBYscdZLwcQN7jnr",
+        "kind": "fr",
+        "raw": "",
+        "seed": "fr"
+      },
+      {
+        "address": "EzrTXjNPSHesthu9HJcE6sjvB8WNSbt8Z3HoH5E4aSYS",
+        "kind": "dp",
+        "raw": "",
+        "seed": "dp"
+      },
+      {
+        "address": "5Ff9y4KD3yKS2cXo5fGTeSQLuYqxKE5jZa9vRgjgWL8z",
+        "kind": "rs",
+        "raw": "0000",
+        "seed": "rs0000"
+      },
+      {
+        "address": "6gYGB9H2Dhrhtxn71D8HfCBT5LsM3vqsKDS245GkuwU1",
+        "kind": "rs",
+        "raw": "8000",
+        "seed": "rs8000"
+      },
+      {
+        "address": "EHTKfXuHNHHXsxttM9gdyFGmeYNViU93EfSVUvBEEGWo",
+        "kind": "pf",
+        "raw": "05",
+        "seed": "pf05"
+      },
+      {
+        "address": "A9KQ4yyooANZ5oWVGUwdkDyvVL1b9Vib9Nvq6ebA9n4T",
+        "kind": "js",
+        "raw": "0507",
+        "seed": "js0507"
+      },
+      {
+        "address": "4qNgNGZWnDVDNwd3NLAUruuWQdaQYxyscRjDhrine3XN",
+        "kind": "bl",
+        "raw": "0f",
+        "seed": "bl0f"
+      },
+      {
+        "address": "793kDNPGRR99SA2cPLN8PQR6oD6aQ4qqjJrCSC4GMH3h",
+        "kind": "ct",
+        "raw": "c3baab1025d2f15a177d8f419b82dd",
+        "seed": "ctc3baab1025d2f15a177d8f419b82dd"
+      },
+      {
+        "address": "BwogNEkTvKcmnHfVL3su2QdBx6ii1rcNRS1TaESCEMf3",
+        "kind": "ho",
+        "raw": "fdffffff070000000b",
+        "seed": "hofdffffff070000000b"
+      },
+      {
+        "address": "3DkeZGQZnq9JUQqgbQJnshQv4FfK579pBAH2E4YyKHNf",
+        "kind": "pv",
+        "raw": "00000080ffffff7f",
+        "seed": "pv00000080ffffff7f"
+      },
+      {
+        "address": "71NPJy66hK9pYaNPd6B7v5NwvEzF1n21cHzoVPQNKLNx",
+        "kind": "pv",
+        "raw": "fdffffff07000000",
+        "seed": "pvfdffffff07000000"
+      },
+      {
+        "address": "AV6JPmV4P3cK8nndYtzBNW9SR6q5LsFuffYWu3s2ejdB",
+        "kind": "ar",
+        "raw": "fdffffff07000000ffffffff0503",
+        "seed": "arfdffffff07000000ffffffff0503"
+      },
+      {
+        "address": "FVirAWfdUovB8KtrbraHaeh9q1DUkftHrkgQc3RADiu1",
+        "kind": "ad",
+        "raw": "fdffffff0700000006000000",
+        "seed": "adfdffffff0700000006000000"
+      },
+      {
+        "address": "DEQTaWEZirm2Qo7C7mD85KrtjkyZiEvkYaMb2izGAMCG",
+        "kind": "ci",
+        "raw": "ffffff7f00000080ef030000",
+        "seed": "ciffffff7f00000080ef030000"
+      },
+      {
+        "address": "9qzsstgsgTDCTkfebC8Ng18gbvwEaT9JsGFZP3VGi1Fx",
+        "kind": "an",
+        "raw": "ffffffff0f",
+        "seed": "anffffffff0f"
+      },
+      {
+        "address": "BtzsReU8AjMeoLDTzVsvvirEhHMTBeeHjq8bxxy6hexA",
+        "kind": "sd",
+        "raw": "ef0300000fff",
+        "seed": "sdef0300000fff"
+      },
+      {
+        "address": "CVc4kiu5JdvLDUNPEifbzNosbjUEHhTPFMqEV5oatfet",
+        "kind": "aa",
+        "raw": "0f06000000",
+        "seed": "aa0f06000000"
+      },
+      {
+        "address": "GTthx7BgjPGhp5y5PyYmfaTYQBF7cuytpai5F5LGM8Zt",
+        "kind": "dc",
+        "raw": "e1fb16ba1d33447b06000000",
+        "seed": "dce1fb16ba1d33447b06000000"
+      },
+      {
+        "address": "QrhNFDj9uoGnJH9izJpxAkj35wiGnbWM5ToWcXrYUrJ",
+        "kind": "sv",
+        "raw": "ffffffffffffffffffffffff",
+        "seed": "svffffffffffffffffffffffff"
+      },
+      {
+        "address": "7cJ3i6CDTroKtNqF2CTSXuoNeGeG4ud5rimZHcxUbdVr",
+        "kind": "po",
+        "raw": "fdffffff07000000090000000200",
+        "seed": "pofdffffff07000000090000000200"
+      }
+    ]
+  },
+  "beacon": {
+    "clock": [
+      {
+        "bell": 0,
+        "bell_end": 1800000600,
+        "genesis_ts": 1800000000,
+        "seed_round_at_a_plus_2": 35732633,
+        "tlock_round": 35732412
+      },
+      {
+        "bell": 1,
+        "bell_end": 1800001200,
+        "genesis_ts": 1800000000,
+        "seed_round_at_a_plus_2": 35732833,
+        "tlock_round": 35732612
+      },
+      {
+        "bell": 143,
+        "bell_end": 1800086400,
+        "genesis_ts": 1800000000,
+        "seed_round_at_a_plus_2": 35761233,
+        "tlock_round": 35761012
+      },
+      {
+        "bell": 144,
+        "bell_end": 1800087000,
+        "genesis_ts": 1800000000,
+        "seed_round_at_a_plus_2": 35761433,
+        "tlock_round": 35761212
+      },
+      {
+        "bell": 1007,
+        "bell_end": 1800604800,
+        "genesis_ts": 1800000000,
+        "seed_round_at_a_plus_2": 35934033,
+        "tlock_round": 35933812
+      }
+    ],
+    "fixture_round": {
+      "hints": "0114dcf59722b7585538cfa4b87b8ccc137ebdd8cf87bb88bd356225cf9c3bfe410f598a3a77d9c98705940acabc64152a0f49a8bbef0170eb29830542bdaaba4b4db4a32552ad7c7b893c8fa14c6971df7b981861241d37d2f31e4280df170ea9054863442c3efabd7433799ee791712f4bb89ba38f9030e80f364d9b5326a6878f03e37151b12b067f63187e38ee13860119884e4047d15ef143718dc611f431217d4903b856b79f8b729dc667fc238e9767544e5be6f98d221111b737346a10351485200a5afca2d5ef7fcb55cffe8dfe00db77b7848763ba034401c71b6911ed4a4198ae7d804aebebcc20185b06e319054ecac0c6af8df4065f6c6962d1e17e399ec20f3526707d8bea2cc0929fb2928274b9b1d6a4acdafbeaaef90ce915e7",
+      "msg": "d66fab0f31ca2b136cf1da95ef4ab4225ed1e060b7e2a94cd81967e322853e97",
+      "round": 32551361,
+      "seed": "ae4d57785cf6d0e4ae776ed82ec7999f5216f063669b96e851117d3b2d21d778",
+      "sig": "b07de38f2242ea4ae09960f14c44b826764b4f00a7b5dbb64f0adaeb8084fd91231934b3f7e1e2ae86cadd2d27a5272f",
+      "sig96": "107de38f2242ea4ae09960f14c44b826764b4f00a7b5dbb64f0adaeb8084fd91231934b3f7e1e2ae86cadd2d27a5272f1264b6394ff15ba7aa73c26540095070dd2350980219f2dc4706a148dd4fc6f9e1a2660c0c33d29c4279ca80ead4a30c"
+    },
+    "quicknet": {
+      "chain_hash": "52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971",
+      "genesis_seed": "f477d5c89f21a17c863a7f937c6a6d15859414d2be09cd448d4279af331c5d3e",
+      "genesis_time": 1692803367,
+      "metadata": {
+        "beaconID": "quicknet"
+      },
+      "period": 3,
+      "public_key": "83cf0f2896adee7eb8b5f01fcad3912212c437e0073e911fb90022d3e760183c8c4b450b6a0a6c3ac6a5776a2d1064510d1fec758c921cc22b0e17e63aaf4bcb5ed66304de9cf809bd274ca73bab4af5a6e9c76a4bc09e76eae8991ef5ece45a",
+      "schemeID": "bls-unchained-g1-rfc9380"
+    },
+    "quicknet_pk_hash": "96e74fcdd3a118406d3800a4e4935e67450a6befde915d47a0d6a13519cee134",
+    "test_key": {
+      "info": {
+        "chain_hash": "b420d6360bc98128c0e8b957147a7d13b4864684eb1ddc82e54a317037a0c99a",
+        "genesis_seed": "b420d6360bc98128c0e8b957147a7d13b4864684eb1ddc82e54a317037a0c99a",
+        "genesis_time": 1692803367,
+        "metadata": {
+          "beaconID": "psf-test"
+        },
+        "period": 3,
+        "public_key": "97d982017d4a0e479d996abe5672544640704d96eb9f846006e41bbedb3ea41ad1089c266769526f85ae306171f0db850ab461df81d7dd0c805169f5990203966e1e95646a54ca50a05e733f1c71242779917f5fc8a0e7c1f1d25914310c98b9",
+        "schemeID": "bls-unchained-g1-rfc9380"
+      },
+      "keygen": {
+        "dst": "PSF-TEST-BEACON-KEYGEN-v1",
+        "msg": "PSF-TEST-BEACON-v1",
+        "rule": "sk = OS2IP(expand_message_xmd_sha256(msg, dst, 48)) mod r"
+      },
+      "pk_hash": "faa6e379244f54e13045e9810e27ff540156e9cc7dc2f15747f95df12e41b9ef",
+      "rounds": [
+        {
+          "round": 1,
+          "sig": "93351b79840f9b267a62a34b7e6de69fa247a4b7f94bc50599e71f3dacf0c2d1cf6dc3e57fd0588a6ad9570b602620d8"
+        },
+        {
+          "round": 1000,
+          "sig": "b4b99e1bba315c3914cab64aa958b8329cb892a97fc769842cdc4a9030d2ad8fd3819c528797f3e2ced3e99ba3afd4bc"
+        },
+        {
+          "round": 32556350,
+          "sig": "ae869abcd1457cd8beee269eea6fd1976aed08f0a63d9f9e1cb58c0c94d5b1f591701aa02d2d30f9c7f52bbcac15a2a2"
+        }
+      ]
+    }
+  },
+  "codec": {
+    "entities": {
+      "citizen": 4,
+      "clash_inputs": 7,
+      "frontier": 2,
+      "holding": 5,
+      "join_shard": 3,
+      "province": 6,
+      "season": 1
+    },
+    "errors": [
+      {
+        "code": 1,
+        "name": "BadData"
+      },
+      {
+        "code": 2,
+        "name": "BadAccount"
+      },
+      {
+        "code": 3,
+        "name": "BadAddress"
+      },
+      {
+        "code": 4,
+        "name": "NotSigner"
+      },
+      {
+        "code": 5,
+        "name": "WrongStatus"
+      },
+      {
+        "code": 6,
+        "name": "RulesetMismatch"
+      },
+      {
+        "code": 7,
+        "name": "WrongRound"
+      },
+      {
+        "code": 8,
+        "name": "NoAnchor"
+      },
+      {
+        "code": 9,
+        "name": "Crypto"
+      },
+      {
+        "code": 10,
+        "name": "Capacity"
+      },
+      {
+        "code": 11,
+        "name": "SiteTaken"
+      },
+      {
+        "code": 12,
+        "name": "WindowClosed"
+      },
+      {
+        "code": 13,
+        "name": "TooEarly"
+      },
+      {
+        "code": 14,
+        "name": "ReservedSealValid"
+      },
+      {
+        "code": 15,
+        "name": "Kernel"
+      },
+      {
+        "code": 16,
+        "name": "Archived"
+      },
+      {
+        "code": 17,
+        "name": "Bucket"
+      },
+      {
+        "code": 18,
+        "name": "NotTopLevel"
+      },
+      {
+        "code": 19,
+        "name": "Overflow"
+      },
+      {
+        "code": 20,
+        "name": "NotOwner"
+      },
+      {
+        "code": 21,
+        "name": "Insufficient"
+      },
+      {
+        "code": 22,
+        "name": "QueueFull"
+      },
+      {
+        "code": 23,
+        "name": "NoTicket"
+      },
+      {
+        "code": 24,
+        "name": "NotFinal"
+      },
+      {
+        "code": 25,
+        "name": "TooManyAccounts"
+      },
+      {
+        "code": 26,
+        "name": "NotResident"
+      },
+      {
+        "code": 27,
+        "name": "ProvinceFull"
+      },
+      {
+        "code": 28,
+        "name": "HostBusy"
+      },
+      {
+        "code": 29,
+        "name": "Cooldown"
+      },
+      {
+        "code": 30,
+        "name": "TransitState"
+      },
+      {
+        "code": 31,
+        "name": "ArrivalBell"
+      },
+      {
+        "code": 32,
+        "name": "Path"
+      },
+      {
+        "code": 33,
+        "name": "CommitMismatch"
+      },
+      {
+        "code": 34,
+        "name": "QuotaRefused"
+      },
+      {
+        "code": 35,
+        "name": "SlotMoved"
+      },
+      {
+        "code": 36,
+        "name": "NeedArrivalDay"
+      },
+      {
+        "code": 37,
+        "name": "Shielded"
+      },
+      {
+        "code": 38,
+        "name": "DepartureUnsettled"
+      },
+      {
+        "code": 39,
+        "name": "NotGathered"
+      },
+      {
+        "code": 40,
+        "name": "OutOfOrder"
+      },
+      {
+        "code": 41,
+        "name": "NotQuiet"
+      },
+      {
+        "code": 42,
+        "name": "InputsOpen"
+      },
+      {
+        "code": 43,
+        "name": "NotEligible"
+      },
+      {
+        "code": 44,
+        "name": "FoldStale"
+      },
+      {
+        "code": 45,
+        "name": "TicketState"
+      },
+      {
+        "code": 46,
+        "name": "NotDormant"
+      },
+      {
+        "code": 47,
+        "name": "Explored"
+      },
+      {
+        "code": 48,
+        "name": "SessionExpired"
+      },
+      {
+        "code": 49,
+        "name": "WrongRegion"
+      },
+      {
+        "code": 50,
+        "name": "Aborted"
+      },
+      {
+        "code": 51,
+        "name": "TipTooLow"
+      },
+      {
+        "code": 52,
+        "name": "AlreadyDone"
+      },
+      {
+        "code": 53,
+        "name": "LatchClosed"
+      },
+      {
+        "code": 54,
+        "name": "SeedNotReady"
+      },
+      {
+        "code": 55,
+        "name": "BadPlaintext"
+      },
+      {
+        "code": 56,
+        "name": "Announce"
+      },
+      {
+        "code": 57,
+        "name": "ReservedSite"
+      },
+      {
+        "code": 58,
+        "name": "HostInTransit"
+      },
+      {
+        "code": 59,
+        "name": "JoinGate"
+      },
+      {
+        "code": 60,
+        "name": "CohortFull"
+      },
+      {
+        "code": 61,
+        "name": "TipNotPreset"
+      },
+      {
+        "code": 99,
+        "name": "NotImplemented"
+      }
+    ],
+    "layouts": {
+      "anchor_archive": {
+        "archived": 42,
+        "day": 20,
+        "entries": 64,
+        "entry_stride": 84,
+        "region": 16,
+        "rent_to": 12160,
+        "tombstone": 24
+      },
+      "arrival": {
+        "citizen_tag": 8,
+        "dealt": 28,
+        "dep_mass": 16,
+        "faction": 30,
+        "fate": 35,
+        "host_id": 0,
+        "present": 34,
+        "retreat": 26,
+        "stamina": 24,
+        "stance": 33,
+        "tile": 32,
+        "troops": 20,
+        "troops_after": 36,
+        "unit": 31
+      },
+      "arrival_day": {
+        "bits": 24,
+        "day": 20,
+        "p": 16,
+        "q": 18,
+        "rent_to": 64
+      },
+      "arrival_slot": {
+        "bell": 20,
+        "beneficiary": 56,
+        "citizen_tag": 40,
+        "claimed": 144,
+        "dealt_bps": 52,
+        "dep_mass": 48,
+        "ev_limit": 136,
+        "ev_loaded": 140,
+        "ev_price": 128,
+        "ev_slot": 120,
+        "faction": 24,
+        "flags": 29,
+        "host_id": 32,
+        "i": 25,
+        "p": 16,
+        "q": 18,
+        "rent_to": 88,
+        "retreat_bps": 30,
+        "stance": 27,
+        "tile": 28,
+        "unit": 26
+      },
+      "beacon_log": {
+        "beneficiary": 96,
+        "latest_round": 24,
+        "posted_slot": 40,
+        "posted_ts": 32,
+        "region": 16,
+        "sig48": 48
+      },
+      "bell_anchor": {
+        "a": 32,
+        "bell": 16,
+        "ev_limit": 136,
+        "ev_price": 128,
+        "net": 21,
+        "region": 20,
+        "rent_to": 96,
+        "round": 24,
+        "sig48": 48,
+        "slot": 40
+      },
+      "citizen": {
+        "arrivals": 236,
+        "bucket_milli": 160,
+        "bucket_t": 164,
+        "citizen_tag": 208,
+        "explores": 232,
+        "explores_floor_left": 139,
+        "faction": 136,
+        "flags": 137,
+        "holding": 168,
+        "holding_stride": 6,
+        "holdings_n": 138,
+        "join_bell": 140,
+        "join_shard": 144,
+        "last_action_ts": 216,
+        "office_terms_used": 186,
+        "rent_payer": 240,
+        "session": 96,
+        "session_expiry": 128,
+        "ticket_bell": 188,
+        "ticket_escrow": 272,
+        "ticket_funder": 280,
+        "ticket_next": 207,
+        "ticket_site_stride": 5,
+        "ticket_sites": 192,
+        "vigil_from_ts": 152,
+        "vigil_next_min": 148,
+        "vigil_start_min": 146,
+        "wallet": 64,
+        "works": 224
+      },
+      "clash_inputs": {
+        "arrival_stride": 40,
+        "arrivals": 96,
+        "arrivals_mask": 72,
+        "bell": 68,
+        "ev_limit": 1224,
+        "ev_price": 1216,
+        "ev_slot": 1208,
+        "flags": 88,
+        "n_present": 89,
+        "p": 64,
+        "posture_mask": 80,
+        "postures": 1056,
+        "q": 66,
+        "rent_to": 1232,
+        "resolved_ts": 1228,
+        "resolver": 1176,
+        "settled_mask": 92
+      },
+      "defence_claim": {
+        "beneficiary": 16,
+        "claimed": 56,
+        "count": 64,
+        "day": 48
+      },
+      "defence_pool": {
+        "claims": 48,
+        "diverted_total": 24,
+        "paid_total": 16,
+        "per_bell_region_cap": 32,
+        "per_keeper_day_cap": 40
+      },
+      "entry": {
+        "dealt_bps": 18,
+        "faction": 8,
+        "from_bell": 28,
+        "id": 0,
+        "op_a": 37,
+        "op_b": 38,
+        "op_ref": 44,
+        "op_troops": 40,
+        "pend_bell": 32,
+        "pend_op": 36,
+        "ready_bell": 24,
+        "stamina_bell": 20,
+        "stamina_value": 16,
+        "state": 11,
+        "tile": 10,
+        "troops": 12,
+        "unit": 9
+      },
+      "explore": {
+        "bell": 0,
+        "host": 10,
+        "len": 24,
+        "p": 4,
+        "q": 6,
+        "state": 18,
+        "tiles": 8
+      },
+      "frontier": {
+        "acc_occupied": 148,
+        "acc_wedge": 152,
+        "fold_bell": 80,
+        "fold_part": 84,
+        "last_ring_open_bell": 68,
+        "last_ring_open_ts": 72,
+        "occupied_sites": 92,
+        "open_sites": 88,
+        "provinces_opened": 96,
+        "rings_opened": 64,
+        "wedge_occupied": 124,
+        "wedge_open": 100
+      },
+      "h": {
+        "event_head": 32,
+        "event_seq": 24,
+        "layout_version": 16,
+        "len": 64,
+        "magic": 0,
+        "season_id": 8
+      },
+      "holding": {
+        "accrual_stride": 40,
+        "delegate": 752,
+        "escrow": 1192,
+        "explore": 1168,
+        "faction": 112,
+        "final_ts": 1232,
+        "flags": 115,
+        "food_shortfall": 712,
+        "founded_day": 128,
+        "founded_ts": 120,
+        "gen": 69,
+        "host_seq": 132,
+        "last_owner_action": 136,
+        "order": 113,
+        "owner_citizen": 72,
+        "p": 64,
+        "pool_owed": 1240,
+        "production": 472,
+        "q": 66,
+        "queue": 600,
+        "queue_stride": 24,
+        "rent_payer": 1200,
+        "reserve": 720,
+        "shield_until": 144,
+        "site": 68,
+        "state": 71,
+        "stores": 152,
+        "ticket_bell": 116,
+        "ticket_score": 104,
+        "tier": 114,
+        "tile": 70,
+        "transit": 784,
+        "transit_stride": 96,
+        "upkeep": 536,
+        "walls": 696,
+        "walls_committed_before": 704
+      },
+      "join_shard": {
+        "faction": 64,
+        "final_holdings": 76,
+        "holdings": 72,
+        "holdings_by_wedge": 80,
+        "members": 68,
+        "released": 104,
+        "shard": 65
+      },
+      "province": {
+        "camp": 3784,
+        "cohort_stride": 8,
+        "entries": 1064,
+        "entry_stride": 48,
+        "explored_mask": 288,
+        "last_outcome_digest": 88,
+        "last_resolve": 3752,
+        "n_entries": 120,
+        "n_sites_used": 121,
+        "opened_bell": 76,
+        "p": 64,
+        "passable_mask": 264,
+        "q": 66,
+        "quiet_ok": 122,
+        "region": 71,
+        "relations": 80,
+        "resolved_next": 72,
+        "resource": 189,
+        "ring": 68,
+        "road_mask": 280,
+        "roster_epoch": 124,
+        "rough_mask": 272,
+        "site_count": 262,
+        "site_mirror": 296,
+        "site_mirror_stride": 64,
+        "sites": 250,
+        "terrain": 128,
+        "ticket_cohorts": 3800,
+        "wedge": 70
+      },
+      "province_fund": {
+        "funded_total": 24,
+        "open_sites": 40,
+        "provinces_funded": 44,
+        "provinces_opened": 20,
+        "spent_total": 32,
+        "wedge": 16
+      },
+      "ring_seed": {
+        "d": 16,
+        "opened_bell": 20,
+        "payer": 80,
+        "provinces_created": 72,
+        "round": 32,
+        "seed": 40,
+        "status": 18,
+        "t_open": 24
+      },
+      "season": {
+        "announced_ts": 376,
+        "archive_after": 272,
+        "authority": 72,
+        "bell_secs": 140,
+        "bucket_burst": 306,
+        "bucket_rate_per_h": 304,
+        "bump": 65,
+        "camp_regrow_bells": 332,
+        "clash_close_grace": 328,
+        "created_ts": 152,
+        "creation_bond": 384,
+        "defence_cap_milli": 308,
+        "dormant_after_secs": 456,
+        "dpool_initial": 472,
+        "drand_genesis": 168,
+        "drand_period": 176,
+        "end_bell": 164,
+        "extra_free_bps": 326,
+        "genesis_ring": 67,
+        "genesis_round": 232,
+        "genesis_seed": 240,
+        "genesis_ts": 144,
+        "join_close_bell": 160,
+        "join_gate": 484,
+        "lateness_slots": 312,
+        "march_fee": 280,
+        "max_lead": 277,
+        "min_lead": 276,
+        "min_reveal_priority_milli": 296,
+        "network": 180,
+        "office_terms_per_wallet": 70,
+        "params_hash": 336,
+        "payout_params_hash": 392,
+        "pfund_initial": 464,
+        "postures_enabled": 71,
+        "program_version": 138,
+        "quicknet_pk_hash": 184,
+        "r_max": 68,
+        "regions": 66,
+        "release_after_secs": 460,
+        "reserve_bps": 324,
+        "reveal_cu_limit": 300,
+        "reveal_loaded_limit": 480,
+        "reveal_window": 216,
+        "rules_version": 136,
+        "ruleset_hash": 104,
+        "seal_bond": 288,
+        "seed_margin": 220,
+        "shade_auditor": 424,
+        "status": 64,
+        "t_create_min": 368,
+        "theta_early_bps": 316,
+        "theta_late_bps": 318,
+        "theta_switch_secs": 320,
+        "transit_slots": 278,
+        "window_from_bell": 228,
+        "window_next": 224
+      },
+      "seed_cache": {
+        "a": 96,
+        "anchor_key": 64,
+        "bell": 16,
+        "nonce": 21,
+        "region": 20,
+        "rent_to": 112,
+        "round": 24,
+        "seed": 32,
+        "slot": 104
+      },
+      "sh": {
+        "len": 16,
+        "magic": 0,
+        "season_id": 8
+      },
+      "site": {
+        "faction": 1,
+        "garrison": 8,
+        "gen": 4,
+        "order": 2,
+        "pend0_bell": 12,
+        "pend0_delta": 16,
+        "pend1_bell": 24,
+        "pend1_delta": 32,
+        "shield_until_bell": 60,
+        "state": 0,
+        "tier": 3,
+        "wall_item0": 44,
+        "wall_item1": 52,
+        "walls_committed": 40
+      },
+      "transit": {
+        "arrive_bell": 20,
+        "dealt_bps": 38,
+        "dep_mass": 32,
+        "depart_bell": 16,
+        "depart_ts": 24,
+        "faction": 2,
+        "flags": 88,
+        "host_id": 8,
+        "march_stamina": 36,
+        "origin_p": 4,
+        "origin_q": 6,
+        "origin_tile": 3,
+        "ready_bell_off": 46,
+        "seal_root": 48,
+        "stamina_after": 44,
+        "state": 0,
+        "tip": 80,
+        "troops_after": 40,
+        "unit": 1
+      }
+    },
+    "log_kinds": [
+      {
+        "kind": 1,
+        "name": "ANNOUNCE"
+      },
+      {
+        "kind": 2,
+        "name": "SEASON_CREATED"
+      },
+      {
+        "kind": 3,
+        "name": "GENESIS_SEED"
+      },
+      {
+        "kind": 4,
+        "name": "RING_OPEN"
+      },
+      {
+        "kind": 5,
+        "name": "RING_SEED"
+      },
+      {
+        "kind": 6,
+        "name": "PROVINCE_OPEN"
+      },
+      {
+        "kind": 7,
+        "name": "FOLD"
+      },
+      {
+        "kind": 8,
+        "name": "SEASON_STATUS"
+      },
+      {
+        "kind": 9,
+        "name": "WINDOW"
+      },
+      {
+        "kind": 10,
+        "name": "JOIN"
+      },
+      {
+        "kind": 11,
+        "name": "SESSION"
+      },
+      {
+        "kind": 12,
+        "name": "VIGIL"
+      },
+      {
+        "kind": 13,
+        "name": "TICKET"
+      },
+      {
+        "kind": 14,
+        "name": "SETTLE"
+      },
+      {
+        "kind": 15,
+        "name": "RELEASE"
+      },
+      {
+        "kind": 16,
+        "name": "HOLDING_FINAL"
+      },
+      {
+        "kind": 20,
+        "name": "HARVEST"
+      },
+      {
+        "kind": 21,
+        "name": "BUILD"
+      },
+      {
+        "kind": 22,
+        "name": "TRAIN"
+      },
+      {
+        "kind": 23,
+        "name": "MUSTER"
+      },
+      {
+        "kind": 24,
+        "name": "DISSOLVE"
+      },
+      {
+        "kind": 25,
+        "name": "GARRISON"
+      },
+      {
+        "kind": 26,
+        "name": "EXPLORE"
+      },
+      {
+        "kind": 27,
+        "name": "EXPLORE_RESULT"
+      },
+      {
+        "kind": 28,
+        "name": "STRANDED"
+      },
+      {
+        "kind": 30,
+        "name": "DEPART"
+      },
+      {
+        "kind": 31,
+        "name": "REVEAL"
+      },
+      {
+        "kind": 32,
+        "name": "DEPARTURE_SETTLED"
+      },
+      {
+        "kind": 34,
+        "name": "TRANSIT_SETTLED"
+      },
+      {
+        "kind": 40,
+        "name": "GATHER"
+      },
+      {
+        "kind": 41,
+        "name": "CLASH"
+      },
+      {
+        "kind": 42,
+        "name": "SKIP"
+      },
+      {
+        "kind": 43,
+        "name": "CAMP"
+      },
+      {
+        "kind": 50,
+        "name": "ANCHOR"
+      },
+      {
+        "kind": 51,
+        "name": "SEED"
+      },
+      {
+        "kind": 52,
+        "name": "BEACON"
+      },
+      {
+        "kind": 53,
+        "name": "ARCHIVE"
+      },
+      {
+        "kind": 60,
+        "name": "DIVERT"
+      },
+      {
+        "kind": 61,
+        "name": "DEFENCE_CLAIM"
+      },
+      {
+        "kind": 62,
+        "name": "POOL_SWEEP"
+      },
+      {
+        "kind": 70,
+        "name": "CLOSE"
+      }
+    ],
+    "magics": {
+      "anchor_archive": "PSF1ARCH",
+      "arrival_day": "PSF1ADAY",
+      "arrival_slot": "PSF1ASLT",
+      "beacon_log": "PSF1BLOG",
+      "bell_anchor": "PSF1ANCH",
+      "citizen": "PSF1CITZ",
+      "clash_inputs": "PSF1CLIN",
+      "defence_claim": "PSF1DCLM",
+      "defence_pool": "PSF1DPOL",
+      "frontier": "PSF1FRNT",
+      "holding": "PSF1HOLD",
+      "join_shard": "PSF1JSHD",
+      "province": "PSF1PROV",
+      "province_fund": "PSF1PFND",
+      "ring_seed": "PSF1RING",
+      "season": "PSF1SEAS",
+      "seed_cache": "PSF1SEED"
+    },
+    "rent": {
+      "anchor_archive": 62585600,
+      "arrival_day": 1137920,
+      "arrival_slot": 1463040,
+      "beacon_log": 1300480,
+      "bell_anchor": 1381760,
+      "citizen": 2600960,
+      "clash_inputs": 7152640,
+      "defence_claim": 1300480,
+      "defence_pool": 1950720,
+      "frontier": 3251200,
+      "holding": 7152640,
+      "join_shard": 1950720,
+      "province": 21457920,
+      "province_fund": 1300480,
+      "ring_seed": 1300480,
+      "season": 11054080,
+      "seed_cache": 1381760
+    },
+    "seal_codes": {
+      "bad_point": 2,
+      "commit_mismatch": 4,
+      "fo_failed": 1,
+      "plaintext_invalid": 5,
+      "valid": 0,
+      "wrong_round": 3
+    },
+    "sizes": {
+      "anchor_archive": 12192,
+      "arrival_day": 96,
+      "arrival_slot": 160,
+      "beacon_log": 128,
+      "bell_anchor": 144,
+      "citizen": 384,
+      "clash_inputs": 1280,
+      "defence_claim": 128,
+      "defence_pool": 256,
+      "frontier": 512,
+      "holding": 1280,
+      "join_shard": 256,
+      "province": 4096,
+      "province_fund": 128,
+      "ring_seed": 128,
+      "season": 2048,
+      "seed_cache": 144
+    },
+    "tags": [
+      {
+        "class": "O",
+        "cu_budget": 70000,
+        "name": "CreateSeason",
+        "tag": 1,
+        "top_level": false,
+        "tx_max": 1100
+      },
+      {
+        "class": "O",
+        "cu_budget": 40000,
+        "name": "InitShards",
+        "tag": 2,
+        "top_level": false,
+        "tx_max": 600
+      },
+      {
+        "class": "D",
+        "cu_budget": 345000,
+        "name": "ConsumeGenesisSeed",
+        "tag": 3,
+        "top_level": true,
+        "tx_max": 760
+      },
+      {
+        "class": "N",
+        "cu_budget": 10000,
+        "name": "EndSeason",
+        "tag": 4,
+        "top_level": false,
+        "tx_max": 300
+      },
+      {
+        "class": "O",
+        "cu_budget": 60000,
+        "name": "CloseSeason",
+        "tag": 5,
+        "top_level": false,
+        "tx_max": 1232
+      },
+      {
+        "class": "N",
+        "cu_budget": 20000,
+        "name": "AbortSeason",
+        "tag": 6,
+        "top_level": false,
+        "tx_max": 300
+      },
+      {
+        "class": "O",
+        "cu_budget": 5000,
+        "name": "SetWindowSchedule",
+        "tag": 7,
+        "top_level": false,
+        "tx_max": 200
+      },
+      {
+        "class": "O",
+        "cu_budget": 18000,
+        "name": "AnnounceSeason",
+        "tag": 8,
+        "top_level": false,
+        "tx_max": 480
+      },
+      {
+        "class": "O",
+        "cu_budget": 60000,
+        "name": "InitBeaconLogs",
+        "tag": 9,
+        "top_level": false,
+        "tx_max": 900
+      },
+      {
+        "class": "D",
+        "cu_budget": 345000,
+        "name": "PostAnchor",
+        "tag": 16,
+        "top_level": true,
+        "tx_max": 800
+      },
+      {
+        "class": "D",
+        "cu_budget": 400000,
+        "name": "PostAnchorMulti",
+        "tag": 17,
+        "top_level": true,
+        "tx_max": 1232
+      },
+      {
+        "class": "D",
+        "cu_budget": 345000,
+        "name": "PostSeed",
+        "tag": 18,
+        "top_level": true,
+        "tx_max": 800
+      },
+      {
+        "class": "N",
+        "cu_budget": 340000,
+        "name": "PostBeacon",
+        "tag": 19,
+        "top_level": true,
+        "tx_max": 760
+      },
+      {
+        "class": "D",
+        "cu_budget": 60000,
+        "name": "ArchiveAnchors",
+        "tag": 20,
+        "top_level": false,
+        "tx_max": 1232
+      },
+      {
+        "class": "N",
+        "cu_budget": 6000,
+        "name": "CloseSeedCache",
+        "tag": 21,
+        "top_level": false,
+        "tx_max": 300
+      },
+      {
+        "class": "D",
+        "cu_budget": 30000,
+        "name": "OpenRing",
+        "tag": 32,
+        "top_level": false,
+        "tx_max": 600
+      },
+      {
+        "class": "D",
+        "cu_budget": 345000,
+        "name": "ConsumeRingSeed",
+        "tag": 33,
+        "top_level": true,
+        "tx_max": 760
+      },
+      {
+        "class": "D",
+        "cu_budget": 220000,
+        "name": "OpenProvince",
+        "tag": 34,
+        "top_level": true,
+        "tx_max": 400
+      },
+      {
+        "class": "D",
+        "cu_budget": 30000,
+        "name": "FoldOccupancy",
+        "tag": 35,
+        "top_level": false,
+        "tx_max": 1200
+      },
+      {
+        "class": "N",
+        "cu_budget": 10000,
+        "name": "CloseProvince",
+        "tag": 36,
+        "top_level": false,
+        "tx_max": 300
+      },
+      {
+        "class": "P",
+        "cu_budget": 25000,
+        "name": "Join",
+        "tag": 48,
+        "top_level": false,
+        "tx_max": 700
+      },
+      {
+        "class": "P",
+        "cu_budget": 6000,
+        "name": "SetSession",
+        "tag": 49,
+        "top_level": false,
+        "tx_max": 300
+      },
+      {
+        "class": "P",
+        "cu_budget": 6000,
+        "name": "SetVigil",
+        "tag": 50,
+        "top_level": false,
+        "tx_max": 250
+      },
+      {
+        "class": "P",
+        "cu_budget": 14000,
+        "name": "FileTicket",
+        "tag": 51,
+        "top_level": false,
+        "tx_max": 560
+      },
+      {
+        "class": "D",
+        "cu_budget": 40000,
+        "name": "SettleTicket",
+        "tag": 52,
+        "top_level": false,
+        "tx_max": 900
+      },
+      {
+        "class": "N",
+        "cu_budget": 25000,
+        "name": "ReleaseDormant",
+        "tag": 53,
+        "top_level": false,
+        "tx_max": 480
+      },
+      {
+        "class": "N",
+        "cu_budget": 15000,
+        "name": "CloseHolding",
+        "tag": 54,
+        "top_level": false,
+        "tx_max": 330
+      },
+      {
+        "class": "N",
+        "cu_budget": 10000,
+        "name": "CloseCitizen",
+        "tag": 55,
+        "top_level": false,
+        "tx_max": 300
+      },
+      {
+        "class": "P",
+        "cu_budget": 12000,
+        "name": "Harvest",
+        "tag": 64,
+        "top_level": false,
+        "tx_max": 320
+      },
+      {
+        "class": "P",
+        "cu_budget": 22000,
+        "name": "Build",
+        "tag": 65,
+        "top_level": false,
+        "tx_max": 360
+      },
+      {
+        "class": "P",
+        "cu_budget": 15000,
+        "name": "Train",
+        "tag": 66,
+        "top_level": false,
+        "tx_max": 330
+      },
+      {
+        "class": "P",
+        "cu_budget": 25000,
+        "name": "Muster",
+        "tag": 67,
+        "top_level": false,
+        "tx_max": 380
+      },
+      {
+        "class": "P",
+        "cu_budget": 25000,
+        "name": "Dissolve",
+        "tag": 68,
+        "top_level": false,
+        "tx_max": 380
+      },
+      {
+        "class": "P",
+        "cu_budget": 25000,
+        "name": "Garrison",
+        "tag": 69,
+        "top_level": false,
+        "tx_max": 380
+      },
+      {
+        "class": "P",
+        "cu_budget": 18000,
+        "name": "Explore",
+        "tag": 70,
+        "top_level": false,
+        "tx_max": 380
+      },
+      {
+        "class": "N",
+        "cu_budget": 15000,
+        "name": "SettleExplore",
+        "tag": 71,
+        "top_level": false,
+        "tx_max": 400
+      },
+      {
+        "class": "N",
+        "cu_budget": 12000,
+        "name": "DisbandStranded",
+        "tag": 72,
+        "top_level": false,
+        "tx_max": 300
+      },
+      {
+        "class": "P",
+        "cu_budget": 15000,
+        "name": "Depart",
+        "tag": 80,
+        "top_level": false,
+        "tx_max": 800
+      },
+      {
+        "class": "W",
+        "cu_budget": 26000,
+        "name": "Reveal",
+        "tag": 81,
+        "top_level": true,
+        "tx_max": 1100
+      },
+      {
+        "class": "D",
+        "cu_budget": 15000,
+        "name": "SettleDeparture",
+        "tag": 82,
+        "top_level": false,
+        "tx_max": 400
+      },
+      {
+        "class": "D",
+        "cu_budget": 85000,
+        "name": "SettleTransit",
+        "tag": 84,
+        "top_level": false,
+        "tx_max": 1100
+      },
+      {
+        "class": "N",
+        "cu_budget": 8000,
+        "name": "SweepPoolOwed",
+        "tag": 85,
+        "top_level": false,
+        "tx_max": 300
+      },
+      {
+        "class": "D",
+        "cu_budget": 40000,
+        "name": "GatherClash",
+        "tag": 96,
+        "top_level": true,
+        "tx_max": 1232
+      },
+      {
+        "class": "D",
+        "cu_budget": 340000,
+        "name": "ResolveFromInputs",
+        "tag": 97,
+        "top_level": true,
+        "tx_max": 460
+      },
+      {
+        "class": "T",
+        "cu_budget": 1400000,
+        "name": "ResolveClash",
+        "tag": 98,
+        "top_level": true,
+        "tx_max": 1232
+      },
+      {
+        "class": "D",
+        "cu_budget": 60000,
+        "name": "SkipQuiet",
+        "tag": 99,
+        "top_level": true,
+        "tx_max": 1232
+      },
+      {
+        "class": "N",
+        "cu_budget": 8000,
+        "name": "CloseClashInputs",
+        "tag": 100,
+        "top_level": false,
+        "tx_max": 300
+      },
+      {
+        "class": "N",
+        "cu_budget": 8000,
+        "name": "CloseArrivalDay",
+        "tag": 101,
+        "top_level": false,
+        "tx_max": 300
+      },
+      {
+        "class": "N",
+        "cu_budget": 8000,
+        "name": "CloseArrivalSlot",
+        "tag": 102,
+        "top_level": false,
+        "tx_max": 300
+      },
+      {
+        "class": "D",
+        "cu_budget": 25000,
+        "name": "ClaimDefence",
+        "tag": 112,
+        "top_level": false,
+        "tx_max": 1000
+      }
+    ]
+  },
+  "contract": "docs/frontier/m1/M1-CONTRACT.md v1.1",
+  "fees": {
+    "cost": [
+      {
+        "cost": 27576,
+        "limit": 26000,
+        "loaded": 1048576,
+        "sigs": 1,
+        "writes": 2
+      },
+      {
+        "cost": 17336,
+        "limit": 16000,
+        "loaded": 65536,
+        "sigs": 1,
+        "writes": 2
+      },
+      {
+        "cost": 341876,
+        "limit": 340000,
+        "loaded": 1048576,
+        "sigs": 1,
+        "writes": 3
+      },
+      {
+        "cost": 346496,
+        "limit": 345000,
+        "loaded": 720896,
+        "sigs": 1,
+        "writes": 2
+      }
+    ],
+    "defence_refund": [
+      {
+        "created_day": false,
+        "defence_cap_milli": 2000,
+        "ev_limit": 26000,
+        "ev_loaded": 1048576,
+        "ev_price": 0,
+        "refund": 0,
+        "tip_min": 14441
+      },
+      {
+        "created_day": false,
+        "defence_cap_milli": 2000,
+        "ev_limit": 26000,
+        "ev_loaded": 1048576,
+        "ev_price": 100000,
+        "refund": 0,
+        "tip_min": 14441
+      },
+      {
+        "created_day": true,
+        "defence_cap_milli": 2000,
+        "ev_limit": 26000,
+        "ev_loaded": 1048576,
+        "ev_price": 1000000,
+        "refund": 14059,
+        "tip_min": 14441
+      },
+      {
+        "created_day": true,
+        "defence_cap_milli": 2000,
+        "ev_limit": 26000,
+        "ev_loaded": 1048576,
+        "ev_price": 100000000,
+        "refund": 41311,
+        "tip_min": 14441
+      }
+    ],
+    "deploy_max_len": [
+      {
+        "max_len": 602112,
+        "so": 480512
+      },
+      {
+        "max_len": 675840,
+        "so": 540608
+      }
+    ],
+    "loaded_limit": [
+      {
+        "account_bytes": 20000,
+        "loaded_limit": 655360,
+        "n_accounts": 14,
+        "programdata_len": 602112
+      },
+      {
+        "account_bytes": 1000,
+        "loaded_limit": 32768,
+        "n_accounts": 3,
+        "programdata_len": 10000
+      },
+      {
+        "account_bytes": 50000,
+        "loaded_limit": 1081344,
+        "n_accounts": 30,
+        "programdata_len": 1000000
+      }
+    ],
+    "min_tip": [
+      {
+        "limit": 26000,
+        "loaded": 1048576,
+        "p_milli": 433,
+        "tip_min": 14441
+      },
+      {
+        "limit": 16000,
+        "loaded": 1048576,
+        "p_milli": 433,
+        "tip_min": 10111
+      },
+      {
+        "limit": 16000,
+        "loaded": 65536,
+        "p_milli": 433,
+        "tip_min": 10007
+      },
+      {
+        "limit": 21000,
+        "loaded": 720896,
+        "p_milli": 500,
+        "tip_min": 13748
+      }
+    ],
+    "p_tip_milli": [
+      {
+        "cost": 27576,
+        "p_milli": 433,
+        "tip": 14441
+      }
+    ],
+    "priority": [
+      {
+        "cost": 27576,
+        "cu_limit": 26000,
+        "cu_price_micro": 9924,
+        "fee": 258,
+        "p_milli": 100,
+        "priority_milli": 100
+      },
+      {
+        "cost": 27576,
+        "cu_limit": 26000,
+        "cu_price_micro": 363116,
+        "fee": 9441,
+        "p_milli": 433,
+        "priority_milli": 433
+      },
+      {
+        "cost": 27576,
+        "cu_limit": 26000,
+        "cu_price_micro": 434154,
+        "fee": 11288,
+        "p_milli": 500,
+        "priority_milli": 500
+      },
+      {
+        "cost": 27576,
+        "cu_limit": 26000,
+        "cu_price_micro": 964462,
+        "fee": 25076,
+        "p_milli": 1000,
+        "priority_milli": 1000
+      },
+      {
+        "cost": 27576,
+        "cu_limit": 26000,
+        "cu_price_micro": 2025077,
+        "fee": 52652,
+        "p_milli": 2000,
+        "priority_milli": 2000
+      }
+    ]
+  },
+  "generator": "frontier-node/crates/fclient/src/vectors.rs (test writes_frontier_vectors)",
+  "seal": {
+    "body": "02af8489a9bef5351b61b07f157f55e36b26020024323f8db3d6e48732a41ce4c767a1a183",
+    "commit": "464d205c5a61e2b3c25c86f42d57643913cf2cbd2ece408b4135c42082751ec4",
+    "domains": {
+      "keystream": "PS-KS",
+      "march": "PS-FRONTIER-MARCH-v1",
+      "posture": "PS-FRONTIER-POSTURE-v1",
+      "salt": "PS-SALT"
+    },
+    "invalid_plaintexts": [
+      {
+        "arrive_bell": 147,
+        "host_id": "2422228410957866",
+        "packed": "022a000000019b080093000000feff07001e01a8610740aa11000000000000000000000000",
+        "why": "version"
+      },
+      {
+        "arrive_bell": 147,
+        "host_id": "2422228410957866",
+        "packed": "012a000000019b080093000000feff07001e01a8610740aa11000000000000000000000100",
+        "why": "reserved"
+      },
+      {
+        "arrive_bell": 147,
+        "host_id": "2422228410957866",
+        "packed": "012a000000019b080093000000feff07001e01a8612140aa11000000000000000000000000",
+        "why": "path_len"
+      },
+      {
+        "arrive_bell": 147,
+        "host_id": "2422228410957866",
+        "packed": "012a000000019b080093000000feff07001e01a8610740aa11000000000000000080000000",
+        "why": "path_bits"
+      },
+      {
+        "arrive_bell": 147,
+        "host_id": "2422228410957866",
+        "packed": "012a000000019b080093000000feff07001e01a86107c00100000000000000000000000000",
+        "why": "direction"
+      },
+      {
+        "arrive_bell": 147,
+        "host_id": "2422228410957866",
+        "packed": "012a000000019b080093000000feff07001e04a8610740aa11000000000000000000000000",
+        "why": "stance"
+      },
+      {
+        "arrive_bell": 147,
+        "host_id": "2422228410957866",
+        "packed": "012a000000019b080093000000feff07001e0161ea0740aa11000000000000000000000000",
+        "why": "retreat"
+      }
+    ],
+    "js_to_rust": {
+      "commit16": "e3cdc769e17c93382a261dc10ef5f1902712dd2917e7ca372c61939158e33036",
+      "ct16": "8767a7fdcb6e576810679c5add7903a38c7cabbeb22c97bd1b417a144e9e14ce06f0cc6ae80689897ebf929cc8e578c11590e117dc199965db7a733444eb05c1d6a9a4c7bd8d71339120c93aa0646755c267b435a9c5e4bcdca0df827542b41e7bee4c53b64d621c71fde948935fcbd1927c80ef1477db08a689f36fa9ffb790503e07a17d890c0fb5acbe026081b8a1d1464d8f16c86356281ad156a46d6a8bcf15e84d9f",
+      "k": "b5f1ba3026c274779c5f008d9962a14f",
+      "note": "S-TLOCK q4: tlock-js compact-16 (69-B legacy plaintext) opened by the Rust crate; commitment matches",
+      "round": 32556350,
+      "sig": "94d4442172f58672422c67e874662bfb2fd7f74b6509d9a347d0a5596f2a507dad1cf5ffa60a45d50906d988d2cfb89c"
+    },
+    "k": "5053462d766563746f722d6b65793136",
+    "plain": {
+      "arrive_bell": 147,
+      "dest_p": -2,
+      "dest_q": 7,
+      "dest_tile": 30,
+      "host_id": "2422228410957866",
+      "packed": "012a000000019b080093000000feff07001e01a8610740aa11000000000000000000000000",
+      "path": "40aa11000000000000000000",
+      "path_len": 7,
+      "retreat_bps": 25000,
+      "stance": 1,
+      "version": 1
+    },
+    "retreat_max_bps": 60000,
+    "rust_to_js": {
+      "commit": "464d205c5a61e2b3c25c86f42d57643913cf2cbd2ece408b4135c42082751ec4",
+      "ct_hash": "5457b1820e9d80ba48173df17000f73256f4aa88b9b278197287a16bf5392327",
+      "k": "5053462d766563746f722d6b65793136",
+      "note": "sealed by the Rust tlock =0.0.10 crate; JS must open it with sig and get k and plain",
+      "pk": "83cf0f2896adee7eb8b5f01fcad3912212c437e0073e911fb90022d3e760183c8c4b450b6a0a6c3ac6a5776a2d1064510d1fec758c921cc22b0e17e63aaf4bcb5ed66304de9cf809bd274ca73bab4af5a6e9c76a4bc09e76eae8991ef5ece45a",
+      "plain": "012a000000019b080093000000feff07001e01a8610740aa11000000000000000000000000",
+      "round": 32556350,
+      "seal": "b62c2a28f35c2c91f6ccc75ed811a22af66f16a6c88e626fca7cab139bc710fba7e05b8365795ae1a66e093b1ec10a960919261c71859b47b21661a04ed27283479b6880e3e05298d8fcae148b0e6b7e452c20256600118178cab351e8860f6ceda82ab00fb07e156bdbfef454d6ea82b3cd5974043213a140bcf850b7747e5602af8489a9bef5351b61b07f157f55e36b26020024323f8db3d6e48732a41ce4c767a1a183",
+      "seal_root": "cf52972211469f93f5ee993c47cc06ddf8ac1f77bcea63dcd11626f757984c85",
+      "sig": "94d4442172f58672422c67e874662bfb2fd7f74b6509d9a347d0a5596f2a507dad1cf5ffa60a45d50906d988d2cfb89c"
+    },
+    "salt": "bdb6ff187260c66cb78c674a664d1947e7c8642629bad20fdf02c3bcc9936510"
+  },
+  "shapes": {
+    "blockhash": "29d2S7vB453rNYFdR5Ycwt7y9haRT5fwVwL9zTmBhfV2",
+    "cases": [
+      {
+        "bytes": 534,
+        "cu_limit": 25000,
+        "cu_price": 0,
+        "fee_payer": "GyGKxMyg1p9SsHfm15MkNUu1u9TN2JtTspcdmrtGUdse",
+        "loaded_limit": 1048576,
+        "locks": 9,
+        "name": "join",
+        "sigs": 2,
+        "tag": 48,
+        "tx_max": 700,
+        "wire": "Aq4U7/7oJKkN6ZrNE3jlGGSuN5v64cQNmSBEGwMLpkwJrplL3HWRrYfi2LfwQAZKDjjs/RY2GFNewV97ga3p2gVb7VvnIRtC8jnNZTcczneC1x+lnaYqzrIAx/1PccGc8ydzrfX3/KBAOjw2g2u4Nn9x3/9lKKTnYTLHx8B/rGcDAgEFCe1JKMYo0cLG6ukDOJBZlWEpWSc6XGP5NjbBRhSshzfRiojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1wcyHDfCtf2fhUfrc3pjDhP8cBxMv7JHLCkwaiSu2a3YfaoHgdxwBVOjzF44yMYqqk8KCDtGf1CR207UKctlbZTAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADBkZv5SEXMv/srbpyw5vnvIzlu8X3EmssQ5s6QAAAADT1Y4yFBELSyfTSa1NlVu1icOTnFudgc8rHd7gpyyShRlDrabperut4wmYxTcycRPv/5JDQbIdM9WHCjr1C/6vQO6//rtykbC/3VSUI5cNLt8i5xp/8jk6WbNMlguaYUBERERERERERERERERERERERERERERERERERERERERERBAUABQKoYQAABQAJAwAAAAAAAAAABQAFBAAAEAAGBwEACAcCAwQqMAOBOXcOqH0XX1ajVGbDTH7My42KkbTuN6Jd9g9bj8mzlACzP3EAAAAA",
+        "within_tx_max": true,
+        "writes": 3
+      },
+      {
+        "bytes": 575,
+        "cu_limit": 14000,
+        "cu_price": 0,
+        "fee_payer": "GyGKxMyg1p9SsHfm15MkNUu1u9TN2JtTspcdmrtGUdse",
+        "loaded_limit": 1048576,
+        "locks": 11,
+        "name": "file_ticket",
+        "sigs": 2,
+        "tag": 51,
+        "tx_max": 560,
+        "wire": "Ao5ss164ll3s3xcRtCntmM9RqsU82W6NSTu/+h5N82X/mrAc7J+ElMmyoLJzeHJbTjwsVpz6RXxqI/WE0T4V7Q+30InbXNiUFt4nLw6TFgi2TsTkB2swzWFwEDOadf7jXRyfIJCXcDyWzosIGeuqBT/X/SCpzvT88EibLRzTiAUEAgEFC+1JKMYo0cLG6ukDOJBZlWEpWSc6XGP5NjbBRhSshzfRgTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5QcyHDfCtf2fhUfrc3pjDhP8cBxMv7JHLCkwaiSu2a3YVglJ/NrP6q2R4M+Vx7LcHFXBQMa1gD04WGWy+NVMMlGWT5NH2eQS+AyRZribqyeSa7NTml4ra5HDap9T1GkOKW66foNKH3+16DuKgcarsQrslgggDUZbcV8HRwtC+iVvAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwZGb+UhFzL/7K26csOb57yM5bvF9xJrLEObOkAAAAA09WOMhQRC0sn00mtTZVbtYnDk5xbnYHPKx3e4KcskoUZQ62m6Xq7reMJmMU3MnET7/+SQ0GyHTPVhwo69Qv+r0Duv/67cpGwv91UlCOXDS7fIucaf/I5OlmzTJYLmmFAREREREREREREREREREREREREREREREREREREREREREQQHAAUCsDYAAAcACQMAAAAAAAAAAAcABQQAABAACAkBAAoCCQQFAwYRMwP9/wcAC/3/CAAC/v8HAAA=",
+        "within_tx_max": false,
+        "writes": 5
+      },
+      {
+        "bytes": 427,
+        "cu_limit": 12000,
+        "cu_price": 0,
+        "fee_payer": "GyGKxMyg1p9SsHfm15MkNUu1u9TN2JtTspcdmrtGUdse",
+        "loaded_limit": 1048576,
+        "locks": 7,
+        "name": "harvest",
+        "sigs": 2,
+        "tag": 64,
+        "tx_max": 320,
+        "wire": "ApVJ1wU9gzntiCRwzTDqwq5B5X8uJpYivvdJ75wug0ohApaYF7e2+beolSCMolkE2Phas4MQIK3j3BKWvHiKpw3O4VzLgc8x0oNjl7moRyV//Asye8yckkcRikBikN2sS87g6mG3QyBh+oBC3rksCGHco+PZimvDYp4um8xCiI4DAgEDB+1JKMYo0cLG6ukDOJBZlWEpWSc6XGP5NjbBRhSshzfRgTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5QcyHDfCtf2fhUfrc3pjDhP8cBxMv7JHLCkwaiSu2a3YaKfA0QgOHyvbf1ZqDTiJdVnNC0X1wFCyBVHnDSStumGAwZGb+UhFzL/7K26csOb57yM5bvF9xJrLEObOkAAAAA09WOMhQRC0sn00mtTZVbtYnDk5xbnYHPKx3e4KcskodA7r/+u3KRsL/dVJQjlw0u3yLnGn/yOTpZs0yWC5phQEREREREREREREREREREREREREREREREREREREREREREEBAAFAuAuAAAEAAkDAAAAAAAAAAAEAAUEAAAQAAUFAQAGAgMBQA==",
+        "within_tx_max": false,
+        "writes": 3
+      },
+      {
+        "bytes": 466,
+        "cu_limit": 25000,
+        "cu_price": 0,
+        "fee_payer": "GyGKxMyg1p9SsHfm15MkNUu1u9TN2JtTspcdmrtGUdse",
+        "loaded_limit": 1048576,
+        "locks": 8,
+        "name": "muster",
+        "sigs": 2,
+        "tag": 67,
+        "tx_max": 380,
+        "wire": "ArODIXyFS/6BEqsm/spUUmkSICR5PHTQXk4a6k7Rkf50WKBwqWbNcs4RdplI8qAaXpIjAEVCDnBkKZl17Itg4glY4kl7Di80JXnw0BmHlbCZjGYNW0yzXNi1Yliozyk4zNLaEdxLExY/EV0++xHurgsTDy9sw9HO8gY0E6fMfcQBAgEDCO1JKMYo0cLG6ukDOJBZlWEpWSc6XGP5NjbBRhSshzfRgTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5QcyHDfCtf2fhUfrc3pjDhP8cBxMv7JHLCkwaiSu2a3YVk+TR9nkEvgMkWa4m6snkmuzU5peK2uRw2qfU9RpDilop8DRCA4fK9t/VmoNOIl1Wc0LRfXAULIFUecNJK26YYDBkZv5SEXMv/srbpyw5vnvIzlu8X3EmssQ5s6QAAAADT1Y4yFBELSyfTSa1NlVu1icOTnFudgc8rHd7gpyySh0Duv/67cpGwv91UlCOXDS7fIucaf/I5OlmzTJYLmmFAREREREREREREREREREREREREREREREREREREREREREQQFAAUCqGEAAAUACQMAAAAAAAAAAAUABQQAABAABgYBAAcCBAMHQwLoAwAAHg==",
+        "within_tx_max": false,
+        "writes": 4
+      },
+      {
+        "bytes": 712,
+        "cu_limit": 15000,
+        "cu_price": 0,
+        "fee_payer": "GyGKxMyg1p9SsHfm15MkNUu1u9TN2JtTspcdmrtGUdse",
+        "loaded_limit": 1048576,
+        "locks": 9,
+        "name": "depart",
+        "sigs": 2,
+        "tag": 80,
+        "tx_max": 800,
+        "wire": "At7byQS6bjJ3M6D62CudKiFc5deY8X/qupV536IJDL5YH8n+rfKwtjr/VeHiKjrKwU4DpVqYWBKTOoHpJrRUsgn+8OujTlgJa2W/MeON5wKCGZ99si9pfFPto954+/U4bbdmhvi4wWsaqnAWKfxJ6la++u2PRhHSM4UNWuNcXlgJAgEECe1JKMYo0cLG6ukDOJBZlWEpWSc6XGP5NjbBRhSshzfRgTl3Dqh9F19Wo1Rmw0x+zMuNipG07jeiXfYPW4/Js5QcyHDfCtf2fhUfrc3pjDhP8cBxMv7JHLCkwaiSu2a3YVk+TR9nkEvgMkWa4m6snkmuzU5peK2uRw2qfU9RpDilop8DRCA4fK9t/VmoNOIl1Wc0LRfXAULIFUecNJK26YYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMGRm/lIRcy/+ytunLDm+e8jOW7xfcSayxDmzpAAAAANPVjjIUEQtLJ9NJrU2VW7WJw5OcW52Bzysd3uCnLJKHQO6//rtykbC/3VSUI5cNLt8i5xp/8jk6WbNMlguaYUBERERERERERERERERERERERERERERERERERERERERERBAYABQKYOgAABgAJAwAAAAAAAAAABgAFBAAAEAAHBwEACAIEAwXbAVAqAAAAAZsIAKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAkwAAAGk4AAAAAAAAAQ==",
+        "within_tx_max": true,
+        "writes": 4
+      },
+      {
+        "bytes": 928,
+        "cu_limit": 26000,
+        "cu_price": 2211539,
+        "fee_payer": "EdmxWPmx2WH6WgFfTdu9xfkYf3k1g5wD1zccTVySEEh1",
+        "loaded_limit": 1048576,
+        "locks": 20,
+        "name": "reveal",
+        "sigs": 1,
+        "tag": 81,
+        "tx_max": 1100,
+        "wire": "AQCfrElCj/m8YRU8+vjj6cX1s+mDGM1yWriDHT+k6HuUMPPwILrcvUbihnvIUsXqCjHIcQx63M+xEujPRqdUUAIBABEUypOsFwUYcHHWe4PH/w7+gQjo7EUwV113JoeTM9vavnwxU8GwlvjsFjaTPuVZAkjFHHqasIhC1bHNep+W9sxXdl/2/yo6Gf+vUEW+mzSP2LFzNcNDnf3wsJB8aNs8wS7LAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADBkZv5SEXMv/srbpyw5vnvIzlu8X3EmssQ5s6QAAAAAan1RcYe9FmNdrUBFX9wsDBJMaPIVZ1pdu6y18IAAAALwDJ0Nsi+kvz+uiCsrHzf6RoH6myRsK0Ea5/unOc6eM09WOMhQRC0sn00mtTZVbtYnDk5xbnYHPKx3e4KcskoVglJ/NrP6q2R4M+Vx7LcHFXBQMa1gD04WGWy+NVMMlGWT5NH2eQS+AyRZribqyeSa7NTml4ra5HDap9T1GkOKVdXAjc21m9DA7YAOdU6vUuieoAwnZ9u9VDCHMHUrKf95B3zmTy0tTy4DpDlAD944b6yCIw0atal0Pn/jcs/IWvop8DRCA4fK9t/VmoNOIl1Wc0LRfXAULIFUecNJK26Ya66foNKH3+16DuKgcarsQrslgggDUZbcV8HRwtC+iVvMKzWVHzl/Ehcowg+QWgrISnp21RS63bm/8Vp/nX8zO/zTiYAgz/Ut1f4/eorFi6hdYZVlL2lg1ophDVzbs/NYbQO6//rtykbC/3VSUI5cNLt8i5xp/8jk6WbNMlguaYUOCiy3ZgdbH4ol9Ag00HVeVLSsAKiB6zDICoisjcq2Tc5fuxXwPie7RNY1HTLyLYOsMOW68KI6Iku7BNemMryeLzvf20PvrlxeSM6hKS37fksiN64ZR8zcpADD+6vYZ3rhERERERERERERERERERERERERERERERERERERERERERBAQABQKQZQAABAAJA9O+IQAAAAAABAAFBAAAEAAHEgAQDAoSCw4IAREGAg8JDRMFA4gBUQECASoAAAABmwgAkwAAAP7/BwAeAahhB0CqEQAAAAAAAAAAAAAAALu7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7zMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzKk6wXBRhwcdZ7g8f/Dv6BCOjsRTBXXXcmh5Mz29q+fA==",
+        "within_tx_max": true,
+        "writes": 3
+      },
+      {
+        "bytes": 762,
+        "cu_limit": 85000,
+        "cu_price": 0,
+        "fee_payer": "GyGKxMyg1p9SsHfm15MkNUu1u9TN2JtTspcdmrtGUdse",
+        "loaded_limit": 1048576,
+        "locks": 12,
+        "name": "settle_transit",
+        "sigs": 1,
+        "tag": 84,
+        "tx_max": 1100,
+        "wire": "AaW++qtDiEUS9DVHYCIgJT3S45FSjy9pfssQ+l13me5QH9kSgQBi+vso4+BZp39viBUkpCftqOc8JFOPIvpY1QUBAAUM7UkoxijRwsbq6QM4kFmVYSlZJzpcY/k2NsFGFKyHN9FYJSfzaz+qtkeDPlcey3BxVwUDGtYA9OFhlsvjVTDJRlk+TR9nkEvgMkWa4m6snkmuzU5peK2uRw2qfU9RpDilX/b/KjoZ/69QRb6bNI/YsXM1w0Od/fCwkHxo2zzBLsuinwNEIDh8r239Wag04iXVZzQtF9cBQsgVR5w0krbphsKzWVHzl/Ehcowg+QWgrISnp21RS63bm/8Vp/nX8zO/ypOsFwUYcHHWe4PH/w7+gQjo7EUwV113JoeTM9vavnwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMGRm/lIRcy/+ytunLDm+e8jOW7xfcSayxDmzpAAAAANPVjjIUEQtLJ9NJrU2VW7WJw5OcW52Bzysd3uCnLJKHQO6//rtykbC/3VSUI5cNLt8i5xp/8jk6WbNMlguaYUOX7sV8D4nu0TWNR0y8i2DrDDluvCiOiJLuwTXpjK8niEREREREREREREREREREREREREREREREREREREREREREECAAFAghMAQAIAAkDAAAAAAAAAAAIAAUEAAAQAAkNAAoEAQUDAgsGBgAAB+cBVAGqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwO1JKMYo0cLG6ukDOJBZlWEpWSc6XGP5NjbBRhSshzfR",
+        "within_tx_max": true,
+        "writes": 7
+      },
+      {
+        "bytes": 780,
+        "cu_limit": 345000,
+        "cu_price": 166667,
+        "fee_payer": "EdmxWPmx2WH6WgFfTdu9xfkYf3k1g5wD1zccTVySEEh1",
+        "loaded_limit": 1048576,
+        "locks": 8,
+        "name": "post_anchor",
+        "sigs": 1,
+        "tag": 16,
+        "tx_max": 800,
+        "wire": "AXpdutkpwYemPqD1uIDFcbjz8lfQHaWR230zN4tjdnafuHN+HEEatixtNrhJfIPH9edBymO4hzJG+dRt6+wlqwQBAAYIypOsFwUYcHHWe4PH/w7+gQjo7EUwV113JoeTM9vavnw/GS2mrJXfwCDVvmSI3UZIQLQoVov7oWWLtMz66nXAeAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwZGb+UhFzL/7K26csOb57yM5bvF9xJrLEObOkAAAAAGp9UXGHvRZjXa1ARV/cLAwSTGjyFWdaXbustfCAAAADT1Y4yFBELSyfTSa1NlVu1icOTnFudgc8rHd7gpyyShynY6n+v9iks0MTolum9rr0WAUUPos8XtKOsDVOUyMirQO6//rtykbC/3VSUI5cNLt8i5xp/8jk6WbNMlguaYUBERERERERERERERERERERERERERERERERERERERERERBAMABQKoQwUAAwAJAwuLAgAAAAAAAwAFBAAAEAAFBgAHAQYEAoADEAWTAAAAwbHwAQAAAACwfeOPIkLqSuCZYPFMRLgmdktPAKe127ZPCtrrgIT9kSMZNLP34eKuhsrdLSelJy8BFNz1lyK3WFU4z6S4e4zME3692M+Hu4i9NWIlz5w7/kEPWYo6d9nJhwWUCsq8ZBUqD0mou+8BcOspgwVCvaq6S020oyVSrXx7iTyPoUxpcd97mBhhJB030vMeQoDfFw6pBUhjRCw++r10M3me55FxL0u4m6OPkDDoDzZNm1MmpoePA+NxUbErBn9jGH447hOGARmITkBH0V7xQ3GNxhH0MSF9SQO4Vrefi3Kdxmf8I46XZ1ROW+b5jSIREbc3NGoQNRSFIApa/KLV73/LVc/+jf4A23e3hIdjugNEAccbaRHtSkGYrn2ASuvrzCAYWwbjGQVOysDGr430Bl9saWLR4X45nsIPNSZwfYvqLMCSn7KSgnS5sdakrNr76q75DOkV58qTrBcFGHBx1nuDx/8O/oEI6OxFMFdddyaHkzPb2r58",
+        "within_tx_max": true,
+        "writes": 2
+      }
+    ],
+    "keys": {
+      "keeper": "EdmxWPmx2WH6WgFfTdu9xfkYf3k1g5wD1zccTVySEEh1",
+      "relay": "GyGKxMyg1p9SsHfm15MkNUu1u9TN2JtTspcdmrtGUdse",
+      "session": "9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu",
+      "wallet": "AKnL4NNf3DGWZJS6cPknBuEGnVsV4A4m5tgebLHaRSZ9"
+    }
+  },
+  "v": 1
+}

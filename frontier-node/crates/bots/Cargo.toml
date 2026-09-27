@@ -1,0 +1,16 @@
+[package]
+name = "bots"
+description = "Frontier bot runner (skeleton in W1; W3 builds it)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "frontier-bots"
+path = "src/main.rs"
+
+[dependencies]
+fclient.workspace = true
+agents = { path = "../agents" }

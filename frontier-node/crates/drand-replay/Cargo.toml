@@ -1,0 +1,24 @@
+[package]
+name = "drand-replay"
+description = "drand HTTP API over recorded quicknet rounds or the test-beacon key, gated by the game clock (M1 contract §8.7, I-53)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+name = "drand_replay"
+
+[[bin]]
+name = "drand-replay"
+path = "src/main.rs"
+
+[dependencies]
+fclient.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+axum.workspace = true
+
+[dev-dependencies]
+localnet.workspace = true

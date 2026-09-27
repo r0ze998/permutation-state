@@ -1,0 +1,14 @@
+[package]
+name = "agents"
+description = "Frontier bot profiles and policies (skeleton in W1; W3 builds it)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+name = "frontier_agents"
+
+[dependencies]
+fclient.workspace = true

@@ -1,0 +1,5 @@
+# frontier-node keeps its own build output (frontier-node/target), as the
+# gates expect (`frontier-node/target/release/frontier-stack`); without this
+# the repository root's config would send it to permutation-chain/target.
+[build]
+target-dir = "target"
