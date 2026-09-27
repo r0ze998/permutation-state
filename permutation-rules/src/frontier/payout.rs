@@ -9,7 +9,7 @@
 //!    + steward_i )
 //! ```
 //!
-//! * `w̃_i = min(Works_i, 105 Works per USDC of fee_i)` ([`works_weight`]):
+//! * `w̃_i = min(Works_i, 105 Works per USDC of fee_i)` ([`works_weight_at`]):
 //!   linear, so splitting play over more wallets earns nothing extra (the
 //!   earlier `√Works` paid N wallets √N times one wallet's weight), and
 //!   capped by the fee, so a wallet's Works weight never outgrows what it
@@ -36,9 +36,11 @@
 //! **Conservation.** Every term is `pot × weight / Σ weight` rounded down,
 //! so for any set of wallets whose weights sum to the totals, Σ claims ≤ the
 //! prize pools. What a cap cuts off is `swept` (to the next season's pools);
-//! rounding remainders and unclaimed shares are `dust`. `Ledger` keeps
-//! `claimed + swept + dust == citizen + laurel` exactly and refuses any
-//! claim that would break it.
+//! rounding remainders and unclaimed shares are `dust`. [`SeasonLedger`]
+//! keeps `claimed + swept + dust == citizen + laurel` exactly and refuses
+//! any claim that would break it, and (CL-08) keeps one [`FactionLedger`]
+//! per faction, so a claim can never draw on another faction's pots even
+//! while the season total is fine.
 
 use super::index::{citizen_faction_weight, laurel_faction_weight, FACTIONS};
 use super::pools::USDC;
@@ -65,15 +67,11 @@ pub fn tenure_units(active_days: u32, days_available: u32) -> u32 {
 /// 28 days a 4-USDC day-0 fee buys). Kept for comparison runs.
 pub const WORKS_PER_USDC_REV2: u64 = 140;
 
-/// Works weight per USDC of citizen fee: the per-wallet cap of the Works
-/// share. The default is [`PayoutParams::REV3`]'s `works_per_usdc`; this
-/// constant is the value `CitizenRecord::weights` uses.
+/// Works weight per USDC of citizen fee in [`PayoutParams::REV3`] (the
+/// Season 1 default). No kernel reads it: every weight takes the season's
+/// own `works_per_usdc` (CL-12 removed `CitizenRecord::weights()` and
+/// `works_weight()`, which always used this constant).
 pub const WORKS_PER_USDC: u64 = PayoutParams::REV3.works_per_usdc;
-
-/// A wallet's Works weight at the default rate ([`WORKS_PER_USDC`]).
-pub fn works_weight(works: u64, fee: u64) -> u64 {
-    works_weight_at(works, fee, WORKS_PER_USDC)
-}
 
 /// A wallet's Works weight: its season Works (daily-capped at credit
 /// time), linear, capped at `per_usdc` per USDC of fee paid. Linear so that
@@ -135,46 +133,51 @@ impl CitizenRecord {
     /// `AddStake` after Join (until the last join day, priced by that day,
     /// `pools::EntrySchedule::laurel_stake`). The program banks every
     /// holding of the wallet first, so `laurels` is complete; none of them
-    /// will count. Returns the record's weights before and after, for the
-    /// shard update (`add(new)` then `remove(old)`).
-    pub fn add_stake(&mut self, stake: u64) -> Result<(Weights, Weights), EconError> {
+    /// will count. Returns the record's weights before and after at the
+    /// season's Works rate `works_per_usdc`, for the shard update
+    /// (`add(new)` then `remove(old)`).
+    pub fn add_stake(
+        &mut self,
+        stake: u64,
+        works_per_usdc: u64,
+    ) -> Result<(Weights, Weights), EconError> {
         if self.staker() || stake == 0 {
             return Err(EconError::Underflow);
         }
-        let old = self.weights();
+        let old = self.weights_at(works_per_usdc);
         self.paid().checked_add(stake).ok_or(EconError::Overflow)?;
         self.stake = stake;
         self.laurels_at_stake = self.laurels;
-        Ok((old, self.weights()))
+        Ok((old, self.weights_at(works_per_usdc)))
     }
 
     /// Move `amount` counted laurels to `to` (a capture's 25%, a failed
     /// siege's stake): refused if `self` has fewer counted laurels. The
     /// receiver's laurels count if it is a staker. Returns both records'
-    /// weights before, for the shard updates.
+    /// weights before at the season's Works rate, for the shard updates.
     pub fn transfer_counted(
         &mut self,
         to: &mut CitizenRecord,
         amount: u64,
+        works_per_usdc: u64,
     ) -> Result<(Weights, Weights), EconError> {
         if amount > self.counted_laurels() {
             return Err(EconError::Underflow);
         }
         let receiver = to.laurels.checked_add(amount).ok_or(EconError::Overflow)?;
-        let old = (self.weights(), to.weights());
+        let old = (
+            self.weights_at(works_per_usdc),
+            to.weights_at(works_per_usdc),
+        );
         self.laurels -= amount;
         to.laurels = receiver;
         Ok(old)
     }
 
-    /// This wallet's contribution to its faction's totals at the default
-    /// Works rate.
-    pub fn weights(&self) -> Weights {
-        self.weights_at(WORKS_PER_USDC)
-    }
-
-    /// This wallet's contribution at the season's Works rate
-    /// (`PayoutParams::works_per_usdc`, `Settlement::works_per_usdc`).
+    /// This wallet's contribution to its faction's totals at the season's
+    /// Works rate (`PayoutParams::works_per_usdc`,
+    /// `Settlement::works_per_usdc`). The only form: there is no default
+    /// rate (CL-12).
     pub fn weights_at(&self, works_per_usdc: u64) -> Weights {
         Weights {
             fee: self.fee,
@@ -321,19 +324,31 @@ impl PayoutParams {
         works_per_usdc: 105,
     };
 
-    /// Refuse parameters a season must never be created with.
+    /// Refuse parameters no settlement may run with. The officer-pay
+    /// ceiling is at most 10,000 bps (CL-11): above what the wallet paid
+    /// an office would be profitable, which O3 rules out. `u32::MAX` (no
+    /// ceiling) stays accepted here for `REV2` comparison runs only.
     pub fn validate(&self) -> Result<(), EconError> {
         let ok = self.fee_units_bps <= BPS_ONE
             && self.steward_bps <= 2_000
             && (1..=10).contains(&self.cap_multiple)
-            && (self.office_ceiling_bps == u32::MAX
-                || self.office_ceiling_bps as u64 <= self.cap_multiple * BPS_ONE as u64)
+            && (self.office_ceiling_bps == u32::MAX || self.office_ceiling_bps <= BPS_ONE)
             && self.works_per_usdc <= 10_000;
         if ok {
             Ok(())
         } else {
             Err(EconError::BadParams)
         }
+    }
+
+    /// The strict form `CreateSeason` calls (CL-11): [`PayoutParams::validate`]
+    /// and a real officer-pay ceiling (`u32::MAX`, "off", is refused).
+    pub fn validate_for_season(&self) -> Result<(), EconError> {
+        self.validate()?;
+        if self.office_ceiling_bps == u32::MAX {
+            return Err(EconError::BadParams);
+        }
+        Ok(())
     }
 }
 
@@ -579,36 +594,143 @@ pub fn claim(st: &Settlement, rec: &CitizenRecord) -> Result<Claim, EconError> {
     })
 }
 
-/// The Season's claim counters: `claimed + swept + dust() == prize` always.
+/// One faction's claim counters (CL-08). The pots are what that faction's
+/// claims may draw on, from its [`FactionPots`]:
+///
+/// * `pot_citizen` = fee×tenure pot + Works pot + steward rows paid (the
+///   steward rows are cut from the faction's citizen and laurel parts, so
+///   they are counted once, here);
+/// * `pot_laurel` = the laurel pot.
+///
+/// A claim draws its citizen and steward parts (before the officer
+/// ceiling and the cap) from `pot_citizen` and its laurel part from
+/// `pot_laurel`; `claimed` and `swept` are the faction's share of what
+/// was paid and cut (the Civilisation Share is season-wide, in
+/// [`SeasonLedger`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct Ledger {
+pub struct FactionLedger {
+    pub pot_citizen: u64,
+    pub pot_laurel: u64,
+    /// Paid to this faction's wallets from its own pots.
+    pub claimed: u64,
+    /// Cut from this faction's parts by the officer ceiling and the cap.
+    pub swept: u64,
+    /// Drawn on `pot_citizen` so far (`claimed + swept` split by pot).
+    pub drawn_citizen: u64,
+    /// Drawn on `pot_laurel` so far.
+    pub drawn_laurel: u64,
+}
+
+impl FactionLedger {
+    /// The faction's counters for a settlement's pots.
+    pub fn new(p: &FactionPots) -> Result<Self, EconError> {
+        let pot_citizen = p
+            .fee_units_pot
+            .checked_add(p.works_pot)
+            .and_then(|x| x.checked_add(p.steward_paid()))
+            .ok_or(EconError::Overflow)?;
+        Ok(FactionLedger {
+            pot_citizen,
+            pot_laurel: p.laurel_pot,
+            ..Default::default()
+        })
+    }
+
+    /// What is left of the faction's pots.
+    pub fn left(&self) -> u64 {
+        (self.pot_citizen - self.drawn_citizen) + (self.pot_laurel - self.drawn_laurel)
+    }
+}
+
+/// The season's claim counters: `claimed + swept + dust() == prize`
+/// always, and per faction (CL-08) no faction's claims ever draw more than
+/// its own pots, even while the season total is fine. `record` refuses
+/// (and changes nothing) otherwise.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct SeasonLedger {
     pub prize: u64,
     pub claimed: u64,
     pub swept: u64,
+    /// The Civilisation Share pot and what claims have drawn on it.
+    pub civ_pot: u64,
+    pub civ_drawn: u64,
+    pub factions: [FactionLedger; FACTIONS],
 }
 
-impl Ledger {
-    pub fn new(prize: u64) -> Self {
-        Ledger {
-            prize,
+impl SeasonLedger {
+    /// Counters for a settlement: the season's prize, the Civilisation
+    /// Share and every faction's pots.
+    pub fn new(st: &Settlement) -> Result<Self, EconError> {
+        let mut factions = [FactionLedger::default(); FACTIONS];
+        for (f, p) in factions.iter_mut().zip(st.factions.iter()) {
+            *f = FactionLedger::new(p)?;
+        }
+        Ok(SeasonLedger {
+            prize: st.prize,
             claimed: 0,
             swept: 0,
-        }
+            civ_pot: st.civ_pot,
+            civ_drawn: 0,
+            factions,
+        })
     }
 
-    /// Book one claim; refused (nothing changes) if it would pay out more
-    /// than the pools hold.
-    pub fn record(&mut self, c: &Claim) -> Result<(), EconError> {
-        let claimed = self
-            .claimed
-            .checked_add(c.paid)
+    /// Book one claim of a wallet of `faction`; refused (nothing changes)
+    /// if it would take the season past its prize, the Civilisation Share
+    /// past its pot, or the faction past either of its own pots.
+    pub fn record(&mut self, faction: u8, c: &Claim) -> Result<(), EconError> {
+        let mut n = *self;
+        let f = n
+            .factions
+            .get_mut(faction as usize)
+            .ok_or(EconError::BadFaction)?;
+        // The parts as drawn from each pot (before the ceiling and the cap).
+        let steward_gross = c
+            .steward
+            .checked_add(c.office_cut)
             .ok_or(EconError::Overflow)?;
-        let swept = self.swept.checked_add(c.swept).ok_or(EconError::Overflow)?;
-        if claimed.checked_add(swept).ok_or(EconError::Overflow)? > self.prize {
+        let citizen_side = c
+            .citizen
+            .checked_add(steward_gross)
+            .ok_or(EconError::Overflow)?;
+        let parts = citizen_side
+            .checked_add(c.laurel)
+            .and_then(|x| x.checked_add(c.civ))
+            .ok_or(EconError::Overflow)?;
+        let settled = c.paid.checked_add(c.swept).ok_or(EconError::Overflow)?;
+        if parts != c.gross || settled != c.gross {
+            // Not a claim `claim()` produced.
             return Err(EconError::Underflow);
         }
-        self.claimed = claimed;
-        self.swept = swept;
+        f.drawn_citizen = f
+            .drawn_citizen
+            .checked_add(citizen_side)
+            .ok_or(EconError::Overflow)?;
+        f.drawn_laurel = f
+            .drawn_laurel
+            .checked_add(c.laurel)
+            .ok_or(EconError::Overflow)?;
+        if f.drawn_citizen > f.pot_citizen || f.drawn_laurel > f.pot_laurel {
+            return Err(EconError::Underflow);
+        }
+        // The faction's share of what was paid and cut: the cap and the
+        // ceiling cut the claim as a whole; the Civilisation Share part is
+        // counted as paid first (it is season-wide).
+        let civ_paid = c.civ.min(c.paid);
+        let own_paid = c.paid - civ_paid;
+        let own_swept = (c.gross - c.civ) - own_paid;
+        f.claimed = f.claimed.checked_add(own_paid).ok_or(EconError::Overflow)?;
+        f.swept = f.swept.checked_add(own_swept).ok_or(EconError::Overflow)?;
+        n.civ_drawn = n.civ_drawn.checked_add(c.civ).ok_or(EconError::Overflow)?;
+        if n.civ_drawn > n.civ_pot {
+            return Err(EconError::Underflow);
+        }
+        n.claimed = n.claimed.checked_add(c.paid).ok_or(EconError::Overflow)?;
+        n.swept = n.swept.checked_add(c.swept).ok_or(EconError::Overflow)?;
+        if n.claimed.checked_add(n.swept).ok_or(EconError::Overflow)? > n.prize {
+            return Err(EconError::Underflow);
+        }
+        *self = n;
         Ok(())
     }
 

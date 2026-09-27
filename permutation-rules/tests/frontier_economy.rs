@@ -18,11 +18,11 @@ use permutation_rules::frontier::laurel::{
     HOLDING_EMISSION_PER_BELL, LAUREL_ONE, SIEGE_STAKE, WEIGHT_ONE,
 };
 use permutation_rules::frontier::mandate::{
-    share_floor, MandateTerm, Reserve, TermState, MANDATE_CAP_PER_TERM,
+    share_floor, MandateTerm, Reserve, TermState, MANDATE_CAP_PER_TERM, TERM_SECS,
 };
 use permutation_rules::frontier::payout::{
-    claim, settle, tenure_units, CitizenRecord, FactionTotals, Ledger, PayoutParams, Settlement,
-    TENURE_ONE,
+    claim, settle, tenure_units, works_weight_at, CitizenRecord, FactionTotals, PayoutParams,
+    SeasonLedger, Settlement, TENURE_ONE, WORKS_PER_USDC,
 };
 use permutation_rules::frontier::pools::{
     civ_share_bps, steward_rows, EconError, Entry, EntrySchedule, Pools, USDC,
@@ -536,7 +536,9 @@ fn rec(faction: u8, fee: u64, stake: u64, tenure: u32) -> CitizenRecord {
 fn totals_of(recs: &[CitizenRecord]) -> [FactionTotals; FACTIONS] {
     let mut t = [FactionTotals::default(); FACTIONS];
     for r in recs.iter().filter(|r| !r.voided) {
-        t[r.faction as usize].add(&r.weights()).unwrap();
+        t[r.faction as usize]
+            .add(&r.weights_at(WORKS_PER_USDC))
+            .unwrap();
     }
     t
 }
@@ -815,7 +817,7 @@ fn reference_claims(s: &Season, index: &[u64; FACTIONS]) -> Vec<u64> {
             let fu_sum: u128 = mates.iter().map(|m| m.fee as u128 * m.tenure as u128).sum();
             let w_sum: u128 = mates
                 .iter()
-                .map(|m| permutation_rules::frontier::payout::works_weight(m.works, m.fee) as u128)
+                .map(|m| works_weight_at(m.works, m.fee, WORKS_PER_USDC) as u128)
                 .sum();
             let (fu_pot, w_pot) = if w_sum > 0 {
                 (cit * 9_000 / 10_000, cit - cit * 9_000 / 10_000)
@@ -825,7 +827,7 @@ fn reference_claims(s: &Season, index: &[u64; FACTIONS]) -> Vec<u64> {
             let mut g = md(fu_pot, r.fee as u128 * r.tenure as u128, fu_sum)
                 + md(
                     w_pot,
-                    permutation_rules::frontier::payout::works_weight(r.works, r.fee) as u128,
+                    works_weight_at(r.works, r.fee, WORKS_PER_USDC) as u128,
                     w_sum,
                 )
                 + if r.builder {
@@ -874,7 +876,8 @@ fn claims_conserve_money_under_random_seasons() {
         let st = settle(&s.pools, &totals, &index, s.stages, &p).unwrap();
         let prize = s.pools.prize().unwrap();
         assert!(st.allocated <= prize, "seed {seed}");
-        let mut ledger = Ledger::new(prize);
+        let mut ledger = SeasonLedger::new(&st).unwrap();
+        assert_eq!(ledger.prize, prize);
         let reference = reference_claims(&s, &index);
         for (i, r) in s.recs.iter().enumerate() {
             let c = claim(&st, r).unwrap();
@@ -886,7 +889,7 @@ fn claims_conserve_money_under_random_seasons() {
             );
             capped += (c.swept > 0) as u32;
             voided += r.voided as u32;
-            ledger.record(&c).unwrap();
+            ledger.record(r.faction, &c).unwrap();
         }
         assert_eq!(
             ledger.claimed + ledger.swept + ledger.dust(),
@@ -951,7 +954,7 @@ fn incremental_sharded_totals_are_order_independent() {
             for &i in &perm {
                 let c = current[i];
                 shards[c.faction as usize][i % 16]
-                    .add(&c.weights())
+                    .add(&c.weights_at(WORKS_PER_USDC))
                     .unwrap();
             }
             // Credits land in random order and pieces: add(new) then remove(old).
@@ -963,8 +966,8 @@ fn incremental_sharded_totals_are_order_independent() {
                     (old.laurels + r.below(s.recs[i].laurels / 2 + 1)).min(s.recs[i].laurels);
                 new.works = (old.works + r.below(s.recs[i].works / 2 + 1)).min(s.recs[i].works);
                 let sh = &mut shards[old.faction as usize][i % 16];
-                sh.add(&new.weights()).unwrap();
-                sh.remove(&old.weights()).unwrap();
+                sh.add(&new.weights_at(WORKS_PER_USDC)).unwrap();
+                sh.remove(&old.weights_at(WORKS_PER_USDC)).unwrap();
                 current[i] = new;
             }
             // Banking window: bring every record to its final value; then
@@ -976,12 +979,12 @@ fn incremental_sharded_totals_are_order_independent() {
                         voided: false,
                         ..s.recs[i]
                     }
-                    .weights(),
+                    .weights_at(WORKS_PER_USDC),
                 )
                 .unwrap();
-                sh.remove(&current[i].weights()).unwrap();
+                sh.remove(&current[i].weights_at(WORKS_PER_USDC)).unwrap();
                 if s.recs[i].voided {
-                    sh.remove(&s.recs[i].weights()).unwrap();
+                    sh.remove(&s.recs[i].weights_at(WORKS_PER_USDC)).unwrap();
                 }
             }
             let mut folded = [FactionTotals::default(); FACTIONS];
@@ -1035,10 +1038,16 @@ fn late_stakes_do_not_reach_back() {
     early.laurels = 300 * LAUREL_ONE;
     late.laurels = 300 * LAUREL_ONE; // banked fee-only, days 0–21
     assert_eq!(late.counted_laurels(), 0);
-    let (old, new) = late.add_stake(SCHED.laurel_stake(21).unwrap()).unwrap();
+    let (old, new) = late
+        .add_stake(SCHED.laurel_stake(21).unwrap(), WORKS_PER_USDC)
+        .unwrap();
     assert_eq!(late.stake, 1_500_000);
     assert_eq!((old.laurels, new.laurels), (0, 0), "nothing reaches back");
-    assert_eq!(late.add_stake(1), Err(EconError::Underflow), "one stake");
+    assert_eq!(
+        late.add_stake(1, WORKS_PER_USDC),
+        Err(EconError::Underflow),
+        "one stake"
+    );
     // Days 21–28: both bank 50 more.
     early.laurels += 50 * LAUREL_ONE;
     late.laurels += 50 * LAUREL_ONE;
@@ -1060,8 +1069,8 @@ fn late_stakes_do_not_reach_back() {
     let mut t = FactionTotals::default();
     let mut fresh = rec(0, fee, 0, TENURE_ONE);
     fresh.laurels = 9 * LAUREL_ONE;
-    t.add(&fresh.weights()).unwrap();
-    let (old, new) = fresh.add_stake(3 * USDC).unwrap();
+    t.add(&fresh.weights_at(WORKS_PER_USDC)).unwrap();
+    let (old, new) = fresh.add_stake(3 * USDC, WORKS_PER_USDC).unwrap();
     t.add(&new).unwrap();
     t.remove(&old).unwrap();
     assert_eq!(t, totals_of(&[fresh])[0]);
@@ -1088,7 +1097,7 @@ fn only_counted_laurels_move_between_wallets() {
     let mut main = rec(0, 4 * USDC, 6 * USDC, TENURE_ONE);
     assert_eq!(capture_transfer(alt.counted_laurels(), fresh).laurels, 0);
     assert_eq!(
-        alt.transfer_counted(&mut main, 1),
+        alt.transfer_counted(&mut main, 1, WORKS_PER_USDC),
         Err(EconError::Underflow),
         "a fee-only wallet has no transferable laurels"
     );
@@ -1096,7 +1105,9 @@ fn only_counted_laurels_move_between_wallets() {
     staker.laurels = 400 * LAUREL_ONE;
     let x = capture_transfer(staker.counted_laurels(), fresh).laurels;
     assert_eq!(x, 100 * LAUREL_ONE);
-    staker.transfer_counted(&mut main, x).unwrap();
+    staker
+        .transfer_counted(&mut main, x, WORKS_PER_USDC)
+        .unwrap();
     assert_eq!(
         (staker.counted_laurels(), main.counted_laurels()),
         (300 * LAUREL_ONE, 100 * LAUREL_ONE)
@@ -1131,7 +1142,7 @@ fn only_counted_laurels_move_between_wallets() {
 /// gave √N times as much), and no wallet's weight outgrows its fee.
 #[test]
 fn works_weight_does_not_reward_splitting() {
-    use permutation_rules::frontier::payout::{works_weight, WORKS_PER_USDC};
+    let works_weight = |w, f| works_weight_at(w, f, WORKS_PER_USDC);
     let fee = 4 * USDC;
     // K3 (O4 step 1): 105 Works per USDC, 15 a day over a day-0 fee.
     assert_eq!(WORKS_PER_USDC, 105);
@@ -1177,7 +1188,7 @@ fn officer_pay_never_makes_an_office_profitable() {
         let s = random_season(55_000 + seed);
         let index = faction_index(&s.facts, &IndexParams::REV2);
         let st = settle(&s.pools, &totals_of(&s.recs), &index, s.stages, &p).unwrap();
-        let mut ledger = Ledger::new(s.pools.prize().unwrap());
+        let mut ledger = SeasonLedger::new(&st).unwrap();
         for r in &s.recs {
             let c = claim(&st, r).unwrap();
             let base = c.citizen + c.civ + c.laurel;
@@ -1191,7 +1202,7 @@ fn officer_pay_never_makes_an_office_profitable() {
             assert!(c.paid >= base.min(5 * r.paid()));
             assert_eq!(c.paid + c.swept, c.gross);
             cut_total += c.office_cut;
-            ledger.record(&c).unwrap();
+            ledger.record(r.faction, &c).unwrap();
         }
         assert_eq!(ledger.claimed + ledger.swept + ledger.dust(), ledger.prize);
     }
@@ -1293,7 +1304,13 @@ fn mandate_reserve_pays_staker_completers_in_closed_form() {
             } else {
                 0
             };
-            let budget = t.close_with_floor(&mut reserve, floor).unwrap();
+            // One term every TERM_SECS; the season ends far later, so the
+            // claim deadline is one term after the term's end (CL-15).
+            let term_end = (term as i64 + 1) * TERM_SECS;
+            let budget = t
+                .close_with_floor(&mut reserve, floor, term_end, i64::MAX / 2)
+                .unwrap();
+            assert_eq!(t.claim_deadline, term_end + TERM_SECS);
             assert_eq!(t.complete(true), Err(EconError::TermState));
             // Reference: the member loop.
             let s_all: u64 = who.iter().map(|x| x.1).sum();
@@ -1315,7 +1332,7 @@ fn mandate_reserve_pays_staker_completers_in_closed_form() {
                 if skip && k % 5 == 0 {
                     continue;
                 }
-                let got = t.claim(&mut reserve, sh).unwrap();
+                let got = t.claim(term_end, &mut reserve, sh).unwrap();
                 assert_eq!(got, want(sh), "seed {seed} term {term}");
                 assert!(got <= MANDATE_CAP_PER_TERM);
                 paid_to[w] += got;
@@ -1325,11 +1342,17 @@ fn mandate_reserve_pays_staker_completers_in_closed_form() {
             assert!(term_paid <= budget - t.floor_cut);
             let all_claimed = t.claimed_shares == t.shares;
             if !all_claimed {
-                assert_eq!(t.sweep(&mut reserve, false), Err(EconError::TermState));
+                assert_eq!(
+                    t.sweep(t.claim_deadline, &mut reserve),
+                    Err(EconError::TermState)
+                );
             }
-            let back = t.sweep(&mut reserve, true).unwrap();
+            let back = t.sweep(t.claim_deadline + 1, &mut reserve).unwrap();
             assert_eq!(back, budget - term_paid - t.floor_cut);
-            assert_eq!(t.claim(&mut reserve, 1), Err(EconError::TermState));
+            assert_eq!(
+                t.claim(term_end, &mut reserve, 1),
+                Err(EconError::TermState)
+            );
             open.push(t);
             check(&reserve, &open);
         }

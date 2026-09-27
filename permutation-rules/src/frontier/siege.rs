@@ -21,8 +21,9 @@
 //! * Completion occupies a first holding (never transferred) and captures
 //!   holdings 2–3 and Free Cities.
 
-use super::geometry::{is_heartland, march_of, ProvinceCoord};
-use super::holding::{Holding, RESOURCES};
+use super::doctrine::bounds::SIEGE_EXTRA_MAX;
+use super::geometry::{is_heartland, march_of, valid_faction, ProvinceCoord};
+use super::holding::{Holding, MAX_WALLS, RESOURCES};
 use crate::fixed::{Bps, Milli, MilliTroops, BPS_ONE};
 use alloc::vec;
 use alloc::vec::Vec;
@@ -53,15 +54,33 @@ pub const RAID_MAX_BPS: Bps = 1_000;
 /// … at most once per this long per holding.
 pub const RAID_INTERVAL: i64 = 6 * HOUR;
 
+/// Most bells of progress a siege can need (CL-02): walls are capped at
+/// `holding::MAX_WALLS` and a valid doctrine adds at most
+/// `doctrine::bounds::SIEGE_EXTRA_MAX` (24; Wardens of Stone use 12), so
+/// `36 + 1,200/50 + 24 = 84` bells (14 hours).
+pub const MAX_REQUIRED_BELLS: u32 = required_bells(MAX_WALLS, SIEGE_EXTRA_MAX);
+
 /// Bells of progress a siege needs: `36 + walls/50`, plus a doctrine's
-/// extra bells (e.g. Wardens of Stone in their heartland: +12).
+/// extra bells (e.g. Wardens of Stone in their heartland: +12). Walls are
+/// read at most `MAX_WALLS` (CL-02) and the sum saturates, so the result
+/// is finite for any input.
 pub const fn required_bells(walls: u32, extra: u32) -> u32 {
-    SIEGE_BASE_BELLS + walls / WALL_POINTS_PER_BELL + extra
+    let w = if walls < MAX_WALLS { walls } else { MAX_WALLS };
+    (SIEGE_BASE_BELLS + w / WALL_POINTS_PER_BELL).saturating_add(extra)
 }
 
 /// A holding's vigil: an 8-hour daily window (seconds after UTC midnight
 /// it starts). The last three schedules are kept so any unresolved bell is
 /// judged by the schedule in force at its scheduled start.
+///
+/// **Windows and changes (CL-09).** A change takes effect at the first UTC
+/// midnight at least [`VIGIL_NOTICE`] after the request. Each 8-hour window
+/// belongs to the schedule in force when it **starts**, so a window that
+/// began before the change runs to its end. The first window of the new
+/// schedule is skipped if it would start before the last old window has
+/// ended (it would join it into one long vigil). So no covered stretch is
+/// ever longer than 8 hours: before this rule a change at an arbitrary time
+/// could create one vigil of about 16 hours (first-pass review).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Vigil {
     /// `(effective_from_ts, start_secs_of_day)`, oldest first.
@@ -93,24 +112,53 @@ impl Vigil {
 
     /// Window start (seconds of day) in force at `ts`.
     pub fn start_at(&self, ts: i64) -> u32 {
-        let mut s = self.schedule[0].1;
-        for (from, start) in self.schedule {
-            if from <= ts {
-                s = start;
+        self.schedule[self.entry_at(ts)].1
+    }
+
+    /// Index of the schedule entry in force at `ts` (entry 0 also covers
+    /// every earlier time).
+    fn entry_at(&self, ts: i64) -> usize {
+        let mut j = 0;
+        for (i, (from, _)) in self.schedule.iter().enumerate() {
+            if *from <= ts {
+                j = i;
             }
         }
-        s
+        j
     }
 
-    /// Whether `ts` falls in the vigil window in force at `ts`.
+    /// Start of the latest window, among entries `0..=j`, that starts at or
+    /// before `t` and is not skipped (the type's doc). Recursion depth ≤ 2.
+    fn window_start(&self, t: i64, j: usize) -> i64 {
+        let (from, start) = self.schedule[j];
+        let ws = last_start(t, start);
+        if j == 0 || from == i64::MIN {
+            return ws;
+        }
+        if ws < from {
+            // No window of entry j yet: the previous entry's last one.
+            return self.window_start(t.min(from - 1), j - 1);
+        }
+        if ws - DAY < from {
+            // Entry j's first window: skipped if it would join the last
+            // window of the previous entry into one stretch.
+            let prev = self.window_start(from - 1, j - 1);
+            if ws <= prev + VIGIL_SECS {
+                return prev;
+            }
+        }
+        ws
+    }
+
+    /// Whether `ts` falls in a vigil window (the type's doc: each window
+    /// belongs to the schedule in force at its start).
     pub fn covers(&self, ts: i64) -> bool {
-        let start = self.start_at(ts) as i64;
-        let tod = ts.rem_euclid(DAY);
-        (tod - start).rem_euclid(DAY) < VIGIL_SECS
+        ts < self.window_start(ts, self.entry_at(ts)) + VIGIL_SECS
     }
 
-    /// Move the window, effective 24 hours from `now`; at most once a week.
-    /// Returns when the new window takes effect.
+    /// Move the window, effective at the first UTC midnight at least 24
+    /// hours from `now` (CL-09); at most once a week. Returns when the new
+    /// schedule takes effect (always a multiple of 86,400).
     pub fn request_change(&mut self, now: i64, start_secs: u32) -> Result<i64, VigilError> {
         if start_secs as i64 >= DAY {
             return Err(VigilError::BadStart);
@@ -120,10 +168,32 @@ impl Vigil {
                 next_ts: self.last_request + VIGIL_CHANGE_INTERVAL,
             });
         }
-        let from = now + VIGIL_NOTICE;
+        let from = change_effective_at(now);
         self.schedule = [self.schedule[1], self.schedule[2], (from, start_secs)];
         self.last_request = now;
         Ok(from)
+    }
+}
+
+/// When a vigil change requested at `now` takes effect: the first UTC
+/// midnight at or after `now + VIGIL_NOTICE` (CL-09).
+pub const fn change_effective_at(now: i64) -> i64 {
+    let t = now + VIGIL_NOTICE;
+    let r = t.rem_euclid(DAY);
+    if r == 0 {
+        t
+    } else {
+        t - r + DAY
+    }
+}
+
+/// The latest `ws ≤ t` with `ws ≡ start (mod DAY)`.
+const fn last_start(t: i64, start: u32) -> i64 {
+    let ws = t - t.rem_euclid(DAY) + start as i64;
+    if ws <= t {
+        ws
+    } else {
+        ws - DAY
     }
 }
 
@@ -175,6 +245,9 @@ pub struct SiegeCheck {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SiegeRefusal {
+    /// A faction id outside `0..=5` (the owner may also be `NEUTRAL` for a
+    /// Free City); CL-06.
+    BadFaction,
     Seat,
     Friendly,
     Shielded,
@@ -185,6 +258,11 @@ pub enum SiegeRefusal {
 
 /// Whether the attacker may declare a siege now.
 pub fn may_besiege(c: &SiegeCheck) -> Result<(), SiegeRefusal> {
+    if !valid_faction(c.attacker_faction, false)
+        || !valid_faction(c.owner_faction, c.kind == HoldingKind::FreeCity)
+    {
+        return Err(SiegeRefusal::BadFaction);
+    }
     if c.kind == HoldingKind::Seat || c.province.is_seat() {
         return Err(SiegeRefusal::Seat);
     }
@@ -254,8 +332,9 @@ pub struct BellReport {
 impl BellReport {
     /// Whether `faction` holds the hex (only the siege's declarer counts:
     /// a third faction taking the hex does not advance another's siege).
+    /// Only a valid faction id (`geometry::valid_faction`, CL-06) can.
     pub const fn holds(&self, faction: u8) -> bool {
-        faction < 8 && self.holders & (1 << faction) != 0
+        valid_faction(faction, true) && self.holders & (1 << faction) != 0
     }
 }
 
@@ -271,19 +350,24 @@ pub fn bells_outside_vigil(vigil: &Vigil, genesis_ts: i64, b0: u32, b1: u32) -> 
     if b1 <= b0 {
         return 0;
     }
-    // Segment boundaries: the first bell starting at or after each change.
+    // Segment boundaries: the first bell starting at or after each change,
+    // and one day later. Coverage is periodic between them: the day after a
+    // change holds the last old window's tail and the new schedule's first
+    // (possibly skipped) window, so it is counted bell by bell (CL-09).
     let mut cuts: Vec<u32> = vec![b0];
     for (from, _) in vigil.schedule {
         if from == i64::MIN {
             continue;
         }
-        let k = if from <= genesis_ts {
-            0
-        } else {
-            ((from - genesis_ts + BELL - 1) / BELL) as u32
-        };
-        if k > b0 && k < b1 {
-            cuts.push(k);
+        for t in [from, from.saturating_add(DAY)] {
+            let k = if t <= genesis_ts {
+                0
+            } else {
+                ((t - genesis_ts + BELL - 1) / BELL).min(u32::MAX as i64) as u32
+            };
+            if k > b0 && k < b1 {
+                cuts.push(k);
+            }
         }
     }
     cuts.push(b1);

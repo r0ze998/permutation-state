@@ -242,6 +242,25 @@ fn coordinates_are_bounded() {
         let p = province_of(h);
         assert!(h.distance(p.centre()) <= 4);
     }
+    // CL-04: province coordinates from data go through `checked`: no i32
+    // pair panics, ring 128 is accepted and 129 refused, and the index
+    // round-trips over all 49,537 provinces within ring 128
+    // (`frontier_bounds::province_coordinates_are_checked` has the rest).
+    for (p, q) in [
+        (i32::MIN, i32::MIN),
+        (i32::MAX, i32::MAX),
+        (i32::MIN, i32::MAX),
+        (i32::MAX, 0),
+    ] {
+        assert!(ProvinceCoord::checked(p, q, R_MAX_HARD).is_err());
+        assert!(ProvinceCoord::new(p, q).ring() > R_MAX_HARD as u32);
+    }
+    assert!(ProvinceCoord::checked(0, 128, R_MAX_HARD).is_ok());
+    assert!(ProvinceCoord::checked(0, 129, R_MAX_HARD).is_err());
+    for i in 0..provinces_within(R_MAX_HARD as u32) {
+        let p = ProvinceCoord::checked_from_index(i).unwrap();
+        assert_eq!(p.checked_index(), Some(i));
+    }
 }
 
 #[test]
@@ -426,7 +445,7 @@ fn accrual_caps_and_floors() {
 
 #[test]
 fn holding_costs_and_shields() {
-    assert_eq!(duplicate_cost(40, 4), 40 * 11 / 2);
+    assert_eq!(duplicate_cost(40, 4), Some(40 * 11 / 2));
     assert_eq!(shield_secs(0), 48 * HOUR);
     assert_eq!(shield_secs(7), 48 * HOUR);
     assert_eq!(shield_secs(8), 72 * HOUR);
@@ -479,14 +498,14 @@ fn host_limits() {
     assert_eq!(a.march_values(13, 14).unwrap(), (13_500 * 1000, 20));
     // Merging: both fight separately in the merge bell, then join.
     let mut a = Host::muster(1, 9, 0, UnitType::Knight, 10_000 * 1000, 10).unwrap();
-    a.stamina.set(10, 20);
+    a.stamina.set(10, 20).unwrap();
     a.merge(&mut c, 15, 15).unwrap();
     assert_eq!(a.values_at(15).unwrap().0, 10_000 * 1000);
     assert_eq!(settle_merge(&mut a, &mut c, 15), Err(HostError::Unresolved));
     settle_merge(&mut a, &mut c, 16).unwrap();
     assert_eq!((a.troops, c.troops), (14_500 * 1000, 0));
     assert_eq!(a.stamina.at(16), 26, "the lower stamina wins");
-    a.route(16);
+    a.route(16).unwrap();
     assert_eq!(a.troops, rout_survivors(14_500 * 1000));
     assert_eq!(a.stamina.at(16), 0);
     let s = Stamina::full(0);
