@@ -32,6 +32,7 @@ tokio.workspace = true
 axum.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
+flate2.workspace = true
 
 [dev-dependencies]
 # W3-D (request R4): `tests/real_chain.rs` drives the keeper over the

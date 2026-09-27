@@ -83,6 +83,10 @@ solana-program-runtime = "=4.2.2"
 # outside the contract's expected dependency set; it waits for the owner.
 hyper = { version = "=1.11.1", features = ["http1", "server"] }
 hyper-util = { version = "=0.1.21", features = ["tokio"] }
+# W4-F request R2 (DECISIONS J2, decided by the main session 2026-09-28):
+# the herald's `.gz` siblings (pure-Rust miniz_oxide backend); brotli not
+# needed now.
+flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
 
 [profile.dev.package."*"]
 # The BLS pairing, LiteSVM and tlock are unusably slow unoptimised.
