@@ -36,15 +36,32 @@ fi
 
 if [ "$CHECK" = 1 ]; then
   TARGET_DIR="$(mktemp -d "${TMPDIR:-/tmp}/frontier-wasm-check.XXXXXX")"
-  trap 'rm -rf "$TARGET_DIR"' EXIT
 else
   TARGET_DIR="$CRATE/target"
 fi
 
 # Reproducible paths: the checkout and the cargo home never reach the bytes.
+# integ-W4: `--remap-path-prefix` alone is not enough. permutation-rules is a
+# path dependency outside frontier-wasm's workspace, so cargo hashes its
+# absolute path into the crate metadata, and two checkouts built different
+# bytes (same size, other symbol hashes and layout). The build therefore runs
+# through one fixed symlink to the checkout, taken under a lock (mkdir is
+# atomic) so that concurrent builds from other checkouts wait.
+LINK=/tmp/psf-frontier-wasm-root
+LOCK="$LINK.lock"
+waited=0
+until mkdir "$LOCK" 2>/dev/null; do
+  waited=$((waited + 1))
+  [ "$waited" -le 900 ] || { echo "build-wasm: $LOCK held for 15 min (remove it if no build is running)" >&2; exit 1; }
+  sleep 1
+done
+cleanup() { rm -f "$LINK"; rmdir "$LOCK" 2>/dev/null || true; [ "$CHECK" = 1 ] && rm -rf "$TARGET_DIR"; return 0; }
+trap cleanup EXIT
+ln -sfn "$ROOT" "$LINK"
 SEP=$'\x1f'
-export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$ROOT=/psf${SEP}--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo${SEP}--remap-path-prefix=$HOME/.rustup=/rustup"
-(cd "$CRATE" && cargo "+$TOOLCHAIN" build --locked --release --target "$TARGET" --target-dir "$TARGET_DIR" --lib)
+export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$LINK=/psf${SEP}--remap-path-prefix=$ROOT=/psf${SEP}--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo${SEP}--remap-path-prefix=$HOME/.rustup=/rustup"
+(cd "$CRATE" && cargo "+$TOOLCHAIN" build --locked --release --target "$TARGET" --target-dir "$TARGET_DIR" --lib \
+  --manifest-path "$LINK/frontier-wasm/Cargo.toml")
 BUILT="$TARGET_DIR/$TARGET/release/frontier_wasm.wasm"
 [ -f "$BUILT" ] || { echo "build-wasm: no $BUILT" >&2; exit 1; }
 
