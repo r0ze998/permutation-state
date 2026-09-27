@@ -332,7 +332,7 @@ async fn overlapping_fallbacks_never_displace() {
     println!("program: {}", run.w.which.label());
     let w0 = wedge_sites(&run.w, 0);
     let (x, y, z) = (w0[0], w0[1], w0[2]);
-    let kps: Vec<Keypair> = (200..205u8).map(wallet).collect();
+    let kps: Vec<Keypair> = (150..155u8).map(wallet).collect();
     let prefs: Vec<Vec<SiteKey>> = vec![vec![x], vec![x, y], vec![y], vec![z, y], vec![z, y]];
     for kp in &kps {
         run.join(kp, 0).await;
