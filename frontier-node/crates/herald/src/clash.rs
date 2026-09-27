@@ -18,11 +18,14 @@
 use frontier_abi::addr::holding_key_of_host;
 use frontier_abi::entry::{read_entry, unit_from_u8};
 use frontier_abi::layout::province::{entry as E, province as PV, site as S};
+use permutation_rules::fixed::{Bps, BPS_ONE, MILLI};
+use permutation_rules::frontier::camp as kcamp;
 use permutation_rules::frontier::clash::{
-    self, ClashInput, ClashOutcome, Fate, Fighter, Garrison, Occupancy, Relations, NEUTRAL,
+    self, ClashInput, ClashOutcome, Fate, Fighter, Garrison, Occupancy, Relations, MAX_GARRISONS,
+    NEUTRAL,
 };
 use permutation_rules::frontier::geometry::{ProvinceCoord, PROVINCE_TILES};
-use permutation_rules::frontier::host::GarrisonState;
+use permutation_rules::frontier::host::{GarrisonState, MAX_HOST_TROOPS};
 use permutation_rules::frontier::stance::{Posture, Stance};
 use permutation_rules::frontier::terrain::ProvinceTerrain;
 use permutation_rules::map::{Terrain, TileResource};
@@ -50,9 +53,60 @@ pub trait ClashBuilder: Send + Sync {
 /// with walls effective at the bell; arrivals = the present records;
 /// terrain from the compact arrays; relations from the Province (0 in M1);
 /// the storage room from the entry states; the camp, if present, as a
-/// NEUTRAL garrison. It does **not** model the lazy camp respawn of the
-/// day's first resolve (I-56): the program's builder (W4-A) is normative.
+/// NEUTRAL garrison.
+///
+/// integ-W4: aligned with the program's builder (W4-A,
+/// `permutation-frontier` `proc::clash::model::build`, normative; its move
+/// into `frontier-abi` is W4-A's request D8 for W5): the camp's troops are
+/// whole troops (× 1,000 to milli, capped at `MAX_HOST_TROOPS`), the camp
+/// fights only while fewer than `MAX_GARRISONS` garrisons stand, the day's
+/// camp check runs first (I-56: `camp::place` with `sha256("PSF-CAMP-v1" ‖
+/// province[TERRAIN ..= SITE_COUNT])`), a stored `dealt_bps` of 0 reads as
+/// 1.0, garrisons are capped at `MAX_HOST_TROOPS`, and residents and
+/// arrivals go to the kernel in id order. Before this, 56 of 121 CLASH
+/// records of the in-process day were herald `MISMATCH` alarms.
 pub struct Provisional;
+
+/// Domain of the camp seed (the program's `model::CAMP_DOMAIN`).
+pub const CAMP_DOMAIN: &[u8] = b"PSF-CAMP-v1";
+
+/// A doctrine multiplier as stored (0 reads as none, the program's `bps`).
+fn bps(v: u16) -> Bps {
+    if v == 0 {
+        BPS_ONE
+    } else {
+        v as Bps
+    }
+}
+
+/// The camp a clash of `bell` sees (I-56; the program's `camp_check`):
+/// `(tile, present, whole troops, gen)` after the day's check.
+fn camp_at(
+    pv: &Province,
+    pd: &[u8],
+    terrain: &ProvinceTerrain,
+    bell: u32,
+) -> Result<(u8, bool, u32, u32), String> {
+    let c = &pv.camp;
+    let day = bell / 144;
+    if day < c.next_check_day {
+        return Ok((c.tile, c.state == 1, c.troops, c.gen));
+    }
+    let block = pd
+        .get(PV::TERRAIN..PV::SITE_COUNT + 1)
+        .ok_or("province: short terrain block")?;
+    let seed = permutation_rules::hash::sha256(&[CAMP_DOMAIN, block]);
+    let has_holding = pv.site_mirror[..(pv.site_count as usize).min(PV::SITES_N)]
+        .iter()
+        .any(|m| m.state == S::STATE_HOLDING);
+    let coord = ProvinceCoord::new(pv.p as i32, pv.q as i32);
+    Ok(
+        match kcamp::place(&seed, coord, terrain, day, has_holding, false) {
+            Some(k) => (k.tile, true, k.troops, c.gen.wrapping_add(1)),
+            None => (c.tile, c.state == 1, c.troops, c.gen),
+        },
+    )
+}
 
 /// Terrain classes in declaration (= borsh) order.
 pub const TERRAINS: [Terrain; 6] = [
@@ -164,7 +218,7 @@ impl Provisional {
                         tile: e.tile,
                         posture: Posture::Stance(Stance::Hold),
                         retreat_bps: None,
-                        dealt_bps: e.dealt_bps as u32,
+                        dealt_bps: bps(e.dealt_bps),
                     });
                 }
                 E::STATE_MUSTER_PENDING => {
@@ -203,17 +257,19 @@ impl Provisional {
                 id,
                 faction: m.faction,
                 tile: pv.sites[i],
-                troops,
+                troops: troops.min(MAX_HOST_TROOPS),
                 walls,
                 posture: Posture::Stance(Stance::Hold),
             });
         }
-        if pv.camp.state == 1 {
+        let (camp_tile, camp_present, camp_troops, camp_gen) =
+            camp_at(&pv, province_before, &terrain, bell)?;
+        if camp_present && garrisons.len() < MAX_GARRISONS {
             garrisons.push(Garrison {
-                id: u64::MAX - pv.camp.gen as u64,
+                id: u64::MAX - camp_gen as u64,
                 faction: NEUTRAL,
-                tile: pv.camp.tile,
-                troops: pv.camp.troops,
+                tile: camp_tile,
+                troops: (camp_troops as u64 * MILLI as u64).min(MAX_HOST_TROOPS as u64) as u32,
                 walls: false,
                 posture: Posture::Stance(Stance::Hold),
             });
@@ -233,9 +289,11 @@ impl Provisional {
                         .ok_or(format!("arrival stance {}", a.stance))?,
                 ),
                 retreat_bps: (a.retreat != 0).then_some(a.retreat as u32),
-                dealt_bps: a.dealt as u32,
+                dealt_bps: bps(a.dealt),
             });
         }
+        residents.sort_by_key(|f| f.id);
+        arrivals.sort_by_key(|f| f.id);
         Ok(BuiltInput {
             province: ProvinceCoord::new(pv.p as i32, pv.q as i32),
             bell,
