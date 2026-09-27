@@ -130,11 +130,12 @@ test('all 217 tile centers invert correctly before and after pan and zoom', t =>
   assert.equal(map._hit(-1e6, -1e6), null);
 });
 
-test('every lens renders every terrain, eight building types and construction/blocked states', t => {
+test('every lens renders every terrain, every building type and construction/blocked states', t => {
   const { map, world, frame } = fixture(t);
   world.tiles.forEach(tile => { tile.explored = true; });
   const types = Object.keys(BUILDINGS);
-  assert.equal(types.length, 8);
+  // Nine since cb92a2f added the warehouse (eight buildable kinds plus the town hall).
+  assert.equal(types.length, 9);
   const drawn = new Set(), drawShape = map._buildingShape.bind(map);
   map._buildingShape = (ctx, x, y, type) => { drawn.add(type); drawShape(ctx, x, y, type); };
   for (const [i, type] of types.entries()) {

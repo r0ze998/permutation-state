@@ -64,6 +64,8 @@ pub struct Outcome {
     pub pools: Pools,
     pub agents: Vec<AgentOut>,
     pub ledger: Ledger,
+    /// CL-07/CL-08: the money and laurel books the bound checks read.
+    pub books: Books,
     pub checks: Vec<Check>,
     /// sha256 over every claim and laurel balance (determinism).
     pub digest: [u8; 32],
@@ -71,6 +73,179 @@ pub struct Outcome {
 
 fn check(v: &mut Vec<Check>, name: &'static str, ok: bool, detail: String) {
     v.push(Check { name, ok, detail });
+}
+
+/// One claimant as the books see it (CL-07): what the rules entitle the
+/// wallet to (`payout::claim` recomputed from its record) and what the
+/// settlement actually paid and swept.
+#[derive(Clone, Copy, Debug)]
+pub struct WalletBook {
+    pub faction: u8,
+    /// Fee + stake paid in.
+    pub paid_in: u64,
+    pub entitled: Claim,
+    pub paid_out: u64,
+    pub swept: u64,
+}
+
+/// The season's books (CL-07, CL-08): every conservation rule is checked
+/// as a **bound** over these numbers (the verifier's V13 reuses the same
+/// shapes), and the identities stay as a second check in `settle_run`.
+#[derive(Clone, Debug)]
+pub struct Books {
+    pub prize: u64,
+    pub cap_multiple: u64,
+    /// Civilisation Share pot (shared by all factions).
+    pub civ_pot: u64,
+    /// Per faction `C_k + L_k`: the faction's citizen and laurel pots
+    /// before the steward cut (the steward pot is 5% of it).
+    pub faction_pot: [u64; FACTIONS],
+    pub wallets: Vec<WalletBook>,
+    /// Reward-index laurels: emitted by every province index, orphaned
+    /// (no holder), credited to holdings (`Sim::distribute`).
+    pub laurel_emitted: u128,
+    pub laurel_orphaned: u128,
+    pub laurel_credited: u128,
+    /// Every laurel unit held at the end (wallets, reserves incl. burned,
+    /// escrow, orphaned stakes, burned stakes) and every source
+    /// (credited − free-city extra + relic minted).
+    pub laurel_held: u128,
+    pub laurel_sources: u128,
+    /// Mandate reserves, summed over factions.
+    pub mandate_deposited: u128,
+    pub mandate_paid: u128,
+    pub mandate_burned: u128,
+    pub mandate_balance: u128,
+}
+
+/// The per-faction ledger of the simulator (CL-08, sim side): a claim
+/// may not take faction `k` past its own pots, even while the season
+/// total is fine. `payout::SeasonLedger` (W1-B) is the kernel form; this
+/// book checks the same rule over the settled claims so the simulator and
+/// the verifier see a cross-faction over-claim.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FactionBook {
+    /// `C_k + L_k` + the civ shares the faction's wallets are entitled to.
+    pub pot: [u128; FACTIONS],
+    pub paid: [u128; FACTIONS],
+    pub civ_pot: u128,
+    pub civ: u128,
+}
+
+impl FactionBook {
+    pub fn new(b: &Books) -> FactionBook {
+        let mut fb = FactionBook {
+            civ_pot: b.civ_pot as u128,
+            ..FactionBook::default()
+        };
+        for (k, p) in b.faction_pot.iter().enumerate() {
+            fb.pot[k] = *p as u128;
+        }
+        fb
+    }
+
+    /// Book one claim; refused (nothing changes) if faction `k` would pay
+    /// out more than `C_k + L_k` plus the civ shares of its wallets, or
+    /// the civ shares would pass the civ pot.
+    pub fn record(&mut self, w: &WalletBook) -> Result<(), String> {
+        let k = w.faction as usize;
+        if k >= FACTIONS {
+            return Err(format!("faction {k} out of range"));
+        }
+        let civ = self.civ + w.entitled.civ as u128;
+        let pot = self.pot[k] + w.entitled.civ as u128;
+        let paid = self.paid[k] + w.paid_out as u128;
+        if civ > self.civ_pot {
+            return Err(format!("civ shares {civ} > civ pot {}", self.civ_pot));
+        }
+        if paid > pot {
+            return Err(format!("faction {k}: paid {paid} > its pots {pot}"));
+        }
+        self.civ = civ;
+        self.pot[k] = pot;
+        self.paid[k] = paid;
+        Ok(())
+    }
+}
+
+/// CL-07: conservation written as bounds. Returns one `Check` per bound;
+/// `settle_run` adds the identities after them.
+pub fn bound_checks(b: &Books) -> Vec<Check> {
+    let mut v = Vec::new();
+    // Money: every claim within its rule-computed entitlement and the cap.
+    let over_entitled = b
+        .wallets
+        .iter()
+        .filter(|w| w.paid_out > w.entitled.paid || w.swept > w.entitled.swept)
+        .count();
+    check(
+        &mut v,
+        "bound: each claim <= its rule-computed entitlement",
+        over_entitled == 0,
+        format!("{over_entitled} wallets paid above their entitlement"),
+    );
+    let over_cap = b
+        .wallets
+        .iter()
+        .filter(|w| w.paid_out as u128 > w.paid_in as u128 * b.cap_multiple as u128)
+        .count();
+    check(
+        &mut v,
+        "bound: each claim <= 5x paid",
+        over_cap == 0,
+        format!("{over_cap} claims above {}x", b.cap_multiple),
+    );
+    let claimed: u128 = b.wallets.iter().map(|w| w.paid_out as u128).sum();
+    let swept: u128 = b.wallets.iter().map(|w| w.swept as u128).sum();
+    check(
+        &mut v,
+        "bound: claims + swept <= prize",
+        claimed + swept <= b.prize as u128,
+        format!("claimed {claimed} + swept {swept} <= prize {}", b.prize),
+    );
+    // CL-08: per faction.
+    let mut fb = FactionBook::new(b);
+    let refused: Vec<String> = b
+        .wallets
+        .iter()
+        .filter_map(|w| fb.record(w).err())
+        .collect();
+    check(
+        &mut v,
+        "bound: each faction's claims <= its own pots (CL-08)",
+        refused.is_empty(),
+        match refused.first() {
+            None => format!("per-faction paid {:?}", fb.paid),
+            Some(e) => format!("{} refused, first: {e}", refused.len()),
+        },
+    );
+    // Laurels.
+    check(
+        &mut v,
+        "bound: laurels credited <= emitted - orphaned",
+        b.laurel_credited + b.laurel_orphaned <= b.laurel_emitted,
+        format!(
+            "credited {} + orphaned {} <= emitted {}",
+            b.laurel_credited, b.laurel_orphaned, b.laurel_emitted
+        ),
+    );
+    check(
+        &mut v,
+        "bound: laurels held <= sources",
+        b.laurel_held <= b.laurel_sources,
+        format!("held {} <= sources {}", b.laurel_held, b.laurel_sources),
+    );
+    // Mandate reserves.
+    check(
+        &mut v,
+        "bound: Mandate paid + burned + balance <= deposited",
+        b.mandate_paid + b.mandate_burned + b.mandate_balance <= b.mandate_deposited,
+        format!(
+            "paid {} + burned {} + balance {} <= deposited {}",
+            b.mandate_paid, b.mandate_burned, b.mandate_balance, b.mandate_deposited
+        ),
+    );
+    v
 }
 
 pub fn settle_run(sim: &Sim, p: &IndexParams) -> Outcome {
@@ -136,9 +311,17 @@ pub fn settle_run(sim: &Sim, p: &IndexParams) -> Outcome {
     let mut voided_paid = 0u64;
     let mut sum_paid = 0u128;
     let mut hash_in: Vec<u8> = Vec::with_capacity(recs.len() * 24);
+    let mut wallets = Vec::with_capacity(recs.len());
     for (i, r) in &recs {
         let c = claim(&st, r).expect("claim");
         ledger.record(&c).expect("ledger");
+        wallets.push(WalletBook {
+            faction: r.faction,
+            paid_in: r.paid(),
+            entitled: claim(&st, r).expect("entitlement"),
+            paid_out: c.paid,
+            swept: c.swept,
+        });
         let a = &sim.agents[*i];
         if c.paid > 5 * r.paid() {
             over_cap += 1;
@@ -181,7 +364,36 @@ pub fn settle_run(sim: &Sim, p: &IndexParams) -> Outcome {
             sessions: a.sessions,
         });
     }
-    // ---- money conservation (design §5.4 F1)
+    // ---- CL-07/CL-08: bounds first, identities after.
+    let (emitted, orphaned) = sim.laurels_minted();
+    let held: u128 = sim.agents.iter().map(|a| a.laurels as u128).sum::<u128>()
+        + sim
+            .reserve
+            .iter()
+            .map(|r| r.balance as u128 + r.burned)
+            .sum::<u128>()
+        + sim.escrow as u128
+        + sim.stats.siege_stake_orphaned as u128
+        + sim.stats.laurels_burned as u128;
+    let sources = sim.laurel_credited - sim.laurel_orphan_extra + sim.stats.relic_minted as u128;
+    let books = Books {
+        prize,
+        cap_multiple: st.cap_multiple,
+        civ_pot: st.civ_pot,
+        faction_pot: core::array::from_fn(|k| st.factions[k].citizen + st.factions[k].laurel),
+        wallets,
+        laurel_emitted: emitted,
+        laurel_orphaned: orphaned,
+        laurel_credited: sim.laurel_credited,
+        laurel_held: held,
+        laurel_sources: sources,
+        mandate_deposited: sim.reserve.iter().map(|r| r.deposited).sum(),
+        mandate_paid: sim.reserve.iter().map(|r| r.paid).sum(),
+        mandate_burned: sim.reserve.iter().map(|r| r.burned).sum(),
+        mandate_balance: sim.reserve.iter().map(|r| r.balance as u128).sum(),
+    };
+    checks.extend(bound_checks(&books));
+    // ---- money conservation (design §5.4 F1), the identities
     let total = sim.pools.total().expect("total");
     check(
         &mut checks,
@@ -245,17 +457,6 @@ pub fn settle_run(sim: &Sim, p: &IndexParams) -> Outcome {
         format!("{voided_paid} voided claims > 0"),
     );
     // ---- laurel conservation (zero-sum emission, §5.4)
-    let (emitted, orphaned) = sim.laurels_minted();
-    let held: u128 = sim.agents.iter().map(|a| a.laurels as u128).sum::<u128>()
-        + sim
-            .reserve
-            .iter()
-            .map(|r| r.balance as u128 + r.burned)
-            .sum::<u128>()
-        + sim.escrow as u128
-        + sim.stats.siege_stake_orphaned as u128
-        + sim.stats.laurels_burned as u128;
-    let sources = sim.laurel_credited - sim.laurel_orphan_extra + sim.stats.relic_minted as u128;
     check(
         &mut checks,
         "laurels: held = credited + relic minted",
@@ -304,6 +505,7 @@ pub fn settle_run(sim: &Sim, p: &IndexParams) -> Outcome {
         pools: sim.pools,
         agents,
         ledger,
+        books,
         checks,
         digest: sha256(&[b"sim/digest", &hash_in]),
     }

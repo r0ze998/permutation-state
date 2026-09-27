@@ -10,13 +10,18 @@
 //!                    [--gate-index 0.12]   (exit 1 if a mean index is off by more)
 //! frontier-sim doctrine-gate [--set kernel|draft|m0] [--controls]
 //!                    (the CI gate's harness; --controls: the negative controls must fail)
-//! frontier-sim criterion [--seeds K] [--rev2-economy] [economy knobs]   (bot criterion, O4)
+//! frontier-sim criterion [--seeds K] [--first-seed N] [--rev2-economy] [economy knobs]
+//!                    (bot criterion, O4; seeds N+1..=N+K, default N = 200)
 //! frontier-sim c4 [--agents 50000] [--seeds K] [--first-seed N] [--out PATH]
 //!                    (restated C4: per-bell participation, tail episodes and
 //!                    the counterfactual value of one attacked bell)
-//! frontier-sim criterion --best-response [--seeds K] [--gate]
+//! frontier-sim criterion --best-response [--seeds K] [--first-seed N] [--gate]
 //!                    (the criterion as the max over the bot's join window,
-//!                    stake and office choices; exit 1 with --gate if any ≥ 1.0)
+//!                    stake and office choices; exit 1 with --gate if any ≥ 1.0;
+//!                    CL-16: `--first-seed 30001` is the held-out set)
+//! frontier-sim c4 ... [--relics]
+//!                    (c4 v3, CL-26/CL-30: per-bell write counts, 600/1,200-s
+//!                    windows, relic tip, the D18 pool table and R99)
 //! ```
 //!
 //! `run` plays one season and prints its report; `suite` runs every M0
@@ -53,7 +58,7 @@ fn main() {
     let mut only: Option<String> = None;
     let mut paired = true;
     let mut gate = false;
-    let mut first_seed = 0u64;
+    let mut first_seed: Option<u64> = None;
     let mut best = false;
     let mut gate_index: Option<f64> = None;
     let mut controls = false;
@@ -102,7 +107,7 @@ fn main() {
                 cfg.doctrines = true;
                 cfg.doctrine_tweaks = v;
             }
-            "--first-seed" => first_seed = v.parse().expect("--first-seed"),
+            "--first-seed" => first_seed = Some(v.parse().expect("--first-seed")),
             "--unpaired" => {
                 paired = false;
                 i += 1;
@@ -121,7 +126,16 @@ fn main() {
             }
             "--bot-mandates" => cfg.bot_mandates = Some(v.parse().expect("--bot-mandates")),
             "--office-term-limit" => {
-                cfg.office_term_limit = Some(v.parse().expect("--office-term-limit"))
+                cfg.office_term_limit = if v == "none" {
+                    None
+                } else {
+                    Some(v.parse().expect("--office-term-limit"))
+                }
+            }
+            "--relic-to-mandate" => {
+                cfg.relic_to_mandate = true;
+                i += 1;
+                continue;
             }
             "--bot-join-days" => {
                 let (lo, hi) = v.split_once('-').unwrap_or((&v, &v));
@@ -212,7 +226,7 @@ fn main() {
             let spec = balance::Spec {
                 agents: cfg.agents,
                 seeds,
-                first_seed,
+                first_seed: first_seed.unwrap_or(0),
                 set: cfg.doctrine_set,
                 tweaks: cfg.doctrine_tweaks.clone(),
                 paired,
@@ -281,7 +295,12 @@ fn main() {
             }
         }
         "criterion" if best => {
-            let rows = suite::criterion_best(&cfg, seeds, &[false, true]);
+            let rows = suite::criterion_best(
+                &cfg,
+                seeds,
+                first_seed.unwrap_or(suite::CRITERION_FIRST_SEED),
+                &[false, true],
+            );
             let (text, worst) = suite::criterion_best_table(&rows);
             println!("{text}");
             if gate && worst >= 1.0 {
@@ -292,6 +311,7 @@ fn main() {
             let rows = suite::criterion_rows(
                 &cfg,
                 seeds,
+                first_seed.unwrap_or(suite::CRITERION_FIRST_SEED),
                 &[("this config".to_string(), cfg.clone())],
                 &[false, true],
             );
@@ -301,7 +321,7 @@ fn main() {
             let spec = c4::Spec {
                 agents: cfg.agents,
                 seeds,
-                first_seed,
+                first_seed: first_seed.unwrap_or(0),
             };
             let (md, js) = c4::run(&cfg, &spec);
             match out {
