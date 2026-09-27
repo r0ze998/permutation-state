@@ -24,8 +24,8 @@ Tests (all new, owned): `permutation-rules/tests/frontier_clash_bounds.rs` (9 te
 ## 2. Commits
 
 1. `a15559d` Frontier M1 W1-A: clash bounds, cap recount, scouts, storage room, Phase A (owned files only).
-2. This notes file.
-3. **Build shim, last commit, separable** (see §5): `occupancy: Occupancy::EMPTY` in the 5 `ClashInput` literals of `permutation-rules/tests/frontier_world.rs` (W1-B's file) and the one in `frontier-sim/src/sim.rs` (W1-D's file), plus the import. Without it the branch's `frontier_world` test target and `frontier-sim` do not compile, because §7 pins the new field. The owners must write exactly this line; the integrator may keep the commit or drop it (merge `HEAD~1`) in favour of the owners' versions.
+2. `5c4df33` this notes file (and a later notes-only commit with the 1,500-season result).
+3. **Build shim, separable** (`707e65d`) (see §5): `occupancy: Occupancy::EMPTY` in the 5 `ClashInput` literals of `permutation-rules/tests/frontier_world.rs` (W1-B's file) and the one in `frontier-sim/src/sim.rs` (W1-D's file), plus the import. Without it the branch's `frontier_world` test target and `frontier-sim` do not compile, because §7 pins the new field. The owners must write exactly this line; the integrator may keep the commit or revert it in favour of the owners' versions.
 
 ## 3. Measurements and gate evidence
 
@@ -74,11 +74,11 @@ Run on the W1-A head (with the §2 shim in `sim.rs`, `Occupancy::EMPTY`) and on 
 - `doctrine-gate --controls`: **kernel table identical to `d95fa25` and to m0c** at printed precision (4 of 6 in band, largest win-rate gap 3.3 points, largest |Δ index| 0.072%, 180/180 conservation). Knight control (F −0.219%) and A-boost control (A +0.384%): identical, both still rejected. **Draft control changed** (A −2.061% → −1.331%, C −1.895% → −5.015%, E +8.163% → +8.921%) and is still rejected: the draft table's C (drill ×1.10 × arrival ×1.10 = ×1.21) passes `COMBAT_MAX_BPS`, so CL-01 refuses C's arriving Assault hosts and the simulator counts those clashes as errors. This is CL-01/CL-14 working as intended (the draft table fails `validate_table` with `DamageProduct` now); W1-D may want the simulator to refuse an invalid table up front instead of playing it.
 - `criterion --best-response --seeds 3 --first-seed 30001 --gate`: **identical** to `d95fa25` (worst cell 0.980, passes; every cell equal).
 - So CL-10 and I-43 change **no simulated season outcome** at printed precision: frontier-sim has no Scouts, and its caps rarely bind together with a fair-share bounce.
-- Overnight item `doctrines --agents 10000 --seeds 250 --first-seed 10000 --set kernel --gate`: see §3.6.
+- Overnight item `doctrines … --seeds 250 … --gate`: identical to `d95fa25`, passes (§3.6).
 
 ### 3.6 1,500-season band [sim]
 
-PENDING at the time of writing; filled in below if it finished in this session.
+`doctrines --agents 10000 --seeds 250 --first-seed 10000 --set kernel --gate` (1,500 seasons), run on the W1-A head and on `d95fa25`: **exit 0 on both, per-doctrine table identical** (6 of 6 in the band, largest win-rate gap 1.1 points, largest |Δ index| 0.043%, 1,500/1,500 conservation). Logs `scratchpad/w1a/{new,base}-doctrines-1500.txt`.
 
 ### 3.7 Gate W1 items for these files [measured, on this branch with the shim]
 
@@ -116,7 +116,6 @@ Not run by this unit (other units' files): `frontier-abi`, `frontier-node`, `per
 ## 6. Pending / not done
 
 - PENDING-OWNER: nothing in this unit needs O-M1-12 (no wasm32, Playwright, drand archive or Agave).
-- The 1,500-season band run (§3.6) if it did not finish in the session.
 - `refund-strict` mutant survives (exact 10× damage ratio untested).
 
 ## 7. Links
