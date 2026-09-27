@@ -77,13 +77,13 @@ test('the crank funds each AI member at its own time, then registers them at the
   for (const r of x.registered) {
     const e = byWallet.get(r.wallet);
     const fundedAt = sends.findIndex(t => t.instructions.length === 2 && t.instructions[0].keys[2].pubkey === e.wallet);
-    const regAt = sends.findIndex(t => t.signers[1] === e.wallet);
+    const regAt = sends.findIndex(t => t.signers.length === 3 && t.signers.includes(e.wallet));
     assert.ok(fundedAt >= 0 && fundedAt < regAt, 'funded (by the faucet function) before it registers');
     // Register: kind 2, votes nobody, the default deposit, its roster tag, its offices, from its associated token account; the crank pays.
     assert.deepEqual([r.reg.kind, r.reg.votes, r.reg.deposit, r.reg.stand, r.reg.name, r.reg.civ], [2, [NOBODY, NOBODY, NOBODY, NOBODY], 2_500_000n, roleMask(e.stand), e.name, e.civ]);
     assert.equal(Buffer.from(r.reg.tag).toString('hex'), e.tag);
     assert.equal(new PublicKey(r.reg.session).toBase58(), e.session);
-    assert.deepEqual(r.tx.signers, [x.keys('crank').publicKey.toBase58(), e.wallet]);
+    assert.deepEqual([r.tx.signers[0], ...r.tx.signers.slice(1).sort()], [x.keys('crank').publicKey.toBase58(), ...[e.wallet, e.session].sort()]);
     assert.equal(r.tx.instructions[0].keys[4].pubkey, ata(e.wallet, x.mint.toBase58()));
     assert.equal(e.registered, r.index);
   }
@@ -118,7 +118,7 @@ test('registration is strictly in order: AI k+1 waits for AI k to land, however 
   let failing = true;
   x.base.sendRawTransaction = async raw => {
     const p = parseTransaction(new Uint8Array(raw));
-    if (failing && p.signers[1] === first.wallet) throw new Error('RPC down');
+    if (failing && p.signers.includes(first.wallet)) throw new Error('RPC down');
     return send(raw);
   };
   await x.runUntil(second.dueAt + 15_000);

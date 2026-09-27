@@ -170,11 +170,15 @@ export function paymentProblems(req, { pin: p = pin, mint, crank, need, wallet }
  * nothing): the fee payer first, exactly two signers (fee payer, wallet),
  * the wallet read-only, and only `programs`.
  */
-export function walletMessageProblem(message, { feePayer, wallet, programs }) {
+export function walletMessageProblem(message, { feePayer, wallet, programs, cosigners = [] }) {
   let m;
   try { m = parseMessage(message); } catch (e) { return `message: ${e.message}`; }
   if (m.accountKeys[0] !== feePayer) return 'fee payer';
-  if (m.signers.length !== 2 || m.signers[1] !== wallet || m.header.numReadonlySignedAccounts !== 1) return 'signers';
+  // Read-only signers are sorted by key: compare sets, not positions.
+  const want = [wallet, ...cosigners];
+  if (new Set(want).size !== want.length || want.includes(feePayer)
+    || m.signers.length !== 1 + want.length || want.some(k => !m.signers.slice(1).includes(k))
+    || m.header.numReadonlySignedAccounts !== want.length) return 'signers';
   if (m.instructions.some(ix => !programs.includes(ix.programId))) return 'programs';
   return null;
 }
@@ -185,8 +189,8 @@ export function walletMessageProblem(message, { feePayer, wallet, programs }) {
  * the wire with only that signature (the gateway adds the fee payer's).
  * Throws `{code}` WalletModified / WalletBadSignature (or the wallet's own).
  */
-export async function signByWallet(wallet, message) {
-  const signed = await wallet.signTransaction(wireTransaction(message));
+export async function signByWallet(wallet, message, presigned = {}) {
+  const signed = await wallet.signTransaction(wireTransaction(message, presigned));
   let tx;
   try { tx = parseTransaction(signed); } catch { throw Object.assign(new Error(L`ウォレットの応答を取引として読めませんでした`), { code: 'WalletModified' }); }
   if (!equal(tx.message, message)) throw Object.assign(new Error(L`ウォレットが取引を書き換えました。署名は送っていません。`), { code: 'WalletModified' });
@@ -194,7 +198,7 @@ export async function signByWallet(wallet, message) {
   if (i < 0 || !(await verify(wallet.address, message, tx.signatures[i]))) {
     throw Object.assign(new Error(L`ウォレットの署名を確認できませんでした`), { code: 'WalletBadSignature' });
   }
-  return wireTransaction(message, { [wallet.address]: tx.signatures[i] });
+  return wireTransaction(message, { ...presigned, [wallet.address]: tx.signatures[i] });
 }
 
 /** A token account of `owner` holding at least `need` (the ATA preferred), or null. */
@@ -245,11 +249,14 @@ export async function join({ wallet, session, civ, name, stand, onStep = () => {
   const ix = registerIx({ programId: p.programId, seasonId: p.seasonId, wallet: wallet.address, feePayer: crank, civ, walletToken: from, mint, name,
     kind: 2, session: session.publicKey, stand, deposit });
   const message = compileMessage({ feePayer: crank, recentBlockhash: req.extra.recentBlockhash, instructions: [ix] });
-  const shape = walletMessageProblem(message, { feePayer: crank, wallet: wallet.address, programs: [p.programId] });
+  const shape = walletMessageProblem(message, { feePayer: crank, wallet: wallet.address, programs: [p.programId], cosigners: [session.publicKey] });
   if (shape) return fail('X402Mismatch', L`取引の形が想定と違います（${shape}）`);
+  // Register takes only a session key that signed it: the session signs first, then the wallet.
+  const sessionSig = await session.sign(message);
+  if (!(await verify(session.publicKey, message, sessionSig))) return fail('SessionBadSignature');
   onStep('sign');
   let wire;
-  try { wire = await signByWallet(wallet, message); } catch (e) { return fail(e.code || 'WalletError', e.message); }
+  try { wire = await signByWallet(wallet, message, { [session.publicKey]: sessionSig }); } catch (e) { return fail(e.code || 'WalletError', e.message); }
   onStep('send');
   const payment = { x402Version: 1, scheme: 'exact', network: req.network, payload: { transaction: toBase64(wire) } };
   const second = await post('/x402/join', { civ, name }, { 'X-PAYMENT': toBase64(utf8(JSON.stringify(payment))) });

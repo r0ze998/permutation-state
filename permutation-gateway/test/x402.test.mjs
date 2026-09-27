@@ -11,11 +11,11 @@ import { verifyTalk } from '../client/src/talk-node.mjs';
 import { decodeRegister } from '../src/routes/x402.mjs';
 import { call, gateway, memberData, payment, tx } from './gateway-fixtures.mjs';
 
-/** A person's Register (the wallet signs; the gateway pays), as the browser and the SDK build it. */
+/** A person's Register (the wallet and the session key sign; the gateway pays), as the browser and the SDK build it. */
 function register(g, { wallet = Keypair.generate(), session = Keypair.generate(), kind = 2, civ = 1, feePayer = g.crankKey.publicKey, extra = [], deposit = 0n } = {}) {
   const ixs = g.chain.register({ wallet: wallet.publicKey, feePayer, civ, walletToken: Keypair.generate().publicKey, mint: g.mint, name: 'Ada K.', kind,
     session: session.publicKey, stand: 3, deposit });
-  return { wallet, session, t: tx([...extra, ...ixs], feePayer, [wallet]) };
+  return { wallet, session, t: tx([...extra, ...ixs], feePayer, [wallet, session]) };
 }
 
 /** Settles: the member account appears once the transaction is sent. */
@@ -58,7 +58,8 @@ test('/x402/join: a valid payment is simulated exactly as signed (signatures che
   assert.equal(g.base.sent.length, 1);
   assert.deepEqual(g.base.sent[0], g.base.simulated[0].wire, 'the simulated bytes are the ones sent');
   const sent = parseTransaction(g.base.sent[0]);
-  assert.deepEqual(sent.signers, [g.crankKey.publicKey.toBase58(), wallet.publicKey.toBase58()]);
+  assert.equal(sent.signers[0], g.crankKey.publicKey.toBase58());
+  assert.deepEqual(sent.signers.slice(1).sort(), [wallet.publicKey.toBase58(), session.publicKey.toBase58()].sort(), 'the wallet and the session key signed');
   for (const [i, k] of sent.signers.entries()) assert.ok(verifyTalk(sent.message, sent.signatures[i], new PublicKey(k).toBytes()), `signature ${i} valid`);
   assert.deepEqual(g.store.state.members, [{ index: 5, civ: 1, name: 'Ada K.', kind: 2, hosted: 'external', wallet: wallet.publicKey.toBase58(), session: session.publicKey.toBase58() }]);
   const receipt = JSON.parse(Buffer.from(r.headers['X-PAYMENT-RESPONSE'], 'base64').toString());
@@ -180,10 +181,10 @@ test('/x402/join in a season with AI members: everyone registers the same way (t
   const closesAt = Date.now() + 60_000;
   const reg = { seconds: 600, openedAt: closesAt - 600_000, closesAt, waitExternal: 0, entryFee: '10000000', deposit: '2500000' };
   const person = (g, o = {}) => {
-    const wallet = Keypair.generate();
+    const wallet = Keypair.generate(), session = Keypair.generate();
     const ixs = g.chain.register({ wallet: wallet.publicKey, feePayer: g.crankKey.publicKey, civ: 1, walletToken: Keypair.generate().publicKey, mint: g.mint, name: 'Ada K.', kind: 2,
-      session: Keypair.generate().publicKey, stand: 3, deposit: 2_500_000n, ...o });
-    return tx(ixs, g.crankKey.publicKey, [wallet]);
+      session: session.publicKey, stand: 3, deposit: 2_500_000n, ...o });
+    return tx(ixs, g.crankKey.publicKey, [wallet, session]);
   };
   let n = 0;
   const join = (g, t) => call(g.public, 'POST', '/x402/join', { body: { civ: 1 }, headers: payment(t), ip: `10.8.0.${++n}` });
