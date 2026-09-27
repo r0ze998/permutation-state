@@ -1,0 +1,478 @@
+//! Frontier money out: the closed-form claim (open-world design §5.4, owner
+//! decision D11).
+//!
+//! ```text
+//! claim_i = min( 5 × paid_i,
+//!      C_k' · [0.9 · fee_i·u_i / Σ_k'(fee·u) + 0.1 · √w_i / Σ_k'√w]      (citizen pool)
+//!    + C_civ · fee_i·[builder_i] / Σ'(fee·builder)                        (Civilisation Share)
+//!    + L_k' · λ_i·[staker_i] / Λ_k'                                        (laurel pool)
+//!    + steward_i )
+//! ```
+//!
+//! There is no loop over members anywhere. Every wallet's contribution is
+//! a `Weights` value derived from its own Citizen record; the faction
+//! totals are sums of those values, kept incrementally in the FactionShards
+//! (`add` on every credit, `remove` for a revealed Shade). `settle` turns
+//! the two pools and six faction totals into pots, O(6); `claim` turns one
+//! record and the settlement into a payment, O(1).
+//!
+//! **Conservation.** Every term is `pot × weight / Σ weight` rounded down,
+//! so for any set of wallets whose weights sum to the totals, Σ claims ≤ the
+//! prize pools. What a cap cuts off is `swept` (to the next season's pools);
+//! rounding remainders and unclaimed shares are `dust`. `Ledger` keeps
+//! `claimed + swept + dust == citizen + laurel` exactly and refuses any
+//! claim that would break it.
+
+use super::index::{citizen_faction_weight, laurel_faction_weight, FACTIONS};
+use super::pools::{civ_share_bps, EconError, Pools, STEWARD_BPS};
+use crate::fixed::{isqrt, Bps, BPS_ONE};
+use borsh::{BorshDeserialize, BorshSerialize};
+
+/// 1.0 tenure unit, in bps.
+pub const TENURE_ONE: u32 = 10_000;
+/// Precision of `√Works` (so small Works totals still differ).
+pub const WORKS_SQRT_SCALE: u64 = 1_000_000;
+
+/// Tenure units `u = 1 + 0.25 × min(1, active_days / (0.43 × days_available))`
+/// in bps (10,000 … 12,500), where `days_available` counts from the join day
+/// so a late joiner can reach the full bonus (§5.4).
+pub fn tenure_units(active_days: u32, days_available: u32) -> u32 {
+    if days_available == 0 {
+        return TENURE_ONE;
+    }
+    // 0.25 × active / (0.43 × avail) in bps = 2,500 × 100 × active / (43 × avail)
+    let bonus = 250_000u64 * active_days as u64 / (43 * days_available as u64);
+    TENURE_ONE + bonus.min(2_500) as u32
+}
+
+/// `√Works` with square-root diminishing returns per season (the daily cap
+/// is applied when Works are credited).
+pub fn works_weight(works: u64) -> u64 {
+    isqrt(works.saturating_mul(WORKS_SQRT_SCALE))
+}
+
+/// The payout fields of one Citizen account.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct CitizenRecord {
+    pub faction: u8,
+    /// Citizen fee paid (released from escrow).
+    pub fee: u64,
+    /// Laurel stake paid; 0 = not a staker.
+    pub stake: u64,
+    /// `tenure_units`, bps.
+    pub tenure: u32,
+    /// Works points banked this season (daily-capped at credit time).
+    pub works: u64,
+    /// Engine pledges passed the builder threshold.
+    pub builder: bool,
+    /// Banked laurels `λ_i`.
+    pub laurels: u64,
+    /// Officer pay rows, already capped per person (`pools::steward_rows`).
+    pub steward: u64,
+    /// A revealed Shade: removed from its faction's totals, claims nothing.
+    pub voided: bool,
+}
+
+impl CitizenRecord {
+    /// What the wallet paid, the base of the 5× cap.
+    pub fn paid(&self) -> u64 {
+        self.fee.saturating_add(self.stake)
+    }
+
+    /// This wallet's contribution to its faction's totals.
+    pub fn weights(&self) -> Weights {
+        let staker = self.stake > 0;
+        Weights {
+            fee: self.fee,
+            fee_units: self.fee as u128 * self.tenure as u128,
+            works_sqrt: works_weight(self.works),
+            builder_fee: if self.builder { self.fee } else { 0 },
+            stake: self.stake,
+            laurels: if staker { self.laurels } else { 0 },
+            steward: self.steward,
+        }
+    }
+}
+
+/// One wallet's (or one shard's) share of the payout denominators.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Weights {
+    pub fee: u64,
+    pub fee_units: u128,
+    pub works_sqrt: u64,
+    pub builder_fee: u64,
+    pub stake: u64,
+    pub laurels: u64,
+    pub steward: u64,
+}
+
+/// A faction's payout denominators (the sum of its 16 FactionShards).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct FactionTotals {
+    /// Σ fee (the faction's weight in the citizen split).
+    pub fee: u128,
+    /// Σ fee·u.
+    pub fee_units: u128,
+    /// Σ √w.
+    pub works_sqrt: u128,
+    /// Σ fee·[builder] (summed across factions for the Civilisation Share).
+    pub builder_fee: u128,
+    /// Σ stake of stakers.
+    pub stake: u128,
+    /// Λ: Σ laurels of stakers.
+    pub laurels: u128,
+    /// Σ steward rows.
+    pub steward: u128,
+}
+
+impl FactionTotals {
+    fn fields(&mut self) -> [&mut u128; 7] {
+        [
+            &mut self.fee,
+            &mut self.fee_units,
+            &mut self.works_sqrt,
+            &mut self.builder_fee,
+            &mut self.stake,
+            &mut self.laurels,
+            &mut self.steward,
+        ]
+    }
+
+    fn values(w: &Weights) -> [u128; 7] {
+        [
+            w.fee as u128,
+            w.fee_units,
+            w.works_sqrt as u128,
+            w.builder_fee as u128,
+            w.stake as u128,
+            w.laurels as u128,
+            w.steward as u128,
+        ]
+    }
+
+    /// Add a contribution (or the difference between a record's new and
+    /// old weights, as `add(new)` then `remove(old)`).
+    pub fn add(&mut self, w: &Weights) -> Result<(), EconError> {
+        let mut n = *self;
+        for (f, v) in n.fields().into_iter().zip(Self::values(w)) {
+            *f = f.checked_add(v).ok_or(EconError::Overflow)?;
+        }
+        *self = n;
+        Ok(())
+    }
+
+    /// Remove a contribution (a record's old weights; a revealed Shade).
+    pub fn remove(&mut self, w: &Weights) -> Result<(), EconError> {
+        let mut n = *self;
+        for (f, v) in n.fields().into_iter().zip(Self::values(w)) {
+            *f = f.checked_sub(v).ok_or(EconError::Underflow)?;
+        }
+        *self = n;
+        Ok(())
+    }
+
+    /// Fold one shard's totals into the faction's (`FinalizeFaction`).
+    pub fn merge(&mut self, other: &FactionTotals) -> Result<(), EconError> {
+        let mut n = *self;
+        let mut o = *other;
+        for (f, v) in n.fields().into_iter().zip(o.fields()) {
+            *f = f.checked_add(*v).ok_or(EconError::Overflow)?;
+        }
+        *self = n;
+        Ok(())
+    }
+}
+
+/// Payout shares (D11).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PayoutParams {
+    /// Part of a faction's citizen pool paid by fee × tenure (90%); the
+    /// rest by √Works.
+    pub fee_units_bps: Bps,
+    /// Steward pot as a share of each faction's two pools (5%).
+    pub steward_bps: Bps,
+    /// Wallet cap as a multiple of what the wallet paid (5).
+    pub cap_multiple: u64,
+}
+
+impl PayoutParams {
+    pub const REV2: PayoutParams = PayoutParams {
+        fee_units_bps: 9_000,
+        steward_bps: STEWARD_BPS,
+        cap_multiple: 5,
+    };
+}
+
+impl Default for PayoutParams {
+    fn default() -> Self {
+        Self::REV2
+    }
+}
+
+/// One faction's pots and denominators after settlement.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct FactionPots {
+    /// `C_k`: the faction's part of the citizen pool before the steward cut.
+    pub citizen: u64,
+    /// `L_k`: the faction's part of the laurel pool before the steward cut.
+    pub laurel: u64,
+    /// 5% of `C_k + L_k`.
+    pub steward_pot: u64,
+    /// Paid by fee × tenure.
+    pub fee_units_pot: u64,
+    /// Paid by √Works.
+    pub works_pot: u64,
+    /// `L_k'`: paid by laurels among stakers.
+    pub laurel_pot: u64,
+    /// No staker banked a laurel: the laurel pot is split by stake instead.
+    pub laurel_by_stake: bool,
+    pub totals: FactionTotals,
+}
+
+impl FactionPots {
+    /// What the steward rows are paid in total (an upper bound on the sum
+    /// of rounded-down per-wallet steward payments).
+    pub fn steward_paid(&self) -> u64 {
+        if self.totals.steward <= self.steward_pot as u128 {
+            self.totals.steward as u64
+        } else {
+            self.steward_pot
+        }
+    }
+}
+
+/// The season's settlement (`FinalizeFaction` for all six, after the
+/// Shades are voided). Everything a claim needs, and nothing per member.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct Settlement {
+    /// `citizen + laurel` pools at settlement.
+    pub prize: u64,
+    /// Civilisation Share pot `C_civ`.
+    pub civ_pot: u64,
+    /// Σ fee·[builder] over all factions.
+    pub builder_fee: u128,
+    pub factions: [FactionPots; FACTIONS],
+    pub cap_multiple: u64,
+    /// Σ of all pots (≤ `prize`); the difference is rounding dust.
+    pub allocated: u64,
+}
+
+fn mul_div(a: u128, b: u128, c: u128) -> Result<u128, EconError> {
+    if c == 0 {
+        return Ok(0);
+    }
+    Ok(a.checked_mul(b).ok_or(EconError::Overflow)? / c)
+}
+
+fn bps_of(x: u64, bps: Bps) -> u64 {
+    (x as u128 * bps as u128 / BPS_ONE as u128) as u64
+}
+
+/// Turn the pools, the six faction totals and the six faction indices
+/// (`index::faction_index`) into pots. O(FACTIONS).
+pub fn settle(
+    pools: &Pools,
+    totals: &[FactionTotals; FACTIONS],
+    index: &[u64; FACTIONS],
+    engine_stages: u8,
+    p: &PayoutParams,
+) -> Result<Settlement, EconError> {
+    let prize = pools.prize()?;
+    let builder_fee = totals
+        .iter()
+        .try_fold(0u128, |a, t| a.checked_add(t.builder_fee))
+        .ok_or(EconError::Overflow)?;
+    let civ_pot = if builder_fee > 0 {
+        bps_of(pools.citizen, civ_share_bps(engine_stages))
+    } else {
+        0
+    };
+    let citizen_rest = pools.citizen - civ_pot;
+
+    let mut cw = [0u128; FACTIONS];
+    let mut lw = [0u128; FACTIONS];
+    for k in 0..FACTIONS {
+        cw[k] = citizen_faction_weight(totals[k].fee, index[k]).ok_or(EconError::Overflow)?;
+        lw[k] = laurel_faction_weight(totals[k].stake, index[k]).ok_or(EconError::Overflow)?;
+    }
+    let cw_all = cw
+        .iter()
+        .try_fold(0u128, |a, x| a.checked_add(*x))
+        .ok_or(EconError::Overflow)?;
+    let lw_all = lw
+        .iter()
+        .try_fold(0u128, |a, x| a.checked_add(*x))
+        .ok_or(EconError::Overflow)?;
+
+    let mut out = Settlement {
+        prize,
+        civ_pot,
+        builder_fee,
+        cap_multiple: p.cap_multiple,
+        ..Default::default()
+    };
+    let mut allocated = civ_pot as u128;
+    for k in 0..FACTIONS {
+        let t = totals[k];
+        let c_k = mul_div(citizen_rest as u128, cw[k], cw_all)? as u64;
+        let l_k = mul_div(pools.laurel as u128, lw[k], lw_all)? as u64;
+        let pot_c = bps_of(c_k, p.steward_bps);
+        let pot_l = bps_of(l_k, p.steward_bps);
+        let steward_pot = pot_c + pot_l;
+        // Rows that fit are paid in full and the rest of the pot returns to
+        // the citizen pool; rows that do not fit are paid pro rata (§4.3).
+        let leftover = (steward_pot as u128).saturating_sub(t.steward) as u64;
+        let citizen_after = c_k - pot_c + leftover;
+        let (fee_units_pot, works_pot) = if t.works_sqrt > 0 {
+            let f = bps_of(citizen_after, p.fee_units_bps);
+            (f, citizen_after - f)
+        } else {
+            (citizen_after, 0)
+        };
+        let pots = FactionPots {
+            citizen: c_k,
+            laurel: l_k,
+            steward_pot,
+            fee_units_pot: if t.fee_units > 0 { fee_units_pot } else { 0 },
+            works_pot,
+            laurel_pot: if t.stake > 0 { l_k - pot_l } else { 0 },
+            laurel_by_stake: t.laurels == 0,
+            totals: t,
+        };
+        allocated += pots.fee_units_pot as u128
+            + pots.works_pot as u128
+            + pots.laurel_pot as u128
+            + pots.steward_paid() as u128;
+        out.factions[k] = pots;
+    }
+    out.allocated = u64::try_from(allocated).map_err(|_| EconError::Overflow)?;
+    debug_assert!(out.allocated <= prize);
+    Ok(out)
+}
+
+/// One wallet's claim, by part.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Claim {
+    pub citizen: u64,
+    pub civ: u64,
+    pub laurel: u64,
+    pub steward: u64,
+    /// Sum of the parts.
+    pub gross: u64,
+    /// What the wallet receives: `min(gross, cap_multiple × paid)`.
+    pub paid: u64,
+    /// `gross − paid`, swept to the next season's pools.
+    pub swept: u64,
+}
+
+/// `part × w / total`, refusing a weight larger than its total (a record
+/// that is not in the totals would otherwise be overpaid).
+fn share(pot: u64, w: u128, total: u128) -> Result<u64, EconError> {
+    if w > total {
+        return Err(EconError::Underflow);
+    }
+    Ok(mul_div(pot as u128, w, total)? as u64)
+}
+
+/// The closed-form claim of one Citizen. O(1): reads only the record and
+/// the settlement. Also the live "prize if the season ended now" when fed
+/// a projected settlement.
+pub fn claim(st: &Settlement, rec: &CitizenRecord) -> Result<Claim, EconError> {
+    let f = st
+        .factions
+        .get(rec.faction as usize)
+        .ok_or(EconError::BadFaction)?;
+    if rec.voided {
+        return Ok(Claim::default());
+    }
+    let w = rec.weights();
+    let t = &f.totals;
+    let citizen = share(f.fee_units_pot, w.fee_units, t.fee_units)?
+        .checked_add(share(f.works_pot, w.works_sqrt as u128, t.works_sqrt)?)
+        .ok_or(EconError::Overflow)?;
+    let civ = share(st.civ_pot, w.builder_fee as u128, st.builder_fee)?;
+    let laurel = if w.stake == 0 {
+        0
+    } else if f.laurel_by_stake {
+        share(f.laurel_pot, w.stake as u128, t.stake)?
+    } else {
+        share(f.laurel_pot, w.laurels as u128, t.laurels)?
+    };
+    let steward = if t.steward <= f.steward_pot as u128 {
+        if w.steward as u128 > t.steward {
+            return Err(EconError::Underflow);
+        }
+        w.steward
+    } else {
+        share(f.steward_pot, w.steward as u128, t.steward)?
+    };
+    let gross = [civ, laurel, steward]
+        .iter()
+        .try_fold(citizen, |a, x| a.checked_add(*x))
+        .ok_or(EconError::Overflow)?;
+    let cap = rec.paid().saturating_mul(st.cap_multiple);
+    let paid = gross.min(cap);
+    Ok(Claim {
+        citizen,
+        civ,
+        laurel,
+        steward,
+        gross,
+        paid,
+        swept: gross - paid,
+    })
+}
+
+/// The Season's claim counters: `claimed + swept + dust() == prize` always.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct Ledger {
+    pub prize: u64,
+    pub claimed: u64,
+    pub swept: u64,
+}
+
+impl Ledger {
+    pub fn new(prize: u64) -> Self {
+        Ledger {
+            prize,
+            claimed: 0,
+            swept: 0,
+        }
+    }
+
+    /// Book one claim; refused (nothing changes) if it would pay out more
+    /// than the pools hold.
+    pub fn record(&mut self, c: &Claim) -> Result<(), EconError> {
+        let claimed = self
+            .claimed
+            .checked_add(c.paid)
+            .ok_or(EconError::Overflow)?;
+        let swept = self.swept.checked_add(c.swept).ok_or(EconError::Overflow)?;
+        if claimed.checked_add(swept).ok_or(EconError::Overflow)? > self.prize {
+            return Err(EconError::Underflow);
+        }
+        self.claimed = claimed;
+        self.swept = swept;
+        Ok(())
+    }
+
+    /// Rounding remainders and unclaimed shares (swept at close).
+    pub fn dust(&self) -> u64 {
+        self.prize - self.claimed - self.swept
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tenure_reaches_full_bonus_at_43_percent() {
+        assert_eq!(tenure_units(0, 28), 10_000);
+        assert_eq!(tenure_units(28, 28), 12_500);
+        assert_eq!(tenure_units(13, 28), 12_500); // 13 ≥ 0.43 × 28 = 12.04
+        assert_eq!(tenure_units(6, 28), 10_000 + 250_000 * 6 / (43 * 28));
+        // A day-21 joiner reaches the full bonus after 4 active days of 7.
+        assert_eq!(tenure_units(4, 7), 12_500);
+    }
+}
