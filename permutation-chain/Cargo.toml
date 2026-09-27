@@ -38,3 +38,9 @@ ephemeral-rollups-sdk = { version = "=0.16.2", optional = true }
 solana-program = "=4.0.0"
 solana-system-interface = { version = "=3.3.0", features = ["bincode"], optional = true }
 permutation-rules = { path = "../permutation-rules" }
+
+[dev-dependencies]
+# The processor's host tests (`tests/*.rs`) drive deadlines through the
+# clock `processor::now()` reads (`set_host_clock`): the library they test
+# is built with `host-clock` (the SBF build never is).
+permutation-chain = { path = ".", features = ["host-clock"] }

@@ -7,7 +7,7 @@
 //! numbers reproduce and a CI failure can be replayed.
 
 use borsh::BorshDeserialize;
-use permutation_rules::gov::{Role, NOBODY};
+use permutation_rules::gov::{GovEntry, Role, NOBODY};
 use permutation_rules::orders::{order_commitment, OrderBatch};
 use permutation_rules::state::WorldState;
 use permutation_rules::tick::{resolve_tick, TickInput};
@@ -17,10 +17,12 @@ use permutation_server::{fog::Fog, ledger::Ledger};
 use solana_address::Address;
 use solana_instruction::Instruction;
 use solana_signer::Signer;
+use std::collections::BTreeMap;
 
 use crate::budget::{resolve_parts, Need, Part};
 use crate::chain::Chain;
 use crate::season::{Params, SeasonFx};
+use crate::state::{gov_slots, MAX_GOV_PER_SIGNER};
 
 /// What one bot tick did and cost.
 #[derive(Debug, Default)]
@@ -31,7 +33,8 @@ pub struct TickReport {
     pub submit_gov: u64,
     pub commit: u64,
     pub reveal: u64,
-    /// Worst CU of the crank's CloseCommits and LogTickInput (the ResolveTick
+    /// Worst CU of the crank's CloseCommits, FreezeTick (with the VRF
+    /// request and the oracle's answer) and LogTickInput (the ResolveTick
     /// parts are in `parts`).
     pub log: u64,
     pub parts: Vec<Part>,
@@ -62,6 +65,34 @@ fn salt(b: &OrderBatch) -> [u8; 32] {
     x[2..4].copy_from_slice(&b.tick.to_le_bytes());
     x[31] = 7;
     x
+}
+
+/// The entries of `gov` each member can send this tick: what fits its
+/// nation's `gov_quota` of slots (`state::gov_slots`) and
+/// `MAX_GOV_PER_SIGNER` entries, in order (the play server trims the same
+/// way, WP03). Entries the program refuses whatever the quota (too large)
+/// are dropped too.
+fn within_quota(
+    gov: &[GovEntry],
+    civ_of: impl Fn(u32) -> u16,
+    quota: impl Fn(u16) -> u16,
+) -> Vec<GovEntry> {
+    let mut used: BTreeMap<u32, (usize, u32)> = BTreeMap::new();
+    let mut quotas: BTreeMap<u16, u16> = BTreeMap::new();
+    let mut out = vec![];
+    for e in gov {
+        let Some(slots) = gov_slots(&e.action) else {
+            continue;
+        };
+        let civ = civ_of(e.member);
+        let q = *quotas.entry(civ).or_insert_with(|| quota(civ)) as u32;
+        let u = used.entry(e.member).or_default();
+        if u.0 < MAX_GOV_PER_SIGNER && u.1 + slots as u32 <= q {
+            *u = (u.0 + 1, u.1 + slots as u32);
+            out.push(e.clone());
+        }
+    }
+    out
 }
 
 impl BotSeason {
@@ -99,6 +130,7 @@ impl BotSeason {
         }
         s.genesis(c);
         s.seat_and_open(c);
+        s.ensure_rolls(c);
         let state = s.world(c);
         BotSeason {
             rules: s.rules(),
@@ -130,9 +162,14 @@ impl BotSeason {
             ..Default::default()
         };
         self.ledger.observe(&self.state, &self.fog);
-        let gov = self
+        let planned = self
             .planner
             .member_gov(&self.state, &self.rules, &self.fog, &AllAi);
+        let gov = within_quota(
+            &planned,
+            |m| self.state.members[m as usize].civ,
+            |civ| s.nation(c, civ as usize).gov_quota,
+        );
         let batches = self.planner.batches(
             &self.state,
             &self.rules,
@@ -202,6 +239,7 @@ impl BotSeason {
                 }
             }
         }
+        rep.log = rep.log.max(s.freeze(c));
         let (input, log) = s.log_input(c);
         rep.log = rep.log.max(log);
         let input = TickInput::try_from_slice(&input).unwrap();

@@ -74,6 +74,7 @@ fn idle_at_member_cap() {
     s.open(&mut c);
     for t in 0..3 {
         s.close(&mut c);
+        s.freeze(&mut c);
         let log = c
             .need(&[s.log_ix(0)], &[&crank])
             .expect("LogTickInput lands");
@@ -244,18 +245,12 @@ fn finish_after_played_season_at_the_cap() {
     );
 }
 
-/// Governance entries the flood must write in each nation's inbox before
-/// SubmitGov refuses with InboxFull (86 at HEAD: 516 across the six).
-/// WP03 (SubmitGov needs a member of the nation, a per-member quota) must
-/// switch the flood to the members' session keys at quota and set this to
-/// its `gov_quota × members` bound, or the flood fills nothing and the
-/// tests below pass without a full inbox.
-const FLOOD_MIN_PER_NATION: usize = 86;
-
 /// 15 members, 10 idle ticks, then every nation's governance inbox filled
-/// to what SubmitGov admits (fresh keys, `MAX_GOV_PER_SIGNER` each), and
-/// the commitments closed. The flood stops only on InboxFull, after at
-/// least `FLOOD_MIN_PER_NATION` entries in each nation.
+/// to what SubmitGov admits: every member sends one-slot entries with its
+/// seated session key until InboxFull (its `gov_quota`, at most
+/// `MAX_GOV_PER_SIGNER`; outsiders are refused, WP03), and the commitments
+/// closed. The flood stops only on InboxFull, after exactly the
+/// `members × min(gov_quota, MAX_GOV_PER_SIGNER)` bound in each nation.
 fn flooded(c: &mut Chain) -> SeasonFx {
     let s = SeasonFx::running(
         c,
@@ -265,6 +260,7 @@ fn flooded(c: &mut Chain) -> SeasonFx {
         },
         15,
     );
+    s.ensure_rolls(c);
     for _ in 0..10 {
         s.play_tick(c);
     }
@@ -272,24 +268,24 @@ fn flooded(c: &mut Chain) -> SeasonFx {
     let mut entries = 0;
     for civ in 0..6u16 {
         let mut here = 0;
-        'keys: loop {
-            let k = Keypair::new();
-            for _ in 0..MAX_GOV_PER_SIGNER {
-                let ix = s.submit_gov_ix(&k.pubkey(), civ, 0, GovAction::Stand { roles: 1 });
+        let n = s.nation(c, civ as usize);
+        for seat in &n.roll {
+            let k = s.members[seat.member as usize].session.insecure_clone();
+            loop {
+                let ix =
+                    s.submit_gov_ix(&k.pubkey(), civ, seat.member, GovAction::Stand { roles: 1 });
                 let r = c.send(vec![ix], &[&crank, &k]);
                 if r.is_err() {
-                    // Only a full inbox ends the flood; any other refusal
-                    // means the flood no longer fills anything.
+                    // Only a full quota ends a member's flood.
                     assert_err(r, ChainError::InboxFull);
-                    break 'keys;
+                    break;
                 }
                 here += 1;
             }
         }
-        assert!(
-            here >= FLOOD_MIN_PER_NATION,
-            "nation {civ}: the flood wrote {here} entries, under {FLOOD_MIN_PER_NATION}"
-        );
+        let bound = n.roll.len() * (n.gov_quota as usize).min(MAX_GOV_PER_SIGNER);
+        assert!(bound > 0);
+        assert_eq!(here, bound, "nation {civ}: the flood wrote {here} entries");
         entries += here;
     }
     println!("{entries} governance entries across the 6 inboxes");
@@ -299,11 +295,11 @@ fn flooded(c: &mut Chain) -> SeasonFx {
 
 /// LogTickInput's first chunk decodes every nation account with a full inbox.
 #[test]
-#[ignore = "until WP03/WP07: LogTickInput#0 needs 232 KiB at full inbox quota"]
 fn inbox_full_quota_log_input() {
     let mut c = Chain::new();
     let s = flooded(&mut c);
     let crank = s.crank.insecure_clone();
+    s.freeze(&mut c);
     let log = c
         .need(&[s.log_ix(0)], &[&crank])
         .expect("LogTickInput lands");

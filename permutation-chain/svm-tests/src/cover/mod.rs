@@ -88,11 +88,11 @@ pub fn covered_by(ix: &I) -> &'static [Cover] {
         // The v9 instructions (tags 26–36): the wire contract is in; each
         // handler and its tests land with the unit named (wave 3), which
         // replaces its arm with its area's table.
-        I::StartClock => &[Cover::Pending("WP01 (unit P1)")],
+        I::StartClock => play::START_CLOCK,
         I::PostBond { .. } => &[Cover::Pending("WP09 (unit P2)")],
-        I::FreezeTick => &[Cover::Pending("WP11 (unit P1)")],
-        I::ConsumeTickRandomness { .. } => &[Cover::Pending("WP11 (unit P1)")],
-        I::RetryTickRandomness => &[Cover::Pending("WP11 (unit P1)")],
+        I::FreezeTick => play::FREEZE_TICK,
+        I::ConsumeTickRandomness { .. } => play::CONSUME_TICK_RANDOMNESS,
+        I::RetryTickRandomness => play::RETRY_TICK_RANDOMNESS,
         I::ConsumeSeasonSeed { .. } => &[Cover::Pending("WP11 (unit P2)")],
         I::RetrySeasonSeed => &[Cover::Pending("WP11 (unit P2)")],
         I::Abort => &[Cover::Pending("WP14 (unit P3)")],
@@ -115,17 +115,13 @@ pub const NOT_AN_INSTRUCTION: &[Cover] = &[Cover::Test(
 /// the v9 codes (34–44) are listed only until the unit named adds the
 /// program behaviour and a covering test, and removes its line.
 pub const EXEMPT: &[(E, &str)] = &[
-    (E::NotAlone, "PENDING WP01/WP02 (units P1, P4)"),
     (E::UndelegationOrder, "PENDING WP02 (unit P4)"),
     (E::AlreadyDelegated, "PENDING WP02/WP14 (unit P4)"),
     (E::BondTooSmall, "PENDING WP09 (unit P2)"),
-    (E::RandomnessPending, "PENDING WP11 (unit P1)"),
-    (E::WrongOracle, "PENDING WP11 (units P1, P2)"),
     (E::Insolvent, "PENDING WP12 (unit P3)"),
     (E::DelegationOrder, "PENDING WP14 (unit P4)"),
     (E::WorldRolledBack, "PENDING WP14 (unit P3)"),
     (E::WrongValidator, "PENDING WP14/WP15 (unit P4)"),
-    (E::RulesMismatch, "PENDING WP15 (units P1, P2, P3)"),
 ];
 
 /// Ignored tests that run only when an environment variable provides what

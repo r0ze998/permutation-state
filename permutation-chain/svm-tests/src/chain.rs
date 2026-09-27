@@ -247,6 +247,8 @@ impl Chain {
             sigverify,
         };
         c.set_time(T0);
+        // Every tick draws its randomness from the VRF (the stand-in).
+        c.install_vrf();
         c
     }
 

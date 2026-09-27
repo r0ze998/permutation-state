@@ -15,7 +15,7 @@ One crate runs everywhere the rules run, so a tick resolved in one place is byte
 - **`no_std` + `alloc`, no floating point.** `#![deny(unsafe_code)]`, with one exception: the `sol_sha256` syscall in `hash` on SBF. Resources are milli-units, troops are milli-troops, and multipliers are basis points (§0.1).
 - **Perfect information.** Every account is public on chain, so the rules make no attempt to hide state; every player decides from the full world. What stays hidden until the deadline is an officer's sealed batch: only `sha256("permutation-rules/orders" ‖ borsh(OrderBatch) ‖ salt32)` is sent (`orders`), and a batch that is not revealed does not run.
 - **Rotation-equivariant.** Maps are six copies of one sextant turned by 60°, and tie-breaks are turned with the sextant, so a season replayed in the world turned by 60° with turned orders gives identical scores (`../permutation-server/tests/symmetry.rs`).
-- **Deterministic.** Iteration is by ascending id. Randomness comes from `sha256(seed_t ‖ domain ‖ id)`, where `seed_t` mixes the season seed with the tick's randomness (§0.2). Since rules version 6 the tick's randomness is `rng::tick_vrf`: derived from the world root before the tick and every revealed order salt, so nobody who resolves the tick can choose it.
+- **Deterministic.** Iteration is by ascending id. Randomness comes from `sha256(seed_t ‖ domain ‖ id)`, where `seed_t` mixes the season seed with the tick's randomness (§0.2). The tick's randomness is supplied by the chain (the MagicBlock VRF output drawn after the tick's input froze, mixed with the frozen order salts: `permutation_chain::randomness`) and is opaque to the rules.
 - **One ruleset, two clocks.** `Ruleset::new(Preset::Season | Preset::Blitz)` differ only in tick length, civ count, map radius and entry window.
 - **Hashed rules.** `Ruleset::hash()` covers the parameters in `Ruleset` and the static tables (units, techs, buildings, terrain). Its value is stored in the world, so it is part of every state root. Some constants are still inline in the code; see "Known debt" below.
 - **Resumable ticks.** `run_phase` advances `phase_cursor`, so a tick can be split across transactions and finished by anyone (§15.1–15.2). `resolve_tick` runs all remaining phases.
@@ -25,7 +25,7 @@ One crate runs everywhere the rules run, so a tick resolved in one place is byte
 
 | Module | Spec | Contents |
 |---|---|---|
-| `fixed`, `hex`, `rng`, `hash` | §0 | numeric types, axial hexes, seeded randomness and tie-breaks (`tick_vrf`), SHA-256 |
+| `fixed`, `hex`, `rng`, `hash` | §0 | numeric types, axial hexes, seeded randomness and tie-breaks, SHA-256 |
 | `params` | §1 | `Ruleset`, presets, protection schedule, office budget split, tariff table, `ruleset_hash` |
 | `map`, `mapgen` | §2 | terrain table, tiles, territory; `mapgen`: six-fold rotationally symmetric maps from `map_seed(world_seed, season_seed)` (ridges with two passes per border, a city-state in each outer pass, the trade hub at the centre, rivers running downhill) |
 | `genesis` | §3 | `new_season`: capitals (starts shuffled by the season seed), starting units, city-states, hubs; `nation_entries` |
