@@ -254,6 +254,21 @@ pub fn cohort_settle(province: &mut [u8], ticket_bell: u32) -> R<()> {
     Ok(())
 }
 
+/// DECISIONS K9 (contract v1.6 §5.9): is an **earlier** cohort of this
+/// Province (a record of a bell `< ticket_bell` with tickets filed) still
+/// open (not every ticket settled, fewer than 24 bells passed)? A fresh
+/// settlement then waits (`TicketState`), so a later cohort can never make
+/// an earlier winner `taken` and I-47's 24-bell bound holds.
+pub fn earlier_cohort_open(province: &[u8], ticket_bell: u32, now_bell: u32) -> R<bool> {
+    let t = province
+        .get(PV::TICKET_COHORTS..PV::TICKET_COHORTS + PV::COHORTS_N * CO::SIZE)
+        .ok_or(BAD_ACCOUNT)?;
+    Ok(t.chunks_exact(CO::SIZE).any(|r| {
+        let (b, f, s) = cohort_rec(r);
+        f > 0 && b < ticket_bell && !CO::is_free(b, f, s, now_bell)
+    }))
+}
+
 // ------------------------------------------------------------ Join
 
 /// 0x30 Join: `[wallet s] [payer s,w] [season] [frontier r] [citizen w]
@@ -822,7 +837,8 @@ fn shard_holdings(js: &mut [u8], wedge: u8, delta: i32) -> R<()> {
 /// first-seen order, the citizen's JoinShard. **Expired** (`now_bell ≥
 /// ticket_bell + 24`) ends the ticket. Otherwise the seed `S(ticket_bell,
 /// r_site)` ([`seed_of_bell`]), `score` ([`ticket_score`]); site free or
-/// released-free → **fresh**; a provisional holding of the same
+/// released-free → **fresh**, unless an earlier cohort of the Province is
+/// still open ([`earlier_cohort_open`], `TicketState`, DECISIONS K9); a provisional holding of the same
 /// `ticket_bell` with a lower score (tie: lower tag) → **displace** (no
 /// time condition, I-47); else **taken** (`ticket_next += 1`; the ticket is
 /// exhausted at `n`). Fresh: the Holding is funded from the ticket escrow
@@ -958,7 +974,15 @@ pub fn settle_ticket(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
             if site >= r.u8(PV::SITE_COUNT)? {
                 return Err(BAD_ACCOUNT);
             }
-            r.u8(PV::site(site as usize) + SM::STATE)?
+            let state = r.u8(PV::site(site as usize) + SM::STATE)?;
+            // DECISIONS K9: a fresh settlement waits while an earlier
+            // cohort of this Province is open.
+            if matches!(state, SM::STATE_FREE | SM::STATE_RELEASED_FREE)
+                && earlier_cohort_open(&pd, ticket_bell, now_bell)?
+            {
+                return Err(FrontierError::TicketState.into());
+            }
+            state
         };
         let outcome = match state {
             SM::STATE_FREE | SM::STATE_RELEASED_FREE => {
@@ -1629,6 +1653,27 @@ mod tests {
         // a settle of a vanished cohort is a no-op
         cohort_settle(&mut d, 100).unwrap();
         assert!(ap::cohort_closed(&d, 100, 124));
+    }
+
+    #[test]
+    fn earlier_open_cohort_blocks_only_later_bells() {
+        let mut d = alloc::vec![0u8; PV::SIZE];
+        assert!(!earlier_cohort_open(&d, 100, 100).unwrap(), "empty table");
+        cohort_file(&mut d, 100).unwrap();
+        cohort_file(&mut d, 100).unwrap();
+        cohort_file(&mut d, 101).unwrap();
+        // Its own bell and earlier bells never block; a later one does.
+        assert!(!earlier_cohort_open(&d, 100, 101).unwrap());
+        assert!(earlier_cohort_open(&d, 101, 101).unwrap());
+        // One of two settled: still open; both: closed.
+        cohort_settle(&mut d, 100).unwrap();
+        assert!(earlier_cohort_open(&d, 101, 101).unwrap());
+        cohort_settle(&mut d, 100).unwrap();
+        assert!(!earlier_cohort_open(&d, 101, 101).unwrap());
+        // Expiry (24 bells) frees an unsettled record.
+        cohort_file(&mut d, 102).unwrap();
+        assert!(earlier_cohort_open(&d, 103, 125).unwrap());
+        assert!(!earlier_cohort_open(&d, 103, 126).unwrap());
     }
 
     #[test]

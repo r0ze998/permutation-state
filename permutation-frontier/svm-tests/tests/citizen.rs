@@ -838,6 +838,58 @@ fn citizen_refile_keeps_the_escrow_funder() {
     );
 }
 
+/// DECISIONS K9 (decided 2026-09-28, contract v1.6 §5.9): a **fresh**
+/// settlement in a Province waits (`TicketState`) while an **earlier**
+/// ticket cohort of the same Province is still open, so a later cohort
+/// can never make an earlier winner `taken` and I-47's 24-bell bound
+/// holds. Displacement and `taken` are unaffected; an earlier cohort that
+/// closed (every ticket settled) or expired (24 bells) no longer blocks.
+#[test]
+fn citizen_cohort_fresh_waits_for_an_earlier_open_cohort() {
+    let (mut c, w, ring2) = land();
+    let p0 = ring2[0];
+    let r0 = region(p0.0, p0.1);
+    let s = site(p0, 0);
+    let a = w.citizen(&mut c, "k9a", 0);
+    let b = w.citizen(&mut c, "k9b", 0);
+    let e = w.citizen(&mut c, "k9e", 0);
+    let b1 = w.now_bell(&c);
+    file(&w, &mut c, &a, &[s]);
+    // A second earlier-cohort ticket at another site of the Province,
+    // never settled: it keeps the b1 cohort open until it expires.
+    file(&w, &mut c, &e, &[site(p0, 5)]);
+    c.set_time(w.genesis_ts() + (b1 as i64 + 1) * 600 + 1);
+    let b2 = w.now_bell(&c);
+    assert_eq!(b2, b1 + 1);
+    file(&w, &mut c, &b, &[s, site(p0, 1)]);
+    w.seed_ready(&mut c, b1, r0);
+    w.seed_ready(&mut c, b2, r0);
+    assert_eq!(cohort(&c, &w, p0, b1), Some((2, 0)));
+    // The later cohort's fresh settlement waits while b1 is open.
+    assert_code(w.settle_ticket(&mut c, &b, 0, None), E::TicketState);
+    // The earlier winner settles fresh; the later ticket is then taken.
+    let l = expect_lands(w.settle_ticket(&mut c, &a, 0, None), "a fresh (b1)");
+    assert_eq!(
+        one(&l.logs, Kind::SETTLE).u64("outcome"),
+        settle_outcome::FRESH as u64
+    );
+    let l = expect_lands(w.settle_ticket(&mut c, &b, 0, None), "b taken (b2)");
+    assert_eq!(
+        one(&l.logs, Kind::SETTLE).u64("outcome"),
+        settle_outcome::TAKEN as u64
+    );
+    // Its next preference (site 1, free) still waits: e's b1 ticket is open.
+    assert_eq!(cohort(&c, &w, p0, b1), Some((2, 1)));
+    assert_code(w.settle_ticket(&mut c, &b, 1, None), E::TicketState);
+    // Once the b1 cohort expired (bell b1 + 24 < b2 + 24) it lands fresh.
+    c.set_time(w.genesis_ts() + (b1 as i64 + 24) * 600 + 1);
+    let l = expect_lands(w.settle_ticket(&mut c, &b, 1, None), "b fresh (b1 expired)");
+    assert_eq!(
+        one(&l.logs, Kind::SETTLE).u64("outcome"),
+        settle_outcome::FRESH as u64
+    );
+}
+
 #[test]
 fn citizen_cohort_table_full_refuses_a_ninth_bell() {
     let (mut c, w, ring2) = land();
