@@ -1,6 +1,6 @@
 [package]
 name = "verify"
-description = "Frontier verifier v2 (skeleton in W1; W4 builds it)"
+description = "Frontier verifier v2: checks V1-V13 over a season's transactions and final account states, the report, the tamper classes T1-T22 and the recorded fixtures (M1 contract §8.5, W4-D)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,6 +14,35 @@ name = "verify_core"
 name = "frontier-verify"
 path = "src/main.rs"
 
+# Checks of the checks (contract §8.5): each feature disables one check, so
+# the tamper test of that check must then PASS (`mutate.sh` builds each in
+# turn). V10 is the report and has no feature.
+[features]
+mutate-v1 = []
+mutate-v2 = []
+mutate-v3 = []
+mutate-v4 = []
+mutate-v5 = []
+mutate-v6 = []
+mutate-v7 = []
+mutate-v8 = []
+mutate-v9 = []
+mutate-v11 = []
+mutate-v12 = []
+mutate-v13 = []
+
+# Dependency sections belong to the integrator (contract §3.4, I-55); every
+# crate below is already a workspace dependency (W4-D notes, request R1).
 [dependencies]
 fclient.workspace = true
+findex.workspace = true
+frontier-abi.workspace = true
+permutation-rules.workspace = true
+solana-address.workspace = true
+hex.workspace = true
 serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+keeper = { path = "../keeper" }
+localnet.workspace = true
