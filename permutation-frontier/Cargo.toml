@@ -1,0 +1,51 @@
+[package]
+name = "permutation-frontier"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+publish = false
+description = "Sixfold Frontier M1 on-chain program (SBPF v2, no money): seasons, beacons, rings, provinces, holdings, marches, clashes and transits over the permutation-rules frontier kernels"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+# M1 contract §3.2: the crate builds, clippies and tests on the host with the
+# default features (the entrypoint and the custom heap are
+# `cfg(target_os = "solana")`-gated); `--no-default-features` leaves the
+# layouts and the pure helpers only (crypto math, clock, addresses, events,
+# evidence parser, heap arithmetic).
+[features]
+default = ["program", "custom-heap"]
+# Instruction handlers, account initialisation, the prologue wrapper and the
+# entrypoint.
+program = []
+no-entrypoint = []
+# Our own 256-KiB-aware bump allocator (heap.rs, I-50) instead of the
+# entrypoint's default one.
+custom-heap = []
+# Measurement builds only: CU checkpoints and the heap high-water mark in the
+# log; carries the marker PSF_TRACE_BUILD (build-frontier.sh refuses it for a
+# deployable build).
+trace = []
+# Tests only: the single-transaction ResolveClash (0x62); marker
+# PSF_ORACLE_BUILD, never deployable.
+oracle = []
+# Tests only (I-53): pins the deterministic local beacon key of
+# `drand-replay --test-key` and its own QUICKNET_PK_HASH; marker
+# PSF_TEST_BEACON_BUILD, never deployable.
+test-beacon = []
+
+# Dependency sections: owned by the integrator (M1 contract §3.4, I-55); the
+# set below is the one listed in docs/frontier/m1/W2-A-NOTES.md.
+[dependencies]
+solana-program = "=4.0.0"
+ark-ff = { version = "=0.5.0", default-features = false }
+ark-ec = { version = "=0.5.0", default-features = false }
+ark-bls12-381 = { version = "=0.5.0", default-features = false, features = ["curve"] }
+borsh = { version = "=1.6.1", default-features = false }
+permutation-rules = { path = "../permutation-rules" }
+frontier-abi = { path = "../frontier-abi" }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))', 'cfg(feature, values("custom-panic"))'] }
