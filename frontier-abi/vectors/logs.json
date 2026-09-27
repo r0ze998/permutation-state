@@ -1,7 +1,7 @@
 {
   "generator": "frontier-abi abi-vectors",
   "abi_version": 1,
-  "contract": "docs/frontier/m1/M1-CONTRACT.md v1.4",
+  "contract": "docs/frontier/m1/M1-CONTRACT.md v1.5",
   "content": "PS2 log records (§6): kinds, field widths, one encoded vector per kind with its chain heads",
   "prefix": "PS2",
   "version": 1,
@@ -688,7 +688,7 @@
       "vector": {
         "bell": 1014,
         "body_without_tail": "010ef603000002000000ffffffff03015a7998b7d6f514335a7998b7d6f514335a7998b7d6f514335a5a7998b7d6f514335a7998b7",
-        "body": "010ef603000002000000ffffffff03015a7998b7d6f514335a7998b7d6f514335a7998b7d6f514335a5a7998b7d6f514335a7998b706030600000000000000030ae30c84ceee7352a9edb704c655290fb00dad8769648433e06e70f53ebcac030700000000000000294a428eb37ec53c8be65b758ef3ece75600606b307a716ac09f196faec80852040800000000000000e75c2159af75ea4136c54442d4c7f9da7849931eb74241a225556a80669c848e040900000000000000f01d497f11c5582c6fbefe5207ce0a90869347d12ed3d664fed02b1fb1fd532a050a000000000000009eeede72c38de3051a8cd85874467d266a794cf8e1f0720746b0f547b8b86d3b060b00000000000000ef7373c42c7c7f321c3a9b8aabfc96d4798cae1f931074117772a1e7fdf0fd2a",
+        "body": "010ef603000002000000ffffffff03015a7998b7d6f514335a7998b7d6f514335a7998b7d6f514335a5a7998b7d6f514335a7998b705030600000000000000030ae30c84ceee7352a9edb704c655290fb00dad8769648433e06e70f53ebcac040700000000000000294a428eb37ec53c8be65b758ef3ece75600606b307a716ac09f196faec80852040800000000000000e75c2159af75ea4136c54442d4c7f9da7849931eb74241a225556a80669c848e050900000000000000f01d497f11c5582c6fbefe5207ce0a90869347d12ed3d664fed02b1fb1fd532a060a000000000000009eeede72c38de3051a8cd85874467d266a794cf8e1f0720746b0f547b8b86d3b",
         "decodes": true,
         "chains": [
           {
@@ -700,8 +700,8 @@
             "head": "030ae30c84ceee7352a9edb704c655290fb00dad8769648433e06e70f53ebcac"
           },
           {
-            "entity": 3,
-            "who": "JoinShardOf(Tag8(3680837098020567386))",
+            "entity": 4,
+            "who": "Citizen(Tag8(3680837098020567386))",
             "prev_seq": 6,
             "prev_head": "071d2654955cd9ee93f5efc5b3d7a6d3e79e1bde28eea69a451987da9b56114e",
             "seq": 7,
@@ -716,28 +716,25 @@
             "head": "e75c2159af75ea4136c54442d4c7f9da7849931eb74241a225556a80669c848e"
           },
           {
-            "entity": 4,
-            "who": "Citizen(Tag8(3680837098020567386))",
+            "entity": 5,
+            "who": "Holding { p: 2, q: -1, site: 3 }",
             "prev_seq": 8,
             "prev_head": "4d2b6450b35bb94d0470288aa844731e870d814c3963500ee664ab9fe0fdfb36",
             "seq": 9,
             "head": "f01d497f11c5582c6fbefe5207ce0a90869347d12ed3d664fed02b1fb1fd532a"
           },
           {
-            "entity": 5,
-            "who": "Holding { p: 2, q: -1, site: 3 }",
+            "entity": 6,
+            "who": "Province { p: 2, q: -1 }",
             "prev_seq": 9,
             "prev_head": "2791e399d191aef15bae5162d354df24fe54061ef259c3e82533881039332240",
             "seq": 10,
             "head": "9eeede72c38de3051a8cd85874467d266a794cf8e1f0720746b0f547b8b86d3b"
           },
           {
-            "entity": 6,
-            "who": "Province { p: 2, q: -1 }",
-            "prev_seq": 10,
-            "prev_head": "8c1866f0a77e92067f98e9e90c5c2f53970a00c32f133bab6592f4f42efe91d0",
-            "seq": 11,
-            "head": "ef7373c42c7c7f321c3a9b8aabfc96d4798cae1f931074117772a1e7fdf0fd2a"
+            "entity": 3,
+            "who": "JoinShardOf(Tag8(3680837098020567386))",
+            "optional": true
           },
           {
             "entity": 6,

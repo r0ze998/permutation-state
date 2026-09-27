@@ -46,7 +46,7 @@ function harvest({ price = 0, tag = 0x40, extra = [], prefix = null, payer = fee
     data: Uint8Array.of(tag),
   };
   if (swap) [frontier.keys[swap[0]], frontier.keys[swap[1]]] = [frontier.keys[swap[1]], frontier.keys[swap[0]]];
-  const instructions = prefix ?? [cb(2, u32(12_000)), cb(3, u64(price)), cb(4, u32(1_048_576))];
+  const instructions = prefix ?? [cb(2, u32(17_500)), cb(3, u64(price)), cb(4, u32(1_048_576))];
   return compileMessage({ feePayer: payer, recentBlockhash: blockhash, instructions: [...instructions, frontier, ...extra] });
 }
 
@@ -61,7 +61,7 @@ test('pins: the Season PDA and bump are found here; another season address or ru
 
 test('message checks: a good player shape passes; every deviation is named', () => {
   io.setPin({ programId: F.program, cluster: 'localnet', seasonId: 1 });
-  const ok = { feePayer, blockhash, tag: 0x40, signers: [session], cuLimit: 12_000, loadedLimit: 1_048_576, expected: expectedHarvest() };
+  const ok = { feePayer, blockhash, tag: 0x40, signers: [session], cuLimit: 17_500, loadedLimit: 1_048_576, expected: expectedHarvest() };
   assert.deepEqual(io.messageProblems(harvest(), ok), []);
   const has = (msg, opts, re) => assert.ok(io.messageProblems(msg, opts).some(p => re.test(p)), `${re}: ${io.messageProblems(msg, opts)}`);
   has(harvest({ price: 1 }), ok, /CU price is not 0/);
@@ -73,7 +73,7 @@ test('message checks: a good player shape passes; every deviation is named', () 
   has(harvest(), { ...ok, cuLimit: 99 }, /CU limit/);
   has(harvest(), { ...ok, loadedLimit: 65_536 }, /loaded-data limit/);
   has(harvest({ signers: [session, key()] }), ok, /signers/);
-  has(harvest({ prefix: [cb(2, u32(12_000)), cb(4, u32(1_048_576)), cb(3, u64(0))] }), ok, /compute-budget prefix/);
+  has(harvest({ prefix: [cb(2, u32(17_500)), cb(4, u32(1_048_576)), cb(3, u64(0))] }), ok, /compute-budget prefix/);
   has(harvest({ extra: [{ programId: key(), keys: [], data: Uint8Array.of(1) }] }), ok, /instructions|unexpected program/);
   has(Uint8Array.of(1, 2, 3), ok, /unparseable/);
   // §9.4 "accounts recomputed" (integ-W2 review of W2-E): the blockhash and

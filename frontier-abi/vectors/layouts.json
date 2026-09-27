@@ -1,7 +1,7 @@
 {
   "generator": "frontier-abi abi-vectors",
   "abi_version": 1,
-  "contract": "docs/frontier/m1/M1-CONTRACT.md v1.4",
+  "contract": "docs/frontier/m1/M1-CONTRACT.md v1.5",
   "content": "account layouts (§4.3, §5.3), sub-records, SeasonParams",
   "accounts": [
     {
