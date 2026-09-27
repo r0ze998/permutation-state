@@ -127,3 +127,8 @@ Not run here (other units' files): the root-workspace, `permutation-frontier/svm
 - Code: `frontier-node/crates/herald/src/{lib,fold,clash,overview,records,views,files,checkpoint,runner,server,ws,viewers,fixture,main}.rs`, `frontier-node/crates/herald/src/bin/viewers.rs`; `frontier-node/crates/findex/src/{index,archive,ingest,lib}.rs`
 - Tests: `frontier-node/crates/herald/tests/{fold,server,viewers,real_chain}.rs`, `frontier-node/crates/findex/tests/ingest.rs`
 - Contract §8.4, §9.2, §9.3: `docs/frontier/m1/M1-CONTRACT.md`; web client read path: `permutation-server/web/frontier/herald.mjs`, `permutation-gateway/client/src/frontier/herald.mjs`
+
+## Post-merge addendum (integ-W3, 2026-09-28)
+
+- **No `.gz` siblings in the merged tree.** R3 (`flate2`) was not applied (outside the owner-approved dependency set; DECISIONS J2), so §1's deterministic `.gz` siblings, §2's "gzip determinism" unit test, the server test's "gzip sibling (decompressed = plain)" and §6's "fold determinism with `.gz` siblings checked by decompression" describe the branch, not the merged herald: the merged `files.rs` writes plain files only (a changed write still removes a stale sibling; the server still serves a sibling placed by other means), and those assertions became "no sibling written". §8.4's `.br`/`.gz` sibling rule is an **open deviation** until the owner answers J2.
+- **Review fixes by the integrator** (`integ-W3-NOTES.md` §6.4): PS2 bodies only from the program's own invoke frame (fold and findex), findex skips an undecodable body, bounded WebSocket writes (1013 `dropped_slow`), `X-Forwarded-For` on `/h/me`'s quota call, a Same write marked dirty for the next checkpoint.

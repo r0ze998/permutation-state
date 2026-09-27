@@ -107,3 +107,8 @@ All of it is under `permutation-server/web/frontier/`, `permutation-server/web/l
 - Screens: `permutation-server/web/frontier/screens/{shell,join,holding,host,explore,march,tracker,incoming,bell,chronicle}.mjs`
 - Changed foundation: `permutation-server/web/frontier/{app,herald,seal,fchainio,marchbook,fi18n}.mjs`, `index.html`, `frontier.css`; `permutation-server/web/lang/en-frontier.mjs`
 - Tests: `permutation-gateway/test/web-frontier-{march,relay,errors}.test.mjs`
+
+## Post-merge addendum (integ-W3 review, 2026-09-28)
+
+- **Size figure restated:** re-running the stated command on `a7e855c` gives **283,896 B** raw (the notes said 283,900); gzip 93,509 B and `en-frontier.mjs` 35,697 / 12,559 B match.
+- **Review fixes by the integrator** (`integ-W3-NOTES.md` §6.6, contract v1.5 §21): send-time earliest arrival bell (90-s margin, re-checked at send), chronicle from `headSeq − 500` with full-page paging, warnings at cavalry pace, remote hosts' provinces loaded, invite field on a gated season, SettleExplore enabled from the bell record's seed source, a reveal-only tick on a hidden page, failed-send revival, SettleTransit only with the arrival bell's envelope, garrison increases only. D10 (relay-signature check instead of fetching the landed transaction back) is now §9.4's text.

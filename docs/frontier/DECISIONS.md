@@ -210,6 +210,24 @@ The wave-3 merge (W3-A, W3-B, W3-C, W3-D, W3-E, W3-F) and Gate W3. The record is
 | J3 (§3.3 kernels) | W3-A F2's terrain kernel patch applied (const `tile_offset`/`tile_index` tables, the terrain base hash once per province): outcome-identical, so no `TERRAIN_VERSION` or ruleset change | integrator | W3-A: 331 provinces bit-identical on chain; new unit test `tile_tables_equal_the_former_loops`; OpenProvince worst 284,896 → 148,401 CU [measured] |
 | J4 | Gate test fix, not a program change: `g03_announce_season_addresses_and_authority` sends its forged-ProgramData case with a loaded limit for two ProgramData (W3-B F5) | integrator | merged release `.so` 565,912 B: two ProgramData = 1,417,762 B > 1 MiB |
 
+## K. Integration window W3, review response (integrator, 2026-09-28; contract v1.5 §21)
+
+The wave-3 review (six units, verdict needs-fix for each) was answered in the same integration window. The item-by-item response is `m1/integ-W3-NOTES.md` §6.
+
+| # | Decision | Status | Evidence |
+|---|---|---|---|
+| K1 (§5.9) | FileTicket keeps the escrow's funder unless the payer tops it up | architect (amendment v1.5) | `citizen_refile_keeps_the_escrow_funder` (sponsor → expiry → self-paid refile → fresh: `rent_payer` = sponsor; the reverse; an empty escrow) |
+| K2 (§6) | `chains_of(SETTLE DISPLACE)`: the displaced JoinShard link is optional; a creation after `CLOSE` restarts the chain at seq 1 | architect | frontier-abi `settle_displace_admits_one_shared_join_shard`; the svm decoder checks every tail against the bounds; re-created Holding seq 1 |
+| K3 (§5.4) | `NoTicket` ends a SettleTicket write as done (keeper-side), rather than a program change to `AlreadyDone` | integrator (the program cannot tell "never filed" from "settled" once the ticket is gone) | `fclient::abi::err::is_done`; engine test |
+| K4 (§5.5) | Budgets Harvest 17.5k, Train 17.5k, Explore 20k, Depart 24.5k; print-only G1 mode removed | architect | `g01_budget_w3b_*` [measured 16,373 / 16,605 / 18,829 / 23,133 CU] |
+| K5 (§5.10) | DisbandStranded is a pending Forfeit of `now_bell` for a host in a roster | architect | `host_disband_stranded_keeps_the_frozen_roster` (G7-style), `host_disband_stranded_frees_a_host_of_a_gone_holding` |
+| K6 (§5.10/§5.11) | The return of Dissolve's troops (and garrison withdrawals) is assigned to **W4-A**; the resolve keeps Leave entries and departed entries until their settles. Dissolve stays enabled in wave 3: no wave-3 path frees a Leave entry (RFI/SkipQuiet are stubs), so no troops can be lost before W4-A lands the return | architect → **W4-A** | review W3-B major; resolve stand-in in svm-tests |
+| K7 (review "doctrine economy") | **Rebutted**: the shipping (kernel) doctrine set has no food/ore/science multipliers — `frontier-sim` builds it with `Doctrine::kernel` (all `BPS_ONE`); the review read the draft table. Pinned by `frontier-sim` `kernel_set_economy_is_neutral` | integrator | `frontier-sim/src/model.rs` l. 274–305, 401 |
+| K8 (§8.1) | PS2 bodies only from the program's own invoke frame | architect | fclient, findex, herald tests |
+| K9 | **Open finding (architect)**: FileTicket lets a later cohort target a site whose earlier cohort is still open; if the later ticket settles first the earlier winner ends `taken`. Keepers now settle the oldest cohort first, but a player who holds the Province against the keeper for about one bell and self-settles his later ticket beats I-47's 24-bell bound. Candidate rule: a fresh settlement waits while an earlier cohort of the same Province is open | **open** (architect; decide before W4-C) | review W3-C missing item |
+| K10 | W3-B's pinned choices P1–P17 (`m1/W3-B-NOTES.md` §1 table: Holding codec and queue kinds, the tier-up touch, Build items incl. item 7 tier-up, walls in the site mirror, units, Muster, Garrison positive-only, Depart, SettleDeparture idempotency, DisbandStranded, Explore/SettleExplore, the Reveal path, shield, accounts and slot, the record fields) are **accepted as the contract's reading** where §5 leaves them open, with v1.5's changes (P10 → K5; P16 wording → §21 created_day; P5/P17 units → §21) | integrator | W3-B notes; review W3-B missing item |
+| K11 | Deferred with owners (not gate items; `integ-W3-NOTES.md` §6): presets from the final `.so` and Reveal headroom (W5-A); ConsumeRingSeed G1 on the release `.so`, `g01_loaded_limit_*` for the W3-A kinds, G13 pending rows (W5-A); F8 and W3-B encodings into frontier-abi/the kernel, `walk` vs `travel::path_cost` test (W4-D); the Province mirror's tier byte is not authoritative until a Province write carries it (W4-A); herald: `--source rpc` captures are inexact (W5-C, until Geyser), the archive `sig` in bell-region records (W4-D), `Provisional` respawn → `unchecked` (W4-A builder hand-over), blocking I/O and the dormant flag of overviews (W5-C); keeper restart-rebuild test and the DisbandStranded code for a live holding (W5); bots journal reconciliation, verdict codes, `Hold` slot length, 4-province path search, control port 41070 (W4-F/W5); web adjacent-wedge tickets when the own wedge is full (W4-E) | integrator | integ-W3 notes §6 |
+
 ## E. Change log
 
 | Version | Date | Change |
@@ -221,3 +239,4 @@ The wave-3 merge (W3-A, W3-B, W3-C, W3-D, W3-E, W3-F) and Gate W3. The record is
 | v1.2 (integ-W2) | 2026-09-28 | Part H (the wave-2 integration window); the rustfmt/clippy install recorded once in part A |
 | v1.3 (integ-W2 review) | 2026-09-28 | Part I (the wave-2 review response); H5 closed; contract v1.3 (§19) |
 | v1.4 (integ-W3) | 2026-09-28 | Part J (the wave-3 integration window); contract v1.4 (§20) |
+| v1.5 (integ-W3 review) | 2026-09-28 | Part K (the wave-3 review response); contract v1.5 (§21) |

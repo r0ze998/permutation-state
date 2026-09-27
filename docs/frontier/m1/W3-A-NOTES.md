@@ -229,3 +229,9 @@ Outcome-identical (verified on 331 provinces on chain and by the kernel's own te
 -        let (t, r) = tile_at(seed, g);
 +        let (t, r) = tile_at_base(seed, base, g);
 ```
+
+## Post-merge addendum (integ-W3 review, 2026-09-28)
+
+- **Numbers on the merged tree** (release `.so` 564,472 B at `1534014`; the review build differs by the review fixes only): SettleTicket displacement over three provinces **22,029 CU** (the §2 table's 21,954 was this branch's `.so`); loaded-data needs of the W3-A kinds are ≈ 711–735 KB at the merged `.so` (the §2 figures were for 405,832 B). W5-A regenerates the table and `L(kind)` from the final `.so`.
+- **Informative "Tx B max" of §5.5 exceeded**, gated by the byte model since v1.2 (§18): SetSession 326 > 300, SetVigil 288 > 250, CloseHolding 351 > 330, CloseCitizen 319 > 300, CloseProvince 322 > 300.
+- **Changed by the integrator:** FileTicket keeps the escrow's funder unless the payer tops it up (§5.9 v1.5); `init::init_funded` allocates first (F1 fixed; `init_funded_after` removed); `Sink::Never` for CloseProvince/CloseCitizen; `chains_of(SETTLE)` marks the displaced JoinShard optional (F4, §6 v1.5); D2, D4, D5, F7 are in the contract (§21). See `integ-W3-NOTES.md` §6.1.
