@@ -91,6 +91,10 @@ enum AnchorState {
 
 /// The anchor checks of §5.8 in order: canonical address; present → no-op;
 /// the region-day archive canonical and not tombstoning `bell`.
+///
+/// "Present" is authenticated (§4.1): owner = program, magic, season id and
+/// the stored key fields `(bell, region)`; any other non-absent account at
+/// the canonical address is `BadAccount` (§13.2 G3), never a no-op.
 #[allow(clippy::too_many_arguments)]
 fn anchor_state(
     p: &Pubkey,
@@ -102,11 +106,15 @@ fn anchor_state(
     region: u8,
 ) -> R<AnchorState> {
     expect_key(anchor, &ctx.bell_anchor(bell, region))?;
-    if anchor.owner == p {
+    if prologue::presence(anchor, p, AccountKind::BellAnchor, season_id)? {
+        let an = {
+            let ad = anchor.try_borrow_data()?;
+            Anchor::read(&ad)?
+        };
+        if an.bell != bell || an.region != region {
+            return Err(BAD_ACCOUNT);
+        }
         return Ok(AnchorState::Present);
-    }
-    if !init::is_absent(anchor) {
-        return Err(BAD_ACCOUNT);
     }
     if archived(p, ctx, season_id, archive, bell, region)? {
         return Err(FrontierError::Archived.into());
@@ -308,13 +316,20 @@ pub fn post_seed(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
     if an.bell != x.bell || an.region != x.region {
         return Err(BAD_ACCOUNT);
     }
-    // The cache at its canonical address; present → no-op.
+    // The cache at its canonical address; present (authenticated by owner,
+    // magic, season and key fields, §4.1) → no-op; any other non-absent
+    // account there → `BadAccount`.
     expect_key(cache, &ctx.seed_cache(x.bell, x.region, x.nonce))?;
-    if cache.owner == p {
+    if prologue::presence(cache, p, AccountKind::SeedCache, hdr.id)? {
+        let cd = cache.try_borrow_data()?;
+        let r = Ro(&cd);
+        if r.u32(SC::BELL)? != x.bell
+            || r.u8(SC::REGION)? != x.region
+            || r.u8(SC::NONCE)? != x.nonce
+        {
+            return Err(BAD_ACCOUNT);
+        }
         return Ok(());
-    }
-    if !init::is_absent(cache) {
-        return Err(BAD_ACCOUNT);
     }
     let c = season_clock(season_ai)?;
     if x.round != c.seed_round(x.bell, an.a) {
