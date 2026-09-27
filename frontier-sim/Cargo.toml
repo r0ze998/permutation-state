@@ -1,0 +1,19 @@
+# The Frontier host balance simulator (open-world design §12 M0). A host
+# binary, never built for SBF: its own workspace root, excluded from the
+# root workspace so the program's lock and build are untouched.
+[workspace]
+
+[package]
+name = "frontier-sim"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+description = "Host balance simulator for the Sixfold Frontier (rules v10 kernels, 10k agents, 28-day season)"
+license = "MIT"
+publish = false
+
+[dependencies]
+permutation-rules = { path = "../permutation-rules", features = ["std"] }
+
+[profile.release]
+debug = false

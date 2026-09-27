@@ -7,6 +7,7 @@
 resolver = "2"
 members = ["permutation-chain", "permutation-rules"]
 exclude = [
+    "frontier-sim",
     "permutation-server",
     "permutation-state-solana-receipt-spike",
     "permutation-chain/svm-tests",
