@@ -37,6 +37,16 @@
 //!    released; the released explorer's host is disbanded as stranded.
 //! 9. **Expiry**: a ticket nobody settled for 24 bells is settled
 //!    `expired` and its cohort closes.
+//!
+//! **Resident actions** (the explore host's Muster in step 3, the
+//! keep-alive owner's Musters, the stranded host of step 8) need the
+//! province resolved through `b − 2`, which on the real program only
+//! W4-A's SkipQuiet/ResolveFromInputs advance. When the first Muster is
+//! refused `NotResident` (26) the run records it and goes on without
+//! them: steps 1, 2 and 4–9 (sweep, fold, crowding ring, displacement,
+//! dormancy release, expiry) run on the program too (wave-3 review,
+//! W3-C). Every run asserts that no write failed except with an expected
+//! code.
 
 mod common;
 mod model;
@@ -235,7 +245,7 @@ async fn holding_history(w: &World) -> BTreeMap<Address, (Vec<i64>, Option<i64>)
         let Some(last) = page.last() else { break };
         cur = Cursor(last.seq);
         for tx in page.iter().filter(|t| t.err.is_none()) {
-            for b in fclient::log::bodies_from_logs(&tx.logs).unwrap() {
+            for b in fclient::log::bodies_from_logs(&tx.logs, &w.addrs.program).unwrap() {
                 let Ok(r) = plog::decode(&b) else { continue };
                 let pqs = |r: &plog::Record| {
                     let p = i32::from_le_bytes(r.key[0..4].try_into().unwrap());
@@ -260,6 +270,179 @@ async fn holding_history(w: &World) -> BTreeMap<Address, (Vec<i64>, Option<i64>)
         }
     }
     out
+}
+
+/// A started keeper with the land roles over a fresh world, genesis rings
+/// open and the season Running (`None`: the program has no land).
+async fn started() -> Option<Run> {
+    let w = world_with(|p| {
+        p.dormant_after_secs = 1_800;
+        p.release_after_secs = RELEASE_AFTER as u32;
+        p.theta_early_bps = THETA_BPS;
+    })
+    .await;
+    let auth = w.authority.pubkey();
+    for f in 0..6u8 {
+        match w
+            .try_send(&[ix::init_shards(&w.addrs, auth, f)], &[&w.authority])
+            .await
+        {
+            Ok(()) => {}
+            Err((Some(99), _)) => return None,
+            Err(e) => panic!("InitShards: {e:?}"),
+        }
+    }
+    let mut cfg = keeper_config(&w);
+    cfg.roles = ["beacon", "rings", "archive", "fold", "tickets"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let k = Keeper::new(cfg, w.ip.clone(), w.drand.clone(), &[0x33; 32], None).unwrap();
+    fund(&w, &k.payers);
+    let relay = Keypair::new_from_array([0xEE; 32]);
+    w.airdrop(&relay.pubkey(), 200_000_000_000);
+    let mut run = Run {
+        w,
+        k,
+        relay,
+        keep: None,
+        keep_musters: 0,
+    };
+    run.k.start().await.unwrap();
+    run.until(3_000, "genesis rings", |w, k| {
+        (k.rings.genesis_done && w.season().effective_status(w.now()) == status::RUNNING)
+            || k.rings.unsupported
+    })
+    .await;
+    (!run.k.rings.unsupported).then_some(run)
+}
+
+/// Wave-3 review (W3-C major): overlapping fallbacks in one honest
+/// cohort. A and B contest X; B's fallback is Y; C's only site is Y; D
+/// and E contest Z with fallback Y as well. Whatever the scores, the
+/// keeper never displaces anyone (it holds a fresh settlement while a
+/// better same-cohort ticket may still come to its site), and the result
+/// is the lottery's: at each site the best ticket of those that reach it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn overlapping_fallbacks_never_displace() {
+    let Some(mut run) = started().await else {
+        println!("land: NotImplemented by this program; not applicable");
+        return;
+    };
+    println!("program: {}", run.w.which.label());
+    let w0 = wedge_sites(&run.w, 0);
+    let (x, y, z) = (w0[0], w0[1], w0[2]);
+    let kps: Vec<Keypair> = (200..205u8).map(wallet).collect();
+    let prefs: Vec<Vec<SiteKey>> = vec![vec![x], vec![x, y], vec![y], vec![z, y], vec![z, y]];
+    for kp in &kps {
+        run.join(kp, 0).await;
+    }
+    let bell = run.next_bell().await;
+    for (kp, p) in kps.iter().zip(&prefs) {
+        run.file(kp, p).await;
+    }
+    assert_eq!(bell_of(&run.w), bell, "one cohort");
+    let cits: Vec<Address> = kps
+        .iter()
+        .map(|k| run.w.addrs.citizen(&k.pubkey()))
+        .collect();
+    let all = cits.clone();
+    run.until(2_000, "cohort settled", move |w, _| {
+        all.iter().all(|c| {
+            let a = w.ip.lock().account(c).unwrap();
+            Citizen::decode(&a.data).unwrap().ticket_bell == land::NO_TICKET
+        })
+    })
+    .await;
+    run.tick().await;
+    assert_eq!(
+        run.k.tickets.displacing, 0,
+        "no displacement in an honest cohort"
+    );
+    // The lottery by hand: repeatedly, the best ticket at its current
+    // preference among the remaining takes the site if free.
+    let score = |i: usize, s: SiteKey| {
+        let r = ix::region_of(s.0 as i32, s.1 as i32);
+        let seed = run.k.seeds.known(bell, r).expect("seed").seed;
+        let tag = citizen_tag_u64(&cits[i]);
+        (
+            land::ticket_score(&seed, s.0 as i32, s.1 as i32, s.2, tag),
+            tag,
+        )
+    };
+    let mut next = [0usize; 5];
+    let mut owner: BTreeMap<SiteKey, usize> = BTreeMap::new();
+    loop {
+        let mut moved = false;
+        for s in [x, y, z] {
+            if owner.contains_key(&s) {
+                continue;
+            }
+            // Only tickets whose current preference is s, and no better
+            // ticket that could still reach s later.
+            let here: Vec<usize> = (0..5)
+                .filter(|&i| prefs[i].get(next[i]) == Some(&s))
+                .collect();
+            let Some(&best) = here.iter().max_by(|&&a, &&b| {
+                let (sa, ta) = score(a, s);
+                let (sb, tb) = score(b, s);
+                if land::beats(sa, ta, sb, tb) {
+                    std::cmp::Ordering::Greater
+                } else {
+                    std::cmp::Ordering::Less
+                }
+            }) else {
+                continue;
+            };
+            let (sb, tb) = score(best, s);
+            // o moves on from its current site if that site is owned or a
+            // better ticket is there too (the keeper's `movers`).
+            let moves = |o: usize| -> bool {
+                let Some(&cur) = prefs[o].get(next[o]) else {
+                    return false;
+                };
+                owner.contains_key(&cur)
+                    || (0..5).any(|b| {
+                        b != o && prefs[b].get(next[b]) == Some(&cur) && {
+                            let (s1, t1) = score(b, cur);
+                            let (s2, t2) = score(o, cur);
+                            land::beats(s1, t1, s2, t2)
+                        }
+                    })
+            };
+            let waits = (0..5).any(|o| {
+                o != best && moves(o) && prefs[o].iter().skip(next[o] + 1).any(|&t| t == s) && {
+                    let (so, to) = score(o, s);
+                    land::beats(so, to, sb, tb)
+                }
+            });
+            if waits {
+                continue;
+            }
+            owner.insert(s, best);
+            for i in here {
+                if i != best {
+                    next[i] += 1;
+                }
+            }
+            next[best] = usize::MAX / 2;
+            moved = true;
+        }
+        if !moved {
+            break;
+        }
+    }
+    for (&s, &i) in &owner {
+        let h = holding(&run.w, s).expect("founded");
+        assert_eq!(h.owner_citizen, cits[i], "site {s:?}");
+        assert_eq!(h.gen, FIRST_GEN, "site {s:?} founded once");
+    }
+    println!(
+        "overlap: owners {:?}, {} settlements, {} fresh settlements held",
+        owner,
+        run.k.tickets.settled.len(),
+        run.k.tickets.held
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -369,7 +552,6 @@ async fn land_season() {
     .await;
     // One more tick polls the last landings into the duty's record.
     run.tick().await;
-    run.keep = Some((wallet(60), keep_site, 0));
     let region_x = ix::region_of(contested.0 as i32, contested.1 as i32);
     let seed = run
         .k
@@ -455,8 +637,9 @@ async fn land_season() {
         q: wc.1,
         site: wc.2,
     };
-    run.w
-        .send(
+    let first_muster = run
+        .w
+        .try_send(
             &[ix::muster(
                 &run.w.addrs,
                 &player(&wkp, &run.relay),
@@ -468,40 +651,55 @@ async fn land_season() {
             &[&run.relay, &wkp],
         )
         .await;
-    let hwh = holding(&run.w, wc).unwrap();
-    let host =
-        fclient::addr::host_id(wc.0 as i32, wc.1 as i32, wc.2, hwh.gen, hwh.host_seq).unwrap();
-    let tile = (1..61u8)
-        .find(|t| province(&run.w, wc.0, wc.1).explored_mask & (1 << t) == 0)
-        .unwrap();
-    run.w
-        .send(
-            &[ix::explore(
-                &run.w.addrs,
-                &player(&wkp, &run.relay),
-                hw,
-                (wc.0, wc.1),
-                host,
-                &[tile],
-            )],
-            &[&run.relay, &wkp],
-        )
+    let resident = match first_muster {
+        Ok(()) => true,
+        Err((Some(26), _)) => {
+            println!(
+                "resident actions: NotResident (26) on this program (resolves are W4-A's); \
+                 explore, keep-alive and stranded-host parts skipped, the rest runs"
+            );
+            false
+        }
+        Err(e) => panic!("Muster: {e:?}"),
+    };
+    let mut host = 0u64;
+    if resident {
+        run.keep = Some((wallet(60), keep_site, 0));
+        let hwh = holding(&run.w, wc).unwrap();
+        host = fclient::addr::host_id(wc.0 as i32, wc.1 as i32, wc.2, hwh.gen, hwh.host_seq - 1)
+            .unwrap();
+        let tile = (1..61u8)
+            .find(|t| province(&run.w, wc.0, wc.1).explored_mask & (1 << t) == 0)
+            .unwrap();
+        run.w
+            .send(
+                &[ix::explore(
+                    &run.w.addrs,
+                    &player(&wkp, &run.relay),
+                    hw,
+                    (wc.0, wc.1),
+                    host,
+                    &[tile],
+                )],
+                &[&run.relay, &wkp],
+            )
+            .await;
+        run.until(600, "explore settled", move |w, _| {
+            holding(w, wc).is_some_and(|h| h.explore.state == 0)
+        })
         .await;
-    run.until(600, "explore settled", move |w, _| {
-        holding(w, wc).is_some_and(|h| h.explore.state == 0)
-    })
-    .await;
-    let ec = citizen(&run.w, &wkp);
-    assert_eq!(
-        (ec.works, ec.explores, ec.explores_floor_left),
-        (4, 1, 2),
-        "the floor find"
-    );
-    assert_eq!(run.k.explore.sent.len(), 1);
-    println!(
-        "explore: host {host:#x} tile {tile} settled by the keeper, works {}",
-        ec.works
-    );
+        let ec = citizen(&run.w, &wkp);
+        assert_eq!(
+            (ec.works, ec.explores, ec.explores_floor_left),
+            (4, 1, 2),
+            "the floor find"
+        );
+        assert_eq!(run.k.explore.sent.len(), 1);
+        println!(
+            "explore: host {host:#x} tile {tile} settled by the keeper, works {}",
+            ec.works
+        );
+    }
 
     // ---- 4. sweep (pool_owed as a fixture)
     let owed = 12_345u64;
@@ -517,15 +715,27 @@ async fn land_season() {
         run.w.ip.lock().set_account(ka, acct).unwrap();
     }
     let pool_before = run.w.ip.lock().balance(&run.w.addrs.defence_pool());
-    run.until(100, "sweep", move |w, _| {
-        holding(w, keep_site).unwrap().pool_owed == 0
+    let sweep_missing = |k: &K| {
+        k.alerts
+            .iter()
+            .any(|a| a.1 == "not-implemented" && a.2.starts_with("sweep:"))
+    };
+    run.until(100, "sweep", move |w, k| {
+        holding(w, keep_site).unwrap().pool_owed == 0 || sweep_missing(k)
     })
     .await;
-    assert_eq!(
-        run.w.ip.lock().balance(&run.w.addrs.defence_pool()),
-        pool_before + owed
-    );
-    println!("sweep: {owed} lamports of pool_owed swept");
+    let sweep_ok = !sweep_missing(&run.k);
+    if sweep_ok {
+        assert_eq!(
+            run.w.ip.lock().balance(&run.w.addrs.defence_pool()),
+            pool_before + owed
+        );
+        println!("sweep: {owed} lamports of pool_owed swept");
+    } else {
+        // SweepPoolOwed is W4-B's (a stub in wave 3); ReleaseDormant sweeps
+        // the same pool_owed at step 8 on the program.
+        println!("sweep: SweepPoolOwed NotImplemented on this program (W4-B); skipped");
+    }
 
     // ---- 5. fold
     let b_fold = run.next_bell().await;
@@ -753,7 +963,7 @@ async fn land_season() {
     for s in &founded {
         let a = run.w.addrs.holding(s.0 as i32, s.1 as i32, s.2);
         let (acts, rel) = &hist[&a];
-        if *s == keep_site {
+        if *s == keep_site && resident {
             assert!(rel.is_none(), "the active holding is kept");
             assert!(holding(&run.w, *s).is_some());
             continue;
@@ -769,12 +979,16 @@ async fn land_season() {
         assert!(holding(&run.w, *s).is_none());
         released += 1;
     }
-    let pv = province(&run.w, wc.0, wc.1);
-    assert!(
-        pv.entries.iter().all(|x| x.id != host),
-        "the released holding's host is disbanded"
-    );
-    assert!(run.k.holdings.disbands.iter().any(|d| d.2 == host));
+    if resident {
+        let pv = province(&run.w, wc.0, wc.1);
+        assert!(
+            pv.entries
+                .iter()
+                .all(|x| x.id != host || x.pend_op == keeper_core::holdings::OP_FORFEIT),
+            "the released holding's host is disbanded (a pending Forfeit, v1.5)"
+        );
+        assert!(run.k.holdings.disbands.iter().any(|d| d.2 == host));
+    }
     println!(
         "dormancy: {released} released after ≥ {RELEASE_AFTER} s idle; keep-alive kept ({} musters); {} stranded hosts disbanded",
         run.keep_musters,
@@ -834,6 +1048,27 @@ async fn land_season() {
     for a in bad.iter().take(12) {
         println!("  {a:?}");
     }
+    // Wave-3 review (W3-C): assert, not only print. No write may die or
+    // meet NotImplemented; a failure is allowed only with a code the
+    // keeper expects in normal operation (a fold part of an older bell, a
+    // ticket that moved, a holding no longer dormant, a seed not there
+    // yet, a province not resolved for the keep-alive host).
+    const EXPECTED: [&str; 6] = [
+        "FoldStale",
+        "TicketState",
+        "NotDormant",
+        "SeedNotReady",
+        "NoAnchor",
+        "NotResident",
+    ];
+    let unexpected: Vec<_> = bad
+        .iter()
+        .filter(|a| {
+            let stub = !sweep_ok && a.1 == "not-implemented" && a.2.starts_with("sweep:");
+            !stub && (a.1 != "failed" || !EXPECTED.iter().any(|c| a.2.contains(c)))
+        })
+        .collect();
+    assert!(unexpected.is_empty(), "unexpected alerts: {unexpected:?}");
     println!(
         "land_season: {:.1} game h, {} slots, in {:.1} s",
         (run.w.now() - s.genesis_ts) as f64 / 3_600.0,

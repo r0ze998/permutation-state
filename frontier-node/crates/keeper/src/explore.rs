@@ -13,7 +13,7 @@ use std::sync::Arc;
 use solana_address::Address;
 
 use fclient::abi::{status, tag, Class};
-use fclient::decode::{Citizen, Holding};
+use fclient::decode::Holding;
 use fclient::ix::{self, HoldingRef};
 use fclient::ports::{ChainPort, PortResult};
 use frontier_abi::layout::player::explore as exl;
@@ -81,20 +81,9 @@ impl ExploreDuty {
                 else {
                     continue;
                 };
-                let wallet = match index.citizens.get(&h.owner_citizen) {
-                    Some(x) => x.0,
-                    None => {
-                        let got = port.accounts(&[h.owner_citizen], 0).await?;
-                        match got[0].as_ref().and_then(|a| Citizen::decode(&a.data).ok()) {
-                            Some(c) => {
-                                index
-                                    .citizens
-                                    .insert(h.owner_citizen, (c.wallet, c.faction));
-                                c.wallet
-                            }
-                            None => continue,
-                        }
-                    }
+                let Some((wallet, _)) = index.citizen_of(port, t.addrs, &h.owner_citizen).await?
+                else {
+                    continue;
                 };
                 let a = t.addrs.clone();
                 let href = HoldingRef {

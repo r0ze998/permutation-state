@@ -419,7 +419,12 @@ async fn bell_region(
     .unwrap_or_else(|| err(StatusCode::NOT_FOUND, "NotYet"))
 }
 
-async fn me(State(app): State<Shared>, Path(wallet): Path<String>) -> Response {
+async fn me(
+    State(app): State<Shared>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    h: HeaderMap,
+    Path(wallet): Path<String>,
+) -> Response {
     let Ok(w) = wallet.parse::<Address>() else {
         return err(StatusCode::BAD_REQUEST, "BadWallet");
     };
@@ -428,7 +433,7 @@ async fn me(State(app): State<Shared>, Path(wallet): Path<String>) -> Response {
         Address::new_from_array(f.ctx.citizen(&w.to_bytes()))
     };
     let quota = match &app.relay {
-        Some(r) => relay_quota(r, &citizen).await,
+        Some(r) => relay_quota(r, &citizen, client_ip(peer.ip(), &h)).await,
         None => Value::Null,
     };
     let f = read_fold(&app);
@@ -436,10 +441,15 @@ async fn me(State(app): State<Shared>, Path(wallet): Path<String>) -> Response {
 }
 
 /// The relay's `/f/quota?citizen=` answer (`null` if it does not answer
-/// within 2 s).
-async fn relay_quota(relay: &str, citizen: &Address) -> Value {
+/// within 2 s). The caller's address goes along as `X-Forwarded-For`, so
+/// the relay's per-IP limit applies to it and not to the herald's
+/// loopback address (wave-3 review, W3-D).
+async fn relay_quota(relay: &str, citizen: &Address, client: IpAddr) -> Value {
     let url = format!("http://{relay}/f/quota?citizen={citizen}");
-    match tokio::time::timeout(Duration::from_secs(2), fclient::http::get(&url)).await {
+    let ip = client.to_string();
+    let hdrs = [("X-Forwarded-For", ip.as_str())];
+    let get = fclient::http::get_with_headers(&url, &hdrs);
+    match tokio::time::timeout(Duration::from_secs(2), get).await {
         Ok(Ok(r)) if (200..300).contains(&r.status) => {
             serde_json::from_slice(&r.body).unwrap_or(Value::Null)
         }

@@ -23,7 +23,7 @@ use solana_address::Address;
 
 use fclient::abi::{status, tag, Class};
 use fclient::addr::host_parts;
-use fclient::decode::{Citizen, Holding, Province};
+use fclient::decode::{Holding, Province};
 use fclient::ix::{self, HoldingRef};
 use fclient::land;
 use fclient::ports::{ChainPort, PortResult};
@@ -38,6 +38,9 @@ pub fn release_key(h: &Address, gen: u8) -> String {
 pub fn sweep_key(h: &Address, owed: u64) -> String {
     format!("sweep:{h}:{owed}")
 }
+/// Entry pending op 6: Forfeit (a bad seal, or a disbanded stranded host).
+pub const OP_FORFEIT: u8 = 6;
+
 pub fn stranded_key(p: i16, q: i16, host: u64) -> String {
     format!("stranded:{p},{q}:{host}")
 }
@@ -157,20 +160,10 @@ impl HoldingDuty {
                 }
             }
             for (addr, h) in need_citizen {
-                let (wallet, faction) = match index.citizens.get(&h.owner_citizen) {
-                    Some(x) => *x,
-                    None => {
-                        let got = port.accounts(&[h.owner_citizen], 0).await?;
-                        match got[0].as_ref().and_then(|a| Citizen::decode(&a.data).ok()) {
-                            Some(c) => {
-                                index
-                                    .citizens
-                                    .insert(h.owner_citizen, (c.wallet, c.faction));
-                                (c.wallet, c.faction)
-                            }
-                            None => continue,
-                        }
-                    }
+                let Some((wallet, faction)) =
+                    index.citizen_of(port, t.addrs, &h.owner_citizen).await?
+                else {
+                    continue;
                 };
                 let a = t.addrs.clone();
                 let href = HoldingRef {
@@ -228,7 +221,10 @@ impl HoldingDuty {
                     continue;
                 };
                 for (i, e) in prov.entries.iter().enumerate() {
-                    if e.state != 0 && e.id != 0 {
+                    // v1.5 §5.10: a disband already issued is a pending
+                    // Forfeit until the province resolves its bell (a
+                    // second one would be refused HostBusy).
+                    if e.state != 0 && e.id != 0 && e.pend_op != OP_FORFEIT {
                         entries.push(((p as i16, q as i16), i as u8, e.id));
                     }
                 }

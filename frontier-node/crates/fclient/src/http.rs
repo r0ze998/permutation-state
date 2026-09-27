@@ -65,15 +65,24 @@ pub async fn request(
     url: &str,
     body: Option<Vec<u8>>,
 ) -> Result<Response, PortError> {
-    tokio::time::timeout(TIMEOUT, request_inner(method, url, body))
+    tokio::time::timeout(TIMEOUT, request_inner(method, url, body, &[]))
         .await
         .map_err(|_| PortError::Io(format!("timeout: {method} {url}")))?
+}
+
+/// `GET` with extra request headers (names and values must be plain
+/// printable ASCII without CR/LF; others are dropped).
+pub async fn get_with_headers(url: &str, headers: &[(&str, &str)]) -> Result<Response, PortError> {
+    tokio::time::timeout(TIMEOUT, request_inner("GET", url, None, headers))
+        .await
+        .map_err(|_| PortError::Io(format!("timeout: GET {url}")))?
 }
 
 async fn request_inner(
     method: &str,
     url: &str,
     body: Option<Vec<u8>>,
+    headers: &[(&str, &str)],
 ) -> Result<Response, PortError> {
     let (hp, path) = split_url(url)?;
     let mut s = TcpStream::connect(&hp)
@@ -81,6 +90,12 @@ async fn request_inner(
         .map_err(|e| PortError::Io(format!("{hp}: {e}")))?;
     let body = body.unwrap_or_default();
     let mut req = format!("{method} {path} HTTP/1.1\r\nHost: {hp}\r\nConnection: close\r\nAccept: application/json\r\n");
+    for (k, v) in headers {
+        let name_ok = !k.is_empty() && k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
+        if name_ok && v.bytes().all(|b| (0x20..0x7f).contains(&b)) {
+            req.push_str(&format!("{k}: {v}\r\n"));
+        }
+    }
     if method != "GET" {
         req.push_str(&format!(
             "Content-Type: application/json\r\nContent-Length: {}\r\n",

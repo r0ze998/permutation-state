@@ -16,6 +16,7 @@
 
 use base64::Engine;
 use sha2::{Digest, Sha256};
+use solana_address::Address;
 
 use crate::abi::entity;
 
@@ -194,25 +195,70 @@ pub fn chain(
     r
 }
 
-/// PS2 bodies from a transaction's log lines, in order.
-pub fn bodies_from_logs(logs: &[String]) -> Result<Vec<Vec<u8>>, LogError> {
-    let b64 = base64::engine::general_purpose::STANDARD;
+/// PS2 bodies **the program `program` emitted**, from a transaction's log
+/// lines, in order (wave-3 review, W3-C/W3-D): a `Program data:` line
+/// counts only while `program` is the innermost frame the runtime opened
+/// (`Program <id> invoke [n]` … `Program <id> success|failed`). Another
+/// program's lines in the same transaction — which could carry forged PS2
+/// bodies — are ignored, and so are lines outside any frame.
+pub fn bodies_from_logs(logs: &[String], program: &Address) -> Result<Vec<Vec<u8>>, LogError> {
+    let id = program.to_string();
+    let mut stack: Vec<&str> = vec![];
     let mut out = vec![];
     for l in logs {
-        let Some(rest) = l.strip_prefix("Program data: ") else {
-            continue;
-        };
-        let mut parts = rest.split(' ');
-        let (Some(a), Some(b)) = (parts.next(), parts.next()) else {
-            continue;
-        };
-        let tag = b64.decode(a).map_err(|_| LogError::Base64)?;
-        if tag != PS2 {
+        if let Some(body) = l.strip_prefix("Program data: ") {
+            if stack.last() == Some(&id.as_str()) {
+                if let Some(b) = ps2_of_data(body)? {
+                    out.push(b);
+                }
+            }
             continue;
         }
-        out.push(b64.decode(b).map_err(|_| LogError::Base64)?);
+        let Some(rest) = l.strip_prefix("Program ") else {
+            continue;
+        };
+        let Some((who, tail)) = rest.split_once(' ') else {
+            continue;
+        };
+        if tail.starts_with("invoke [") {
+            stack.push(who);
+        } else if (tail == "success" || tail.starts_with("failed")) && stack.last() == Some(&who) {
+            stack.pop();
+        }
     }
     Ok(out)
+}
+
+/// The PS2 body of one `Program data:` payload (`None`: another tag).
+fn ps2_of_data(rest: &str) -> Result<Option<Vec<u8>>, LogError> {
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let mut parts = rest.split(' ');
+    let (Some(a), Some(b)) = (parts.next(), parts.next()) else {
+        return Ok(None);
+    };
+    let tag = b64.decode(a).map_err(|_| LogError::Base64)?;
+    if tag != PS2 {
+        return Ok(None);
+    }
+    Ok(Some(b64.decode(b).map_err(|_| LogError::Base64)?))
+}
+
+/// The PS2 body of a single `Program data:` line, frame not checked (tools
+/// that rewrite one line of a recorded archive).
+pub fn body_of_line(line: &str) -> Result<Option<Vec<u8>>, LogError> {
+    match line.strip_prefix("Program data: ") {
+        Some(rest) => ps2_of_data(rest),
+        None => Ok(None),
+    }
+}
+
+/// `lines` inside one top-level frame of `program`, as the runtime prints
+/// them (fixtures and synthetic archives).
+pub fn in_frame(program: &Address, lines: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut v = vec![format!("Program {program} invoke [1]")];
+    v.extend(lines);
+    v.push(format!("Program {program} success"));
+    v
 }
 
 /// The `Program data:` line the runtime prints for a record.
@@ -345,8 +391,35 @@ mod tests {
             links: vec![],
         };
         let line = log_line(&r.encode());
-        let bodies = bodies_from_logs(&[line, "Program log: x".into()]).unwrap();
+        let me = Address::new_from_array([7; 32]);
+        let other = Address::new_from_array([9; 32]);
+        let logs = in_frame(&me, [line.clone(), "Program log: x".into()]);
+        let bodies = bodies_from_logs(&logs, &me).unwrap();
         assert_eq!(Record::decode(&bodies[0]).unwrap(), r);
+        // Outside any frame, or in another program's frame: ignored.
+        assert!(bodies_from_logs(std::slice::from_ref(&line), &me)
+            .unwrap()
+            .is_empty());
+        let forged = in_frame(&other, [line.clone()]);
+        assert!(bodies_from_logs(&forged, &me).unwrap().is_empty());
+        // Another program invoked by ours logs a line: not ours; ours
+        // after its return is.
+        let nested = vec![
+            format!("Program {me} invoke [1]"),
+            format!("Program {other} invoke [2]"),
+            line.clone(),
+            format!("Program {other} success"),
+            line.clone(),
+            format!("Program {me} success"),
+        ];
+        assert_eq!(bodies_from_logs(&nested, &me).unwrap().len(), 1);
+        // A foreign top-level frame that failed does not leave us inside.
+        let failed = vec![
+            format!("Program {other} invoke [1]"),
+            format!("Program {other} failed: custom program error: 0x1"),
+            line,
+        ];
+        assert!(bodies_from_logs(&failed, &me).unwrap().is_empty());
     }
 
     #[test]

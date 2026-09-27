@@ -159,6 +159,12 @@ impl Out {
             Err(e) => return Err(e),
         };
         if old.as_deref() == Some(bytes) {
+            // Durability after a crash (wave-3 review, W3-D): the bytes may
+            // sit only in the page cache from before the crash; a batched
+            // writer syncs them with the next checkpoint too.
+            if let Some(d) = &self.dirty {
+                d.lock().unwrap_or_else(|e| e.into_inner()).insert(p);
+            }
             return Ok(Written::Same);
         }
         // A stale sibling must never be served with new bytes.
@@ -259,6 +265,10 @@ mod tests {
         assert_eq!(dirty.len(), 1, "the file");
         assert_eq!(sync_paths(&dirty).unwrap(), 1);
         assert!(b.take_dirty().is_empty());
+        // A re-fold that finds the same bytes (after a crash) syncs them
+        // with the next checkpoint as well.
+        assert_eq!(b.write("h/b/2.bin", &[1, 2, 3]).unwrap(), Written::Same);
+        assert_eq!(b.take_dirty().len(), 1);
         let _ = fs::remove_dir_all(&d);
     }
 }

@@ -289,7 +289,31 @@ enum Ctl {
     Seen,
 }
 
-/// Serves one upgraded socket until it closes.
+/// Why a bounded write did not complete.
+enum WriteFail {
+    /// The peer is gone (I/O error).
+    Io,
+    /// The peer stopped reading: the write did not finish within the limit.
+    Slow,
+}
+
+/// `write_all` bounded by `limit` (wave-3 review, W3-D: a client that
+/// stops reading must not hold its socket forever).
+async fn write_within<W: AsyncWrite + Unpin>(
+    wr: &mut W,
+    bytes: &[u8],
+    limit: Duration,
+) -> Result<(), WriteFail> {
+    match tokio::time::timeout(limit, wr.write_all(bytes)).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(_)) => Err(WriteFail::Io),
+        Err(_) => Err(WriteFail::Slow),
+    }
+}
+
+/// Serves one upgraded socket until it closes. Every write is bounded by
+/// two heartbeats; a peer that does not drain its socket in that time is
+/// closed 1013 and counted in `dropped_slow`.
 pub async fn serve<S>(
     io: S,
     mut rx: broadcast::Receiver<Arc<Diff>>,
@@ -352,6 +376,16 @@ pub async fn serve<S>(
     let mut silent = 0u32;
     let mut hb = tokio::time::interval(cfg.heartbeat);
     hb.tick().await;
+    let limit = cfg.heartbeat * 2;
+    let fail = |e: WriteFail, stats: &WsStats| -> u16 {
+        match e {
+            WriteFail::Io => 1006,
+            WriteFail::Slow => {
+                stats.dropped_slow.fetch_add(1, Ordering::SeqCst);
+                1013
+            }
+        }
+    };
     let close_code: u16 = loop {
         tokio::select! {
             d = rx.recv() => match d {
@@ -359,8 +393,8 @@ pub async fn serve<S>(
                     if sub.wants(&d.scope) {
                         seq += 1;
                         let m = message(seq, &d);
-                        if wr.write_all(&encode_frame(OP_TEXT, m.as_bytes(), None)).await.is_err() {
-                            break 1006;
+                        if let Err(e) = write_within(&mut wr, &encode_frame(OP_TEXT, m.as_bytes(), None), limit).await {
+                            break fail(e, &stats);
                         }
                     }
                 }
@@ -380,19 +414,19 @@ pub async fn serve<S>(
                     let ack = json!({"op": "subscribed", "provinces": s.provinces.len(), "rings": s.rings.len(),
                         "wallet": s.wallet.is_some(), "bells": s.bells}).to_string();
                     sub = s;
-                    if wr.write_all(&encode_frame(OP_TEXT, ack.as_bytes(), None)).await.is_err() {
-                        break 1006;
+                    if let Err(e) = write_within(&mut wr, &encode_frame(OP_TEXT, ack.as_bytes(), None), limit).await {
+                        break fail(e, &stats);
                     }
                 }
                 Some(Ctl::Refused(code)) => {
                     let m = json!({"op": "error", "code": code}).to_string();
-                    if wr.write_all(&encode_frame(OP_TEXT, m.as_bytes(), None)).await.is_err() {
-                        break 1006;
+                    if let Err(e) = write_within(&mut wr, &encode_frame(OP_TEXT, m.as_bytes(), None), limit).await {
+                        break fail(e, &stats);
                     }
                 }
                 Some(Ctl::Pong(p)) => {
-                    if wr.write_all(&encode_frame(OP_PONG, &p, None)).await.is_err() {
-                        break 1006;
+                    if let Err(e) = write_within(&mut wr, &encode_frame(OP_PONG, &p, None), limit).await {
+                        break fail(e, &stats);
                     }
                 }
                 Some(Ctl::Seen) => silent = 0,
@@ -403,18 +437,29 @@ pub async fn serve<S>(
                 if silent > 3 {
                     break 1001;
                 }
-                if wr.write_all(&encode_frame(OP_PING, b"hb", None)).await.is_err() {
-                    break 1006;
+                if let Err(e) = write_within(&mut wr, &encode_frame(OP_PING, b"hb", None), limit).await {
+                    break fail(e, &stats);
                 }
             }
         }
     };
-    if close_code != 1006 {
-        let _ = wr
-            .write_all(&encode_frame(OP_CLOSE, &close_code.to_be_bytes(), None))
-            .await;
+    if close_code != 1006 && close_code != 1013 {
+        let _ = write_within(
+            &mut wr,
+            &encode_frame(OP_CLOSE, &close_code.to_be_bytes(), None),
+            limit,
+        )
+        .await;
+    } else if close_code == 1013 {
+        // Best effort only: the peer is not reading.
+        let _ = write_within(
+            &mut wr,
+            &encode_frame(OP_CLOSE, &close_code.to_be_bytes(), None),
+            Duration::from_millis(10),
+        )
+        .await;
     }
-    let _ = wr.shutdown().await;
+    let _ = tokio::time::timeout(limit, wr.shutdown()).await;
     reader.abort();
     stats.open.fetch_sub(1, Ordering::SeqCst);
 }
@@ -543,6 +588,45 @@ mod tests {
             let f = read_frame(&mut &enc[..], false).await.unwrap();
             assert_eq!(f.payload, p);
         }
+    }
+
+    /// Wave-3 review (W3-D major): a client that subscribes and never
+    /// reads (small socket buffer) is closed within bounded time and the
+    /// open count returns to 0.
+    #[tokio::test]
+    async fn a_client_that_never_reads_is_dropped() {
+        let (srv, mut cli) = tokio::io::duplex(512);
+        let (tx, rx) = broadcast::channel::<Arc<Diff>>(4_096);
+        let stats = Arc::new(WsStats::default());
+        let cfg = WsCfg {
+            heartbeat: Duration::from_millis(100),
+            max_lags: 1_000_000,
+            max_sockets: 8,
+        };
+        let h = tokio::spawn(serve(srv, rx, cfg, stats.clone()));
+        let sub = json!({"op": "sub", "bells": true}).to_string();
+        cli.write_all(&encode_frame(OP_TEXT, sub.as_bytes(), Some([1, 2, 3, 4])))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(stats.open.load(Ordering::SeqCst), 1);
+        for i in 0..2_000u64 {
+            let _ = tx.send(Arc::new(Diff {
+                kind: "bell",
+                key: format!("/h/bell/{i}/region/0.json"),
+                slot: i,
+                head: None,
+                bytes: vec![0xAB; 64],
+                scope: Scope::Bells,
+            }));
+        }
+        tokio::time::timeout(Duration::from_secs(3), h)
+            .await
+            .expect("the socket closes within bounded time")
+            .unwrap();
+        assert_eq!(stats.open.load(Ordering::SeqCst), 0);
+        assert_eq!(stats.dropped_slow.load(Ordering::SeqCst), 1);
+        drop(cli);
     }
 
     #[test]

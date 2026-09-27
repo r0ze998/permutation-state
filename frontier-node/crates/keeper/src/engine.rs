@@ -349,7 +349,7 @@ impl Engine {
             }
         };
         let first = p.first_slot.unwrap_or(st.slot);
-        if st.err.is_none() || st.code == Some(err::ALREADY_DONE) {
+        if st.err.is_none() || st.code.is_some_and(|c| err::is_done(p.spec.tag, c)) {
             status(if st.err.is_none() { "landed" } else { "done" });
             return Some(Outcome::Landed {
                 slot: st.slot,
@@ -1081,5 +1081,9 @@ mod tests {
             };
             assert_eq!(got, want, "code {code}");
         }
+        // NoTicket (23) ends a SettleTicket as done, and only a SettleTicket.
+        assert!(err::is_done(abi::tag::SETTLE_TICKET, 23));
+        assert!(!err::is_done(abi::tag::POST_SEED, 23));
+        assert!(err::is_done(abi::tag::POST_SEED, 52));
     }
 }

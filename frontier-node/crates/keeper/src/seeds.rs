@@ -31,12 +31,20 @@ pub struct SeedInfo {
 /// Slots between two probes of a `(b, r)` whose seed is not there yet.
 const RETRY_SLOTS: u64 = 2;
 
+/// Slots between two checks that a remembered SeedCache still exists
+/// (wave-3 review, W3-C: a cache closes after its bell is archived, and a
+/// keeper that does not anchor that region never learns it from its own
+/// beacon duty).
+pub const RECHECK_SLOTS: u64 = 150;
+
 #[derive(Default)]
 pub struct SeedFinder {
     known: BTreeMap<(u32, u8), SeedInfo>,
     last_try: BTreeMap<(u32, u8), u64>,
     /// Anchors whose 256 nonces were probed without a cache.
     probed: BTreeMap<(u32, u8), u64>,
+    /// Last slot a remembered cache was seen present.
+    checked: BTreeMap<(u32, u8), u64>,
 }
 
 impl SeedFinder {
@@ -49,6 +57,16 @@ impl SeedFinder {
         self.known = self.known.split_off(&(bell, 0));
         self.last_try = self.last_try.split_off(&(bell, 0));
         self.probed = self.probed.split_off(&(bell, 0));
+        self.checked = self.checked.split_off(&(bell, 0));
+    }
+
+    /// Forgets `(bell, region)` so the next [`SeedFinder::find`] reads the
+    /// chain again (a write naming its cache was refused `NoAnchor` or
+    /// `SeedNotReady`).
+    pub fn forget(&mut self, bell: u32, region: u8) {
+        self.known.remove(&(bell, region));
+        self.checked.remove(&(bell, region));
+        self.last_try.remove(&(bell, region));
     }
 
     /// The seed of `(bell, region)` if it is on chain.
@@ -72,6 +90,28 @@ impl SeedFinder {
                 };
                 self.known.insert(k, s2);
                 return Ok(Some(s2));
+            }
+            // A remembered cache: check now and then that it still exists;
+            // once closed, the archive (or the anchor) is read again.
+            if let SeedSource::Cache { nonce } = s.src {
+                let last = self.checked.get(&k).copied().unwrap_or(s.seen_slot);
+                if slot >= last + RECHECK_SLOTS {
+                    let got = port
+                        .accounts(&[addrs.seed_cache(bell, region, nonce)], 0)
+                        .await?;
+                    let present = got[0]
+                        .as_ref()
+                        .filter(|a| a.owner == addrs.program)
+                        .and_then(|a| SeedCache::decode(&a.data).ok())
+                        .is_some();
+                    if present {
+                        self.checked.insert(k, slot);
+                        return Ok(Some(s));
+                    }
+                    self.forget(bell, region);
+                    self.probed.remove(&k);
+                    return Box::pin(self.find(port, addrs, anchors, bell, region, slot)).await;
+                }
             }
             return Ok(Some(s));
         }

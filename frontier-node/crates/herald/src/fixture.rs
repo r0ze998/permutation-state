@@ -134,7 +134,7 @@ impl B {
             signature: Signature::from(sig),
             block_time: time,
             tx: vec![],
-            logs: bodies.iter().map(|b| log_line(b)).collect(),
+            logs: fclient::log::in_frame(&program(), bodies.iter().map(|b| log_line(b))),
             err: err.then(|| "InstructionError(0, Custom(52))".into()),
             code: err.then_some(52),
             units: 0,
@@ -748,10 +748,10 @@ pub fn mini_season(bells: u32) -> Vec<TxRecord> {
 pub fn fixture_tamper(txs: &mut [TxRecord]) -> Option<(i32, i32, u32)> {
     for t in txs.iter_mut().filter(|t| t.err.is_none()) {
         for l in t.logs.iter_mut() {
-            let Ok(bodies) = fclient::log::bodies_from_logs(std::slice::from_ref(l)) else {
+            let Ok(Some(bd)) = fclient::log::body_of_line(l) else {
                 continue;
             };
-            let Some(bd) = bodies.first() else { continue };
+            let bd = &bd;
             let Ok(r) = plog::decode(bd) else { continue };
             if r.kind == Kind::CLASH {
                 let key = (

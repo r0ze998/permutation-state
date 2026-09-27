@@ -261,6 +261,40 @@ fn a_tampered_outcome_digest_is_a_published_mismatch() {
     let _ = std::fs::remove_dir_all(&d);
 }
 
+/// Wave-3 review (W3-D major): a PS2 line printed by another program in a
+/// transaction that lists ours (here a forged CLASH with a flipped digest)
+/// is not folded: the files equal the clean archive's, no mismatch.
+#[test]
+fn a_foreign_programs_ps2_lines_are_ignored() {
+    let clean = fixture::mini_season(4);
+    let mut tampered = clean.clone();
+    fixture::fixture_tamper(&mut tampered).unwrap();
+    let other = fclient::Address::new_from_array([0xEE; 32]);
+    let mut mixed = clean.clone();
+    let mut n = 0;
+    for (m, t) in mixed.iter_mut().zip(&tampered) {
+        let forged: Vec<String> = t
+            .logs
+            .iter()
+            .filter(|l| !m.logs.contains(l))
+            .cloned()
+            .collect();
+        if !forged.is_empty() {
+            n += forged.len();
+            m.logs.extend(fclient::log::in_frame(&other, forged));
+        }
+    }
+    assert_eq!(n, 1, "one forged line");
+    let (d1, d2) = (tmp("foreign-clean"), tmp("foreign-mixed"));
+    let f1 = fold_all(&d1, &clean);
+    let f2 = fold_all(&d2, &mixed);
+    assert_eq!(tree(&d1), tree(&d2));
+    assert_eq!(f2.st.alarms.clash_mismatch, 0);
+    assert_eq!(f1.st.events, f2.st.events);
+    let _ = std::fs::remove_dir_all(&d1);
+    let _ = std::fs::remove_dir_all(&d2);
+}
+
 /// With a public RPC's post-state ("state at a slot ≥ s") a differing
 /// recomputation is not an alarm: it is published `unchecked`.
 #[test]

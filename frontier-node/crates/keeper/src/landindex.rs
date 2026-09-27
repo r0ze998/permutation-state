@@ -81,6 +81,39 @@ fn le_i32(b: &[u8]) -> i32 {
 }
 
 impl LandIndex {
+    /// The wallet and faction of `citizen`, trusted only when the wallet's
+    /// canonical Citizen address is `citizen`; otherwise (or when unknown)
+    /// read from the Citizen account and checked the same way (wave-3
+    /// review, W3-C: a feed record alone never names a displaced holder).
+    pub async fn citizen_of<P: ChainPort>(
+        &mut self,
+        port: &P,
+        addrs: &Addresses,
+        citizen: &Address,
+    ) -> PortResult<Option<(Address, u8)>> {
+        if let Some(&(w, f)) = self.citizens.get(citizen) {
+            if addrs.citizen(&w) == *citizen {
+                return Ok(Some((w, f)));
+            }
+        }
+        let got = port.accounts(&[*citizen], 0).await?;
+        let hc = got
+            .first()
+            .and_then(|a| a.as_ref())
+            .filter(|a| a.owner == addrs.program)
+            .and_then(|a| fclient::decode::Citizen::decode(&a.data).ok());
+        match hc {
+            Some(c) if addrs.citizen(&c.wallet) == *citizen => {
+                self.citizens.insert(*citizen, (c.wallet, c.faction));
+                Ok(Some((c.wallet, c.faction)))
+            }
+            _ => {
+                self.citizens.remove(citizen);
+                Ok(None)
+            }
+        }
+    }
+
     /// Reads new feed records (at most a few pages per tick).
     pub async fn pull<P: ChainPort>(&mut self, port: &P, addrs: &Addresses) -> PortResult<usize> {
         let mut n = 0;
@@ -92,7 +125,7 @@ impl LandIndex {
                 if tx.err.is_some() {
                     continue;
                 }
-                let Ok(bodies) = fclient::log::bodies_from_logs(&tx.logs) else {
+                let Ok(bodies) = fclient::log::bodies_from_logs(&tx.logs, &addrs.program) else {
                     self.bad += 1;
                     continue;
                 };
@@ -130,6 +163,12 @@ impl LandIndex {
                 };
                 let c = addrs.of(SeedKind::Citizen, tag);
                 let w = Address::new_from_array(wallet.try_into().unwrap_or([0; 32]));
+                // The key must be the wallet's canonical Citizen (§3.3: a
+                // reader recomputes every keyed address it trusts).
+                if addrs.citizen(&w) != c {
+                    self.bad += 1;
+                    return;
+                }
                 self.citizens.insert(c, (w, f[0]));
             }
             Kind::TICKET => {
@@ -241,5 +280,15 @@ mod tests {
         assert!(ix.explores.contains(&a.holding(-2, 3, 4)));
         ix.ingest(&[1, 2, 3], 13, &a);
         assert_eq!(ix.bad, 1);
+        // A JOIN whose wallet is not the key's citizen is refused (a forged
+        // record must not overwrite the real one).
+        let thief = Address::new_from_array([5; 32]);
+        let mut forged = thief.to_bytes().to_vec();
+        forged.extend_from_slice(&[2, 1]);
+        forged.extend_from_slice(&[0; 32]);
+        forged.extend_from_slice(&0i64.to_le_bytes());
+        ix.ingest(&body(Kind::JOIN, &tag, &forged), 14, &a);
+        assert_eq!(ix.citizens.get(&c), Some(&(wallet, 2)));
+        assert_eq!(ix.bad, 2);
     }
 }

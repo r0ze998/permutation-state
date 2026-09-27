@@ -56,10 +56,16 @@ pub struct Candidate {
     pub site: (i16, i16, u8),
     pub sites: Vec<(i16, i16, u8)>,
     pub score: u64,
+    /// `S(ticket_bell, region(site))` (zero for an expired ticket).
+    pub seed: [u8; 32],
     pub src: SeedSource,
     pub expired: bool,
     pub cache_slot: Option<u64>,
 }
+
+/// Slots a fresh settlement may be held back for a better same-cohort
+/// ticket that is still moving towards its site (overlap rule, below).
+pub const OVERLAP_HOLD_SLOTS: u64 = 300;
 
 /// A settlement in flight.
 #[derive(Clone, Debug)]
@@ -95,6 +101,43 @@ pub fn lottery_order(v: &mut [Candidate]) {
     v.sort_by(|a, b| b.score.cmp(&a.score).then(a.tag.cmp(&b.tag)));
 }
 
+/// Orders one site's candidates for settlement (wave-3 review, W3-C):
+/// the **oldest cohort first** (scores of different cohorts come from
+/// different seeds and do not compare; a later cohort settled first would
+/// make an earlier winner `taken`), then the lottery order.
+pub fn settle_order(v: &mut [Candidate]) {
+    v.sort_by(|a, b| {
+        a.ticket_bell
+            .cmp(&b.ticket_bell)
+            .then(b.score.cmp(&a.score))
+            .then(a.tag.cmp(&b.tag))
+    });
+}
+
+/// Whether a fresh settlement of `c` at its site should wait (overlap
+/// rule, wave-3 review): another open ticket `o` of the same cohort that
+/// will not win its own current site (`movers`) has `c`'s site among its
+/// later preferences with a better score there. Settling `c` first would
+/// let `o`, once taken elsewhere, displace `c` (a displaced ticket ends);
+/// waiting lets `o` take the site first and `c` settle `taken` and move
+/// on. Bounded by [`OVERLAP_HOLD_SLOTS`] after the seed.
+pub fn overlap_hold(c: &Candidate, movers: &[&Candidate], slot: u64) -> bool {
+    if c.cache_slot.is_some_and(|s| slot >= s + OVERLAP_HOLD_SLOTS) {
+        return false;
+    }
+    movers.iter().any(|o| {
+        o.citizen != c.citizen
+            && o.ticket_bell == c.ticket_bell
+            && o.sites.iter().skip(o.k as usize + 1).any(|&s| s == c.site)
+            && land::beats(
+                land::ticket_score(&c.seed, c.site.0 as i32, c.site.1 as i32, c.site.2, o.tag),
+                o.tag,
+                c.score,
+                c.tag,
+            )
+    })
+}
+
 #[derive(Default)]
 pub struct TicketDuty {
     pub planned: BTreeMap<String, Planned>,
@@ -103,6 +146,8 @@ pub struct TicketDuty {
     pub expired: u64,
     /// Settlements sent with a displaced holder.
     pub displacing: u64,
+    /// Fresh settlements held back by the overlap rule (tick count).
+    pub held: u64,
 }
 
 impl TicketDuty {
@@ -188,6 +233,7 @@ impl TicketDuty {
                 site,
                 sites,
                 score,
+                seed: seed.map_or([0; 32], |x| x.seed),
                 // An expired ticket's settlement does not read the seed; the
                 // canonical cache address of nonce 0 fills the position.
                 src: seed.map_or(SeedSource::Cache { nonce: 0 }, |x| x.src),
@@ -248,6 +294,9 @@ impl TicketDuty {
                 }
             }
         }
+        // Per candidate, what SettleTicket would do against the site as the
+        // chain shows it (wave-3 review: per candidate, not once per group).
+        let mut plans: BTreeMap<(i16, i16, u8), Vec<(Candidate, SiteOutcome)>> = BTreeMap::new();
         for (site, mut group) in by_site {
             let Some(pv) = provs.get(&(site.0, site.1)) else {
                 continue;
@@ -255,56 +304,79 @@ impl TicketDuty {
             let Some(mirror) = pv.site_mirror.get(site.2 as usize) else {
                 continue;
             };
-            lottery_order(&mut group);
+            settle_order(&mut group);
             let holding = holds.get(&site);
             let holder_tag = holding.map(|h| citizen_tag_u64(&h.owner_citizen));
-            let top = &group[0];
-            let pred = land::predict_site(
-                mirror.state,
-                holding,
-                top.ticket_bell,
-                top.score,
-                top.tag,
-                holder_tag,
-            );
-            match pred {
-                SiteOutcome::Taken => {
-                    // Held for good against the best: every one of them is taken.
-                    for c in &group {
-                        self.send(t, engine, c, None, "taken");
-                    }
+            let v = group
+                .into_iter()
+                .map(|c| {
+                    let o = land::predict_site(
+                        mirror.state,
+                        holding,
+                        c.ticket_bell,
+                        c.score,
+                        c.tag,
+                        holder_tag,
+                    );
+                    (c, o)
+                })
+                .collect();
+            plans.insert(site, v);
+        }
+        // Tickets that will not win their current site (taken there, or a
+        // better candidate is ahead): they move on and may reach a later
+        // preference another ticket is about to settle (overlap rule).
+        let mut movers: Vec<Candidate> = vec![];
+        for v in plans.values() {
+            let mut first_live = true;
+            for (c, o) in v {
+                match o {
+                    SiteOutcome::Taken => movers.push(c.clone()),
+                    _ if !first_live => movers.push(c.clone()),
+                    _ => first_live = false,
                 }
+            }
+        }
+        let mover_refs: Vec<&Candidate> = movers.iter().collect();
+        for (site, v) in plans {
+            // Held against every candidate: each is taken now (order-free).
+            for (c, o) in &v {
+                if *o == SiteOutcome::Taken {
+                    self.send(t, engine, c, None, "taken");
+                }
+            }
+            if busy_sites.contains(&site) {
+                continue;
+            }
+            // The first candidate that can change the site's holder, in
+            // settlement order (oldest cohort, then the lottery order).
+            let Some((top, pred)) = v.iter().find(|(_, o)| *o != SiteOutcome::Taken) else {
+                continue;
+            };
+            match pred {
+                SiteOutcome::Taken => {}
                 SiteOutcome::Fresh => {
-                    if !busy_sites.contains(&site) {
-                        self.send(t, engine, top, None, "fresh");
+                    if overlap_hold(top, &mover_refs, t.slot) {
+                        self.held += 1;
+                        continue;
                     }
+                    self.send(t, engine, top, None, "fresh");
                 }
                 SiteOutcome::Displace {
                     holder_citizen,
                     holder_rent_payer,
                     ..
                 } => {
-                    if busy_sites.contains(&site) {
+                    // The displaced holder's wallet and faction, checked
+                    // against the canonical address (never trusted from a
+                    // feed record alone).
+                    let Some((wallet, faction)) =
+                        index.citizen_of(port, t.addrs, holder_citizen).await?
+                    else {
                         continue;
-                    }
-                    // The displaced holder's wallet and faction.
-                    let (wallet, faction) = match index.citizens.get(&holder_citizen) {
-                        Some(x) => *x,
-                        None => {
-                            let got = port.accounts(&[holder_citizen], 0).await?;
-                            match got[0].as_ref().and_then(|a| Citizen::decode(&a.data).ok()) {
-                                Some(hc) => {
-                                    index
-                                        .citizens
-                                        .insert(holder_citizen, (hc.wallet, hc.faction));
-                                    (hc.wallet, hc.faction)
-                                }
-                                None => continue,
-                            }
-                        }
                     };
                     let d = Displaced {
-                        rent_payer: holder_rent_payer,
+                        rent_payer: *holder_rent_payer,
                         wallet,
                         faction,
                     };
@@ -431,6 +503,7 @@ mod tests {
             site: (2, 0, 1),
             sites: vec![(2, 0, 1)],
             score,
+            seed: [7; 32],
             src: SeedSource::Cache { nonce: 1 },
             expired: false,
             cache_slot: None,
@@ -443,5 +516,58 @@ mod tests {
         lottery_order(&mut v);
         let tags: Vec<u64> = v.iter().map(|c| c.tag).collect();
         assert_eq!(tags, vec![4, 1, 2, 3]);
+    }
+
+    /// Oldest cohort first, then the lottery order (wave-3 review).
+    #[test]
+    fn settle_order_puts_the_oldest_cohort_first() {
+        let mut late = cand(9, 99);
+        late.ticket_bell = 6;
+        let mut v = vec![late, cand(3, 10), cand(1, 50)];
+        settle_order(&mut v);
+        let tags: Vec<u64> = v.iter().map(|c| c.tag).collect();
+        assert_eq!(tags, vec![1, 3, 9]);
+    }
+
+    /// The overlap rule: C (fresh at Y) waits while B, who will be taken at
+    /// X, has Y later with a better Y-score; not for a worse one, another
+    /// cohort, or past the hold bound.
+    #[test]
+    fn overlap_hold_waits_for_a_better_mover() {
+        let y = (2, 0, 1);
+        let x = (3, 0, 1);
+        let mut c = cand(3, 0);
+        c.site = y;
+        c.sites = vec![y];
+        c.cache_slot = Some(100);
+        c.score = land::ticket_score(&c.seed, 2, 0, 1, c.tag);
+        let mut b = cand(2, 0);
+        b.site = x;
+        b.sites = vec![x, y];
+        let b_at_y = land::ticket_score(&c.seed, 2, 0, 1, b.tag);
+        let held = overlap_hold(&c, &[&b], 110);
+        assert_eq!(held, land::beats(b_at_y, b.tag, c.score, c.tag));
+        // Force both directions with a crafted score.
+        let mut c2 = c.clone();
+        c2.score = 0;
+        assert!(overlap_hold(&c2, &[&b], 110), "a better mover: hold");
+        c2.score = u64::MAX;
+        assert!(!overlap_hold(&c2, &[&b], 110), "a worse mover: go");
+        let mut c3 = c.clone();
+        c3.score = 0;
+        assert!(
+            !overlap_hold(&c3, &[&b], 100 + OVERLAP_HOLD_SLOTS),
+            "bounded"
+        );
+        let mut b2 = b.clone();
+        b2.ticket_bell = 9;
+        assert!(!overlap_hold(&c3, &[&b2], 110), "another cohort");
+        let mut b3 = b.clone();
+        b3.k = 1;
+        b3.site = y;
+        assert!(
+            !overlap_hold(&c3, &[&b3], 110),
+            "Y is not a later preference"
+        );
     }
 }

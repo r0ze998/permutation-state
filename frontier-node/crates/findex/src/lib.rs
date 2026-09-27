@@ -30,11 +30,11 @@ pub use ingest::{Enriched, IngestError, LocalnetFeed, RpcPoll, Source};
 /// The PS2 records of one transaction, in log order, decoded with the
 /// canonical per-kind lengths of `frontier-abi::log` (W1-F note 5: without
 /// them a payload byte could impersonate a tail).
-pub fn records(tx: &TxRecord) -> Result<Vec<Record>, LogError> {
+pub fn records(tx: &TxRecord, program: &Address) -> Result<Vec<Record>, LogError> {
     let lens = |k: u8| {
         frontier_abi::log::Kind::from_u8(k).map(|k| k.spec().key_len() + k.spec().payload_len())
     };
-    bodies_from_logs(&tx.logs)?
+    bodies_from_logs(&tx.logs, program)?
         .iter()
         .map(|b| Record::decode_with(b, &lens))
         .collect()
@@ -143,14 +143,24 @@ mod tests {
             signature: Default::default(),
             block_time: 0,
             tx: vec![],
-            logs: vec!["Program log: hi".into(), log::log_line(&r.encode())],
+            logs: log::in_frame(
+                &Address::new_from_array([3; 32]),
+                ["Program log: hi".into(), log::log_line(&r.encode())],
+            ),
             err: None,
             code: None,
             units: 0,
             fee: 0,
             post: vec![],
         };
-        assert_eq!(records(&tx).unwrap(), vec![r]);
+        assert_eq!(
+            records(&tx, &Address::new_from_array([3; 32])).unwrap(),
+            vec![r]
+        );
+        // Another program's frame: no record.
+        assert!(records(&tx, &Address::new_from_array([4; 32]))
+            .unwrap()
+            .is_empty());
         assert_eq!(
             frontier_abi::log::Kind::ANCHOR.spec().body_len(),
             6 + 61,

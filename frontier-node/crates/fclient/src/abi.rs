@@ -362,6 +362,16 @@ pub mod err {
     pub const TICKET_STATE: u32 = 45;
     pub const NOT_DORMANT: u32 = 46;
     pub const NOT_IMPLEMENTED: u32 = 99;
+    pub const NO_TICKET: u32 = 23;
+
+    /// A refusal that means the write's work is done (v1.5 §5.4 keeper
+    /// mapping): `AlreadyDone` for every write; `NoTicket` for SettleTicket
+    /// (the ticket ended — this write's or another version's settlement,
+    /// an expiry, or the last preference taken — so nothing is left to
+    /// settle; wave-3 review, W3-A).
+    pub fn is_done(tag: u8, code: u32) -> bool {
+        code == ALREADY_DONE || (tag == super::tag::SETTLE_TICKET && code == NO_TICKET)
+    }
 
     /// The window of this write is gone for good: stop retrying.
     pub fn stops_window(code: u32) -> bool {

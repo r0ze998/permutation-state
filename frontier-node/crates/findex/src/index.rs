@@ -424,9 +424,17 @@ fn index_one(
         ))?;
     }
     // PS2 records and their chain links.
-    let bodies = bodies_from_logs(&r.logs).map_err(|e| format!("{e:?}"))?;
-    for (idx, body) in bodies.iter().enumerate() {
-        let rec = plog::decode(body).map_err(|e| format!("tx {}: {e:?}", r.signature))?;
+    // Only the program's own frame (fclient::log); an undecodable body is
+    // skipped, never an error that would wedge the index (wave-3 review).
+    let bodies = bodies_from_logs(&r.logs, program).unwrap_or_default();
+    let mut idx = 0usize;
+    for body in bodies.iter() {
+        let Ok(rec) = plog::decode(body) else {
+            continue;
+        };
+        let this = idx;
+        idx += 1;
+        let idx = this;
         sql(t.execute(
             "INSERT INTO record(seq, idx, kind, bell, key, payload, body) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
@@ -569,19 +577,29 @@ mod tests {
         let recs = vec![
             tx(
                 1,
-                vec![fclient::log::log_line(&a1)],
+                fclient::log::in_frame(&program, [fclient::log::log_line(&a1)]),
                 vec![(anchor_addr, acct(anchor_data))],
                 false,
             ),
             tx(
                 2,
-                vec![fclient::log::log_line(&g1)],
+                fclient::log::in_frame(&program, [fclient::log::log_line(&g1)]),
                 vec![(season, acct(season_data))],
                 false,
             ),
             // A failed transaction's records are not events.
-            tx(3, vec![fclient::log::log_line(&a1)], vec![], true),
-            tx(4, vec![fclient::log::log_line(&g2)], vec![], false),
+            tx(
+                3,
+                fclient::log::in_frame(&program, [fclient::log::log_line(&a1)]),
+                vec![],
+                true,
+            ),
+            tx(
+                4,
+                fclient::log::in_frame(&program, [fclient::log::log_line(&g2)]),
+                vec![],
+                false,
+            ),
             // The anchor closes.
             tx(5, vec![], vec![(anchor_addr, None)], false),
         ];
@@ -627,5 +645,44 @@ mod tests {
         assert_eq!(ix.rebuild_from(&recs).unwrap(), 5);
         assert_eq!(ix.entity_head(&season).unwrap(), Some((l2.seq, l2.head)));
         assert_eq!(ix.last_event().unwrap(), 3, "renumbered from 1");
+    }
+
+    /// Wave-3 review (W3-D): a garbage PS2 body in the program's frame and
+    /// a well-formed one in another program's frame neither fail the batch
+    /// nor take an event number.
+    #[test]
+    fn garbage_and_foreign_records_are_skipped() {
+        let program = Address::new_from_array([0xAB; 32]);
+        let other = Address::new_from_array([0xCD; 32]);
+        let ctx = crate::addr_ctx(&program, 3);
+        let mut ix = Index::open(Path::new(":memory:"), program, Some(ctx)).unwrap();
+        let a1 = body(Kind::ANCHOR, 7, &[7u8, 0, 0, 0, 5], &[1u8; 56], &[]);
+        let a2 = body(Kind::ANCHOR, 8, &[8u8, 0, 0, 0, 5], &[1u8; 56], &[]);
+        let recs = vec![
+            tx(
+                1,
+                fclient::log::in_frame(&program, [fclient::log::log_line(&[1, 2, 3])]),
+                vec![],
+                false,
+            ),
+            tx(
+                2,
+                fclient::log::in_frame(&other, [fclient::log::log_line(&a1)]),
+                vec![],
+                false,
+            ),
+            tx(
+                3,
+                fclient::log::in_frame(&program, [fclient::log::log_line(&a2)]),
+                vec![],
+                false,
+            ),
+        ];
+        assert_eq!(ix.add(&recs).unwrap(), 3);
+        let ev = ix.events_after(0, 10).unwrap();
+        assert_eq!(
+            ev.iter().map(|e| (e.ev, e.seq)).collect::<Vec<_>>(),
+            vec![(1, 3)]
+        );
     }
 }

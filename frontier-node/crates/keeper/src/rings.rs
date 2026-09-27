@@ -59,6 +59,25 @@ pub struct RingDuty {
     pub seeded_at: Vec<(u16, u64)>,
     seen_open: BTreeSet<u16>,
     seen_seeded: BTreeSet<u16>,
+    /// Bell at which this keeper saw ring d complete (keeper policy below).
+    complete_bell: std::collections::BTreeMap<u16, u32>,
+}
+
+/// Keeper policy for crowding rings (wave-3 review, W3-C D5/F1; the
+/// contract allows any caller to open a ring whenever the folded values
+/// are crowded): this keeper requests OpenRing(d > g) only once ring
+/// d − 1 is complete (every province on chain) **and** a whole fold of a
+/// later bell has landed, so the folded values count ring d − 1's sites.
+/// Without it the folded values stay crowded for the bells the previous
+/// ring needs to seed and open, and a ring opens every bell.
+pub fn crowding_ring_allowed(
+    d: u16,
+    genesis: u16,
+    complete_bell: Option<u32>,
+    fold_bell: u32,
+    fold_part: u8,
+) -> bool {
+    d <= genesis || complete_bell.is_some_and(|cb| fold_bell > cb && fold_part == 0)
 }
 
 impl RingDuty {
@@ -79,6 +98,7 @@ impl RingDuty {
             return Ok(());
         }
         let g = s.genesis_ring as u16;
+        let now_bell = t.clock.bell_at(t.now).unwrap_or(0);
         let fr = port.accounts(&[t.addrs.frontier()], 0).await?;
         let Some(fr) = fr[0].as_ref().and_then(|a| Frontier::decode(&a.data).ok()) else {
             return Ok(());
@@ -94,6 +114,17 @@ impl RingDuty {
         let ready = if d <= g {
             self.waiting = None;
             true
+        } else if d <= s.r_max
+            && !crowding_ring_allowed(
+                d,
+                g,
+                self.complete_bell.get(&(d - 1)).copied(),
+                fr.fold_bell,
+                fr.fold_part,
+            )
+        {
+            self.waiting = Some(RingWait::TooSoon);
+            false
         } else if d <= s.r_max {
             let funds = port.accounts(&t.addrs.province_funds(), 0).await?;
             let lam: [u64; 6] =
@@ -187,6 +218,7 @@ impl RingDuty {
                     );
                     if want.iter().all(|w| w.0 != d) {
                         self.complete.insert(d);
+                        self.complete_bell.entry(d).or_insert(now_bell);
                     }
                 }
                 _ => {}
@@ -232,6 +264,7 @@ impl RingDuty {
             for &(d, _, _) in &want {
                 if !missing.contains(&d) {
                     self.complete.insert(d);
+                    self.complete_bell.entry(d).or_insert(now_bell);
                 }
             }
         }
@@ -256,5 +289,23 @@ impl RingDuty {
     /// Provinces of every ring `0..=d_max` (the genesis count check).
     pub fn provinces_of_rings(d_max: u16) -> usize {
         (0..=d_max as u32).map(|d| ring_provinces(d).len()).sum()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn crowding_rings_wait_for_the_previous_ring_and_a_later_fold() {
+        // Genesis rings never wait.
+        assert!(crowding_ring_allowed(3, 3, None, 0, 0));
+        // Ring 4: ring 3 not complete yet.
+        assert!(!crowding_ring_allowed(4, 3, None, 50, 0));
+        // Complete at bell 40: a fold of bell 40 or earlier does not count,
+        // nor a fold of bell 41 still in its parts.
+        assert!(!crowding_ring_allowed(4, 3, Some(40), 40, 0));
+        assert!(!crowding_ring_allowed(4, 3, Some(40), 41, 1));
+        assert!(crowding_ring_allowed(4, 3, Some(40), 41, 0));
     }
 }

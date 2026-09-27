@@ -503,7 +503,7 @@ impl Fold {
             }
         }
         // 2. The records.
-        let bodies = match bodies_from_logs(&tx.logs) {
+        let bodies = match bodies_from_logs(&tx.logs, &self.cfg.program) {
             Ok(b) => b,
             Err(_) => {
                 self.st.alarms.bad_records += 1;

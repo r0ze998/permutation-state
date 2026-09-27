@@ -55,6 +55,7 @@ const NOT_OWNER: u32 = 20;
 const FOLD_STALE: u32 = 44;
 const TICKET_STATE: u32 = 45;
 const NOT_DORMANT: u32 = 46;
+const HOST_BUSY: u32 = 28;
 const EXPLORED: u32 = 47;
 const SEED_NOT_READY: u32 = 54;
 const RESERVED_SITE: u32 = 57;
@@ -1348,8 +1349,10 @@ pub fn muster(ic: &mut InvokeContext, c: &mut Cursor) -> R<()> {
     let free = (0..fclient::abi::ENTRIES)
         .find(|&i| pv[l::province::ENTRIES + i * l::province::ENTRY_STRIDE + l::entry::STATE] == 0)
         .ok_or(e(PROVINCE_FULL))?;
-    let seq = u32_at(&h, l::holding::HOST_SEQ) + 1;
-    put(&mut h, l::holding::HOST_SEQ, seq.to_le_bytes());
+    // The program's numbering (W3-B): the host takes `host_seq`, then
+    // `host_seq += 1`.
+    let seq = u32_at(&h, l::holding::HOST_SEQ);
+    put(&mut h, l::holding::HOST_SEQ, (seq + 1).to_le_bytes());
     let id =
         fa::host_id(p as i32, q as i32, site, h[l::holding::GEN], seq).map_err(|_| e(BAD_DATA))?;
     let o = l::province::ENTRIES + free * l::province::ENTRY_STRIDE;
@@ -1573,10 +1576,28 @@ pub fn disband_stranded(ic: &mut InvokeContext, c: &mut Cursor) -> R<()> {
         return Err(e(NOT_DORMANT));
     }
     let troops = u32_at(&pv, o + l::entry::TROOPS);
-    for b in &mut pv[o..o + l::province::ENTRY_STRIDE] {
-        *b = 0;
+    // v1.5 §5.10 (the program's rule): a host in a roster (state 1 or 2)
+    // gets the pending op Forfeit of now_bell, freed by that bell's
+    // resolve (the model has none, so it stays pending); others are freed.
+    let st = pv[o + l::entry::STATE];
+    if (st == 1 || st == 2)
+        && u32_at(&pv, l::province::RESOLVED_NEXT) < u32_at(&s, l::season::END_BELL)
+    {
+        if pv[o + l::entry::PEND_OP] != 0 {
+            return Err(e(HOST_BUSY));
+        }
+        pv[o + l::entry::PEND_OP] = 6;
+        put(
+            &mut pv,
+            o + l::entry::PEND_BELL,
+            now_bell(&s, now).to_le_bytes(),
+        );
+    } else {
+        for b in &mut pv[o..o + l::province::ENTRY_STRIDE] {
+            *b = 0;
+        }
+        pv[l::province::N_ENTRIES] = pv[l::province::N_ENTRIES].saturating_sub(1);
     }
-    pv[l::province::N_ENTRIES] = pv[l::province::N_ENTRIES].saturating_sub(1);
     let ep = u32_at(&pv, l::province::ROSTER_EPOCH) + 1;
     put(&mut pv, l::province::ROSTER_EPOCH, ep.to_le_bytes());
     write(ic, 2, &pv)?;

@@ -82,6 +82,9 @@ pub struct Reads {
     pub beacon_log: Option<Account>,
     pub inputs: Option<Account>,
     pub dest_province: Option<Account>,
+    /// The canonical address of the Holding read (from its stored P, Q,
+    /// site); `None` = not checked (unit fixtures).
+    pub canonical_holding: Option<Address>,
 }
 
 /// Step 1: the holding and its transit (needed to name the other accounts).
@@ -112,12 +115,24 @@ pub fn judge(req: &RevealReq, r: &Reads, now: i64) -> Result<Accepted, Refusal> 
         .as_ref()
         .and_then(|a| Season::decode(&a.data).ok())
         .ok_or_else(|| refuse(410, "WindowClosed", "no season"))?;
-    let (h, i) = transit_of(req, r.holding.as_ref())?;
-    let tr = h.transit[i];
-    // 1. The season takes the reveal.
+    // 1. The season takes reveals (the keeper prologue's status set),
+    // before the holding (the program's order; wave-3 review, W3-C).
     let eff = s.effective_status(now);
-    let open = eff == status::RUNNING || (eff == status::ENDED && tr.arrive_bell < s.end_bell);
-    if !open {
+    if eff != status::RUNNING && eff != status::ENDED {
+        return Err(refuse(410, "WindowClosed", "the season takes no reveal"));
+    }
+    let (h, i) = transit_of(req, r.holding.as_ref())?;
+    // The Holding of this season at its canonical address (the program's
+    // step 2 refuses any other).
+    if h.h.season_id != s.h.season_id || r.canonical_holding.is_some_and(|k| k != req.holding) {
+        return Err(refuse(
+            409,
+            "TransitState",
+            "not this season's Holding at its canonical address",
+        ));
+    }
+    let tr = h.transit[i];
+    if eff == status::ENDED && tr.arrive_bell >= s.end_bell {
         return Err(refuse(410, "WindowClosed", "the season takes no reveal"));
     }
     // 2. The plaintext against the transit.
@@ -174,6 +189,18 @@ pub fn judge(req: &RevealReq, r: &Reads, now: i64) -> Result<Accepted, Refusal> 
             }
         }
     }
+    // The destination Province must exist (the program reads it).
+    let Some(dest_pv) = r
+        .dest_province
+        .as_ref()
+        .and_then(|a| Province::decode(&a.data).ok())
+    else {
+        return Err(refuse(
+            422,
+            "BadPlaintext",
+            format!("destination province ({dp}, {dq}) does not exist"),
+        ));
+    };
     // 5. The latch.
     if r.inputs
         .as_ref()
@@ -185,18 +212,12 @@ pub fn judge(req: &RevealReq, r: &Reads, now: i64) -> Result<Accepted, Refusal> 
             "LatchClosed: the province-bell is gathered",
         ));
     }
-    if let Some(pv) = r
-        .dest_province
-        .as_ref()
-        .and_then(|a| Province::decode(&a.data).ok())
-    {
-        if pv.resolved_next > arrive {
-            return Err(refuse(
-                410,
-                "WindowClosed",
-                "LatchClosed: the destination resolved past the arrival bell",
-            ));
-        }
+    if dest_pv.resolved_next > arrive {
+        return Err(refuse(
+            410,
+            "WindowClosed",
+            "LatchClosed: the destination resolved past the arrival bell",
+        ));
     }
     Ok(Accepted {
         host_id: tr.host_id,
@@ -231,6 +252,7 @@ pub async fn check<P: ChainPort>(
         ..Reads::default()
     };
     let (h, i) = transit_of(req, r.holding.as_ref())?;
+    r.canonical_holding = Some(addrs.holding(h.p as i32, h.q as i32, h.site));
     let tr = h.transit[i];
     let p = seal::unpack(&req.plain);
     let (dp, dq) = (p.dest_p as i32, p.dest_q as i32);
@@ -338,9 +360,12 @@ mod tests {
             salt,
             ct_hash: ct,
         };
+        let mut pv = vec![0u8; fclient::abi::size::PROVINCE];
+        put(&mut pv, 0, fclient::abi::magic::PROVINCE);
         let r = Reads {
             season: acct(s),
             holding: acct(h),
+            dest_province: acct(pv),
             ..Reads::default()
         };
         (req, r, 1_000_000 + 40 * 600 + 10)
@@ -435,5 +460,27 @@ mod tests {
         put(&mut sd, l::season::END_BELL, &40u32.to_le_bytes());
         r6.season = acct(sd);
         assert_eq!(judge(&req, &r6, now).unwrap_err().code, "WindowClosed");
+        // Wave-3 review: a Holding of another season, or read at a
+        // non-canonical address; a destination that does not exist; the
+        // season status comes before the holding.
+        let mut r7 = r.clone();
+        let mut hd = r7.holding.clone().unwrap().data;
+        put(&mut hd, 8, &9u64.to_le_bytes());
+        r7.holding = acct(hd);
+        assert_eq!(judge(&req, &r7, now).unwrap_err().code, "TransitState");
+        let mut r8 = r.clone();
+        r8.canonical_holding = Some(Address::new_from_array([9; 32]));
+        assert_eq!(judge(&req, &r8, now).unwrap_err().code, "TransitState");
+        r8.canonical_holding = Some(req.holding);
+        assert!(judge(&req, &r8, now).is_ok());
+        let mut r9 = r.clone();
+        r9.dest_province = None;
+        assert_eq!(judge(&req, &r9, now).unwrap_err().http, 422);
+        let mut r10 = r.clone();
+        let mut sd = r10.season.clone().unwrap().data;
+        sd[l::season::STATUS] = status::ABORTED;
+        r10.season = acct(sd);
+        r10.holding = None;
+        assert_eq!(judge(&req, &r10, now).unwrap_err().code, "WindowClosed");
     }
 }
