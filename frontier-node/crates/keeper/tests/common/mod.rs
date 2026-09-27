@@ -95,6 +95,36 @@ impl World {
         self.ip.lock().airdrop(k, lamports).unwrap();
     }
 
+    /// Sends one transaction, lands it in the next block and returns its
+    /// error (with the custom code) if it failed.
+    pub async fn try_send(
+        &self,
+        ixs: &[Instruction],
+        signers: &[&Keypair],
+    ) -> Result<(), (Option<u32>, String)> {
+        let (bh, _) = self.ip.blockhash().await.unwrap();
+        let budget = tx::TxBudget {
+            cu_limit: 1_400_000,
+            cu_price: 0,
+            loaded_limit: 4 * 1024 * 1024,
+            heap: None,
+        };
+        let t = tx::build(ixs, &budget, signers, &bh).unwrap();
+        let sig = self
+            .ip
+            .send(&tx::wire(&t))
+            .await
+            .map_err(|e| (None, e.to_string()))?;
+        self.step();
+        let st = self.ip.statuses(&[sig]).await.unwrap()[0]
+            .clone()
+            .expect("landed");
+        match st.err {
+            None => Ok(()),
+            Some(e) => Err((st.code, e)),
+        }
+    }
+
     /// Sends one operator transaction and lands it in the next block.
     pub async fn send(&self, ixs: &[Instruction], signers: &[&Keypair]) {
         let (bh, _) = self.ip.blockhash().await.unwrap();
@@ -125,6 +155,12 @@ impl World {
 /// created (at scale 2,000 through the 24-h lead) and with its beacon logs;
 /// the Clock then runs at 20× (8 game s per slot).
 pub async fn world() -> World {
+    world_with(|_| {}).await
+}
+
+/// [`world`] with the season parameters changed by `f` (before the
+/// announcement, so the params hash covers them).
+pub async fn world_with(f: impl FnOnce(&mut frontier_abi::presets::SeasonParams)) -> World {
     let which = Program::from_env();
     let program = Address::new_from_array([0x5F; 32]);
     let authority = Keypair::new_from_array([0xA1; 32]);
@@ -164,6 +200,7 @@ pub async fn world() -> World {
     // AnnounceSeason: t_create_min 24 h + 1 min ahead.
     let mut p = frontier_abi::presets::M1_LOCAL_7D;
     p.quicknet_pk_hash = fclient::beacon::pk_hash(&key.pk96);
+    f(&mut p);
     let sp = p.to_bytes();
     let payout = permutation_rules::frontier::payout::PayoutParams::REV3.to_borsh();
     let ph = frontier_abi::presets::params_hash(&sp, &payout);

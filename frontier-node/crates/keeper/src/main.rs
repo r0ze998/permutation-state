@@ -4,7 +4,8 @@
 //! journal, reconciles in-flight attempts, then ticks once per slot against
 //! the first RPC URL (the local chain node or a validator) and the drand
 //! URLs (`drand-replay` on loopback; HTTPS endpoints wait for a TLS client,
-//! W1-F request R4). The loopback API serves when `api` is set.
+//! W1-F request R4). The loopback API serves when `api` is set, with the
+//! `/v1/reveal` accept path reading the same RPC (W3-C).
 //! `--init-seed` writes a fresh 32-byte master seed (mode 0600) and exits.
 
 use std::path::PathBuf;
@@ -156,7 +157,13 @@ async fn main() {
         eprintln!("no drand URL answered /info");
         std::process::exit(1)
     };
-    let port = RpcPort::localnet(rpc, cfg.program);
+    let port = RpcPort::localnet(rpc.clone(), cfg.program);
+    // The `/v1/reveal` accept path reads the chain through its own client.
+    let gate: std::sync::Arc<dyn keeper_core::reveal_accept::RevealGate> =
+        std::sync::Arc::new(keeper_core::reveal_accept::ChainGate {
+            port: RpcPort::localnet(rpc, cfg.program),
+            addrs: fclient::addr::Addresses::new(cfg.program, cfg.season_id),
+        });
     let drand = HttpDrand::new(cfg.drand.clone(), info);
     let api_addr = cfg.api;
     let token = match &cfg.token_file {
@@ -174,7 +181,7 @@ async fn main() {
     });
     let running = match api_addr {
         Some(a) => Some(
-            api::serve(a, k.shared.clone(), token)
+            api::serve_with(a, k.shared.clone(), token, Some(gate))
                 .await
                 .unwrap_or_else(|e| {
                     eprintln!("api: {e}");

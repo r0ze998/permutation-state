@@ -11,8 +11,7 @@
 //! | 0x09 InitBeaconLogs | 16 logs | — |
 //! | 0x03 ConsumeGenesisSeed | round rule, BLS verify with the test key, seed | logs, evidence |
 //! | 0x10 / 0x11 / 0x12 / 0x13 | canonical addresses, present → success no-op, tombstone, round rules, verify, rent from the fee payer (`rent_to`), `ANCHOR`/`SEED`/`BEACON` records | the instructions-sysvar evidence (stored 0) |
-//! | 0x20 OpenRing | `d ≤ g` genesis rings (seed `sha256("PSF-RING" ‖ genesis_seed ‖ le16 d)`) | `d > g` (answers 99, as W2's program) |
-//! | 0x22 OpenProvince | funded from the wedge fund, header and coordinates | terrain, sites, camp |
+//! | 0x02, 0x20–0x23, 0x30, 0x33–0x35, 0x43, 0x46–0x48, 0x55 | land (W3-C): see `land.rs` | as listed there |
 //! | 0x14 ArchiveAnchors | archive init (`rent_to` = payer), `now ≥ A + archive_after`, the cache of THE anchor, entry `{a_off, seed, sig}`, tombstone and archived bits first, anchor closed to its `rent_to` | the `ARCHIVE`/`CLOSE` records |
 //! | 0x15 CloseSeedCache | archived bit, `rent_to` match, close | the `CLOSE` record |
 //! | other | `NotImplemented` (99) | — |
@@ -21,6 +20,8 @@
 //! (≈ 330k for a verifying one, SP-V2) so block and per-account caps apply.
 
 #![allow(dead_code)]
+
+mod land;
 
 use std::sync::OnceLock;
 
@@ -35,10 +36,8 @@ use fclient::clock::Drand;
 use frontier_abi::layout::beacon::{
     anchor_archive as arc, archive_entry as ent, bell_anchor as ban, seed_cache as sdc,
 };
-use frontier_abi::layout::province::province as prv;
 use frontier_abi::layout::world::{
-    beacon_log as blg, defence_pool as dpl, frontier as frt, province_fund as pfd,
-    ring_seed as rsd, season as ssn,
+    beacon_log as blg, defence_pool as dpl, frontier as frt, province_fund as pfd, season as ssn,
 };
 
 type R<T> = Result<T, InstructionError>;
@@ -369,8 +368,20 @@ fn process(ic: &mut InvokeContext) -> R<()> {
         0x11 => post_anchor(ic, &mut c, true),
         0x12 => post_seed(ic, &mut c),
         0x13 => post_beacon(ic, &mut c),
-        0x20 => open_ring(ic, &mut c),
-        0x22 => open_province(ic, &mut c),
+        0x02 => land::init_shards(ic, &mut c),
+        0x20 => land::open_ring(ic, &mut c),
+        0x21 => land::consume_ring_seed(ic, &mut c),
+        0x22 => land::open_province(ic, &mut c),
+        0x23 => land::fold(ic, &mut c),
+        0x30 => land::join(ic, &mut c),
+        0x33 => land::file_ticket(ic, &mut c),
+        0x34 => land::settle_ticket(ic, &mut c),
+        0x35 => land::release_dormant(ic, &mut c),
+        0x43 => land::muster(ic, &mut c),
+        0x46 => land::explore(ic, &mut c),
+        0x47 => land::settle_explore(ic, &mut c),
+        0x48 => land::disband_stranded(ic, &mut c),
+        0x55 => land::sweep_pool_owed(ic, &mut c),
         0x14 => archive_anchors(ic, &mut c),
         0x15 => close_seed_cache(ic, &mut c),
         _ => Err(e(NOT_IMPLEMENTED)),
@@ -574,6 +585,19 @@ fn create(ic: &mut InvokeContext, params: &[u8]) -> R<()> {
         p.defence_cap_milli.to_le_bytes(),
     );
     s[ssn::LATENESS_SLOTS] = p.lateness_slots;
+    put(
+        &mut s,
+        ssn::THETA_EARLY_BPS,
+        p.theta_early_bps.to_le_bytes(),
+    );
+    put(&mut s, ssn::THETA_LATE_BPS, p.theta_late_bps.to_le_bytes());
+    put(
+        &mut s,
+        ssn::THETA_SWITCH_SECS,
+        p.theta_switch_secs.to_le_bytes(),
+    );
+    put(&mut s, ssn::RESERVE_BPS, p.reserve_bps.to_le_bytes());
+    put(&mut s, ssn::EXTRA_FREE_BPS, p.extra_free_bps.to_le_bytes());
     put(
         &mut s,
         ssn::CLASH_CLOSE_GRACE,
@@ -848,119 +872,6 @@ fn post_beacon(ic: &mut InvokeContext, c: &mut Cursor) -> R<()> {
     body.push(0);
     log_ps2(ic, &body);
     Ok(())
-}
-
-fn open_ring(ic: &mut InvokeContext, c: &mut Cursor) -> R<()> {
-    consume(ic, 25_000)?;
-    let d = c.u16()?;
-    c.done()?;
-    let (season, s) = season_at(ic, 1)?;
-    let (_, now) = clock(ic)?;
-    let eff = effective(&s, now);
-    if eff != ssn::STATUS_SEEDED && eff != ssn::STATUS_RUNNING {
-        return Err(e(WRONG_STATUS));
-    }
-    let (fo, mut f, _) = read(ic, 2)?;
-    if fo != program_id(ic)? || get::<8>(&f, 0) != frt::MAGIC {
-        return Err(e(BAD_ACCOUNT));
-    }
-    let opened = u16::from_le_bytes(get(&f, frt::RINGS_OPENED));
-    if d != opened {
-        return Err(e(BAD_DATA));
-    }
-    if d > s[ssn::GENESIS_RING] as u16 {
-        return Err(e(NOT_IMPLEMENTED)); // crowding-rule rings are W3's
-    }
-    let seed_s = seed_str(fclient::addr::SeedKind::RingSeed, &d.to_le_bytes());
-    init_with_seed(ic, 0, 3, &season, &seed_s, rsd::SIZE, 0)?;
-    let ring_seed = permutation_rules::hash::sha256(&[
-        rsd::GENESIS_RING_DOMAIN,
-        &get::<32>(&s, ssn::GENESIS_SEED),
-        &d.to_le_bytes(),
-    ]);
-    let bell = season_clock(&s).bell_at(now).unwrap_or(0);
-    let mut r = vec![0u8; rsd::SIZE];
-    header(&mut r, rsd::MAGIC, season.id, false);
-    put(&mut r, rsd::D, d.to_le_bytes());
-    r[rsd::STATUS] = rsd::STATUS_SEEDED;
-    put(&mut r, rsd::OPENED_BELL, bell.to_le_bytes());
-    put(&mut r, rsd::T_OPEN, now.to_le_bytes());
-    put(&mut r, rsd::SEED, ring_seed);
-    put(&mut r, rsd::PAYER, key(ic, 0)?.to_bytes());
-    write(ic, 3, &r)?;
-    put(&mut f, frt::RINGS_OPENED, (d + 1).to_le_bytes());
-    put(&mut f, frt::LAST_RING_OPEN_BELL, bell.to_le_bytes());
-    put(&mut f, frt::LAST_RING_OPEN_TS, now.to_le_bytes());
-    write(ic, 2, &f)
-}
-
-fn open_province(ic: &mut InvokeContext, c: &mut Cursor) -> R<()> {
-    consume(ic, 150_000)?;
-    let p = c.i16()?;
-    let q = c.i16()?;
-    c.done()?;
-    let (season, s) = season_at(ic, 1)?;
-    let (_, now) = clock(ic)?;
-    let eff = effective(&s, now);
-    if eff != ssn::STATUS_SEEDED && eff != ssn::STATUS_RUNNING {
-        return Err(e(WRONG_STATUS));
-    }
-    let prog = program_id(ic)?;
-    let (pi, qi) = (p as i32, q as i32);
-    let ring = fclient::ix::ring_of(pi, qi);
-    let wedge = fclient::ix::wedge_of(pi, qi);
-    let (ro, rd, _) = read(ic, 2)?;
-    if ro != prog
-        || get::<8>(&rd, 0) != rsd::MAGIC
-        || u16::from_le_bytes(get(&rd, rsd::D)) != ring
-        || rd[rsd::STATUS] != rsd::STATUS_SEEDED
-    {
-        return Err(e(BAD_ACCOUNT));
-    }
-    let (fo, fd, flam) = read(ic, 3)?;
-    if fo != prog || get::<8>(&fd, 0) != pfd::MAGIC || fd[pfd::WEDGE] != wedge {
-        return Err(e(BAD_ACCOUNT));
-    }
-    let pseed = seed_str(
-        fclient::addr::SeedKind::Province,
-        &fclient::addr::raw_province(pi, qi),
-    );
-    if fclient::addr::with_seed(&season.key, &pseed, &prog) != key(ic, 4)? {
-        return Err(e(BAD_ADDRESS));
-    }
-    let (po, pd, plam) = read(ic, 4)?;
-    if !is_absent(&po, &pd) {
-        return Err(e(BAD_ACCOUNT));
-    }
-    // init_funded: the shortfall moves from the program-owned wedge fund.
-    let need = rent(prv::SIZE).saturating_sub(plam);
-    if flam < need + rent(pfd::SIZE) {
-        return Err(e(21));
-    }
-    move_lamports(ic, 3, 4, need)?;
-    let (id, bump) = season.seeds();
-    ic.native_invoke_signed(
-        allocate_with_seed_ix(key(ic, 4)?, season.key, &pseed, prv::SIZE as u64, prog),
-        &[&[ssn::PDA_PREFIX, &id, &bump]],
-    )?;
-    let sc = season_clock(&s);
-    let bell = sc.bell_at(now).unwrap_or(0);
-    let mut d = vec![0u8; prv::SIZE];
-    header(&mut d, prv::MAGIC, season.id, true);
-    put(&mut d, prv::P, p.to_le_bytes());
-    put(&mut d, prv::Q, q.to_le_bytes());
-    put(&mut d, prv::RING, ring.to_le_bytes());
-    d[prv::WEDGE] = wedge;
-    d[prv::REGION] = fclient::ix::region_of(pi, qi);
-    put(&mut d, prv::RESOLVED_NEXT, bell.to_le_bytes());
-    put(&mut d, prv::OPENED_BELL, bell.to_le_bytes());
-    write(ic, 4, &d)?;
-    let mut f = fd.clone();
-    let n = u32_at(&f, pfd::PROVINCES_OPENED) + 1;
-    put(&mut f, pfd::PROVINCES_OPENED, n.to_le_bytes());
-    let spent = u64_at(&f, pfd::SPENT_TOTAL) + need;
-    put(&mut f, pfd::SPENT_TOTAL, spent.to_le_bytes());
-    write(ic, 3, &f)
 }
 
 /// Closes a program account: data to zero, owner System, lamports to `to`.

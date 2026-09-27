@@ -8,9 +8,17 @@
 //! | [`journal`] | SQLite journal (WAL, `synchronous=FULL`), the process lock |
 //! | [`rounds`] | verified drand rounds with their hints |
 //! | [`beacon`] | anchors (combined + fallbacks), seed caches with the nonce switch, beacon logs |
-//! | [`genesis`] | the genesis seed, genesis rings and provinces |
+//! | [`genesis`] | the genesis seed |
 //! | [`archive`] | ArchiveAnchors 48 h after the anchor, CloseSeedCache |
-//! | [`api`] | the loopback API skeleton (`/v1/*`, `/metrics`) |
+//! | [`rings`] | every ring (genesis and crowding), ConsumeRingSeed, OpenProvince (W3-C) |
+//! | [`fold`] | FoldOccupancy, three parts per bell while joins are open (W3-C) |
+//! | [`tickets`] | SettleTicket in descending score per site, displacement, expiry (W3-C) |
+//! | [`explore`] | SettleExplore (W3-C) |
+//! | [`holdings`] | ReleaseDormant, DisbandStranded, SweepPoolOwed (W3-C) |
+//! | [`landindex`] | the land objects the feed's PS2 records name (W3-C) |
+//! | [`seeds`] | where a `(bell, region)` seed is read and its value (W3-C) |
+//! | [`reveal_accept`] | the `/v1/reveal` accept path against chain (W3-C) |
+//! | [`api`] | the loopback API (`/v1/*`, `/metrics`) |
 //!
 //! [`Keeper::tick`] runs once per slot: it reads the Clock, plans every
 //! duty from chain reads (the chain is the state), then lets the engine
@@ -18,21 +26,29 @@
 //! never the wall clock, so the same code runs at 1× on a validator and at
 //! 20× (or in virtual time) on `localnet`.
 //!
-//! W3-C adds land (rings past genesis, folds, tickets, explore, dormancy,
-//! sweeps, the `/v1/reveal` accept path); W4-C the reveal pipeline, gathers,
-//! resolves, skips, settlements, closes and claims.
+//! W3-C added land (rings past genesis, folds, tickets, explore, dormancy,
+//! stranded hosts, sweeps, the `/v1/reveal` accept path); W4-C adds the
+//! reveal pipeline, gathers, resolves, skips, settlements, closes and claims.
 
 pub mod api;
 pub mod archive;
 pub mod beacon;
 pub mod config;
 pub mod engine;
+pub mod explore;
+pub mod fold;
 pub mod genesis;
+pub mod holdings;
 pub mod journal;
+pub mod landindex;
 pub mod pools;
+pub mod reveal_accept;
+pub mod rings;
 pub mod rounds;
+pub mod seeds;
+pub mod tickets;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
@@ -50,10 +66,32 @@ use crate::archive::ArchiveDuty;
 use crate::beacon::BeaconDuty;
 use crate::config::KeeperConfig;
 use crate::engine::{BuildCtx, Engine, EngineParams, Outcome, WriteSpec};
+use crate::explore::ExploreDuty;
+use crate::fold::FoldDuty;
 use crate::genesis::GenesisDuty;
+use crate::holdings::HoldingDuty;
 use crate::journal::Journal;
+use crate::landindex::LandIndex;
 use crate::pools::Payers;
+use crate::rings::RingDuty;
 use crate::rounds::Rounds;
+use crate::seeds::SeedFinder;
+use crate::tickets::TicketDuty;
+
+/// Land roles that need the feed index.
+const LAND_ROLES: [&str; 5] = ["tickets", "explore", "dormancy", "sweep", "fold"];
+
+/// The role a land write key belongs to (for "the program lacks it").
+fn role_of_key(key: &str) -> Option<&'static str> {
+    match key.split(':').next()? {
+        "fold" => Some("fold"),
+        "ticket" => Some("tickets"),
+        "explore" => Some("explore"),
+        "release" | "stranded" => Some("dormancy"),
+        "sweep" => Some("sweep"),
+        _ => None,
+    }
+}
 
 /// P_def = 2.0, P_delay = 0.5 (milli-units, §8.2).
 pub const P_DEF_MILLI: u64 = 2_000;
@@ -96,6 +134,8 @@ pub struct Shared {
     pub metrics: String,
     /// Owner reveal material queued by `/v1/reveal` (W3-C accepts, W4-C sends).
     pub reveals: Vec<(String, Value)>,
+    /// `holding:slot:commit` → track id (the same material answers the same track).
+    pub reveal_keys: BTreeMap<String, String>,
     pub tracks: BTreeMap<String, Value>,
     pub nudges: Vec<Value>,
     pub next_track: u64,
@@ -136,6 +176,15 @@ pub struct Keeper<P: ChainPort, D: DrandPort> {
     pub beacon: BeaconDuty,
     pub genesis: GenesisDuty,
     pub archive: ArchiveDuty,
+    pub rings: RingDuty,
+    pub fold: FoldDuty,
+    pub tickets: TicketDuty,
+    pub explore: ExploreDuty,
+    pub holdings: HoldingDuty,
+    pub index: LandIndex,
+    pub seeds: SeedFinder,
+    /// Land roles the program answered NotImplemented (99) for: off.
+    pub unsupported_roles: BTreeSet<&'static str>,
     pub shared: Arc<Mutex<Shared>>,
     pub last_slot: Option<u64>,
     /// `(slot, kind, detail)`.
@@ -196,6 +245,14 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
             season: None,
             genesis: GenesisDuty::default(),
             archive: ArchiveDuty::default(),
+            rings: RingDuty::default(),
+            fold: FoldDuty::default(),
+            tickets: TicketDuty::default(),
+            explore: ExploreDuty::default(),
+            holdings: HoldingDuty::default(),
+            index: LandIndex::default(),
+            seeds: SeedFinder::default(),
+            unsupported_roles: BTreeSet::new(),
             shared: Arc::new(Mutex::new(Shared::default())),
             last_slot: None,
             alerts: vec![],
@@ -347,6 +404,10 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
         for (k, o) in &r.outcomes {
             if let Outcome::Landed { .. } = o {
                 self.archive.on_landed(k, &mut self.beacon.anchors);
+                self.fold.on_landed(k);
+            }
+            if k.starts_with("ticket:") {
+                self.tickets.on_outcome(k, o);
             }
         }
         // Duties.
@@ -362,16 +423,37 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
                         .into(),
                 );
             }
+            // Roles the program lacks (99) are off for the rest of the run.
+            let cfg_eff;
+            let cfg = if self.unsupported_roles.is_empty() {
+                &self.cfg
+            } else {
+                let mut c = self.cfg.clone();
+                c.roles
+                    .retain(|r| !self.unsupported_roles.contains(r.as_str()));
+                cfg_eff = c;
+                &cfg_eff
+            };
             let t = Tick {
                 slot,
                 now,
                 season: &season,
                 clock: sclock,
                 addrs: &self.addrs,
-                cfg: &self.cfg,
+                cfg,
             };
             if key_ok {
                 self.genesis
+                    .plan(
+                        &t,
+                        &self.port,
+                        &self.drand,
+                        &mut self.rounds,
+                        &mut self.engine,
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+                self.rings
                     .plan(
                         &t,
                         &self.port,
@@ -397,6 +479,56 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
             }
             self.archive
                 .plan(&t, &self.beacon.anchors, &mut self.engine);
+            // Land (W3-C).
+            if LAND_ROLES.iter().any(|r| t.cfg.has_role(r)) {
+                self.index
+                    .pull(&self.port, &self.addrs)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                self.fold
+                    .plan(&t, &self.port, &mut self.engine)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                self.tickets
+                    .plan(
+                        &t,
+                        &self.port,
+                        &mut self.engine,
+                        &mut self.index,
+                        &mut self.seeds,
+                        &self.beacon.anchors,
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+                self.explore
+                    .plan(
+                        &t,
+                        &self.port,
+                        &mut self.engine,
+                        &mut self.index,
+                        &mut self.seeds,
+                        &self.beacon.anchors,
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let mut provinces = self.rings.opened.clone();
+                provinces.extend(
+                    self.index
+                        .provinces
+                        .iter()
+                        .map(|&(p, q)| (p as i32, q as i32)),
+                );
+                self.holdings
+                    .plan(
+                        &t,
+                        &self.port,
+                        &mut self.engine,
+                        &mut self.index,
+                        &provinces,
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
         }
         // Send the next versions.
         self.engine
@@ -415,7 +547,17 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
         for (k, o) in &r.outcomes {
             match o {
                 Outcome::Dead { code, reason } => {
-                    if self.genesis.on_dead(k, *code) || self.archive.on_dead(k, *code) {
+                    let land_role =
+                        role_of_key(k).filter(|_| *code == Some(abi::err::NOT_IMPLEMENTED));
+                    if let Some(role) = land_role {
+                        if self.unsupported_roles.insert(role) {
+                            self.alert(
+                                slot,
+                                "not-implemented",
+                                format!("{k}: {reason}; role `{role}` off (the program lacks it)"),
+                            );
+                        }
+                    } else if self.rings.on_dead(k, *code) || self.archive.on_dead(k, *code) {
                         self.alert(
                             slot,
                             "not-implemented",
@@ -427,8 +569,16 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
                 }
                 Outcome::Landed { .. } => {}
                 Outcome::Failed { code, err, .. } => {
-                    if *code != Some(abi::err::NO_ANCHOR) && *code != Some(abi::err::SEED_NOT_READY)
-                    {
+                    // Expected refusals of a re-planned write: an anchor or
+                    // seed not there yet, a fold part of an older bell, a
+                    // ticket whose preference moved (another settler won).
+                    let expected = [
+                        abi::err::NO_ANCHOR,
+                        abi::err::SEED_NOT_READY,
+                        abi::err::FOLD_STALE,
+                        abi::err::TICKET_STATE,
+                    ];
+                    if !code.is_some_and(|c| expected.contains(&c)) {
                         self.alert(slot, "failed", format!("{k}: {code:?} {err}"));
                     }
                 }
@@ -505,8 +655,20 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
                 "contested_bells": self.beacon.contested_bells.iter().collect::<Vec<_>>(),
                 "anchor_latency_slots_p99": quantile(&self.beacon.anchor_latency, 0.99),
                 "seed_latency_slots_p99": quantile(&self.beacon.seed_latency, 0.99),
-                "genesis_provinces": self.genesis.opened.len(),
-                "rings_unsupported": self.genesis.rings_unsupported,
+                "provinces_opened": self.rings.opened.len(),
+                "rings_complete": self.rings.complete.iter().collect::<Vec<_>>(),
+                "ring_waiting": self.rings.waiting.as_ref().map(|w| format!("{w:?}")),
+                "rings_unsupported": self.rings.unsupported,
+                "folded_bells": self.fold.folded.len(),
+                "tickets_open": self.index.tickets.len(),
+                "tickets_settled": self.tickets.settled.len(),
+                "tickets_expired": self.tickets.expired,
+                "ticket_winner_latency_slots_p99": quantile(&self.tickets.winner_latency(), 0.99),
+                "explores_sent": self.explore.sent.len(),
+                "releases_sent": self.holdings.releases.len(),
+                "sweeps_sent": self.holdings.sweeps.len(),
+                "disbands_sent": self.holdings.disbands.len(),
+                "land_unsupported": self.unsupported_roles.iter().collect::<Vec<_>>(),
                 "archive_unsupported": self.archive.unsupported,
                 "archived_bells": self.archive.archived_bells,
             },
@@ -613,6 +775,19 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
     }
 }
 
+/// The land instruction tags W3-C sends, with their §5.5 class.
+pub const W3C_TAGS: [(u8, Class); 9] = [
+    (tag::OPEN_RING, Class::D),
+    (tag::CONSUME_RING_SEED, Class::D),
+    (tag::OPEN_PROVINCE, Class::D),
+    (tag::FOLD_OCCUPANCY, Class::D),
+    (tag::SETTLE_TICKET, Class::D),
+    (tag::SETTLE_EXPLORE, Class::N),
+    (tag::RELEASE_DORMANT, Class::N),
+    (tag::DISBAND_STRANDED, Class::N),
+    (tag::SWEEP_POOL_OWED, Class::N),
+];
+
 /// The keeper-write instruction tags this unit sends (budget coverage test).
 pub const W2F_TAGS: [u8; 9] = [
     tag::CONSUME_GENESIS_SEED,
@@ -656,5 +831,18 @@ mod tests {
             };
             assert_eq!(c, want, "tag {t:#x}");
         }
+    }
+
+    #[test]
+    fn land_writes_have_their_contract_class_and_a_budget() {
+        let b = Budgets::from_json(&serde_json::from_str(CANONICAL_BUDGETS).unwrap()).unwrap();
+        for (t, class) in W3C_TAGS {
+            assert_eq!(abi::ix_info(t).unwrap().class, class, "tag {t:#x}");
+            let x = b.get(t);
+            assert!(x.cu_limit > 0 && x.loaded_limit >= fees::PAGE, "tag {t:#x}");
+        }
+        assert_eq!(role_of_key("ticket:x:5:0"), Some("tickets"));
+        assert_eq!(role_of_key("stranded:2,0:9"), Some("dormancy"));
+        assert_eq!(role_of_key("anchor:1:2"), None);
     }
 }

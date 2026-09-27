@@ -32,8 +32,10 @@ use std::path::PathBuf;
 use solana_address::Address;
 
 /// Duties (§8.2 `roles`). W2-F runs `beacon` (genesis seed, anchors, seed
-/// caches, beacon logs), `rings` (the genesis rings and provinces) and
-/// `archive`; the others are accepted and wait for their waves.
+/// caches, beacon logs) and `archive`; W3-C runs `rings` (every ring, its
+/// seed and provinces), `fold`, `tickets`, `explore`, `dormancy` (releases
+/// and stranded hosts) and `sweep`, and the `/v1/reveal` accept path; the
+/// others are accepted and wait for their waves (W4-C).
 pub const ROLES: [&str; 16] = [
     "beacon",
     "reveal",
@@ -212,6 +214,12 @@ pub struct KeeperConfig {
     pub rescan_bells: u32,
     /// Payer care every this many slots (at rest).
     pub care_every_slots: u64,
+    /// Land (W3-C): Holdings the feed named are re-read every this many
+    /// slots (dormancy, sweeps).
+    pub land_scan_slots: u64,
+    /// Land (W3-C): backstop scan of every opened Province for stranded
+    /// hosts every this many slots (a release triggers one at once).
+    pub stranded_scan_slots: u64,
     /// Pools below their contract minimum are allowed (tests, local drills).
     pub dev: bool,
 }
@@ -249,6 +257,8 @@ impl KeeperConfig {
             nonce_switch_slots: 2,
             rescan_bells: 288,
             care_every_slots: 150,
+            land_scan_slots: 8,
+            stranded_scan_slots: 450,
             dev: false,
         }
     }
@@ -333,6 +343,8 @@ impl KeeperConfig {
         num!("nonce_switch_slots", nonce_switch_slots, u64);
         num!("rescan_bells", rescan_bells, u32);
         num!("care_every_slots", care_every_slots, u64);
+        num!("land_scan_slots", land_scan_slots, u64);
+        num!("stranded_scan_slots", stranded_scan_slots, u64);
         if let Some(v) = take("reveal_floor") {
             c.reveal_floor = Some(int(v, "reveal_floor")?);
         }

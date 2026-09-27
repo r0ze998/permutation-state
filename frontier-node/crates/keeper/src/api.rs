@@ -8,7 +8,7 @@
 //! |---|---|
 //! | `GET /v1/status` | duties, pools, spend, latencies (live) |
 //! | `GET /metrics` | Prometheus text (live) |
-//! | `POST /v1/reveal` | shape checks (`400`), plaintext rules (`422 BadPlaintext`), then queued with a track id (`202`); the commitment (`409`) and window (`410`) checks against chain are W3-C's accept path, the sending W4-C's pipeline |
+//! | `POST /v1/reveal` | shape checks (`400`), plaintext rules (`422 BadPlaintext`), then (W3-C) the accept path against chain ([`crate::reveal_accept`]: `409 CommitMismatch` / `TransitState`, `410 WindowClosed`, `422 BadPlaintext` against the transit), then queued with a track id (`202`; the same material again answers the same track). The sending is W4-C's pipeline |
 //! | `POST /v1/nudge` | queued (`{queued, blocking: []}`); the blocking set is W4-C's |
 //! | `GET /v1/track/{id}` | the track's state |
 
@@ -23,6 +23,7 @@ use axum::{Json, Router};
 use base64::Engine as _;
 use serde_json::{json, Value};
 
+use crate::reveal_accept::{RevealGate, RevealReq};
 use crate::Shared;
 
 const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::STANDARD;
@@ -31,6 +32,9 @@ const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::STA
 struct ApiState {
     shared: Arc<Mutex<Shared>>,
     token: Arc<String>,
+    /// The accept path against chain (W3-C); `None` queues after the shape
+    /// checks only (unit tests of the routes).
+    gate: Option<Arc<dyn RevealGate>>,
 }
 
 fn lock(s: &Mutex<Shared>) -> std::sync::MutexGuard<'_, Shared> {
@@ -114,6 +118,22 @@ pub fn check_reveal(v: &Value) -> Result<(), (StatusCode, &'static str, String)>
     })
 }
 
+/// The request's material as the accept path takes it (shape already checked).
+fn reveal_req(v: &Value) -> Option<RevealReq> {
+    let b = |k: &str| {
+        v.get(k)
+            .and_then(|x| x.as_str())
+            .and_then(|s| B64.decode(s).ok())
+    };
+    Some(RevealReq {
+        holding: v.get("holding")?.as_str()?.parse().ok()?,
+        transit_slot: v.get("transit_slot")?.as_u64()? as u8,
+        plain: b("plain_b64")?.try_into().ok()?,
+        salt: b("salt_b64")?.try_into().ok()?,
+        ct_hash: b("ct_hash_b64")?.try_into().ok()?,
+    })
+}
+
 async fn reveal(State(st): State<ApiState>, h: HeaderMap, Json(v): Json<Value>) -> Response {
     if !authorized(&st, &h) {
         return err(StatusCode::UNAUTHORIZED, "Unauthorized", "bearer token");
@@ -121,11 +141,50 @@ async fn reveal(State(st): State<ApiState>, h: HeaderMap, Json(v): Json<Value>) 
     if let Err((c, name, d)) = check_reveal(&v) {
         return err(c, name, &d);
     }
+    let Some(req) = reveal_req(&v) else {
+        return err(StatusCode::BAD_REQUEST, "BadRequest", "reveal material");
+    };
+    let mut item = v.clone();
+    if let Some(g) = &st.gate {
+        match g.check(&req).await {
+            Ok(a) => {
+                item["checked"] = json!(true);
+                item["host_id"] = json!(a.host_id.to_string());
+                item["faction"] = json!(a.faction);
+                item["arrive"] = json!(a.arrive);
+                item["dest"] = json!([a.dest.0, a.dest.1]);
+                item["tile"] = json!(a.tile);
+                item["region"] = json!(a.region);
+                item["commit_hex"] = json!(hex::encode(a.commit));
+                item["close"] = json!(a.close);
+            }
+            Err(r) => {
+                let code = StatusCode::from_u16(r.http).unwrap_or(StatusCode::CONFLICT);
+                return err(code, r.code, &r.detail);
+            }
+        }
+    } else {
+        item["checked"] = json!(false);
+    }
+    let dedupe = format!(
+        "{}:{}:{}",
+        req.holding,
+        req.transit_slot,
+        hex::encode(fclient::seal::commit(&req.plain, &req.salt))
+    );
     let mut s = lock(&st.shared);
+    if let Some(id) = s.reveal_keys.get(&dedupe).cloned() {
+        return (
+            StatusCode::ACCEPTED,
+            Json(json!({"accepted": true, "track": id})),
+        )
+            .into_response();
+    }
     s.next_track += 1;
     let id = format!("r{}", s.next_track);
     s.tracks.insert(id.clone(), json!({"state": "queued"}));
-    s.reveals.push((id.clone(), v));
+    s.reveal_keys.insert(dedupe, id.clone());
+    s.reveals.push((id.clone(), item));
     (
         StatusCode::ACCEPTED,
         Json(json!({"accepted": true, "track": id})),
@@ -164,9 +223,19 @@ async fn track(State(st): State<ApiState>, h: HeaderMap, Path(id): Path<String>)
 }
 
 pub fn router(shared: Arc<Mutex<Shared>>, token: String) -> Router {
+    router_with(shared, token, None)
+}
+
+/// The routes with the accept path of `/v1/reveal` behind `gate`.
+pub fn router_with(
+    shared: Arc<Mutex<Shared>>,
+    token: String,
+    gate: Option<Arc<dyn RevealGate>>,
+) -> Router {
     let st = ApiState {
         shared,
         token: Arc::new(token),
+        gate,
     };
     Router::new()
         .route("/v1/status", get(status))
@@ -195,6 +264,16 @@ pub async fn serve(
     shared: Arc<Mutex<Shared>>,
     token: String,
 ) -> Result<Running, String> {
+    serve_with(addr, shared, token, None).await
+}
+
+/// [`serve`] with the `/v1/reveal` accept path against chain.
+pub async fn serve_with(
+    addr: SocketAddr,
+    shared: Arc<Mutex<Shared>>,
+    token: String,
+    gate: Option<Arc<dyn RevealGate>>,
+) -> Result<Running, String> {
     if !addr.ip().is_loopback() {
         return Err(format!("the keeper API binds loopback only, not {addr}"));
     }
@@ -205,7 +284,7 @@ pub async fn serve(
         .await
         .map_err(|e| format!("bind {addr}: {e}"))?;
     let addr = l.local_addr().map_err(|e| e.to_string())?;
-    let app = router(shared, token);
+    let app = router_with(shared, token, gate);
     let task = tokio::spawn(async move {
         let _ = axum::serve(l, app).await;
     });
@@ -289,6 +368,9 @@ mod tests {
         let id = v["track"].as_str().unwrap().to_string();
         let (c, v) = call(a, "GET", &format!("/v1/track/{id}"), Some(&tok), None).await;
         assert_eq!((c, v["state"].as_str()), (200, Some("queued")));
+        // The same material again: the same track, queued once.
+        let (c, v) = call(a, "POST", "/v1/reveal", Some(&tok), Some(good.clone())).await;
+        assert_eq!((c, v["track"].as_str()), (202, Some(id.as_str())));
         let mut short = good.clone();
         short["salt_b64"] = json!(B64.encode([1u8; 31]));
         assert_eq!(
