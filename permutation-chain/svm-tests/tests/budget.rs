@@ -412,6 +412,12 @@ fn light_worst_shapes() {
     let crank = b.crank.insecure_clone();
     let cp = crank.pubkey();
     let mut delegated = c.fork();
+    // Bound to this build's rules, as CreateSeason binds it (WP15).
+    delegated.edit::<Season>(&b.season, |x| {
+        x.rules_version = permutation_chain::rules::PINNED_RULES_VERSION;
+        x.rules_hash = permutation_chain::rules::pinned_ruleset_hash(x.preset, x.market).unwrap();
+        x.logic_version = permutation_chain::rules::CHAIN_LOGIC_VERSION;
+    });
     light(
         &mut delegated,
         "Delegate chunk",
@@ -451,6 +457,11 @@ fn light_worst_shapes() {
         vec![b.part_ix(&cp, vec![1], true)],
         &[&crank],
     );
+    // The nations come after chunks 2..19 (`undelegation_order`).
+    for k in 2..WORLD_CHUNKS as u16 {
+        c.send(vec![b.part_ix(&cp, vec![k], true)], &[&crank])
+            .expect("UndelegatePart, one chunk");
+    }
     light(
         &mut c,
         "UndelegatePart, three nations",
@@ -494,7 +505,6 @@ const NATIONS_PER_INTENT: usize = 3;
 /// and the whole undelegation in `undelegation_order` (chunks 1..=19 one at
 /// a time, the nations `NATIONS_PER_INTENT` at a time, chunk 0 last).
 #[test]
-#[ignore = "until WP02: intents over every account exceed the Light ceiling (WP02 caps the shape)"]
 fn light_intents_at_every_target() {
     let mut c = Chain::new().with_magicblock();
     let b = SeasonFx::running(
