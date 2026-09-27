@@ -77,3 +77,38 @@ Merged `--no-ff` in the §11 order: W1-B `218f906`, W1-A `f62d190`, W1-C `bb16d0
 Pass conditions beyond exit codes: Phase A equivalence 4,320/4,320 (`phase_a_equals_the_reference_on_4320_inputs`, plus the occupancy, refund-corner and ties-and-edges variants) green; `occupancy_empty_keeps_the_d95fa25_digests` green; CL-29 worst ResolveFromInputs 307,139 CU and heap 18,856 B on SBF v2 (W1-A lab, measured on the `clash.rs` that is merged byte for byte unchanged); `catalog_equality` green and comparing; `localnet`'s `loaded_data_control_one_page_below_fails_at_the_need_passes` and `drand-replay`'s `test_key_mode_signs_on_demand` green; every G0 task mapped to a merged commit in §1.
 
 PENDING-OWNER in this gate: the `frontier-node` fmt and clippy line only (above). O-M1-12 items (wasm32, Playwright, round archive, Agave) are not used by Gate W1.
+
+### 3.1 Gate W1 re-run after the wave-1 review (integ-W1 window, 2026-09-27)
+
+The review of all six units (six "needs-fix" verdicts) was answered in the integration window. Every blocker/major item was confirmed and fixed with a test; the minor items were fixed or rebutted. Details are in `docs/frontier/m1/integ-W1-NOTES.md`, the contract changes in `M1-CONTRACT.md` v1.2 §18 and the decisions in `DECISIONS.md` part G.
+
+Commits: `7b0f115` (W1-A), `ba135ff` (W1-B), `cc35e34` (W1-C, RULESET_HASH and seal vectors), `c0359a5` (created-day flag, fee rounding), `eab7a7e` (W1-E), `e11abbb` (W1-F), `907dc9f` (W1-D), `2553a69` (docs). **707e65d** (W1-A's shim in W1-B/W1-D files) is accepted under the integration window.
+
+The gate was run on `2553a69`, all 13 items as §12 writes them; the commit that adds this section changes only this file.
+
+| Gate W1 item (§12) | Result [measured] |
+|---|---|
+| root `cargo fmt --all -- --check` | exit 0 |
+| clippy `permutation-rules`, `frontier-abi` `-D warnings` | exit 0 |
+| `cargo test --locked --release -p permutation-rules` | exit 0 (434 passed) |
+| `cargo test --locked -p frontier-abi` | exit 0 (43 passed) |
+| `abi-vectors -- --check` | exit 0 (9 files fresh) |
+| `cargo test --locked -p permutation-chain` | exit 0 |
+| `frontier-sim` fmt, clippy, `cargo test --release` | exit 0 (18 passed: 15 unit tests incl. the four 60-seed doctrine gate tests under D23, plus 3 `catalog_equality` tests, compiled unconditionally) |
+| `criterion --best-response --seeds 3 --first-seed 30001 --gate` | exit 0, worst cell 0.985 (caretaker term exempt) |
+| `doctrine-gate --controls` (shipping economy, 60 seeds) | exit 0: kernel 6/6, gap 1.4 points, largest \|Δ\| 0.063%. All three controls rejected: draft (−1.291% A, +8.77% E), Knight (−0.294%), A boost (+0.338%) |
+| `frontier-node` `cargo fmt --all -- --check && cargo clippy --locked --workspace --all-targets -- -D warnings && cargo test --locked --workspace` | **exit 0 as written** (68 passed, 1 ignored). The 1.95.0 rustfmt and clippy components appeared on this machine during the review; this session did not install them. The owner should know. |
+| `permutation-gateway` `npm ci --ignore-scripts && npm test` | exit 0 (327/327) |
+| civilization tests | exit 0 (47/47) |
+| `git diff --quiet d95fa25 -- permutation-server/web/session.mjs permutation-chain/src` | exit 0 |
+| Overnight O5 band (outcomes changed: CL-09 day rule, caretaker exemption, garrison cap) | exit 0: 6/6 in band, gap 1.1 points, largest \|Δ\| 0.069%, 1,500/1,500 conserve, 500 s (run on the code of `907dc9f`; later commits change docs only) |
+
+Pass conditions beyond exit codes:
+- Phase A equivalence 4,320/4,320 green, now also asserting the I-43 caps. `occupancy_empty_keeps_the_d95fa25_digests` and `clash_bounds_do_not_change_honest_outcomes` green.
+- **CL-29 re-measured on the integ kernel:** worst ResolveFromInputs **307,546 CU**, heap **18,856 B** over 1,240 fills on SBF v2, with on-chain digests equal to the native kernel's (lab `integ-w1r/rfi/`).
+- `catalog_equality` green, with no environment variable.
+- The localnet loaded-data control (now asserting 602,471 B independently) and the drand-replay test-key tests green.
+- The G0 map in §1 is unchanged; the named tests still exist.
+
+**PENDING-OWNER in this gate: none.**
+
