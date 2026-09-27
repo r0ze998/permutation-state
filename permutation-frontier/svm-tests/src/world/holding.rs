@@ -371,7 +371,7 @@ impl World {
     /// Resolves a crafted Province through bell `b` the way ResolveFromInputs
     /// (W4-A) leaves a quiet bell's entries: `resolved_next = b + 1`; every
     /// pending change of a bell ≤ b settled with the kernel (a Spend makes
-    /// the entry departed, state 3; a Leave frees it); muster-pending
+    /// the entry departed, state 3; a Leave or a Forfeit frees it); muster-pending
     /// entries with `from_bell ≤ b + 1` join the roster. A stand-in, used by
     /// SettleDeparture and resident-action tests.
     pub fn resolve_through(&self, c: &mut Chain, province: &Address, b: u32) {
@@ -393,6 +393,8 @@ impl World {
                         e.state = E::STATE_DEPARTED;
                     }
                     EntryOp::Leave if e.pend_bell < rn => e = Entry::FREE,
+                    // v1.5: DisbandStranded's pending Forfeit (troops lost)
+                    EntryOp::Forfeit if e.pend_bell < rn => e = Entry::FREE,
                     _ => {}
                 }
                 write_entry(d, i, &e).unwrap();

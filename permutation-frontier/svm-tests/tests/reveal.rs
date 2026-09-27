@@ -762,6 +762,12 @@ fn reveal_refusals() {
         d[S::END_BELL..S::END_BELL + 4].copy_from_slice(&s.m.arrive.to_le_bytes());
     });
     assert_code(send_keeper(&mut f, &s.w, base.clone()), E::WrongStatus);
+    // ... also with a bad plaintext: step 1 comes first (§5.11, wave-3
+    // review).
+    let mut m = s.m.clone();
+    m.made.plain[19..21].copy_from_slice(&60_001u16.to_le_bytes());
+    let ix = s.w.reveal_ix(&s.w.keeper.pubkey(), &s.e, &m, 0, true);
+    assert_code(send_keeper(&mut f, &s.w, ix), E::WrongStatus);
     // RulesetMismatch.
     let mut f = s.c.fork();
     f.edit(&s.w.a.season, |d| d[S::RULESET_HASH] ^= 1);

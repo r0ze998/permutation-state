@@ -712,12 +712,14 @@ pub fn reveal(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
     if !T::in_transit(tr.state) {
         return Err(FrontierError::TransitState.into());
     }
+    // §5.11 step 1's Ended clause, as soon as the arrival bell is known
+    // (before the plaintext; wave-3 review, W3-B).
+    if hdr.status == S::STATUS_ENDED && tr.arrive >= hdr.end_bell {
+        return Err(FrontierError::WrongStatus.into());
+    }
     let plain = ks::unpack(&x.plain);
     if !plain_ok(&plain, tr.host_id, tr.arrive) {
         return Err(FrontierError::BadPlaintext.into());
-    }
-    if hdr.status == S::STATUS_ENDED && tr.arrive >= hdr.end_bell {
-        return Err(FrontierError::WrongStatus.into());
     }
     crate::heap::trace_checkpoint(0x5102);
     // 3. commitment

@@ -214,7 +214,9 @@ fn host_disband_stranded_frees_a_host_of_a_gone_holding() {
     let ix = hix::disband_stranded(&w.a, any.pubkey(), e.p, e.q, 5, id);
     // The holding is live with the host's generation: not stranded.
     assert_code(c.send(std::slice::from_ref(&ix), &[&any]), E::NotDormant);
-    // Re-founded (another generation): stranded.
+    // Re-founded (another generation): stranded. v1.5 roster freeze: the
+    // host (state 1) gets a pending Forfeit of now_bell; the resolve of
+    // that bell frees it.
     let mut f = c.fork();
     f.edit(&e.holding, |d| d[H::GEN] = 2);
     let watch = ChainWatch::new(&f, e.province, EntityKind::Province);
@@ -223,16 +225,78 @@ fn host_disband_stranded_frees_a_host_of_a_gone_holding() {
         "hix::disband_stranded(",
     );
     watch.check(&f, &l.logs, 1);
-    assert_eq!(entry_at(&f.data(&e.province), 5).state, EN::STATE_FREE);
+    let en = entry_at(&f.data(&e.province), 5);
+    assert_eq!(en.state, EN::STATE_ROSTER, "still in the frozen rosters");
+    assert_eq!(en.op, EntryOp::Forfeit);
+    assert_eq!(en.pend_bell, B0);
     let r = records::one(&l.logs, Kind::STRANDED);
     assert_eq!(r.u64("troops_lost") as u32, 300_000);
-    // Closed (absent): stranded too; a free entry is BadData.
+    // A second disband while the Forfeit is pending: HostBusy.
+    assert_code(f.send(std::slice::from_ref(&ix), &[&any]), E::HostBusy);
+    w.resolve_through(&mut f, &e.province, B0);
+    assert_eq!(entry_at(&f.data(&e.province), 5).state, EN::STATE_FREE);
+    assert_code(f.send(std::slice::from_ref(&ix), &[&any]), E::BadData);
+    // Closed (absent): stranded too.
+    let id2 = w.craft_host(&mut c, &e, &e.province, 6, 1, 0, 300, e.tile);
+    let id3 = w.craft_host(&mut c, &e, &e.province, 7, 2, 0, 300, e.tile);
     c.remove(&e.holding);
     expect_lands(
         c.send(std::slice::from_ref(&ix), &[&any]),
         "hix::disband_stranded(",
     );
-    assert_code(c.send(&[ix], &[&any]), E::BadData);
+    // A province behind by more than a bell: NotResident (the pending
+    // bell could not be ordered after the unresolved clashes).
+    let mut g = c.fork();
+    let rn = u32_at(&g.data(&e.province), P::RESOLVED_NEXT);
+    w.to_bell(&mut g, rn + 5, 0);
+    let ix2 = hix::disband_stranded(&w.a, any.pubkey(), e.p, e.q, 6, id2);
+    assert_code(g.send(&[ix2], &[&any]), E::NotResident);
+    // A departed entry (state 3, in no roster) is freed at once.
+    c.edit(&e.province, |d| {
+        let o = P::entry(7);
+        d[o + EN::STATE] = EN::STATE_DEPARTED;
+    });
+    let ix3 = hix::disband_stranded(&w.a, any.pubkey(), e.p, e.q, 7, id3);
+    expect_lands(c.send(&[ix3], &[&any]), "departed entry");
+    assert_eq!(entry_at(&c.data(&e.province), 7).state, EN::STATE_FREE);
+}
+
+/// G7-style (wave-3 review, W3-B major): a DisbandStranded landing before
+/// the resolve of an unresolved bell and one landing after it leave that
+/// bell's roster identical (the class-N disband cannot remove a defender
+/// from a frozen roster).
+#[test]
+fn host_disband_stranded_keeps_the_frozen_roster() {
+    let (mut c, w, e) = setup();
+    let id = w.craft_host(&mut c, &e, &e.province, 5, 0, 0, 300, e.tile);
+    c.edit(&e.holding, |d| d[H::GEN] = 2);
+    let any = c.funded(b"any", 1);
+    let ix = hix::disband_stranded(&w.a, any.pubkey(), e.p, e.q, 5, id);
+    let rn = u32_at(&c.data(&e.province), P::RESOLVED_NEXT);
+    assert!(rn <= B0, "bell {rn}..={B0} unresolved");
+    // The roster the resolve of bell rn reads: entries in state 1.
+    let roster = |c: &Chain| -> Vec<(usize, u64, u32)> {
+        let d = c.data(&e.province);
+        (0..P::ENTRIES_N)
+            .map(|i| (i, entry_at(&d, i)))
+            .filter(|(_, x)| x.state == EN::STATE_ROSTER)
+            .map(|(i, x)| (i, x.id, x.troops))
+            .collect()
+    };
+    // Before: the disband lands first, then the resolve reads the roster.
+    let mut before = c.fork();
+    expect_lands(
+        before.send(std::slice::from_ref(&ix), &[&any]),
+        "disband first",
+    );
+    let seen_before = roster(&before);
+    // After: the resolve reads the roster first.
+    let seen_after = roster(&c);
+    assert_eq!(seen_before, seen_after, "the frozen roster is unchanged");
+    assert!(
+        seen_after.iter().any(|x| x.1 == id),
+        "the defender is in it"
+    );
 }
 
 #[test]
@@ -505,12 +569,9 @@ fn f_now(_w: &World, c: &Chain) -> i64 {
 
 // ------------------------------------------------------------ G1
 
-/// Instructions whose §5.5 CU budget the §13.1 fill exceeds on this
-/// build (W3-B notes, "G1 for W3-B's instructions"): measured and printed,
-/// the CU ceiling asserted only under `RELEASE_CHECK=1` (W5-A's release
-/// gate, which must see them fixed or the budget amended). Every other
-/// ceiling (tx bytes, locks, loaded data, heap) is asserted always.
-const OVER_BUDGET: &[frontier_abi::tags::Ix] = &[frontier_abi::tags::Ix::Depart];
+/// G1 for W3-B's instructions: every ceiling asserted (v1.5 budgets:
+/// Harvest 17.5k, Train 17.5k, Explore 20k, Depart 24.5k; the wave-3
+/// review removed the print-only mode).
 
 fn within(
     c: &Chain,
@@ -523,17 +584,7 @@ fn within(
     let need = c
         .measure(ixs, &[signer])
         .unwrap_or_else(|f| panic!("{label}: refused while measuring: {f:?}"));
-    let mut ceil = ceilings(ix, 0, c.programdata_len());
-    let release = std::env::var("RELEASE_CHECK").is_ok_and(|v| v == "1");
-    if OVER_BUDGET.contains(&ix) && !release {
-        if need.cu > ceil.cu as u64 {
-            println!(
-                "{label}: {} CU over its {} CU budget (known breach, reported)",
-                need.cu, ceil.cu
-            );
-        }
-        ceil.cu = u32::MAX;
-    }
+    let ceil = ceilings(ix, 0, c.programdata_len());
     assert_within(label, &need, &ceil);
     need.cu
 }

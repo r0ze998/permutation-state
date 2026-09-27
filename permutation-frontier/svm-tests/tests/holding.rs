@@ -461,12 +461,9 @@ fn holding_explore_refusals() {
 
 // ------------------------------------------------------------ G1
 
-/// Instructions whose §5.5 CU budget the §13.1 fill exceeds on this
-/// build (W3-B notes, "G1 for W3-B's instructions"): measured and printed,
-/// the CU ceiling asserted only under `RELEASE_CHECK=1` (W5-A's release
-/// gate, which must see them fixed or the budget amended). Every other
-/// ceiling (tx bytes, locks, loaded data, heap) is asserted always.
-const OVER_BUDGET: &[frontier_abi::tags::Ix] = &[Ix::Harvest, Ix::Train, Ix::Explore];
+/// G1 for W3-B's instructions: every ceiling asserted (v1.5 budgets:
+/// Harvest 17.5k, Train 17.5k, Explore 20k, Depart 24.5k; the wave-3
+/// review removed the print-only mode).
 
 fn within(
     c: &Chain,
@@ -479,17 +476,7 @@ fn within(
     let need = c
         .measure(ixs, &[signer])
         .unwrap_or_else(|f| panic!("{label}: refused while measuring: {f:?}"));
-    let mut ceil = ceilings(ix, 0, c.programdata_len());
-    let release = std::env::var("RELEASE_CHECK").is_ok_and(|v| v == "1");
-    if OVER_BUDGET.contains(&ix) && !release {
-        if need.cu > ceil.cu as u64 {
-            println!(
-                "{label}: {} CU over its {} CU budget (known breach, reported)",
-                need.cu, ceil.cu
-            );
-        }
-        ceil.cu = u32::MAX;
-    }
+    let ceil = ceilings(ix, 0, c.programdata_len());
     assert_within(label, &need, &ceil);
     need.cu
 }

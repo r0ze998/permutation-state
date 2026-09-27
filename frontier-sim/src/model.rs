@@ -457,3 +457,26 @@ pub fn apply_tweaks(t: &mut [Doctrine; 6], tweaks: &str) {
         }
     }
 }
+
+#[cfg(test)]
+mod economy_parity {
+    use super::*;
+
+    /// The shipping (kernel) doctrine set has no economic multipliers: the
+    /// program's neutral `catalog::base_production` and building deltas
+    /// (W3-B's Build and tier-up touch) are the simulator's economy. The
+    /// food/ore/science multipliers exist only in the draft table (wave-3
+    /// review, W3-B "doctrine economy": rebutted by this pin; a change here
+    /// needs the kernel catalog to carry the multipliers first, I-56).
+    #[test]
+    fn kernel_set_economy_is_neutral() {
+        for d in doctrine_table(DoctrineSet::Kernel, "") {
+            assert_eq!(
+                (d.food_bps, d.ore_bps, d.science_bps),
+                (BPS_ONE, BPS_ONE, BPS_ONE),
+                "{}",
+                d.name()
+            );
+        }
+    }
+}

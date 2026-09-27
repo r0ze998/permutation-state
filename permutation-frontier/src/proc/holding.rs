@@ -113,34 +113,14 @@ pub(crate) struct Player {
 /// end bell (`PlayerStart::finish`, which writes the Citizen). The account
 /// flags were checked by `check_accounts` before this runs.
 pub(crate) fn player(program: &Pubkey, a: &[AccountInfo]) -> R<Player> {
-    let [actor, payer, season_ai, citizen, ..] = a else {
+    let [_, _, season_ai, ..] = a else {
         return Err(FrontierError::TooManyAccounts.into());
     };
     let now = prologue::now()?;
-    prologue::season(
-        season_ai,
-        program,
-        Some(&RULESET_HASH),
-        &[S::STATUS_RUNNING],
-        now.ts,
-    )?;
-    let start = {
-        let sd = season_ai.try_borrow_data()?;
-        let cd = citizen.try_borrow_data()?;
-        let views = [
-            view(actor, &[]),
-            view(payer, &[]),
-            view(season_ai, &sd),
-            view(citizen, &cd),
-        ];
-        ap::player_prologue(&views, program.as_array(), &RULESET_HASH, now.ts, true)?
-    };
-    let pc = {
-        let mut cd = citizen.try_borrow_mut_data()?;
-        let pc = start.finish(&mut cd, now.ts)?;
-        Rw(&mut cd).set_i64(C::LAST_ACTION_TS, now.ts)?;
-        pc
-    };
+    // One Season check (structure and PDA, then status and ruleset inside
+    // the kernel prologue): the lean path W3-A's instructions take
+    // (wave-3 review, W3-B CU budgets).
+    let pc = super::citizen::player(program, a, now.ts, true)?;
     Ok(Player {
         now,
         ctx: addr::ctx(&key(season_ai), &program.to_bytes()),

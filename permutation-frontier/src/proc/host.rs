@@ -30,7 +30,9 @@
 //! - **SettleDeparture** of a transit already settled is `AlreadyDone`
 //!   (keeper idempotency); `ready_bell_off = ready_bell − depart_bell`.
 //! - **DisbandStranded** of a host whose Holding is live with the same
-//!   generation is `NotDormant` (46, "not stranded").
+//!   generation is `NotDormant` (46, "not stranded"). v1.5: a host in a
+//!   roster (state 1 or 2) is disbanded as a pending `Forfeit` of
+//!   `now_bell`, freed by that bell's resolve (roster freeze).
 
 use solana_program::{account_info::AccountInfo, pubkey::Pubkey};
 
@@ -458,8 +460,19 @@ pub fn garrison(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
 
 /// 0x48 DisbandStranded(entry): `[any s] [season] [province w] [holding r
 /// (canonical, may be absent)]`, class N. The entry's host id names a
-/// Holding that is absent or re-founded (another generation); the entry
-/// is freed and its troops are lost.
+/// Holding that is absent or re-founded (another generation); its troops
+/// are lost.
+///
+/// v1.5 (§5.10, wave-3 review of W3-B): the disband obeys the roster
+/// freeze. A host that is (or will be) in a roster — state 1, or state 2
+/// muster-pending — is not freed at once: it gets the pending op `Forfeit`
+/// issued at `now_bell` (the province resolved through `now_bell − 2`,
+/// `NotResident`; no other pending change, `HostBusy`), so every clash
+/// whose roster was already fixed still reads it, and the resolve (or
+/// skip) of `now_bell` frees the entry with its post-clash troops lost
+/// (W4-A). A departed entry (state 3, in no roster), and any entry once
+/// the province has resolved every bell of the season, is freed at once.
+/// `STRANDED` records the troops at issue (milli-troops).
 pub fn disband_stranded(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
     check_accounts(Ix::DisbandStranded, a, None)?;
     let x = aix::DisbandStranded::decode(d)?;
@@ -476,11 +489,11 @@ pub fn disband_stranded(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
     )?;
     let ctx = addr::ctx(&key(season_ai), &p.to_bytes());
     prologue::present(province, p, AccountKind::Province, hdr.id)?;
-    let (pp, pq, e) = {
+    let (pp, pq, rn, e) = {
         let pd = province.try_borrow_data()?;
         let r = Ro(&pd);
         let e = read_entry(&pd, x.entry as usize).map_err(|_| FrontierError::BadData)?;
-        (r.i16(P::P)?, r.i16(P::Q)?, e)
+        (r.i16(P::P)?, r.i16(P::Q)?, r.u32(P::RESOLVED_NEXT)?, e)
     };
     expect_key(province, &ctx.province(pp as i32, pq as i32))?;
     if e.state == E::STATE_FREE {
@@ -499,19 +512,36 @@ pub fn disband_stranded(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
             return Err(FrontierError::NotDormant.into());
         }
     }
+    let b = hdr.bell(now.ts).unwrap_or(NO_BELL);
+    let in_roster = matches!(e.state, E::STATE_ROSTER | E::STATE_MUSTER_PENDING);
+    let pending = in_roster && rn < hdr.end_bell;
     let lost = e.troops;
     {
         let mut pd = province.try_borrow_mut_data()?;
-        write_entry(&mut pd, x.entry as usize, &Entry::FREE).map_err(|_| BAD_ACCOUNT)?;
-        let mut w = Rw(&mut pd);
-        bump_epoch(&mut w)?;
-        let n = w.u8(P::N_ENTRIES)?.saturating_sub(1);
-        w.set_u8(P::N_ENTRIES, n)?;
+        if pending {
+            if !ap::resident_ok(rn, b) {
+                return Err(FrontierError::NotResident.into());
+            }
+            if e.busy() {
+                return Err(FrontierError::HostBusy.into());
+            }
+            let mut f = e;
+            f.op = EntryOp::Forfeit;
+            f.pend_bell = b;
+            write_entry(&mut pd, x.entry as usize, &f).map_err(|_| BAD_ACCOUNT)?;
+            bump_epoch(&mut Rw(&mut pd))?;
+        } else {
+            write_entry(&mut pd, x.entry as usize, &Entry::FREE).map_err(|_| BAD_ACCOUNT)?;
+            let mut w = Rw(&mut pd);
+            bump_epoch(&mut w)?;
+            let n = w.u8(P::N_ENTRIES)?.saturating_sub(1);
+            w.set_u8(P::N_ENTRIES, n)?;
+        }
     }
     let mut pd = province.try_borrow_mut_data()?;
     events::emit(
         Kind::STRANDED,
-        hdr.bell(now.ts).unwrap_or(NO_BELL),
+        b,
         &e.id.to_le_bytes(),
         &lost.to_le_bytes(),
         &mut [Chained {
