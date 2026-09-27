@@ -1,0 +1,8 @@
+# LiteSVM 0.16 does not build on 1.89 (contract §3.2); the root workspace,
+# the program and frontier-sim stay on 1.89.0. Owned by the integrator (I-55).
+# No `components` line on purpose: listing rustfmt/clippy here makes rustup
+# download them on first use, and the installed 1.95.0 has neither (see
+# docs/frontier/m1/W1-F-NOTES.md, dependency requests).
+[toolchain]
+channel = "1.95.0"
+profile = "minimal"
