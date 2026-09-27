@@ -32,6 +32,8 @@ struct RelayLog {
     /// (path, tag, signer keys other than the fee payer, tip for a Depart).
     posts: Vec<(String, u8, Vec<Address>, Option<u64>)>,
     departs: Vec<Transaction>,
+    /// Departs refused `HostInTransit` (the settle racer's redepart).
+    in_transit: Vec<Transaction>,
     reveals: Vec<Value>,
     settles: Vec<Value>,
     /// Sponsored transactions per authority this game day.
@@ -131,6 +133,7 @@ impl MockRelay {
                 == fclient::addr::host_id(hp as i32, hq as i32, 0, 1, fixture::IN_TRANSIT_SEQ)
                     .unwrap()
             {
+                self.log.lock().unwrap().in_transit.push(t.clone());
                 return Self::refuse(400, "HostInTransit");
             }
             let t8: [u8; 8] = ix.data[210..218].try_into().unwrap();
@@ -763,6 +766,18 @@ async fn the_settle_racer_redeparts_then_settles_at_the_first_instant() {
     assert_eq!(&ix.data[2..34], &m.commit);
     assert_eq!(&ix.data[34..199], m.seal.as_slice());
     assert!(m.settled && m.redeparted);
+    // The redepart names the province the host stands in after its
+    // arrival — the destination — not its origin (W4-F).
+    let rd = log
+        .in_transit
+        .first()
+        .expect("the redepart reached the relay");
+    let rix = &rd.message.instructions[3];
+    let w0 = fixture::world();
+    assert_eq!(
+        rd.message.account_keys[rix.accounts[5] as usize],
+        a.province(w0.enemy_home.0 as i32, w0.enemy_home.1 as i32)
+    );
     // Wave-3 review (W3-E): the slot, its beneficiary and the resolver are
     // the arrival bell's (per-bell envelope), not the latest bell's.
     let w = fixture::world();

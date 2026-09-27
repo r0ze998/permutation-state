@@ -327,16 +327,41 @@ pub fn copies(h: &Holding, item: u8, now: i64) -> u32 {
     } else {
         0
     };
+    // Every Production item of the building's resource: a running one is
+    // queued; a finished one the program's settle has already added to
+    // `production` (the herald's bytes predate that settle). The item's
+    // `arg` is the resource, not the building (W3-B P1); matching the
+    // building index mispriced Builds (`Insufficient`, W4-F's in-process
+    // day). `now` is kept for the callers' symmetry.
+    let _ = now;
     let queued = h
         .queue
         .iter()
-        .filter(|q| q.done_at > now && q.arg == item)
+        .filter(|q| q.kind == QUEUE_PRODUCTION && q.arg as usize == r)
         .count() as u32;
     built + queued
 }
 
-fn queue_free(h: &Holding, now: i64) -> bool {
-    h.queue.iter().any(|q| q.done_at <= now)
+/// Queue item kind `Production{resource = arg}` (W3-B P1; the program's
+/// `queue_kind::PRODUCTION`, not yet exported by `frontier-abi`).
+pub const QUEUE_PRODUCTION: u8 = 1;
+
+/// Whether the build queue has room at `now`: items still running
+/// (`kind ≠ 0`, `done_at > now`; a finished item is freed by the next
+/// settle) below the tier's slots (Hamlet 2, Town 3, City and Stronghold
+/// 4: `holding::Tier::queue_slots`). Counting the four stored items alone
+/// sent Builds a Hamlet refuses `QueueFull` (W4-F's in-process day).
+pub fn queue_free(h: &Holding, now: i64) -> bool {
+    use permutation_rules::frontier::holding::Tier;
+    let slots = [Tier::Hamlet, Tier::Town, Tier::City, Tier::Stronghold]
+        .get(h.tier as usize)
+        .map_or(2, |t| t.queue_slots());
+    let busy = h
+        .queue
+        .iter()
+        .filter(|q| q.kind != 0 && q.done_at > now)
+        .count();
+    busy < slots
 }
 
 fn href(h: &Holding) -> HoldingRef {
@@ -532,13 +557,16 @@ pub fn targets(obs: &Observation, faction: u8, arrive_hint: u32) -> Vec<Target> 
 /// first: a free passable non-site tile of an observed province without a
 /// camp or another faction's host.
 pub fn stay_targets(obs: &Observation, faction: u8, near: (i16, i16)) -> Vec<Target> {
-    let mut v: Vec<(u32, Target)> = vec![];
+    // Camp-free provinces first; provinces with a camp (a free tile away
+    // from it) only after them: every opened province starts with a camp,
+    // so on day 0 a camp-free province is rare and the settle racer never
+    // marched (W4-F's in-process day).
+    let mut v: Vec<(bool, u32, Target)> = vec![];
     for (&(p, q), pv) in obs.provinces.iter().map(|(k, v)| (k, &v.province)) {
-        if pv.camp.state != 0
-            || pv
-                .entries
-                .iter()
-                .any(|e| e.state != le::STATE_FREE && e.faction != faction)
+        if pv
+            .entries
+            .iter()
+            .any(|e| e.state != le::STATE_FREE && e.faction != faction)
         {
             continue;
         }
@@ -548,6 +576,7 @@ pub fn stay_targets(obs: &Observation, faction: u8, near: (i16, i16)) -> Vec<Tar
         let d = ProvinceCoord::new(p as i32, q as i32)
             .distance(ProvinceCoord::new(near.0 as i32, near.1 as i32));
         v.push((
+            pv.camp.state != 0,
             d,
             Target {
                 p,
@@ -557,8 +586,8 @@ pub fn stay_targets(obs: &Observation, faction: u8, near: (i16, i16)) -> Vec<Tar
             },
         ));
     }
-    v.sort_by_key(|x| (x.0, x.1.p, x.1.q));
-    v.into_iter().map(|x| x.1).collect()
+    v.sort_by_key(|x| (x.0, x.1, x.2.p, x.2.q));
+    v.into_iter().map(|x| x.2).collect()
 }
 
 /// The Depart plan for `host` at `at` to `t`: path over the observed
@@ -641,14 +670,14 @@ pub fn decide(obs: &Observation, cx: &Ctx) -> Vec<Intent> {
         .holdings
         .iter()
         .map(|(_, h)| h)
-        .filter(|h| h.state == lh::STATE_FINAL)
+        .filter(|h| final_by_rule(obs, h))
         .collect();
     let provisional: Vec<&Holding> = obs
         .me
         .holdings
         .iter()
         .map(|(_, h)| h)
-        .filter(|h| h.state == lh::STATE_PROVISIONAL)
+        .filter(|h| h.state == lh::STATE_PROVISIONAL && !final_by_rule(obs, h))
         .collect();
     if finals.is_empty() {
         tickets(obs, cx, cz, &provisional, &mut rng, &mut out);
@@ -680,6 +709,24 @@ pub fn decide(obs: &Observation, cx: &Ctx) -> Vec<Intent> {
     out
 }
 
+/// Whether `h` is final **by rule** (I-29, I-47, §5.6 step 5): stored
+/// final, or provisional with `now ≥ final_ts` and its Province's cohort of
+/// `ticket_bell` closed (every ticket settled, or 24 bells passed). The flip
+/// is lazy: the owner's first resident action (Muster, Dissolve, Garrison,
+/// Explore, Depart: they carry the Province) makes it, so a bot must act on
+/// such a holding rather than wait for the herald to show `final`. Without
+/// the Province in view the holding counts as provisional.
+pub fn final_by_rule(obs: &Observation, h: &Holding) -> bool {
+    if h.state == lh::STATE_FINAL {
+        return true;
+    }
+    if h.state != lh::STATE_PROVISIONAL || obs.now < h.final_ts {
+        return false;
+    }
+    obs.province(h.p, h.q)
+        .is_some_and(|pv| fclient::land::cohort_closed(&pv.cohorts, h.ticket_bell, obs.bell()))
+}
+
 // A persona arm must not fall through to the default arm when its own
 // condition fails (a late revealer never reveals in-bell), so the ifs stay
 // inside the arms.
@@ -698,8 +745,16 @@ fn duties(obs: &Observation, cx: &Ctx, prof: &Profile, rng: &mut Rng, out: &mut 
             .map(|(_, h)| h)
             .find(|h| href(h) == m.h);
         let transit = holding.and_then(|h| h.transit_of(m.key.0).map(|(_, t)| *t));
-        // settle_racer: Depart the same host again while it is in transit.
-        if persona == Some(Persona::SettleRacer) && !m.redeparted && transit.is_some() {
+        // settle_racer: Depart the same host again from where it now
+        // stands — the destination, once that province resolved the arrival
+        // bell (a Stays host is in its roster) — and before its settlement
+        // (§8.6, G12: `HostInTransit`). Earlier, at the origin, the entry is
+        // busy or departed and the program answers `HostBusy`/`NotResident`
+        // (W4-F's in-process day), which tests nothing.
+        let arrived = obs
+            .province(m.dest.0 as i16, m.dest.1 as i16)
+            .is_some_and(|pv| pv.resolved_next > m.arrive_bell);
+        if persona == Some(Persona::SettleRacer) && !m.redeparted && transit.is_some() && arrived {
             out.push(Intent::Redepart { key: m.key });
         }
         // Reveals: from the arrival bell's start, one bell long for owners.
@@ -1092,15 +1147,10 @@ fn economy(
             }
         }
     }
-    // Muster from what is (or is about to be) in reserve.
-    let planned = |u: u8| -> u32 {
-        out.iter()
-            .map(|i| match i {
-                Intent::Train { unit: uu, n, .. } if *uu == u => *n,
-                _ => 0,
-            })
-            .sum()
-    };
+    // Muster from what is in reserve now. A Train of this step is not
+    // counted: the relay simulates each transaction against the landed
+    // state, so a Muster sent right behind its Train is `Insufficient`
+    // (found by W4-F's in-process day); the next step musters them.
     let own_pv = obs.province(h.p, h.q);
     let pending_here = own_pv
         .map(|p| {
@@ -1111,8 +1161,7 @@ fn economy(
         })
         .unwrap_or(0);
     let room = pending_here < permutation_rules::frontier::host::FACTION_RESIDENT_CAP;
-    let (planned_unit, planned_scout) = (planned(unit), planned(SCOUT));
-    let avail = h.reserve[unit as usize] + planned_unit;
+    let avail = h.reserve[unit as usize];
     if room && combat.len() < want_hosts && avail >= MIN_HOST {
         let troops = if persona == Some(Persona::Squatter) {
             MIN_HOST
@@ -1127,7 +1176,7 @@ fn economy(
         });
         used += 1;
     }
-    let savail = h.reserve[SCOUT as usize] + planned_scout;
+    let savail = h.reserve[SCOUT as usize];
     if room && scouts.is_empty() && savail >= MIN_HOST {
         out.push(Intent::Muster {
             h: r,

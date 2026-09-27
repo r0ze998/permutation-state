@@ -114,6 +114,10 @@ pub struct Config {
     pub cache_ttl: Duration,
     /// Game seconds per slot when the clock cannot tell (0.4 × scale).
     pub slot_game_secs: f64,
+    /// Persona bots run a session every bell instead of their archetype's
+    /// sessions (a one-game-day run, e.g. W4-F's `inproc_day`, then reaches
+    /// every persona's test; off by default).
+    pub eager_personas: bool,
 }
 
 impl Config {
@@ -124,6 +128,7 @@ impl Config {
             invites: vec![],
             cache_ttl: Duration::from_millis(1_500),
             slot_game_secs: 8.0,
+            eager_personas: false,
         }
     }
     pub fn reveal_loaded_limit(&self) -> u32 {
@@ -837,8 +842,10 @@ impl Bot {
                     tip: presets[0],
                     transit_slot: (m.transit_slot + 1) % 4,
                 };
+                // The host stands at the destination once it arrived.
+                let at = (m.dest.0 as i16, m.dest.1 as i16);
                 self.sponsored(sh, "depart", Some("redepart"), |p| {
-                    ix::depart(&a, p, m.h, (m.h.p, m.h.q), &args)
+                    ix::depart(&a, p, m.h, at, &args)
                 })
                 .await;
                 if let Some(mm) = self.mem.march_mut(key) {

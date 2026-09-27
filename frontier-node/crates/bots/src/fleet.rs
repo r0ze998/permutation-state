@@ -27,6 +27,8 @@ use crate::report::Report;
 pub struct Fleet<H, R, D> {
     pub shared: Arc<Shared<H, R, D>>,
     pub bots: Vec<Bot>,
+    /// Pacing per bot index ([`Fleet::step_due`]).
+    pace: std::collections::BTreeMap<u32, Pace>,
 }
 
 /// When a bot next wants to run.
@@ -84,7 +86,11 @@ where
         let bots = roster.iter().map(|s| Bot::new(*s, seed)).collect();
         let shared = Arc::new(shared);
         shared.report.lock().expect("report").bots = roster.len() as u64;
-        Fleet { shared, bots }
+        Fleet {
+            shared,
+            bots,
+            pace: Default::default(),
+        }
     }
 
     /// Restores every bot's marches from the marchbook (after a restart).
@@ -133,7 +139,7 @@ where
     /// Runs every bot on its own schedule until game time `until` or
     /// `stop`. Needs a game clock (`ClockSource::Game`).
     pub async fn run(self, until: i64, stop: Arc<AtomicBool>) -> Report {
-        let Fleet { shared, bots } = self;
+        let Fleet { shared, bots, .. } = self;
         if matches!(shared.clock, ClockSource::Fixed(_)) {
             shared.error("run: a fixed clock (use step_all)");
             return shared.report.lock().expect("report").clone();
@@ -150,14 +156,188 @@ where
     }
 }
 
+/// Game times of the season a pace is planned in.
+#[derive(Clone, Copy, Debug)]
+struct Times {
+    genesis: i64,
+    bell_secs: i64,
+    day_secs: i64,
+}
+
+impl Times {
+    fn of(season: &frontier_agents::obs::SeasonView) -> Times {
+        let bell_secs = season.bell_secs.max(1) as i64;
+        Times {
+            genesis: season.genesis_ts,
+            bell_secs,
+            day_secs: bell_secs * BELLS_PER_DAY as i64,
+        }
+    }
+}
+
+/// One bot's pacing (the rules in the module note), shared by
+/// [`Fleet::run`] (wall clock) and [`Fleet::step_due`] (a clock the caller
+/// moves, e.g. an in-process chain on virtual time).
+struct Pace {
+    sched: Schedule,
+    jitter: Rng,
+    next_session: i64,
+    last_duty_bell: Option<u32>,
+    /// The next game time this bot wants to run.
+    wake: i64,
+}
+
+impl Pace {
+    fn new(seed: u64, index: u32) -> Pace {
+        Pace {
+            sched: Schedule::new(seed, index),
+            jitter: Rng::fork(seed, 0x7177_0000 ^ index as u64),
+            next_session: i64::MIN,
+            last_duty_bell: None,
+            wake: i64::MIN,
+        }
+    }
+
+    fn join_at(bot: &Bot, t: &Times) -> i64 {
+        t.genesis + bot.spec.join_bell as i64 * t.bell_secs
+    }
+
+    /// Whether `bot` runs at `now`: `Some(session)` (economy and war
+    /// allowed) or `None`.
+    fn plan(&mut self, bot: &Bot, t: &Times, now: i64, eager: bool) -> Option<bool> {
+        let join_at = Self::join_at(bot, t);
+        if self.next_session == i64::MIN || self.next_session < now - t.day_secs {
+            self.next_session =
+                self.sched
+                    .next_session(&bot.spec, t.genesis, t.day_secs, now.max(join_at));
+        }
+        let bell = ((now - t.genesis).max(0) / t.bell_secs) as u32;
+        let pre_join = now < join_at;
+        // The first two game days after joining: join, ticket, cohort,
+        // first holding (polled every bell).
+        let onboarding = now < join_at + 2 * t.day_secs;
+        let busy = bot.mem.marches.iter().any(|m| !m.settled);
+        let eager = eager && bot.spec.persona.is_some();
+        let new_bell = self.last_duty_bell != Some(bell);
+        let session_due = !pre_join && (now >= self.next_session || (eager && new_bell));
+        let duty_due = !pre_join && (busy || onboarding || eager) && new_bell;
+        (session_due || duty_due).then_some(session_due)
+    }
+
+    /// After a run (`ran = Some(session)`) or a skip at `now`: the next
+    /// wake-up — the join bell; else the next bell (0–20 s in) while
+    /// onboarding or a march is open; else the next session.
+    fn after(&mut self, bot: &Bot, t: &Times, now: i64, ran: Option<bool>, eager: bool) -> i64 {
+        let bell = ((now - t.genesis).max(0) / t.bell_secs) as u32;
+        if let Some(session) = ran {
+            self.last_duty_bell = Some(bell);
+            if session {
+                self.next_session =
+                    self.sched
+                        .next_session(&bot.spec, t.genesis, t.day_secs, now + 1);
+            }
+        }
+        let join_at = Self::join_at(bot, t);
+        let pre_join = now < join_at;
+        let onboarding = now < join_at + 2 * t.day_secs;
+        let eager = eager && bot.spec.persona.is_some();
+        let busy = bot.mem.marches.iter().any(|m| !m.settled) || eager;
+        // Duties 0–20 s into the bell (§9.1); an eager persona's session
+        // 90–150 s in, once its province has usually resolved bell − 2
+        // (resident actions need it: at 0–20 s nearly every Muster was
+        // `NotResident`, W4-F's in-process day).
+        let offset = if eager {
+            90 + self.jitter.below(61) as i64
+        } else {
+            self.jitter.below(21) as i64
+        };
+        let next_bell = t.genesis + (bell as i64 + 1) * t.bell_secs + offset;
+        self.wake = if pre_join {
+            join_at + self.jitter.below(21) as i64
+        } else if busy || onboarding {
+            next_bell.min(self.next_session)
+        } else {
+            self.next_session
+        };
+        self.wake
+    }
+}
+
+impl<H, R, D> Fleet<H, R, D>
+where
+    H: HeraldPort + 'static,
+    R: RelayPort + 'static,
+    D: DirectPort + 'static,
+{
+    /// Runs every bot that is due at the shared clock's `now` (its session
+    /// or its per-bell duty, by the same pacing as [`Fleet::run`]),
+    /// `concurrency` bots at a time; the caller moves the clock
+    /// (`ClockSource::set`) between calls. Returns (bots run, actions sent).
+    pub async fn step_due(&mut self, concurrency: usize) -> (usize, usize) {
+        let Ok(season) = self.shared.season().await else {
+            return (0, 0);
+        };
+        let Some(now) = self.shared.now() else {
+            return (0, 0);
+        };
+        let t = Times::of(&season);
+        let eager = self.shared.cfg.eager_personas;
+        let mut due = vec![];
+        let mut rest = vec![];
+        for b in std::mem::take(&mut self.bots) {
+            let p = self
+                .pace
+                .entry(b.spec.index)
+                .or_insert_with(|| Pace::new(self.shared.cfg.seed, b.spec.index));
+            if now < p.wake {
+                rest.push(b);
+                continue;
+            }
+            match p.plan(&b, &t, now, eager) {
+                Some(session) => due.push((b, session)),
+                None => {
+                    p.after(&b, &t, now, None, eager);
+                    rest.push(b);
+                }
+            }
+        }
+        let ran = due.len();
+        let mut sent = 0;
+        let mut it = due.into_iter();
+        loop {
+            let mut set = tokio::task::JoinSet::new();
+            for (mut b, session) in it.by_ref().take(concurrency.max(1)) {
+                let sh = self.shared.clone();
+                set.spawn(async move {
+                    let n = b.step(&sh, session).await;
+                    (b, session, n)
+                });
+            }
+            if set.is_empty() {
+                break;
+            }
+            while let Some(r) = set.join_next().await {
+                let (b, session, n) = r.expect("bot task");
+                sent += n;
+                if let Some(p) = self.pace.get_mut(&b.spec.index) {
+                    p.after(&b, &t, now, Some(session), eager);
+                }
+                rest.push(b);
+            }
+        }
+        rest.sort_by_key(|b| b.spec.index);
+        self.bots = rest;
+        (ran, sent)
+    }
+}
+
 async fn run_bot<H: HeraldPort, R: RelayPort, D: DirectPort>(
     sh: Arc<Shared<H, R, D>>,
     mut bot: Bot,
     until: i64,
     stop: Arc<AtomicBool>,
 ) {
-    let mut sched = Schedule::new(sh.cfg.seed, bot.spec.index);
-    let mut jitter = Rng::fork(sh.cfg.seed, 0x7177_0000 ^ bot.spec.index as u64);
+    let mut pace = Pace::new(sh.cfg.seed, bot.spec.index);
     // Wait for the season file.
     let season = loop {
         if stop.load(Ordering::Relaxed) {
@@ -168,12 +348,7 @@ async fn run_bot<H: HeraldPort, R: RelayPort, D: DirectPort>(
             Err(_) => tokio::time::sleep(std::time::Duration::from_secs(1)).await,
         }
     };
-    let bell_secs = season.bell_secs.max(1) as i64;
-    let day_secs = bell_secs * BELLS_PER_DAY as i64;
-    let genesis = season.genesis_ts;
-    let join_at = genesis + bot.spec.join_bell as i64 * bell_secs;
-    let mut next_session = i64::MIN;
-    let mut last_duty_bell: Option<u32> = None;
+    let t = Times::of(&season);
     loop {
         if stop.load(Ordering::Relaxed) {
             return;
@@ -186,36 +361,13 @@ async fn run_bot<H: HeraldPort, R: RelayPort, D: DirectPort>(
         if now >= until {
             return;
         }
-        if next_session == i64::MIN || next_session < now - day_secs {
-            next_session = sched.next_session(&bot.spec, genesis, day_secs, now.max(join_at));
-        }
-        let bell = ((now - genesis).max(0) / bell_secs) as u32;
-        let pre_join = now < join_at;
-        // The first two game days after joining: join, ticket, cohort,
-        // first holding (polled every bell).
-        let onboarding = now < join_at + 2 * day_secs;
-        let busy = bot.mem.marches.iter().any(|m| !m.settled);
-        let session_due = !pre_join && now >= next_session;
-        let duty_due = !pre_join && (busy || onboarding) && last_duty_bell != Some(bell);
-        if session_due || duty_due {
+        let eager = sh.cfg.eager_personas;
+        let ran = pace.plan(&bot, &t, now, eager);
+        if let Some(session) = ran {
             let _ = sh.season().await;
-            bot.step(&sh, session_due).await;
-            last_duty_bell = Some(bell);
-            if session_due {
-                next_session = sched.next_session(&bot.spec, genesis, day_secs, now + 1);
-            }
+            bot.step(&sh, session).await;
         }
-        // Next wake-up: the join bell; else the next bell (0–20 s in) while
-        // onboarding or a march is open; else the next session.
-        let next_bell = genesis + (bell as i64 + 1) * bell_secs + jitter.below(21) as i64;
-        let wake = if pre_join {
-            join_at + jitter.below(21) as i64
-        } else if busy || onboarding {
-            next_bell.min(next_session)
-        } else {
-            next_session
-        };
-        let wake = wake.min(until);
+        let wake = pace.after(&bot, &t, now, ran, eager).min(until);
         let d = sh.clock.wall_until(wake);
         tokio::time::sleep(d.max(std::time::Duration::from_millis(50))).await;
     }
