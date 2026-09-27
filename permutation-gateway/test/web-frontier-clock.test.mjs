@@ -9,6 +9,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import * as clock from '../../permutation-server/web/frontier/clock.mjs';
+import * as herald from '../../permutation-server/web/frontier/herald.mjs';
 import { NO_WINDOW_CHANGE } from '../../permutation-server/web/frontier/fcodec.mjs';
 
 const vectors = JSON.parse(readFileSync(new URL('../../permutation-rules/vectors/clock-vectors-v1.json', import.meta.url), 'utf8'));
@@ -56,7 +57,7 @@ test('W(b) follows the window schedule vectors', () => {
 
 test('the chain clock extrapolates the herald\'s sample, detects the scale and never goes back', () => {
   let wall = 1_000_000;
-  const c = new clock.ChainClock({ wall: () => wall });
+  const c = new clock.ChainClock({ wall: () => wall, accelerated: true });
   assert.equal(c.now(), null);
   c.observe(5000, 10);
   assert.equal(c.now(), 5000);
@@ -75,6 +76,47 @@ test('the chain clock extrapolates the herald\'s sample, detects the scale and n
   const d = new clock.ChainClock({ wall: () => wall });
   d.observe(wall / 1000 - 3, 1);
   assert.equal(Math.round(d.offset()), 3, 'local minus chain');
+});
+
+test('a real cluster\'s clock runs at rate 1: a lagging herald never makes it run ahead; a stuck one shows as stale', () => {
+  // True chain time = wall seconds − 1,000,000 (rate 1).
+  let wall = 2_000_000_000;
+  const chain = () => wall / 1000 - 1_000_000;
+  const c = new clock.ChainClock({ wall: () => wall });
+  c.observe(chain(), 1);
+  // The herald lags 40 s (answers stay 40 s old), then catches up at once.
+  for (let i = 1; i <= 10; i++) { wall += 4_000; c.observe(chain() - 40, 1 + i); }
+  assert.equal(c.rate, 1, 'no rate estimate off localnet');
+  wall += 4_000;
+  c.observe(chain(), 20);
+  for (let i = 0; i < 30; i++) { wall += 1_000; assert.ok(c.now() <= chain() + 1e-9, `never ahead of the chain (${c.now() - chain()} s)`); }
+  // A stuck herald: the same latestUnix on every poll for 300 s.
+  const stuck = chain();
+  c.observe(stuck, 21);
+  for (let i = 0; i < 60; i++) { wall += 5_000; c.observe(stuck, 22 + i); }
+  assert.equal(c.rate, 1);
+  assert.ok(c.behind() >= 299, `behind ${c.behind()}`);
+  assert.equal(herald.staleness({ behind: c.behind() }).stale, true, 'the 60-s banner fires');
+  // The chip keeps moving (rate 1), it does not freeze.
+  const t0 = c.now();
+  wall += 10_000;
+  assert.ok(c.now() - t0 >= 9.99);
+});
+
+test('an accelerated (localnet) clock keeps its rate while the herald is stuck and reports it stale', () => {
+  let wall = 1_000_000;
+  const c = new clock.ChainClock({ wall: () => wall, accelerated: true });
+  c.observe(5000, 1);
+  wall += 2_000;
+  c.observe(5040, 2);
+  assert.equal(c.rate, 20);
+  for (let i = 0; i < 40; i++) { wall += 2_000; c.observe(5040, 3 + i); }
+  assert.equal(c.rate, 20, 'a stuck herald does not drive the rate down');
+  assert.ok(c.behind() >= 80);
+  assert.equal(herald.staleness({ behind: c.behind() }).stale, true);
+  // Switching to a real cluster resets the rate.
+  c.setAccelerated(false);
+  assert.equal(c.rate, 1);
 });
 
 test('the bell chip', () => {

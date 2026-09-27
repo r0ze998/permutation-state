@@ -25,6 +25,8 @@ export const bellEnd = (genesisTs, b) => genesisTs + BELL_SECS * (b + 1);
 /** The bell containing t, or null before genesis. */
 export const bellAt = (genesisTs, t) => (t < genesisTs ? null : Math.floor((t - genesisTs) / BELL_SECS));
 export const dayOf = b => Math.floor(b / BELLS_PER_DAY);
+/** The AnchorArchive part of a bell (v1.3: one archive per region and half day). */
+export const archivePartOf = b => Math.floor(b / 72);
 /** T(b): the round a march arriving at bell b is sealed to. */
 export const tlockRound = (drand, genesisTs, b) => firstRoundFrom(drand.genesis, drand.period, bellEnd(genesisTs, b));
 export const revealClose = (a, w) => a + w;
@@ -45,27 +47,45 @@ export function seasonClock(season) {
 // ------------------------------------------------------------------ the chain clock
 /**
  * "Now" on the chain: the herald's latest (slot, unix) sample, advanced by
- * local elapsed time at the rate the chain's Clock has been moving (1 on a
- * real cluster; the scale on an accelerated localnet, detected from two
- * samples at least 2 s apart). Monotone: it never goes back.
+ * local elapsed time. The rate is **1** unless the clock is `accelerated`
+ * (the pinned cluster is `localnet`, whose Clock runs at the stack's
+ * scale): only then is the rate estimated, from two samples at least 2 s
+ * apart in which the chain time advanced, and never below 1. A herald that
+ * lags and catches up, or stops, can therefore neither run a real
+ * cluster's clock fast nor freeze it (integ-W2 review of W2-E: revealStep
+ * uses this `now`, and must never post before the arrival bell starts).
+ * Monotone: it never goes back.
  */
 export class ChainClock {
-  constructor({ wall = () => Date.now() } = {}) {
+  constructor({ wall = () => Date.now(), accelerated = false } = {}) {
     this.wall = wall;
+    this.accelerated = accelerated;
     this.last = null;
     this.prev = null;
     this.rate = 1;
     this.floor = -Infinity;
+    /** min over samples of (wall − chain) seconds: the freshest sample's offset. */
+    this.minOffset = Infinity;
+    /** Wall ms at which the herald's chain time last moved forward. */
+    this.advancedAt = null;
+  }
+
+  /** Mark the clock accelerated (localnet) or not; a real cluster resets the rate to 1. */
+  setAccelerated(on) {
+    this.accelerated = !!on;
+    if (!this.accelerated) this.rate = 1;
   }
 
   /** A herald sample: the Clock sysvar's unix time at a slot. */
   observe(unix, slot) {
     const s = { unix: Number(unix), slot: Number(slot), at: this.wall() };
     if (this.last && s.slot < this.last.slot) return; // an older answer arriving late
-    if (this.last && s.at - this.last.at >= 2000 && s.unix >= this.last.unix) {
+    if (this.accelerated && this.last && s.at - this.last.at >= 2000 && s.unix > this.last.unix) {
       const r = (s.unix - this.last.unix) / ((s.at - this.last.at) / 1000);
-      this.rate = Math.min(5000, Math.max(0.25, r));
+      this.rate = Math.min(5000, Math.max(1, r));
     }
+    if (!this.last || s.unix > this.last.unix) this.advancedAt = s.at;
+    this.minOffset = Math.min(this.minOffset, s.at / 1000 - s.unix);
     this.prev = this.last;
     this.last = s;
   }
@@ -80,6 +100,19 @@ export class ChainClock {
 
   /** Seconds since the last sample (the "as of … N s ago" line). */
   age() { return this.last ? (this.wall() - this.last.at) / 1000 : null; }
+
+  /**
+   * How far the herald's latest chain time is behind, in seconds, measured
+   * independently of the herald-derived estimate: on a real cluster the
+   * local wall clock minus the freshest sample's offset; on an accelerated
+   * localnet the wall seconds since the herald's chain time last advanced.
+   * null before any sample.
+   */
+  behind() {
+    if (!this.last) return null;
+    if (this.accelerated) return Math.max(0, (this.wall() - this.advancedAt) / 1000);
+    return Math.max(0, this.wall() / 1000 - this.minOffset - this.last.unix);
+  }
 
   /** Local clock minus chain clock, seconds (shown when |offset| > 2 s on a real cluster). */
   offset() {

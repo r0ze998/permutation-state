@@ -131,6 +131,22 @@ export function bodyXor(k, plain) {
   return out;
 }
 
+// ------------------------------------------------------------------ the round a march is sealed to
+/**
+ * T(b): the first drand round at or after the end of bell `b` (§5.1), from
+ * the season clock `{genesisTs, drand: {genesis, period}}` (clock.mjs
+ * `seasonClock`). The same arithmetic as clock.mjs `tlockRound`
+ * (web-frontier-seal.test.mjs pins them equal); here so the sealing worker
+ * needs no other module. The program opens a seal only with T(arrive_bell)'s
+ * signature, so the round is never a caller's input (integ-W2 review of W2-E).
+ */
+export function sealRound(clock, arriveBell) {
+  const g = Number(clock?.drand?.genesis), p = Math.max(Number(clock?.drand?.period), 1), t0 = Number(clock?.genesisTs);
+  if (!Number.isFinite(g) || !Number.isFinite(t0) || !Number.isInteger(arriveBell) || arriveBell < 0) return null;
+  const t = t0 + 600 * (arriveBell + 1);
+  return t <= g ? 1 : Math.ceil((t - g) / p) + 1;
+}
+
 // ------------------------------------------------------------------ the beacon pin
 /**
  * Check the season's beacon before sealing to it: the drand info from
@@ -173,19 +189,29 @@ function startWorker() {
 }
 
 /**
- * Seal a march: `{plain (37 B), round, publicKey, hostId, arriveBell}` →
- * `{ok, seal, commit, salt, ctHash, sealRoot}` or `{ok: false, code, error}`.
- * The plaintext is validated here first; the worker seals and self-audits.
- * `inline: true` (or no Worker) runs the same code on this thread.
+ * Seal a march: `{plain (37 B), clock, publicKey, hostId, arriveBell,
+ * round?}` → `{ok, seal, commit, salt, ctHash, sealRoot, round}` or
+ * `{ok: false, code, error}`. The round is T(arriveBell) from the season
+ * `clock` (`sealRound`); a `round` passed in must equal it (`WrongRound`),
+ * so an off-by-one bell or a mixed-up clock can never produce a seal the
+ * program would judge bad. The plaintext is validated here first; the
+ * worker seals and self-audits (including the round). `inline: true` (or
+ * no Worker) runs the same code on this thread.
  */
 export async function sealMarch(req, { inline = false } = {}) {
+  const round = sealRound(req.clock, req.arriveBell);
+  if (round === null) return { ok: false, code: 'NoClock', error: 'the season clock is needed to find T(arrive_bell)' };
+  if (req.round !== undefined && req.round !== null && Number(req.round) !== round) {
+    return { ok: false, code: 'WrongRound', error: `round ${req.round} is not T(${req.arriveBell}) = ${round}` };
+  }
   const why = validate(unpack(req.plain), req.hostId, req.arriveBell);
   if (why) return { ok: false, code: 'BadPlaintext', error: why };
+  req = { ...req, round };
   const w = inline || typeof globalThis.Worker !== 'function' ? false : startWorker();
   if (!w) {
     const { sealRequest } = await import('./seal-worker.mjs');
     return sealRequest(req);
   }
   const id = ++seq;
-  return new Promise(resolve => { waiting.set(id, resolve); w.postMessage({ id, ...req, plain: Uint8Array.from(req.plain) }); });
+  return new Promise(resolve => { waiting.set(id, resolve); w.postMessage({ id, ...req, clock: { genesisTs: Number(req.clock.genesisTs), drand: { genesis: Number(req.clock.drand.genesis), period: Number(req.clock.drand.period) } }, plain: Uint8Array.from(req.plain) }); });
 }

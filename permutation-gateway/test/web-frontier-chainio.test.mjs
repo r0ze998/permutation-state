@@ -16,6 +16,7 @@ import bs58 from 'bs58';
 import * as io from '../../permutation-server/web/frontier/fchainio.mjs';
 import { RULESET_HASH } from '../../permutation-server/web/frontier/abi.mjs';
 import { COMPUTE_BUDGET_PROGRAM, compileMessage, wireTransaction } from '../../permutation-server/web/sdk/solana-tx.mjs';
+import { frontierIx } from '../../permutation-server/web/sdk/frontier/shapes.mjs';
 
 const F = JSON.parse(readFileSync(new URL('./frontier-vectors.json', import.meta.url), 'utf8')).addresses;
 const key = () => bs58.encode(generateKeyPairSync('ed25519').publicKey.export({ format: 'der', type: 'spki' }).subarray(-32));
@@ -24,11 +25,18 @@ const u32 = v => { const b = new Uint8Array(4); new DataView(b.buffer).setUint32
 const u64 = v => { const b = new Uint8Array(8); new DataView(b.buffer).setBigUint64(0, BigInt(v), true); return b; };
 const cb = (tag, bytes) => ({ programId: COMPUTE_BUDGET_PROGRAM, keys: [], data: Uint8Array.of(tag, ...bytes) });
 
-function harvest({ price = 0, tag = 0x40, extra = [], prefix = null, payer = feePayer, signers = [session] } = {}) {
+/** The Harvest this page would build (the expected instruction, from recomputed addresses). */
+function expectedHarvest({ holding = { p: 2, q: 0, site: 3 } } = {}) {
+  const A = io.pinned().addresses;
+  return frontierIx(io.pinned().programId, 'Harvest', { actor: session, payer: feePayer, season: A.season,
+    citizen: A.of('Citizen', { wallet: F.citizen.wallet }), holding: A.of('Holding', holding) }, {});
+}
+
+function harvest({ price = 0, tag = 0x40, extra = [], prefix = null, payer = feePayer, signers = [session], swap = null, keys = null } = {}) {
   const A = io.pinned().addresses;
   const frontier = {
     programId: io.pinned().programId,
-    keys: [
+    keys: keys ?? [
       ...signers.map(s => ({ pubkey: s, isSigner: true, isWritable: false })),
       { pubkey: payer, isSigner: true, isWritable: true },
       { pubkey: A.season, isSigner: false, isWritable: false },
@@ -37,7 +45,8 @@ function harvest({ price = 0, tag = 0x40, extra = [], prefix = null, payer = fee
     ],
     data: Uint8Array.of(tag),
   };
-  const instructions = prefix ?? [cb(2, u32(12_600)), cb(3, u64(price)), cb(4, u32(1_048_576))];
+  if (swap) [frontier.keys[swap[0]], frontier.keys[swap[1]]] = [frontier.keys[swap[1]], frontier.keys[swap[0]]];
+  const instructions = prefix ?? [cb(2, u32(12_000)), cb(3, u64(price)), cb(4, u32(1_048_576))];
   return compileMessage({ feePayer: payer, recentBlockhash: blockhash, instructions: [...instructions, frontier, ...extra] });
 }
 
@@ -52,7 +61,7 @@ test('pins: the Season PDA and bump are found here; another season address or ru
 
 test('message checks: a good player shape passes; every deviation is named', () => {
   io.setPin({ programId: F.program, cluster: 'localnet', seasonId: 1 });
-  const ok = { feePayer, blockhash, tag: 0x40, signers: [session], cuLimit: 12_600, loadedLimit: 1_048_576 };
+  const ok = { feePayer, blockhash, tag: 0x40, signers: [session], cuLimit: 12_000, loadedLimit: 1_048_576, expected: expectedHarvest() };
   assert.deepEqual(io.messageProblems(harvest(), ok), []);
   const has = (msg, opts, re) => assert.ok(io.messageProblems(msg, opts).some(p => re.test(p)), `${re}: ${io.messageProblems(msg, opts)}`);
   has(harvest({ price: 1 }), ok, /CU price is not 0/);
@@ -64,11 +73,40 @@ test('message checks: a good player shape passes; every deviation is named', () 
   has(harvest(), { ...ok, cuLimit: 99 }, /CU limit/);
   has(harvest(), { ...ok, loadedLimit: 65_536 }, /loaded-data limit/);
   has(harvest({ signers: [session, key()] }), ok, /signers/);
-  has(harvest({ prefix: [cb(2, u32(12_600)), cb(4, u32(1_048_576)), cb(3, u64(0))] }), ok, /compute-budget prefix/);
+  has(harvest({ prefix: [cb(2, u32(12_000)), cb(4, u32(1_048_576)), cb(3, u64(0))] }), ok, /compute-budget prefix/);
   has(harvest({ extra: [{ programId: key(), keys: [], data: Uint8Array.of(1) }] }), ok, /instructions|unexpected program/);
   has(Uint8Array.of(1, 2, 3), ok, /unparseable/);
+  // §9.4 "accounts recomputed" (integ-W2 review of W2-E): the blockhash and
+  // the expected instruction are required; a swapped account list, another
+  // holding, a payer account that is not the fee payer, a read-only account
+  // marked writable are all named.
+  has(harvest(), { ...ok, blockhash: undefined }, /no recent blockhash/);
+  has(harvest(), { ...ok, expected: null }, /no expected instruction/);
+  has(harvest({ swap: [3, 4] }), ok, /account 3 is .*expected/);
+  has(harvest(), { ...ok, expected: expectedHarvest({ holding: { p: 2, q: 0, site: 4 } }) }, /account 4 is .*expected/);
+  const A = io.pinned().addresses;
+  const other = key();
+  has(harvest({ keys: [
+    { pubkey: session, isSigner: true, isWritable: false },
+    { pubkey: other, isSigner: true, isWritable: true },
+    { pubkey: A.season, isSigner: false, isWritable: false },
+    { pubkey: A.of('Citizen', { wallet: F.citizen.wallet }), isSigner: false, isWritable: true },
+    { pubkey: A.of('Holding', { p: 2, q: 0, site: 3 }), isSigner: false, isWritable: true },
+  ] }), { ...ok, signers: [session, other] }, /payer|not a relay shape/);
+  has(harvest({ keys: [
+    { pubkey: session, isSigner: true, isWritable: false },
+    { pubkey: feePayer, isSigner: true, isWritable: true },
+    { pubkey: A.season, isSigner: false, isWritable: true },
+    { pubkey: A.of('Citizen', { wallet: F.citizen.wallet }), isSigner: false, isWritable: true },
+    { pubkey: A.of('Holding', { p: 2, q: 0, site: 3 }), isSigner: false, isWritable: true },
+  ] }), ok, /not a relay shape: .*read-only/);
   // A settle shape: no authority signer, only the relay's.
-  assert.deepEqual(io.messageProblems(harvest({ tag: 0x54, signers: [] }), { ...ok, tag: 0x54, signers: [] }), []);
+  const settleAccounts = { payer: feePayer, season: A.season, holding: A.of('Holding', { p: 2, q: 0, site: 3 }), dest_province: key(), inputs: key(),
+    slot: key(), home_province: key(), anchor_or_archive: key(), slot_beneficiary: feePayer, resolver: feePayer, holding_rent_payer: key(), settle_beneficiary: feePayer };
+  const settle = frontierIx(io.pinned().programId, 'SettleTransit', settleAccounts,
+    { transit_slot: 1, commit: new Uint8Array(32), seal: new Uint8Array(165), beneficiary: bs58.decode(feePayer) });
+  const settleMsg = compileMessage({ feePayer, recentBlockhash: blockhash, instructions: [cb(2, u32(85_000)), cb(3, u64(0)), cb(4, u32(1_048_576)), settle] });
+  assert.deepEqual(io.messageProblems(settleMsg, { feePayer, blockhash, tag: 0x54, signers: [], expected: settle }), []);
 });
 
 test('after co-signing, the message must come back byte for byte', () => {

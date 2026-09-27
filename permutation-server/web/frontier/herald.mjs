@@ -200,7 +200,10 @@ export function wantedProvinces({ visible = [], own = [], lod = 'world', limit =
 }
 
 /** How far the herald's view is behind the chain clock; `stale` past 60 s (actions that need fresh state ask to reload). */
-export function staleness({ latestUnix, chainNow }) {
+export function staleness({ latestUnix, chainNow, behind: measured }) {
+  // `behind` (ChainClock.behind(), measured against the local clock) wins:
+  // an estimate built from the herald itself cannot see the herald stall.
+  if (measured !== undefined && measured !== null) return { behind: measured, stale: measured > STALE_AFTER };
   if (latestUnix === null || latestUnix === undefined || chainNow === null || chainNow === undefined) return { behind: null, stale: false };
   const behind = Math.max(0, chainNow - Number(latestUnix));
   return { behind, stale: behind > STALE_AFTER };

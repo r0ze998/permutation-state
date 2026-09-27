@@ -18,7 +18,7 @@
 // installed only inside a worker.
 import { bls12_381 as bls } from '../sdk/vendor/noble/curves/bls12-381.mjs';
 import { sha256 as nobleSha256 } from '../sdk/vendor/noble/hashes/sha2.mjs';
-import { bodyXor, commit, ctHash, pack, PLAIN_LEN, saltOf, SEAL_LEN, sealRoot, unpack, validate } from './seal.mjs';
+import { bodyXor, commit, ctHash, pack, PLAIN_LEN, saltOf, SEAL_LEN, sealRoot, sealRound, unpack, validate } from './seal.mjs';
 
 export const DST_G1 = 'BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_';
 export const K_LEN = 16;
@@ -137,9 +137,13 @@ function fail(what) { throw Object.assign(new Error(`seal self-audit failed: ${w
  * the seal is exactly what the program's opener will accept for `plain`.
  * `hostId`/`arriveBell` are the transit's (Plain::validate, I-28).
  */
-export function audit({ seal, plain, round, publicKey, k, sigma, commit: c, sealRoot: root, hostId, arriveBell }) {
+export function audit({ seal, plain, round, publicKey, k, sigma, commit: c, sealRoot: root, hostId, arriveBell, clock }) {
   const s = asBytes(seal), pt = asBytes(plain);
   if (s.length !== SEAL_LEN) fail('length');
+  // The program opens with T(arrive_bell)'s signature: a seal to any other
+  // round would be judged bad (integ-W2 review of W2-E).
+  const t = sealRound(clock, arriveBell);
+  if (t === null || Number(round) !== t) fail(`round ${round} is not T(${arriveBell}) = ${t}`);
   const r = h3(sigma, k);
   if (!same(G2.BASE.multiply(r).toRawBytes(true), s.subarray(0, 96))) fail('U ≠ H3(σ, k)·G2');
   if (!same(xor(sigma, maskFor(publicKey, round, r)), s.subarray(96, 112))) fail('V');
@@ -159,15 +163,16 @@ const random16 = () => globalThis.crypto.getRandomValues(new Uint8Array(K_LEN));
 
 /**
  * One sealing request: draws k and σ, seals, audits, zeroes k and σ.
- * `{plain, round, publicKey, hostId, arriveBell}` → `{ok: true, seal,
+ * `{plain, round, publicKey, hostId, arriveBell, clock}` (the audit
+ * refuses a round other than T(arriveBell) of `clock`) → `{ok: true, seal,
  * commit, salt, ctHash, sealRoot}` or `{ok: false, code, error}`.
  */
-export function sealRequest({ plain, round, publicKey, hostId, arriveBell }, draw = random16) {
+export function sealRequest({ plain, round, publicKey, hostId, arriveBell, clock }, draw = random16) {
   const k = draw(), sigma = draw();
   try {
     const out = sealWith({ plain, round, publicKey, k, sigma });
-    audit({ ...out, plain, round, publicKey, k, sigma, hostId, arriveBell });
-    return { ok: true, ...out };
+    audit({ ...out, plain, round, publicKey, k, sigma, hostId, arriveBell, clock });
+    return { ok: true, ...out, round: Number(round) };
   } catch (e) {
     return { ok: false, code: e.code ?? 'SealFailed', error: String(e.message ?? e) };
   } finally {

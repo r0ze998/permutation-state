@@ -17,6 +17,7 @@
 import { equal, toBase64 } from '../sdk/bytes.mjs';
 import { COMPUTE_BUDGET_PROGRAM, messageOf, parseMessage, pubkeyString } from '../sdk/solana-tx.mjs';
 import { RULESET_HASH } from './abi.mjs';
+import { classify } from '../sdk/frontier/shapes.mjs';
 import { seasonAddresses } from './faddr.mjs';
 import { L } from '../lang.mjs';
 
@@ -106,16 +107,25 @@ const u64zero = (d, o) => d.subarray(o, o + 8).every(x => x === 0);
 
 /**
  * Problems with a message before a key signs it (empty = fine):
- * `{feePayer, blockhash, tag, signers: [base58], cuLimit?, loadedLimit?}`.
- * A Reveal is never a client transaction (`UseRevealRoute`).
+ * `{feePayer, blockhash, tag, signers: [base58], cuLimit?, loadedLimit?,
+ * expected}`. `blockhash` (the one GET /f/relay gave) and `expected` (the
+ * Frontier instruction this page built from addresses it recomputed,
+ * faddr.mjs / the SDK's `frontierIx`) are required: the message's Frontier
+ * instruction must name exactly `expected`'s accounts in order and carry
+ * exactly its data (no bump from anyone), its `payer` account must be the
+ * fee payer, and the message must be a relay shape as the relay checks it
+ * (the SDK's `classify`: no unreferenced key, ABI writability) (§9.4;
+ * integ-W2 review of W2-E). A Reveal is never a client transaction
+ * (`UseRevealRoute`).
  */
-export function messageProblems(message, { feePayer, blockhash, tag, signers = [], cuLimit = null, loadedLimit = null }) {
+export function messageProblems(message, { feePayer, blockhash, tag, signers = [], cuLimit = null, loadedLimit = null, expected = null }) {
   const out = [];
   let m;
   try { m = parseMessage(message); } catch (e) { return [`unparseable: ${e.message}`]; }
   if (!pin) return ['no pinned season'];
   if (m.accountKeys[0] !== feePayer) out.push('fee payer is not the announced relay key');
-  if (blockhash && m.recentBlockhash !== blockhash) out.push('recent blockhash differs');
+  if (!blockhash) out.push('no recent blockhash to check against (GET /f/relay gives it)');
+  else if (m.recentBlockhash !== blockhash) out.push('recent blockhash differs');
   const want = [feePayer, ...signers];
   if (m.signers.length !== want.length || want.some(s => !m.signers.includes(s))) out.push(`signers ${m.signers.join(',')} are not ${want.join(',')}`);
   const ix = m.instructions;
@@ -135,6 +145,20 @@ export function messageProblems(message, { feePayer, blockhash, tag, signers = [
     else if (tag !== undefined && t !== tag) out.push(`tag 0x${t.toString(16)} is not the expected 0x${tag.toString(16)}`);
   }
   for (const i of ix) if (i.programId !== COMPUTE_BUDGET_PROGRAM && i.programId !== pin.programId) out.push(`unexpected program ${i.programId}`);
+  if (f && f.programId === pin.programId && f.data[0] !== REVEAL_TAG) {
+    const c = classify(m, { programId: pin.programId });
+    if (!c.ok) out.push(`not a relay shape: ${c.problem}`);
+    else if (c.accounts.payer !== feePayer) out.push('the instruction\'s payer account is not the fee payer');
+    if (!expected) out.push('no expected instruction to compare (build it from recomputed addresses)');
+    else {
+      if (expected.programId !== f.programId) out.push('the Frontier program differs from the expected instruction\'s');
+      const want = expected.keys.map(k => k.pubkey);
+      const have = f.keys.map(k => k.pubkey);
+      if (want.length !== have.length) out.push(`${have.length} accounts, the expected instruction has ${want.length}`);
+      else for (let i = 0; i < want.length; i++) if (want[i] !== have[i]) out.push(`account ${i} is ${have[i]}, expected ${want[i]} (recomputed)`);
+      if (!equal(Uint8Array.from(expected.data), f.data)) out.push('instruction data differs from the expected instruction\'s');
+    }
+  }
   return out;
 }
 

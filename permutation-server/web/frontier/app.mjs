@@ -30,7 +30,7 @@ export function chipText(chip) {
 function renderChip() {
   const now = FS.chain?.now() ?? null;
   setText('bell-chip', chipText(FS.clock ? bellChip(FS.clock, now) : null));
-  FS.stale = staleness({ latestUnix: FS.record?.latestUnix, chainNow: now });
+  FS.stale = staleness({ latestUnix: FS.record?.latestUnix, chainNow: now, behind: FS.chain?.behind() ?? null });
   const banner = $('stale-banner');
   if (banner) {
     banner.hidden = !FS.stale.stale;
@@ -64,6 +64,8 @@ async function loadSeason(herald) {
   FS.record = record;
   FS.season = season;
   FS.clock = seasonClock(season);
+  // Only a localnet Clock runs accelerated (§8.7); every other cluster's rate is 1.
+  FS.chain.setAccelerated(record.cluster === 'localnet');
   FS.chain.observe(record.latestUnix, record.latestSlot);
   invalidate('chip', 'status', 'map');
   return true;

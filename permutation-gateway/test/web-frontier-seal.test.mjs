@@ -27,6 +27,10 @@ const F = read('./frontier-vectors.json');
 const hex = h => Uint8Array.from(Buffer.from(h, 'hex'));
 const toHex = b => Buffer.from(b).toString('hex');
 const valid = V.cases.filter(c => c.expect === 'valid');
+/** The season clock of a vector case (quicknet, its genesis_ts): T(arrive_bell) = c.round. */
+const clockOf = c => ({ genesisTs: c.genesis_ts, drand: { genesis: QUICKNET.genesis, period: QUICKNET.period } });
+/** A season clock under `drand` whose T(arriveBell) is `round`. */
+const clockAt = (drand, round, arriveBell) => ({ genesisTs: drand.genesis + (round - 1) * drand.period - 600 * (arriveBell + 1), drand: { genesis: drand.genesis, period: drand.period } });
 
 test('the vector file is the one the kernel checks, over quicknet', () => {
   assert.equal(V.network, 'quicknet');
@@ -91,7 +95,7 @@ test('the self-audit accepts a good seal and catches a flipped bit in U, V, W or
   const c = valid[0];
   const k = hex(c.k), sigma = hex(c.sigma), plain = hex(c.plain);
   const out = worker.sealWith({ plain, round: c.round, publicKey: V.public_key, k, sigma });
-  const base = { ...out, plain, round: c.round, publicKey: V.public_key, k, sigma, hostId: BigInt(c.host_id), arriveBell: c.arrive_bell };
+  const base = { ...out, plain, round: c.round, publicKey: V.public_key, k, sigma, hostId: BigInt(c.host_id), arriveBell: c.arrive_bell, clock: clockOf(c) };
   assert.equal(worker.audit(base), true);
   for (const [what, at] of [['U', 40], ['V', 100], ['W', 120], ['body', 140]]) {
     const bad = Uint8Array.from(out.seal);
@@ -100,14 +104,19 @@ test('the self-audit accepts a good seal and catches a flipped bit in U, V, W or
   }
   assert.throws(() => worker.audit({ ...base, hostId: BigInt(c.host_id) + 1n }), /plaintext \(HostMismatch\)/);
   assert.throws(() => worker.audit({ ...base, commit: new Uint8Array(32) }), /commitment/);
-  assert.throws(() => worker.audit({ ...base, round: c.round + 1 }), /V/);
+  assert.throws(() => worker.audit({ ...base, round: c.round + 1 }), /round .* is not T/);
+  // A seal genuinely made for another round (V consistent with it) is
+  // refused too: the round must be T(arrive_bell) (integ-W2 review of W2-E).
+  const off = worker.sealWith({ plain, round: c.round + 1, publicKey: V.public_key, k, sigma });
+  assert.throws(() => worker.audit({ ...base, ...off, round: c.round + 1 }), /round .* is not T/);
+  assert.equal(worker.audit({ ...base, ...off, round: c.round + 1, clock: clockAt(QUICKNET, c.round + 1, c.arrive_bell) }), true, 'the same seal audits under the clock whose T it is');
 });
 
 test('sealRequest draws k and σ, audits, answers the material and zeroes the key', () => {
   const c = valid[1];
   const drawn = [];
   const draw = () => { const b = globalThis.crypto.getRandomValues(new Uint8Array(16)); drawn.push(b); return b; };
-  const r = worker.sealRequest({ plain: hex(c.plain), round: c.round, publicKey: V.public_key, hostId: BigInt(c.host_id), arriveBell: c.arrive_bell }, draw);
+  const r = worker.sealRequest({ plain: hex(c.plain), round: c.round, publicKey: V.public_key, hostId: BigInt(c.host_id), arriveBell: c.arrive_bell, clock: clockOf(c) }, draw);
   assert.equal(r.ok, true, r.error);
   assert.equal(r.seal.length, 165);
   assert.ok(!('k' in r) && !('sigma' in r), 'k and σ never leave the worker');
@@ -118,7 +127,7 @@ test('sealRequest draws k and σ, audits, answers the material and zeroes the ke
   assert.deepEqual(o.salt, r.salt);
   assert.deepEqual(seal.sealRoot(r.commit, seal.ctHash(r.seal)), r.sealRoot);
   // A plaintext for another transit is refused by the audit, nothing returned.
-  const bad = worker.sealRequest({ plain: hex(c.plain), round: c.round, publicKey: V.public_key, hostId: 1n, arriveBell: c.arrive_bell });
+  const bad = worker.sealRequest({ plain: hex(c.plain), round: c.round, publicKey: V.public_key, hostId: 1n, arriveBell: c.arrive_bell, clock: clockOf(c) });
   assert.equal(bad.ok, false);
   assert.equal(bad.code, 'SealAuditFailed');
   assert.ok(!('seal' in bad));
@@ -126,9 +135,18 @@ test('sealRequest draws k and σ, audits, answers the material and zeroes the ke
 
 test('sealMarch validates first and seals on this thread when there is no Worker', async () => {
   const c = valid[2];
-  const r = await seal.sealMarch({ plain: hex(c.plain), round: c.round, publicKey: V.public_key, hostId: BigInt(c.host_id), arriveBell: c.arrive_bell }, { inline: true });
-  assert.equal(r.ok, true);
-  const refused = await seal.sealMarch({ plain: hex(V.cases.find(x => x.validate === 'Retreat').plain), round: c.round, publicKey: V.public_key, hostId: 0n, arriveBell: 0 });
+  // The round comes from the clock: T(arrive_bell).
+  const r = await seal.sealMarch({ plain: hex(c.plain), clock: clockOf(c), publicKey: V.public_key, hostId: BigInt(c.host_id), arriveBell: c.arrive_bell }, { inline: true });
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.round, c.round);
+  assert.equal(seal.sealRound(clockOf(c), c.arrive_bell), tlockRound(clockOf(c).drand, c.genesis_ts, c.arrive_bell), 'sealRound = clock.tlockRound');
+  // A round passed in that is not T(arrive_bell) (an off-by-one bell) is refused, nothing sealed.
+  for (const round of [c.round + 1, c.round - 1, seal.sealRound(clockOf(c), c.arrive_bell + 1)]) {
+    const w = await seal.sealMarch({ plain: hex(c.plain), clock: clockOf(c), round, publicKey: V.public_key, hostId: BigInt(c.host_id), arriveBell: c.arrive_bell }, { inline: true });
+    assert.deepEqual([w.ok, w.code, 'seal' in w], [false, 'WrongRound', false], `round ${round}`);
+  }
+  assert.equal((await seal.sealMarch({ plain: hex(c.plain), publicKey: V.public_key, hostId: BigInt(c.host_id), arriveBell: c.arrive_bell }, { inline: true })).code, 'NoClock');
+  const refused = await seal.sealMarch({ plain: hex(V.cases.find(x => x.validate === 'Retreat').plain), clock: clockOf(c), publicKey: V.public_key, hostId: 0n, arriveBell: 0 });
   assert.deepEqual([refused.ok, refused.code], [false, 'BadPlaintext']);
 });
 
@@ -155,7 +173,7 @@ test('the local test key (I-53): a seal to a test-key round opens with its recor
   const c = valid[0];
   for (const { round, sig } of tk.rounds) {
     const plain = hex(c.plain);
-    const r = worker.sealRequest({ plain, round, publicKey: TEST_BEACON.publicKey, hostId: BigInt(c.host_id), arriveBell: c.arrive_bell });
+    const r = worker.sealRequest({ plain, round, publicKey: TEST_BEACON.publicKey, hostId: BigInt(c.host_id), arriveBell: c.arrive_bell, clock: clockAt(TEST_BEACON, round, c.arrive_bell) });
     assert.equal(r.ok, true, r.error);
     const o = worker.openSeal(r.seal, hex(sig));
     assert.deepEqual(o.plain, plain, `round ${round}`);
