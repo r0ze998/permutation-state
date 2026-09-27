@@ -1,6 +1,7 @@
 //! Coverage of the beacon instructions (§5.8). W2-A's four are covered from
-//! wave 2; ArchiveAnchors and CloseSeedCache are W4-B's (this file is
-//! handed over to W4-B in wave 4, §11).
+//! wave 2; ArchiveAnchors and CloseSeedCache by W4-B (this file is handed
+//! over to W4-B in wave 4, §11), which also adds the re-creation refusals
+//! of an archived bell to PostAnchor and PostSeed.
 
 use super::{Cover, Err, Lands, Loaded, Refused, E};
 
@@ -53,6 +54,10 @@ pub const POST_ANCHOR: &[Cover] = &[
         &[Err(E::Archived)],
     ),
     Cover::Test("g01_loaded_limit::g01_loaded_limit_post_anchor", &[Loaded]),
+    Cover::Test(
+        "archive::g02_recreate_after_archive_refused_and_caches_close",
+        &[Err(E::Archived)],
+    ),
     Cover::Pending(
         "W5-A: BadData (region ≥ 16, bell ≥ end_bell), WrongStatus, TooEarly (test-beacon)",
     ),
@@ -127,6 +132,10 @@ pub const POST_SEED: &[Cover] = &[
         &[Err(E::NotTopLevel)],
     ),
     Cover::Test("g01_loaded_limit::g01_loaded_limit_post_seed", &[Loaded]),
+    Cover::Test(
+        "archive::g02_recreate_after_archive_refused_and_caches_close",
+        &[Err(E::NoAnchor)],
+    ),
 ];
 
 pub const POST_BEACON: &[Cover] = &[
@@ -153,5 +162,50 @@ pub const POST_BEACON: &[Cover] = &[
     Cover::Test("g01_loaded_limit::g01_loaded_limit_post_beacon", &[Loaded]),
 ];
 
-pub const ARCHIVE_ANCHORS: &[Cover] = &[Cover::Pending("W4-B")];
-pub const CLOSE_SEED_CACHE: &[Cover] = &[Cover::Pending("W4-B")];
+pub const ARCHIVE_ANCHORS: &[Cover] = &[
+    Cover::Test(
+        "archive::g05_archive_anchors_keeps_the_entries_and_closes_the_anchors",
+        &[Lands("archive_ix(")],
+    ),
+    Cover::Test(
+        "archive::g13_archive_anchors_refusals",
+        &[
+            Err(E::TooEarly),
+            Err(E::SeedNotReady),
+            Err(E::NoAnchor),
+            Err(E::BadData),
+            Err(E::BadAddress),
+            Err(E::BadAccount),
+            Lands("archive_ix("),
+        ],
+    ),
+    Cover::Test(
+        "archive::g02_prefund_anchor_archive",
+        &[Lands("ArchiveAnchors on a pre-funded archive")],
+    ),
+    Cover::Test(
+        "archive::g02_recreate_after_archive_refused_and_caches_close",
+        &[Lands("archive_ix(")],
+    ),
+    Cover::Test(
+        "transit::g10_settle_transit_seal_codes_match_the_stock_opener",
+        &[Lands("w.settle_ix(")],
+    ),
+    Cover::Test("archive::g01_loaded_limit_w4b_archive", &[Loaded]),
+    Cover::Pending("W5-A: WrongStatus, TooManyAccounts, Auth"),
+];
+
+pub const CLOSE_SEED_CACHE: &[Cover] = &[
+    Cover::Test(
+        "archive::g02_recreate_after_archive_refused_and_caches_close",
+        &[
+            Err(E::TooEarly),
+            Err(E::BadAddress),
+            Err(E::AlreadyDone),
+            Err(E::BadData),
+            Lands("close_seed_cache("),
+        ],
+    ),
+    Cover::Test("archive::g01_loaded_limit_w4b_archive", &[Loaded]),
+    Cover::Pending("W5-A: WrongStatus, BadAccount, TooManyAccounts"),
+];
