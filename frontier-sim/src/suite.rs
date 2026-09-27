@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
 
-use crate::config::{Config, Emission};
+use crate::config::{Config, Emission, LateStake};
 use crate::model::{doctrine_set, Arch};
 use crate::report::*;
 use crate::settle::{settle_run, Outcome};
@@ -645,21 +645,24 @@ pub fn suite(base: &Config, seeds: u64, only: Option<&str>) -> String {
         let variants: Vec<(&str, Tweak)> = vec![
             ("design (baseline)", |_| {}),
             ("no Relic Sites", |c| c.relics = false),
-            ("Works cap 20/day (was 60)", |c| c.works_cap = 20),
+            ("Works cap 60/day (the old default)", |c| c.works_cap = 60),
             ("holdings 2-3 do not emit", |c| {
                 c.emission = Emission::FirstOnly
             }),
             ("holdings emit by order factor", |c| {
                 c.emission = Emission::OrderWeighted
             }),
-            (
-                "no Relic Sites + Works cap 20 + order-weighted emission",
-                |c| {
-                    c.relics = false;
-                    c.works_cap = 20;
-                    c.emission = Emission::OrderWeighted;
-                },
-            ),
+            ("no Relic Sites + order-weighted emission", |c| {
+                c.relics = false;
+                c.emission = Emission::OrderWeighted;
+            }),
+            ("bots add their stake late (day 21)", |c| {
+                c.late_stake = LateStake::Bots
+            }),
+            ("every staker adds its stake late (day 21)", |c| {
+                c.late_stake = LateStake::Stakers
+            }),
+            ("bots stand for office", |c| c.bot_officers = true),
         ];
         let shares = [0.02, 0.05, 0.10];
         let mut jobs = Vec::new();

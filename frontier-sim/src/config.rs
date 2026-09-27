@@ -15,6 +15,19 @@ pub enum Emission {
     OrderWeighted,
 }
 
+/// Who adds the laurel stake late (`AddStake` on the last join day, at
+/// that day's price) instead of at Join: a review variant (late stakes used
+/// to count laurels banked before them).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LateStake {
+    /// Everyone who stakes does so at Join (design default).
+    None,
+    /// Scripted bots that would stake do it on the last join day.
+    Bots,
+    /// Every wallet that would stake does it on the last join day.
+    Stakers,
+}
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub seed: u64,
@@ -59,6 +72,12 @@ pub struct Config {
     pub relics: bool,
     /// Works credited per wallet per day at most [sim].
     pub works_cap: u64,
+    /// Late `AddStake` variant (review).
+    pub late_stake: LateStake,
+    /// Scripted bots stand for office like the humans the sim elects (the
+    /// most engaged win): a review variant; by default bots never hold a
+    /// paid office.
+    pub bot_officers: bool,
     /// Print progress to stderr.
     pub verbose: bool,
 }
@@ -87,6 +106,8 @@ impl Default for Config {
             emission: Emission::Full,
             relics: true,
             works_cap: crate::model::WORKS_DAY_CAP,
+            late_stake: LateStake::None,
+            bot_officers: false,
             verbose: false,
         }
     }

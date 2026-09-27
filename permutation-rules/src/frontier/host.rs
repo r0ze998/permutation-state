@@ -10,6 +10,10 @@
 //! * Roster membership is by bell (`Presence`): anything issued during
 //!   bell b takes effect at the start of b + 1, so the roster of bell b is
 //!   frozen at its start (design §6.3).
+//! * So are the roster's **values**: a merge, split or Depart (its march
+//!   stamina) issued during bell b is recorded as a [`Pending`] change and
+//!   executed after the clash of b ([`Host::settle`]); garrison changes
+//!   likewise ([`GarrisonState`]). The clash of b reads `values_at(b)`.
 
 use crate::fixed::{Bps, MilliTroops, BPS_ONE, MILLI};
 use crate::units::{stats, UnitType};
@@ -49,6 +53,14 @@ pub enum HostError {
     NoStamina,
     /// The host fought this bell or the last and cannot depart yet.
     Cooldown,
+    /// A change is already pending for this bell (one per host per bell).
+    Busy,
+    /// A change issued during an earlier bell has not been settled: its
+    /// bell's clash must be applied and [`Host::settle`] called first.
+    Unsettled,
+    /// The province has not resolved the bells this needs yet (lag only
+    /// waits, design §8.4).
+    Unresolved,
 }
 
 /// Lazy stamina: `value` at resolved bell `bell`, +1 per resolved bell.
@@ -101,6 +113,38 @@ impl Stamina {
     }
 }
 
+/// A change to a host issued during bell `bell` (design §6.3, roster
+/// freeze). It takes effect at the start of `bell + 1`, **after** the clash
+/// of `bell`: the clash of `bell` reads the host's values from before the
+/// change, and the change is executed on the values the clash left
+/// ([`Host::settle`]). So a Depart, a merge or a split issued after seeing
+/// a revealed arrival never changes that bell's clash.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum PendingOp {
+    /// A Depart: the march's stamina, charged after the origin's clash
+    /// (down to 0 if the clash spent more).
+    Spend { cost: u16 },
+    /// Split `troops` of the `of` troops the host had when the split was
+    /// issued into host `new_id`: after the clash the new host gets the
+    /// same share of the survivors.
+    Split {
+        troops: MilliTroops,
+        of: MilliTroops,
+        new_id: u64,
+    },
+    /// Absorb host `from` (same owner, faction and unit) after the clash.
+    Absorb { from: u64 },
+    /// Absorbed into host `into` after the clash (this host dissolves).
+    AbsorbedInto { into: u64 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct Pending {
+    /// The bell the change was issued in.
+    pub bell: u32,
+    pub op: PendingOp,
+}
+
 /// A host's rules-side state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Host {
@@ -109,10 +153,14 @@ pub struct Host {
     pub owner: u64,
     pub faction: u8,
     pub unit: UnitType,
+    /// Troops and stamina in force for every bell up to the clash of the
+    /// pending change's bell (and after it, once there is no pending change).
     pub troops: MilliTroops,
     pub stamina: Stamina,
     /// First bell at which the host may depart again.
     pub ready_bell: u32,
+    /// At most one change per host per bell, executed by [`Host::settle`].
+    pub pending: Option<Pending>,
 }
 
 /// Whether `unit` can form a host (every unit type except Settlers).
@@ -147,37 +195,99 @@ impl Host {
             troops,
             stamina: Stamina::full(b),
             ready_bell: b,
+            pending: None,
         })
     }
 
-    /// Merge `other` into `self` at bell `b`: same owner and unit type, at
-    /// most 30,000 troops; stamina is the lower of the two.
-    pub fn merge(&mut self, other: &Host, b: u32) -> Result<(), HostError> {
-        if self.owner != other.owner || self.unit != other.unit || self.faction != other.faction {
+    /// Troops and stamina the clash of bell `b` reads: the values in force
+    /// at the start of `b`. A change issued during an earlier bell must be
+    /// settled first ([`HostError::Unsettled`]).
+    pub fn values_at(&self, b: u32) -> Result<(MilliTroops, u16), HostError> {
+        if let Some(p) = self.pending {
+            if b > p.bell {
+                return Err(HostError::Unsettled);
+            }
+        }
+        Ok((self.troops, self.stamina.at(b)))
+    }
+
+    /// Record a change issued during bell `b`. The host's province must be
+    /// resolved through `b − 2`, the last bell whose reveal window can have
+    /// closed (a bell resolves at the earliest one bell after it ends,
+    /// §8.4; `resolved_next` is the first bell the province has not
+    /// resolved). One change per host is pending at a time: an older one
+    /// must have been settled ([`Host::settle`], [`settle_merge`]) so nothing
+    /// it creates is lost, and one issued during `b − 1` makes the host wait
+    /// a bell ([`HostError::Busy`]).
+    fn check_issue(&self, b: u32, resolved_next: u32) -> Result<(), HostError> {
+        if resolved_next.saturating_add(1) < b {
+            return Err(HostError::Unresolved);
+        }
+        match self.pending {
+            Some(p) if p.bell >= resolved_next => Err(HostError::Busy),
+            Some(_) => Err(HostError::Unsettled),
+            None => Ok(()),
+        }
+    }
+
+    /// Merge `other` into `self`, issued during bell `b`: same owner, faction
+    /// and unit type, at most 30,000 troops. Both keep fighting separately
+    /// in the clash of `b`; [`settle_merge`] joins what survives: troops
+    /// add up, stamina is the lower of the two survivors'.
+    pub fn merge(&mut self, other: &mut Host, b: u32, resolved_next: u32) -> Result<(), HostError> {
+        if self.owner != other.owner
+            || self.unit != other.unit
+            || self.faction != other.faction
+            || self.id == other.id
+        {
             return Err(HostError::Mismatch);
         }
+        self.check_issue(b, resolved_next)?;
+        other.check_issue(b, resolved_next)?;
         let t = self.troops as u64 + other.troops as u64;
         if t > MAX_HOST_TROOPS as u64 {
             return Err(HostError::TooLarge);
         }
-        self.troops = t as MilliTroops;
-        let s = self.stamina.at(b).min(other.stamina.at(b));
-        self.stamina.set(b, s);
-        self.ready_bell = self.ready_bell.max(other.ready_bell);
+        self.pending = Some(Pending {
+            bell: b,
+            op: PendingOp::Absorb { from: other.id },
+        });
+        other.pending = Some(Pending {
+            bell: b,
+            op: PendingOp::AbsorbedInto { into: self.id },
+        });
         Ok(())
     }
 
-    /// Split `troops` off into a new host `new_id`; both keep ≥ 100 troops.
-    pub fn split(&mut self, troops: MilliTroops, new_id: u64) -> Result<Host, HostError> {
-        if troops < MIN_HOST_TROOPS || self.troops < troops + MIN_HOST_TROOPS {
+    /// Split `troops` off into a new host `new_id`, issued during bell `b`;
+    /// both keep ≥ 100 troops (checked arithmetic: no wrap in release
+    /// builds). The new host is created by [`Host::settle`] after the
+    /// clash of `b`, with its share of the survivors, and joins the roster
+    /// at `b + 1`.
+    pub fn split(
+        &mut self,
+        troops: MilliTroops,
+        new_id: u64,
+        b: u32,
+        resolved_next: u32,
+    ) -> Result<(), HostError> {
+        self.check_issue(b, resolved_next)?;
+        let room = self
+            .troops
+            .checked_sub(MIN_HOST_TROOPS)
+            .ok_or(HostError::TooSmall)?;
+        if troops < MIN_HOST_TROOPS || troops > room || troops > MAX_HOST_TROOPS {
             return Err(HostError::TooSmall);
         }
-        self.troops -= troops;
-        Ok(Host {
-            id: new_id,
-            troops,
-            ..*self
-        })
+        self.pending = Some(Pending {
+            bell: b,
+            op: PendingOp::Split {
+                troops,
+                of: self.troops,
+                new_id,
+            },
+        });
+        Ok(())
     }
 
     /// Whether the host may depart at bell `b`.
@@ -191,6 +301,103 @@ impl Host {
         Ok(())
     }
 
+    /// Depart during bell `b`: the host still fights in its origin's clash
+    /// of `b` (it leaves the roster at `b + 1`) and pays the march's stamina
+    /// after it.
+    pub fn depart(
+        &mut self,
+        b: u32,
+        stamina_cost: u16,
+        resolved_next: u32,
+    ) -> Result<(), HostError> {
+        self.check_issue(b, resolved_next)?;
+        self.check_depart(b, stamina_cost)?;
+        self.pending = Some(Pending {
+            bell: b,
+            op: PendingOp::Spend { cost: stamina_cost },
+        });
+        Ok(())
+    }
+
+    /// Apply this host's result of the clash of bell `b` (troops and stamina
+    /// after it). Results are applied in bell order, before the pending
+    /// change of an earlier bell is settled.
+    pub fn apply_clash(
+        &mut self,
+        b: u32,
+        troops: MilliTroops,
+        stamina: u16,
+        engaged: bool,
+    ) -> Result<(), HostError> {
+        if let Some(p) = self.pending {
+            if b > p.bell {
+                return Err(HostError::Unsettled);
+            }
+        }
+        self.troops = troops;
+        self.stamina.set(b, stamina);
+        if engaged {
+            self.ready_bell = self.ready_bell.max(b + 1 + BATTLE_COOLDOWN_BELLS);
+        }
+        Ok(())
+    }
+
+    /// Execute the pending change once its bell's clash has been applied
+    /// (`resolved_next` > its bell). Returns the host a split created.
+    /// A merge is settled with [`settle_merge`], which needs both hosts.
+    pub fn settle(&mut self, resolved_next: u32) -> Result<Option<Host>, HostError> {
+        let Some(p) = self.pending else {
+            return Ok(None);
+        };
+        if resolved_next <= p.bell {
+            return Ok(None);
+        }
+        let e = effective_bell(p.bell);
+        match p.op {
+            PendingOp::Spend { cost } => {
+                let v = self.stamina.at(e).saturating_sub(cost);
+                self.stamina.set(e, v);
+                self.pending = None;
+                Ok(None)
+            }
+            PendingOp::Split { troops, of, new_id } => {
+                let part = if of == 0 {
+                    0
+                } else {
+                    (self.troops as u64 * troops as u64 / of as u64) as MilliTroops
+                };
+                self.troops -= part;
+                self.pending = None;
+                Ok(Some(Host {
+                    id: new_id,
+                    troops: part,
+                    pending: None,
+                    ..*self
+                }))
+            }
+            PendingOp::Absorb { .. } | PendingOp::AbsorbedInto { .. } => Err(HostError::Busy),
+        }
+    }
+
+    /// Troops and stamina of a host that departed during `depart_bell`, as
+    /// its arrival reads them: the values after its origin's clash of the
+    /// departure bell and the march's stamina. Reveal's quota ranking and
+    /// the destination's clash wait (lag only waits, §8.4) until the origin
+    /// has resolved through the departure bell.
+    pub fn march_values(
+        &self,
+        depart_bell: u32,
+        origin_resolved_next: u32,
+    ) -> Result<(MilliTroops, u16), HostError> {
+        if origin_resolved_next <= depart_bell {
+            return Err(HostError::Unresolved);
+        }
+        if self.pending.is_some() {
+            return Err(HostError::Unsettled);
+        }
+        Ok((self.troops, self.stamina.at(effective_bell(depart_bell))))
+    }
+
     /// An unrevealed arrival: home with half its troops and no stamina.
     pub fn route(&mut self, b: u32) {
         self.troops = rout_survivors(self.troops);
@@ -200,6 +407,113 @@ impl Host {
     /// Strength for `retreat_ratio` and holding the field.
     pub fn strength(&self) -> u64 {
         strength(self.unit, self.troops)
+    }
+}
+
+/// Settle a merge issued during bell b once the clash of b has been
+/// applied to both hosts: `into` takes the survivors of both (troops add
+/// up; stamina is the lower of the two that still have troops) and `from`
+/// is left with none (the program closes it).
+pub fn settle_merge(into: &mut Host, from: &mut Host, resolved_next: u32) -> Result<(), HostError> {
+    let (Some(a), Some(b)) = (into.pending, from.pending) else {
+        return Err(HostError::Mismatch);
+    };
+    match (a.op, b.op) {
+        (PendingOp::Absorb { from: f }, PendingOp::AbsorbedInto { into: i })
+            if f == from.id && i == into.id && a.bell == b.bell => {}
+        _ => return Err(HostError::Mismatch),
+    }
+    if resolved_next <= a.bell {
+        return Err(HostError::Unresolved);
+    }
+    let e = effective_bell(a.bell);
+    let alive = |h: &Host| h.troops >= DESTROYED_BELOW;
+    let stamina = match (alive(into), alive(from)) {
+        (true, true) => into.stamina.at(e).min(from.stamina.at(e)),
+        (true, false) => into.stamina.at(e),
+        (false, true) => from.stamina.at(e),
+        (false, false) => 0,
+    };
+    let t = into.troops as u64 + from.troops as u64;
+    into.troops = t.min(MAX_HOST_TROOPS as u64) as MilliTroops;
+    into.stamina.set(e, stamina);
+    into.ready_bell = into.ready_bell.max(from.ready_bell);
+    into.pending = None;
+    from.troops = 0;
+    from.pending = None;
+    Ok(())
+}
+
+/// A holding's garrison as the clash reads it (design §6.3): garrison
+/// changes issued during bell b (reinforcements, auto-reinforce transfers,
+/// musters drawn from it) take effect at b + 1, after the clash of b, like
+/// host changes. Changes may be issued while the province is resolved
+/// through `b − 2`, so at most two bells (`b − 1` and `b`) have changes
+/// pending; each slot sums the changes of one bell.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct GarrisonState {
+    pub troops: MilliTroops,
+    /// `(bell, net change)` of up to two unsettled bells.
+    pub pending: [Option<(u32, i64)>; 2],
+}
+
+impl GarrisonState {
+    pub const fn new(troops: MilliTroops) -> GarrisonState {
+        GarrisonState {
+            troops,
+            pending: [None, None],
+        }
+    }
+
+    /// Troops the clash of bell `b` reads (the value at the start of `b`):
+    /// every change of a bell before `b` must have been settled.
+    pub fn at(&self, b: u32) -> Result<MilliTroops, HostError> {
+        if self.pending.iter().flatten().any(|(pb, _)| *pb < b) {
+            return Err(HostError::Unsettled);
+        }
+        Ok(self.troops)
+    }
+
+    /// A change of `delta` issued during bell `b` (the province resolved up
+    /// to, not including, `resolved_next ≥ b − 1`).
+    pub fn change(&mut self, b: u32, delta: i64, resolved_next: u32) -> Result<(), HostError> {
+        if resolved_next.saturating_add(1) < b {
+            return Err(HostError::Unresolved);
+        }
+        self.settle(resolved_next);
+        if let Some(slot) = self.pending.iter_mut().flatten().find(|(pb, _)| *pb == b) {
+            slot.1 = slot.1.checked_add(delta).ok_or(HostError::TooLarge)?;
+            return Ok(());
+        }
+        match self.pending.iter_mut().find(|x| x.is_none()) {
+            Some(free) => {
+                *free = Some((b, delta));
+                Ok(())
+            }
+            None => Err(HostError::Unsettled),
+        }
+    }
+
+    /// The garrison's troops after the clash of bell `b`.
+    pub fn apply_clash(&mut self, b: u32, troops: MilliTroops) -> Result<(), HostError> {
+        self.at(b)?;
+        self.troops = troops;
+        Ok(())
+    }
+
+    /// Execute the pending changes whose bell's clash has been applied
+    /// (`bell < resolved_next`), oldest first.
+    pub fn settle(&mut self, resolved_next: u32) {
+        self.pending.sort_by_key(|x| x.map_or(u32::MAX, |(b, _)| b));
+        for x in self.pending.iter_mut() {
+            if let Some((b, d)) = *x {
+                if b < resolved_next {
+                    let v = (self.troops as i64 + d).clamp(0, MilliTroops::MAX as i64);
+                    self.troops = v as MilliTroops;
+                    *x = None;
+                }
+            }
+        }
     }
 }
 

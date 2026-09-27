@@ -91,6 +91,7 @@ pub fn settle_run(sim: &Sim, p: &IndexParams) -> Outcome {
                 works: a.works,
                 builder: a.pledged >= BUILDER_THRESHOLD,
                 laurels: a.laurels,
+                laurels_at_stake: a.laurels_at_stake,
                 steward: steward_rows(a.minister_terms, a.warden_terms),
                 voided: false,
             },
@@ -232,7 +233,8 @@ pub fn settle_run(sim: &Sim, p: &IndexParams) -> Outcome {
     let held: u128 = sim.agents.iter().map(|a| a.laurels as u128).sum::<u128>()
         + sim.reserve.iter().map(|&x| x as u128).sum::<u128>()
         + sim.escrow as u128
-        + sim.stats.siege_stake_orphaned as u128;
+        + sim.stats.siege_stake_orphaned as u128
+        + sim.stats.laurels_burned as u128;
     let sources = sim.laurel_credited - sim.laurel_orphan_extra + sim.stats.relic_minted as u128;
     check(
         &mut checks,

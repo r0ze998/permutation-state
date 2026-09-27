@@ -243,8 +243,10 @@ pub const SETTLER_COST: [i64; RESOURCES] = [800, 800, 400, 0, 0, 200, 0, 0];
 /// Starter kit of a new first holding (units).
 pub const STARTER_KIT: [i64; RESOURCES] = [300, 300, 200, 100, 0, 100, 0, 0];
 
-/// Works: daily cap, and what each source gives. [sim]
-pub const WORKS_DAY_CAP: u64 = 60;
+/// Works: daily cap, and what each source gives. [sim] The cap was 60;
+/// the review of 2026-09-27 made 20 the default (RESULTS F1a: a fee-only
+/// bot returns 0.92× at 20 against 1.01× at 60, humans unchanged).
+pub const WORKS_DAY_CAP: u64 = 20;
 pub const WORKS_EXPLORE: u64 = 4;
 pub const WORKS_CAMP: u64 = 10;
 pub const WORKS_PLEDGE: u64 = 2;

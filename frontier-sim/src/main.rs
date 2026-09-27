@@ -75,6 +75,19 @@ fn main() {
                     x => panic!("--emission {x}"),
                 }
             }
+            "--late-stake" => {
+                cfg.late_stake = match v.as_str() {
+                    "none" => config::LateStake::None,
+                    "bots" => config::LateStake::Bots,
+                    "stakers" => config::LateStake::Stakers,
+                    x => panic!("--late-stake {x}"),
+                }
+            }
+            "--bot-officers" => {
+                cfg.bot_officers = true;
+                i += 1;
+                continue;
+            }
             "--no-relics" => {
                 cfg.relics = false;
                 i += 1;

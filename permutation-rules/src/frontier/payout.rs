@@ -3,11 +3,24 @@
 //!
 //! ```text
 //! claim_i = min( 5 × paid_i,
-//!      C_k' · [0.9 · fee_i·u_i / Σ_k'(fee·u) + 0.1 · √w_i / Σ_k'√w]      (citizen pool)
+//!      C_k' · [0.9 · fee_i·u_i / Σ_k'(fee·u) + 0.1 · w̃_i / Σ_k' w̃]        (citizen pool)
 //!    + C_civ · fee_i·[builder_i] / Σ'(fee·builder)                        (Civilisation Share)
-//!    + L_k' · λ_i·[staker_i] / Λ_k'                                        (laurel pool)
+//!    + L_k' · λ̃_i·[staker_i] / Λ_k'                                        (laurel pool)
 //!    + steward_i )
 //! ```
+//!
+//! * `w̃_i = min(Works_i, 140 Works per USDC of fee_i)` ([`works_weight`]):
+//!   linear, so splitting play over more wallets earns nothing extra (the
+//!   earlier `√Works` paid N wallets √N times one wallet's weight), and
+//!   capped by the fee, so a wallet's Works weight never outgrows what it
+//!   paid. 140 per USDC is the 20-a-day cap over the days a fee buys
+//!   (4 USDC on day 0 = 28 days × 20).
+//! * `λ̃_i` ([`CitizenRecord::counted_laurels`]) counts only laurels banked
+//!   **while the wallet was a staker**: a stake added late (`AddStake`,
+//!   priced by its day) does not reach back to laurels banked before it.
+//!   Laurels a wallet transfers away (captures, siege stakes) come out of
+//!   its counted laurels, so laurels that are worthless to their holder
+//!   (a fee-only alt's) cannot be moved to a staker.
 //!
 //! There is no loop over members anywhere. Every wallet's contribution is
 //! a `Weights` value derived from its own Citizen record; the faction
@@ -24,14 +37,13 @@
 //! claim that would break it.
 
 use super::index::{citizen_faction_weight, laurel_faction_weight, FACTIONS};
+use super::pools::USDC;
 use super::pools::{civ_share_bps, EconError, Pools, STEWARD_BPS};
-use crate::fixed::{isqrt, Bps, BPS_ONE};
+use crate::fixed::{Bps, BPS_ONE};
 use borsh::{BorshDeserialize, BorshSerialize};
 
 /// 1.0 tenure unit, in bps.
 pub const TENURE_ONE: u32 = 10_000;
-/// Precision of `√Works` (so small Works totals still differ).
-pub const WORKS_SQRT_SCALE: u64 = 1_000_000;
 
 /// Tenure units `u = 1 + 0.25 × min(1, active_days / (0.43 × days_available))`
 /// in bps (10,000 … 12,500), where `days_available` counts from the join day
@@ -45,10 +57,17 @@ pub fn tenure_units(active_days: u32, days_available: u32) -> u32 {
     TENURE_ONE + bonus.min(2_500) as u32
 }
 
-/// `√Works` with square-root diminishing returns per season (the daily cap
-/// is applied when Works are credited).
-pub fn works_weight(works: u64) -> u64 {
-    isqrt(works.saturating_mul(WORKS_SQRT_SCALE))
+/// Works weight per USDC of citizen fee: the per-wallet cap of the Works
+/// share (20 Works a day over the 28 days a 4-USDC day-0 fee buys).
+pub const WORKS_PER_USDC: u64 = 140;
+
+/// A wallet's Works weight: its season Works (daily-capped at credit
+/// time), linear, capped at `WORKS_PER_USDC` per USDC of fee paid. Linear
+/// so that N wallets with W Works between them weigh what one wallet with
+/// W Works weighs (the earlier `√Works` rewarded splitting by √N).
+pub fn works_weight(works: u64, fee: u64) -> u64 {
+    let cap = (fee as u128 * WORKS_PER_USDC as u128 / USDC as u128) as u64;
+    works.min(cap)
 }
 
 /// The payout fields of one Citizen account.
@@ -65,8 +84,12 @@ pub struct CitizenRecord {
     pub works: u64,
     /// Engine pledges passed the builder threshold.
     pub builder: bool,
-    /// Banked laurels `λ_i`.
+    /// Banked laurels (all of them).
     pub laurels: u64,
+    /// Laurels already banked when the stake was added by `AddStake` after
+    /// Join (0 for a stake paid at Join): they never count in the laurel
+    /// pool ([`CitizenRecord::counted_laurels`]).
+    pub laurels_at_stake: u64,
     /// Officer pay rows, already capped per person (`pools::steward_rows`).
     pub steward: u64,
     /// A revealed Shade: removed from its faction's totals, claims nothing.
@@ -79,16 +102,64 @@ impl CitizenRecord {
         self.fee.saturating_add(self.stake)
     }
 
+    pub fn staker(&self) -> bool {
+        self.stake > 0
+    }
+
+    /// `λ̃_i`: laurels banked while the wallet was a staker, the only ones
+    /// that count in the laurel pool and the only ones it can transfer.
+    pub fn counted_laurels(&self) -> u64 {
+        if self.staker() {
+            self.laurels.saturating_sub(self.laurels_at_stake)
+        } else {
+            0
+        }
+    }
+
+    /// `AddStake` after Join (until the last join day, priced by that day,
+    /// `pools::EntrySchedule::laurel_stake`). The program banks every
+    /// holding of the wallet first, so `laurels` is complete; none of them
+    /// will count. Returns the record's weights before and after, for the
+    /// shard update (`add(new)` then `remove(old)`).
+    pub fn add_stake(&mut self, stake: u64) -> Result<(Weights, Weights), EconError> {
+        if self.staker() || stake == 0 {
+            return Err(EconError::Underflow);
+        }
+        let old = self.weights();
+        self.paid().checked_add(stake).ok_or(EconError::Overflow)?;
+        self.stake = stake;
+        self.laurels_at_stake = self.laurels;
+        Ok((old, self.weights()))
+    }
+
+    /// Move `amount` counted laurels to `to` (a capture's 25%, a failed
+    /// siege's stake): refused if `self` has fewer counted laurels. The
+    /// receiver's laurels count if it is a staker. Returns both records'
+    /// weights before, for the shard updates.
+    pub fn transfer_counted(
+        &mut self,
+        to: &mut CitizenRecord,
+        amount: u64,
+    ) -> Result<(Weights, Weights), EconError> {
+        if amount > self.counted_laurels() {
+            return Err(EconError::Underflow);
+        }
+        let receiver = to.laurels.checked_add(amount).ok_or(EconError::Overflow)?;
+        let old = (self.weights(), to.weights());
+        self.laurels -= amount;
+        to.laurels = receiver;
+        Ok(old)
+    }
+
     /// This wallet's contribution to its faction's totals.
     pub fn weights(&self) -> Weights {
-        let staker = self.stake > 0;
         Weights {
             fee: self.fee,
             fee_units: self.fee as u128 * self.tenure as u128,
-            works_sqrt: works_weight(self.works),
+            works: works_weight(self.works, self.fee),
             builder_fee: if self.builder { self.fee } else { 0 },
             stake: self.stake,
-            laurels: if staker { self.laurels } else { 0 },
+            laurels: self.counted_laurels(),
             steward: self.steward,
         }
     }
@@ -99,7 +170,7 @@ impl CitizenRecord {
 pub struct Weights {
     pub fee: u64,
     pub fee_units: u128,
-    pub works_sqrt: u64,
+    pub works: u64,
     pub builder_fee: u64,
     pub stake: u64,
     pub laurels: u64,
@@ -113,8 +184,8 @@ pub struct FactionTotals {
     pub fee: u128,
     /// Σ fee·u.
     pub fee_units: u128,
-    /// Σ √w.
-    pub works_sqrt: u128,
+    /// Σ w̃ (linear, fee-capped Works weights).
+    pub works: u128,
     /// Σ fee·[builder] (summed across factions for the Civilisation Share).
     pub builder_fee: u128,
     /// Σ stake of stakers.
@@ -130,7 +201,7 @@ impl FactionTotals {
         [
             &mut self.fee,
             &mut self.fee_units,
-            &mut self.works_sqrt,
+            &mut self.works,
             &mut self.builder_fee,
             &mut self.stake,
             &mut self.laurels,
@@ -142,7 +213,7 @@ impl FactionTotals {
         [
             w.fee as u128,
             w.fee_units,
-            w.works_sqrt as u128,
+            w.works as u128,
             w.builder_fee as u128,
             w.stake as u128,
             w.laurels as u128,
@@ -187,7 +258,7 @@ impl FactionTotals {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PayoutParams {
     /// Part of a faction's citizen pool paid by fee × tenure (90%); the
-    /// rest by √Works.
+    /// rest by the Works weight.
     pub fee_units_bps: Bps,
     /// Steward pot as a share of each faction's two pools (5%).
     pub steward_bps: Bps,
@@ -220,7 +291,7 @@ pub struct FactionPots {
     pub steward_pot: u64,
     /// Paid by fee × tenure.
     pub fee_units_pot: u64,
-    /// Paid by √Works.
+    /// Paid by the Works weight.
     pub works_pot: u64,
     /// `L_k'`: paid by laurels among stakers.
     pub laurel_pot: u64,
@@ -323,7 +394,7 @@ pub fn settle(
         // the citizen pool; rows that do not fit are paid pro rata (§4.3).
         let leftover = (steward_pot as u128).saturating_sub(t.steward) as u64;
         let citizen_after = c_k - pot_c + leftover;
-        let (fee_units_pot, works_pot) = if t.works_sqrt > 0 {
+        let (fee_units_pot, works_pot) = if t.works > 0 {
             let f = bps_of(citizen_after, p.fee_units_bps);
             (f, citizen_after - f)
         } else {
@@ -388,7 +459,7 @@ pub fn claim(st: &Settlement, rec: &CitizenRecord) -> Result<Claim, EconError> {
     let w = rec.weights();
     let t = &f.totals;
     let citizen = share(f.fee_units_pot, w.fee_units, t.fee_units)?
-        .checked_add(share(f.works_pot, w.works_sqrt as u128, t.works_sqrt)?)
+        .checked_add(share(f.works_pot, w.works as u128, t.works)?)
         .ok_or(EconError::Overflow)?;
     let civ = share(st.civ_pot, w.builder_fee as u128, st.builder_fee)?;
     let laurel = if w.stake == 0 {

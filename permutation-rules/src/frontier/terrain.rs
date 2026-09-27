@@ -16,6 +16,13 @@
 //!   water → grassland). Both provinces of a border force their own middle
 //!   tiles, whatever ring seed each was made with, so every border has at
 //!   least 5 passable crossings.
+//! * **Connectivity across the province:** from every gate tile and every
+//!   site a fixed path to the province centre ([`carve_path`]: each step
+//!   one tile closer to the centre, preferring a passable tile, then the
+//!   lower tile index) is made passable the same way. So every site and
+//!   every gate lies in the centre's passable component, and any two sites
+//!   on the map are connected by land. The Concord carves the union of its
+//!   paths turned six ways, keeping its six-fold symmetry.
 //! * **Sites:** up to 12 settlement sites by score, at least 2 apart, ties
 //!   to the lower canonical tile index. The Concord has none (neutral).
 
@@ -133,6 +140,62 @@ fn site_score(t: Terrain, r: Option<TileResource>) -> u32 {
     1 + 3 * i.food + 2 * i.prod + 2 * i.gold + bonus
 }
 
+/// A blocked tile made passable: mountain → hills, water → grassland.
+fn pass(t: Terrain) -> Terrain {
+    match t {
+        Terrain::Mountain => Terrain::Hills,
+        Terrain::Water => Terrain::Grassland,
+        other => other,
+    }
+}
+
+/// The fixed path from tile `from` to the province centre: each step goes
+/// to a neighbour one tile closer to the centre, preferring a passable one,
+/// then the lower tile index. Marks every tile on it (both ends included).
+fn carve_path(terrain: &[Terrain; PROVINCE_TILES], from: u8, mark: &mut [bool; PROVINCE_TILES]) {
+    let Some(mut at) = tile_offset(from) else {
+        return;
+    };
+    loop {
+        if let Some(i) = tile_index(at) {
+            mark[i as usize] = true;
+        }
+        let d = at.distance(Hex::ORIGIN);
+        if d == 0 {
+            return;
+        }
+        let mut best: Option<(bool, u8, Hex)> = None;
+        for n in at.neighbors() {
+            if n.distance(Hex::ORIGIN) + 1 != d {
+                continue;
+            }
+            let Some(i) = tile_index(n) else { continue };
+            let key = (!terrain[i as usize].is_passable(), i, n);
+            if best.is_none_or(|b| (key.0, key.1) < (b.0, b.1)) {
+                best = Some(key);
+            }
+        }
+        match best {
+            Some((_, _, n)) => at = n,
+            None => return,
+        }
+    }
+}
+
+/// Make every marked tile passable (turned six ways for the Concord).
+fn carve(out: &mut ProvinceTerrain, mark: &[bool; PROVINCE_TILES], concord: bool) {
+    for i in 0..PROVINCE_TILES as u8 {
+        if !mark[i as usize] {
+            continue;
+        }
+        let turns = if concord { 6 } else { 1 };
+        for k in 0..turns {
+            let j = tile_turned(i, k) as usize;
+            out.terrain[j] = pass(out.terrain[j]);
+        }
+    }
+}
+
 /// The canonical copy (wedge 0, or the Concord) of a province's land.
 fn canonical(seed: &Seed, pc: ProvinceCoord) -> ProvinceTerrain {
     let concord = pc.is_concord();
@@ -154,13 +217,17 @@ fn canonical(seed: &Seed, pc: ProvinceCoord) -> ProvinceTerrain {
     for side in GATES {
         for i in side {
             let t = &mut out.terrain[i as usize];
-            *t = match *t {
-                Terrain::Mountain => Terrain::Hills,
-                Terrain::Water => Terrain::Grassland,
-                other => other,
-            };
+            *t = pass(*t);
         }
     }
+    // Every gate reaches the centre.
+    let mut mark = [false; PROVINCE_TILES];
+    for side in GATES {
+        for i in side {
+            carve_path(&out.terrain, i, &mut mark);
+        }
+    }
+    carve(&mut out, &mark, concord);
     if concord {
         return out;
     }
@@ -185,6 +252,12 @@ fn canonical(seed: &Seed, pc: ProvinceCoord) -> ProvinceTerrain {
             }
         }
     }
+    // Every site reaches the centre.
+    let mut mark = [false; PROVINCE_TILES];
+    for s in 0..out.site_count as usize {
+        carve_path(&out.terrain, out.sites[s], &mut mark);
+    }
+    carve(&mut out, &mark, false);
     out
 }
 

@@ -151,9 +151,19 @@ pub fn path_cost(start: Hex, steps: &[Step], unit: UnitType) -> Result<PathCost,
     })
 }
 
+/// A departing host still fights in its origin's clash of the departure
+/// bell (design §6.3), so it may arrive no earlier than this many bells
+/// after it: never in the departure bell, and never in the next one, whose
+/// clash could otherwise be revealed into and resolved before the origin's
+/// clash that sets the arriving host's troops (the origin's reveal close is
+/// at least one bell after the departure bell ends).
+pub const MIN_ARRIVAL_LEAD_BELLS: u32 = 2;
+
 /// Earliest arrival bell of a march leaving at `depart_ts` that takes
-/// `secs`: its arrival time rounded up to the next bell start, and never
-/// the departure bell itself.
+/// `secs`: its arrival time rounded up to the next bell start, and at least
+/// [`MIN_ARRIVAL_LEAD_BELLS`] after the departure bell. The arrival's
+/// troops and stamina are the host's after its origin's clash of the
+/// departure bell (`host::Host::march_values`).
 pub const fn earliest_arrival_bell(genesis_ts: i64, depart_ts: i64, secs: u32) -> u32 {
     let t = depart_ts + secs as i64 - genesis_ts;
     let up = if t <= 0 {
@@ -161,7 +171,7 @@ pub const fn earliest_arrival_bell(genesis_ts: i64, depart_ts: i64, secs: u32) -
     } else {
         ((t + BELL_SECS - 1) / BELL_SECS) as u32
     };
-    let after = bell_at(genesis_ts, depart_ts) + 1;
+    let after = bell_at(genesis_ts, depart_ts) + MIN_ARRIVAL_LEAD_BELLS;
     if up > after {
         up
     } else {

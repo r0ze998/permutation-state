@@ -357,13 +357,14 @@ fn captures_and_sieges_only_move_laurels() {
         Err(EconError::Underflow)
     );
 
-    let ok = siege_settle(true);
-    let failed = siege_settle(false);
+    let fresh = PairHistory::default();
+    let ok = siege_settle(true, true, fresh);
+    let failed = siege_settle(false, true, fresh);
     assert_eq!((ok.to_attacker, ok.to_defender), (SIEGE_STAKE, 0));
     assert_eq!((failed.to_attacker, failed.to_defender), (0, SIEGE_STAKE));
 
     for c in [0, 1, 7, 999_999, 12_345_678] {
-        let o = occupation_split(c);
+        let o = occupation_split(c, true, fresh);
         let m = mandate_reserve_split(c);
         assert_eq!(o.keep + o.give, c);
         assert_eq!(m.keep + m.give, c);
@@ -696,6 +697,7 @@ fn random_season(seed: u64) -> Season {
                 0
             },
             voided: r.chance(2),
+            laurels_at_stake: 0,
         };
         pools.pay_pending(fee).unwrap();
         pools.release(&SCHED, Entry::CitizenFee, fee).unwrap();
@@ -774,7 +776,7 @@ fn reference_claims(s: &Season, index: &[u64; FACTIONS]) -> Vec<u64> {
             let fu_sum: u128 = mates.iter().map(|m| m.fee as u128 * m.tenure as u128).sum();
             let w_sum: u128 = mates
                 .iter()
-                .map(|m| permutation_rules::frontier::payout::works_weight(m.works) as u128)
+                .map(|m| permutation_rules::frontier::payout::works_weight(m.works, m.fee) as u128)
                 .sum();
             let (fu_pot, w_pot) = if w_sum > 0 {
                 (cit * 9_000 / 10_000, cit - cit * 9_000 / 10_000)
@@ -784,7 +786,7 @@ fn reference_claims(s: &Season, index: &[u64; FACTIONS]) -> Vec<u64> {
             let mut g = md(fu_pot, r.fee as u128 * r.tenure as u128, fu_sum)
                 + md(
                     w_pot,
-                    permutation_rules::frontier::payout::works_weight(r.works) as u128,
+                    permutation_rules::frontier::payout::works_weight(r.works, r.fee) as u128,
                     w_sum,
                 )
                 + if r.builder {
@@ -796,14 +798,14 @@ fn reference_claims(s: &Season, index: &[u64; FACTIONS]) -> Vec<u64> {
                 let lam: u128 = mates
                     .iter()
                     .filter(|m| m.stake > 0)
-                    .map(|m| m.laurels as u128)
+                    .map(|m| m.counted_laurels() as u128)
                     .sum();
                 let st: u128 = mates.iter().map(|m| m.stake as u128).sum();
                 let lpot = l_k - pl;
                 g += if lam == 0 {
                     md(lpot, r.stake as u128, st)
                 } else {
-                    md(lpot, r.laurels as u128, lam)
+                    md(lpot, r.counted_laurels() as u128, lam)
                 };
             }
             g += if rows <= pc + pl {
@@ -975,4 +977,140 @@ fn passive_wallets_and_bot_farms_do_not_pay_by_themselves() {
         "passive wallet got {}",
         sybil.paid
     );
+}
+
+// ------------------------------------------------ review fixes (K2, 2026-09-27)
+
+/// A stake added late (AddStake on day 21, 25% of the day-0 price) does
+/// not reach back to laurels banked before it: same laurels, a 1.5-USDC
+/// late stake against a 6-USDC day-0 stake, and the late staker's laurel
+/// share is only what it banks after staking.
+#[test]
+fn late_stakes_do_not_reach_back() {
+    let fee = SCHED.citizen_fee(0).unwrap();
+    let mut early = rec(0, fee, SCHED.laurel_stake(0).unwrap(), TENURE_ONE);
+    let mut late = rec(0, fee, 0, TENURE_ONE);
+    early.laurels = 300 * LAUREL_ONE;
+    late.laurels = 300 * LAUREL_ONE; // banked fee-only, days 0–21
+    assert_eq!(late.counted_laurels(), 0);
+    let (old, new) = late.add_stake(SCHED.laurel_stake(21).unwrap()).unwrap();
+    assert_eq!(late.stake, 1_500_000);
+    assert_eq!((old.laurels, new.laurels), (0, 0), "nothing reaches back");
+    assert_eq!(late.add_stake(1), Err(EconError::Underflow), "one stake");
+    // Days 21–28: both bank 50 more.
+    early.laurels += 50 * LAUREL_ONE;
+    late.laurels += 50 * LAUREL_ONE;
+    assert_eq!(late.counted_laurels(), 50 * LAUREL_ONE);
+    let recs = [early, late];
+    let st = settle(
+        &pools_of(&recs),
+        &totals_of(&recs),
+        &[INDEX_ONE; FACTIONS],
+        0,
+        &PayoutParams::REV2,
+    )
+    .unwrap();
+    let (a, b) = (claim(&st, &early).unwrap(), claim(&st, &late).unwrap());
+    assert_eq!(a.laurel, 7 * b.laurel, "350 : 50 counted laurels");
+    // Before the fix both counted 350 laurels and split the pot evenly.
+    assert!(b.laurel * 2 < a.laurel);
+    // The shard update: remove the old weights, add the new.
+    let mut t = FactionTotals::default();
+    let mut fresh = rec(0, fee, 0, TENURE_ONE);
+    fresh.laurels = 9 * LAUREL_ONE;
+    t.add(&fresh.weights()).unwrap();
+    let (old, new) = fresh.add_stake(3 * USDC).unwrap();
+    t.add(&new).unwrap();
+    t.remove(&old).unwrap();
+    assert_eq!(t, totals_of(&[fresh])[0]);
+}
+
+/// Laurels move between wallets only if they were counted laurels of the
+/// source (banked while a staker) and the pair has no other ties: a
+/// fee-only alt's laurels cannot be fed to a staking main by captures,
+/// occupations or failed sieges.
+#[test]
+fn only_counted_laurels_move_between_wallets() {
+    let fresh = PairHistory::default();
+    let tied = PairHistory {
+        prior_captures: 0,
+        other_ties: true,
+    };
+    let second = PairHistory {
+        prior_captures: 1,
+        other_ties: false,
+    };
+    // Captures take 25% of the victim's counted laurels.
+    let mut alt = rec(0, 4 * USDC, 0, TENURE_ONE);
+    alt.laurels = 400 * LAUREL_ONE;
+    let mut main = rec(0, 4 * USDC, 6 * USDC, TENURE_ONE);
+    assert_eq!(capture_transfer(alt.counted_laurels(), fresh).laurels, 0);
+    assert_eq!(
+        alt.transfer_counted(&mut main, 1),
+        Err(EconError::Underflow),
+        "a fee-only wallet has no transferable laurels"
+    );
+    let mut staker = rec(0, 4 * USDC, 6 * USDC, TENURE_ONE);
+    staker.laurels = 400 * LAUREL_ONE;
+    let x = capture_transfer(staker.counted_laurels(), fresh).laurels;
+    assert_eq!(x, 100 * LAUREL_ONE);
+    staker.transfer_counted(&mut main, x).unwrap();
+    assert_eq!(
+        (staker.counted_laurels(), main.counted_laurels()),
+        (300 * LAUREL_ONE, 100 * LAUREL_ONE)
+    );
+    assert_eq!(capture_transfer(400, second).laurels, 25);
+    assert_eq!(capture_transfer(400, tied).laurels, 0);
+    // Occupation: nothing from a fee-only owner or a tied pair.
+    let c = 12_000_000;
+    assert_eq!(occupation_split(c, true, fresh).give, 6_000_000);
+    assert_eq!(occupation_split(c, false, fresh).give, 0);
+    assert_eq!(occupation_split(c, true, tied).give, 0);
+    assert_eq!(occupation_split(c, true, second).give, 1_500_000);
+    for h in [fresh, tied, second] {
+        for staker in [false, true] {
+            let o = occupation_split(c, staker, h);
+            assert_eq!(o.keep + o.give, c);
+        }
+    }
+    // Failed sieges: an uncounted stake is burned, not paid.
+    let s = siege_settle(false, false, fresh);
+    assert_eq!((s.to_defender, s.burned), (0, SIEGE_STAKE));
+    let s = siege_settle(false, true, tied);
+    assert_eq!((s.to_defender, s.burned), (0, SIEGE_STAKE));
+    let s = siege_settle(false, true, second);
+    assert_eq!(s.to_defender + s.burned, SIEGE_STAKE);
+    assert_eq!(s.to_defender, SIEGE_STAKE / 4);
+    assert_eq!(siege_settle(true, false, tied).to_attacker, SIEGE_STAKE);
+}
+
+/// The Works weight is linear and capped by the fee: N wallets holding W
+/// Works between them weigh no more than one wallet with W Works (√Works
+/// gave √N times as much), and no wallet's weight outgrows its fee.
+#[test]
+fn works_weight_does_not_reward_splitting() {
+    use permutation_rules::frontier::payout::{works_weight, WORKS_PER_USDC};
+    let fee = 4 * USDC;
+    let one = works_weight(560, fee);
+    let split: u64 = (0..4).map(|_| works_weight(140, fee)).sum();
+    assert_eq!(one, 560);
+    assert_eq!(split, one);
+    assert_eq!(works_weight(10_000, fee), 4 * WORKS_PER_USDC);
+    assert_eq!(works_weight(10_000, SCHED.citizen_fee(21).unwrap()), 140);
+    // A faction of one wallet with 400 Works against one with four wallets
+    // of 100 Works each (same total fee): the same Works pot share.
+    let solo = CitizenRecord {
+        works: 400,
+        ..rec(0, 4 * USDC, 0, TENURE_ONE)
+    };
+    let quad: Vec<CitizenRecord> = (0..4)
+        .map(|_| CitizenRecord {
+            works: 100,
+            ..rec(1, USDC, 0, TENURE_ONE)
+        })
+        .collect();
+    let mut all = vec![solo];
+    all.extend(quad.iter().copied());
+    let t = totals_of(&all);
+    assert_eq!(t[0].works, t[1].works);
 }

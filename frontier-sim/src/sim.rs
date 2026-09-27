@@ -9,7 +9,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use crate::config::{Config, Emission};
+use crate::config::{Config, Emission, LateStake};
 use crate::model::*;
 use crate::rng::Rng;
 use permutation_rules::fixed::{Bps, Milli, MilliTroops, BPS_ONE, MILLI};
@@ -115,6 +115,8 @@ impl Prov {
 pub struct SiegeRec {
     pub s: Siege,
     pub attacker: u32,
+    /// The escrowed stake came from the attacker's counted laurels.
+    pub stake_counted: bool,
     pub host: u32,
     pub kind: HoldingKind,
 }
@@ -135,6 +137,8 @@ pub struct Hold {
     pub vigil: Vigil,
     pub siege: Option<SiegeRec>,
     pub occupier: Option<(u32, u32)>,
+    /// The occupier's pair history with the owner at the occupation's start.
+    pub occ_pair: PairHistory,
     pub posture: Posture,
     pub alive: bool,
     pub explores: u32,
@@ -208,10 +212,15 @@ pub struct Agent {
     pub join_day: u32,
     pub fee: u64,
     pub stake: u64,
+    /// Adds its stake late (`AddStake` on the last join day).
+    pub stake_later: bool,
     pub state: JoinState,
     pub holdings: Vec<u32>,
     /// Banked laurels (base units).
     pub laurels: u64,
+    /// Laurels already banked when a late stake was added: never counted
+    /// (`CitizenRecord::laurels_at_stake`).
+    pub laurels_at_stake: u64,
     pub works: u64,
     pub works_day: u32,
     pub works_today: u64,
@@ -270,6 +279,10 @@ pub struct Stats {
     pub mandate_paid: u64,
     pub mandate_left: u64,
     pub siege_stake_orphaned: u64,
+    /// Siege stakes burned: uncounted (fee-only) stakes, pair rules.
+    pub laurels_burned: u64,
+    /// Late stakes added (`AddStake` on the last join day).
+    pub late_stakes: u64,
     pub starved: u64,
     /// Siege failures: never held within the start window / held then lost.
     pub fail_never_held: u64,
@@ -469,7 +482,15 @@ impl Sim {
             let join_bell = day * BELLS_PER_DAY + rng.below(BELLS_PER_DAY as u64) as u32;
             let stake_p = cfg.stake_optin[arch.idx()];
             let fee = self.sched.citizen_fee(day).unwrap_or(0);
-            let stake = if rng.chance(stake_p) {
+            let wants_stake = rng.chance(stake_p);
+            let stake_later = wants_stake
+                && day < self.sched.last_join_day
+                && match cfg.late_stake {
+                    LateStake::None => false,
+                    LateStake::Bots => arch == Arch::Bot,
+                    LateStake::Stakers => true,
+                };
+            let stake = if wants_stake && !stake_later {
                 self.sched.laurel_stake(day).unwrap_or(0)
             } else {
                 0
@@ -483,9 +504,11 @@ impl Sim {
                 join_day: day,
                 fee,
                 stake,
+                stake_later,
                 state: JoinState::NotYet,
                 holdings: Vec::new(),
                 laurels: 0,
+                laurels_at_stake: 0,
                 works: 0,
                 works_day: NONE,
                 works_today: 0,
@@ -678,6 +701,7 @@ impl Sim {
             vigil: Vigil::new(tz * BELL_SECS as u32).expect("vigil"),
             siege: None,
             occupier: None,
+            occ_pair: PairHistory::default(),
             posture: Posture::default(),
             alive: true,
             explores: 0,
@@ -800,12 +824,13 @@ impl Sim {
             self.laurel_orphan_extra += credit as u128;
             return;
         }
-        let (owner, occ, faction) = (x.owner, x.occupier, x.faction);
+        let (owner, occ, faction, pair) = (x.owner, x.occupier, x.faction, x.occ_pair);
         let m = mandate_reserve_split(credit);
         self.reserve[faction as usize] += m.give;
         match occ {
             Some((o, _)) => {
-                let p = occupation_split(m.keep);
+                let owner_staker = self.agents[owner as usize].stake > 0;
+                let p = occupation_split(m.keep, owner_staker, pair);
                 self.agents[owner as usize].laurels += p.keep;
                 self.agents[owner as usize].earned.holding += p.keep;
                 self.agents[o as usize].laurels += p.give;
@@ -881,6 +906,9 @@ impl Sim {
         if b % BELLS_PER_DAY == 0 {
             self.new_day(b / BELLS_PER_DAY, b);
         }
+        if b == self.sched.last_join_day * BELLS_PER_DAY {
+            self.late_stakes(b);
+        }
         let evs = std::mem::take(&mut self.events[b as usize]);
         for e in evs {
             self.event(e, b);
@@ -900,6 +928,95 @@ impl Sim {
         self.relic_credit(b);
         if b % HOUR_BELLS == HOUR_BELLS - 1 {
             self.hourly_fold(b);
+        }
+    }
+
+    /// `AddStake` on the last join day for the wallets that planned it:
+    /// bank every holding it owns or occupies first, pay the day's price,
+    /// and never count the laurels banked so far (`laurels_at_stake`).
+    fn late_stakes(&mut self, b: u32) {
+        let price = match self.sched.laurel_stake(self.sched.last_join_day) {
+            Some(p) => p,
+            None => return,
+        };
+        let who: Vec<u32> = (0..self.agents.len() as u32)
+            .filter(|&a| {
+                let ag = &self.agents[a as usize];
+                ag.stake_later && ag.stake == 0 && ag.state == JoinState::Settled
+            })
+            .collect();
+        if who.is_empty() {
+            return;
+        }
+        let mut occupied: HashMap<u32, Vec<u32>> = HashMap::new();
+        for (i, x) in self.holds.iter().enumerate() {
+            if let Some((o, _)) = x.occupier {
+                occupied.entry(o).or_default().push(i as u32);
+            }
+        }
+        for a in who {
+            let mut banks = self.agents[a as usize].holdings.clone();
+            banks.extend(occupied.get(&a).cloned().unwrap_or_default());
+            for hid in banks {
+                if self.holds[hid as usize].alive {
+                    self.reweigh(hid, b);
+                }
+            }
+            self.pools
+                .pay_settled(&self.sched, Entry::LaurelStake, price)
+                .expect("add stake");
+            self.paid_in += price;
+            let ag = &mut self.agents[a as usize];
+            ag.stake = price;
+            ag.laurels_at_stake = ag.laurels;
+            self.stats.late_stakes += 1;
+        }
+    }
+
+    /// Counted laurels (`CitizenRecord::counted_laurels`): banked while a
+    /// staker; the only ones a wallet can transfer.
+    fn counted(&self, a: u32) -> u64 {
+        let ag = &self.agents[a as usize];
+        if ag.stake > 0 {
+            ag.laurels.saturating_sub(ag.laurels_at_stake)
+        } else {
+            0
+        }
+    }
+
+    /// Keep `laurels_at_stake` in step when a siege stake of uncounted
+    /// laurels is escrowed (`out`) or returned.
+    fn escrow_uncounted(&mut self, a: u32, uncounted: bool, out: bool) {
+        let ag = &mut self.agents[a as usize];
+        if !uncounted || ag.stake == 0 {
+            return;
+        }
+        if out {
+            ag.laurels_at_stake = ag.laurels_at_stake.saturating_sub(SIEGE_STAKE);
+        } else {
+            ag.laurels_at_stake += SIEGE_STAKE;
+        }
+    }
+
+    fn pair_history(&self, a: u32, b: u32) -> PairHistory {
+        PairHistory {
+            prior_captures: self.agents[a as usize]
+                .pairs
+                .iter()
+                .find(|x| x.0 == b)
+                .map_or(0, |x| x.1),
+            other_ties: false,
+        }
+    }
+
+    /// Count a laurel transfer between a pair (captures count themselves).
+    fn note_pair(&mut self, a: u32, b: u32) {
+        for (x, y) in [(a, b), (b, a)] {
+            let v = &mut self.agents[x as usize].pairs;
+            match v.iter_mut().find(|p| p.0 == y) {
+                Some(p) => p.1 += 1,
+                None => v.push((y, 1)),
+            }
         }
     }
 
@@ -1226,6 +1343,9 @@ impl Sim {
     /// Build, tier up, walls, garrison. Returns actions used.
     fn economy(&mut self, a: u32, hid: u32, b: u32, p: &Profile) -> i64 {
         let now = now_of(b);
+        // The sim resolves every bell promptly, so walls finished before
+        // this bell have been read by its clashes and can be committed.
+        self.holds[hid as usize].h.commit_walls(now);
         let mut used = 0i64;
         let faction = self.holds[hid as usize].faction;
         let d = self.doctrine[faction as usize];
@@ -1339,7 +1459,7 @@ impl Sim {
             let reserve = tier_up(tier).map(|c| c.0[2] * MILLI).unwrap_or(0);
             let slots = x.h.tier.queue_slots();
             let busy = x.h.queue.iter().filter(|q| q.is_some()).count();
-            if x.h.walls < want
+            if x.h.walls_at(now).unwrap_or(x.h.walls) < want
                 && busy < slots
                 && stock[2] >= cost + reserve * (q > 0.5) as i64
                 && self.rng.chance(q)
@@ -1934,12 +2054,21 @@ impl Sim {
         let n = (need * 1.2).min(avail as f64) as MilliTroops;
         let (tp, tt, tf, walls, kind) = {
             let x = &self.holds[t as usize];
-            (x.prov, x.tile, x.faction, x.h.walls, x.kind())
+            (
+                x.prov,
+                x.tile,
+                x.faction,
+                x.h.walls_at(now_of(b)).unwrap_or(x.h.walls),
+                x.kind(),
+            )
         };
         let Some(host) = self.send(a, src, n, tp, tt, Mission::Siege(t), b, p, None) else {
             return 0;
         };
-        // Declare: the siege horn, 5 laurels escrowed.
+        // Declare: the siege horn, 5 laurels escrowed (counted laurels if
+        // the attacker has them).
+        let stake_counted = self.counted(a) >= SIEGE_STAKE;
+        self.escrow_uncounted(a, !stake_counted, true);
         self.agents[a as usize].laurels -= SIEGE_STAKE;
         self.agents[a as usize].earned.siege_net -= SIEGE_STAKE as i64;
         self.escrow += SIEGE_STAKE;
@@ -1947,6 +2076,7 @@ impl Sim {
         self.holds[t as usize].siege = Some(SiegeRec {
             s: Siege::declare(faction, b, walls, 0),
             attacker: a,
+            stake_counted,
             host,
             kind,
         });
@@ -2273,7 +2403,7 @@ impl Sim {
                     faction: y.faction,
                     tile: y.tile,
                     troops: y.garrison,
-                    walls: y.h.walls > 0,
+                    walls: y.h.walls_at(now_of(b)).unwrap_or(y.h.walls) > 0,
                     posture: y.posture,
                 }
             })
@@ -2310,7 +2440,7 @@ impl Sim {
             self.holds[hid as usize].report = Some((
                 b,
                 BellReport {
-                    attackers_hold: g.attackers_hold,
+                    holders: g.holders,
                     defender_present: g.defender_present,
                 },
             ));
@@ -2471,7 +2601,7 @@ impl Sim {
             let r = match x.report {
                 Some((rb, r)) if rb == b => r,
                 _ => BellReport {
-                    attackers_hold: false,
+                    holders: 0,
                     defender_present: false,
                 },
             };
@@ -2500,16 +2630,26 @@ impl Sim {
             return;
         };
         self.siege_holds.remove(&t);
-        let st = siege_settle(ok);
-        self.escrow -= SIEGE_STAKE;
         let att = rec.attacker;
+        let owner = self.holds[t as usize].owner;
+        let pair = if owner != NONE {
+            self.pair_history(att, owner)
+        } else {
+            PairHistory::default()
+        };
+        let st = siege_settle(ok, rec.stake_counted, pair);
+        self.escrow -= SIEGE_STAKE;
+        if st.to_attacker > 0 {
+            self.escrow_uncounted(att, !rec.stake_counted, false);
+        }
         self.agents[att as usize].laurels += st.to_attacker;
         self.agents[att as usize].earned.siege_net += st.to_attacker as i64;
-        let owner = self.holds[t as usize].owner;
+        self.stats.laurels_burned += st.burned;
         if st.to_defender > 0 {
             if owner != NONE {
                 self.agents[owner as usize].laurels += st.to_defender;
                 self.agents[owner as usize].earned.siege_net += st.to_defender as i64;
+                self.note_pair(att, owner);
             } else {
                 self.stats.siege_stake_orphaned += st.to_defender;
             }
@@ -2555,6 +2695,8 @@ impl Sim {
                     self.stats.occupations += 1;
                     self.hosts[host as usize].mission = Mission::Occupy(t);
                     self.holds[t as usize].occupier = Some((att, host));
+                    self.holds[t as usize].occ_pair = self.pair_history(att, owner);
+                    self.note_pair(att, owner);
                     self.reweigh(t, b);
                 } else if host_there {
                     self.unstation(pi, host);
@@ -2589,7 +2731,7 @@ impl Sim {
                 .find(|x| x.0 == victim)
                 .map_or(0, |x| x.1);
             let tr = capture_transfer(
-                self.agents[victim as usize].laurels,
+                self.counted(victim),
                 PairHistory {
                     prior_captures: prior,
                     other_ties: false,
@@ -2824,7 +2966,8 @@ impl Sim {
                 .filter(|(_, a)| {
                     a.faction == f
                         && !a.shade
-                        && matches!(a.arch, Arch::Skilled | Arch::VerySkilled)
+                        && (matches!(a.arch, Arch::Skilled | Arch::VerySkilled)
+                            || (a.arch == Arch::Bot && self.cfg.bot_officers))
                         && a.last_active_day != NONE
                         && a.last_active_day >= term_start
                 })
@@ -2866,12 +3009,15 @@ impl Sim {
             if ballots < 12 {
                 continue;
             }
-            // The most engaged non-Shade human stands and wins.
+            // The most engaged non-Shade human stands and wins (bots too in
+            // the `bot_officers` variant).
+            let bot_officers = self.cfg.bot_officers;
             let warden = active
                 .iter()
                 .copied()
                 .filter(|&a| {
-                    !self.agents[a as usize].shade && self.agents[a as usize].arch != Arch::Bot
+                    !self.agents[a as usize].shade
+                        && (bot_officers || self.agents[a as usize].arch != Arch::Bot)
                 })
                 .max_by_key(|&a| (self.agents[a as usize].sessions, a));
             if let Some(w) = warden {
@@ -2900,6 +3046,7 @@ impl Sim {
         for t in sieges {
             if let Some(rec) = self.holds[t as usize].siege.take() {
                 self.escrow -= SIEGE_STAKE;
+                self.escrow_uncounted(rec.attacker, !rec.stake_counted, false);
                 self.agents[rec.attacker as usize].laurels += SIEGE_STAKE;
                 self.agents[rec.attacker as usize].earned.siege_net += SIEGE_STAKE as i64;
             }

@@ -3,13 +3,17 @@
 //!
 //! * A siege is declared publicly (the siege horn) and needs
 //!   **36 + walls/50 bells** of progress. Progress rises by 1 per
-//!   **resolved** bell in which the besiegers hold the holding's hex and no
-//!   defending host is present, **except during the owner's vigil**: an
+//!   **resolved** bell in which the declaring faction's own hosts hold the
+//!   holding's hex (`BellReport::holds`; a third faction taking the hex
+//!   does not advance it) and no defending host is present, **except
+//!   during the owner's vigil**: an
 //!   8-hour daily window during which progress pauses. So a siege needs at
 //!   least 6 hours outside the defender's vigil.
 //! * Whether a bell falls in the vigil is decided by the bell's scheduled
 //!   start time, never by when it was resolved, and each bell is counted at
 //!   most once: siege progress does not depend on keeper lag (design §8.4).
+//!   A run of quiet bells (`clash::is_quiet`) is counted at once by
+//!   [`Siege::advance_quiet`], with the same result.
 //! * Protection: Shield (48 h, 72 h after day 7), Frontier protection (7
 //!   days after the Shield, holdings founded after day 2 can be besieged
 //!   only by factions with a holding within 2 provinces), heartlands (no
@@ -20,6 +24,7 @@
 use super::geometry::{is_heartland, march_of, ProvinceCoord};
 use super::holding::{Holding, RESOURCES};
 use crate::fixed::{Bps, Milli, MilliTroops, BPS_ONE};
+use alloc::vec;
 use alloc::vec::Vec;
 use borsh::{BorshDeserialize, BorshSerialize};
 
@@ -239,10 +244,69 @@ pub struct Siege {
 /// What the clash of one bell reported about the besieged hex.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BellReport {
-    /// Hosts hostile to the owner hold the holding's hex after the clash.
-    pub attackers_hold: bool,
+    /// Bit f set: faction f (hostile to the owner) holds the holding's hex
+    /// with a host of its own after the clash (`GarrisonResult::holders`).
+    pub holders: u8,
     /// A host of the owner (or an ally) stands on the hex.
     pub defender_present: bool,
+}
+
+impl BellReport {
+    /// Whether `faction` holds the hex (only the siege's declarer counts:
+    /// a third faction taking the hex does not advance another's siege).
+    pub const fn holds(&self, faction: u8) -> bool {
+        faction < 8 && self.holders & (1 << faction) != 0
+    }
+}
+
+/// Bells in `[b0, b1)` whose scheduled start falls outside `vigil`
+/// (bell b starts at `genesis_ts + 600 b`). O(1) in the length of the
+/// range: a day is exactly 144 bells, so whole days are counted once per
+/// schedule segment and only the remainder bell by bell (≤ 2 × 144 checks
+/// per segment, ≤ 3 segments).
+pub fn bells_outside_vigil(vigil: &Vigil, genesis_ts: i64, b0: u32, b1: u32) -> u32 {
+    const BELL: i64 = 600;
+    const PER_DAY: u32 = (DAY / BELL) as u32;
+    let start = |b: u32| genesis_ts + b as i64 * BELL;
+    if b1 <= b0 {
+        return 0;
+    }
+    // Segment boundaries: the first bell starting at or after each change.
+    let mut cuts: Vec<u32> = vec![b0];
+    for (from, _) in vigil.schedule {
+        if from == i64::MIN {
+            continue;
+        }
+        let k = if from <= genesis_ts {
+            0
+        } else {
+            ((from - genesis_ts + BELL - 1) / BELL) as u32
+        };
+        if k > b0 && k < b1 {
+            cuts.push(k);
+        }
+    }
+    cuts.push(b1);
+    cuts.sort_unstable();
+    cuts.dedup();
+    let mut total = 0u32;
+    for w in cuts.windows(2) {
+        let (s0, s1) = (w[0], w[1]);
+        let n = s1 - s0;
+        let days = n / PER_DAY;
+        let mut per_day = 0;
+        if days > 0 {
+            for b in s0..s0 + PER_DAY {
+                per_day += !vigil.covers(start(b)) as u32;
+            }
+        }
+        let mut tail = 0;
+        for b in s0 + days * PER_DAY..s1 {
+            tail += !vigil.covers(start(b)) as u32;
+        }
+        total += days * per_day + tail;
+    }
+    total
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -286,7 +350,7 @@ impl Siege {
             });
         }
         self.last_bell = b;
-        if !report.attackers_hold {
+        if !report.holds(self.attacker_faction) {
             // Before the besiegers first hold the hex the siege waits for
             // them (up to the start window); after, losing it fails it.
             if self.held || b > self.declared_bell + SIEGE_START_WINDOW_BELLS {
@@ -302,6 +366,64 @@ impl Siege {
         if self.progress >= self.required {
             self.status = SiegeStatus::Completed;
         }
+        Ok(self.status)
+    }
+
+    /// Count the quiet bells `last_bell + 1 ..= to_bell` at once
+    /// (`clash::is_quiet`: nothing changed, so every one of them reports
+    /// `report`, the last resolved bell's report). Gives exactly the state
+    /// of calling [`Siege::advance`] for each, in O(1) of the run's length.
+    pub fn advance_quiet(
+        &mut self,
+        to_bell: u32,
+        genesis_ts: i64,
+        report: BellReport,
+        vigil: &Vigil,
+    ) -> Result<SiegeStatus, SiegeError> {
+        if self.status != SiegeStatus::Active {
+            return Err(SiegeError::NotActive);
+        }
+        let b0 = self.last_bell + 1;
+        if to_bell < b0 {
+            return Err(SiegeError::OutOfOrder { expected: b0 });
+        }
+        if !report.holds(self.attacker_faction) {
+            let deadline = self.declared_bell + SIEGE_START_WINDOW_BELLS + 1;
+            let fail_at = if self.held { b0 } else { deadline.max(b0) };
+            if fail_at <= to_bell {
+                self.last_bell = fail_at;
+                self.status = SiegeStatus::Failed;
+            } else {
+                self.last_bell = to_bell;
+            }
+            return Ok(self.status);
+        }
+        self.held = true;
+        if report.defender_present {
+            self.last_bell = to_bell;
+            return Ok(self.status);
+        }
+        let need = self.required.saturating_sub(self.progress);
+        let got = bells_outside_vigil(vigil, genesis_ts, b0, to_bell + 1);
+        if got < need {
+            self.progress += got;
+            self.last_bell = to_bell;
+            return Ok(self.status);
+        }
+        // The bell that completes it: the smallest e with `need` counted
+        // bells in [b0, e] (binary search over the O(1) count).
+        let (mut lo, mut hi) = (b0, to_bell);
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if bells_outside_vigil(vigil, genesis_ts, b0, mid + 1) >= need {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        self.progress = self.required;
+        self.last_bell = lo;
+        self.status = SiegeStatus::Completed;
         Ok(self.status)
     }
 }

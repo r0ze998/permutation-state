@@ -288,7 +288,10 @@ pub struct Holding {
     pub upkeep: [i64; RESOURCES],
     /// In completion order.
     pub queue: [Option<QueueItem>; QUEUE_SLOTS],
+    /// Committed walls (`walls_at` adds finished items not yet committed).
     pub walls: u32,
+    /// `commit_walls` has committed every Walls item finished before this.
+    pub walls_committed_before: i64,
     /// Starving seconds are not tracked; the food shortfall is summed here
     /// (milli-units) for the troop-attrition rule.
     pub food_shortfall: Milli,
@@ -309,6 +312,7 @@ impl Holding {
             upkeep: [0; RESOURCES],
             queue: [None; QUEUE_SLOTS],
             walls: 0,
+            walls_committed_before: i64::MIN,
             food_shortfall: 0,
         }
     }
@@ -386,6 +390,50 @@ impl Holding {
         }
     }
 
+    /// Walls as the clash of a bell starting at `bell_start_ts` reads them:
+    /// the committed walls plus every finished Walls item that completed
+    /// **before** the bell started (a completion during bell b counts from
+    /// b + 1, like any change, design §6.3). A pure function of the queue,
+    /// so a clash resolved late reads the same walls as one resolved at
+    /// once. Refused for a bell before the last commit.
+    pub fn walls_at(&self, bell_start_ts: i64) -> Result<u32, HoldingError> {
+        if bell_start_ts < self.walls_committed_before {
+            return Err(HoldingError::TimeReversed);
+        }
+        let mut w = self.walls;
+        for q in self.queue.iter().flatten() {
+            if let Effect::Walls { delta } = q.effect {
+                if q.done_at < bell_start_ts {
+                    w = w.saturating_add(delta);
+                }
+            }
+        }
+        Ok(w)
+    }
+
+    /// Move finished Walls items into `walls` once no clash can read a bell
+    /// starting before `before_ts` any more: the program passes the start
+    /// of the first bell the holding's province has not resolved. Until
+    /// then a finished Walls item keeps its queue slot (lag only waits).
+    pub fn commit_walls(&mut self, before_ts: i64) {
+        if before_ts <= self.walls_committed_before {
+            return;
+        }
+        for q in self.queue.iter_mut() {
+            if let Some(QueueItem {
+                done_at,
+                effect: Effect::Walls { delta },
+            }) = *q
+            {
+                if done_at < before_ts {
+                    self.walls = self.walls.saturating_add(delta);
+                    *q = None;
+                }
+            }
+        }
+        self.walls_committed_before = before_ts;
+    }
+
     /// Settle every store to `now`, applying queue completions and the
     /// start of dormancy at their own times, in time order (ties: queue
     /// order, then dormancy). Path independent: any sequence of settles
@@ -400,6 +448,12 @@ impl Holding {
             let mut next: Option<(i64, usize)> = None;
             for (i, q) in self.queue.iter().enumerate() {
                 if let Some(q) = q {
+                    // Walls do not change rates; they are committed by
+                    // `commit_walls` once the province's clashes have
+                    // read them (`walls_at`).
+                    if matches!(q.effect, Effect::Walls { .. }) {
+                        continue;
+                    }
                     if q.done_at <= now && next.is_none_or(|(nt, _)| q.done_at < nt) {
                         next = Some((q.done_at.max(t), i));
                     }

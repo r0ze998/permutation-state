@@ -5,7 +5,10 @@
 //! weight**, so being stronger than your neighbours takes a larger share of
 //! *their* emission, never more emission. Nothing else mints laurels except
 //! Relic Sites (1 per bell to the holder). Captures, occupations and sieges
-//! only move laurels that already exist.
+//! only move laurels that already exist, and only **counted** laurels (banked
+//! by a staker) between wallets without a history or other ties: a
+//! transfer from a fee-only wallet (whose laurels are worth nothing to it)
+//! moves nothing, so alts cannot feed a main (the rest is kept or burned).
 //!
 //! Credit is lazy, with a per-province **reward index** (the staking-reward
 //! pattern): the province stores cumulative laurels per unit of weight; each
@@ -254,9 +257,30 @@ pub struct Parts {
     pub give: u64,
 }
 
-/// An occupied first holding's credit: 50% to the occupier (§6.3).
-pub fn occupation_split(credit: u64) -> Parts {
-    let give = part(credit, OCCUPATION_BPS);
+/// The pair rule of every laurel transfer between two wallets (§5.4 item
+/// 3, extended to occupations and siege stakes): the first transfer
+/// between a pair moves all of its amount, the second 25% of it, then
+/// nothing; any non-capture tie moves nothing.
+pub const fn pair_bps(h: PairHistory) -> Bps {
+    match (h.other_ties, h.prior_captures) {
+        (true, _) => 0,
+        (false, 0) => BPS_ONE,
+        (false, 1) => CAPTURE_BPS,
+        _ => 0,
+    }
+}
+
+/// An occupied first holding's credit (§6.3): 50% to the occupier, scaled
+/// by the pair rule of the occupation (`h` as of its start) — and nothing
+/// if the owner is not a staker: a fee-only wallet's laurels are worth
+/// nothing to it, so an occupier taking them would be a free transfer
+/// from an alt to its main.
+pub fn occupation_split(credit: u64, owner_staker: bool, h: PairHistory) -> Parts {
+    let give = if owner_staker {
+        part(part(credit, OCCUPATION_BPS), pair_bps(h))
+    } else {
+        0
+    };
     Parts {
         keep: credit - give,
         give,
@@ -272,10 +296,11 @@ pub fn mandate_reserve_split(credit: u64) -> Parts {
     }
 }
 
-/// What the captor and the victim have done together before (§5.4 item 3).
+/// What two wallets have done together before (§5.4 item 3).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PairHistory {
-    /// Earlier captures between these two wallets, in either direction.
+    /// Earlier laurel transfers between these two wallets, in either
+    /// direction: captures, occupations and siege stakes paid.
     pub prior_captures: u32,
     /// Any non-capture tie: a caravan, a delegation, a shared Company.
     pub other_ties: bool,
@@ -289,17 +314,13 @@ pub struct CaptureTransfer {
 }
 
 /// Captures of holdings 2–3 and Free Cities (§5.4 item 3): the first
-/// capture between a pair moves 25% of the victim's banked laurels, the
-/// second 25% of that, then nothing; any non-capture tie moves nothing. A
-/// refugee kit only when the pair has no history at all.
-pub fn capture_transfer(victim_banked: u64, h: PairHistory) -> CaptureTransfer {
-    let first = part(victim_banked, CAPTURE_BPS);
-    let laurels = match (h.other_ties, h.prior_captures) {
-        (true, _) => 0,
-        (false, 0) => first,
-        (false, 1) => part(first, CAPTURE_BPS),
-        _ => 0,
-    };
+/// capture between a pair moves 25% of the victim's **counted** laurels
+/// (`payout::CitizenRecord::counted_laurels`: banked while a staker; 0 for
+/// a fee-only wallet), the second 25% of that, then nothing; any
+/// non-capture tie moves nothing. A refugee kit only when the pair has no
+/// history at all.
+pub fn capture_transfer(victim_counted: u64, h: PairHistory) -> CaptureTransfer {
+    let laurels = part(part(victim_counted, CAPTURE_BPS), pair_bps(h));
     CaptureTransfer {
         laurels,
         refugee_kit: !h.other_ties && h.prior_captures == 0,
@@ -316,24 +337,33 @@ pub fn transfer(from: &mut u64, to: &mut u64, amount: u64) -> Result<(), EconErr
 }
 
 /// Where a siege's escrowed laurels go (§5.4 item 4): back to the attacker
-/// on success, to the defender on failure.
+/// on success; on failure to the defender, by the pair rule, and only if
+/// the escrowed laurels were counted laurels of the attacker (a fee-only
+/// alt's laurels are worth nothing to it: failing sieges on purpose must
+/// not move them to a staking main). What does not move is burned.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SiegeSettlement {
     pub to_attacker: u64,
     pub to_defender: u64,
+    pub burned: u64,
 }
 
-pub fn siege_settle(succeeded: bool) -> SiegeSettlement {
+pub fn siege_settle(succeeded: bool, stake_counted: bool, h: PairHistory) -> SiegeSettlement {
     if succeeded {
-        SiegeSettlement {
+        return SiegeSettlement {
             to_attacker: SIEGE_STAKE,
-            to_defender: 0,
-        }
+            ..Default::default()
+        };
+    }
+    let to_defender = if stake_counted {
+        part(SIEGE_STAKE, pair_bps(h))
     } else {
-        SiegeSettlement {
-            to_attacker: 0,
-            to_defender: SIEGE_STAKE,
-        }
+        0
+    };
+    SiegeSettlement {
+        to_attacker: 0,
+        to_defender,
+        burned: SIEGE_STAKE - to_defender,
     }
 }
 
