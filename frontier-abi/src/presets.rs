@@ -374,8 +374,10 @@ pub const M1_LOCAL_7D: SeasonParams = SeasonParams {
     min_reveal_priority_milli: 433,
     // [placeholder] until W3-B measures the worst Reveal (I-08, CL-22).
     reveal_cu_limit: 26_000,
-    // [placeholder] 1 MiB until the release .so is measured (I-45).
-    reveal_loaded_limit: 1_048_576,
+    // [placeholder] `L(Reveal)` at the budgets placeholder programdata
+    // (integ-W4, v1.6 §22: the wave-4 `.so` no longer fits 1 MiB; I-45);
+    // W5-A regenerates it from the final release `.so`.
+    reveal_loaded_limit: 1_343_488,
     bucket_rate_per_h: 30,
     bucket_burst: 60,
     defence_cap_milli: 2_000,
@@ -414,6 +416,15 @@ pub const M1_PLAYTEST: SeasonParams = m1_playtest(PLAYTEST_GATE_UNSET);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reveal_loaded_limit_is_the_budgets_l_reveal() {
+        assert_eq!(
+            M1_LOCAL_7D.reveal_loaded_limit,
+            crate::budgets::loaded_limit(crate::tags::Ix::Reveal),
+            "the budgets placeholder moved: update reveal_loaded_limit"
+        );
+    }
 
     #[test]
     fn ruleset_hash_is_the_kernels() {

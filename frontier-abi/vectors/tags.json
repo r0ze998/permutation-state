@@ -1,7 +1,7 @@
 {
   "generator": "frontier-abi abi-vectors",
   "abi_version": 1,
-  "contract": "docs/frontier/m1/M1-CONTRACT.md v1.5",
+  "contract": "docs/frontier/m1/M1-CONTRACT.md v1.6",
   "content": "instruction tags, classes, data layouts and account lists (§5.5–§5.12)",
   "instructions": [
     {

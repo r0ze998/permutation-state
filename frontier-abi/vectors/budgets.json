@@ -1,7 +1,7 @@
 {
   "generator": "frontier-abi abi-vectors",
   "abi_version": 1,
-  "contract": "docs/frontier/m1/M1-CONTRACT.md v1.5",
+  "contract": "docs/frontier/m1/M1-CONTRACT.md v1.6",
   "content": "budgets (§5.5, §10.1, §10.2): wave-1 placeholders; L(kind) from the worst account sets",
   "constants": {
     "heap_gate": 28672,
@@ -10,8 +10,8 @@
     "locks_max": 64,
     "tx_max": 1232,
     "loaded_limit_working_default": 1048576,
-    "placeholder_so_len": 540608,
-    "placeholder_programdata_len": 675840,
+    "placeholder_so_len": 1048576,
+    "placeholder_programdata_len": 1310720,
     "account_overhead": 64,
     "programdata_meta": 45,
     "multi_max_regions": 7
@@ -30,8 +30,8 @@
       "builder_limited": false,
       "accounts": [11, 11],
       "write_locks_worst": 10,
-      "loaded_need_placeholder": 680529,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1315409,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -47,8 +47,8 @@
       "builder_limited": false,
       "accounts": [11, 11],
       "write_locks_worst": 9,
-      "loaded_need_placeholder": 681041,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1315921,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -64,8 +64,8 @@
       "builder_limited": false,
       "accounts": [2, 2],
       "write_locks_worst": 2,
-      "loaded_need_placeholder": 678353,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1313233,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -81,8 +81,8 @@
       "builder_limited": false,
       "accounts": [2, 2],
       "write_locks_worst": 1,
-      "loaded_need_placeholder": 678353,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1313233,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -98,8 +98,8 @@
       "builder_limited": true,
       "accounts": [10, 74],
       "write_locks_worst": 74,
-      "loaded_need_placeholder": 698833,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1333713,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -115,8 +115,8 @@
       "builder_limited": false,
       "accounts": [4, 4],
       "write_locks_worst": 3,
-      "loaded_need_placeholder": 678545,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1313425,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -132,8 +132,8 @@
       "builder_limited": false,
       "accounts": [2, 2],
       "write_locks_worst": 1,
-      "loaded_need_placeholder": 678353,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1313233,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -149,8 +149,8 @@
       "builder_limited": false,
       "accounts": [5, 5],
       "write_locks_worst": 2,
-      "loaded_need_placeholder": 678645,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1313525,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -166,8 +166,8 @@
       "builder_limited": false,
       "accounts": [19, 19],
       "write_locks_worst": 17,
-      "loaded_need_placeholder": 681553,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1316433,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -183,8 +183,8 @@
       "builder_limited": false,
       "accounts": [6, 6],
       "write_locks_worst": 2,
-      "loaded_need_placeholder": 685718,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1320598,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -200,8 +200,8 @@
       "builder_limited": false,
       "accounts": [6, 18],
       "write_locks_worst": 8,
-      "loaded_need_placeholder": 724611,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1359491,
+      "loaded_limit": 1376256,
       "heap": 28672
     },
     {
@@ -217,8 +217,8 @@
       "builder_limited": false,
       "accounts": [6, 6],
       "write_locks_worst": 2,
-      "loaded_need_placeholder": 679719,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1314599,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -234,8 +234,8 @@
       "builder_limited": false,
       "accounts": [3, 3],
       "write_locks_worst": 2,
-      "loaded_need_placeholder": 678545,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1313425,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -251,8 +251,8 @@
       "builder_limited": false,
       "accounts": [7, 28],
       "write_locks_worst": 18,
-      "loaded_need_placeholder": 688529,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1323409,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -268,8 +268,8 @@
       "builder_limited": false,
       "accounts": [5, 5],
       "write_locks_worst": 2,
-      "loaded_need_placeholder": 684833,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1319713,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -285,8 +285,8 @@
       "builder_limited": false,
       "accounts": [11, 11],
       "write_locks_worst": 3,
-      "loaded_need_placeholder": 680401,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1315281,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -302,8 +302,8 @@
       "builder_limited": false,
       "accounts": [3, 3],
       "write_locks_worst": 2,
-      "loaded_need_placeholder": 678545,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1313425,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -319,8 +319,8 @@
       "builder_limited": false,
       "accounts": [6, 6],
       "write_locks_worst": 4,
-      "loaded_need_placeholder": 683025,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1317905,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -336,8 +336,8 @@
       "builder_limited": true,
       "accounts": [3, 33],
       "write_locks_worst": 1,
-      "loaded_need_placeholder": 687761,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1322641,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -353,8 +353,8 @@
       "builder_limited": false,
       "accounts": [4, 4],
       "write_locks_worst": 2,
-      "loaded_need_placeholder": 682705,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1317585,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -370,8 +370,8 @@
       "builder_limited": false,
       "accounts": [7, 8],
       "write_locks_worst": 3,
-      "loaded_need_placeholder": 679953,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1314833,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -387,8 +387,8 @@
       "builder_limited": false,
       "accounts": [4, 4],
       "write_locks_worst": 2,
-      "loaded_need_placeholder": 678865,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1313745,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -404,8 +404,8 @@
       "builder_limited": false,
       "accounts": [4, 4],
       "write_locks_worst": 2,
-      "loaded_need_placeholder": 678865,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1313745,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -421,8 +421,8 @@
       "builder_limited": false,
       "accounts": [7, 9],
       "write_locks_worst": 5,
-      "loaded_need_placeholder": 692049,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1326929,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -438,8 +438,8 @@
       "builder_limited": false,
       "accounts": [9, 14],
       "write_locks_worst": 10,
-      "loaded_need_placeholder": 706321,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1341201,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -455,8 +455,8 @@
       "builder_limited": false,
       "accounts": [8, 8],
       "write_locks_worst": 6,
-      "loaded_need_placeholder": 685009,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1319889,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -472,8 +472,8 @@
       "builder_limited": false,
       "accounts": [5, 5],
       "write_locks_worst": 3,
-      "loaded_need_placeholder": 680081,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1314961,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -489,8 +489,8 @@
       "builder_limited": false,
       "accounts": [4, 5],
       "write_locks_worst": 3,
-      "loaded_need_placeholder": 678929,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1313809,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -506,8 +506,8 @@
       "builder_limited": false,
       "accounts": [5, 5],
       "write_locks_worst": 3,
-      "loaded_need_placeholder": 680209,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1315089,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -523,8 +523,8 @@
       "builder_limited": false,
       "accounts": [5, 6],
       "write_locks_worst": 4,
-      "loaded_need_placeholder": 684369,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1319249,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -540,8 +540,8 @@
       "builder_limited": false,
       "accounts": [5, 5],
       "write_locks_worst": 3,
-      "loaded_need_placeholder": 680209,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1315089,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -557,8 +557,8 @@
       "builder_limited": false,
       "accounts": [6, 6],
       "write_locks_worst": 4,
-      "loaded_need_placeholder": 684369,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1319249,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -574,8 +574,8 @@
       "builder_limited": false,
       "accounts": [6, 6],
       "write_locks_worst": 4,
-      "loaded_need_placeholder": 684369,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1319249,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -591,8 +591,8 @@
       "builder_limited": false,
       "accounts": [6, 6],
       "write_locks_worst": 4,
-      "loaded_need_placeholder": 684369,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1319249,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -608,8 +608,8 @@
       "builder_limited": false,
       "accounts": [6, 6],
       "write_locks_worst": 4,
-      "loaded_need_placeholder": 684369,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1319249,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -625,8 +625,8 @@
       "builder_limited": false,
       "accounts": [6, 6],
       "write_locks_worst": 2,
-      "loaded_need_placeholder": 692561,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1327441,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -642,8 +642,8 @@
       "builder_limited": false,
       "accounts": [4, 4],
       "write_locks_worst": 1,
-      "loaded_need_placeholder": 683857,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1318737,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -659,8 +659,8 @@
       "builder_limited": false,
       "accounts": [7, 7],
       "write_locks_worst": 4,
-      "loaded_need_placeholder": 684497,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1319377,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -676,8 +676,8 @@
       "builder_limited": false,
       "accounts": [15, 18],
       "write_locks_worst": 6,
-      "loaded_need_placeholder": 706442,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1341322,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -693,8 +693,8 @@
       "builder_limited": false,
       "accounts": [4, 4],
       "write_locks_worst": 2,
-      "loaded_need_placeholder": 683857,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1318737,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -710,8 +710,8 @@
       "builder_limited": false,
       "accounts": [13, 13],
       "write_locks_worst": 10,
-      "loaded_need_placeholder": 696177,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1331057,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -727,8 +727,8 @@
       "builder_limited": false,
       "accounts": [4, 4],
       "write_locks_worst": 2,
-      "loaded_need_placeholder": 680017,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1314897,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -744,8 +744,8 @@
       "builder_limited": true,
       "accounts": [8, 42],
       "write_locks_worst": 2,
-      "loaded_need_placeholder": 710837,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1345717,
+      "loaded_limit": 1376256,
       "heap": 28672
     },
     {
@@ -761,8 +761,8 @@
       "builder_limited": false,
       "accounts": [7, 7],
       "write_locks_worst": 3,
-      "loaded_need_placeholder": 696780,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1331660,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -778,8 +778,8 @@
       "builder_limited": true,
       "accounts": [3, 63],
       "write_locks_worst": 62,
-      "loaded_need_placeholder": 686353,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1321233,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -795,8 +795,8 @@
       "builder_limited": false,
       "accounts": [6, 29],
       "write_locks_worst": 1,
-      "loaded_need_placeholder": 831825,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1466705,
+      "loaded_limit": 1474560,
       "heap": 28672
     },
     {
@@ -812,8 +812,8 @@
       "builder_limited": false,
       "accounts": [5, 5],
       "write_locks_worst": 2,
-      "loaded_need_placeholder": 683921,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1318801,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -829,8 +829,8 @@
       "builder_limited": false,
       "accounts": [5, 5],
       "write_locks_worst": 2,
-      "loaded_need_placeholder": 682737,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1317617,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -846,8 +846,8 @@
       "builder_limited": false,
       "accounts": [4, 5],
       "write_locks_worst": 2,
-      "loaded_need_placeholder": 678849,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1313729,
+      "loaded_limit": 1343488,
       "heap": 28672
     },
     {
@@ -863,8 +863,8 @@
       "builder_limited": false,
       "accounts": [7, 17],
       "write_locks_worst": 9,
-      "loaded_need_placeholder": 681585,
-      "loaded_limit": 1048576,
+      "loaded_need_placeholder": 1316465,
+      "loaded_limit": 1343488,
       "heap": 28672
     }
   ]

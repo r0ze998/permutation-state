@@ -43,10 +43,16 @@ pub const PROGRAM_ACCOUNT_LEN: u32 = 36;
 /// Data counted for a builtin program account (System, ComputeBudget,
 /// the incinerator) [estimate, conservative].
 pub const BUILTIN_DATA_LEN: u32 = 64;
-/// Placeholder programdata length: SP-V2's `program-kprobe` release `.so`
-/// (540,608 B, sbpfv2 [measured]) deployed at `round_up(1.25 × .so, 4 KiB)`.
-/// Replaced by the M1 release `.so` once W2-A builds it.
-pub const PLACEHOLDER_SO_LEN: u32 = 540_608;
+/// Placeholder `.so` length for `L(kind)`, deployed at
+/// `round_up(1.25 × .so, 4 KiB)` (I-45). Waves 1–3 used SP-V2's
+/// `program-kprobe` release `.so` (540,608 B). integ-W4 (contract v1.6
+/// §22): the merged wave-4 release `.so` is 1,021,160 B [measured] (the
+/// clash kernel is linked; W4-A §2), so its programdata (1,277,952 B) no
+/// longer fits the 1-MiB working default and every transaction was refused
+/// `MaxLoadedAccountsDataSizeExceeded` before the program ran. The
+/// placeholder is 1 MiB (≈ 27 KB of growth headroom over the merged `.so`)
+/// until W5-A regenerates `L(kind)` and the presets from the final `.so`.
+pub const PLACEHOLDER_SO_LEN: u32 = 1_048_576;
 pub const PLACEHOLDER_PROGRAMDATA_LEN: u32 = max_len_for(PLACEHOLDER_SO_LEN);
 
 /// `--max-len = round_up(1.25 × so_len, 4,096)` (I-45).
@@ -397,20 +403,25 @@ mod tests {
 
     #[test]
     fn placeholder_max_len() {
-        // round_up(1.25 × 540,608 = 675,760, 4,096) = 675,840
-        assert_eq!(PLACEHOLDER_PROGRAMDATA_LEN, 675_840);
+        // round_up(1.25 × 540,608 = 675,760, 4,096) = 675,840 (waves 1–3)
+        assert_eq!(max_len_for(540_608), 675_840);
+        // round_up(1.25 × 1,048,576 = 1,310,720, 4,096) (integ-W4)
+        assert_eq!(PLACEHOLDER_PROGRAMDATA_LEN, 1_310_720);
+        // the merged wave-4 release `.so` [measured] fits under it
+        assert!(max_len_for(1_021_160) <= PLACEHOLDER_PROGRAMDATA_LEN);
         assert_eq!(max_len_for(4_096), 8_192);
     }
 
     #[test]
-    fn loaded_limits_are_32k_multiples_and_fit_the_default() {
+    fn loaded_limits_are_32k_multiples_and_cover_the_need() {
         for i in Ix::ALL {
             let l = loaded_limit(*i);
             assert_eq!(l % 32_768, 0);
             assert!(l >= LOADED_LIMIT_WORKING_DEFAULT);
-            // at the placeholder program every worst set fits in 1 MiB
+            // integ-W4: the placeholder program no longer fits 1 MiB (the
+            // wave-4 `.so`); every worst set fits its own `L(kind)`
             assert!(
-                loaded_need(*i, PLACEHOLDER_PROGRAMDATA_LEN) <= LOADED_LIMIT_WORKING_DEFAULT as u64,
+                loaded_need(*i, PLACEHOLDER_PROGRAMDATA_LEN) <= l as u64,
                 "{}",
                 i.name()
             );
