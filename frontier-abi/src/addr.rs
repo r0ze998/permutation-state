@@ -13,16 +13,20 @@
 //! This is SP-V2 `acct.rs`'s grammar byte for byte (checked against a
 //! verbatim copy of its seed builder in `tests/addresses.rs`).
 //!
-//! **Interim home (wave 1).** The contract names the kernel module
-//! `permutation_rules::frontier::addr` (W1-C, CL-21) as the owner of the
-//! seed strings. W1-E and W1-C are built in parallel from the same base, so
-//! this module implements the pinned grammar itself; after W1-C merges, the
-//! integrator either re-exports the kernel's builders here or keeps both
-//! behind the equality test requested in `docs/frontier/m1/W1-E-NOTES.md`.
+//! **One grammar (integ-W1).** The kernel module
+//! `permutation_rules::frontier::addr` (W1-C, CL-21) owns the seed strings,
+//! the tags and the host-id codec (§4.1); every builder here delegates to
+//! it and only adds the ABI's `Seed` type, the tag table by account kind
+//! and [`AddrCtx`]. `tests/addresses.rs` still checks the result against a
+//! verbatim copy of SP-V2's seed builder, and `tags_are_the_kernels` pins
+//! the tag table to the kernel's.
 
 use crate::layout::AccountKind;
-use permutation_rules::frontier::geometry::{provinces_within, ProvinceCoord, R_MAX_HARD};
+use permutation_rules::frontier::addr as ka;
+use permutation_rules::frontier::geometry::ProvinceCoord;
 use permutation_rules::hash::sha256;
+
+pub use permutation_rules::frontier::addr::{citizen_tag, citizen_tag15, keeper_tag8};
 
 /// Two-letter seed tags (§4.1).
 pub mod tag {
@@ -130,127 +134,92 @@ pub fn with_seed(base: &[u8; 32], seed: &Seed, owner: &[u8; 32]) -> [u8; 32] {
 
 // ------------------------------------------------------------ seeds
 
-fn raw_pq(p: i32, q: i32) -> [u8; 8] {
-    let mut r = [0u8; 8];
-    r[..4].copy_from_slice(&p.to_le_bytes());
-    r[4..].copy_from_slice(&q.to_le_bytes());
-    r
+impl Seed {
+    /// The kernel's seed string as the ABI type.
+    fn of_kernel(k: ka::SeedStr) -> Seed {
+        let (buf, len) = k.into_parts();
+        Seed {
+            buf,
+            len: len as u8,
+        }
+    }
+    /// `kind`'s seed of a raw key of exactly `kind.raw_len()` bytes (the
+    /// empty seed otherwise, which no address check accepts).
+    fn of_raw(kind: ka::SeedKind, raw: &[u8]) -> Seed {
+        match ka::try_seed(kind, raw) {
+            Some(k) => Seed::of_kernel(k),
+            None => Seed {
+                buf: [0; MAX_SEED],
+                len: 0,
+            },
+        }
+    }
 }
 
 pub fn frontier_seed() -> Seed {
-    Seed::new(tag::FRONTIER, &[])
+    Seed::of_kernel(ka::frontier())
 }
 pub fn ring_seed_seed(d: u16) -> Seed {
-    Seed::new(tag::RING_SEED, &d.to_le_bytes())
+    Seed::of_kernel(ka::ring_seed(d))
 }
 pub fn province_fund_seed(wedge: u8) -> Seed {
-    Seed::new(tag::PROVINCE_FUND, &[wedge])
+    Seed::of_kernel(ka::province_fund(wedge))
 }
 pub fn join_shard_seed(faction: u8, shard: u8) -> Seed {
-    Seed::new(tag::JOIN_SHARD, &[faction, shard])
+    Seed::of_kernel(ka::join_shard(faction, shard))
 }
 pub fn beacon_log_seed(region: u8) -> Seed {
-    Seed::new(tag::BEACON_LOG, &[region])
+    Seed::of_kernel(ka::beacon_log(region))
 }
 pub fn defence_pool_seed() -> Seed {
-    Seed::new(tag::DEFENCE_POOL, &[])
+    Seed::of_kernel(ka::defence_pool())
 }
 /// Citizen seed from its 15-byte tag ([`citizen_tag15`]).
 pub fn citizen_seed(tag15: &[u8; 15]) -> Seed {
-    Seed::new(tag::CITIZEN, tag15)
+    Seed::of_raw(ka::SeedKind::Citizen, tag15)
 }
 pub fn holding_seed(p: i32, q: i32, site: u8) -> Seed {
-    let mut r = [0u8; 9];
-    r[..8].copy_from_slice(&raw_pq(p, q));
-    r[8] = site;
-    Seed::new(tag::HOLDING, &r)
+    Seed::of_kernel(ka::holding(p, q, site))
 }
 pub fn province_seed(p: i32, q: i32) -> Seed {
-    Seed::new(tag::PROVINCE, &raw_pq(p, q))
-}
-/// SP-V2 `slot_seed`: `P i32 ‖ Q i32 ‖ bell u32 ‖ x ‖ y`, first `n` bytes.
-fn slot_raw(t: [u8; 2], p: i32, q: i32, bell: u32, x: u8, y: u8, n: usize) -> Seed {
-    let mut r = [0u8; 14];
-    r[..8].copy_from_slice(&raw_pq(p, q));
-    r[8..12].copy_from_slice(&bell.to_le_bytes());
-    r[12] = x;
-    r[13] = y;
-    Seed::new(t, &r[..n])
+    Seed::of_kernel(ka::province(p, q))
 }
 pub fn arrival_slot_seed(p: i32, q: i32, bell: u32, faction: u8, i: u8) -> Seed {
-    slot_raw(tag::ARRIVAL_SLOT, p, q, bell, faction, i, 14)
+    Seed::of_kernel(ka::slot(p, q, bell, faction, i))
 }
 pub fn arrival_day_seed(p: i32, q: i32, day: u32) -> Seed {
-    slot_raw(tag::ARRIVAL_DAY, p, q, day, 0, 0, 12)
+    Seed::of_kernel(ka::arrival_day(p, q, day))
 }
 pub fn clash_inputs_seed(p: i32, q: i32, bell: u32) -> Seed {
-    slot_raw(tag::CLASH_INPUTS, p, q, bell, 0, 0, 12)
+    Seed::of_kernel(ka::clash_inputs(p, q, bell))
 }
-/// Reserved (M3). SP-V2 grammar: 13 raw bytes `P, Q, bell, pos` (see the
-/// W1-E notes: the contract table's "pos u8, 0 u8 → 14 B" disagrees with
-/// SP-V2 `acct.rs`, which §4.1 says the vectors must match byte for byte).
+/// Reserved (M3). SP-V2 grammar: 13 raw bytes `P, Q, bell, pos` (28-byte
+/// seed; contract v1.2 §4.1).
 pub fn posture_seed(p: i32, q: i32, bell: u32, pos: u8) -> Seed {
-    slot_raw(tag::POSTURE, p, q, bell, pos, 0, 13)
+    Seed::of_kernel(ka::posture(p, q, bell, pos))
 }
 /// Reserved: SealVerdict removed in v1.1 (I-44).
 pub fn seal_verdict_seed(host_id: u64, arrive_bell: u32) -> Seed {
-    let mut r = [0u8; 12];
-    r[..8].copy_from_slice(&host_id.to_le_bytes());
-    r[8..].copy_from_slice(&arrive_bell.to_le_bytes());
-    Seed::new(tag::SEAL_VERDICT, &r)
+    Seed::of_kernel(ka::seal_verdict_reserved(host_id, arrive_bell))
 }
 pub fn bell_anchor_seed(bell: u32, region: u8) -> Seed {
-    let mut r = [0u8; 5];
-    r[..4].copy_from_slice(&bell.to_le_bytes());
-    r[4] = region;
-    Seed::new(tag::BELL_ANCHOR, &r)
+    Seed::of_kernel(ka::anchor(bell, region))
 }
 pub fn seed_cache_seed(bell: u32, region: u8, nonce: u8) -> Seed {
-    let mut r = [0u8; 6];
-    r[..4].copy_from_slice(&bell.to_le_bytes());
-    r[4] = region;
-    r[5] = nonce;
-    Seed::new(tag::SEED_CACHE, &r)
+    Seed::of_kernel(ka::seed_cache(bell, region, nonce))
 }
 pub fn anchor_archive_seed(region: u8, day: u32) -> Seed {
-    let mut r = [0u8; 5];
-    r[0] = region;
-    r[1..].copy_from_slice(&day.to_le_bytes());
-    Seed::new(tag::ANCHOR_ARCHIVE, &r)
+    Seed::of_kernel(ka::anchor_archive(region, day))
 }
 /// DefenceClaim seed from the keeper tag ([`keeper_tag8`]).
 pub fn defence_claim_seed(keeper_tag: &[u8; 8], day: u32) -> Seed {
     let mut r = [0u8; 12];
     r[..8].copy_from_slice(keeper_tag);
     r[8..].copy_from_slice(&day.to_le_bytes());
-    Seed::new(tag::DEFENCE_CLAIM, &r)
+    Seed::of_raw(ka::SeedKind::DefenceClaim, &r)
 }
 
 // ------------------------------------------------------------ tags
-
-/// `sha256("PSF-CIT" ‖ wallet)[0..15]`: the Citizen seed key.
-pub fn citizen_tag15(wallet: &[u8; 32]) -> [u8; 15] {
-    let h = sha256(&[crate::layout::player::citizen::TAG_DOMAIN, wallet]);
-    let mut t = [0u8; 15];
-    t.copy_from_slice(&h[..15]);
-    t
-}
-
-/// `sha256("PSF-KPR" ‖ beneficiary)[0..8]`: the DefenceClaim seed key.
-pub fn keeper_tag8(beneficiary: &[u8; 32]) -> [u8; 8] {
-    let h = sha256(&[b"PSF-KPR", beneficiary]);
-    let mut t = [0u8; 8];
-    t.copy_from_slice(&h[..8]);
-    t
-}
-
-/// The quota's citizen id: the first 8 bytes of the Citizen **address**,
-/// little-endian (§4.1).
-pub fn citizen_tag(citizen_address: &[u8; 32]) -> u64 {
-    let mut b = [0u8; 8];
-    b.copy_from_slice(&citizen_address[..8]);
-    u64::from_le_bytes(b)
-}
 
 /// JoinShard of a wallet: `sha256(wallet)[0] mod 8` (§5.9 Join).
 pub fn join_shard_of(wallet: &[u8; 32]) -> u8 {
@@ -264,15 +233,12 @@ pub const fn day_of(bell: u32) -> u32 {
 
 // ------------------------------------------------------------ host ids
 
-/// Host id (§4.1, pinned):
+/// Host id (§4.1, pinned; the kernel's `addr::host_id`):
 /// `province_index(P,Q) << 44 | site << 40 | gen << 32 | seq`.
 /// `None` if the province is outside ring 128 or `site ≥ 12`.
 pub fn host_id(p: i32, q: i32, site: u8, gen: u8, seq: u32) -> Option<u64> {
-    let idx = province_index(p, q)?;
-    if site as usize >= crate::layout::province::province::SITES_N {
-        return None;
-    }
-    Some(((idx as u64) << 44) | ((site as u64) << 40) | ((gen as u64) << 32) | seq as u64)
+    let id = ka::host_id(p, q, site, gen, seq);
+    (id != ka::HOST_ID_INVALID).then_some(id)
 }
 
 /// The parts of a host id.
@@ -284,20 +250,15 @@ pub struct HostParts {
     pub seq: u32,
 }
 
-/// Inverse of [`host_id`]; `None` for an id no valid holding can issue.
+/// Inverse of [`host_id`] (the kernel's `addr::host_parts`); `None` for an
+/// id no valid holding can issue.
 pub fn split_host_id(id: u64) -> Option<HostParts> {
-    let idx = (id >> 44) as u32;
-    let site = ((id >> 40) & 0xF) as u8;
-    let gen = ((id >> 32) & 0xFF) as u8;
-    let seq = id as u32;
-    if idx >= provinces_within(R_MAX_HARD as u32) || site as usize >= 12 {
-        return None;
-    }
+    let h = ka::host_parts(id)?;
     Some(HostParts {
-        province: ProvinceCoord::from_index(idx),
-        site,
-        gen,
-        seq,
+        province: ProvinceCoord::new(h.p, h.q),
+        site: h.site,
+        gen: h.gen,
+        seq: h.seq,
     })
 }
 
@@ -311,13 +272,7 @@ pub const fn holding_key_of_host(id: u64) -> u64 {
 /// Dense province index of (P, Q) within ring 128, computed without
 /// overflow for any i32 pair.
 pub fn province_index(p: i32, q: i32) -> Option<u32> {
-    // ring = hex distance from the origin, in i64 (CL-04 style).
-    let (p64, q64) = (p as i64, q as i64);
-    let ring = (p64.abs() + q64.abs() + (p64 + q64).abs()) / 2;
-    if ring > R_MAX_HARD as i64 {
-        return None;
-    }
-    Some(ProvinceCoord::new(p, q).index())
+    ProvinceCoord::new(p, q).checked_index()
 }
 
 /// Ring of (P, Q) in i64 (no overflow).
@@ -443,6 +398,44 @@ pub const fn raw_len(kind: AccountKind) -> usize {
 mod tests {
     use super::*;
 
+    /// The ABI's tag table is the kernel's (one grammar, §4.1).
+    #[test]
+    fn tags_are_the_kernels() {
+        use ka::SeedKind as K;
+        let pairs = [
+            (tag::FRONTIER, K::Frontier),
+            (tag::RING_SEED, K::RingSeed),
+            (tag::PROVINCE_FUND, K::ProvinceFund),
+            (tag::JOIN_SHARD, K::JoinShard),
+            (tag::BEACON_LOG, K::BeaconLog),
+            (tag::DEFENCE_POOL, K::DefencePool),
+            (tag::CITIZEN, K::Citizen),
+            (tag::HOLDING, K::Holding),
+            (tag::PROVINCE, K::Province),
+            (tag::ARRIVAL_SLOT, K::ArrivalSlot),
+            (tag::ARRIVAL_DAY, K::ArrivalDay),
+            (tag::CLASH_INPUTS, K::ClashInputs),
+            (tag::SEAL_VERDICT, K::SealVerdict),
+            (tag::BELL_ANCHOR, K::BellAnchor),
+            (tag::SEED_CACHE, K::SeedCache),
+            (tag::ANCHOR_ARCHIVE, K::AnchorArchive),
+            (tag::DEFENCE_CLAIM, K::DefenceClaim),
+            (tag::POSTURE, K::Posture),
+        ];
+        assert_eq!(pairs.len(), K::ALL.len());
+        for (t, k) in pairs {
+            assert_eq!(&t, k.tag(), "{k:?}");
+        }
+        assert_eq!(
+            crate::layout::player::citizen::TAG_DOMAIN,
+            b"PSF-CIT",
+            "citizen_tag15 domain"
+        );
+        // A wrong-length raw key builds the empty seed, never a short one.
+        assert!(citizen_seed(&[1; 15]).len() == 32);
+        assert_eq!(Seed::of_raw(K::Citizen, &[1; 14]).len(), 0);
+    }
+
     #[test]
     fn seed_lengths_are_the_contract_table() {
         assert_eq!(frontier_seed().len(), 2);
@@ -514,6 +507,6 @@ mod tests {
         assert_eq!(host_id(0, 0, 12, 0, 0), None);
         assert_eq!(split_host_id(u64::MAX), None);
         // index < 2^20 for R ≤ 128
-        assert!(provinces_within(128) < (1 << 20));
+        assert!(permutation_rules::frontier::geometry::provinces_within(128) < (1 << 20));
     }
 }

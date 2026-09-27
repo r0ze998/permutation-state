@@ -366,7 +366,9 @@ pub fn accounts_of(ix: Ix) -> &'static [Group] {
                         SEASON_R,
                         s!("frontier", Kind(K::Frontier), false, W)
                     ]),
-                    rep!(&[s!("joinshard", Kind(K::JoinShard), false, R)], 24, 24),
+                    // parts 0, 1: 24 shards and no fund; part 2: 6 funds
+                    // (v1.2, `ix::FoldOccupancy::{shards_in, funds_in}`)
+                    rep!(&[s!("joinshard", Kind(K::JoinShard), false, R)], 0, 24),
                     rep!(&[s!("pfund", Kind(K::ProvinceFund), false, R)], 0, 6),
                 ]
             }
@@ -880,18 +882,22 @@ impl SeasonHdr {
 
 /// `b(t) = ⌊(t − genesis_ts) / 600⌋` for `t ≥ genesis_ts` (§5.1).
 pub fn bell_at(genesis_ts: i64, t: i64) -> Option<u32> {
-    if t < genesis_ts {
+    let dt = t.checked_sub(genesis_ts)?;
+    if dt < 0 {
         return None;
     }
-    u32::try_from((t - genesis_ts) / 600).ok()
+    u32::try_from(dt / 600).ok()
 }
 
-/// The Season account: owner, magic, full size, ruleset (`RulesetMismatch`).
-/// The caller verifies the PDA address with the stored bump.
-pub fn check_season(
+/// The Season account, structurally: owner, magic, full size and the
+/// fields every prologue needs (`BadAccount`). The status and the ruleset
+/// are the caller's next steps, in that order (§5.6 step 1; a season that
+/// is not Running reports `WrongStatus` whatever its ruleset, and an
+/// Announced season has no ruleset yet). The caller verifies the PDA
+/// address with the stored bump.
+pub fn read_season(
     a: &AccountView<'_>,
     program: &[u8; 32],
-    ruleset_hash: &[u8; 32],
     now: i64,
 ) -> Result<SeasonHdr, FrontierError> {
     let d = a.data;
@@ -899,9 +905,6 @@ pub fn check_season(
         return Err(FrontierError::BadAccount);
     }
     let bad = FrontierError::BadAccount;
-    if rd_arr::<32>(d, S::RULESET_HASH).as_ref() != Some(ruleset_hash) {
-        return Err(FrontierError::RulesetMismatch);
-    }
     let stored = rd_u8(d, S::STATUS).ok_or(bad)?;
     let genesis_ts = rd_i64(d, S::GENESIS_TS).ok_or(bad)?;
     Ok(SeasonHdr {
@@ -917,6 +920,36 @@ pub fn check_season(
     })
 }
 
+/// `Season.ruleset_hash == RULESET_HASH`, else `RulesetMismatch` (§5.6
+/// step 1, after the status).
+pub fn check_ruleset(a: &AccountView<'_>, ruleset_hash: &[u8; 32]) -> Result<(), FrontierError> {
+    if rd_arr::<32>(a.data, S::RULESET_HASH).as_ref() != Some(ruleset_hash) {
+        return Err(FrontierError::RulesetMismatch);
+    }
+    Ok(())
+}
+
+/// [`read_season`], the effective status in `allowed` (`WrongStatus`),
+/// then the ruleset when `ruleset_hash` is given (`RulesetMismatch`):
+/// §5.6 step 1 in its pinned order. Status-agnostic lifecycle callers
+/// (AnnounceSeason, CreateSeason, AbortSeason path b) pass `None`.
+pub fn check_season(
+    a: &AccountView<'_>,
+    program: &[u8; 32],
+    ruleset_hash: Option<&[u8; 32]>,
+    allowed: &[u8],
+    now: i64,
+) -> Result<SeasonHdr, FrontierError> {
+    let s = read_season(a, program, now)?;
+    if !allowed.contains(&s.status) {
+        return Err(FrontierError::WrongStatus);
+    }
+    if let Some(h) = ruleset_hash {
+        check_ruleset(a, h)?;
+    }
+    Ok(s)
+}
+
 // ------------------------------------------------------------ player prologue
 
 /// What the player prologue established.
@@ -929,29 +962,73 @@ pub struct PlayerCtx {
     pub citizen_tag: u64,
 }
 
-/// Player prologue steps 1, 2 and 4 (§5.6) over `[actor, payer, season,
-/// citizen]`. Step 3 (the action bucket) writes the Citizen: call
-/// [`debit_bucket`] on its data next. `session_ok` lets SetSession insist on
-/// the wallet (`false` = wallet only).
+/// Steps 1 and 2 of the player prologue passed; [`PlayerStart::finish`]
+/// runs steps 3 (the bucket, which writes the Citizen) and 4, so the
+/// checks can only run in the pinned order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use]
+pub struct PlayerStart {
+    pub season: SeasonHdr,
+    pub by_session: bool,
+    pub citizen_tag: u64,
+}
+
+impl PlayerStart {
+    /// Step 3 ([`debit_bucket`] on the Citizen's data, `Bucket`) then step
+    /// 4 (`bell(now) < end_bell`, `WrongStatus`).
+    pub fn finish(self, citizen: &mut [u8], now: i64) -> Result<PlayerCtx, FrontierError> {
+        let s = self.season;
+        debit_bucket(
+            citizen,
+            now,
+            s.genesis_ts,
+            s.bucket_rate_per_h,
+            s.bucket_burst,
+        )?;
+        let now_bell = s.bell(now).ok_or(FrontierError::WrongStatus)?;
+        if now_bell >= s.end_bell {
+            return Err(FrontierError::WrongStatus);
+        }
+        Ok(PlayerCtx {
+            season: s,
+            now_bell,
+            by_session: self.by_session,
+            citizen_tag: self.citizen_tag,
+        })
+    }
+}
+
+/// Player prologue steps 1 and 2 (§5.6) over `[actor, payer, season,
+/// citizen]`, in order: signatures (`Auth`) and writability
+/// (`BadAccount`, as `check_flags` reports it), then the season (status
+/// Running, then the ruleset), then the citizen. Steps 3 and 4 follow in
+/// [`PlayerStart::finish`]. `session_ok` lets SetSession insist on the
+/// wallet (`false` = wallet only).
 pub fn player_prologue(
     accounts: &[AccountView<'_>],
     program: &[u8; 32],
     ruleset_hash: &[u8; 32],
     now: i64,
     session_ok: bool,
-) -> Result<PlayerCtx, FrontierError> {
+) -> Result<PlayerStart, FrontierError> {
     let [actor, payer, season, citizen] = match accounts.get(..PLAYER_PROLOGUE_LEN) {
         Some([a, b, c, d]) => [a, b, c, d],
         _ => return Err(FrontierError::TooManyAccounts),
     };
-    if !actor.is_signer || !payer.is_signer || !payer.is_writable || !citizen.is_writable {
+    if !actor.is_signer || !payer.is_signer {
         return Err(FrontierError::Auth);
     }
-    // 1. season
-    let s = check_season(season, program, ruleset_hash, now)?;
-    if s.status != S::STATUS_RUNNING {
-        return Err(FrontierError::WrongStatus);
+    if !payer.is_writable || !citizen.is_writable {
+        return Err(FrontierError::BadAccount);
     }
+    // 1. season: status, then ruleset
+    let s = check_season(
+        season,
+        program,
+        Some(ruleset_hash),
+        &[S::STATUS_RUNNING],
+        now,
+    )?;
     // 2. citizen
     check_present(citizen, program, AccountKind::Citizen, s.id)?;
     let d = citizen.data;
@@ -974,14 +1051,8 @@ pub fn player_prologue(
         }
         true
     };
-    // 4. before the end bell
-    let now_bell = s.bell(now).ok_or(FrontierError::WrongStatus)?;
-    if now_bell >= s.end_bell {
-        return Err(FrontierError::WrongStatus);
-    }
-    Ok(PlayerCtx {
+    Ok(PlayerStart {
         season: s,
-        now_bell,
         by_session,
         citizen_tag: crate::addr::citizen_tag(citizen.key),
     })
@@ -1116,21 +1187,28 @@ pub const fn resident_ok(resolved_next: u32, b: u32) -> bool {
 // ------------------------------------------------------------ keeper prologue
 
 /// Keeper-write prologue (§5.6): `[fee_payer s,w] [season]`; the season's
-/// status set is the instruction's.
+/// effective status must be in the instruction's `allowed` set
+/// (`WrongStatus`), then the ruleset matches (`RulesetMismatch`). A
+/// fee payer that did not sign is `Auth`; one not writable is
+/// `BadAccount`.
 pub fn keeper_prologue(
     accounts: &[AccountView<'_>],
     program: &[u8; 32],
     ruleset_hash: &[u8; 32],
+    allowed: &[u8],
     now: i64,
 ) -> Result<SeasonHdr, FrontierError> {
     let (fee_payer, season) = match accounts.get(..2) {
         Some([a, b]) => (a, b),
         _ => return Err(FrontierError::TooManyAccounts),
     };
-    if !fee_payer.is_signer || !fee_payer.is_writable {
+    if !fee_payer.is_signer {
         return Err(FrontierError::Auth);
     }
-    check_season(season, program, ruleset_hash, now)
+    if !fee_payer.is_writable {
+        return Err(FrontierError::BadAccount);
+    }
+    check_season(season, program, Some(ruleset_hash), allowed, now)
 }
 
 #[cfg(test)]
@@ -1225,11 +1303,13 @@ mod tests {
         let view = |key: &'static [u8; 32]| key;
         let _ = view;
         let actor_key = session;
-        let accts = |actor: &[u8; 32],
-                     sd: &[u8],
-                     cd: &[u8],
-                     ck: &[u8; 32]|
+        let accts_at = |now: i64,
+                        actor: &[u8; 32],
+                        sd: &[u8],
+                        cd: &[u8],
+                        ck: &[u8; 32]|
          -> Result<PlayerCtx, FrontierError> {
+            let mut cm = cd.to_vec();
             let v = [
                 AccountView {
                     key: actor,
@@ -1264,8 +1344,13 @@ mod tests {
                     is_writable: true,
                 },
             ];
-            player_prologue(&v, &program, &ruleset, 2_000, true)
+            let start = player_prologue(&v, &program, &ruleset, now, true)?;
+            start.finish(&mut cm, now)
         };
+        let accts = |actor: &[u8; 32], sd: &[u8], cd: &[u8], ck: &[u8; 32]| {
+            accts_at(2_000, actor, sd, cd, ck)
+        };
+        cd[C::BUCKET_MILLI..C::BUCKET_MILLI + 4].copy_from_slice(&60_000u32.to_le_bytes());
         let ok = accts(&actor_key, &sd, &cd, &citizen_key).unwrap();
         assert!(ok.by_session);
         assert_eq!(ok.now_bell, 1);
@@ -1294,6 +1379,92 @@ mod tests {
             accts(&actor_key, &sd, &expired, &citizen_key),
             Err(FrontierError::SessionExpired)
         );
+        // Step 1's order (integ-W1 review): the status before the ruleset,
+        // so a season that is not Running reports WrongStatus even with
+        // another (or no) ruleset.
+        let before_other = season_bytes([0; 32], SL::STATUS_SEEDED, 3_000);
+        assert_eq!(
+            accts(&actor_key, &before_other, &cd, &citizen_key),
+            Err(FrontierError::WrongStatus)
+        );
+        let announced = season_bytes([0; 32], SL::STATUS_ANNOUNCED, 1_000);
+        assert_eq!(
+            accts(&actor_key, &announced, &cd, &citizen_key),
+            Err(FrontierError::WrongStatus)
+        );
+        // Step 3 before step 4: an empty bucket after the end bell is
+        // Bucket; with tokens it is WrongStatus.
+        let after_end = 1_000 + 1_008 * 600 + 5;
+        let mut empty = cd.clone();
+        empty[C::BUCKET_MILLI..C::BUCKET_MILLI + 4].copy_from_slice(&0u32.to_le_bytes());
+        empty[C::BUCKET_T..C::BUCKET_T + 4]
+            .copy_from_slice(&((after_end - 1_000) as u32).to_le_bytes());
+        empty[C::SESSION_EXPIRY..C::SESSION_EXPIRY + 8].copy_from_slice(&i64::MAX.to_le_bytes());
+        assert_eq!(
+            accts_at(after_end, &actor_key, &sd, &empty, &citizen_key),
+            Err(FrontierError::Bucket)
+        );
+        let mut full = empty.clone();
+        full[C::BUCKET_MILLI..C::BUCKET_MILLI + 4].copy_from_slice(&60_000u32.to_le_bytes());
+        assert_eq!(
+            accts_at(after_end, &actor_key, &sd, &full, &citizen_key),
+            Err(FrontierError::WrongStatus)
+        );
+    }
+
+    #[test]
+    fn keeper_prologue_checks_status_then_ruleset() {
+        let program = [9u8; 32];
+        let ruleset = [1u8; 32];
+        let sys = ids::SYSTEM_PROGRAM;
+        let run = |signer: bool, writable: bool, sd: &[u8], allowed: &[u8]| {
+            let v = [
+                AccountView {
+                    key: &[8; 32],
+                    owner: &sys,
+                    lamports: 1,
+                    data: &[],
+                    is_signer: signer,
+                    is_writable: writable,
+                },
+                AccountView {
+                    key: &[5; 32],
+                    owner: &program,
+                    lamports: 1,
+                    data: sd,
+                    is_signer: false,
+                    is_writable: false,
+                },
+            ];
+            keeper_prologue(&v, &program, &ruleset, allowed, 2_000).map(|s| s.status)
+        };
+        let running = season_bytes(ruleset, SL::STATUS_SEEDED, 1_000);
+        let other = season_bytes([0; 32], SL::STATUS_SEEDED, 3_000);
+        let ok = [SL::STATUS_RUNNING];
+        assert_eq!(run(true, true, &running, &ok), Ok(SL::STATUS_RUNNING));
+        assert_eq!(run(false, true, &running, &ok), Err(FrontierError::Auth));
+        assert_eq!(
+            run(true, false, &running, &ok),
+            Err(FrontierError::BadAccount)
+        );
+        assert_eq!(
+            run(true, true, &other, &ok),
+            Err(FrontierError::WrongStatus)
+        );
+        assert_eq!(
+            run(true, true, &other, &[SL::STATUS_SEEDED]),
+            Err(FrontierError::RulesetMismatch)
+        );
+        // Status-agnostic lifecycle callers skip the ruleset.
+        let v = AccountView {
+            key: &[5; 32],
+            owner: &program,
+            lamports: 1,
+            data: &other,
+            is_signer: false,
+            is_writable: false,
+        };
+        assert!(check_season(&v, &program, None, &[SL::STATUS_SEEDED], 2_000).is_ok());
     }
 
     #[test]

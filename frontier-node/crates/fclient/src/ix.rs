@@ -433,16 +433,20 @@ pub fn open_province(a: &Addresses, payer: Address, p: i16, q: i16) -> Instructi
     build(a, m, Data::new(tag::OPEN_PROVINCE).i16(p).i16(q))
 }
 
-/// 0x23 FoldOccupancy(part): `[payer s] [season] [frontier w] [js × 24 r]`
-/// (+ part 1: `[pfund × 6 r]`). Part 0 folds factions 0–2, part 1 factions 3–5.
+/// 0x23 FoldOccupancy(part), three parts per bell (contract v1.2 §5.9):
+/// `[payer s] [season] [frontier w]` then part 0 `[js × 24 r]` (factions
+/// 0–2), part 1 `[js × 24 r]` (factions 3–5), part 2 `[pfund × 6 r]`.
+/// v1.1's part 1 (24 shards + 6 funds) was 1,288 B, over the packet.
 pub fn fold_occupancy(a: &Addresses, payer: Address, part: u8) -> Instruction {
     let mut m = vec![ws(payer), r(a.season), w(a.frontier())];
-    let factions = if part == 0 { 0..3u8 } else { 3..6u8 };
-    for f in factions {
-        m.extend((0..crate::abi::SHARDS_PER_FACTION).map(|s| r(a.join_shard(f, s))));
-    }
-    if part == 1 {
-        m.extend(a.province_funds().map(r));
+    match part {
+        0 | 1 => {
+            let factions = if part == 0 { 0..3u8 } else { 3..6u8 };
+            for f in factions {
+                m.extend((0..crate::abi::SHARDS_PER_FACTION).map(|s| r(a.join_shard(f, s))));
+            }
+        }
+        _ => m.extend(a.province_funds().map(r)),
     }
     build(a, m, Data::new(tag::FOLD_OCCUPANCY).u8(part))
 }
@@ -1328,7 +1332,8 @@ mod tests {
         let a = addrs();
         let k = Address::new_from_array([9; 32]);
         assert_eq!(fold_occupancy(&a, k, 0).accounts.len(), 3 + 24);
-        assert_eq!(fold_occupancy(&a, k, 1).accounts.len(), 3 + 24 + 6);
+        assert_eq!(fold_occupancy(&a, k, 1).accounts.len(), 3 + 24);
+        assert_eq!(fold_occupancy(&a, k, 2).accounts.len(), 3 + 6);
     }
 
     /// Regions a PostAnchorMulti fits in one packet with the budget prefix
@@ -1563,10 +1568,8 @@ mod tests {
                 oversize.push((name, sh.bytes));
             }
         }
-        // Contract finding (W1-F notes): FoldOccupancy part 1 (24 shards +
-        // 6 ProvinceFunds, §5.9) is 1,288 B with the compute-budget prefix
-        // every transaction carries (I-45) — 56 B over the packet. Any other
-        // overflow is a regression.
-        assert_eq!(oversize, vec![("FoldOccupancy", 1_288)], "{oversize:?}");
+        // W1-F's contract finding (FoldOccupancy part 1 at 1,288 B) is
+        // resolved by v1.2's three-part fold: every shape fits the packet.
+        assert!(oversize.is_empty(), "{oversize:?}");
     }
 }

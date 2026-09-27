@@ -139,7 +139,11 @@ ix_data! {
     ConsumeRingSeed { d: u16, round: u64, sig48: [u8; 48], hints: [u8; HINTS_LEN] }
     /// 0x22.
     OpenProvince { p: i16, q: i16 }
-    /// 0x23.
+    /// 0x23: three parts per bell (contract v1.2 §5.9, integ-W1): part 0
+    /// folds JoinShards of factions 0–2, part 1 factions 3–5, part 2 the
+    /// six ProvinceFund shards ([`FoldOccupancy::shards_in`],
+    /// [`FoldOccupancy::funds_in`]). v1.1's part 1 with 24 shards and 6
+    /// funds was 1,288 B, over the 1,232-B packet.
     FoldOccupancy { part: u8 }
     /// 0x24.
     CloseProvince { p: i16, q: i16 }
@@ -216,6 +220,35 @@ pub struct TicketSite {
 pub struct FileTicket {
     pub n: u8,
     pub sites: [TicketSite; MAX_TICKET_SITES],
+}
+
+impl FoldOccupancy {
+    /// Parts per fold.
+    pub const PARTS: u8 = 3;
+    /// JoinShards a part lists (read-only): 24 for parts 0 and 1.
+    pub const fn shards_in(part: u8) -> u8 {
+        if part < 2 {
+            24
+        } else {
+            0
+        }
+    }
+    /// ProvinceFund shards a part lists (read-only): 6 for part 2.
+    pub const fn funds_in(part: u8) -> u8 {
+        if part == 2 {
+            6
+        } else {
+            0
+        }
+    }
+    /// The factions whose shards part `part` folds (`None` for part 2).
+    pub const fn factions_of(part: u8) -> Option<(u8, u8)> {
+        match part {
+            0 => Some((0, 3)),
+            1 => Some((3, 6)),
+            _ => None,
+        }
+    }
 }
 
 impl FileTicket {

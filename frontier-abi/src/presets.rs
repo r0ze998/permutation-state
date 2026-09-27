@@ -275,7 +275,7 @@ impl SeasonParams {
     /// first failing field; the program maps it to `BadData`.
     pub fn validate(&self) -> Result<(), &'static str> {
         let p = self;
-        let checks: [(bool, &'static str); 26] = [
+        let checks: [(bool, &'static str); 27] = [
             (p.regions == 16, "regions"),
             (p.genesis_ring <= 4, "genesis_ring"),
             (p.r_max > p.genesis_ring as u16 && p.r_max <= 128, "r_max"),
@@ -286,7 +286,10 @@ impl SeasonParams {
                 p.join_close_bell < p.end_bell && p.end_bell <= 4_032,
                 "join_close_bell/end_bell",
             ),
-            (p.drand_period >= 1, "drand_period"),
+            // Quicknet's schedule is fixed (§5.3; the test beacon of I-53
+            // replays rounds on the same schedule with its own key).
+            (p.drand_period == QUICKNET_PERIOD, "drand_period"),
+            (p.drand_genesis == QUICKNET_GENESIS, "drand_genesis"),
             (
                 p.network == crate::layout::world::season::NETWORK_QUICKNET,
                 "network",
@@ -445,6 +448,13 @@ mod tests {
     #[test]
     fn validation_refuses_each_range() {
         let base = M1_LOCAL_7D;
+        // The drand schedule is quicknet's (integ-W1 review).
+        let mut bad = base;
+        bad.drand_genesis += 1;
+        assert_eq!(bad.validate(), Err("drand_genesis"));
+        let mut bad = base;
+        bad.drand_period = 30;
+        assert_eq!(bad.validate(), Err("drand_period"));
         let mut bad = base;
         bad.reveal_loaded_limit = 65_536 + 1;
         assert_eq!(bad.validate(), Err("reveal_loaded_limit"));

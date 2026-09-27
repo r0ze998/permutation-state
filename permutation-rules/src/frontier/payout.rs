@@ -328,6 +328,12 @@ impl PayoutParams {
         works_per_usdc: 105,
     };
 
+    /// The borsh encoding CreateSeason, the verifier and the JS SDK hash
+    /// (one producer: `frontier-abi`'s `presets.json` takes it from here).
+    pub fn to_borsh(&self) -> alloc::vec::Vec<u8> {
+        borsh::to_vec(self).unwrap_or_default()
+    }
+
     /// Refuse parameters no settlement may run with. The officer-pay
     /// ceiling is at most 10,000 bps (CL-11): above what the wallet paid
     /// an office would be profitable, which O3 rules out. `u32::MAX` (no

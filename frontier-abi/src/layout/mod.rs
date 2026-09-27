@@ -96,8 +96,13 @@ pub const fn rent(space: usize) -> u64 {
 pub const RENT_PER_BYTE: u64 = 5_080;
 
 /// A rent refund of a whole account (≥ this many lamports) never diverts
-/// (§4.2, `pay_or_divert`).
-pub const WHOLE_ACCOUNT_REFUND_FLOOR: u64 = 890_880;
+/// (§4.2, `pay_or_divert`): `rent(0)`, the rent-exempt minimum of a
+/// data-less wallet, so the refund alone makes any recipient wallet
+/// rent-exempt (contract v1.2 erratum: v1.1's 890,880 was 6,960 × 128,
+/// the pre-SIMD-0194 rate, inconsistent with `RENT_PER_BYTE`). The
+/// program reads the rent from the Rent sysvar; these constants are for
+/// off-chain estimates and tests (`rent_is_the_sysvar_formula`).
+pub const WHOLE_ACCOUNT_REFUND_FLOOR: u64 = rent(0);
 
 /// The 17 program account kinds (§0, §5.2), numbered for CLOSE records and
 /// tables. `SealVerdict` (removed, I-44) and `PosturePDA` (M3) are not kinds.
@@ -330,6 +335,16 @@ pub fn write_header(d: &mut [u8], kind: AccountKind, season_id: u64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rent_is_the_sysvar_formula() {
+        assert_eq!(rent(0), 650_240);
+        assert_eq!(WHOLE_ACCOUNT_REFUND_FLOOR, rent(0));
+        // Every program account's refund clears the floor.
+        for k in AccountKind::ALL {
+            assert!(k.rent() >= WHOLE_ACCOUNT_REFUND_FLOOR, "{k:?}");
+        }
+    }
 
     fn tiles(name: &str, size: usize, fields: &[Field]) {
         let mut at = 0;

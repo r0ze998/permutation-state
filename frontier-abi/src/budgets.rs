@@ -55,10 +55,6 @@ pub const fn max_len_for(so_len: u32) -> u32 {
     (x.div_ceil(4_096) * 4_096) as u32
 }
 
-const fn round_up_32k(x: u64) -> u64 {
-    x.div_ceil(32_768) * 32_768
-}
-
 /// One row of the budgets table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Budget {
@@ -183,8 +179,8 @@ pub fn tx_worst_estimate(ix: Ix) -> u32 {
 /// Instructions whose account list at every group maximum cannot fit one
 /// legacy transaction: their builders split the work (GatherClash ≤ 22
 /// slots + holdings per part, CloseSeason in parts, ResolveClash is
-/// test-only) or the contract needs an amendment (FoldOccupancy part 1:
-/// 33 accounts ≈ 1,288 B, see the W1-E notes).
+/// test-only, FoldOccupancy lists either 24 shards or 6 funds per part,
+/// v1.2: the table's union of both is never one transaction).
 pub const fn builder_limited(ix: Ix) -> bool {
     matches!(
         ix,
@@ -267,6 +263,19 @@ fn position_data(acc: Acc, ix_sysvar: u32) -> u32 {
 
 /// Loaded-data need of `ix`'s worst account set for a programdata length.
 pub fn loaded_need(ix: Ix, programdata_len: u32) -> u64 {
+    let (bytes, n) = loaded_accounts(ix);
+    programdata_len as u64
+        + PROGRAMDATA_META as u64
+        + bytes as u64
+        + ACCOUNT_OVERHEAD as u64 * n as u64
+}
+
+/// The loaded accounts of `ix`'s worst set besides the ELF: Σ data
+/// lengths (the instruction's accounts, the Frontier program account, the
+/// ComputeBudget builtin) and their count, **plus the ProgramData account**
+/// (counted with its 64-B overhead; its data is the programdata length the
+/// caller adds). The inputs of `fees::loaded_limit` (I-45).
+pub fn loaded_accounts(ix: Ix) -> (u32, u8) {
     let (_, hi) = count_bounds(ix);
     let (_, data_max) = data_len_range(ix);
     let mut ixs = [(0u32, 0u32); 4];
@@ -275,18 +284,24 @@ pub fn loaded_need(ix: Ix, programdata_len: u32) -> u64 {
     }
     ixs[3] = (hi as u32, data_max as u32);
     let sysvar = ix_sysvar_len(&ixs);
-    let accounts: u64 = worst_positions(ix)
-        .map(|sp| (position_data(sp.acc, sysvar) + ACCOUNT_OVERHEAD) as u64)
-        .sum();
-    // The Frontier program account and the ComputeBudget program.
-    let programs =
-        (PROGRAM_ACCOUNT_LEN + ACCOUNT_OVERHEAD + BUILTIN_DATA_LEN + ACCOUNT_OVERHEAD) as u64;
-    programdata_len as u64 + PROGRAMDATA_META as u64 + accounts + programs
+    let (mut bytes, mut n) = (0u32, 0u32);
+    for sp in worst_positions(ix) {
+        bytes += position_data(sp.acc, sysvar);
+        n += 1;
+    }
+    // The Frontier program account, the ComputeBudget program, the
+    // ProgramData account.
+    bytes += PROGRAM_ACCOUNT_LEN + BUILTIN_DATA_LEN;
+    n += 3;
+    (bytes, n.min(u8::MAX as u32) as u8)
 }
 
-/// `L(kind)` for a programdata length (rounded up to 32 KiB).
+/// `L(kind)` for a programdata length: the kernel's
+/// `fees::loaded_limit` (one formula, integ-W1 review) over
+/// [`loaded_accounts`].
 pub fn loaded_limit_for(ix: Ix, programdata_len: u32) -> u32 {
-    round_up_32k(loaded_need(ix, programdata_len)) as u32
+    let (bytes, n) = loaded_accounts(ix);
+    permutation_rules::frontier::fees::loaded_limit(programdata_len, bytes, n)
 }
 
 /// `L(kind)` to request now: the need at the placeholder programdata
@@ -422,9 +437,15 @@ mod tests {
             465
         );
         assert_eq!(tx_ceiling(Ix::ResolveFromInputs), 472);
-        // FoldOccupancy part 1 (payer, season, frontier, 24 JoinShards, 6
-        // ProvinceFunds) does not fit a legacy transaction.
-        assert!(tx_worst_estimate(Ix::FoldOccupancy) > TX_MAX);
+        // FoldOccupancy: v1.1's part 1 (24 shards + 6 funds, 33 accounts)
+        // did not fit; each v1.2 part does.
+        assert!(tx_size_estimate(1, 3 + 24 + 6, ix::FoldOccupancy::LEN as u32) > TX_MAX);
+        for part in 0..ix::FoldOccupancy::PARTS {
+            let n = 3 + ix::FoldOccupancy::shards_in(part) + ix::FoldOccupancy::funds_in(part);
+            let t = tx_size_estimate(1, n as u32, ix::FoldOccupancy::LEN as u32);
+            assert!(t <= TX_MAX, "fold part {part}: {t} B");
+        }
+        assert_eq!(ix::FoldOccupancy::factions_of(2), None);
         // A GatherClash part fits 22 slots + holdings.
         assert!(tx_size_estimate(1, 8 + 22, ix::GatherClash::LEN as u32) <= TX_MAX);
         assert!(tx_size_estimate(1, 8 + 23, ix::GatherClash::LEN as u32) > TX_MAX);

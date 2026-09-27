@@ -139,6 +139,13 @@ fn decoders_never_panic_on_arbitrary_bytes() {
         if let Ok(rec) = log::decode(&d) {
             let _ = log::chains_of(rec.kind, rec.key, rec.payload);
         }
+        // chains_of directly on arbitrary key and payload slices, every
+        // kind (integ-W1 review: CLOSE indexed a short key).
+        let spec = &log::SPECS[(r.next() % log::SPECS.len() as u64) as usize];
+        let kl = (r.next() % 20) as usize;
+        let key = r.bytes(kl);
+        let _ = log::chains_of(spec.kind, &key, &d);
+        let _ = log::chains_of(spec.kind, &[], &[]);
         let mut big = vec![0u8; 4_096];
         let n = d.len().min(4_096);
         big[..n].copy_from_slice(&d[..n]);

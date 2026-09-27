@@ -826,14 +826,10 @@ fn params_json(p: &SeasonParams) -> J {
 }
 
 /// Borsh of `PayoutParams` (plain integers: LE in field order).
+/// The borsh derive's encoding (integ-W1 review: no hand copy, so a field
+/// added or retyped in PayoutParams moves the vector).
 fn payout_borsh(p: &permutation_rules::frontier::payout::PayoutParams) -> Vec<u8> {
-    let mut v = Vec::new();
-    v.extend(p.fee_units_bps.to_le_bytes());
-    v.extend(p.steward_bps.to_le_bytes());
-    v.extend(p.cap_multiple.to_le_bytes());
-    v.extend(p.office_ceiling_bps.to_le_bytes());
-    v.extend(p.works_per_usdc.to_le_bytes());
-    v
+    p.to_borsh()
 }
 
 fn presets_file() -> J {

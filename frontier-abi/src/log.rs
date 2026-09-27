@@ -738,21 +738,23 @@ pub fn chains_of(kind: Kind, key: &[u8], payload: &[u8]) -> Option<Chains> {
             c.push(E::Holding, R::Holding { p, q, site }, false);
         }
         Kind::CLOSE => {
-            let ak = AccountKind::from_u8(key[0])?;
+            // Every read is checked: a short key is `None`, never a panic
+            // (integ-W1 review; `chains_of` is public no_std API).
+            let ak = AccountKind::from_u8(rd_u8(key, 0)?)?;
             if let Some(e) = EntityKind::of_account(ak) {
-                let k = &key[1..];
+                let k = key.get(1..)?;
                 let who = match e {
                     E::Season => R::Season,
                     E::Frontier => R::Frontier,
                     E::JoinShard => R::JoinShard {
-                        faction: k[0],
-                        shard: k[1],
+                        faction: rd_u8(k, 0)?,
+                        shard: rd_u8(k, 1)?,
                     },
                     E::Citizen => R::Citizen(CitizenRef::Tag15(rd_arr(k, 0)?)),
                     E::Holding => R::Holding {
                         p: rd_i32(k, 0)?,
                         q: rd_i32(k, 4)?,
-                        site: k[8],
+                        site: rd_u8(k, 8)?,
                     },
                     E::Province => R::Province {
                         p: rd_i32(k, 0)?,
