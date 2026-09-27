@@ -1,10 +1,15 @@
 //! Laurels: a fixed, zero-sum emission (open-world design §5.4, revision 2).
 //!
-//! Every non-dormant holding emits 1/12 laurel per bell into its province.
+//! Every non-dormant holding emits into its province **in proportion to its
+//! holding-order factor** (K3, owner decision O4 step 3): a first holding
+//! 1/12 laurel per bell, a second 1/24, a third 1/48 — the same factor its
+//! strength weight carries, so extra holdings no longer bring a full
+//! holding's emission while taking only a quarter or half of the weight.
 //! The province's emission is split among the holdings in it by **strength
 //! weight**, so being stronger than your neighbours takes a larger share of
-//! *their* emission, never more emission. Nothing else mints laurels except
-//! Relic Sites (1 per bell to the holder). Captures, occupations and sieges
+//! *their* emission, never more emission. Nothing else mints laurels:
+//! Relic Sites paid 1 per bell to the holder in revision 2 and pay nothing
+//! from K3 on (O4 step 4, [`RELIC_EMISSION_PER_BELL`]). Captures, occupations and sieges
 //! only move laurels that already exist, and only **counted** laurels (banked
 //! by a staker) between wallets without a history or other ties: a
 //! transfer from a fee-only wallet (whose laurels are worth nothing to it)
@@ -26,10 +31,21 @@ use borsh::{BorshDeserialize, BorshSerialize};
 
 /// One laurel in base units.
 pub const LAUREL_ONE: u64 = 12_000_000;
-/// A holding's emission into its province per bell: 1/12 laurel.
+/// A first holding's emission into its province per bell: 1/12 laurel.
 pub const HOLDING_EMISSION_PER_BELL: u64 = LAUREL_ONE / 12;
-/// A Relic Site's emission to its holder per bell: 1 laurel (12 holdings).
-pub const RELIC_EMISSION_PER_BELL: u64 = LAUREL_ONE;
+/// A quarter of it: the unit of the order-weighted emission.
+pub const QUARTER_EMISSION_PER_BELL: u64 = HOLDING_EMISSION_PER_BELL / 4;
+const _: () = assert!(HOLDING_EMISSION_PER_BELL % 4 == 0);
+/// Emission quarters of a holding that emits a full share (revision 2
+/// emission, or a first holding).
+pub const EMIT_FULL: u8 = 4;
+/// Revision 2: a Relic Site paid its holder 1 laurel per bell (12
+/// holdings). Kept for comparison runs.
+pub const RELIC_EMISSION_PER_BELL_REV2: u64 = LAUREL_ONE;
+/// From K3 (O4 step 4) Relic Sites mint no laurels: an always-online host
+/// collected them by the bell, which kept a scripted staking wallet above
+/// 1.0× at low bot shares.
+pub const RELIC_EMISSION_PER_BELL: u64 = 0;
 /// Laurels a siege declaration escrows (§5.4 item 4).
 pub const SIEGE_STAKE: u64 = 5 * LAUREL_ONE;
 /// Share of the victim's banked laurels a first capture moves (§5.4 item 3).
@@ -81,6 +97,13 @@ pub const fn order_quarters(order: u8) -> u64 {
     }
 }
 
+/// Emission quarters of an emitting holding (K3, O4 step 3): its order
+/// factor, so a province emits `Σ quarters × 1/48` laurel per bell.
+/// `order` is 0-based, like [`order_quarters`].
+pub const fn emission_quarters(order: u8) -> u8 {
+    order_quarters(order) as u8
+}
+
 /// Strength weight = tier × garrison factor × holding-order factor, in
 /// `WEIGHT_ONE` units (0.25 … 3.0), rounded down. Always ≥ 250,000.
 pub fn strength_weight(tier: Tier, garrison: MilliTroops, order: u8) -> u64 {
@@ -98,9 +121,9 @@ pub struct RewardIndex {
     pub carry: u128,
     /// Σ strength weight of the holdings attached.
     pub total_weight: u64,
-    /// Holdings currently emitting (non-dormant, and non-occupied if the
-    /// program so rules).
-    pub emitters: u32,
+    /// Σ emission quarters of the holdings attached ([`emission_quarters`];
+    /// 0 for one that does not emit, e.g. an occupied holding).
+    pub emit_quarters: u64,
     /// The bell the index is accrued to.
     pub bell: u64,
     /// Laurel units emitted into the index since genesis.
@@ -113,7 +136,8 @@ pub struct RewardIndex {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Stake {
     pub weight: u64,
-    pub emits: bool,
+    /// Emission quarters (0..=4) this holding adds to its province.
+    pub emit_q: u8,
     /// `RewardIndex::acc` when this holding was last credited.
     pub last_acc: u128,
 }
@@ -127,9 +151,9 @@ impl RewardIndex {
         }
     }
 
-    /// Laurel units emitted per bell at the current emitter count.
+    /// Laurel units emitted per bell at the current emission quarters.
     pub fn emission_per_bell(&self) -> u64 {
-        self.emitters as u64 * HOLDING_EMISSION_PER_BELL
+        self.emit_quarters.saturating_mul(QUARTER_EMISSION_PER_BELL)
     }
 
     /// Accrue emission up to `min(to_bell, end_bell)`: the index freezes at
@@ -166,21 +190,26 @@ impl RewardIndex {
         Ok(e)
     }
 
-    /// Attach a holding (settled, captured into, back from dormancy). The
-    /// index must already be accrued to the current bell.
-    pub fn attach(&mut self, weight: u64, emits: bool) -> Result<Stake, EconError> {
+    /// Attach a holding (settled, captured into, back from dormancy) with
+    /// `emit_q` emission quarters (0..=4). The index must already be
+    /// accrued to the current bell.
+    pub fn attach(&mut self, weight: u64, emit_q: u8) -> Result<Stake, EconError> {
+        if emit_q > EMIT_FULL {
+            return Err(EconError::BadParams);
+        }
         let mut next = *self;
         next.total_weight = next
             .total_weight
             .checked_add(weight)
             .ok_or(EconError::Overflow)?;
-        if emits {
-            next.emitters = next.emitters.checked_add(1).ok_or(EconError::Overflow)?;
-        }
+        next.emit_quarters = next
+            .emit_quarters
+            .checked_add(emit_q as u64)
+            .ok_or(EconError::Overflow)?;
         *self = next;
         Ok(Stake {
             weight,
-            emits,
+            emit_q,
             last_acc: self.acc,
         })
     }
@@ -194,24 +223,26 @@ impl RewardIndex {
             .total_weight
             .checked_sub(stake.weight)
             .ok_or(EconError::Underflow)?;
-        if stake.emits {
-            next.emitters = next.emitters.checked_sub(1).ok_or(EconError::Underflow)?;
-        }
+        next.emit_quarters = next
+            .emit_quarters
+            .checked_sub(stake.emit_q as u64)
+            .ok_or(EconError::Underflow)?;
         *self = next;
         Ok(credit)
     }
 
-    /// Change a holding's weight or emitting flag (muster, clash, tier-up,
-    /// occupation). Credits what it earned under the old weight first.
+    /// Change a holding's weight or emission quarters (muster, clash,
+    /// tier-up, occupation). Credits what it earned under the old weight
+    /// first.
     pub fn reweigh(
         &mut self,
         stake: &mut Stake,
         weight: u64,
-        emits: bool,
+        emit_q: u8,
     ) -> Result<u64, EconError> {
         let mut next = *self;
         let credit = next.detach(stake)?;
-        let fresh = next.attach(weight, emits)?;
+        let fresh = next.attach(weight, emit_q)?;
         *self = next;
         *stake = fresh;
         Ok(credit)
@@ -239,9 +270,15 @@ impl RewardIndex {
     }
 }
 
-/// Laurels a Relic Site pays its holder for `bells` held.
+/// Laurels a Relic Site pays its holder for `bells` held: nothing from K3
+/// on ([`RELIC_EMISSION_PER_BELL`]).
 pub fn relic_credit(bells: u64) -> Option<u64> {
-    bells.checked_mul(RELIC_EMISSION_PER_BELL)
+    relic_credit_at(bells, RELIC_EMISSION_PER_BELL)
+}
+
+/// Relic credit at an explicit rate (revision-2 comparison runs).
+pub fn relic_credit_at(bells: u64, per_bell: u64) -> Option<u64> {
+    bells.checked_mul(per_bell)
 }
 
 fn part(x: u64, bps: Bps) -> u64 {
@@ -420,9 +457,26 @@ mod tests {
     }
 
     #[test]
+    fn extra_holdings_emit_by_their_order_factor() {
+        let mut ix = RewardIndex::new(0);
+        let a = ix.attach(WEIGHT_ONE, emission_quarters(0)).unwrap();
+        let b = ix.attach(WEIGHT_ONE / 2, emission_quarters(1)).unwrap();
+        let c = ix.attach(WEIGHT_ONE / 4, emission_quarters(2)).unwrap();
+        assert_eq!(ix.emission_per_bell(), 7 * HOLDING_EMISSION_PER_BELL / 4);
+        assert_eq!(
+            ix.accrue(4, 100).unwrap(),
+            7 * HOLDING_EMISSION_PER_BELL as u128
+        );
+        let got = ix.pending(&a).unwrap() + ix.pending(&b).unwrap() + ix.pending(&c).unwrap();
+        assert!(7 * HOLDING_EMISSION_PER_BELL - got < 3);
+        assert_eq!(ix.attach(1, 5), Err(EconError::BadParams));
+        assert_eq!(relic_credit(10), Some(0));
+    }
+
+    #[test]
     fn index_freezes_at_end() {
         let mut ix = RewardIndex::new(10);
-        let s = ix.attach(WEIGHT_ONE, true).unwrap();
+        let s = ix.attach(WEIGHT_ONE, EMIT_FULL).unwrap();
         assert_eq!(
             ix.accrue(30, 20).unwrap(),
             10 * HOLDING_EMISSION_PER_BELL as u128

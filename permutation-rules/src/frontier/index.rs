@@ -103,13 +103,31 @@ pub struct IndexParams {
 }
 
 impl IndexParams {
-    /// Revision 2: clamp [0.5, 2], γ = 0.6.
+    /// Revision 2: clamp [0.5, 2], γ = 0.6. Owner decision O6 (2026-09-27)
+    /// keeps γ = 0.6 as the default until M3 measures β with real players.
     pub const REV2: IndexParams = IndexParams {
         clamp_lo: INDEX_ONE / 2,
         clamp_hi: 2 * INDEX_ONE,
         gamma_num: 3,
         gamma_den: 5,
     };
+
+    /// Refuse parameters a season must never be created with: a clamp that
+    /// does not contain 1.0, γ outside [0, 3], or a denominator large enough
+    /// to make `pow_frac` expensive on chain.
+    pub fn validate(&self) -> Result<(), EconError> {
+        let ok = 0 < self.clamp_lo
+            && self.clamp_lo <= INDEX_ONE
+            && INDEX_ONE <= self.clamp_hi
+            && self.clamp_hi <= 10 * INDEX_ONE
+            && (1..=20).contains(&self.gamma_den)
+            && self.gamma_num <= 3 * self.gamma_den;
+        if ok {
+            Ok(())
+        } else {
+            Err(EconError::BadParams)
+        }
+    }
 }
 
 impl Default for IndexParams {
@@ -158,8 +176,10 @@ fn pow_fix(v: u64, n: u32) -> u128 {
     acc
 }
 
-/// `x^(num/den)` for `0 ≤ x ≤ INDEX_ONE` and `num ≤ den`: the largest `y`
-/// (in `INDEX_ONE` units) with `y^den ≤ x^num`, by 20 halvings of [0, 1].
+/// `x^(num/den)` for `0 ≤ x ≤ INDEX_ONE`: the largest `y` (in `INDEX_ONE`
+/// units) with `y^den ≤ x^num`, by 20 halvings of [0, 1]. Any `num` works
+/// (γ > 1 is used by the simulator's γ grid); `IndexParams::validate`
+/// bounds `num ≤ 3 den` and `den ≤ 20` for cost.
 pub fn pow_frac(x: u64, num: u32, den: u32) -> u64 {
     let x = x.min(INDEX_ONE);
     if den == 0 || num == 0 {
@@ -252,6 +272,23 @@ mod tests {
         assert_eq!(pow_frac(250_000, 1, 2), 500_000);
         assert_eq!(pow_frac(INDEX_ONE, 3, 5), INDEX_ONE);
         assert_eq!(pow_frac(0, 3, 5), 0);
+    }
+
+    #[test]
+    fn default_gamma_is_0_6_and_params_validate() {
+        let p = IndexParams::default();
+        assert_eq!((p.gamma_num, p.gamma_den), (3, 5));
+        assert_eq!(p.validate(), Ok(()));
+        let bad = |q: IndexParams| q.validate() == Err(EconError::BadParams);
+        assert!(bad(IndexParams { gamma_den: 0, ..p }));
+        assert!(bad(IndexParams { gamma_num: 16, ..p }));
+        assert!(bad(IndexParams { clamp_lo: 0, ..p }));
+        assert!(bad(IndexParams {
+            clamp_hi: INDEX_ONE / 2,
+            ..p
+        }));
+        // γ > 1 is valid and still a damping.
+        assert!(pow_frac(500_000, 3, 2) < pow_frac(500_000, 3, 5));
     }
 
     #[test]

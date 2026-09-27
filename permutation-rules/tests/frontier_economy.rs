@@ -2,6 +2,9 @@
 //! schedule and pools, the zero-sum laurel emission and its reward index,
 //! capture transfers, the per-capita faction index with herding damping,
 //! and the closed-form claim with the 5× cap and exact conservation.
+//! K3 (owner decisions O3, O4, O6, O10): the officer-pay ceiling, the
+//! Works rate, the stake priced by accrual left, order-weighted emission,
+//! and the closed-form Mandate reserve.
 //!
 //! The property tests draw random seasons from a fixed-seed generator, so
 //! every run checks the same cases and a failure names its seed.
@@ -10,10 +13,11 @@ use permutation_rules::frontier::index::{
     faction_index, herding, FactionFacts, IndexParams, Path, FACTIONS, INDEX_ONE, PATHS,
 };
 use permutation_rules::frontier::laurel::{
-    capture_transfer, mandate_reserve_split, occupation_split, siege_settle, strength_weight,
-    transfer, PairHistory, RewardIndex, Stake, Tier, HOLDING_EMISSION_PER_BELL, LAUREL_ONE,
-    SIEGE_STAKE, WEIGHT_ONE,
+    capture_transfer, emission_quarters, mandate_reserve_split, occupation_split, siege_settle,
+    strength_weight, transfer, PairHistory, RewardIndex, Stake, Tier, EMIT_FULL,
+    HOLDING_EMISSION_PER_BELL, LAUREL_ONE, SIEGE_STAKE, WEIGHT_ONE,
 };
+use permutation_rules::frontier::mandate::{MandateTerm, Reserve, TermState, MANDATE_CAP_PER_TERM};
 use permutation_rules::frontier::payout::{
     claim, settle, tenure_units, CitizenRecord, FactionTotals, Ledger, PayoutParams, Settlement,
     TENURE_ONE,
@@ -149,8 +153,8 @@ fn province_emission_is_split_by_strength_not_created_by_it() {
     let strong = strength_weight(Tier::Stronghold, 1_000_000, 0);
     assert_eq!((weak, strong), (WEIGHT_ONE, 3 * WEIGHT_ONE));
     let mut ix = RewardIndex::new(0);
-    let mut a = ix.attach(weak, true).unwrap();
-    let mut b = ix.attach(strong, true).unwrap();
+    let mut a = ix.attach(weak, EMIT_FULL).unwrap();
+    let mut b = ix.attach(strong, EMIT_FULL).unwrap();
     ix.accrue(12, u64::MAX).unwrap();
     let emitted = 12 * 2 * HOLDING_EMISSION_PER_BELL;
     assert_eq!(ix.emitted, emitted as u128);
@@ -160,8 +164,12 @@ fn province_emission_is_split_by_strength_not_created_by_it() {
     assert_eq!(emitted, 2 * LAUREL_ONE);
 
     // Arming the Hamlet takes a larger share of the same emission.
-    ix.reweigh(&mut a, strength_weight(Tier::Hamlet, 2_000_000, 0), true)
-        .unwrap();
+    ix.reweigh(
+        &mut a,
+        strength_weight(Tier::Hamlet, 2_000_000, 0),
+        EMIT_FULL,
+    )
+    .unwrap();
     ix.accrue(24, u64::MAX).unwrap();
     let got = ix.settle(&mut a).unwrap() + ix.settle(&mut b).unwrap();
     assert!(got <= emitted && emitted - got <= 2);
@@ -173,11 +181,11 @@ fn a_wallet_farm_in_one_province_splits_that_province() {
     // emitters, but each bot's share is small and the total is fixed.
     let mut ix = RewardIndex::new(0);
     let mut human = ix
-        .attach(strength_weight(Tier::Stronghold, 0, 0), true)
+        .attach(strength_weight(Tier::Stronghold, 0, 0), EMIT_FULL)
         .unwrap();
     let mut bots: Vec<Stake> = (0..11)
         .map(|_| {
-            ix.attach(strength_weight(Tier::Hamlet, 0, 2), true)
+            ix.attach(strength_weight(Tier::Hamlet, 0, 2), EMIT_FULL)
                 .unwrap()
         })
         .collect();
@@ -187,6 +195,31 @@ fn a_wallet_farm_in_one_province_splits_that_province() {
     let b: u64 = bots.iter_mut().map(|s| ix.settle(s).unwrap()).sum();
     assert!(h + b <= total && total - (h + b) <= 12);
     // Weights 2.0 vs 11 × 0.25: the human earns 2/4.75 of the province.
+    assert!(h.abs_diff(total * 200 / 475) <= 1);
+
+    // K3 (O4 step 3): the same farm under order-weighted emission. The
+    // bots' third holdings add a quarter of an emission each, so the farm
+    // brings 11/4 holdings' emission instead of 11, and still takes the
+    // same share of it.
+    let mut ix = RewardIndex::new(0);
+    let mut human = ix
+        .attach(
+            strength_weight(Tier::Stronghold, 0, 0),
+            emission_quarters(0),
+        )
+        .unwrap();
+    let mut bots: Vec<Stake> = (0..11)
+        .map(|_| {
+            ix.attach(strength_weight(Tier::Hamlet, 0, 2), emission_quarters(2))
+                .unwrap()
+        })
+        .collect();
+    ix.accrue(144, u64::MAX).unwrap();
+    let total = 144 * (4 + 11) * HOLDING_EMISSION_PER_BELL / 4;
+    assert_eq!(ix.emitted, total as u128);
+    let h = ix.settle(&mut human).unwrap();
+    let b: u64 = bots.iter_mut().map(|s| ix.settle(s).unwrap()).sum();
+    assert!(h + b <= total && total - (h + b) <= 12);
     assert!(h.abs_diff(total * 200 / 475) <= 1);
 }
 
@@ -222,7 +255,11 @@ fn reward_index_is_zero_sum_under_random_histories() {
                 r.below(3_000_000) as u32,
                 r.below(3) as u8,
             );
-            let emits = r.chance(85);
+            let emits = if r.chance(85) {
+                r.below(EMIT_FULL as u64 + 1) as u8
+            } else {
+                0
+            };
             match r.below(5) {
                 0 if hs.iter().filter(|h| h.1).count() < 12 => {
                     let s = ix.attach(weight, emits).unwrap();
@@ -524,7 +561,7 @@ fn a_day_21_citizen_gets_the_same_return_per_usdc() {
         &totals_of(&recs),
         &[INDEX_ONE; FACTIONS],
         0,
-        &PayoutParams::REV2,
+        &PayoutParams::REV3,
     )
     .unwrap();
     let a = claim(&st, &early).unwrap();
@@ -551,7 +588,7 @@ fn laurel_pool_goes_to_stakers_by_laurels_and_the_cap_sweeps() {
         &totals_of(&recs),
         &[INDEX_ONE; FACTIONS],
         0,
-        &PayoutParams::REV2,
+        &PayoutParams::REV3,
     )
     .unwrap();
     let c: Vec<_> = recs.iter().map(|r| claim(&st, r).unwrap()).collect();
@@ -573,7 +610,7 @@ fn laurel_pool_goes_to_stakers_by_laurels_and_the_cap_sweeps() {
         &totals_of(&many),
         &[INDEX_ONE; FACTIONS],
         0,
-        &PayoutParams::REV2,
+        &PayoutParams::REV3,
     )
     .unwrap();
     let w = claim(&st, &many[0]).unwrap();
@@ -592,7 +629,7 @@ fn steward_rows_are_paid_in_full_or_pro_rata() {
         &totals_of(&recs),
         &[INDEX_ONE; FACTIONS],
         0,
-        &PayoutParams::REV2,
+        &PayoutParams::REV3,
     )
     .unwrap();
     assert_eq!(st.factions[0].steward_pot, 1_600_000);
@@ -611,7 +648,7 @@ fn steward_rows_are_paid_in_full_or_pro_rata() {
         &totals_of(&recs),
         &[INDEX_ONE; FACTIONS],
         0,
-        &PayoutParams::REV2,
+        &PayoutParams::REV3,
     )
     .unwrap();
     let paid: Vec<u64> = recs
@@ -631,7 +668,7 @@ fn a_claim_needs_its_record_in_the_totals() {
         &totals_of(&recs),
         &[INDEX_ONE; FACTIONS],
         0,
-        &PayoutParams::REV2,
+        &PayoutParams::REV3,
     )
     .unwrap();
     let outsider = rec(0, 8 * USDC, 0, TENURE_ONE);
@@ -728,7 +765,7 @@ fn random_season(seed: u64) -> Season {
 /// The formula of §5.4 written out as a plain loop over members, with the
 /// same rounding: the reference the closed form must match exactly.
 fn reference_claims(s: &Season, index: &[u64; FACTIONS]) -> Vec<u64> {
-    let p = PayoutParams::REV2;
+    let p = PayoutParams::REV3;
     let live: Vec<&CitizenRecord> = s.recs.iter().filter(|r| !r.voided).collect();
     let md = |a: u128, b: u128, c: u128| if c == 0 { 0 } else { a * b / c };
     let builders: u128 = live
@@ -808,12 +845,15 @@ fn reference_claims(s: &Season, index: &[u64; FACTIONS]) -> Vec<u64> {
                     md(lpot, r.counted_laurels() as u128, lam)
                 };
             }
-            g += if rows <= pc + pl {
+            let row = if rows <= pc + pl {
                 r.steward as u128
             } else {
                 md(pc + pl, r.steward as u128, rows)
             };
-            (g as u64).min(p.cap_multiple * (r.fee + r.stake))
+            // O3: officer pay lifts the claim to at most 95% of what was paid.
+            let ceiling = (r.fee + r.stake) as u128 * p.office_ceiling_bps as u128 / 10_000;
+            let kept = row.min(ceiling.saturating_sub(g));
+            ((g + kept) as u64).min(p.cap_multiple * (r.fee + r.stake))
         })
         .collect()
 }
@@ -823,7 +863,7 @@ fn reference_claims(s: &Season, index: &[u64; FACTIONS]) -> Vec<u64> {
 /// rounding, and pools + operator escrow == everything paid in.
 #[test]
 fn claims_conserve_money_under_random_seasons() {
-    let p = PayoutParams::REV2;
+    let p = PayoutParams::REV3;
     let (mut capped, mut voided, mut max_dust) = (0u32, 0u32, 0u64);
     for seed in 0..300u64 {
         let s = random_season(77_000 + seed);
@@ -888,7 +928,7 @@ fn incremental_sharded_totals_are_order_independent() {
         let s = random_season(91_000 + seed);
         let batch = totals_of(&s.recs);
         let index = faction_index(&s.facts, &IndexParams::REV2);
-        let want = settle(&s.pools, &batch, &index, s.stages, &PayoutParams::REV2).unwrap();
+        let want = settle(&s.pools, &batch, &index, s.stages, &PayoutParams::REV3).unwrap();
         for order in 0..7u64 {
             let mut r = Rng(seed * 100 + order);
             let mut shards = [[FactionTotals::default(); 16]; FACTIONS];
@@ -950,7 +990,7 @@ fn incremental_sharded_totals_are_order_independent() {
             }
             assert_eq!(folded, batch, "seed {seed} order {order}");
             let got: Settlement =
-                settle(&s.pools, &folded, &index, s.stages, &PayoutParams::REV2).unwrap();
+                settle(&s.pools, &folded, &index, s.stages, &PayoutParams::REV3).unwrap();
             assert_eq!(got, want);
         }
     }
@@ -968,7 +1008,7 @@ fn passive_wallets_and_bot_farms_do_not_pay_by_themselves() {
         &totals_of(&recs),
         &[INDEX_ONE; FACTIONS],
         0,
-        &PayoutParams::REV2,
+        &PayoutParams::REV3,
     )
     .unwrap();
     let sybil = claim(&st, &recs[99]).unwrap();
@@ -1007,7 +1047,7 @@ fn late_stakes_do_not_reach_back() {
         &totals_of(&recs),
         &[INDEX_ONE; FACTIONS],
         0,
-        &PayoutParams::REV2,
+        &PayoutParams::REV3,
     )
     .unwrap();
     let (a, b) = (claim(&st, &early).unwrap(), claim(&st, &late).unwrap());
@@ -1091,12 +1131,17 @@ fn only_counted_laurels_move_between_wallets() {
 fn works_weight_does_not_reward_splitting() {
     use permutation_rules::frontier::payout::{works_weight, WORKS_PER_USDC};
     let fee = 4 * USDC;
-    let one = works_weight(560, fee);
-    let split: u64 = (0..4).map(|_| works_weight(140, fee)).sum();
-    assert_eq!(one, 560);
+    // K3 (O4 step 1): 105 Works per USDC, 15 a day over a day-0 fee.
+    assert_eq!(WORKS_PER_USDC, 105);
+    let one = works_weight(420, fee);
+    let split: u64 = (0..4).map(|_| works_weight(105, fee)).sum();
+    assert_eq!(one, 420);
     assert_eq!(split, one);
     assert_eq!(works_weight(10_000, fee), 4 * WORKS_PER_USDC);
-    assert_eq!(works_weight(10_000, SCHED.citizen_fee(21).unwrap()), 140);
+    assert_eq!(
+        works_weight(10_000, SCHED.citizen_fee(21).unwrap()),
+        WORKS_PER_USDC
+    );
     // A faction of one wallet with 400 Works against one with four wallets
     // of 100 Works each (same total fee): the same Works pot share.
     let solo = CitizenRecord {
@@ -1113,4 +1158,266 @@ fn works_weight_does_not_reward_splitting() {
     all.extend(quad.iter().copied());
     let t = totals_of(&all);
     assert_eq!(t[0].works, t[1].works);
+}
+
+// ------------------------------------------------ K3 economy (2026-09-27)
+
+/// O3: officer pay can lift a wallet's claim to at most 95% of what it
+/// paid, never beyond, however many offices it holds; what the ceiling cuts
+/// is swept, so money stays conserved. A farm that wins every office in its
+/// faction still gets back less than it paid.
+#[test]
+fn officer_pay_never_makes_an_office_profitable() {
+    let p = PayoutParams::REV3;
+    assert_eq!(p.office_ceiling_bps, 9_500);
+    let mut cut_total = 0u64;
+    for seed in 0..200u64 {
+        let s = random_season(55_000 + seed);
+        let index = faction_index(&s.facts, &IndexParams::REV2);
+        let st = settle(&s.pools, &totals_of(&s.recs), &index, s.stages, &p).unwrap();
+        let mut ledger = Ledger::new(s.pools.prize().unwrap());
+        for r in &s.recs {
+            let c = claim(&st, r).unwrap();
+            let base = c.citizen + c.civ + c.laurel;
+            if c.steward > 0 {
+                assert!(
+                    c.paid as u128 * 10_000 <= r.paid() as u128 * 9_500,
+                    "seed {seed}: an office lifted a claim above 95%"
+                );
+            }
+            // Officer pay only ever tops up; it never lowers the rest.
+            assert!(c.paid >= base.min(5 * r.paid()));
+            assert_eq!(c.paid + c.swept, c.gross);
+            cut_total += c.office_cut;
+            ledger.record(&c).unwrap();
+        }
+        assert_eq!(ledger.claimed + ledger.swept + ledger.dust(), ledger.prize);
+    }
+    assert!(cut_total > 0, "the ceiling was exercised");
+
+    // A farm of 12 staking wallets holds every office of its faction all
+    // season (the person cap, 10 USDC each) next to 100 honest stakers.
+    let mut recs: Vec<CitizenRecord> = (0..112)
+        .map(|_| rec(0, 4 * USDC, 6 * USDC, 12_500))
+        .collect();
+    for (i, r) in recs.iter_mut().enumerate() {
+        r.laurels = 100 * LAUREL_ONE;
+        if i < 12 {
+            r.steward = steward_rows(4, 4);
+        }
+    }
+    let st = settle(
+        &pools_of(&recs),
+        &totals_of(&recs),
+        &[INDEX_ONE; FACTIONS],
+        0,
+        &p,
+    )
+    .unwrap();
+    let farm: u64 = recs[..12].iter().map(|r| claim(&st, r).unwrap().paid).sum();
+    let paid: u64 = recs[..12].iter().map(|r| r.paid()).sum();
+    assert!(farm * 100 <= paid * 95, "farm got {farm} of {paid}");
+    // Revision 2 had no ceiling: the same farm profited.
+    let st2 = settle(
+        &pools_of(&recs),
+        &totals_of(&recs),
+        &[INDEX_ONE; FACTIONS],
+        0,
+        &PayoutParams {
+            office_ceiling_bps: u32::MAX,
+            ..p
+        },
+    )
+    .unwrap();
+    let farm2: u64 = recs[..12]
+        .iter()
+        .map(|r| claim(&st2, r).unwrap().paid)
+        .sum();
+    assert!(farm2 > paid, "revision 2 farm got {farm2} of {paid}");
+}
+
+/// O10: the Mandate reserve is split in closed form among the stakers who
+/// completed each term, one O(1) claim each, with the per-term cap; every
+/// laurel deposited is either paid, waiting in the reserve, or sitting in a
+/// closed term, exactly, at every step; and the result equals a plain
+/// member loop.
+#[test]
+fn mandate_reserve_pays_staker_completers_in_closed_form() {
+    for seed in 0..200u64 {
+        let mut r = Rng(31_000 + seed);
+        let mut reserve = Reserve::default();
+        let wallets = 1 + r.below(300) as usize;
+        let stakers: Vec<bool> = (0..wallets).map(|_| r.chance(55)).collect();
+        let mut paid_to = vec![0u64; wallets];
+        let mut open: Vec<MandateTerm> = Vec::new();
+        let check = |reserve: &Reserve, open: &[MandateTerm]| {
+            let sitting: u128 = open
+                .iter()
+                .filter(|t| t.state == TermState::Closed)
+                .map(|t| (t.budget - t.paid) as u128)
+                .sum();
+            assert_eq!(reserve.outstanding().unwrap(), sitting, "seed {seed}");
+            assert_eq!(
+                reserve.deposited,
+                reserve.balance as u128 + sitting + reserve.paid
+            );
+        };
+        for term in 0..7u32 {
+            // Credits arrive during the term (10% of each goes here).
+            for _ in 0..r.below(50) {
+                let big = r.chance(10);
+                let credit = r.below(if big {
+                    40 * MANDATE_CAP_PER_TERM
+                } else {
+                    MANDATE_CAP_PER_TERM
+                });
+                reserve.deposit(mandate_reserve_split(credit).give).unwrap();
+            }
+            let mut t = MandateTerm::new(term);
+            let mut who: Vec<(usize, u64)> = Vec::new();
+            for (w, &st) in stakers.iter().enumerate() {
+                if r.chance(40) {
+                    let sh = t.complete(st).unwrap();
+                    assert_eq!(sh, st as u64, "only stakers get a share");
+                    if sh > 0 {
+                        who.push((w, sh));
+                    }
+                }
+            }
+            let budget = t.close(&mut reserve).unwrap();
+            assert_eq!(t.complete(true), Err(EconError::TermState));
+            // Reference: the member loop.
+            let s_all: u64 = who.iter().map(|x| x.1).sum();
+            let want = |sh: u64| {
+                if s_all == 0 {
+                    0
+                } else {
+                    ((budget as u128 * sh as u128 / s_all as u128) as u64)
+                        .min(MANDATE_CAP_PER_TERM * sh)
+                }
+            };
+            // Claims in random order; some are left unclaimed (deadline).
+            for i in (1..who.len()).rev() {
+                who.swap(i, r.below(i as u64 + 1) as usize);
+            }
+            let skip = r.chance(20);
+            let mut term_paid = 0u64;
+            for (k, &(w, sh)) in who.iter().enumerate() {
+                if skip && k % 5 == 0 {
+                    continue;
+                }
+                let got = t.claim(&mut reserve, sh).unwrap();
+                assert_eq!(got, want(sh), "seed {seed} term {term}");
+                assert!(got <= MANDATE_CAP_PER_TERM);
+                paid_to[w] += got;
+                term_paid += got;
+                check(&reserve, &[t]);
+            }
+            assert!(term_paid <= budget);
+            let all_claimed = t.claimed_shares == t.shares;
+            if !all_claimed {
+                assert_eq!(t.sweep(&mut reserve, false), Err(EconError::TermState));
+            }
+            let back = t.sweep(&mut reserve, true).unwrap();
+            assert_eq!(back, budget - term_paid);
+            assert_eq!(t.claim(&mut reserve, 1), Err(EconError::TermState));
+            open.push(t);
+            check(&reserve, &open);
+        }
+        for (w, &st) in stakers.iter().enumerate() {
+            if !st {
+                assert_eq!(paid_to[w], 0, "seed {seed}: a fee-only wallet was paid");
+            }
+        }
+        assert_eq!(
+            reserve.deposited,
+            reserve.balance as u128 + reserve.paid,
+            "seed {seed}: every term swept"
+        );
+    }
+}
+
+/// O4 step 2: the Season 1 laurel stake is priced by the expected accrual
+/// still to come, which rises while joins are open, so a late stake costs
+/// more than its share of days left but still less every day; the citizen
+/// fee keeps the days-left schedule.
+#[test]
+fn season1_prices_late_stakes_by_accrual_left() {
+    let s1 = EntrySchedule::SEASON1;
+    assert_eq!(s1.stake_ramp_bps, 20_000);
+    assert_eq!(s1.validate(), Ok(()));
+    let d3 = EntrySchedule::FRONTIER_28;
+    let got: [u64; 4] = [0, 7, 14, 21].map(|d| s1.laurel_stake(d).unwrap());
+    // Σ rate (1 + 2 min(t,21)/21) over 28 days = 28 + 2 × (10 + 7) = 62.
+    // Left at day 7: 62 − (7 + 2 × 21/21) = 53; day 14: 7 + 2 × 119/21 +
+    // 21 = 39⅓; day 21: 7 × 3 = 21. (D3: 6, 4.5, 3, 1.5.)
+    assert_eq!(got, [6_000_000, 5_129_032, 3_806_451, 2_032_258]);
+    for d in 1..=21 {
+        assert!(s1.laurel_stake(d) > d3.laurel_stake(d));
+        assert!(s1.laurel_stake(d) < s1.laurel_stake(d - 1));
+        assert_eq!(s1.citizen_fee(d), d3.citizen_fee(d));
+    }
+    assert_eq!(s1.laurel_stake(22), None);
+}
+
+/// Season parameters outside their ranges are refused (the §4.8 review
+/// item: no `validate()` for the bps and γ parameters).
+#[test]
+fn bad_season_parameters_are_refused() {
+    assert_eq!(PayoutParams::REV2.validate(), Ok(()));
+    assert_eq!(PayoutParams::REV3.validate(), Ok(()));
+    assert_eq!(IndexParams::REV2.validate(), Ok(()));
+    let bad = [
+        PayoutParams {
+            fee_units_bps: 10_001,
+            ..PayoutParams::REV3
+        },
+        PayoutParams {
+            cap_multiple: 0,
+            ..PayoutParams::REV3
+        },
+        PayoutParams {
+            office_ceiling_bps: 60_000,
+            ..PayoutParams::REV3
+        },
+        PayoutParams {
+            steward_bps: 5_000,
+            ..PayoutParams::REV3
+        },
+    ];
+    let recs = [rec(0, 4 * USDC, 0, TENURE_ONE)];
+    for p in bad {
+        assert_eq!(p.validate(), Err(EconError::BadParams));
+        assert_eq!(
+            settle(
+                &pools_of(&recs),
+                &totals_of(&recs),
+                &[INDEX_ONE; FACTIONS],
+                0,
+                &p
+            ),
+            Err(EconError::BadParams)
+        );
+    }
+    let sched_bad = [
+        EntrySchedule {
+            last_join_day: 28,
+            ..EntrySchedule::SEASON1
+        },
+        EntrySchedule {
+            pool_bps: 10_001,
+            ..EntrySchedule::SEASON1
+        },
+    ];
+    for s in sched_bad {
+        assert_eq!(s.validate(), Err(EconError::BadParams));
+    }
+    assert_eq!(
+        IndexParams {
+            gamma_den: 0,
+            ..IndexParams::REV2
+        }
+        .validate(),
+        Err(EconError::BadParams)
+    );
 }

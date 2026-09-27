@@ -3,6 +3,7 @@
 //! conservation checked. The same finished season can be settled under
 //! several index parameters (γ), since γ changes only the settlement.
 
+use crate::config::OfficePay;
 use crate::model::{Arch, BUILDER_THRESHOLD};
 use crate::sim::{Earned, JoinState, Sim, NONE};
 use permutation_rules::frontier::index::{
@@ -92,22 +93,30 @@ pub fn settle_run(sim: &Sim, p: &IndexParams) -> Outcome {
                 builder: a.pledged >= BUILDER_THRESHOLD,
                 laurels: a.laurels,
                 laurels_at_stake: a.laurels_at_stake,
-                steward: steward_rows(a.minister_terms, a.warden_terms),
+                steward: match sim.cfg.office_pay {
+                    OfficePay::Usdc => steward_rows(a.minister_terms, a.warden_terms),
+                    // Variant: rows capped at a share of what was paid.
+                    OfficePay::ShareOfPaid(bps) => steward_rows(a.minister_terms, a.warden_terms)
+                        .min(((a.fee + a.stake) as u128 * bps as u128 / 10_000) as u64),
+                    OfficePay::Laurels => 0,
+                },
                 voided: false,
             },
         ));
     }
     // FactionShards: every credit added; RevealShade removes each Shade.
+    let pp: PayoutParams = sim.cfg.payout;
+    let wpu = pp.works_per_usdc;
     let mut totals = [FactionTotals::default(); FACTIONS];
     for (_, r) in &recs {
         totals[r.faction as usize]
-            .add(&r.weights())
+            .add(&r.weights_at(wpu))
             .expect("totals");
     }
     for (i, r) in recs.iter_mut() {
         if sim.agents[*i].shade {
             totals[r.faction as usize]
-                .remove(&r.weights())
+                .remove(&r.weights_at(wpu))
                 .expect("void");
             r.voided = true;
         }
@@ -117,19 +126,13 @@ pub fn settle_run(sim: &Sim, p: &IndexParams) -> Outcome {
     let members_all: u64 = facts.iter().map(|f| f.members).sum();
     let raw: [u64; FACTIONS] = core::array::from_fn(|k| clamped_mean(k, &facts, p));
     let herd: [u64; FACTIONS] = core::array::from_fn(|k| herding(facts[k].members, members_all, p));
-    let st = settle(
-        &sim.pools,
-        &totals,
-        &index,
-        sim.engine_stages,
-        &PayoutParams::REV2,
-    )
-    .expect("settle");
+    let st = settle(&sim.pools, &totals, &index, sim.engine_stages, &pp).expect("settle");
     let prize = sim.pools.prize().expect("prize");
     let mut ledger = Ledger::new(prize);
     let mut agents = Vec::with_capacity(recs.len());
     let mut checks = Vec::new();
     let mut over_cap = 0u64;
+    let mut office_profit = 0u64;
     let mut voided_paid = 0u64;
     let mut sum_paid = 0u128;
     let mut hash_in: Vec<u8> = Vec::with_capacity(recs.len() * 24);
@@ -139,6 +142,13 @@ pub fn settle_run(sim: &Sim, p: &IndexParams) -> Outcome {
         let a = &sim.agents[*i];
         if c.paid > 5 * r.paid() {
             over_cap += 1;
+        }
+        // O3: officer pay never lifts a claim above the ceiling.
+        if pp.office_ceiling_bps != u32::MAX
+            && c.steward > 0
+            && c.paid as u128 * 10_000 > r.paid() as u128 * pp.office_ceiling_bps as u128
+        {
+            office_profit += 1;
         }
         if r.voided && c.paid > 0 {
             voided_paid += 1;
@@ -224,6 +234,12 @@ pub fn settle_run(sim: &Sim, p: &IndexParams) -> Outcome {
     );
     check(
         &mut checks,
+        "officer pay within its ceiling",
+        office_profit == 0,
+        format!("{office_profit} officers paid above the ceiling"),
+    );
+    check(
+        &mut checks,
         "voided Shades paid nothing",
         voided_paid == 0,
         format!("{voided_paid} voided claims > 0"),
@@ -231,7 +247,7 @@ pub fn settle_run(sim: &Sim, p: &IndexParams) -> Outcome {
     // ---- laurel conservation (zero-sum emission, §5.4)
     let (emitted, orphaned) = sim.laurels_minted();
     let held: u128 = sim.agents.iter().map(|a| a.laurels as u128).sum::<u128>()
-        + sim.reserve.iter().map(|&x| x as u128).sum::<u128>()
+        + sim.reserve.iter().map(|r| r.balance as u128).sum::<u128>()
         + sim.escrow as u128
         + sim.stats.siege_stake_orphaned as u128
         + sim.stats.laurels_burned as u128;
@@ -241,6 +257,24 @@ pub fn settle_run(sim: &Sim, p: &IndexParams) -> Outcome {
         "laurels: held = credited + relic minted",
         held == sources,
         format!("held {held} sources {sources}"),
+    );
+    // Mandate reserve (O10): deposited = balance + paid, every term swept.
+    let (dep, bal, rpaid, open) = sim
+        .reserve
+        .iter()
+        .fold((0u128, 0u128, 0u128, 0u128), |a, r| {
+            (
+                a.0 + r.deposited,
+                a.1 + r.balance as u128,
+                a.2 + r.paid,
+                a.3 + r.outstanding().expect("outstanding"),
+            )
+        });
+    check(
+        &mut checks,
+        "Mandate reserve: deposited = balance + paid",
+        dep == bal + rpaid && open == 0 && rpaid == sim.stats.mandate_paid as u128,
+        format!("deposited {dep} = balance {bal} + paid {rpaid}; open {open}"),
     );
     let idx_dust = emitted as i128 - sim.laurel_credited as i128 - orphaned as i128;
     check(

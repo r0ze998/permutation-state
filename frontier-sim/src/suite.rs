@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
 
-use crate::config::{Config, Emission, LateStake};
+use crate::config::{Config, Emission, LateStake, OfficePay};
 use crate::model::Arch;
 use crate::report::*;
 use crate::settle::{settle_run, Outcome};
@@ -74,6 +74,17 @@ pub fn run_report(sim: &Sim, o: &Outcome, secs: f64) -> String {
     .unwrap();
     writeln!(s, "### Season\n\n{}", stats_table(sim, o)).unwrap();
     writeln!(s, "### Conservation\n\n{}", checks_table(o)).unwrap();
+    writeln!(
+        s,
+        "World holding emission per day (laurels): {}\n",
+        sim.stats
+            .emission_by_day
+            .iter()
+            .map(|e| format!("{:.0}", *e as f64 / crate::sim::LAUREL as f64))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+    .unwrap();
     writeln!(s, "digest {}", hex(&o.digest)).unwrap();
     s
 }
@@ -205,7 +216,7 @@ pub fn suite(base: &Config, seeds: u64, only: Option<&str>) -> String {
         .unwrap();
         writeln!(
             s,
-            "{} seasons × {} wallets, equal factions, bots {:.0}%, Shades {:.1}%, doctrines off, γ = 0.6. Pooled over seeds 1..={}. Multiples are Σ claims / Σ paid for the group [sim].\n",
+            "{} seasons × {} wallets, equal factions, bots {:.0}%, Shades {:.1}%, doctrines off, γ = 0.6, **K3 economy** (officer-pay ceiling 95%, 105 Works per USDC, stake priced by accrual left, order-weighted emission, no Relic Site laurels, Mandate reserve to staker completers). Pooled over seeds 1..={}. Multiples are Σ claims / Σ paid for the group [sim].\n",
             done.len(),
             base.agents,
             base.bot_share * 100.0,
@@ -287,16 +298,19 @@ pub fn suite(base: &Config, seeds: u64, only: Option<&str>) -> String {
         .unwrap();
     }
 
-    // ---- §B variant: second and third holdings do not emit
+    // ---- §B the M0 (revision 2) economy on the same seeds
     if want("variant") {
         let jobs: Vec<Job> = (1..=seeds)
-            .map(|k| Job {
-                cfg: Config {
+            .map(|k| {
+                let mut cfg = Config {
                     seed: k,
-                    emission: Emission::OrderWeighted,
                     ..base.clone()
-                },
-                gammas: vec![],
+                };
+                cfg.set_rev2_economy();
+                Job {
+                    cfg,
+                    gammas: vec![],
+                }
             })
             .collect();
         let done = run_all(jobs);
@@ -306,10 +320,10 @@ pub fn suite(base: &Config, seeds: u64, only: Option<&str>) -> String {
         let outs: Vec<&Outcome> = done.iter().map(|d| &d.outs[0]).collect();
         writeln!(
             s,
-            "## B. Variant: holdings emit in proportion to their order factor\n"
+            "## B. For comparison: the M0 (revision 2) economy on the same seeds\n"
         )
         .unwrap();
-        writeln!(s, "Same seeds and settings as A; a second holding emits ½ × 1/12 laurel a bell and a third ¼ × 1/12, matching the order factor of their weight [sim variant, a proposal; not the design].\n").unwrap();
+        writeln!(s, "Same seeds and settings as A, with the economy of `cea89be`: every holding emits 1/12 a bell, Relic Sites pay 1 laurel a bell, 140 Works per USDC, stakes priced by days left, officer pay without a ceiling, Mandate reserve split among every completer [sim].\n").unwrap();
         writeln!(s, "{}", payout_table(&outs)).unwrap();
         writeln!(s, "### B.1 By join day\n\n{}", join_day_table(&outs)).unwrap();
         writeln!(
@@ -643,18 +657,21 @@ pub fn suite(base: &Config, seeds: u64, only: Option<&str>) -> String {
     if want("decompose") {
         type Tweak = fn(&mut Config);
         let variants: Vec<(&str, Tweak)> = vec![
-            ("design (baseline)", |_| {}),
-            ("no Relic Sites", |c| c.relics = false),
-            ("Works cap 60/day (the old default)", |c| c.works_cap = 60),
+            ("K3 economy (baseline)", |_| {}),
+            ("Relic Sites pay again (rev2)", |c| c.relics = true),
+            ("every holding emits 1/12 (rev2)", |c| {
+                c.emission = Emission::Full
+            }),
             ("holdings 2-3 do not emit", |c| {
                 c.emission = Emission::FirstOnly
             }),
-            ("holdings emit by order factor", |c| {
-                c.emission = Emission::OrderWeighted
+            ("140 Works per USDC (rev2)", |c| {
+                c.payout.works_per_usdc = 140
             }),
-            ("no Relic Sites + order-weighted emission", |c| {
-                c.relics = false;
-                c.emission = Emission::OrderWeighted;
+            ("Works cap 60/day", |c| c.works_cap = 60),
+            ("stake priced by days left (D3)", |c| c.stake_ramp_bps = 0),
+            ("Mandate reserve to every completer (M0)", |c| {
+                c.mandate_stakers_only = false
             }),
             ("bots add their stake late (day 21)", |c| {
                 c.late_stake = LateStake::Bots
@@ -663,6 +680,10 @@ pub fn suite(base: &Config, seeds: u64, only: Option<&str>) -> String {
                 c.late_stake = LateStake::Stakers
             }),
             ("bots stand for office", |c| c.bot_officers = true),
+            ("bots stand for office, no officer ceiling (rev2)", |c| {
+                c.bot_officers = true;
+                c.payout.office_ceiling_bps = u32::MAX;
+            }),
         ];
         let shares = [0.02, 0.05, 0.10];
         let mut jobs = Vec::new();
@@ -688,7 +709,7 @@ pub fn suite(base: &Config, seeds: u64, only: Option<&str>) -> String {
         checks_ok += ok;
         checks_n += n;
         writeln!(s, "## G. What drives the bot edge\n").unwrap();
-        writeln!(s, "SDK-default bots; each row switches one mechanism off [sim variants]. {} seeds per cell, {} wallets.\n", seeds, base.agents).unwrap();
+        writeln!(s, "SDK-default bots; each row switches one K3 change back (or adds one behaviour) [sim variants]. {} seeds per cell, {} wallets.\n", seeds, base.agents).unwrap();
         writeln!(s, "| variant | bot share | bot + stake | bot fee only | very skilled + stake | skilled + stake | daily + stake | daily fee only | casual fee only | late-join daily + stake (days 1-21) vs day 0 |").unwrap();
         writeln!(s, "|---|---|---|---|---|---|---|---|---|---|").unwrap();
         for (vi, (label, _)) in variants.iter().enumerate() {
@@ -728,6 +749,131 @@ pub fn suite(base: &Config, seeds: u64, only: Option<&str>) -> String {
             }
         }
         writeln!(s).unwrap();
+    }
+
+    // ---- §K the O4 ladder and the O3 alternatives
+    if want("ladder") {
+        let mk = |f: &dyn Fn(&mut Config)| {
+            let mut c = base.clone();
+            f(&mut c);
+            c
+        };
+        let m0 = |c: &mut Config| c.set_rev2_economy();
+        let k3base = |c: &mut Config| {
+            c.set_rev2_economy();
+            c.mandate_stakers_only = true;
+            c.payout.office_ceiling_bps = 9_500;
+        };
+        let ladder: Vec<(String, Config)> = vec![
+            ("0. M0 economy (rev2)".into(), mk(&m0)),
+            (
+                "1. + O10 Mandate to staker completers + O3 ceiling 95%".into(),
+                mk(&k3base),
+            ),
+            (
+                "2. step 1: + 70 Works per USDC".into(),
+                mk(&|c| {
+                    k3base(c);
+                    c.payout.works_per_usdc = 70;
+                }),
+            ),
+            (
+                "2b. step 1 alt: 35 Works per USDC".into(),
+                mk(&|c| {
+                    k3base(c);
+                    c.payout.works_per_usdc = 35;
+                }),
+            ),
+            (
+                "3. step 2: + stake priced by accrual left (ramp 2.0)".into(),
+                mk(&|c| {
+                    k3base(c);
+                    c.payout.works_per_usdc = 70;
+                    c.stake_ramp_bps = 20_000;
+                }),
+            ),
+            (
+                "4. step 3: + order-weighted emission".into(),
+                mk(&|c| {
+                    k3base(c);
+                    c.payout.works_per_usdc = 70;
+                    c.stake_ramp_bps = 20_000;
+                    c.emission = Emission::OrderWeighted;
+                }),
+            ),
+            (
+                "5. step 4: + no Relic Site laurels".into(),
+                mk(&|c| {
+                    k3base(c);
+                    c.payout.works_per_usdc = 70;
+                    c.stake_ramp_bps = 20_000;
+                    c.emission = Emission::OrderWeighted;
+                    c.relics = false;
+                }),
+            ),
+            (
+                "6. back-off: steps 2-4 with 140 Works per USDC".into(),
+                mk(&|c| {
+                    c.payout.works_per_usdc = 140;
+                }),
+            ),
+            (
+                "7. back-off: step 4 alone (140, D3 stake, full emission)".into(),
+                mk(&|c| {
+                    c.payout.works_per_usdc = 140;
+                    c.stake_ramp_bps = 0;
+                    c.emission = Emission::Full;
+                }),
+            ),
+            (
+                "8. back-off: 70 Works + step 4 (no ramp, full emission)".into(),
+                mk(&|c| {
+                    c.payout.works_per_usdc = 70;
+                    c.stake_ramp_bps = 0;
+                    c.emission = Emission::Full;
+                }),
+            ),
+            (
+                "9. **K3 choice**: steps 2-4 with 105 Works per USDC".into(),
+                base.clone(),
+            ),
+        ];
+        let rows = criterion_rows(base, seeds, &ladder, &[false, true]);
+        writeln!(s, "## K. The bot criterion, step by step (O4) \n").unwrap();
+        writeln!(s, "SDK-default staking bots at 1, 2, 5 and 10% of wallets, {} seeds per cell (seeds 201..), {} wallets; each economy is run with bots barred from office and with bots standing for office (the most engaged wallet wins, as in M0 §G). Steps are cumulative in the owner's order (O4); rows 6-9 back steps off to find the passing set that costs honest players least. The honest cells are the same seasons' multiples. \"swept\" is what the officer-pay ceiling (and the 5× cap) carries to the next season [sim].\n", seeds, base.agents).unwrap();
+        writeln!(s, "{}", criterion_table(&rows)).unwrap();
+        let alts: Vec<(String, Config)> = vec![
+            (
+                "a. no bound (rev2 rows)".into(),
+                mk(&|c| c.payout.office_ceiling_bps = u32::MAX),
+            ),
+            (
+                "b. rows capped at 25% of what the officer paid".into(),
+                mk(&|c| {
+                    c.payout.office_ceiling_bps = u32::MAX;
+                    c.office_pay = OfficePay::ShareOfPaid(2_500);
+                }),
+            ),
+            (
+                "c. laurels from the Mandate budget (Minister 2, Warden 1 shares)".into(),
+                mk(&|c| {
+                    c.payout.office_ceiling_bps = u32::MAX;
+                    c.office_pay = OfficePay::Laurels;
+                }),
+            ),
+            (
+                "d. ceiling 90% of what the wallet paid".into(),
+                mk(&|c| c.payout.office_ceiling_bps = 9_000),
+            ),
+            ("e. **ceiling 95%** (K3 choice)".into(), base.clone()),
+            (
+                "f. ceiling 100% (break-even)".into(),
+                mk(&|c| c.payout.office_ceiling_bps = 10_000),
+            ),
+        ];
+        let rows = criterion_rows(base, seeds, &alts, &[true]);
+        writeln!(s, "### K.1 Officer pay (O3): the alternatives on the K3 economy, bots standing for office\n").unwrap();
+        writeln!(s, "{}", criterion_table(&rows)).unwrap();
     }
 
     // ---- §E doctrines
@@ -796,7 +942,7 @@ pub fn suite(base: &Config, seeds: u64, only: Option<&str>) -> String {
 fn stats_line(d: &Done) -> String {
     let st = &d.stats;
     format!(
-        "Final ring {}, rings opened {}; sessions {}; clashes {} ({} engagements, {} kernel refusals); sieges declared {} / completed {} / failed {} (never held {}, lost {}); occupations {}, liberations {}, captures {}, Free City captures {}; camps beaten {}; routs {}; Disarray postures {}; Engine stages {} on days {:?}; Relic Sites {} minting {:.0} laurels; dormancies {}, first holdings released {}; 2nd/3rd holdings founded {}; withdrawn joins {}.\n",
+        "Final ring {}, rings opened {}; sessions {}; clashes {} ({} engagements, {} kernel refusals); sieges declared {} / completed {} / failed {} (never held {}, lost {}); occupations {}, liberations {}, captures {}, Free City captures {}; camps beaten {}; routs {}; Disarray postures {}; Engine stages {} on days {:?}; Relic Sites {} minting {:.0} laurels; dormancies {}, first holdings released {}; 2nd/3rd holdings founded {}; withdrawn joins {}; Mandate shares {} (fee-only completions without a share {}), Mandate laurels paid {:.0}, left in reserve {:.0}; office-terms Minister {} / paid Warden {}.\n",
         st.final_ring,
         st.rings_opened,
         st.sessions,
@@ -823,7 +969,174 @@ fn stats_line(d: &Done) -> String {
         st.releases,
         st.second_holdings,
         st.withdrawn_joins,
+        st.mandate_shares,
+        st.mandate_unshared,
+        lau(st.mandate_paid),
+        lau(st.mandate_left),
+        st.minister_terms,
+        st.warden_terms,
     )
+}
+
+/// The bot criterion of O4 (and O3's office variant) for a list of
+/// configurations: SDK-default staking bots at 1, 2, 5 and 10% of wallets,
+/// with bots barred from office and with bots standing for office, plus
+/// the honest archetypes' multiples in the same seasons [sim].
+pub const CRITERION_SHARES: [f64; 4] = [0.01, 0.02, 0.05, 0.10];
+
+pub struct CriterionRow {
+    pub label: String,
+    pub offices: bool,
+    pub share: f64,
+    pub bot_stake: Mult,
+    pub bot_stake_max: f64,
+    pub cells: Vec<Mult>,
+    pub swept_pct: f64,
+}
+
+/// Honest cells reported next to the bot: (label, archetype, staker).
+pub const HONEST_CELLS: [(&str, Arch, bool); 8] = [
+    ("bot fee only", Arch::Bot, false),
+    ("very skilled + stake", Arch::VerySkilled, true),
+    ("skilled + stake", Arch::Skilled, true),
+    ("daily + stake", Arch::Daily, true),
+    ("daily fee only", Arch::Daily, false),
+    ("casual + stake", Arch::Casual, true),
+    ("casual fee only", Arch::Casual, false),
+    ("idle fee only", Arch::Idle, false),
+];
+
+pub fn criterion_rows(
+    base: &Config,
+    seeds: u64,
+    variants: &[(String, Config)],
+    offices: &[bool],
+) -> Vec<CriterionRow> {
+    let mut jobs = Vec::new();
+    let mut tags = Vec::new();
+    for (vi, (_, cfg)) in variants.iter().enumerate() {
+        for &off in offices {
+            for &b in &CRITERION_SHARES {
+                for k in 1..=seeds {
+                    jobs.push(Job {
+                        cfg: Config {
+                            seed: 200 + k,
+                            bot_share: b,
+                            bot_officers: off,
+                            agents: base.agents,
+                            ..cfg.clone()
+                        },
+                        gammas: vec![],
+                    });
+                    tags.push((vi, off, b));
+                }
+            }
+        }
+    }
+    let done = run_all(jobs);
+    let mut rows = Vec::new();
+    for (vi, (label, _)) in variants.iter().enumerate() {
+        for &off in offices {
+            for &b in &CRITERION_SHARES {
+                let ds: Vec<&Done> = done
+                    .iter()
+                    .zip(&tags)
+                    .filter(|(_, t)| **t == (vi, off, b))
+                    .map(|(d, _)| d)
+                    .collect();
+                let mut bot = Mult::default();
+                let mut mx = f64::MIN;
+                let mut cells = vec![Mult::default(); HONEST_CELLS.len()];
+                let (mut swept, mut prize) = (0u128, 0u128);
+                for d in &ds {
+                    let o = &d.outs[0];
+                    assert!(o.checks.iter().all(|c| c.ok), "conservation failed");
+                    let m = arch_mult(o, Arch::Bot, true);
+                    mx = mx.max(m.x());
+                    bot.merge(&m);
+                    for (i, (_, a, st)) in HONEST_CELLS.iter().enumerate() {
+                        cells[i].merge(&arch_mult(o, *a, *st));
+                    }
+                    swept += o.ledger.swept as u128;
+                    prize += o.ledger.prize as u128;
+                }
+                rows.push(CriterionRow {
+                    label: label.clone(),
+                    offices: off,
+                    share: b,
+                    bot_stake: bot,
+                    bot_stake_max: mx,
+                    cells,
+                    swept_pct: 100.0 * swept as f64 / prize.max(1) as f64,
+                });
+            }
+        }
+    }
+    rows
+}
+
+pub fn criterion_table(rows: &[CriterionRow]) -> String {
+    let mut s = String::new();
+    write!(
+        s,
+        "| variant | bots in office | bot share | **bot + stake** | max seed |"
+    )
+    .unwrap();
+    for (l, _, _) in HONEST_CELLS {
+        write!(s, " {l} |").unwrap();
+    }
+    writeln!(s, " swept % of prize |").unwrap();
+    writeln!(
+        s,
+        "|---|---|---|---|---|{}---|",
+        "---|".repeat(HONEST_CELLS.len())
+    )
+    .unwrap();
+    for r in rows {
+        write!(
+            s,
+            "| {} | {} | {:.0}% | **{:.3}** | {:.3} |",
+            r.label,
+            if r.offices { "yes" } else { "no" },
+            r.share * 100.0,
+            r.bot_stake.x(),
+            r.bot_stake_max
+        )
+        .unwrap();
+        for c in &r.cells {
+            write!(s, " {} |", c.cell()).unwrap();
+        }
+        writeln!(s, " {:.2}% |", r.swept_pct).unwrap();
+    }
+    // Verdict per variant.
+    let mut labels: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
+    labels.dedup();
+    writeln!(s).unwrap();
+    for l in labels {
+        for off in [false, true] {
+            let rs: Vec<&CriterionRow> = rows
+                .iter()
+                .filter(|r| r.label == l && r.offices == off)
+                .collect();
+            if rs.is_empty() {
+                continue;
+            }
+            let worst = rs.iter().map(|r| r.bot_stake.x()).fold(f64::MIN, f64::max);
+            writeln!(
+                s,
+                "- {l}, bots {} office: worst pooled bot + stake {:.3} → **{}**",
+                if off { "in" } else { "barred from" },
+                worst,
+                if worst < 1.0 {
+                    "passes (< 1.0 at 1, 2, 5, 10%)"
+                } else {
+                    "fails"
+                }
+            )
+            .unwrap();
+        }
+    }
+    s
 }
 
 /// β for path p (0..4) or the undamped index (p = 4), faction 0 vs 1..6.
@@ -856,16 +1169,45 @@ mod tests {
 
     #[test]
     fn a_small_season_conserves_money_and_laurels() {
-        for emission in [Emission::Full, Emission::FirstOnly, Emission::OrderWeighted] {
-            let (_, o) = play(&Config {
-                emission,
+        let mut rev2 = small(3);
+        rev2.set_rev2_economy();
+        let cfgs = [
+            small(3),
+            rev2,
+            Config {
+                emission: Emission::FirstOnly,
+                relics: true,
                 ..small(3)
-            });
+            },
+            Config {
+                bot_officers: true,
+                office_pay: OfficePay::Laurels,
+                ..small(3)
+            },
+            Config {
+                bot_officers: true,
+                office_pay: OfficePay::ShareOfPaid(2_500),
+                ..small(3)
+            },
+        ];
+        for cfg in cfgs {
+            let (sim, o) = play(&cfg);
             for c in &o.checks {
-                assert!(c.ok, "{emission:?}: {} ({})", c.name, c.detail);
+                assert!(c.ok, "{:?}: {} ({})", cfg.emission, c.name, c.detail);
             }
             assert!(o.ledger.claimed > 0);
+            assert!(sim.stats.mandate_paid > 0);
         }
+    }
+
+    #[test]
+    fn the_mandate_reserve_pays_only_staker_completers() {
+        let (sim, o) = play(&small(4));
+        assert!(sim.stats.mandate_unshared > 0 && sim.stats.mandate_shares > 0);
+        for a in o.agents.iter().filter(|a| a.stake == 0) {
+            assert_eq!(a.earned.mandate, 0, "a fee-only wallet got Mandate pay");
+        }
+        assert!(o.agents.iter().any(|a| a.earned.mandate > 0));
     }
 
     #[test]

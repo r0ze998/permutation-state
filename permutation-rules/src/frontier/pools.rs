@@ -32,6 +32,11 @@ pub enum EconError {
     BadFaction,
     /// A reward index asked to go back in time.
     BellBackwards,
+    /// A Mandate term asked to do something its state does not allow
+    /// (register after close, claim before close or after the sweep).
+    TermState,
+    /// Season parameters outside their allowed range (`validate`).
+    BadParams,
 }
 
 /// The entry prices and the pool split. `FRONTIER_28` is decision D3.
@@ -50,6 +55,15 @@ pub struct EntrySchedule {
     /// Share of every payment that goes to its pool (80%); the rest is the
     /// operator's escrow.
     pub pool_bps: Bps,
+    /// **Laurel-stake accrual ramp (O4 step 2)**, bps. The laurel stake is
+    /// priced by the share of the season's expected laurel accrual still to
+    /// come, not by the share of days left: the expected accrual rate on
+    /// day `t` is `1 + ramp × min(t, last_join_day) / last_join_day` (the
+    /// world's emission grows while joins are open, then stays flat), and
+    /// `l(day) = l(0) × max(floor, Σ_{t ≥ day} rate / Σ_t rate)`. 0 gives
+    /// the D3 days-left schedule exactly. The citizen fee always uses days
+    /// left.
+    pub stake_ramp_bps: u32,
 }
 
 impl EntrySchedule {
@@ -61,7 +75,46 @@ impl EntrySchedule {
         last_join_day: 21,
         floor_bps: 2_500,
         pool_bps: 8_000,
+        stake_ramp_bps: 0,
     };
+
+    /// Season 1 after K3 (owner decision O4 step 2): `FRONTIER_28` with the
+    /// laurel stake priced by expected accrual left. The ramp 20,000 bps
+    /// (accrual rate 3× day 0's by the last join day) fits the simulator's
+    /// world emission curve within 1.3 points of remaining share on every
+    /// day [sim]; M3 re-fits it on real play.
+    pub const SEASON1: EntrySchedule = EntrySchedule {
+        stake_ramp_bps: 20_000,
+        ..Self::FRONTIER_28
+    };
+
+    /// Refuse schedules a season must never be created with.
+    pub fn validate(&self) -> Result<(), EconError> {
+        let ok = self.season_days > 0
+            && self.season_days <= 366
+            && self.last_join_day < self.season_days
+            && self.floor_bps <= BPS_ONE
+            && self.pool_bps <= BPS_ONE
+            && self.stake_ramp_bps <= 100_000;
+        if ok {
+            Ok(())
+        } else {
+            Err(EconError::BadParams)
+        }
+    }
+
+    /// Expected accrual rate on `day`, in units of `last_join_day` × bps
+    /// (integer, so the ratio of two sums is exact).
+    fn accrual_rate(&self, day: u32) -> u128 {
+        let j = self.last_join_day.max(1) as u128;
+        j * BPS_ONE as u128 + self.stake_ramp_bps as u128 * day.min(self.last_join_day) as u128
+    }
+
+    /// `Σ_{t = day}^{season_days − 1}` of the accrual rate. At most 366
+    /// terms (`validate`).
+    fn accrual_left(&self, day: u32) -> u128 {
+        (day..self.season_days).map(|t| self.accrual_rate(t)).sum()
+    }
 
     /// `base × max(floor, (season_days − day) / season_days)`, rounded down
     /// (the payer's favour), or `None` after the last join day.
@@ -81,9 +134,20 @@ impl EntrySchedule {
         self.price(self.citizen_fee_day0, day)
     }
 
-    /// The laurel stake `l(day)`: 6.00 / 4.50 / 3.00 / 1.50 USDC.
+    /// The laurel stake `l(day)`: 6.00 / 4.50 / 3.00 / 1.50 USDC with no
+    /// ramp; with a ramp, priced by the expected accrual still to come
+    /// (`stake_ramp_bps`), rounded down, never below the floor.
     pub fn laurel_stake(&self, day: u32) -> Option<u64> {
-        self.price(self.laurel_stake_day0, day)
+        if self.stake_ramp_bps == 0 {
+            return self.price(self.laurel_stake_day0, day);
+        }
+        if day > self.last_join_day || day >= self.season_days {
+            return None;
+        }
+        let base = self.laurel_stake_day0 as u128;
+        let by_accrual = base * self.accrual_left(day) / self.accrual_left(0);
+        let floor = base * self.floor_bps as u128 / BPS_ONE as u128;
+        Some(by_accrual.max(floor) as u64)
     }
 
     /// Days a wallet that joins on `day` can still play (the tenure
@@ -285,6 +349,29 @@ mod tests {
         assert_eq!(s.citizen_fee(22), None);
         // Rounded down in the payer's favour.
         assert_eq!(s.citizen_fee(1), Some(3_857_142));
+    }
+
+    #[test]
+    fn a_ramp_prices_late_stakes_by_accrual_left() {
+        let flat = EntrySchedule::FRONTIER_28;
+        let ramp = EntrySchedule {
+            stake_ramp_bps: 10_000,
+            ..flat
+        };
+        assert_eq!(ramp.validate(), Ok(()));
+        assert_eq!(ramp.laurel_stake(0), Some(6_000_000));
+        let mut last = u64::MAX;
+        for d in 0..=21 {
+            let (f, r) = (flat.laurel_stake(d).unwrap(), ramp.laurel_stake(d).unwrap());
+            // Accrual rises while joins are open, so a late stake costs more
+            // than its share of days left; the price still falls every day.
+            assert!(r >= f && r <= last, "day {d}: {r} vs {f}");
+            last = r;
+            assert_eq!(ramp.citizen_fee(d), flat.citizen_fee(d));
+        }
+        assert_eq!(ramp.laurel_stake(22), None);
+        // Day 21: rates 2.0 × 7 of Σ(1 + t/21, t < 21) + 2.0 × 7 = 31 + 14.
+        assert_eq!(ramp.laurel_stake(21), Some(6_000_000 * 14 / 45));
     }
 
     #[test]

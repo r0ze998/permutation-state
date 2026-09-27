@@ -8,6 +8,7 @@
 //!                    [--dx "C.arrival=10500,D.drill=10500"] [--unpaired]
 //!                    [--first-seed N] [--gate]
 //! frontier-sim doctrine-gate [--set kernel|draft|m0]   (the CI gate's harness)
+//! frontier-sim criterion [--seeds K] [--rev2-economy] [economy knobs]   (bot criterion, O4)
 //! ```
 //!
 //! `run` plays one season and prints its report; `suite` runs every M0
@@ -58,6 +59,23 @@ fn main() {
             "--bot-aggression" => cfg.bot_aggression = Some(v.parse().expect("--bot-aggression")),
             "--works-cap" => cfg.works_cap = v.parse().expect("--works-cap"),
             "--gamma" => cfg.index = parse_gamma(&v),
+            "--works-per-usdc" => cfg.payout.works_per_usdc = v.parse().expect("--works-per-usdc"),
+            "--stake-ramp" => cfg.stake_ramp_bps = v.parse().expect("--stake-ramp"),
+            "--office-ceiling" => {
+                cfg.payout.office_ceiling_bps = if v == "none" {
+                    u32::MAX
+                } else {
+                    v.parse().expect("--office-ceiling")
+                }
+            }
+            "--office-pay" => {
+                cfg.office_pay = match v.split_once(':') {
+                    Some(("share", b)) => config::OfficePay::ShareOfPaid(b.parse().expect("bps")),
+                    _ if v == "usdc" => config::OfficePay::Usdc,
+                    _ if v == "laurels" => config::OfficePay::Laurels,
+                    _ => panic!("--office-pay {v}"),
+                }
+            }
             "--out" => out = Some(v),
             "--only" => only = Some(v),
             "--sizes" => {
@@ -106,6 +124,21 @@ fn main() {
             }
             "--bot-officers" => {
                 cfg.bot_officers = true;
+                i += 1;
+                continue;
+            }
+            "--mandate-all" => {
+                cfg.mandate_stakers_only = false;
+                i += 1;
+                continue;
+            }
+            "--relics" => {
+                cfg.relics = true;
+                i += 1;
+                continue;
+            }
+            "--rev2-economy" => {
+                cfg.set_rev2_economy();
                 i += 1;
                 continue;
             }
@@ -168,6 +201,15 @@ fn main() {
                 eprintln!("gate failed: {e}");
                 std::process::exit(1);
             }
+        }
+        "criterion" => {
+            let rows = suite::criterion_rows(
+                &cfg,
+                seeds,
+                &[("this config".to_string(), cfg.clone())],
+                &[false, true],
+            );
+            println!("{}", suite::criterion_table(&rows));
         }
         other => panic!("unknown command {other}"),
     }

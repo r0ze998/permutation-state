@@ -333,6 +333,24 @@ pub fn stats_table(sim: &Sim, o: &Outcome) -> String {
             format!("{:.0} / {:.0}", lau(st.mandate_paid), lau(st.mandate_left)),
         ),
         (
+            "Mandate shares (staker completions) / fee-only completions (no share)",
+            format!("{} / {}", st.mandate_shares, st.mandate_unshared),
+        ),
+        (
+            "office-terms: Minister / paid Warden / held by bots",
+            format!(
+                "{} / {} / {}",
+                st.minister_terms, st.warden_terms, st.bot_office_terms
+            ),
+        ),
+        (
+            "officer pay cut by the ceiling (USDC, swept)",
+            format!(
+                "{:.2}",
+                usdc(o.agents.iter().map(|a| a.claim.office_cut).sum::<u64>())
+            ),
+        ),
+        (
             "builders (Civilisation Share)",
             o.agents.iter().filter(|a| a.builder).count().to_string(),
         ),
