@@ -16,6 +16,7 @@
 //! | `drive` | genesis, seating and ticks as the crank drives them |
 //! | `bots` | the play server's bots playing a season through the program |
 //! | `magicblock` | stand-ins for the delegation and Magic programs |
+//! | `dlp_escape` | the delegation stand-in with the owner-side escape (WP14) |
 //! | `vrf` | a stand-in for the MagicBlock VRF program (requests, `fulfil`) |
 //! | `records` | `sol_log_data` records (`PS_*`) |
 //! | `budget` | CU/heap needs (`need`), the ceilings, the crank's split points |
@@ -31,6 +32,7 @@ pub mod bots;
 pub mod budget;
 pub mod chain;
 pub mod cover;
+pub mod dlp_escape;
 pub mod drive;
 pub mod ix;
 pub mod magicblock;

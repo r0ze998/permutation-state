@@ -128,7 +128,7 @@ impl SeasonFx {
         let s = Self::with_ai(c, p, civs, bounty, bond);
         let admin = s.admin.insecure_clone();
         c.send(
-            vec![s.create_ai_ix(&admin.pubkey(), s.roster_chain())],
+            vec![s.create_ai_ix(&admin.pubkey(), s.roster_commit())],
             &[&admin],
         )
         .expect("CreateSeason with AIs");

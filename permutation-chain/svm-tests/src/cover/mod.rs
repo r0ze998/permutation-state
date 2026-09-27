@@ -95,10 +95,10 @@ pub fn covered_by(ix: &I) -> &'static [Cover] {
         I::RetryTickRandomness => play::RETRY_TICK_RANDOMNESS,
         I::ConsumeSeasonSeed { .. } => genesis::CONSUME_SEASON_SEED,
         I::RetrySeasonSeed => genesis::RETRY_SEASON_SEED,
-        I::Abort => &[Cover::Pending("WP14 (unit P3)")],
-        I::RequestUndelegation { .. } => &[Cover::Pending("WP14 (unit P3)")],
-        I::RollbackUndelegation { .. } => &[Cover::Pending("WP14 (unit P3)")],
-        I::CloseSeasonAccounts { .. } => &[Cover::Pending("WP14 (unit P3)")],
+        I::Abort => escape::ABORT,
+        I::RequestUndelegation { .. } => escape::REQUEST_UNDELEGATION,
+        I::RollbackUndelegation { .. } => escape::ROLLBACK_UNDELEGATION,
+        I::CloseSeasonAccounts { .. } => escape::CLOSE_SEASON_ACCOUNTS,
     }
 }
 
@@ -117,16 +117,23 @@ pub const NOT_AN_INSTRUCTION: &[Cover] = &[Cover::Test(
 pub const EXEMPT: &[(E, &str)] = &[
     (E::UndelegationOrder, "PENDING WP02 (unit P4)"),
     (E::AlreadyDelegated, "PENDING WP02/WP14 (unit P4)"),
-    (E::Insolvent, "PENDING WP12 (unit P3)"),
     (E::DelegationOrder, "PENDING WP14 (unit P4)"),
-    (E::WorldRolledBack, "PENDING WP14 (unit P3)"),
     (E::WrongValidator, "PENDING WP14/WP15 (unit P4)"),
 ];
 
 /// Ignored tests that run only when an environment variable provides what
 /// they need: (test, variable).
-pub const OPT_IN: &[(&str, &str)] =
-    &[("budget::finish_after_played_season_at_the_cap", "SVM_HEAVY")];
+pub const OPT_IN: &[(&str, &str)] = &[
+    ("budget::finish_after_played_season_at_the_cap", "SVM_HEAVY"),
+    (
+        "escape_hatches::rollback_restores_last_finalized_bytes",
+        "DLP_SO",
+    ),
+    (
+        "escape_hatches::an_owner_request_blocks_the_plain_undelegate",
+        "DLP_SO",
+    ),
+];
 
 /// Every area's ledger of ignored tests waiting for a fix: (test, "WPxx").
 pub fn pending() -> Vec<(&'static str, &'static str)> {

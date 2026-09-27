@@ -9,10 +9,12 @@ use crate::{addr, r, rs, w, TOKEN};
 
 impl SeasonFx {
     /// `finishSeason` (`chain.mjs:160`): season, the world chunks (read),
-    /// with a revealed roster the roster account. Permissionless.
+    /// the vault (read), with a revealed roster the roster account.
+    /// Permissionless.
     pub fn finish_ix(&self, roster: bool) -> Instruction {
         let mut m = vec![w(&self.season)];
         m.extend(self.chunks.iter().map(r));
+        m.push(r(&self.vault));
         if roster {
             m.push(r(&self.roster));
         }
