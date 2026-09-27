@@ -23,11 +23,13 @@ pub fn finalized(ctx: &mut Ctx, state: &WorldState, members: &[MemberAccount]) {
     let paid = paid_in(season, rules.ops_share_bps as u64, members);
     let entries = roster_account(&ctx.base, &ctx.program_id, season.season_id).unwrap_or_default();
     let roster = roster(&mut ctx.report, season, state, members, &entries);
-    let f = finalize(&paid, state, rules, roster);
+    // The sticky `usdc_broken` flag of the replay is unit V's (WP12 §4.7);
+    // a voided season's payouts then differ and this check fails.
+    let f = finalize(&paid, state, rules, roster, false);
     let p = &f.settlement;
     ctx.report.check(
         "every member's payout recomputed (V5 §7, §18) matches the Season account",
-        p.per_member == season.payouts
+        f.payouts == season.payouts
             && f.pool == season.pool
             && f.bounty_paid == season.bounty_paid,
         format!(
@@ -49,7 +51,7 @@ pub fn finalized(ctx: &mut Ctx, state: &WorldState, members: &[MemberAccount]) {
             }
         ),
     );
-    let ops = paid.ops + f.ops_add;
+    let ops = f.ops;
     ctx.report.check(
         "operations share = 20% of fees + 20% of in-play income + rounding (+ the bond, returned)",
         ops == season.ops,

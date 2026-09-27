@@ -4,7 +4,9 @@
 //! Every member registers with a 32-byte `tag`. People put random bytes
 //! there; an operator AI puts `roster_tag(season, wallet, salt)`. Before
 //! registration opens the operator commits the number of its AI members and
-//! `roster_chain`, the tags linked in order. After the season it reveals each
+//! `roster_chain`, the tags linked in order, blinded with a secret
+//! (`roster_commit`), so the commitment hides the set until the blind is
+//! revealed with the roster. After the season it reveals each
 //! AI's salt: the tag recomputes, and it sits in a registration the AI's own
 //! wallet signed, so nobody can be named an AI who is not one (a person's
 //! random tag has no salt).
@@ -37,6 +39,12 @@ pub fn roster_link(prev: &[u8; 32], tag: &[u8; 32]) -> [u8; 32] {
 /// The chain over tags in order, from the zero root.
 pub fn roster_chain(tags: &[[u8; 32]]) -> [u8; 32] {
     tags.iter().fold([0; 32], |acc, t| roster_link(&acc, t))
+}
+
+/// The roster commitment `CreateSeason` stores: the chain blinded with a
+/// secret 32-byte `blind` the operator reveals with the last `RevealRoster`.
+pub fn roster_commit(blind: &[u8; 32], chain: &[u8; 32]) -> [u8; 32] {
+    sha256(&[b"permutation-rules/roster-commit", blind, chain])
 }
 
 /// An AI's home city: one of its nation's cities recorded at the end of
@@ -101,5 +109,19 @@ mod tests {
         assert_ne!(roster_chain(&[a, b]), roster_chain(&[b, a]));
         assert_eq!(roster_chain(&[]), [0; 32]);
         assert_eq!(roster_chain(&[a]), roster_link(&[0; 32], &a));
+    }
+
+    #[test]
+    fn the_commitment_is_blinded() {
+        let chain = roster_chain(&[roster_tag(1, &[1; 32], &[9; 32])]);
+        assert_ne!(roster_commit(&[0; 32], &chain), chain);
+        assert_ne!(
+            roster_commit(&[1; 32], &chain),
+            roster_commit(&[2; 32], &chain)
+        );
+        assert_ne!(
+            roster_commit(&[1; 32], &chain),
+            roster_commit(&[1; 32], &[0; 32])
+        );
     }
 }

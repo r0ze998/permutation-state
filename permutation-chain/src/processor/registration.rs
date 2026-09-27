@@ -196,9 +196,9 @@ pub(super) fn create_season(
         rolled_back: 0,
         aborted_from: 0,
         validator,
-        rules_version: 0,
-        rules_hash: [0; 32],
-        logic_version: 0,
+        rules_version: crate::rules::PINNED_RULES_VERSION,
+        rules_hash: crate::rules::pinned_ruleset_hash(preset, market)?,
+        logic_version: crate::rules::CHAIN_LOGIC_VERSION,
         created_slot: 0,
     };
     store(&mut season_info.try_borrow_mut_data()?, &season)?;

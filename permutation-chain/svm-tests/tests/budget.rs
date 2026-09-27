@@ -369,17 +369,28 @@ fn light_worst_shapes() {
     for i in 0..batch {
         a.register_ai(&mut c, i);
     }
-    // RevealRoster: the largest batch a transaction carries.
+    // RevealRoster: the largest batch a transaction carries (the operator,
+    // after the last tick: on a fork where the season runs and chunk 0
+    // holds a finished world).
+    let ap = admin.pubkey();
     let fits = (1..=batch)
         .rev()
-        .find(|k| tx_size(&[a.reveal_ai_ix(&(0..*k).collect::<Vec<_>>())], &p) <= PACKET_DATA_SIZE)
+        .find(|k| tx_size(&[a.reveal_ai_ix(&(0..*k).collect::<Vec<_>>())], &ap) <= PACKET_DATA_SIZE)
         .unwrap();
     let ai: Vec<usize> = (0..fits).collect();
+    let mut over = c.fork();
+    over.edit::<Season>(&a.season, |x| x.status = SeasonStatus::Running);
+    let mut chunk0 = over.data(&a.chunks[0]);
+    chunk0[..8].copy_from_slice(&WORLD_MAGIC);
+    let mut meta = WorldMeta::from_chunk0(&chunk0).unwrap();
+    (meta.season_id, meta.finished) = (a.p.id, true);
+    meta.write_chunk0(&mut chunk0).unwrap();
+    over.set_data(&a.chunks[0], chunk0);
     light(
-        &mut c,
+        &mut over,
         &format!("RevealRoster, {fits} salts"),
         vec![a.reveal_ai_ix(&ai)],
-        &[&payer],
+        &[&admin],
     );
     let m = a.ai[0].member.unwrap();
     let w = a.members[m].wallet.insecure_clone();

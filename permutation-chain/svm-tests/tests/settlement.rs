@@ -44,7 +44,8 @@ fn finalized(c: &mut Chain, id: u64) -> SeasonFx {
 fn finish_season_checks() {
     let mut c = Chain::new();
     let anyone = c.funded();
-    // Not Running (still registering).
+    // Not Running (still registering): no world yet, so the precheck
+    // (shared with Abort) refuses it first.
     let b = SeasonFx::create(
         &mut c,
         Params {
@@ -52,7 +53,7 @@ fn finish_season_checks() {
             ..Params::default()
         },
     );
-    assert_err(c.send(vec![b.finish_ix(false)], &[&anyone]), E::WrongStatus);
+    assert_err(c.send(vec![b.finish_ix(false)], &[&anyone]), E::WrongWorld);
     let s = running(&mut c, 7);
     s.play_tick(&mut c);
     assert_err(
@@ -71,20 +72,42 @@ fn finish_season_checks() {
     c.set_data(&s.chunks[0], genesis);
     assert_err(c.send(vec![s.finish_ix(false)], &[&anyone]), E::WrongWorld);
     c.set_data(&s.chunks[0], world0);
+    // A chunk taken back by RollbackUndelegation (WP14).
+    c.edit::<Season>(&s.season, |x| x.rolled_back = 1 << 5);
+    assert_err(
+        c.send(vec![s.finish_ix(false)], &[&anyone]),
+        E::WorldRolledBack,
+    );
+    c.edit::<Season>(&s.season, |x| x.rolled_back = 0);
+    // The vault: missing, not the season's PDA, or the roster in its slot.
+    let mut ix = s.finish_ix(false);
+    ix.accounts.pop();
+    assert_program_err(c.send(vec![ix], &[&anyone]), "NotEnoughAccountKeys");
+    let fake_vault = c.token_account(&s.mint, &s.season, 1_000_000_000);
+    let mut ix = s.finish_ix(false);
+    ix.accounts[21].pubkey = fake_vault;
+    assert_err(c.send(vec![ix], &[&anyone]), E::WrongPda);
+    let mut ix = s.finish_ix(false);
+    ix.accounts[21].pubkey = s.roster;
+    assert_err(c.send(vec![ix], &[&anyone]), E::WrongPda);
     // Permissionless: the payouts are the finalize of the final world.
     let before = s.season(&c);
     let state = s.world(&mut c);
     let rules = s.rules();
-    let f = finalize(&before, &state, &rules, Roster::None);
+    let f = finalize(&before, &state, &rules, Roster::None, false);
+    assert!(!f.voided);
     let l = c
         .send(vec![s.finish_ix(false)], &[&anyone])
         .expect("FinishSeason");
     let season = s.season(&c);
     assert_eq!(season.status, SeasonStatus::Finalized);
-    assert_eq!(season.payouts, f.settlement.per_member);
+    assert_eq!(season.payouts, f.payouts);
     assert_eq!(season.payouts.len(), 4);
-    assert_eq!((season.pool, season.ops), (f.pool, before.ops + f.ops_add));
+    assert_eq!((season.pool, season.ops), (f.pool, f.ops));
     assert_eq!(season.treasury_final, f.treasury_final);
+    assert_eq!(season.refund_base, f.refund_base);
+    assert_eq!((season.voided, season.outstanding), (false, f.owed));
+    assert_eq!(season.outstanding, c.balance(&s.vault), "every unit owed");
     assert_eq!(season.final_root, state.state_root().unwrap());
     let record = season_record(&state, &f.settlement);
     assert_eq!(
@@ -109,6 +132,68 @@ fn finish_season_checks() {
         h[4].len() <= HISTORY_LOG_MAX && !log_truncated(&l.logs) && log_bytes(&l.logs) <= 10_000
     );
     assert_err(c.send(vec![s.finish_ix(false)], &[&anyone]), E::WrongStatus);
+}
+
+/// WP01: a world whose chunks come from different writes (one chunk from
+/// an older snapshot) is refused, not decoded and paid out.
+#[test]
+fn a_mixed_world_is_refused() {
+    let mut c = Chain::new();
+    let s = running(&mut c, 7);
+    let anyone = c.funded();
+    let old: Vec<Vec<u8>> = s.chunks.iter().map(|k| c.data(k)).collect();
+    s.play_tick(&mut c);
+    s.fast_forward_to_end(&mut c);
+    // A chunk (not chunk 0, which holds the header) that the later writes
+    // changed, put back as it was.
+    let k = (1..WORLD_CHUNKS)
+        .find(|k| c.data(&s.chunks[*k]) != old[*k])
+        .expect("a later write changed a chunk");
+    c.set_data(&s.chunks[k], old[k].clone());
+    assert_err(c.send(vec![s.finish_ix(false)], &[&anyone]), E::WrongWorld);
+}
+
+/// WP15 test 13: a season whose recorded rules or settlement logic are
+/// not this build's (or not the world's) is refused.
+#[test]
+fn finish_season_refuses_a_world_under_other_rules() {
+    let mut c = Chain::new();
+    let s = running(&mut c, 7);
+    let anyone = c.funded();
+    s.fast_forward_to_end(&mut c);
+    let pinned = s.season(&c);
+    c.edit::<Season>(&s.season, |x| x.rules_hash[0] ^= 1);
+    assert_err(
+        c.send(vec![s.finish_ix(false)], &[&anyone]),
+        E::RulesMismatch,
+    );
+    c.edit::<Season>(&s.season, |x| {
+        x.rules_hash = pinned.rules_hash;
+        x.logic_version += 1;
+    });
+    assert_err(
+        c.send(vec![s.finish_ix(false)], &[&anyone]),
+        E::RulesMismatch,
+    );
+    c.edit::<Season>(&s.season, |x| x.logic_version = pinned.logic_version);
+    c.send(vec![s.finish_ix(false)], &[&anyone])
+        .expect("FinishSeason under the season's own rules");
+}
+
+/// WP12 §6.3(4): books that owe more than the vault holds are refused.
+#[test]
+fn finish_season_refuses_an_underfunded_vault() {
+    let mut c = Chain::new();
+    let s = running(&mut c, 7);
+    let anyone = c.funded();
+    s.fast_forward_to_end(&mut c);
+    let full = c.balance(&s.vault);
+    c.set_balance(&s.vault, full - 1);
+    assert_err(c.send(vec![s.finish_ix(false)], &[&anyone]), E::Insolvent);
+    assert_eq!(s.season(&c).status, SeasonStatus::Running);
+    c.set_balance(&s.vault, full);
+    c.send(vec![s.finish_ix(false)], &[&anyone])
+        .expect("FinishSeason");
 }
 
 fn record_of(logs: &[String]) -> Vec<Vec<u8>> {
@@ -178,12 +263,21 @@ fn claim_checks() {
     // None of it moved USDC or marked the claim.
     assert_eq!(c.balance(&s.vault), vault);
     assert!(!s.member(&c, i).claimed);
-    // The claim pays claim_amount to the wallet's own account, once.
+    // Never more than FinishSeason set aside (WP12).
     let owed = claim_amount(&s.season(&c), &s.member(&c, i));
     assert!(owed > 0);
+    let outstanding = s.season(&c).outstanding;
+    c.edit::<Season>(&s.season, |x| x.outstanding = owed - 1);
+    assert_err(
+        claim(&mut c, s.claim_ix(i, &w0.pubkey(), &t0)),
+        E::Insolvent,
+    );
+    c.edit::<Season>(&s.season, |x| x.outstanding = outstanding);
+    // The claim pays claim_amount to the wallet's own account, once.
     claim(&mut c, s.claim_ix(i, &w0.pubkey(), &t0)).expect("Claim");
     assert_eq!((c.balance(&t0), c.balance(&s.vault)), (owed, vault - owed));
     assert!(s.member(&c, i).claimed);
+    assert_eq!(s.season(&c).outstanding, outstanding - owed);
     assert_err(
         claim(&mut c, s.claim_ix(i, &w0.pubkey(), &t0)),
         E::AlreadyClaimed,
@@ -237,11 +331,16 @@ fn withdraw_ops_checks() {
     let mut ix = s.withdraw_ix(&ap, &dest);
     ix.accounts[2].pubkey = pda(&c.program, &[VAULT_SEED, &8u64.to_le_bytes()]);
     assert_err(withdraw(&mut c, ix), E::WrongPda);
+    // Never more than FinishSeason set aside (WP12).
+    let (ops, outstanding) = (s.season(&c).ops, s.season(&c).outstanding);
+    c.edit::<Season>(&s.season, |x| x.outstanding = ops - 1);
+    assert_err(withdraw(&mut c, s.withdraw_ix(&ap, &dest)), E::Insolvent);
+    c.edit::<Season>(&s.season, |x| x.outstanding = outstanding);
     // The operations share, once.
-    let ops = s.season(&c).ops;
     let vault = c.balance(&s.vault);
     withdraw(&mut c, s.withdraw_ix(&ap, &dest)).expect("WithdrawOps");
     assert_eq!((c.balance(&dest), c.balance(&s.vault)), (ops, vault - ops));
     assert!(s.season(&c).ops_withdrawn);
+    assert_eq!(s.season(&c).outstanding, outstanding - ops);
     assert_err(withdraw(&mut c, s.withdraw_ix(&ap, &dest)), E::WrongStatus);
 }
