@@ -74,3 +74,61 @@ test('errors carry the gateway code', async () => {
   assert.ok(notMember instanceof GameError);
   assert.equal(notMember.code, 'NotAMember');
 });
+
+test('propose refuses treasury orders (a rejection) before anything is sent; other proposals go out', async () => {
+  const calls = fake({ relay: () => json(200, { ok: true, signature: 'sigP' }) });
+  const g = client();
+  for (const order of [{ type: 'ExchangeOrder', good: { kind: 'Iron' }, side: 'Buy', amount: 1, price: 1 }, { type: 'ConsentSpend', usdc: 5 },
+    { type: 'OfferContract', to: 2, term: { kind: 'Peace' }, usdc: 1, deadline: 9 }]) {
+    await assert.rejects(g.propose('Diplomat', [{ type: 'SendEnvoy', cityState: 1, influence: 5 }, order]), /cannot be proposed/, order.type);
+  }
+  assert.equal(calls.length, 0, 'nothing was requested');
+  const r = await g.propose('Diplomat', [{ type: 'SendEnvoy', cityState: 1, influence: 5 }]);
+  assert.equal(r.signature, 'sigP');
+});
+
+test('submit adopts proposals from the view: their orders count towards the caps; an unknown id sends nothing', async () => {
+  const sent = [];
+  fake({ relay: (i, tx) => { sent.push(tx); return json(200, { ok: true, signature: `sig${i}` }); } });
+  const research = { type: 'SetResearch', techs: ['Writing'] };
+  const costed = n => Array.from({ length: n }, (_, i) => ({ type: 'Purchase', city: i, gold: 1 }));
+  const withProposals = { ...view, gov: { ...view.gov, proposals: [{ id: 4, role: 'Science', orders: [research] }, { id: 9, role: 'Diplomat', orders: costed(5) }] } };
+  const unknown = await client().submit({ orders: [research], policy: 'p/v1', adopt: { Science: [5] }, view: withProposals });
+  assert.deepEqual([unknown.ok, unknown.code], [false, 'UnknownProposal']);
+  const otherOffice = await client().submit({ orders: [research], policy: 'p/v1', adopt: { Science: [9] }, view: withProposals });
+  assert.equal(otherOffice.code, 'UnknownProposal', 'a proposal to another office is not adoptable');
+  const tooMany = await client().submit({ orders: Array.from({ length: 20 }, () => ({ type: 'SendEnvoy', cityState: 1, influence: 1 })), policy: 'p/v1',
+    adopt: { Diplomat: [9] }, view: withProposals });
+  assert.deepEqual([tooMany.ok, tooMany.code], [false, 'BatchTooLarge']);
+  assert.match(tooMany.error, /^Diplomat: more than 24 orders, counting the adopted/);
+  assert.equal(sent.length, 0);
+  const g = client();
+  const ok = await g.submit({ orders: [research], policy: 'p/v1', adopt: { Science: [4] }, view: withProposals });
+  assert.equal(ok.ok, true, JSON.stringify(ok));
+  assert.deepEqual(g.sealed.get('5:Science')[0].batch.adopt, [4]);
+});
+
+test('claim proceeds once the season is Finalized or Aborted (a refund), and not before', async () => {
+  const wallet = Keypair.generate();
+  const mint = Keypair.generate().publicKey.toBase58();
+  const dest = Keypair.generate().publicKey.toBase58();
+  let status = 'Aborted';
+  const posted = [];
+  globalThis.fetch = async (url, init = {}) => {
+    const { pathname } = new URL(url);
+    const method = init.method ?? 'GET';
+    if (pathname === '/season') return json(200, { programId: DEFAULTS.programId, season: { seasonId: '42' } });
+    if (pathname === '/claim-relay' && method === 'GET') return json(200, { status, feePayer, blockhash, lastValidBlockHeight: 99, mint });
+    if (pathname === '/claim-relay') { posted.push(Transaction.from(Buffer.from(JSON.parse(init.body).tx, 'base64'))); return json(200, { ok: true, signature: 'sigC' }); }
+    return json(404, { error: 'not found' });
+  };
+  const g = client();
+  assert.equal((await g.claim({ wallet, usdcAccount: dest })).signature, 'sigC');
+  status = 'Finalized';
+  assert.equal((await g.claim({ wallet, usdcAccount: dest })).signature, 'sigC');
+  assert.equal(posted.length, 2);
+  status = 'Running';
+  const e = await g.claim({ wallet, usdcAccount: dest }).catch(x => x);
+  assert.equal(e.code, 'NotFinalized');
+  assert.match(e.message, /Finalized or Aborted/);
+});

@@ -9,6 +9,13 @@ const STEWARD_ORDERS = new Set(['FoundCity', 'SetQueue', 'SetFocus', 'Purchase']
 const DIPLOMAT_ORDERS = new Set(['DeclareWar', 'ProposePeace', 'AcceptPeace', 'ProposeNap', 'AcceptNap', 'BreakNap', 'ProposeAlliance',
   'AcceptAlliance', 'LeaveAlliance', 'SendEnvoy', 'Transfer', 'MarketTrade', 'ExchangeOrder', 'OfferContract', 'AcceptContract', 'CancelContract']);
 
+/**
+ * Orders that move treasury USDC (V5 §7.5, `Order::is_treasury_order`):
+ * only the officer's own batch carries them; they cannot be proposed.
+ */
+export const TREASURY_ORDERS = new Set(['ExchangeOrder', 'OfferContract', 'ConsentSpend']);
+export const isTreasuryOrder = o => TREASURY_ORDERS.has(o.type);
+
 /** Orders whose office depends on the unit they move or rule (settlers: steward, others: general). */
 const unitOf = o => (o.type === 'MoveUnit' ? o.unit : o.type === 'SetStanding' && o.target?.kind === 'Unit' ? o.target.id : undefined);
 
@@ -63,7 +70,8 @@ export function submitOffice(order, held, view) {
 
 /**
  * Split orders into one list per office held, and the rest (`notHeld`:
- * orders to propose to their office instead, or unknown ones).
+ * orders to propose to their office instead, or unknown ones; treasury
+ * orders among them cannot be proposed, `isTreasuryOrder`).
  */
 export function splitByOffice(orders, held, view) {
   const byOffice = Object.fromEntries(ROLES.map(r => [r, []]));

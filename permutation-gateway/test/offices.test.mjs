@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { allowedOffices, officeOf, splitByOffice, submitOffice } from '../client/src/offices.mjs';
+import { allowedOffices, isTreasuryOrder, officeOf, splitByOffice, submitOffice } from '../client/src/offices.mjs';
 import { vectors } from './vectors.mjs';
 
 test('allowedOffices equals role_allows_static for every order vector', () => {
@@ -40,4 +40,9 @@ test('splitByOffice: one list per held office, the rest not held', () => {
   assert.deepEqual(byOffice.Science, [orders[0]]);
   assert.deepEqual(byOffice.Steward, [orders[2]]);
   assert.deepEqual(notHeld, [orders[1], orders[3]]);
+});
+
+test('isTreasuryOrder equals Order::is_treasury_order for every order vector', () => {
+  for (const v of vectors.offices) assert.equal(isTreasuryOrder(v.dto), v.treasury, JSON.stringify(v.dto));
+  assert.deepEqual(vectors.offices.filter(v => v.treasury).map(v => v.dto.type).filter((t, i, a) => a.indexOf(t) === i).sort(), ['ConsentSpend', 'ExchangeOrder', 'OfferContract']);
 });

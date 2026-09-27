@@ -1,5 +1,99 @@
 {
   "accounts": {
+    "legacySeason": {
+      "decoded": {
+        "abortedFrom": "Registering",
+        "admin": "0101010101010101010101010101010101010101010101010101010101010101",
+        "aiCount": 3,
+        "bond": "60000000",
+        "bountyEach": "5000000",
+        "bountyPaid": [
+          "0",
+          "5000000",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        "bump": 254,
+        "crank": "0202020202020202020202020202020202020202020202020202020202020202",
+        "createdSlot": "0",
+        "delegated": 0,
+        "deposit": "0",
+        "entryFee": "10000000",
+        "finalRoot": "0606060606060606060606060606060606060606060606060606060606060606",
+        "historyRoot": "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+        "legacy": true,
+        "logicVersion": 0,
+        "market": true,
+        "memberCount": 3,
+        "nationMembers": [
+          2,
+          1,
+          0,
+          0,
+          0,
+          0
+        ],
+        "nations": 6,
+        "ops": "6000123",
+        "opsWithdrawn": false,
+        "outstanding": "0",
+        "payouts": [
+          "12000000",
+          "0",
+          "6148914691236517205"
+        ],
+        "pool": "24000000",
+        "preset": 0,
+        "prevHistoryRoot": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
+        "prevSeasonId": "1789999999999",
+        "refundBase": [],
+        "refundInPayout": "",
+        "rolledBack": 0,
+        "rosterAcc": "1010101010101010101010101010101010101010101010101010101010101010",
+        "rosterBlind": "0000000000000000000000000000000000000000000000000000000000000000",
+        "rosterCommit": "1010101010101010101010101010101010101010101010101010101010101010",
+        "rosterOutcome": "revealed",
+        "rosterRevealed": 3,
+        "rulesHash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "rulesVersion": 0,
+        "seasonId": "1790000000123",
+        "seasonSeed": "0505050505050505050505050505050505050505050505050505050505050505",
+        "seated": 3,
+        "seedOracle": "0000000000000000000000000000000000000000000000000000000000000000",
+        "seedRequestedAt": 0,
+        "seedRequests": 0,
+        "seedState": 0,
+        "stageAt": 0,
+        "startBy": 0,
+        "status": "Finalized",
+        "tickSeconds": 30,
+        "treasury": [
+          "5000000",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        "treasuryFinal": [
+          "4000000",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        "usdcDecimals": 6,
+        "usdcMint": "0303030303030303030303030303030303030303030303030303030303030303",
+        "validator": "0000000000000000000000000000000000000000000000000000000000000000",
+        "vaultBump": 253,
+        "voided": false,
+        "worldSeed": "0404040404040404040404040404040404040404040404040404040404040404"
+      },
+      "hex": "5053534541534e377b6c50c4a0010000fefd01010101010101010101010101010101010101010101010101010101010101010202020202020202020202020202020202020202020202020202020202020202030303030303030303030303030303030303030303030303030303030303030306000680969800000000001e00000001040404040404040404040404040404040404040404040404040404040404040404050505050505050505050505050505050505050505050505050505050505050503000000060000000200000001000000000000000000000000000000000000000300000000366e0100000000fb8d5b00000000000006000000404b4c0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000600000000093d00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003000000001bb70000000000000000000000000055555555555555550606060606060606060606060606060606060606060606060606060606060606ff6b50c4a00100000e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f03001010101010101010101010101010101010101010101010101010101010101010404b4c000000000000879303000000001010101010101010101010101010101010101010101010101010101010101010030001060000000000000000000000404b4c000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    },
     "member": {
       "decoded": {
         "attestation": "0909090909090909090909090909090909090909090909090909090909090909",
@@ -60,16 +154,6 @@
         "openTick": 17,
         "preset": 1,
         "revealing": true,
-        "roll": [
-          {
-            "key8": "0a0a0a0a0a0a0a0a",
-            "member": 0
-          },
-          {
-            "key8": "0b0b0b0b0b0b0b0b",
-            "member": 5
-          }
-        ],
         "salts": [
           "1717171717171717171717171717171717171717171717171717171717171717",
           "0000000000000000000000000000000000000000000000000000000000000000",
@@ -90,6 +174,7 @@
           17
         ]
       },
+      "headLen": 499,
       "hex": "50534e41544e30387b6c50c4a00100000400fa01000202020202020202020202020202020202020202020202020202020202020202110000000000ffffffff05000000070000000a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a00000000000000000000000000000000000000000000000000000000000000000b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c030000000000000008000000020000001100ffff1000110001010c3cb16a000000001100ffff11001000141414141414141414141414141414141414141414141414141414141414141400000000000000000000000000000000000000000000000000000000000000001515151515151515151515151515151515151515151515151515151515151515161616161616161616161616161616161616161616161616161616161616161617171717171717171717171717171717171717171717171717171717171717170000000000000000000000000000000000000000000000000000000000000000181818181818181818181818181818181818181818181818181818181818181819191919191919191919191919191919191919191919191919191919191919190600000000000000000002000000000000000a0a0a0a0a0a0a0a050000000b0b0b0b0b0b0b0b"
     },
     "roster": {
@@ -115,7 +200,7 @@
     },
     "season": {
       "decoded": {
-        "abortedFrom": 0,
+        "abortedFrom": "Registering",
         "admin": "0101010101010101010101010101010101010101010101010101010101010101",
         "aiCount": 3,
         "bond": "60000000",
@@ -136,6 +221,7 @@
         "entryFee": "10000000",
         "finalRoot": "0606060606060606060606060606060606060606060606060606060606060606",
         "historyRoot": "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+        "legacy": false,
         "logicVersion": 1,
         "market": true,
         "memberCount": 3,
@@ -246,108 +332,765 @@
       "hex": "5053574f524c4436a05b00007b6c50c4a001000000061e000000fb3bb16a000000000001010d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0200010001001e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e0211001f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f2020202020202020202020202020202020202020202020202020202020202020f63bb16a00000000f73bb16a00000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
     }
   },
+  "bond": [
+    {
+      "aiCount": 0,
+      "bondFloor": "0",
+      "bountyEach": "0",
+      "entryFee": "10000000",
+      "forfeitPenalty": "0",
+      "memberCount": 0,
+      "pool": "0",
+      "treasury": [
+        "0",
+        "0",
+        "3",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "aiCount": 0,
+      "bondFloor": "0",
+      "bountyEach": "5000000",
+      "entryFee": "10000000",
+      "forfeitPenalty": "0",
+      "memberCount": 5,
+      "pool": "40000000",
+      "treasury": [
+        "0",
+        "0",
+        "3",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "aiCount": 3,
+      "bondFloor": "0",
+      "bountyEach": "5000000",
+      "entryFee": "10000000",
+      "forfeitPenalty": "30000000",
+      "memberCount": 3,
+      "pool": "24000000",
+      "treasury": [
+        "0",
+        "0",
+        "3",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "aiCount": 3,
+      "bondFloor": "261000009",
+      "bountyEach": "5000000",
+      "entryFee": "10000000",
+      "forfeitPenalty": "30000000",
+      "memberCount": 4,
+      "pool": "32000000",
+      "treasury": [
+        "0",
+        "0",
+        "3",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "aiCount": 3,
+      "bondFloor": "77666668",
+      "bountyEach": "5000000",
+      "entryFee": "10000000",
+      "forfeitPenalty": "30000000",
+      "memberCount": 12,
+      "pool": "96000000",
+      "treasury": [
+        "2000000",
+        "0",
+        "3",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "aiCount": 47,
+      "bondFloor": "2296608000141",
+      "bountyEach": "1000000000",
+      "entryFee": "10000000",
+      "forfeitPenalty": "470000000",
+      "memberCount": 48,
+      "pool": "384000000",
+      "treasury": [
+        "1000000000",
+        "0",
+        "3",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "aiCount": 40,
+      "bondFloor": "4520000015",
+      "bountyEach": "1000000",
+      "entryFee": "10000000",
+      "forfeitPenalty": "400000000",
+      "memberCount": 48,
+      "pool": "384000000",
+      "treasury": [
+        "0",
+        "0",
+        "3",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "aiCount": 1,
+      "bondFloor": "36000003",
+      "bountyEach": "0",
+      "entryFee": "10000000",
+      "forfeitPenalty": "10000000",
+      "memberCount": 2,
+      "pool": "16000000",
+      "treasury": [
+        "0",
+        "0",
+        "3",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "aiCount": 12,
+      "bondFloor": "20288000001",
+      "bountyEach": "1000000000",
+      "entryFee": "10000000",
+      "forfeitPenalty": "120000000",
+      "memberCount": 48,
+      "pool": "384000000",
+      "treasury": [
+        "48000000000",
+        "0",
+        "3",
+        "0",
+        "0",
+        "0"
+      ]
+    },
+    {
+      "aiCount": 47,
+      "bondFloor": "18446744073709551615",
+      "bountyEach": "18446744073709551615",
+      "entryFee": "18446744073709551615",
+      "forfeitPenalty": "18446744073709551615",
+      "memberCount": 48,
+      "pool": "18446744073709551615",
+      "treasury": [
+        "18446744073709551615",
+        "18446744073709551615",
+        "18446744073709551615",
+        "18446744073709551615",
+        "18446744073709551615",
+        "18446744073709551615"
+      ]
+    }
+  ],
+  "claimRuleV9": false,
   "claims": [
     {
       "amount": "14000000",
       "civ": 0,
       "index": 0,
-      "payouts": [
-        "12000000",
-        "0",
-        "7"
-      ],
+      "season": {
+        "abortedFrom": "Registering",
+        "aiCount": 3,
+        "bond": "60000000",
+        "bountyEach": "5000000",
+        "entryFee": "10000000",
+        "legacy": false,
+        "memberCount": 3,
+        "payouts": [
+          "12000000",
+          "0",
+          "7"
+        ],
+        "refundBase": [],
+        "refundInPayout": "",
+        "status": "Finalized",
+        "treasury": [
+          "5000000",
+          "0"
+        ],
+        "treasuryFinal": [
+          "4000000",
+          "0"
+        ]
+      },
       "shares": "2500000",
-      "treasury": [
-        "5000000",
-        "0"
-      ],
-      "treasuryFinal": [
-        "4000000",
-        "0"
-      ]
+      "v9": false
     },
     {
       "amount": "0",
       "civ": 1,
       "index": 1,
-      "payouts": [
-        "12000000",
-        "0",
-        "7"
-      ],
+      "season": {
+        "abortedFrom": "Registering",
+        "aiCount": 3,
+        "bond": "60000000",
+        "bountyEach": "5000000",
+        "entryFee": "10000000",
+        "legacy": false,
+        "memberCount": 3,
+        "payouts": [
+          "12000000",
+          "0",
+          "7"
+        ],
+        "refundBase": [],
+        "refundInPayout": "",
+        "status": "Finalized",
+        "treasury": [
+          "5000000",
+          "0"
+        ],
+        "treasuryFinal": [
+          "4000000",
+          "0"
+        ]
+      },
       "shares": "0",
-      "treasury": [
-        "5000000",
-        "0"
-      ],
-      "treasuryFinal": [
-        "4000000",
-        "0"
-      ]
+      "v9": false
     },
     {
       "amount": "7",
       "civ": 0,
       "index": 2,
-      "payouts": [
-        "12000000",
-        "0",
-        "7"
-      ],
+      "season": {
+        "abortedFrom": "Registering",
+        "aiCount": 3,
+        "bond": "60000000",
+        "bountyEach": "5000000",
+        "entryFee": "10000000",
+        "legacy": false,
+        "memberCount": 3,
+        "payouts": [
+          "12000000",
+          "0",
+          "7"
+        ],
+        "refundBase": [],
+        "refundInPayout": "",
+        "status": "Finalized",
+        "treasury": [
+          "5000000",
+          "0"
+        ],
+        "treasuryFinal": [
+          "4000000",
+          "0"
+        ]
+      },
       "shares": "1",
-      "treasury": [
-        "5000000",
-        "0"
-      ],
-      "treasuryFinal": [
-        "4000000",
-        "0"
-      ]
+      "v9": false
     },
     {
       "amount": "0",
       "civ": 5,
       "index": 9,
-      "payouts": [
-        "1"
-      ],
+      "season": {
+        "abortedFrom": "Registering",
+        "aiCount": 3,
+        "bond": "60000000",
+        "bountyEach": "5000000",
+        "entryFee": "10000000",
+        "legacy": false,
+        "memberCount": 3,
+        "payouts": [
+          "1"
+        ],
+        "refundBase": [],
+        "refundInPayout": "",
+        "status": "Finalized",
+        "treasury": [
+          "3"
+        ],
+        "treasuryFinal": [
+          "2"
+        ]
+      },
       "shares": "1",
-      "treasury": [
-        "3"
-      ],
-      "treasuryFinal": [
-        "2"
-      ]
+      "v9": false
     },
     {
       "amount": "10",
       "civ": 1,
       "index": 0,
-      "payouts": [],
+      "season": {
+        "abortedFrom": "Registering",
+        "aiCount": 3,
+        "bond": "60000000",
+        "bountyEach": "5000000",
+        "entryFee": "10000000",
+        "legacy": false,
+        "memberCount": 3,
+        "payouts": [],
+        "refundBase": [],
+        "refundInPayout": "",
+        "status": "Finalized",
+        "treasury": [
+          "0",
+          "10"
+        ],
+        "treasuryFinal": [
+          "0",
+          "10"
+        ]
+      },
       "shares": "10",
-      "treasury": [
-        "0",
-        "10"
-      ],
-      "treasuryFinal": [
-        "0",
-        "10"
-      ]
+      "v9": false
     },
     {
       "amount": "3074457345618258607",
       "civ": 0,
       "index": 0,
-      "payouts": [
-        "5"
-      ],
+      "season": {
+        "abortedFrom": "Registering",
+        "aiCount": 3,
+        "bond": "60000000",
+        "bountyEach": "5000000",
+        "entryFee": "10000000",
+        "legacy": false,
+        "memberCount": 3,
+        "payouts": [
+          "5"
+        ],
+        "refundBase": [],
+        "refundInPayout": "",
+        "status": "Finalized",
+        "treasury": [
+          "9223372036854775807"
+        ],
+        "treasuryFinal": [
+          "4611686018427387903"
+        ]
+      },
       "shares": "6148914691236517205",
-      "treasury": [
-        "9223372036854775807"
-      ],
-      "treasuryFinal": [
-        "4611686018427387903"
-      ]
+      "v9": false
+    },
+    {
+      "amount": null,
+      "civ": 0,
+      "index": 0,
+      "season": {
+        "abortedFrom": "Registering",
+        "aiCount": 3,
+        "bond": "60000000",
+        "bountyEach": "5000000",
+        "entryFee": "10000000",
+        "legacy": false,
+        "memberCount": 3,
+        "payouts": [
+          "12000000",
+          "3000000",
+          "1000000",
+          "9",
+          "4"
+        ],
+        "refundBase": [
+          "4000000",
+          "2000000"
+        ],
+        "refundInPayout": "06",
+        "status": "Finalized",
+        "treasury": [
+          "5000000",
+          "2000000"
+        ],
+        "treasuryFinal": [
+          "4000000",
+          "3000000"
+        ]
+      },
+      "shares": "2500000",
+      "v9": true
+    },
+    {
+      "amount": null,
+      "civ": 0,
+      "index": 1,
+      "season": {
+        "abortedFrom": "Registering",
+        "aiCount": 3,
+        "bond": "60000000",
+        "bountyEach": "5000000",
+        "entryFee": "10000000",
+        "legacy": false,
+        "memberCount": 3,
+        "payouts": [
+          "12000000",
+          "3000000",
+          "1000000",
+          "9",
+          "4"
+        ],
+        "refundBase": [
+          "4000000",
+          "2000000"
+        ],
+        "refundInPayout": "06",
+        "status": "Finalized",
+        "treasury": [
+          "5000000",
+          "2000000"
+        ],
+        "treasuryFinal": [
+          "4000000",
+          "3000000"
+        ]
+      },
+      "shares": "1000000",
+      "v9": true
+    },
+    {
+      "amount": null,
+      "civ": 1,
+      "index": 2,
+      "season": {
+        "abortedFrom": "Registering",
+        "aiCount": 3,
+        "bond": "60000000",
+        "bountyEach": "5000000",
+        "entryFee": "10000000",
+        "legacy": false,
+        "memberCount": 3,
+        "payouts": [
+          "12000000",
+          "3000000",
+          "1000000",
+          "9",
+          "4"
+        ],
+        "refundBase": [
+          "4000000",
+          "2000000"
+        ],
+        "refundInPayout": "06",
+        "status": "Finalized",
+        "treasury": [
+          "5000000",
+          "2000000"
+        ],
+        "treasuryFinal": [
+          "4000000",
+          "3000000"
+        ]
+      },
+      "shares": "2000000",
+      "v9": true
+    },
+    {
+      "amount": null,
+      "civ": 1,
+      "index": 3,
+      "season": {
+        "abortedFrom": "Registering",
+        "aiCount": 3,
+        "bond": "60000000",
+        "bountyEach": "5000000",
+        "entryFee": "10000000",
+        "legacy": false,
+        "memberCount": 3,
+        "payouts": [
+          "12000000",
+          "3000000",
+          "1000000",
+          "9",
+          "4"
+        ],
+        "refundBase": [
+          "4000000",
+          "2000000"
+        ],
+        "refundInPayout": "06",
+        "status": "Finalized",
+        "treasury": [
+          "5000000",
+          "2000000"
+        ],
+        "treasuryFinal": [
+          "4000000",
+          "3000000"
+        ]
+      },
+      "shares": "2000000",
+      "v9": true
+    },
+    {
+      "amount": null,
+      "civ": 0,
+      "index": 4,
+      "season": {
+        "abortedFrom": "Registering",
+        "aiCount": 3,
+        "bond": "60000000",
+        "bountyEach": "5000000",
+        "entryFee": "10000000",
+        "legacy": false,
+        "memberCount": 3,
+        "payouts": [
+          "12000000",
+          "3000000",
+          "1000000",
+          "9",
+          "4"
+        ],
+        "refundBase": [
+          "0",
+          "2000000"
+        ],
+        "refundInPayout": "06",
+        "status": "Finalized",
+        "treasury": [
+          "5000000",
+          "2000000"
+        ],
+        "treasuryFinal": [
+          "4000000",
+          "3000000"
+        ]
+      },
+      "shares": "5",
+      "v9": true
+    },
+    {
+      "amount": null,
+      "civ": 0,
+      "index": 0,
+      "season": {
+        "abortedFrom": "Registering",
+        "aiCount": 3,
+        "bond": "60000000",
+        "bountyEach": "5000000",
+        "entryFee": "10000000",
+        "legacy": false,
+        "memberCount": 3,
+        "payouts": [
+          "18446744073709551615"
+        ],
+        "refundBase": [
+          "4000000",
+          "2000000"
+        ],
+        "refundInPayout": "06",
+        "status": "Finalized",
+        "treasury": [
+          "5000000",
+          "2000000"
+        ],
+        "treasuryFinal": [
+          "4000000",
+          "3000000"
+        ]
+      },
+      "shares": "4000000",
+      "v9": true
+    },
+    {
+      "amount": "14000000",
+      "civ": 0,
+      "index": 0,
+      "season": {
+        "abortedFrom": "Registering",
+        "aiCount": 3,
+        "bond": "60000000",
+        "bountyEach": "5000000",
+        "entryFee": "10000000",
+        "legacy": true,
+        "memberCount": 3,
+        "payouts": [
+          "12000000",
+          "0",
+          "6148914691236517205"
+        ],
+        "refundBase": [],
+        "refundInPayout": "",
+        "status": "Finalized",
+        "treasury": [
+          "5000000",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        "treasuryFinal": [
+          "4000000",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ]
+      },
+      "shares": "2500000",
+      "v9": false
+    },
+    {
+      "amount": null,
+      "civ": 0,
+      "index": 1,
+      "season": {
+        "abortedFrom": "Registering",
+        "aiCount": 3,
+        "bond": "60000001",
+        "bountyEach": "1000003",
+        "entryFee": "10000000",
+        "legacy": false,
+        "memberCount": 7,
+        "payouts": [
+          "12000000",
+          "3000000",
+          "1000000",
+          "9",
+          "4"
+        ],
+        "refundBase": [
+          "4000000",
+          "2000000"
+        ],
+        "refundInPayout": "06",
+        "status": "Aborted",
+        "treasury": [
+          "5000000",
+          "2000000"
+        ],
+        "treasuryFinal": [
+          "4000000",
+          "3000000"
+        ]
+      },
+      "shares": "2000000",
+      "v9": true
+    },
+    {
+      "amount": null,
+      "civ": 0,
+      "index": 1,
+      "season": {
+        "abortedFrom": "Seeding",
+        "aiCount": 3,
+        "bond": "60000001",
+        "bountyEach": "1000003",
+        "entryFee": "10000000",
+        "legacy": false,
+        "memberCount": 7,
+        "payouts": [
+          "12000000",
+          "3000000",
+          "1000000",
+          "9",
+          "4"
+        ],
+        "refundBase": [
+          "4000000",
+          "2000000"
+        ],
+        "refundInPayout": "06",
+        "status": "Aborted",
+        "treasury": [
+          "5000000",
+          "2000000"
+        ],
+        "treasuryFinal": [
+          "4000000",
+          "3000000"
+        ]
+      },
+      "shares": "2000000",
+      "v9": true
+    },
+    {
+      "amount": null,
+      "civ": 0,
+      "index": 1,
+      "season": {
+        "abortedFrom": "Seating",
+        "aiCount": 3,
+        "bond": "60000001",
+        "bountyEach": "1000003",
+        "entryFee": "10000000",
+        "legacy": false,
+        "memberCount": 7,
+        "payouts": [
+          "12000000",
+          "3000000",
+          "1000000",
+          "9",
+          "4"
+        ],
+        "refundBase": [
+          "4000000",
+          "2000000"
+        ],
+        "refundInPayout": "06",
+        "status": "Aborted",
+        "treasury": [
+          "5000000",
+          "2000000"
+        ],
+        "treasuryFinal": [
+          "4000000",
+          "3000000"
+        ]
+      },
+      "shares": "2000000",
+      "v9": true
+    },
+    {
+      "amount": null,
+      "civ": 0,
+      "index": 1,
+      "season": {
+        "abortedFrom": "Running",
+        "aiCount": 3,
+        "bond": "60000001",
+        "bountyEach": "1000003",
+        "entryFee": "10000000",
+        "legacy": false,
+        "memberCount": 7,
+        "payouts": [
+          "12000000",
+          "3000000",
+          "1000000",
+          "9",
+          "4"
+        ],
+        "refundBase": [
+          "4000000",
+          "2000000"
+        ],
+        "refundInPayout": "06",
+        "status": "Aborted",
+        "treasury": [
+          "5000000",
+          "2000000"
+        ],
+        "treasuryFinal": [
+          "4000000",
+          "3000000"
+        ]
+      },
+      "shares": "2000000",
+      "v9": true
     }
   ],
   "commitment": {
@@ -436,8 +1179,10 @@
   "constants": {
     "ABORT_GRACE_SECONDS": 86400,
     "BATCH_BYTES": 800,
+    "CANONICAL_PROGRAM_ID": "J4aZxe3ynkS7kcvCpKbp6aFYw8d9vtrRDsgSEi1niU6n",
     "CHUNK": 4096,
     "DEGRADED": 128,
+    "EXCHANGE_MAX_PRICE": "100000000",
     "FINISH_GRACE_SECONDS": 604800,
     "GOV_QUOTA_MAX": 12,
     "GOV_QUOTA_MIN": 2,
@@ -454,10 +1199,12 @@
       "world": "PSWORLD6"
     },
     "MAX_AI": 64,
+    "MAX_BATCH_ORDERS": 24,
     "MAX_BOND": "100000000000000",
     "MAX_BOUNTY": "1000000000",
     "MAX_DEPOSIT": "1000000000",
     "MAX_ENTRY_FEE": "1000000000",
+    "MAX_FREE_ORDERS": 8,
     "MAX_GENESIS_WORK": 50,
     "MAX_GOV_ACTION_BYTES": 480,
     "MAX_GOV_PER_SIGNER": 8,
@@ -465,11 +1212,14 @@
     "MAX_NAME": 24,
     "MAX_NATIONS": 8,
     "MAX_NATIONS_PER_INTENT": 3,
+    "MAX_ORDER_COORD": 255,
     "MAX_POLICY": 64,
     "MAX_RATIONALE": 512,
     "MAX_REGISTRATION_SECONDS": 1209600,
     "MAX_REVEAL_BYTES": 950,
     "MAX_TICK_SECONDS": 14400,
+    "MAX_TRADE_AMOUNT": 10000,
+    "MIN_NATIONS": 2,
     "NATIONS": [
       "Aster",
       "Borealis",
@@ -478,8 +1228,18 @@
       "Ember",
       "Fjordal"
     ],
+    "NATION_BASE_LEN": 511,
+    "NATION_HEAD_LEN": 499,
     "NATION_MEMBER_CAP": 24,
     "NATION_TARGET": 1000,
+    "PRESET_BLITZ": 0,
+    "RAND": {
+      "dev": 4,
+      "fallback": 3,
+      "none": 0,
+      "pending": 1,
+      "vrf": 2
+    },
     "REVEAL_ROOM": 1100,
     "ROLES": [
       "General",
@@ -498,6 +1258,12 @@
       "Seeding",
       "Aborted"
     ],
+    "SEED": {
+      "dev": 4,
+      "none": 0,
+      "pending": 1,
+      "vrf": 2
+    },
     "SEEDS": {
       "member": "member",
       "nation": "nation",
@@ -509,14 +1275,44 @@
     "SEED_RETRY_SECONDS": 60,
     "TAKEOVER_SECONDS": 600,
     "TICK0_GRACE_SECONDS": 600,
+    "TICKS_PER_SEASON": 180,
     "TICK_OVERHEAD_SECONDS": 60,
     "USDC_DECIMALS": 6,
     "VRF_GIVEUP_SECONDS": 600,
+    "VRF_PROGRAM_ID": "Vrf1RNUjXmQGjmQrQLvJHs9SNkvDJEsRVFPkfSQUwGz",
+    "VRF_QUEUE_BASE": "Cuj97ggrhhidhbu39TijNVqE74xvKJ69gDervRUXAxGh",
+    "VRF_QUEUE_ER": "5hBR571xnXppuCPveTrctfTU7tJLSN94nq7kv7FRK5Tc",
     "VRF_RETRY_SECONDS": 10,
     "WORLD_BODY_MAX": 81664,
     "WORLD_CHUNKS": 20,
     "WORLD_HEADER": 256,
-    "WORLD_META_SPACE": 244
+    "WORLD_META_SPACE": 244,
+    "degradeAfter": [
+      [
+        1,
+        600
+      ],
+      [
+        30,
+        600
+      ],
+      [
+        300,
+        600
+      ],
+      [
+        301,
+        602
+      ],
+      [
+        600,
+        1200
+      ],
+      [
+        14400,
+        28800
+      ]
+    ]
   },
   "errors": [
     {
@@ -745,6 +1541,954 @@
       "hex": "0400"
     }
   ],
+  "govQuota": [
+    [
+      1,
+      1,
+      12
+    ],
+    [
+      2,
+      1,
+      12
+    ],
+    [
+      2,
+      2,
+      12
+    ],
+    [
+      5,
+      1,
+      12
+    ],
+    [
+      5,
+      2,
+      12
+    ],
+    [
+      5,
+      4,
+      12
+    ],
+    [
+      8,
+      1,
+      12
+    ],
+    [
+      8,
+      2,
+      12
+    ],
+    [
+      8,
+      4,
+      12
+    ],
+    [
+      8,
+      8,
+      8
+    ],
+    [
+      12,
+      1,
+      8
+    ],
+    [
+      12,
+      2,
+      8
+    ],
+    [
+      12,
+      4,
+      8
+    ],
+    [
+      12,
+      8,
+      8
+    ],
+    [
+      12,
+      12,
+      5
+    ],
+    [
+      17,
+      1,
+      5
+    ],
+    [
+      17,
+      2,
+      5
+    ],
+    [
+      17,
+      4,
+      5
+    ],
+    [
+      17,
+      8,
+      5
+    ],
+    [
+      17,
+      12,
+      5
+    ],
+    [
+      17,
+      16,
+      4
+    ],
+    [
+      24,
+      1,
+      4
+    ],
+    [
+      24,
+      2,
+      4
+    ],
+    [
+      24,
+      4,
+      4
+    ],
+    [
+      24,
+      8,
+      4
+    ],
+    [
+      24,
+      12,
+      4
+    ],
+    [
+      24,
+      16,
+      4
+    ],
+    [
+      24,
+      24,
+      2
+    ],
+    [
+      36,
+      1,
+      2
+    ],
+    [
+      36,
+      2,
+      2
+    ],
+    [
+      36,
+      4,
+      2
+    ],
+    [
+      36,
+      8,
+      2
+    ],
+    [
+      36,
+      12,
+      2
+    ],
+    [
+      36,
+      16,
+      2
+    ],
+    [
+      36,
+      24,
+      2
+    ],
+    [
+      48,
+      1,
+      2
+    ],
+    [
+      48,
+      2,
+      2
+    ],
+    [
+      48,
+      4,
+      2
+    ],
+    [
+      48,
+      8,
+      2
+    ],
+    [
+      48,
+      12,
+      2
+    ],
+    [
+      48,
+      16,
+      2
+    ],
+    [
+      48,
+      24,
+      2
+    ],
+    [
+      96,
+      1,
+      2
+    ],
+    [
+      96,
+      2,
+      2
+    ],
+    [
+      96,
+      4,
+      2
+    ],
+    [
+      96,
+      8,
+      2
+    ],
+    [
+      96,
+      12,
+      2
+    ],
+    [
+      96,
+      16,
+      2
+    ],
+    [
+      96,
+      24,
+      2
+    ],
+    [
+      256,
+      1,
+      2
+    ],
+    [
+      256,
+      2,
+      2
+    ],
+    [
+      256,
+      4,
+      2
+    ],
+    [
+      256,
+      8,
+      2
+    ],
+    [
+      256,
+      12,
+      2
+    ],
+    [
+      256,
+      16,
+      2
+    ],
+    [
+      256,
+      24,
+      2
+    ]
+  ],
+  "govSlots": [
+    {
+      "bytes": 2,
+      "dto": {
+        "roles": [
+          "General",
+          "Diplomat"
+        ],
+        "type": "Stand"
+      },
+      "slots": 1
+    },
+    {
+      "bytes": 6,
+      "dto": {
+        "candidate": 7,
+        "role": "Steward",
+        "type": "Vote"
+      },
+      "slots": 1
+    },
+    {
+      "bytes": 12,
+      "dto": {
+        "orders": [
+          {
+            "techs": [
+              "Writing"
+            ],
+            "type": "SetResearch"
+          }
+        ],
+        "role": "Science",
+        "type": "Propose"
+      },
+      "slots": 2
+    },
+    {
+      "bytes": 5,
+      "dto": {
+        "proposal": 12,
+        "type": "Support"
+      },
+      "slots": 1
+    },
+    {
+      "bytes": 2,
+      "dto": {
+        "role": "General",
+        "type": "Recall"
+      },
+      "slots": 1
+    },
+    {
+      "bytes": 426,
+      "dto": {
+        "orders": [
+          {
+            "path": [
+              [
+                0,
+                0
+              ],
+              [
+                1,
+                -1
+              ],
+              [
+                2,
+                -2
+              ],
+              [
+                3,
+                -3
+              ],
+              [
+                4,
+                -4
+              ],
+              [
+                5,
+                -5
+              ],
+              [
+                6,
+                -6
+              ],
+              [
+                7,
+                -7
+              ],
+              [
+                8,
+                -8
+              ],
+              [
+                9,
+                -9
+              ],
+              [
+                10,
+                -10
+              ],
+              [
+                11,
+                -11
+              ]
+            ],
+            "type": "MoveUnit",
+            "unit": 7
+          },
+          {
+            "path": [
+              [
+                0,
+                0
+              ],
+              [
+                1,
+                -1
+              ],
+              [
+                2,
+                -2
+              ],
+              [
+                3,
+                -3
+              ],
+              [
+                4,
+                -4
+              ],
+              [
+                5,
+                -5
+              ],
+              [
+                6,
+                -6
+              ],
+              [
+                7,
+                -7
+              ],
+              [
+                8,
+                -8
+              ],
+              [
+                9,
+                -9
+              ],
+              [
+                10,
+                -10
+              ],
+              [
+                11,
+                -11
+              ]
+            ],
+            "type": "MoveUnit",
+            "unit": 7
+          },
+          {
+            "path": [
+              [
+                0,
+                0
+              ],
+              [
+                1,
+                -1
+              ],
+              [
+                2,
+                -2
+              ],
+              [
+                3,
+                -3
+              ],
+              [
+                4,
+                -4
+              ],
+              [
+                5,
+                -5
+              ],
+              [
+                6,
+                -6
+              ],
+              [
+                7,
+                -7
+              ],
+              [
+                8,
+                -8
+              ],
+              [
+                9,
+                -9
+              ],
+              [
+                10,
+                -10
+              ],
+              [
+                11,
+                -11
+              ]
+            ],
+            "type": "MoveUnit",
+            "unit": 7
+          },
+          {
+            "path": [
+              [
+                0,
+                0
+              ],
+              [
+                1,
+                -1
+              ],
+              [
+                2,
+                -2
+              ],
+              [
+                3,
+                -3
+              ],
+              [
+                4,
+                -4
+              ],
+              [
+                5,
+                -5
+              ],
+              [
+                6,
+                -6
+              ],
+              [
+                7,
+                -7
+              ],
+              [
+                8,
+                -8
+              ],
+              [
+                9,
+                -9
+              ],
+              [
+                10,
+                -10
+              ],
+              [
+                11,
+                -11
+              ]
+            ],
+            "type": "MoveUnit",
+            "unit": 7
+          }
+        ],
+        "role": "General",
+        "type": "Propose"
+      },
+      "slots": 10
+    },
+    {
+      "bytes": 51,
+      "dto": {
+        "orders": [
+          {
+            "city": 0,
+            "gold": 9,
+            "type": "Purchase"
+          },
+          {
+            "city": 1,
+            "gold": 9,
+            "type": "Purchase"
+          },
+          {
+            "city": 2,
+            "gold": 9,
+            "type": "Purchase"
+          },
+          {
+            "city": 3,
+            "gold": 9,
+            "type": "Purchase"
+          },
+          {
+            "city": 4,
+            "gold": 9,
+            "type": "Purchase"
+          }
+        ],
+        "role": "Steward",
+        "type": "Propose"
+      },
+      "slots": 6
+    },
+    {
+      "bytes": 664,
+      "dto": {
+        "orders": [
+          {
+            "path": [
+              [
+                0,
+                0
+              ],
+              [
+                1,
+                -1
+              ],
+              [
+                2,
+                -2
+              ],
+              [
+                3,
+                -3
+              ],
+              [
+                4,
+                -4
+              ],
+              [
+                5,
+                -5
+              ],
+              [
+                6,
+                -6
+              ],
+              [
+                7,
+                -7
+              ],
+              [
+                8,
+                -8
+              ],
+              [
+                9,
+                -9
+              ],
+              [
+                10,
+                -10
+              ],
+              [
+                11,
+                -11
+              ],
+              [
+                12,
+                -12
+              ],
+              [
+                13,
+                -13
+              ],
+              [
+                14,
+                -14
+              ],
+              [
+                15,
+                -15
+              ],
+              [
+                16,
+                -16
+              ],
+              [
+                17,
+                -17
+              ],
+              [
+                18,
+                -18
+              ],
+              [
+                19,
+                -19
+              ],
+              [
+                20,
+                -20
+              ],
+              [
+                21,
+                -21
+              ],
+              [
+                22,
+                -22
+              ],
+              [
+                23,
+                -23
+              ],
+              [
+                24,
+                -24
+              ],
+              [
+                25,
+                -25
+              ],
+              [
+                26,
+                -26
+              ],
+              [
+                27,
+                -27
+              ],
+              [
+                28,
+                -28
+              ],
+              [
+                29,
+                -29
+              ],
+              [
+                30,
+                -30
+              ],
+              [
+                31,
+                -31
+              ],
+              [
+                32,
+                -32
+              ],
+              [
+                33,
+                -33
+              ],
+              [
+                34,
+                -34
+              ],
+              [
+                35,
+                -35
+              ],
+              [
+                36,
+                -36
+              ],
+              [
+                37,
+                -37
+              ],
+              [
+                38,
+                -38
+              ],
+              [
+                39,
+                -39
+              ]
+            ],
+            "type": "MoveUnit",
+            "unit": 7
+          },
+          {
+            "path": [
+              [
+                0,
+                0
+              ],
+              [
+                1,
+                -1
+              ],
+              [
+                2,
+                -2
+              ],
+              [
+                3,
+                -3
+              ],
+              [
+                4,
+                -4
+              ],
+              [
+                5,
+                -5
+              ],
+              [
+                6,
+                -6
+              ],
+              [
+                7,
+                -7
+              ],
+              [
+                8,
+                -8
+              ],
+              [
+                9,
+                -9
+              ],
+              [
+                10,
+                -10
+              ],
+              [
+                11,
+                -11
+              ],
+              [
+                12,
+                -12
+              ],
+              [
+                13,
+                -13
+              ],
+              [
+                14,
+                -14
+              ],
+              [
+                15,
+                -15
+              ],
+              [
+                16,
+                -16
+              ],
+              [
+                17,
+                -17
+              ],
+              [
+                18,
+                -18
+              ],
+              [
+                19,
+                -19
+              ],
+              [
+                20,
+                -20
+              ],
+              [
+                21,
+                -21
+              ],
+              [
+                22,
+                -22
+              ],
+              [
+                23,
+                -23
+              ],
+              [
+                24,
+                -24
+              ],
+              [
+                25,
+                -25
+              ],
+              [
+                26,
+                -26
+              ],
+              [
+                27,
+                -27
+              ],
+              [
+                28,
+                -28
+              ],
+              [
+                29,
+                -29
+              ],
+              [
+                30,
+                -30
+              ],
+              [
+                31,
+                -31
+              ],
+              [
+                32,
+                -32
+              ],
+              [
+                33,
+                -33
+              ],
+              [
+                34,
+                -34
+              ],
+              [
+                35,
+                -35
+              ],
+              [
+                36,
+                -36
+              ],
+              [
+                37,
+                -37
+              ],
+              [
+                38,
+                -38
+              ],
+              [
+                39,
+                -39
+              ]
+            ],
+            "type": "MoveUnit",
+            "unit": 7
+          }
+        ],
+        "role": "General",
+        "type": "Propose"
+      },
+      "slots": null
+    },
+    {
+      "bytes": 6,
+      "dto": {
+        "orders": [],
+        "role": "Science",
+        "type": "Propose"
+      },
+      "slots": 1
+    }
+  ],
   "instructions": [
     {
       "hex": "002a00000000000000000680969800000000001e0000000707070707070707070707070707070707070707070707070707070707070707090909090909090909090909090909090909090909090909090909090909090901290000000000000003000c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c404b4c0000000000008793030000000040420f00000000009049b16a000000001111111111111111111111111111111111111111111111111111111111111111",
@@ -895,6 +2639,660 @@
       "name": "closeSeasonAccounts"
     }
   ],
+  "lifecycle": {
+    "abort": [
+      {
+        "now": "0",
+        "operator": true,
+        "result": null,
+        "runningDeadline": "112700",
+        "season": {
+          "delegated": 0,
+          "stageAt": 500,
+          "startBy": 1000,
+          "status": "Registering",
+          "tickSeconds": 30
+        },
+        "view": null
+      },
+      {
+        "now": "87399",
+        "operator": false,
+        "result": "TooEarly",
+        "runningDeadline": "112700",
+        "season": {
+          "delegated": 0,
+          "stageAt": 500,
+          "startBy": 1000,
+          "status": "Registering",
+          "tickSeconds": 30
+        },
+        "view": null
+      },
+      {
+        "now": "87400",
+        "operator": false,
+        "result": null,
+        "runningDeadline": "112700",
+        "season": {
+          "delegated": 0,
+          "stageAt": 500,
+          "startBy": 1000,
+          "status": "Registering",
+          "tickSeconds": 30
+        },
+        "view": null
+      },
+      {
+        "now": "86899",
+        "operator": true,
+        "result": "TooEarly",
+        "runningDeadline": "112700",
+        "season": {
+          "delegated": 0,
+          "stageAt": 500,
+          "startBy": 1000,
+          "status": "Seeding",
+          "tickSeconds": 30
+        },
+        "view": null
+      },
+      {
+        "now": "86900",
+        "operator": false,
+        "result": null,
+        "runningDeadline": "112700",
+        "season": {
+          "delegated": 0,
+          "stageAt": 500,
+          "startBy": 1000,
+          "status": "Seeding",
+          "tickSeconds": 30
+        },
+        "view": null
+      },
+      {
+        "now": "86899",
+        "operator": true,
+        "result": "TooEarly",
+        "runningDeadline": "112700",
+        "season": {
+          "delegated": 0,
+          "stageAt": 500,
+          "startBy": 1000,
+          "status": "Genesis",
+          "tickSeconds": 30
+        },
+        "view": null
+      },
+      {
+        "now": "86900",
+        "operator": false,
+        "result": null,
+        "runningDeadline": "112700",
+        "season": {
+          "delegated": 0,
+          "stageAt": 500,
+          "startBy": 1000,
+          "status": "Seating",
+          "tickSeconds": 30
+        },
+        "view": null
+      },
+      {
+        "now": "86929",
+        "operator": false,
+        "result": "TooEarly",
+        "runningDeadline": "112700",
+        "season": {
+          "delegated": 0,
+          "stageAt": 500,
+          "startBy": 1000,
+          "status": "Running",
+          "tickSeconds": 30
+        },
+        "view": {
+          "allHome": true,
+          "chunk0Home": true,
+          "deadline": 530,
+          "finished": false,
+          "isWorld": true,
+          "precheckOk": false
+        }
+      },
+      {
+        "now": "86930",
+        "operator": false,
+        "result": null,
+        "runningDeadline": "112700",
+        "season": {
+          "delegated": 0,
+          "stageAt": 500,
+          "startBy": 1000,
+          "status": "Running",
+          "tickSeconds": 30
+        },
+        "view": {
+          "allHome": true,
+          "chunk0Home": true,
+          "deadline": 530,
+          "finished": false,
+          "isWorld": true,
+          "precheckOk": false
+        }
+      },
+      {
+        "now": "86930",
+        "operator": false,
+        "result": "TooEarly",
+        "runningDeadline": "112700",
+        "season": {
+          "delegated": 0,
+          "stageAt": 500,
+          "startBy": 1000,
+          "status": "Running",
+          "tickSeconds": 30
+        },
+        "view": {
+          "allHome": true,
+          "chunk0Home": true,
+          "deadline": 86930,
+          "finished": false,
+          "isWorld": true,
+          "precheckOk": false
+        }
+      },
+      {
+        "now": "112700",
+        "operator": false,
+        "result": "WorldTooSmall",
+        "runningDeadline": "112700",
+        "season": {
+          "delegated": 0,
+          "stageAt": 500,
+          "startBy": 1000,
+          "status": "Running",
+          "tickSeconds": 30
+        },
+        "view": null
+      },
+      {
+        "now": "86930",
+        "operator": false,
+        "result": "TooEarly",
+        "runningDeadline": "112700",
+        "season": {
+          "delegated": 67108863,
+          "stageAt": 500,
+          "startBy": 1000,
+          "status": "Running",
+          "tickSeconds": 30
+        },
+        "view": {
+          "allHome": false,
+          "chunk0Home": false,
+          "deadline": 530,
+          "finished": false,
+          "isWorld": false,
+          "precheckOk": false
+        }
+      },
+      {
+        "now": "112699",
+        "operator": false,
+        "result": "TooEarly",
+        "runningDeadline": "112700",
+        "season": {
+          "delegated": 67108863,
+          "stageAt": 500,
+          "startBy": 1000,
+          "status": "Running",
+          "tickSeconds": 30
+        },
+        "view": {
+          "allHome": false,
+          "chunk0Home": false,
+          "deadline": 530,
+          "finished": false,
+          "isWorld": false,
+          "precheckOk": false
+        }
+      },
+      {
+        "now": "112700",
+        "operator": false,
+        "result": null,
+        "runningDeadline": "112700",
+        "season": {
+          "delegated": 67108863,
+          "stageAt": 500,
+          "startBy": 1000,
+          "status": "Running",
+          "tickSeconds": 30
+        },
+        "view": {
+          "allHome": false,
+          "chunk0Home": false,
+          "deadline": 530,
+          "finished": false,
+          "isWorld": false,
+          "precheckOk": false
+        }
+      },
+      {
+        "now": "112700",
+        "operator": false,
+        "result": "TooEarly",
+        "runningDeadline": "112700",
+        "season": {
+          "delegated": 67108863,
+          "stageAt": 500,
+          "startBy": 1000,
+          "status": "Running",
+          "tickSeconds": 30
+        },
+        "view": {
+          "allHome": true,
+          "chunk0Home": true,
+          "deadline": 530,
+          "finished": true,
+          "isWorld": true,
+          "precheckOk": true
+        }
+      },
+      {
+        "now": "717499",
+        "operator": false,
+        "result": "TooEarly",
+        "runningDeadline": "112700",
+        "season": {
+          "delegated": 67108863,
+          "stageAt": 500,
+          "startBy": 1000,
+          "status": "Running",
+          "tickSeconds": 30
+        },
+        "view": {
+          "allHome": true,
+          "chunk0Home": true,
+          "deadline": 530,
+          "finished": true,
+          "isWorld": true,
+          "precheckOk": true
+        }
+      },
+      {
+        "now": "717500",
+        "operator": false,
+        "result": null,
+        "runningDeadline": "112700",
+        "season": {
+          "delegated": 67108863,
+          "stageAt": 500,
+          "startBy": 1000,
+          "status": "Running",
+          "tickSeconds": 30
+        },
+        "view": {
+          "allHome": true,
+          "chunk0Home": true,
+          "deadline": 530,
+          "finished": true,
+          "isWorld": true,
+          "precheckOk": true
+        }
+      },
+      {
+        "now": "112700",
+        "operator": false,
+        "result": null,
+        "runningDeadline": "112700",
+        "season": {
+          "delegated": 67108863,
+          "stageAt": 500,
+          "startBy": 1000,
+          "status": "Running",
+          "tickSeconds": 30
+        },
+        "view": {
+          "allHome": true,
+          "chunk0Home": true,
+          "deadline": 530,
+          "finished": true,
+          "isWorld": true,
+          "precheckOk": false
+        }
+      },
+      {
+        "now": "9223372036854775807",
+        "operator": true,
+        "result": "WrongStatus",
+        "runningDeadline": "112700",
+        "season": {
+          "delegated": 0,
+          "stageAt": 500,
+          "startBy": 1000,
+          "status": "Finalized",
+          "tickSeconds": 30
+        },
+        "view": null
+      },
+      {
+        "now": "9223372036854775807",
+        "operator": true,
+        "result": "WrongStatus",
+        "runningDeadline": "112700",
+        "season": {
+          "delegated": 0,
+          "stageAt": 500,
+          "startBy": 1000,
+          "status": "Aborted",
+          "tickSeconds": 30
+        },
+        "view": null
+      },
+      {
+        "now": "9223372036854775807",
+        "operator": false,
+        "result": null,
+        "runningDeadline": "9223372036854775807",
+        "season": {
+          "delegated": 67108863,
+          "stageAt": 9223372036854775797,
+          "startBy": 1000,
+          "status": "Running",
+          "tickSeconds": 30
+        },
+        "view": {
+          "allHome": false,
+          "chunk0Home": false,
+          "deadline": 530,
+          "finished": false,
+          "isWorld": false,
+          "precheckOk": false
+        }
+      }
+    ],
+    "refunds": [
+      {
+        "escrow": "9000000",
+        "opsAfterAbort": "9000000",
+        "refund": "12000000",
+        "season": {
+          "abortedFrom": "Registering",
+          "aiCount": 3,
+          "bond": "6000000",
+          "bountyEach": "1000000",
+          "entryFee": "10000000",
+          "legacy": false,
+          "memberCount": 12,
+          "payouts": [
+            "12000000",
+            "0",
+            "6148914691236517205"
+          ],
+          "refundBase": [
+            "4000000",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0"
+          ],
+          "refundInPayout": "02",
+          "status": "Aborted",
+          "treasury": [
+            "5000000",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0"
+          ],
+          "treasuryFinal": [
+            "4000000",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0"
+          ]
+        },
+        "shares": "2000000"
+      },
+      {
+        "escrow": "9000000",
+        "opsAfterAbort": "0",
+        "refund": "12750000",
+        "season": {
+          "abortedFrom": "Seating",
+          "aiCount": 3,
+          "bond": "6000000",
+          "bountyEach": "1000000",
+          "entryFee": "10000000",
+          "legacy": false,
+          "memberCount": 12,
+          "payouts": [
+            "12000000",
+            "0",
+            "6148914691236517205"
+          ],
+          "refundBase": [
+            "4000000",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0"
+          ],
+          "refundInPayout": "02",
+          "status": "Aborted",
+          "treasury": [
+            "5000000",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0"
+          ],
+          "treasuryFinal": [
+            "4000000",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0"
+          ]
+        },
+        "shares": "2000000"
+      },
+      {
+        "escrow": "666667",
+        "opsAfterAbort": "1",
+        "refund": "10095238",
+        "season": {
+          "abortedFrom": "Seeding",
+          "aiCount": 2,
+          "bond": "1",
+          "bountyEach": "333333",
+          "entryFee": "10000000",
+          "legacy": false,
+          "memberCount": 7,
+          "payouts": [
+            "12000000",
+            "0",
+            "6148914691236517205"
+          ],
+          "refundBase": [
+            "4000000",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0"
+          ],
+          "refundInPayout": "02",
+          "status": "Aborted",
+          "treasury": [
+            "5000000",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0"
+          ],
+          "treasuryFinal": [
+            "4000000",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0"
+          ]
+        },
+        "shares": "0"
+      },
+      {
+        "escrow": "824777918",
+        "opsAfterAbort": "14",
+        "refund": "27182873",
+        "season": {
+          "abortedFrom": "Running",
+          "aiCount": 47,
+          "bond": "777777777",
+          "bountyEach": "1000003",
+          "entryFee": "10000000",
+          "legacy": false,
+          "memberCount": 48,
+          "payouts": [
+            "12000000",
+            "0",
+            "6148914691236517205"
+          ],
+          "refundBase": [
+            "4000000",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0"
+          ],
+          "refundInPayout": "02",
+          "status": "Aborted",
+          "treasury": [
+            "5000000",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0"
+          ],
+          "treasuryFinal": [
+            "4000000",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0"
+          ]
+        },
+        "shares": "0"
+      },
+      {
+        "escrow": "5",
+        "opsAfterAbort": "5",
+        "refund": "10000000",
+        "season": {
+          "abortedFrom": "Genesis",
+          "aiCount": 0,
+          "bond": "5",
+          "bountyEach": "0",
+          "entryFee": "10000000",
+          "legacy": false,
+          "memberCount": 0,
+          "payouts": [
+            "12000000",
+            "0",
+            "6148914691236517205"
+          ],
+          "refundBase": [
+            "4000000",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0"
+          ],
+          "refundInPayout": "02",
+          "status": "Aborted",
+          "treasury": [
+            "5000000",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0"
+          ],
+          "treasuryFinal": [
+            "4000000",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0"
+          ]
+        },
+        "shares": "0"
+      },
+      {
+        "escrow": "18446744073709551615",
+        "opsAfterAbort": "0",
+        "refund": "18446744073709551615",
+        "season": {
+          "abortedFrom": "Running",
+          "aiCount": 2,
+          "bond": "18446744073709551615",
+          "bountyEach": "18446744073709551615",
+          "entryFee": "10000000",
+          "legacy": false,
+          "memberCount": 5,
+          "payouts": [
+            "12000000",
+            "0",
+            "6148914691236517205"
+          ],
+          "refundBase": [
+            "4000000",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0"
+          ],
+          "refundInPayout": "02",
+          "status": "Aborted",
+          "treasury": [
+            "5000000",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0"
+          ],
+          "treasuryFinal": [
+            "4000000",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0"
+          ]
+        },
+        "shares": "18446744073709551615"
+      }
+    ],
+    "ticksPerSeason": 180
+  },
   "offices": [
     {
       "dto": {
@@ -915,10 +3313,12 @@
         "type": "MoveUnit",
         "unit": 7
       },
+      "free": false,
       "offices": [
         "General",
         "Steward"
-      ]
+      ],
+      "treasury": false
     },
     {
       "dto": {
@@ -929,9 +3329,11 @@
         },
         "type": "Attack"
       },
+      "free": false,
       "offices": [
         "General"
-      ]
+      ],
+      "treasury": false
     },
     {
       "dto": {
@@ -942,9 +3344,11 @@
         },
         "type": "Attack"
       },
+      "free": false,
       "offices": [
         "General"
-      ]
+      ],
+      "treasury": false
     },
     {
       "dto": {
@@ -955,18 +3359,22 @@
         },
         "type": "Attack"
       },
+      "free": false,
       "offices": [
         "General"
-      ]
+      ],
+      "treasury": false
     },
     {
       "dto": {
         "settler": 12,
         "type": "FoundCity"
       },
+      "free": false,
       "offices": [
         "Steward"
-      ]
+      ],
+      "treasury": false
     },
     {
       "dto": {
@@ -990,9 +3398,11 @@
         ],
         "type": "SetQueue"
       },
+      "free": false,
       "offices": [
         "Steward"
-      ]
+      ],
+      "treasury": false
     },
     {
       "dto": {
@@ -1000,9 +3410,11 @@
         "focus": "Science",
         "type": "SetFocus"
       },
+      "free": false,
       "offices": [
         "Steward"
-      ]
+      ],
+      "treasury": false
     },
     {
       "dto": {
@@ -1010,9 +3422,11 @@
         "gold": 60,
         "type": "Purchase"
       },
+      "free": false,
       "offices": [
         "Steward"
-      ]
+      ],
+      "treasury": false
     },
     {
       "dto": {
@@ -1023,36 +3437,44 @@
         ],
         "type": "SetResearch"
       },
+      "free": false,
       "offices": [
         "Science"
-      ]
+      ],
+      "treasury": false
     },
     {
       "dto": {
         "civ": 4,
         "type": "DeclareWar"
       },
+      "free": false,
       "offices": [
         "Diplomat"
-      ]
+      ],
+      "treasury": false
     },
     {
       "dto": {
         "civ": 4,
         "type": "ProposePeace"
       },
+      "free": false,
       "offices": [
         "Diplomat"
-      ]
+      ],
+      "treasury": false
     },
     {
       "dto": {
         "civ": 4,
         "type": "AcceptPeace"
       },
+      "free": false,
       "offices": [
         "Diplomat"
-      ]
+      ],
+      "treasury": false
     },
     {
       "dto": {
@@ -1060,9 +3482,11 @@
         "civ": 2,
         "type": "ProposeNap"
       },
+      "free": false,
       "offices": [
         "Diplomat"
-      ]
+      ],
+      "treasury": false
     },
     {
       "dto": {
@@ -1070,44 +3494,54 @@
         "civ": 2,
         "type": "AcceptNap"
       },
+      "free": false,
       "offices": [
         "Diplomat"
-      ]
+      ],
+      "treasury": false
     },
     {
       "dto": {
         "civ": 2,
         "type": "BreakNap"
       },
+      "free": false,
       "offices": [
         "Diplomat"
-      ]
+      ],
+      "treasury": false
     },
     {
       "dto": {
         "civ": 5,
         "type": "ProposeAlliance"
       },
+      "free": false,
       "offices": [
         "Diplomat"
-      ]
+      ],
+      "treasury": false
     },
     {
       "dto": {
         "civ": 5,
         "type": "AcceptAlliance"
       },
+      "free": false,
       "offices": [
         "Diplomat"
-      ]
+      ],
+      "treasury": false
     },
     {
       "dto": {
         "type": "LeaveAlliance"
       },
+      "free": false,
       "offices": [
         "Diplomat"
-      ]
+      ],
+      "treasury": false
     },
     {
       "dto": {
@@ -1115,9 +3549,11 @@
         "influence": 20,
         "type": "SendEnvoy"
       },
+      "free": false,
       "offices": [
         "Diplomat"
-      ]
+      ],
+      "treasury": false
     },
     {
       "dto": {
@@ -1129,9 +3565,11 @@
         },
         "type": "Transfer"
       },
+      "free": false,
       "offices": [
         "Diplomat"
-      ]
+      ],
+      "treasury": false
     },
     {
       "dto": {
@@ -1143,9 +3581,11 @@
         "side": "Buy",
         "type": "MarketTrade"
       },
+      "free": false,
       "offices": [
         "Diplomat"
-      ]
+      ],
+      "treasury": false
     },
     {
       "dto": {
@@ -1158,18 +3598,22 @@
         "side": "Sell",
         "type": "ExchangeOrder"
       },
+      "free": true,
       "offices": [
         "Diplomat"
-      ]
+      ],
+      "treasury": true
     },
     {
       "dto": {
         "city": 6,
         "type": "Raze"
       },
+      "free": false,
       "offices": [
         "General"
-      ]
+      ],
+      "treasury": false
     },
     {
       "dto": {
@@ -1183,10 +3627,12 @@
         },
         "type": "SetStanding"
       },
+      "free": false,
       "offices": [
         "General",
         "Steward"
-      ]
+      ],
+      "treasury": false
     },
     {
       "dto": {
@@ -1200,10 +3646,12 @@
         },
         "type": "SetStanding"
       },
+      "free": false,
       "offices": [
         "General",
         "Steward"
-      ]
+      ],
+      "treasury": false
     },
     {
       "dto": {
@@ -1226,10 +3674,12 @@
         },
         "type": "SetStanding"
       },
+      "free": false,
       "offices": [
         "General",
         "Steward"
-      ]
+      ],
+      "treasury": false
     },
     {
       "dto": {
@@ -1243,9 +3693,11 @@
         },
         "type": "SetStanding"
       },
+      "free": false,
       "offices": [
         "Steward"
-      ]
+      ],
+      "treasury": false
     },
     {
       "dto": {
@@ -1259,9 +3711,11 @@
         },
         "type": "SetStanding"
       },
+      "free": false,
       "offices": [
         "Steward"
-      ]
+      ],
+      "treasury": false
     },
     {
       "dto": {
@@ -1274,10 +3728,12 @@
         },
         "type": "SetStanding"
       },
+      "free": false,
       "offices": [
         "General",
         "Steward"
-      ]
+      ],
+      "treasury": false
     },
     {
       "dto": {
@@ -1287,33 +3743,39 @@
         "tick": 3,
         "type": "RevealRationale"
       },
+      "free": true,
       "offices": [
         "General",
         "Steward",
         "Science",
         "Diplomat"
-      ]
+      ],
+      "treasury": false
     },
     {
       "dto": {
         "civ": 2,
         "type": "ConsentWar"
       },
+      "free": true,
       "offices": [
         "General",
         "Steward"
-      ]
+      ],
+      "treasury": false
     },
     {
       "dto": {
         "type": "ConsentSpend",
         "usdc": 25000000
       },
+      "free": true,
       "offices": [
         "General",
         "Steward",
         "Science"
-      ]
+      ],
+      "treasury": true
     },
     {
       "dto": {
@@ -1325,9 +3787,11 @@
         "type": "OfferContract",
         "usdc": 4000000
       },
+      "free": false,
       "offices": [
         "Diplomat"
-      ]
+      ],
+      "treasury": true
     },
     {
       "dto": {
@@ -1340,9 +3804,11 @@
         "type": "OfferContract",
         "usdc": 2500000
       },
+      "free": false,
       "offices": [
         "Diplomat"
-      ]
+      ],
+      "treasury": true
     },
     {
       "dto": {
@@ -1356,9 +3822,11 @@
         "type": "OfferContract",
         "usdc": 8000000
       },
+      "free": false,
       "offices": [
         "Diplomat"
-      ]
+      ],
+      "treasury": true
     },
     {
       "dto": {
@@ -1370,27 +3838,33 @@
         "type": "OfferContract",
         "usdc": 3000000
       },
+      "free": false,
       "offices": [
         "Diplomat"
-      ]
+      ],
+      "treasury": true
     },
     {
       "dto": {
         "id": 7,
         "type": "AcceptContract"
       },
+      "free": false,
       "offices": [
         "Diplomat"
-      ]
+      ],
+      "treasury": false
     },
     {
       "dto": {
         "id": 8,
         "type": "CancelContract"
       },
+      "free": false,
       "offices": [
         "Diplomat"
-      ]
+      ],
+      "treasury": false
     }
   ],
   "orders": [
@@ -1806,6 +4280,23 @@
   ],
   "roster": {
     "chain": "83fd0e364bfd2f66991a960afa17198f2d788e81fccfc8fde9fe887a2641eed9",
+    "commits": [
+      {
+        "blind": "0000000000000000000000000000000000000000000000000000000000000000",
+        "chain": "83fd0e364bfd2f66991a960afa17198f2d788e81fccfc8fde9fe887a2641eed9",
+        "commit": "9fdb15a7bc72895e115c24a1ebb2fcd49051f087a5c5499d500f52e273d1b5e0"
+      },
+      {
+        "blind": "0303030303030303030303030303030303030303030303030303030303030303",
+        "chain": "83fd0e364bfd2f66991a960afa17198f2d788e81fccfc8fde9fe887a2641eed9",
+        "commit": "c1d1c5c576a4126f8a99fcb26fae1d283b947b8de38cf6e886ee9c0ddf93344d"
+      },
+      {
+        "blind": "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+        "chain": "83fd0e364bfd2f66991a960afa17198f2d788e81fccfc8fde9fe887a2641eed9",
+        "commit": "b3b3ec2288aab6f194b90385d9e16c4068d3d2ceba5f2c6af62c666ba932beaf"
+      }
+    ],
     "tags": [
       {
         "salt": "1111111111111111111111111111111111111111111111111111111111111111",
@@ -1826,5 +4317,10 @@
         "wallet": "0101010101010101010101010101010101010101010101010101010101010101"
       }
     ]
+  },
+  "vrf": {
+    "programId": "J4aZxe3ynkS7kcvCpKbp6aFYw8d9vtrRDsgSEi1niU6n",
+    "programIdentity": "2DbGAgfkuSgPRvPurX9uyw9SjLfZSYaa3677C8RmKj2U",
+    "vrfIdentity": "35drvgJ8EHWNuuyTP27Z1xtSCUJj6b97qgNDzgLTwEmK"
   }
 }

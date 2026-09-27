@@ -11,7 +11,7 @@
 // after the tick.
 import { parseArgs, runAgent } from './runner.mjs';
 import { hexDist as dist } from '../client/src/hexgrid.mjs';
-import { officeOf } from '../client/src/offices.mjs';
+import { isTreasuryOrder, officeOf } from '../client/src/offices.mjs';
 
 const TECH_PLAN = ['Agriculture', 'BronzeWorking', 'Writing', 'Masonry', 'Mysticism', 'Currency', 'Archery', 'Mathematics', 'Philosophy',
   'IronWorking', 'HorsebackRiding', 'Engineering', 'Astronomy', 'Physics', 'CelestialMechanics', 'Chivalry'];
@@ -132,6 +132,8 @@ async function decide({ game, view: v, map, held }) {
   const chosen = [];
   for (const w of wish.sort((a, b) => b.pri - a.pri)) {
     const role = officeOf(w.order, v);
+    // Treasury orders cannot be proposed: keep the two proposal slots for orders that can.
+    if (!held.includes(role) && isTreasuryOrder(w.order)) continue;
     const cap = held.includes(role) ? spendable[role] ?? 0 : 2;
     if ((used[role] ?? 0) >= cap) continue;
     used[role] = (used[role] ?? 0) + 1;

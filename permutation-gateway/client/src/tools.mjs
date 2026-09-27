@@ -2,7 +2,7 @@
 // reference LLM agent (agents/llm-agent.mjs). Each tool is a thin, honest
 // wrapper over GameClient: it returns what the game server says, trimmed to
 // what fits a context window.
-import { NATIONS, ROLES } from './codec.mjs';
+import { NATIONS, orderOutOfRange, ROLES } from './codec.mjs';
 import { MAX_RATIONALE } from './decision.mjs';
 import { hexDist } from './hexgrid.mjs';
 import { summarize } from './summary.mjs';
@@ -12,6 +12,7 @@ Each order belongs to one office (V5): General = armies and scouts (MoveUnit of 
 Steward = cities and settlers (SetQueue, SetFocus, Purchase, FoundCity, MoveUnit of settlers, city SetStanding), Science = SetResearch,
 Diplomat = war, treaties, envoys, transfers, markets. Each office has its own budget (a share of 3 + cities, max 8) and bank.
 Each order costs 1 (ExchangeOrder, RevealRationale, ConsentWar, ConsentSpend cost 0). One manual order per unit per tick.
+A batch holds at most 24 orders (counting the orders of the proposals it adopts), at most 8 of them free; an adoption over that is skipped.
   MoveUnit        {unit, path: [[q,r], ...]}           every step adjacent to the previous hex; get one from find_path
   Attack          {army, target: {kind: "Unit"|"City"|"CityState", id}}   see preview_unit.attacks
   FoundCity       {settler}                               the settler founds a city where it stands (preview_unit.found)
@@ -24,10 +25,12 @@ Each order costs 1 (ExchangeOrder, RevealRationale, ConsentWar, ConsentSpend cos
   ProposeNap | AcceptNap  {civ, bond}                     bond in gold
   LeaveAlliance   {}
   SendEnvoy       {cityState, influence}
-  Transfer        {civ, good: {kind:"Gold"|"Iron"|"Horses"} | {kind:"Food"|"Production", city}, amount}
-  MarketTrade     {good, side: "Buy"|"Sell", amount, limitGold}
-  ExchangeOrder   {good, side, amount, price}             USDC market between treasuries: batch auction, rising tariff, 3-tick delivery
-  ConsentWar      {civ}      ConsentSpend {usdc}          the second officer's consent
+  Transfer        {civ, good: {kind:"Gold"|"Iron"|"Horses"} | {kind:"Food"|"Production", city}, amount}   amount <= 10000
+  MarketTrade     {good, side: "Buy"|"Sell", amount, limitGold}                                      amount <= 10000
+  ExchangeOrder   {good, side, amount, price}             USDC market between treasuries: batch auction, rising tariff, 3-tick delivery;
+                  price <= 100000000 base units (100 USDC) per unit, amount <= 10000
+  ConsentWar      {civ}      ConsentSpend {usdc}          the second officer's consent; ConsentSpend counts only from a seated
+                  General, Steward or Science officer who is not the diplomat. Without it a nation spends at most 5 USDC of its treasury per term
   OfferContract   {to?, term, usdc, deadline}             escrow treasury USDC; paid by the program when the world shows the term by the deadline, else returned.
                   term: {kind:"Peace"} (to makes peace with you) | {kind:"LeaveAlliance", with} | {kind:"KeepNap", every, installments} (paid in parts while your NAP with to stands)
                         | {kind:"Capture", city} (no "to": whichever nation takes that city is paid). Counts as treasury spending; received USDC cannot be spent on the market.
@@ -35,6 +38,7 @@ Each order costs 1 (ExchangeOrder, RevealRationale, ConsentWar, ConsentSpend cos
   Raze            {city}
   SetStanding     {target: {kind:"Unit"|"City", id}, rule: {kind:"Clear"} | {kind:"AutoDefend", radius} | {kind:"Retreat", ratioBps} | {kind:"Patrol", route:[[q,r],...]} | {kind:"QueueRepeat", on} | {kind:"AutoPurchase", maxGold}}
 Governance actions (any member): Stand {roles}, Vote {role, candidate} (in the 10 ticks before a term), Propose {role, orders}, Support {proposal}, Recall {role}.
+Treasury orders (ExchangeOrder, OfferContract, ConsentSpend) are the officer's own: they cannot be proposed.
 Buildings: Granary Workshop Temple Market Academy Barracks Walls StarGate1 StarGate2 StarGate3.
 Units: Spearman Archer Horseman Pikeman Crossbowman Knight Scout Settler.
 Techs: Agriculture BronzeWorking Archery HorsebackRiding Masonry Mysticism Writing Currency IronWorking Mathematics Chivalry Philosophy Engineering Astronomy Physics CelestialMechanics.`;
@@ -63,7 +67,7 @@ export const TOOLS = [
   { name: 'find_path', description: 'A legal MoveUnit path for your unit to hex (q, r), or why there is none.', inputSchema: { type: 'object', properties: { unit: { type: 'integer' }, q: { type: 'integer' }, r: { type: 'integer' } }, required: ['unit', 'q', 'r'] } },
   { name: 'validate_orders', description: 'Dry run. ok = accepted at submit time (structure, budget); warnings = orders that would be skipped when the tick resolves.', inputSchema: { type: 'object', properties: { orders: ORDERS_SCHEMA }, required: ['orders'] } },
   { name: 'submit_orders', description: 'As an officer: seal this tick\'s orders for the offices you hold (one batch per office, replacing earlier ones this tick). Only a commitment goes on chain now; the orders are revealed automatically after the tick\'s deadline, so nobody can react to them this tick. The rationale is committed now as a hash and revealed after the tick. Orders for offices you do not hold come back as notHeld: propose them instead.', inputSchema: { type: 'object', properties: { orders: ORDERS_SCHEMA, rationale: { type: 'string', description: `why, in one or two sentences (max ${MAX_RATIONALE} bytes); becomes public after the tick` }, adopt: { type: 'object', description: 'proposal ids to adopt per office, e.g. {"Science": [3]}' } }, required: ['orders', 'rationale'] } },
-  { name: 'propose', description: 'Propose orders to one office of your nation (any member). The officer may adopt it; its merit is then shared with you.', inputSchema: { type: 'object', properties: { role: { type: 'string', enum: [...ROLES] }, orders: ORDERS_SCHEMA }, required: ['role', 'orders'] } },
+  { name: 'propose', description: 'Propose orders to one office of your nation (any member). The officer may adopt it; its merit is then shared with you. ExchangeOrder, OfferContract and ConsentSpend are the officer\'s own and cannot be proposed.', inputSchema: { type: 'object', properties: { role: { type: 'string', enum: [...ROLES] }, orders: ORDERS_SCHEMA }, required: ['role', 'orders'] } },
   { name: 'talk', description: 'Send a public message (signed, anchored on chain): to everyone, a nation {civ} or a member {member}. Words bind nothing; contracts do.', inputSchema: { type: 'object', properties: { to: { type: 'object', description: '{civ} or {member}; omit for everyone' }, text: { type: 'string', description: 'up to 280 characters' } }, required: ['text'] } },
   { name: 'read_talk', description: 'Recent public messages (from id `since`).', inputSchema: { type: 'object', properties: { since: { type: 'integer' } } } },
   { name: 'get_roster', description: 'How many operator AI members this season has, the bounty for conquering one\'s home city, and those revealed so far.', inputSchema: { type: 'object', properties: {} } },
@@ -77,6 +81,9 @@ export const TOOLS = [
  */
 export async function callTool(ctx, name, args = {}) {
   const g = ctx.game;
+  // Orders past the value bounds would make the program refuse the whole batch: say so before anything is sent.
+  const bounds = ['submit_orders', 'propose', 'validate_orders'].includes(name) ? (args.orders ?? []).map(orderOutOfRange).filter(Boolean) : [];
+  if (bounds.length) return { error: bounds.join('; '), code: 'OutOfRange' };
   try {
     switch (name) {
       case 'get_rules': return { rules: RULES_BRIEF, orders: ORDER_REFERENCE };

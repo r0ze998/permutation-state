@@ -18,19 +18,32 @@ export const programId = DEFAULTS.programId;
 const u8 = s => new TextEncoder().encode(s);
 const bytes = k => (k instanceof Uint8Array ? k : new PublicKey(k).toBytes());
 
-/** A season account's data: the sample season (vectors.json) with `over` fields replaced. */
+/**
+ * A season account's data: the sample season (vectors.json) with `over`
+ * fields replaced, in the v8 layout (`MAGIC.season`; `legacy: true` writes
+ * `MAGIC.legacySeason`).
+ */
 export function seasonData(over = {}) {
   const sample = fromHex(vectors.accounts.season.hex);
   const s = { ...decodeSeason(sample), ...over };
-  const w = new Writer().fixed(u8(MAGIC.season), 8).u64(s.seasonId).u8(s.bump).u8(s.vaultBump).fixed(bytes(s.admin), 32).fixed(bytes(s.crank), 32)
+  const status = name => SEASON_STATUS.indexOf(name);
+  const i64 = (w, v) => w.u64(BigInt.asUintN(64, BigInt(v)));
+  const w = new Writer().fixed(u8(s.legacy ? MAGIC.legacySeason : MAGIC.season), 8).u64(s.seasonId).u8(s.bump).u8(s.vaultBump).fixed(bytes(s.admin), 32).fixed(bytes(s.crank), 32)
     .fixed(bytes(s.usdcMint), 32).u8(s.usdcDecimals).u8(s.preset).u8(s.nations).u64(s.entryFee).u32(s.tickSeconds).bool(s.market)
-    .u8(SEASON_STATUS.indexOf(s.status)).fixed(s.worldSeed, 32).fixed(s.seasonSeed, 32).u32(s.memberCount).vec(s.nationMembers, (x, v) => x.u32(v))
+    .u8(status(s.status)).fixed(s.worldSeed, 32).fixed(s.seasonSeed, 32).u32(s.memberCount).vec(s.nationMembers, (x, v) => x.u32(v))
     .u32(s.seated).u64(s.pool).u64(s.ops).bool(s.opsWithdrawn).vec(s.treasury, (x, v) => x.u64(v)).vec(s.treasuryFinal, (x, v) => x.u64(v))
     .vec(s.payouts, (x, v) => x.u64(v)).fixed(s.finalRoot, 32).u64(s.prevSeasonId).fixed(s.prevHistoryRoot, 32).fixed(s.historyRoot, 32)
-    .u16(s.aiCount).fixed(s.rosterChain, 32).u64(s.bountyEach).u64(s.bond).fixed(s.rosterAcc, 32).u16(s.rosterRevealed)
-    .u8(['none', 'revealed', 'forfeited'].indexOf(s.rosterOutcome)).vec(s.bountyPaid, (x, v) => x.u64(v)).toBytes();
-  const out = new Uint8Array(Math.max(w.length, sample.length));
-  out.set(w);
+    .u16(s.aiCount).fixed(s.rosterCommit, 32).u64(s.bountyEach).u64(s.bond).fixed(s.rosterAcc, 32).u16(s.rosterRevealed)
+    .u8(['none', 'revealed', 'forfeited'].indexOf(s.rosterOutcome)).vec(s.bountyPaid, (x, v) => x.u64(v))
+    // The v8 tail, in the contract's block order.
+    .u32(s.delegated).fixed(s.rosterBlind, 32).vec(s.refundBase, (x, v) => x.u64(v)).bytes(s.refundInPayout)
+    .u8(s.seedState).fixed(s.seedOracle, 32);
+  i64(w, s.seedRequestedAt).u8(s.seedRequests).u64(s.deposit).u64(s.outstanding).bool(s.voided);
+  i64(i64(w, s.startBy), s.stageAt).u32(s.rolledBack).u8(status(s.abortedFrom)).fixed(bytes(s.validator), 32)
+    .u16(s.rulesVersion).fixed(s.rulesHash, 32).u16(s.logicVersion).u64(s.createdSlot);
+  const b = w.toBytes();
+  const out = new Uint8Array(Math.max(b.length, sample.length));
+  out.set(b);
   return Buffer.from(out);
 }
 
@@ -49,7 +62,21 @@ export function memberData(over = {}) {
 
 // The encoders reproduce the samples byte for byte.
 assert.deepEqual(new Uint8Array(seasonData()), fromHex(vectors.accounts.season.hex));
+{
+  // A legacy account is the v8 layout with a zero tail (padded to the sample's length here).
+  const legacy = fromHex(vectors.accounts.legacySeason.hex);
+  const data = new Uint8Array(seasonData(decodeSeason(legacy)));
+  assert.deepEqual(data.slice(0, legacy.length), legacy);
+  assert.ok(data.slice(legacy.length).every(b => b === 0));
+}
 assert.deepEqual(new Uint8Array(memberData()), fromHex(vectors.accounts.member.hex));
+
+/**
+ * A member as the gateway's registry lists it (`registryMembers`), for a
+ * key the test generated: the relay accepts `SubmitGov` only from members
+ * signing for themselves and their own nation.
+ */
+export const member = (key, { index = 3, civ = 1 } = {}) => ({ index, civ, session: key.publicKey.toBase58() });
 
 export const blockhash = Keypair.generate().publicKey.toBase58();
 
