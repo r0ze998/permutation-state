@@ -167,6 +167,12 @@ Contract amendments are in `M1-CONTRACT.md` v1.2 §18; the review response item 
 | G13 (§8.7) | drand-replay serves a round when `round_time + delay ≤ game_now`, `game_now` = the last observed chain Clock | architect | `chain_clock_never_extrapolates` |
 | G14 | `frontier-abi` is a dev-dependency of `fclient` (path only) for the twin tests; fclient re-exports the kernel's seal, clock and host-id rules | architect | fclient `twin_tests` |
 
+## H. Wave-2 records
+
+| # | Decision | Status | Evidence |
+|---|---|---|---|
+| H1 | The `rustfmt` and `clippy` components of toolchain 1.95.0 were installed by the main session on 2026-09-27 **with the owner's explicit OK** (it answers integ-W1 notes §F, "the owner should know that someone installed them"). The `frontier-node` fmt/clippy gate lines run as written; O-M1-12's other items (the wasm32 target, Playwright Chromium, the drand archive, Agave ≥ 4.0) are still not approved and stay `PENDING-OWNER` | owner (2026-09-27) | recorded by W2-F; `W2-F-NOTES.md` §3 |
+
 ## E. Change log
 
 | Version | Date | Change |

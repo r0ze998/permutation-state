@@ -321,7 +321,7 @@ pub fn post_beacon(a: &Addresses, fee_payer: Address, region: u8, b: &BeaconArg)
 
 /// One bell of an ArchiveAnchors batch: THE anchor, the cache that gives
 /// its seed, and the anchor's `rent_to` (refund recipient).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArchiveItem {
     pub bell: u32,
     pub cache_nonce: u8,

@@ -102,6 +102,109 @@ impl RpcClient {
     }
 }
 
+/// One row of `getSignaturesForAddress` (newest first on the wire).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SigInfo {
+    pub signature: Signature,
+    pub slot: u64,
+    pub failed: bool,
+    pub block_time: Option<i64>,
+}
+
+impl RpcClient {
+    /// `getSignaturesForAddress(address, {before?, until?, limit})`, newest
+    /// first (W2-F: the pager of `findex`'s RpcPoll ingest).
+    pub async fn get_signatures_for_address(
+        &self,
+        address: &Address,
+        before: Option<&Signature>,
+        until: Option<&Signature>,
+        limit: usize,
+    ) -> PortResult<Vec<SigInfo>> {
+        let mut cfg = json!({"limit": limit.clamp(1, 1_000), "commitment": "confirmed"});
+        if let Some(b) = before {
+            cfg["before"] = json!(b.to_string());
+        }
+        if let Some(u) = until {
+            cfg["until"] = json!(u.to_string());
+        }
+        let v = self
+            .call("getSignaturesForAddress", json!([address.to_string(), cfg]))
+            .await?;
+        v.as_array()
+            .ok_or_else(|| PortError::Decode("signatures".into()))?
+            .iter()
+            .map(|r| {
+                Ok(SigInfo {
+                    signature: r
+                        .get("signature")
+                        .ok_or_else(|| PortError::Decode("signature".into()))
+                        .and_then(parse_sig)?,
+                    slot: r.get("slot").and_then(|x| x.as_u64()).unwrap_or(0),
+                    failed: r.get("err").is_some_and(|e| !e.is_null()),
+                    block_time: r.get("blockTime").and_then(|x| x.as_i64()),
+                })
+            })
+            .collect()
+    }
+
+    /// `getTransaction(sig, base64)` as a [`TxRecord`] with `seq = 0` (the
+    /// caller numbers its feed) and no post-state (a public RPC has none).
+    pub async fn get_transaction(&self, sig: &Signature) -> PortResult<Option<TxRecord>> {
+        let v = self
+            .call(
+                "getTransaction",
+                json!([sig.to_string(), {"encoding": "base64", "commitment": "confirmed", "maxSupportedTransactionVersion": 0}]),
+            )
+            .await?;
+        if v.is_null() {
+            return Ok(None);
+        }
+        parse_transaction(sig, &v).map(Some)
+    }
+}
+
+/// Parses a `getTransaction` result (base64 encoding).
+pub fn parse_transaction(sig: &Signature, v: &Value) -> PortResult<TxRecord> {
+    let d = |m: &str| PortError::Decode(format!("transaction {m}"));
+    let meta = v.get("meta").ok_or_else(|| d("meta"))?;
+    let err = meta.get("err").cloned().unwrap_or(Value::Null);
+    let tx = v
+        .get("transaction")
+        .and_then(|t| t.get(0))
+        .and_then(|t| t.as_str())
+        .ok_or_else(|| d("bytes"))?;
+    Ok(TxRecord {
+        seq: 0,
+        slot: v
+            .get("slot")
+            .and_then(|x| x.as_u64())
+            .ok_or_else(|| d("slot"))?,
+        signature: *sig,
+        block_time: v.get("blockTime").and_then(|x| x.as_i64()).unwrap_or(0),
+        tx: B64
+            .decode(tx)
+            .map_err(|e| PortError::Decode(e.to_string()))?,
+        logs: meta
+            .get("logMessages")
+            .and_then(|x| x.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|l| l.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        code: code_of(&err),
+        err: err_string(&err),
+        units: meta
+            .get("computeUnitsConsumed")
+            .and_then(|x| x.as_u64())
+            .unwrap_or(0),
+        fee: meta.get("fee").and_then(|x| x.as_u64()).unwrap_or(0),
+        post: vec![],
+    })
+}
+
 pub fn parse_sig(v: &Value) -> PortResult<Signature> {
     v.as_str()
         .and_then(|s| s.parse().ok())

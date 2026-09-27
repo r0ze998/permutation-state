@@ -1,6 +1,6 @@
 [package]
 name = "keeper"
-description = "Frontier keeper: beacons, reveals, gathers, resolves, settlements (skeleton in W1; W2-F onwards)"
+description = "Frontier keeper: beacons, genesis, payer pools, escalation engine, journal, loopback API (W2-F); land, reveals, gathers, resolves and settlements from W3/W4"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -16,5 +16,24 @@ path = "src/main.rs"
 
 [dependencies]
 fclient.workspace = true
-serde_json.workspace = true
+frontier-abi.workspace = true
+permutation-rules.workspace = true
+solana-address.workspace = true
+solana-hash.workspace = true
+solana-instruction.workspace = true
+solana-keypair.workspace = true
+solana-signer.workspace = true
+solana-signature.workspace = true
+rusqlite.workspace = true
+axum.workspace = true
 tokio.workspace = true
+rand.workspace = true
+sha2.workspace = true
+hex.workspace = true
+base64.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+localnet.workspace = true
+findex = { path = "../findex" }
+solana-program-runtime.workspace = true
