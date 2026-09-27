@@ -442,6 +442,15 @@ test("a legal fifteen-minute settlement run expands from raw production into res
   assert.ok(world.stock.wood > 0 && world.stock.stone > 0 && world.stock.ore > 0);
   assert.equal(world.research.unlocked.length, 3);
   assert.equal(world.season.complete, true);
-  assert.ok(Object.values(world.buildings).every((building) => building.status === "active"));
+  // Storage capacity (cb92a2f) stops a producer whose shared store is full: that is the
+  // designed back-pressure, not a stall. Any other blocked state is still a failure.
+  for (const building of Object.values(world.buildings)) {
+    if (building.status === "active") continue;
+    assert.equal(building.status, "blocked", `${building.type} is ${building.status}`);
+    assert.match(building.reason, /^現地の出荷待ちが満杯/, `${building.type} blocked: ${building.reason}`);
+    for (const resource of Object.keys(BUILDINGS[building.type].outputs)) {
+      assert.ok(world.economy.capacity[resource] - world.stock[resource] < 1, `${building.type} blocked while ${resource} has room`);
+    }
+  }
   assert.ok(Object.values(world.stock).every((value) => Number.isFinite(value) && value >= 0));
 });

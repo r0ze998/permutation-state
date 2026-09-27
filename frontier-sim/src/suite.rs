@@ -838,7 +838,7 @@ pub fn suite(base: &Config, seeds: u64, only: Option<&str>) -> String {
                 base.clone(),
             ),
         ];
-        let rows = criterion_rows(base, seeds, &ladder, &[false, true]);
+        let rows = criterion_rows(base, seeds, CRITERION_FIRST_SEED, &ladder, &[false, true]);
         writeln!(s, "## K. The bot criterion, step by step (O4) \n").unwrap();
         writeln!(s, "SDK-default staking bots at 1, 2, 5 and 10% of wallets, {} seeds per cell (seeds 201..), {} wallets; each economy is run with bots barred from office and with bots standing for office (the most engaged wallet wins, as in M0 §G). Steps are cumulative in the owner's order (O4); rows 6-9 back steps off to find the passing set that costs honest players least. The honest cells are the same seasons' multiples. \"swept\" is what the officer-pay ceiling (and the 5× cap) carries to the next season [sim].\n", seeds, base.agents).unwrap();
         writeln!(s, "{}", criterion_table(&rows)).unwrap();
@@ -871,7 +871,7 @@ pub fn suite(base: &Config, seeds: u64, only: Option<&str>) -> String {
                 mk(&|c| c.payout.office_ceiling_bps = 10_000),
             ),
         ];
-        let rows = criterion_rows(base, seeds, &alts, &[true]);
+        let rows = criterion_rows(base, seeds, CRITERION_FIRST_SEED, &alts, &[true]);
         writeln!(s, "### K.1 Officer pay (O3): the alternatives on the K3 economy, bots standing for office\n").unwrap();
         writeln!(s, "{}", criterion_table(&rows)).unwrap();
     }
@@ -1011,6 +1011,7 @@ pub const HONEST_CELLS: [(&str, Arch, bool); 8] = [
 pub fn criterion_rows(
     base: &Config,
     seeds: u64,
+    first_seed: u64,
     variants: &[(String, Config)],
     offices: &[bool],
 ) -> Vec<CriterionRow> {
@@ -1022,7 +1023,7 @@ pub fn criterion_rows(
                 for k in 1..=seeds {
                     jobs.push(Job {
                         cfg: Config {
-                            seed: 200 + k,
+                            seed: first_seed + k,
                             bot_share: b,
                             bot_officers: off,
                             agents: base.agents,
@@ -1190,28 +1191,23 @@ impl BestRow {
 /// Every bot of a season makes the same choice, so each cell has the
 /// whole bot share in it (n = share × wallets per seed), not the ~10 per
 /// seed of the SDK-default mix.
-pub fn criterion_best(base: &Config, seeds: u64, offices: &[bool]) -> Vec<BestRow> {
-    let mut jobs = Vec::new();
-    let mut tags = Vec::new();
-    for &off in offices {
-        for &b in &CRITERION_SHARES {
-            for (w, (win, _)) in BOT_WINDOWS.iter().enumerate() {
-                for k in 1..=seeds {
-                    jobs.push(Job {
-                        cfg: Config {
-                            seed: 200 + k,
-                            bot_share: b,
-                            bot_officers: off,
-                            bot_join_days: *win,
-                            ..base.clone()
-                        },
-                        gammas: vec![],
-                    });
-                    tags.push((off, b, w));
-                }
-            }
-        }
-    }
+pub fn criterion_best(
+    base: &Config,
+    seeds: u64,
+    first_seed: u64,
+    offices: &[bool],
+) -> Vec<BestRow> {
+    let (cfgs, tags): (Vec<Config>, Vec<(bool, f64, usize)>) =
+        criterion_best_jobs(base, seeds, first_seed, offices)
+            .into_iter()
+            .unzip();
+    let jobs = cfgs
+        .into_iter()
+        .map(|cfg| Job {
+            cfg,
+            gammas: vec![],
+        })
+        .collect();
     let done = run_all(jobs);
     let mut rows = Vec::new();
     for &off in offices {
@@ -1245,6 +1241,42 @@ pub fn criterion_best(base: &Config, seeds: u64, offices: &[bool]) -> Vec<BestRo
         }
     }
     rows
+}
+
+/// Default first seed of the criterion runs: seeds `201..=200 + K` (the
+/// m0b/m0c tables). CL-16: `--first-seed N` moves them to `N+1..=N+K`
+/// (the held-out restatement uses `--first-seed 30001`).
+pub const CRITERION_FIRST_SEED: u64 = 200;
+
+/// The job list of [`criterion_best`]: one season per (office choice,
+/// bot share, join window, seed `first_seed + k` for `k` in `1..=seeds`),
+/// tagged `(offices, share, window)`.
+pub fn criterion_best_jobs(
+    base: &Config,
+    seeds: u64,
+    first_seed: u64,
+    offices: &[bool],
+) -> Vec<(Config, (bool, f64, usize))> {
+    let mut jobs = Vec::new();
+    for &off in offices {
+        for &b in &CRITERION_SHARES {
+            for (w, (win, _)) in BOT_WINDOWS.iter().enumerate() {
+                for k in 1..=seeds {
+                    jobs.push((
+                        Config {
+                            seed: first_seed + k,
+                            bot_share: b,
+                            bot_officers: off,
+                            bot_join_days: *win,
+                            ..base.clone()
+                        },
+                        (off, b, w),
+                    ));
+                }
+            }
+        }
+    }
+    jobs
 }
 
 /// Markdown for [`criterion_best`], with the verdict: passes only if every
@@ -1375,7 +1407,165 @@ mod tests {
             }
             assert!(o.ledger.claimed > 0);
             assert!(sim.stats.mandate_paid > 0);
+            assert_mutation_controls(&o.books);
         }
+    }
+
+    /// CL-07 mutation controls: each breaks the books by the smallest
+    /// amount the rule forbids, and the named bound must fail, while the
+    /// honest books pass every bound.
+    fn assert_mutation_controls(books: &crate::settle::Books) {
+        use crate::settle::{bound_checks, Books};
+        use crate::sim::LAUREL;
+        let fails = |b: &Books, name: &str| {
+            let v = bound_checks(b);
+            let c = v.iter().find(|c| c.name == name).expect(name);
+            !c.ok
+        };
+        assert!(bound_checks(books).iter().all(|c| c.ok));
+        // Pay 1 extra unit to one wallet: the global `claims + swept <=
+        // prize` bound alone would not see it (dust > 0), the per-wallet
+        // entitlement bound does.
+        let mut b = books.clone();
+        let w = b
+            .wallets
+            .iter()
+            .position(|w| w.paid_out > 0)
+            .expect("a claim");
+        b.wallets[w].paid_out += 1;
+        assert!(fails(
+            &b,
+            "bound: each claim <= its rule-computed entitlement"
+        ));
+        // Credit one index laurel twice (the credit and the balance it
+        // lands in both count it again).
+        let mut b = books.clone();
+        b.laurel_credited += LAUREL as u128;
+        b.laurel_held += LAUREL as u128;
+        assert!(fails(&b, "bound: laurels credited <= emitted - orphaned"));
+        // A laurel that appears without a credit.
+        let mut b = books.clone();
+        b.laurel_held += 1;
+        assert!(fails(&b, "bound: laurels held <= sources"));
+        // Mandate: one unit paid twice.
+        let mut b = books.clone();
+        b.mandate_paid += 1;
+        assert!(fails(
+            &b,
+            "bound: Mandate paid + burned + balance <= deposited"
+        ));
+        // A claim above 5x what the wallet paid.
+        let mut b = books.clone();
+        let w = b.wallets.iter().position(|w| w.paid_in > 0).expect("paid");
+        b.wallets[w].paid_out = b.wallets[w].paid_in * b.cap_multiple + 1;
+        assert!(fails(&b, "bound: each claim <= 5x paid"));
+    }
+
+    /// CL-08 (simulator side): an over-claim in faction 2, offset by an
+    /// under-claim in faction 4, is refused by the per-faction book even
+    /// though the season total and every per-wallet entitlement agree.
+    #[test]
+    fn the_ledger_is_per_faction() {
+        use crate::settle::{bound_checks, FactionBook};
+        let (_, o) = play(&small(3));
+        let mut b = o.books.clone();
+        let mut fb = FactionBook::new(&b);
+        for w in &b.wallets {
+            fb.record(w).expect("honest claims fit their faction");
+        }
+        let x = (fb.pot[2] - fb.paid[2] + 1) as u64;
+        let mut left = x;
+        for w in b.wallets.iter_mut().filter(|w| w.faction == 4) {
+            let d = w.paid_out.min(left);
+            w.paid_out -= d;
+            left -= d;
+        }
+        assert_eq!(left, 0, "faction 4 paid less than faction 2's slack");
+        let w2 = b
+            .wallets
+            .iter()
+            .position(|w| w.faction == 2)
+            .expect("faction 2");
+        b.wallets[w2].paid_out += x;
+        b.wallets[w2].entitled.paid += x;
+        b.wallets[w2].paid_in = b.wallets[w2].paid_out;
+        let v = bound_checks(&b);
+        let get = |n: &str| v.iter().find(|c| c.name == n).expect(n).ok;
+        assert!(get("bound: claims + swept <= prize"));
+        assert!(get("bound: each claim <= its rule-computed entitlement"));
+        assert!(!get("bound: each faction's claims <= its own pots (CL-08)"));
+    }
+
+    /// CL-16: `--first-seed N` moves the criterion to seeds `N+1..=N+K`;
+    /// the default keeps the m0c seeds 201..=203.
+    #[test]
+    fn criterion_first_seed_changes_the_seeds() {
+        let base = Config::default();
+        let seeds = |first| {
+            let mut s: Vec<u64> = criterion_best_jobs(&base, 3, first, &[false, true])
+                .iter()
+                .map(|(c, _)| c.seed)
+                .collect();
+            s.sort_unstable();
+            s.dedup();
+            s
+        };
+        assert_eq!(seeds(CRITERION_FIRST_SEED), vec![201, 202, 203]);
+        assert_eq!(seeds(30_001), vec![30_002, 30_003, 30_004]);
+        let jobs = criterion_best_jobs(&base, 3, 30_001, &[false, true]);
+        assert_eq!(
+            jobs.len(),
+            2 * CRITERION_SHARES.len() * BOT_WINDOWS.len() * 3
+        );
+    }
+
+    /// CL-31 / D23: one office-term per wallet by default, and a seat with
+    /// no eligible candidate stays vacant (small seasons).
+    #[test]
+    fn one_office_term_per_wallet_and_vacant_seats() {
+        assert_eq!(Config::default().office_term_limit, Some(1));
+        let (sim, o) = play(&small(3));
+        assert!(o.checks.iter().all(|c| c.ok));
+        assert!(sim.stats.minister_terms > 0);
+        assert!(sim
+            .agents
+            .iter()
+            .all(|a| a.minister_terms + a.warden_terms <= 1));
+        // 120 wallets over 4 terms: too few eligible wallets to fill 24
+        // Minister seats a term once each has served.
+        let (tiny, t) = play(&Config {
+            agents: 120,
+            ..small(3)
+        });
+        assert!(t.checks.iter().all(|c| c.ok));
+        assert!(
+            tiny.stats.minister_vacant > 0,
+            "no vacancy in a tiny season"
+        );
+        let (free, _) = play(&Config {
+            agents: 120,
+            office_term_limit: None,
+            ..small(3)
+        });
+        assert!(free.stats.minister_vacant < tiny.stats.minister_vacant);
+    }
+
+    /// CL-33 / D24 variant: with `relic_to_mandate` the relic emission goes
+    /// only to Mandate reserves, no holder banks a relic laurel, and the
+    /// season still conserves.
+    #[test]
+    fn relic_emission_can_feed_the_mandate_reserve() {
+        let (sim, o) = play(&Config {
+            relics: true,
+            relic_to_mandate: true,
+            ..small(3)
+        });
+        for c in &o.checks {
+            assert!(c.ok, "{} ({})", c.name, c.detail);
+        }
+        assert!(sim.stats.relic_minted > 0);
+        assert_eq!(sim.stats.relic_to_mandate, sim.stats.relic_minted);
+        assert!(o.agents.iter().all(|a| a.earned.relic == 0));
     }
 
     #[test]

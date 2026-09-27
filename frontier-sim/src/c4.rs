@@ -22,6 +22,15 @@
 //!   counterfactual is noisy; the table spans several seeds and bells, and
 //!   the **minimal attack** (the bell in which the faction has the smallest
 //!   non-zero arrival) shows how far a tiny exclusion propagates.
+//! * **Writes per bell, world-wide** (c4 v3, CL-30 and CL-26): the keeper
+//!   writes each bell needs — reveals (every arriving host, quota-refused
+//!   ones included), posture reveals (M3), GatherClash parts (≤ 10
+//!   arrivals a part, one part for a clash without arrivals), resolves,
+//!   transit and departure settlements (one per revealed arrival), reveals
+//!   in Relic Site provinces (relic tip), and the 16 + 16 beacon posts —
+//!   with p50/p99/max over the season's bells, and the per-bell series in
+//!   the JSON for the D18 pool model (`m1/lab/d18`). **R99**, the p99
+//!   reveals per bell, sizes the keeper reveal-payer band (I-49).
 
 use std::fmt::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -96,6 +105,51 @@ pub struct Bells {
     pub troops: Vec<[u64; 6]>,
     /// Player-vs-player clashes (≥ 2 player factions) f takes part in.
     pub pvp: Vec<[u32; 6]>,
+    /// World-wide writes per bell (c4 v3).
+    pub w: Writes,
+}
+
+/// Beacon posts per bell: one PostAnchor and one PostSeed per region
+/// (16 regions) [design].
+pub const BEACON_POSTS_PER_BELL: u32 = 32;
+/// Arrivals one GatherClash part carries (M1 contract §8.2).
+pub const GATHER_PART: u32 = 10;
+
+/// World-wide keeper writes per bell (c4 v3, CL-30).
+#[derive(Clone, Debug, Default)]
+pub struct Writes {
+    pub reveals: Vec<u32>,
+    pub postures: Vec<u32>,
+    pub gathers: Vec<u32>,
+    pub resolves: Vec<u32>,
+    pub settles: Vec<u32>,
+    pub relic_reveals: Vec<u32>,
+}
+
+impl Writes {
+    fn new(n: usize) -> Writes {
+        Writes {
+            reveals: vec![0; n],
+            postures: vec![0; n],
+            gathers: vec![0; n],
+            resolves: vec![0; n],
+            settles: vec![0; n],
+            relic_reveals: vec![0; n],
+        }
+    }
+
+    fn add(&mut self, r: &ClashRow) {
+        let b = r.bell as usize;
+        let rev = r.revealed as u32;
+        self.reveals[b] += rev;
+        self.postures[b] += r.postures as u32;
+        self.gathers[b] += rev.div_ceil(GATHER_PART).max(1);
+        self.resolves[b] += 1;
+        self.settles[b] += 2 * rev;
+        if r.relic {
+            self.relic_reveals[b] += rev;
+        }
+    }
 }
 
 pub fn bells(p: &Played) -> Bells {
@@ -105,8 +159,10 @@ pub fn bells(p: &Played) -> Bells {
         arr: vec![[0; 6]; n],
         troops: vec![[0; 6]; n],
         pvp: vec![[0; 6]; n],
+        w: Writes::new(n),
     };
     for r in &p.log {
+        bl.w.add(r);
         let b = r.bell as usize;
         let any = r.arr_mask | r.def_mask;
         let is_pvp = any.count_ones() >= 2;
@@ -268,11 +324,44 @@ pub fn run(base: &Config, spec: &Spec) -> (String, String) {
                 .join("; ")
         )
         .unwrap();
+        let w = &bl.w;
+        let cut = |v: &[u32]| v[..nb].to_vec();
+        writeln!(md, "- World-wide writes per bell [sim]:").unwrap();
+        for (name, v) in [
+            ("reveals (R)", &w.reveals),
+            ("posture reveals (M3)", &w.postures),
+            ("GatherClash parts", &w.gathers),
+            ("resolves", &w.resolves),
+            ("SettleTransit + SettleDeparture", &w.settles),
+            ("reveals in Relic Site provinces", &w.relic_reveals),
+        ] {
+            writeln!(md, "  - {name}: {}.", stat_line(&cut(v))).unwrap();
+        }
+        writeln!(
+            md,
+            "  - beacon posts: {BEACON_POSTS_PER_BELL} every bell [design].\n  - **R99 = {}** reveals per bell (p99; the keeper reveal-payer band, I-49).\n",
+            quant(&cut(&w.reveals), 0.99)
+        )
+        .unwrap();
+        let series = |v: &[u32]| {
+            v[..nb]
+                .iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        };
         let _ = write!(
             js,
-            "{}{{\"seed\": {}, \"part\": {{\"mean\": {:.2}, \"p90\": {}, \"p99\": {}, \"max\": {}}}, \"arr\": {{\"mean\": {:.2}, \"p90\": {}, \"p99\": {}, \"max\": {}}}, \"episodes\": {}}}",
+            "{}{{\"seed\": {}, \"writes\": {{\"bells\": {nb}, \"r99\": {}, \"reveals\": [{}], \"postures\": [{}], \"gathers\": [{}], \"resolves\": [{}], \"settles\": [{}], \"relic_reveals\": [{}]}}, \"part\": {{\"mean\": {:.2}, \"p90\": {}, \"p99\": {}, \"max\": {}}}, \"arr\": {{\"mean\": {:.2}, \"p90\": {}, \"p99\": {}, \"max\": {}}}, \"episodes\": {}}}",
             if i > 0 { ", " } else { "" },
             seeds[i],
+            quant(&cut(&w.reveals), 0.99),
+            series(&w.reveals),
+            series(&w.postures),
+            series(&w.gathers),
+            series(&w.resolves),
+            series(&w.settles),
+            series(&w.relic_reveals),
             m.iter().map(|&x| x as f64).sum::<f64>() / nb as f64,
             quant(&m, 0.9),
             quant(&m, 0.99),

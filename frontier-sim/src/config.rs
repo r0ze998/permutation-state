@@ -114,8 +114,18 @@ pub struct Config {
     /// chance (0 = no human can). Bots complete as usual. `None` = off.
     pub bot_mandates: Option<f64>,
     /// At most this many office-terms (Minister or paid Warden) per wallet
-    /// per season; `None` = no limit (design rule under review).
+    /// per season. D23 (decided 2026-09-27, CL-31): **1** in the K3 /
+    /// Season-1 preset, so every suite, criterion and c4 default uses it;
+    /// `None` = no limit (`--office-term-limit none`, the pre-D23 runs).
+    /// A seat with no eligible candidate stays vacant for the term (no pay,
+    /// no Assembly weight): `Stats::{minister,warden}_vacant`.
     pub office_term_limit: Option<u32>,
+    /// D24 variant (CL-33, `--relic-to-mandate`): a Relic Site's emission
+    /// is paid into the holder faction's Mandate reserve (which pays
+    /// staking completers under the share floor) instead of to the
+    /// holders. Only meaningful with `relics`. Off by default (D24 working
+    /// default: Relic Sites pay Works and Dominion only, no laurels).
+    pub relic_to_mandate: bool,
     /// Mandate share floor (m0c, kernel `mandate::share_floor`): the term's
     /// divisor is at least half of the faction's stakers active in it.
     /// `false` = the K3 kernel without the floor.
@@ -171,7 +181,8 @@ impl Default for Config {
             bot_officers: false,
             bot_join_days: None,
             bot_mandates: None,
-            office_term_limit: None,
+            office_term_limit: Some(1),
+            relic_to_mandate: false,
             mandate_floor: true,
             clash_log: false,
             attack: None,

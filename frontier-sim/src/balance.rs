@@ -398,7 +398,23 @@ pub fn gate_run(set: DoctrineSet) -> Balance {
 pub fn gate_run_with(set: DoctrineSet, tweaks: &str, seeds: u64) -> Balance {
     let mut spec = Spec::new(GATE_AGENTS, seeds, set);
     spec.tweaks = tweaks.to_string();
-    run(&Config::default(), &spec)
+    run(&gate_config(), &spec)
+}
+
+/// The economy the CI proxy gate was calibrated on (m0c): the K3 default
+/// **without** D23's office-term limit. M1 (CL-31) made the limit the
+/// simulator's default; on the gate's 30 seeds it moves the Knight
+/// control from −0.219% to −0.178%, inside the ±0.2% bound, so the gate
+/// would lose that control. The per-push gate therefore keeps its
+/// calibrated harness (it detects doctrine-table edits); the Season-1
+/// economy with D23 is checked by the O5 band itself on 1,500 paired
+/// seasons (`doctrines ... --gate`, `doctrine-balance.yml`, which runs the
+/// default config). Re-calibrate the proxy at the W5 Phase B gate.
+pub fn gate_config() -> Config {
+    Config {
+        office_term_limit: None,
+        ..Config::default()
+    }
 }
 
 /// Negative controls: tables the gate must reject. The Knight line for F

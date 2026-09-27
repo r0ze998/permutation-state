@@ -344,6 +344,10 @@ pub fn stats_table(sim: &Sim, o: &Outcome) -> String {
             ),
         ),
         (
+            "vacant seats (D23): Minister / Warden",
+            format!("{} / {}", st.minister_vacant, st.warden_vacant),
+        ),
+        (
             "officer pay cut by the ceiling (USDC, swept)",
             format!(
                 "{:.2}",
@@ -370,6 +374,22 @@ pub fn stats_table(sim: &Sim, o: &Outcome) -> String {
                 usdc(o.ledger.swept),
                 usdc(o.ledger.dust())
             ),
+        ),
+        (
+            "claims by faction / its pots C+L (USDC, CL-08)",
+            (0..6)
+                .map(|k| {
+                    let paid: u64 = o
+                        .books
+                        .wallets
+                        .iter()
+                        .filter(|w| w.faction as usize == k)
+                        .map(|w| w.paid_out)
+                        .sum();
+                    format!("{:.0}/{:.0}", usdc(paid), usdc(o.books.faction_pot[k]))
+                })
+                .collect::<Vec<_>>()
+                .join(", "),
         ),
     ];
     writeln!(s, "| Quantity | value |").unwrap();

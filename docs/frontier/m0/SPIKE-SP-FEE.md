@@ -1,5 +1,10 @@
 # SP-FEE results: fee and write-lock drill redone, and the C4 decision
 
+> **Corrections in M1 wave 1 (CL-27, I-45; 2026-09-27, unit W1-D).** Three labels and one parameter were wrong. Nothing was re-run; the measurements stand, only what they mean changes.
+> 1. **"Clock" is confirmation lag, not clock drift.** The §2 row "mainnet Clock 1.3–1.7 s behind wall time" measured the time from a beacon to its confirmed transaction (confirmation lag). It is **not** Clock-vs-drand skew, which is still unmeasured; the seed margin Δ ≥ 60 s (DESIGN §8.5) does not rest on it.
+> 2. **The lookup-table lock count is [unverified].** "64 (ALT)" / "60 per lookup-table stream" was never landed locally (§1, §6 item 8): only the legacy streams (≈ 20–26 known accounts) are measured. Every "60 (ALT)" figure in this report and in DESIGN §8.6/§8.7 is a limit from the lock rules, not a measurement.
+> 3. **The loaded-data limit cannot be 64 KiB for the real program (I-45).** SIMD-0186 counts the invoked program's ProgramData toward `SetLoadedAccountsDataSizeLimit`. The drills used the 13,600-B `sfee_probe.so`; the SP-V2 program is 480,512 B (`plain-v2`) to 540,608 B (`program-kprobe`) [measured, M1 contract review]. With a 64-KiB limit every Frontier transaction would fail to load and still pay its fee. M1 sets a per-kind limit `L(kind) = round_up(programdata_len + 45 + Σ(account data + 64), 32 KiB)` from the release build (deployed with `--max-len = round_up(1.25 × .so, 4 KiB)`), 1 MiB until measured. The loaded-data cost term becomes `8 × ⌈L/32,768⌉` (+256 cost units at 1 MiB instead of +16), which moves every priority in this report by < 1% (a 26k Reveal: 14,441 lamports at priority 0.433 instead of 14,337). Finding 1 of §3 (set the limit, or a bid's priority halves) stands.
+
 > **Corrections after review (m0c, 2026-09-27).** Seven review issues were checked and all confirmed. What changed:
 > 1. **Headline.** **C4 NOT MET at the default tip [model].** The O7 pool at cap 2.0 passes on every valuation only when the side's reveals are paid from ≥ 150 rotating fee payers; that, the Reveal CU and the leader execution rate are unverified until drill (g)'s rule is in the keeper SDK, the M1 Reveal CU and the M4 soak. The first version read as a conditional pass; §1 below is the original text, kept for the record.
 > 2. **Drill (g), new [measured]:** locking the keeper's **fee payer** (listed as a writable, non-signing key in the attacker's fillers) held a Reveal into an address the attacker did not know for 11.2 s at 0.0395 SOL per slot (one account's price, p × 40M); 20 known payers in one 21-key legacy stream were all held (0.042–0.045 SOL per slot); a **fresh payer landed in 0.89 s**; a keeper at 2.0 landed in 0.53 s (one payer) and 2.3 s (pool). Validator `solana-test-validator` 3.1.9 on ports 39970–40025, stopped, ledger deleted. Rows `g-*` in `results/drill-summary.md`, log `results/g.log`.
@@ -60,7 +65,7 @@
 | Slot time | 0.5 s idle; 0.6–0.9 s under flood [measured] | 0.263–0.275 s. The 250-ms feature has been active since slot 447,552,000. Whether the 100M limit is rescaled is not verified. |
 | Block fill | — | 12 blocks: 10–34M CU; top writable account ≤ 10.8M [measured] |
 | Priority market | — | minimum landed priority fee 0 in 150 of 150 recent slots [measured] |
-| Clock | — | mainnet Clock 1.3–1.7 s behind wall time [measured] |
+| Confirmation lag (labelled "Clock" before M1 CL-27) | — | 1.3–1.7 s from beacon to confirmation [measured]; **not** Clock-vs-drand skew, which is unmeasured |
 | Clients | — | Agave 4.3.0 on about 77% of stake; 26.x versions on about 10% [measured] |
 | Fee | 5,000 + limit × price; the priority fee is charged on the declared limit [measured] | same |
 
@@ -155,7 +160,7 @@ The loaded-data cost is 8 CU per 32 KiB declared; the default 64 MiB costs 16,38
 
 **Attack cost [model].**
 - A side-wide attack (sealed destinations) is whole-block pricing: p × 100M per block.
-- A one-province attack is p × 40M per block for up to about 26 (legacy) or 64 (ALT) known accounts.
+- A one-province attack is p × 40M per block for up to about 26 (legacy) or 64 (ALT, **[unverified]**: never landed locally) known accounts.
 - The keeper's priority at the default tip is 0.433.
 
 | Attack at the default tip | 600-s window | 1,200-s window |
@@ -205,12 +210,12 @@ The loaded-data cost is 8 CU per 32 KiB declared; the default 64 MiB costs 16,38
 ## 7. Design impact
 
 1. **Rewrite the §8.6 and §8.7 cost model.**
-   - k known accounts cost p × 40M per block (up to about 26 per legacy stream, 64 with ALT).
+   - k known accounts cost p × 40M per block (up to about 26 per legacy stream, 64 with ALT [unverified]).
    - A side-wide attack is p × 100M per block.
    - Drop the 4-slot multiplier and the "$7.2k per province-bell" figure.
 2. **Keeper SDK.**
    - Pay each Reveal from a fee payer drawn at random from ≥ 150 funded keys (m0c, drill (g)).
-   - Set `SetLoadedAccountsDataSizeLimit` (64 KiB) and a tight CU limit.
+   - Set `SetLoadedAccountsDataSizeLimit` and a tight CU limit (M1, I-45: at `L(kind)` from the release program, not 64 KiB; see the correction header).
    - Bid in priority terms: (fee + 2,500) / cost.
    - Escalate from the tip level, at least ×2 per slot, up to the cap.
    - Resend every slot.

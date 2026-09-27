@@ -138,6 +138,11 @@ jobs:
       # seasons) runs in doctrine-balance.yml, nightly and on demand.
       - name: Simulator tests
         run: cargo test --locked --release
+      # M1 CL-16: the bot criterion restated on a held-out seed set
+      # (30002..30004) with D23 (one office-term per wallet) on; exit 1 if
+      # any bot choice returns >= 1.0.
+      - name: Bot criterion, held-out seeds (CL-16)
+        run: cargo run --locked --release -- criterion --best-response --seeds 3 --first-seed 30001 --gate
 
   gateway:
     name: Gateway and web client tests
@@ -154,3 +159,102 @@ jobs:
           cache-dependency-path: permutation-gateway/package-lock.json
       - run: npm ci --ignore-scripts
       - run: npm test
+
+  # ------------------------------------------------------------------ M1
+  # Frontier M1 (docs/frontier/m1/M1-CONTRACT.md §3.2, §12; CL-36). The
+  # crates arrive wave by wave (frontier-abi and frontier-node in wave 1,
+  # permutation-frontier and its svm-tests in wave 2), so each step runs
+  # only once its crate exists on the branch. Agave 3.1.9's validator has
+  # no BLS12-381 syscalls; LiteSVM with the mainnet feature set is enough
+  # for the CU gates (the 7-day season runs locally, not in CI).
+  frontier-program:
+    name: Frontier M1 rules, ABI and program (host + SBF v2 + LiteSVM)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Rust toolchains
+        run: rustup toolchain install 1.89.0 1.95.0 --profile minimal --component rustfmt,clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cache/solana
+            target
+            permutation-frontier/svm-tests/target
+          key: frontier-program-${{ hashFiles('Cargo.lock', 'permutation-frontier/svm-tests/Cargo.lock', '**/rust-toolchain.toml') }}
+      - name: v9 files the Frontier must not touch (session text, v9 program)
+        run: git diff --quiet d95fa25 -- permutation-server/web/session.mjs permutation-chain/src
+      - name: Format (root workspace)
+        run: cargo fmt --all -- --check
+      - name: Rules lints
+        run: cargo clippy --locked -p permutation-rules --all-targets -- -D warnings
+      - name: ABI lints, tests and vector freshness
+        if: hashFiles('frontier-abi/Cargo.toml') != ''
+        run: |
+          cargo clippy --locked -p frontier-abi --all-targets -- -D warnings
+          cargo test --locked -p frontier-abi
+          cargo run --locked -p frontier-abi --bin abi-vectors -- --check
+      - name: Program host tests (default features and layouts only)
+        if: hashFiles('permutation-frontier/Cargo.toml') != ''
+        run: |
+          cargo clippy --locked -p permutation-frontier --all-targets -- -D warnings
+          cargo test --locked -p permutation-frontier
+          cargo check --locked -p permutation-frontier --no-default-features
+      - name: Install Agave 3.1.9 (cargo-build-sbf, platform-tools v1.52)
+        if: hashFiles('scripts/build-frontier.sh') != ''
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v3.1.9/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+      # Reproducible SBPF v2 build: e_flags == 2, overflow checks present,
+      # no oracle/trace/test-beacon markers, two builds with equal hashes.
+      - name: SBF v2 build, twice
+        if: hashFiles('scripts/build-frontier.sh') != ''
+        run: scripts/build-frontier.sh --twice
+      - name: LiteSVM suite (G1-G13 against the SBF build)
+        if: hashFiles('permutation-frontier/svm-tests/run.sh') != ''
+        run: permutation-frontier/svm-tests/run.sh
+        env:
+          RELEASE_CHECK: ${{ (startsWith(github.ref, 'refs/tags/') || startsWith(github.ref, 'refs/heads/release/')) && '1' || '' }}
+
+  frontier-node:
+    name: Frontier M1 off-chain workspace (keeper, herald, verifier, localnet)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Rust toolchain (frontier-node/rust-toolchain.toml pins 1.95.0)
+        run: rustup toolchain install 1.95.0 --profile minimal --component rustfmt,clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            frontier-node/target
+          key: frontier-node-${{ hashFiles('frontier-node/Cargo.lock', 'frontier-node/rust-toolchain.toml') }}
+      # In-process tests bind 127.0.0.1:0 and use the test-beacon key
+      # (drand-replay --test-key, I-53); no network, no fixed ports.
+      - name: Format, lints and tests
+        if: hashFiles('frontier-node/Cargo.toml') != ''
+        working-directory: frontier-node
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          cargo test --locked --workspace
+
+  frontier-wasm:
+    name: Frontier M1 web kernels (WASM build and hash)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      # The wasm32 target is installed on the CI runner only; the local
+      # machine waits for owner decision O-M1-12 (PENDING-OWNER there).
+      - name: Rust toolchain and wasm32 target
+        if: hashFiles('scripts/build-wasm.sh') != ''
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal
+          rustup target add wasm32-unknown-unknown --toolchain 1.95.0
+      - name: WASM build matches the committed module
+        if: hashFiles('scripts/build-wasm.sh') != ''
+        run: scripts/build-wasm.sh --check

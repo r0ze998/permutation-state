@@ -48,6 +48,41 @@ use permutation_rules::params::Ruleset;
 use permutation_rules::units::UnitType;
 
 pub const NONE: u32 = u32::MAX;
+
+/// W1-B (CL-03, CL-05) turns `holding::duplicate_cost` into
+/// `Option<u64>` and `host::Stamina::set` into `Result<(), HostError>`.
+/// The simulator calls them through these adapters, so it builds against
+/// the kernel both before and after that merge; a refusal is a simulator
+/// bug and stops the run loudly.
+trait CheckedCost {
+    fn cost(self) -> u64;
+}
+
+impl CheckedCost for u64 {
+    fn cost(self) -> u64 {
+        self
+    }
+}
+
+impl CheckedCost for Option<u64> {
+    fn cost(self) -> u64 {
+        self.expect("duplicate_cost refused (CL-03)")
+    }
+}
+
+trait Settled {
+    fn settled(self);
+}
+
+impl Settled for () {
+    fn settled(self) {}
+}
+
+impl<E: core::fmt::Debug> Settled for Result<(), E> {
+    fn settled(self) {
+        self.expect("Stamina::set refused (CL-05)")
+    }
+}
 const HOUR_BELLS: u32 = 6;
 /// Militia every new holding starts with (troops). [sim]
 const START_GARRISON: i64 = 100;
@@ -264,6 +299,8 @@ pub struct Stats {
     pub camps_won: u64,
     pub relics_spawned: u64,
     pub relic_minted: u64,
+    /// Relic emission paid into Mandate reserves (`Config::relic_to_mandate`).
+    pub relic_to_mandate: u64,
     pub rings_opened: u32,
     pub final_ring: u32,
     pub withdrawn_joins: u64,
@@ -283,6 +320,12 @@ pub struct Stats {
     pub minister_terms: u64,
     pub warden_terms: u64,
     pub bot_office_terms: u64,
+    /// D23 vacancy rule (CL-31): Minister seats (4 per faction-term) and
+    /// Warden seats (a March with a quorum) left vacant because no
+    /// eligible wallet stood. A vacant seat is paid nothing and carries no
+    /// Assembly weight.
+    pub minister_vacant: u64,
+    pub warden_vacant: u64,
     /// World holding emission per day (laurel units), for the stake ramp.
     pub emission_by_day: Vec<u128>,
     pub siege_stake_orphaned: u64,
@@ -320,6 +363,14 @@ pub struct ClashRow {
     pub camp: bool,
     /// Troops arriving, by faction (admitted arrivals).
     pub arr_troops: [u32; 6],
+    /// c4 v3 (CL-30): arriving hosts that reached the clash, each revealed
+    /// once in the bell's window (quota-refused ones included: their
+    /// Reveal is sent and refused).
+    pub revealed: u16,
+    /// Garrisons with a committed posture (a RevealPosture in M3).
+    pub postures: u8,
+    /// The province holds a Relic Site (relic tip, CL-26).
+    pub relic: bool,
 }
 
 pub struct Sim {
@@ -1466,8 +1517,9 @@ impl Sim {
             };
             let bd = BUILDINGS[k];
             let n = self.holds[hid as usize].buildings[k] + 1;
-            let c: [Milli; RESOURCES] =
-                core::array::from_fn(|r| duplicate_cost(bd.cost[r] as u64, n) as i64 * MILLI);
+            let c: [Milli; RESOURCES] = core::array::from_fn(|r| {
+                duplicate_cost(bd.cost[r] as u64, n).cost() as i64 * MILLI
+            });
             // A careful player (probability q) buys a building only if it
             // pays back within 3 days and leaves the next tier's cost.
             if self.rng.chance(p.thrift) {
@@ -1595,7 +1647,7 @@ impl Sim {
         let d = self.doctrine[faction as usize];
         let c: [Milli; RESOURCES] = core::array::from_fn(|r| {
             bps_mul(
-                duplicate_cost(SETTLER_COST[r] as u64, n - 1) as i64,
+                duplicate_cost(SETTLER_COST[r] as u64, n - 1).cost() as i64,
                 d.settler_cost_bps,
             ) * MILLI
         });
@@ -2310,7 +2362,9 @@ impl Sim {
                 let x = &mut self.hosts[h as usize];
                 let before = x.troops;
                 x.troops = permutation_rules::frontier::host::rout_survivors(x.troops);
-                x.stamina.set(b, 0);
+                // `()` today, `Result` after W1-B (CL-05).
+                #[allow(clippy::unit_arg)]
+                x.stamina.set(b, 0).settled();
                 let lost = before - x.troops;
                 let home = x.home;
                 self.holds[home as usize].away =
@@ -2420,6 +2474,7 @@ impl Sim {
 
     fn clash(&mut self, pi: u32, b: u32, arrivals: Vec<u32>) {
         // Arrival slots: one per citizen, 4 per faction, by mass.
+        let revealed = arrivals.len().min(u16::MAX as usize) as u16;
         let mut arrivals = arrivals;
         arrivals.sort_by_key(|&h| {
             let x = &self.hosts[h as usize];
@@ -2487,6 +2542,7 @@ impl Sim {
             0
         };
         let has_camp = p.camp.is_some();
+        let has_relic = p.relic.is_some();
         let arr: Vec<Fighter> = admitted.iter().map(|&h| self.fighter(h, b, true)).collect();
         let seed = sha256(&[b"sim/bell", &self.cfg.seed.to_le_bytes(), &b.to_le_bytes()]);
         let inp = ClashInput {
@@ -2520,6 +2576,13 @@ impl Sim {
                 def_mask: 0,
                 camp: has_camp,
                 arr_troops: [0; 6],
+                revealed,
+                postures: garrisons
+                    .iter()
+                    .filter(|g| g.posture != Posture::default())
+                    .count()
+                    .min(255) as u8,
+                relic: has_relic,
             };
             for a in &arr {
                 if (a.faction as usize) < 6 {
@@ -2570,7 +2633,9 @@ impl Sim {
             {
                 let x = &mut self.hosts[h as usize];
                 x.troops = f.troops;
-                x.stamina.set(b, f.stamina);
+                // `()` today, `Result` after W1-B (CL-05).
+                #[allow(clippy::unit_arg)]
+                x.stamina.set(b, f.stamina).settled();
                 if f.engaged {
                     x.ready_bell = ready_bell_after(b);
                 }
@@ -2930,6 +2995,14 @@ impl Sim {
                 paid += c;
                 let a = self.hosts[*h as usize].owner;
                 let f = self.agents[a as usize].faction;
+                if self.cfg.relic_to_mandate {
+                    // D24 variant (CL-33): the whole emission goes to the
+                    // holder faction's Mandate reserve, which pays staking
+                    // completers under the share floor.
+                    self.reserve[f as usize].deposit(c).expect("reserve");
+                    self.stats.relic_to_mandate += c;
+                    continue;
+                }
                 let m = mandate_reserve_split(c);
                 self.reserve[f as usize].deposit(m.give).expect("reserve");
                 self.agents[a as usize].laurels += m.keep;
@@ -3140,6 +3213,7 @@ impl Sim {
                 .map(|(i, a)| (self.rng.below(1_000) * (1 + a.sessions as u64), i as u32))
                 .collect();
             cands.sort_unstable_by_key(|x| std::cmp::Reverse(x.0));
+            self.stats.minister_vacant += 4 - cands.len().min(4) as u64;
             for &(_, a) in cands.iter().take(4) {
                 self.agents[a as usize].minister_terms += 1;
                 self.stats.minister_terms += 1;
@@ -3193,6 +3267,9 @@ impl Sim {
                             .is_none_or(|l| ag.minister_terms + ag.warden_terms < l)
                 })
                 .max_by_key(|&a| (self.agents[a as usize].sessions, a));
+            if warden.is_none() {
+                self.stats.warden_vacant += 1;
+            }
             if let Some(w) = warden {
                 self.agents[w as usize].warden_terms += 1;
                 self.stats.warden_terms += 1;
