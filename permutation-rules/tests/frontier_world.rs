@@ -1,20 +1,28 @@
 //! Frontier (rules v10) world kernels: geometry, terrain, holdings, hosts,
 //! stances, the clash, sieges and travel (design §3, §5.1, §6), and the
 //! §9.4 property tests that concern them: determinism and order
-//! independence of the clash, the roster freeze, and lag invariance.
+//! independence of the clash, the roster freeze, lag invariance and quota
+//! fairness (the ArrivalSlot set), plus the seed-round margin and the
+//! doctrine table's bounds.
 
 use permutation_rules::fixed::{BPS_ONE, MILLI};
 use permutation_rules::frontier::clash::{
-    clash_seed, frontier_ruleset, is_quiet, resolve_clash, ClashInput, ClashOutcome, Fate, Fighter,
-    Garrison, Relations, RelationsLog,
+    admit_arrival, apply_slot, clash_seed, frontier_ruleset, is_quiet, quota_set, resolve_clash,
+    reveal_close, reveal_open, seed_round, BeaconClock, ClashInput, ClashOutcome, FactionSlots,
+    Fate, Fighter, Garrison, Relations, RelationsLog, SlotDecision, SlotEntry, SlotRefusal,
+    FACTION_ARRIVAL_SLOTS, QUICKNET, REVEAL_WINDOW_SECS, SEED_MARGIN_SECS,
+};
+use permutation_rules::frontier::doctrine::{
+    self, validate_table, Doctrine, DoctrineError, DOCTRINES,
 };
 use permutation_rules::frontier::geometry::*;
 use permutation_rules::frontier::holding::{
     duplicate_cost, shield_secs, Accrual, Effect, Holding, Resource, Tier, DAY, HOUR,
 };
 use permutation_rules::frontier::host::{
-    rout_survivors, settle_merge, GarrisonState, Host, HostError, PendingOp, Presence, Stamina,
-    DESTROYED_BELOW, ENGAGE_STAMINA, MAX_HOST_TROOPS, MIN_HOST_TROOPS, STAMINA_CAP,
+    rout_survivors, settle_merge, supply_attrition, GarrisonState, Host, HostError, PendingOp,
+    Presence, Stamina, DESTROYED_BELOW, ENGAGE_STAMINA, MAX_HOST_TROOPS, MIN_HOST_TROOPS,
+    STAMINA_CAP,
 };
 use permutation_rules::frontier::siege::{
     auto_reinforce, may_besiege, raid, required_bells, BellReport, Donor, HoldingKind, Relation,
@@ -2467,4 +2475,221 @@ fn quiet_runs_count_like_single_bells() {
         completed += (a.status == SiegeStatus::Completed) as u32;
     }
     assert!(completed > 50, "only {completed} completed");
+}
+
+// ------------------------------------------------------------ quota fairness (§6.2, §9.4)
+
+fn reveal_all(order: &[SlotEntry], bell: u32) -> (FactionSlots, Vec<SlotDecision>) {
+    let mut slots: FactionSlots = [None; FACTION_ARRIVAL_SLOTS];
+    let mut ds = Vec::new();
+    for x in order {
+        let before = slots;
+        let d = admit_arrival(P, bell, &slots, *x);
+        apply_slot(&mut slots, *x, d);
+        // Each Reveal writes at most one slot.
+        let written = (0..FACTION_ARRIVAL_SLOTS)
+            .filter(|&i| slots[i] != before[i])
+            .count();
+        assert!(written <= 1, "a reveal wrote {written} slots");
+        // One arrival per citizen, never two slots for one host.
+        let mut cit: Vec<u64> = slots.iter().flatten().map(|e| e.citizen).collect();
+        cit.sort_unstable();
+        let n = cit.len();
+        cit.dedup();
+        assert_eq!(cit.len(), n, "a citizen holds two slots");
+        ds.push(d);
+    }
+    (slots, ds)
+}
+
+fn slot_set(slots: &FactionSlots) -> Vec<SlotEntry> {
+    let mut v: Vec<SlotEntry> = slots.iter().flatten().copied().collect();
+    v.sort_by_key(|e| e.host_id);
+    v
+}
+
+#[test]
+fn arrival_slots_are_the_four_largest_regardless_of_reveal_order() {
+    let mut rng = Rng(0x5107);
+    let mut displaced = 0;
+    for case in 0..400 {
+        let bell = 1 + rng.below(4_000) as u32;
+        let n = 1 + rng.below(14) as usize;
+        let citizens = 1 + rng.below(8);
+        // Few troop values, so ties are common and the tie key matters.
+        let arrivals: Vec<SlotEntry> = (0..n)
+            .map(|i| SlotEntry {
+                host_id: 1_000 * case + i as u64,
+                citizen: rng.below(citizens),
+                troops: (100 + 100 * rng.below(6) as u32) * 1000,
+            })
+            .collect();
+        let want = quota_set(P, bell, &arrivals);
+        assert!(want.len() <= FACTION_ARRIVAL_SLOTS);
+        for _ in 0..8 {
+            let mut order = arrivals.clone();
+            rng.shuffle(&mut order);
+            let (slots, ds) = reveal_all(&order, bell);
+            assert_eq!(slot_set(&slots), want, "case {case}");
+            displaced += ds
+                .iter()
+                .filter(|d| matches!(d, SlotDecision::Displace { .. }))
+                .count();
+        }
+        // The kept set really is the largest: nothing refused or displaced
+        // outranks a kept arrival of another citizen.
+        let min_kept = want.iter().map(|e| e.troops).min().unwrap_or(0);
+        for a in &arrivals {
+            if want.len() == FACTION_ARRIVAL_SLOTS && !want.iter().any(|e| e.citizen == a.citizen) {
+                assert!(
+                    a.troops <= min_kept,
+                    "case {case}: a larger arrival was left out"
+                );
+            }
+        }
+    }
+    assert!(
+        displaced > 500,
+        "displacement barely exercised: {displaced}"
+    );
+}
+
+#[test]
+fn a_spy_cannot_squat_the_slots_and_a_citizen_gets_one() {
+    let e = |host_id, citizen, troops: u32| SlotEntry {
+        host_id,
+        citizen,
+        troops: troops * 1000,
+    };
+    // A spy fills all four slots with 100-troop hosts first.
+    let mut order: Vec<SlotEntry> = (0..4).map(|i| e(10 + i, 99, 100)).collect();
+    order.extend([e(1, 1, 3_000), e(2, 2, 2_000), e(3, 3, 900), e(4, 4, 101)]);
+    let (slots, ds) = reveal_all(&order, 7);
+    assert_eq!(
+        slot_set(&slots),
+        vec![e(1, 1, 3_000), e(2, 2, 2_000), e(3, 3, 900), e(4, 4, 101)]
+    );
+    // The spy's second to fourth hosts compete with the spy's own slot.
+    assert!(ds[1..4].iter().all(
+        |d| *d == SlotDecision::Refuse(SlotRefusal::CitizenHasLarger)
+            || matches!(d, SlotDecision::Displace { displaced, .. } if displaced.citizen == 99)
+    ));
+    // A citizen's larger host replaces the smaller one; a repeat is refused.
+    let mut s: FactionSlots = [None; FACTION_ARRIVAL_SLOTS];
+    for x in [e(1, 5, 200), e(2, 5, 500)] {
+        let d = admit_arrival(P, 7, &s, x);
+        apply_slot(&mut s, x, d);
+    }
+    assert_eq!(slot_set(&s), vec![e(2, 5, 500)]);
+    assert_eq!(
+        admit_arrival(P, 7, &s, e(2, 5, 500)),
+        SlotDecision::Refuse(SlotRefusal::AlreadyIn)
+    );
+    assert_eq!(
+        admit_arrival(P, 7, &s, e(3, 5, 400)),
+        SlotDecision::Refuse(SlotRefusal::CitizenHasLarger)
+    );
+}
+
+// ------------------------------------------------------------ seed-round margin (§8.5)
+
+#[test]
+fn the_seed_round_is_after_the_reveal_close_plus_the_margin() {
+    let mut rng = Rng(0x5eed);
+    let clocks = [
+        QUICKNET,
+        BeaconClock {
+            genesis: 1_727_521_075,
+            period: 3,
+        },
+        BeaconClock {
+            genesis: 1_595_431_050,
+            period: 30,
+        },
+    ];
+    for clock in clocks {
+        for _ in 0..20_000 {
+            let anchor = clock.genesis + rng.below(400_000_000) as i64 - 1_000;
+            let close = reveal_close(anchor);
+            assert_eq!(close, anchor + REVEAL_WINDOW_SECS);
+            let s = seed_round(&clock, anchor);
+            let t = clock.round_time(s);
+            // The seed's round is scheduled no earlier than close + M, and
+            // it is the first such round.
+            assert!(t >= close + SEED_MARGIN_SECS, "{clock:?} anchor {anchor}");
+            assert!(t < close + SEED_MARGIN_SECS + clock.period);
+            assert!(s == 1 || clock.round_time(s - 1) < close + SEED_MARGIN_SECS);
+            // A beacon appears after its scheduled time, so the seed is
+            // unknown to everyone until at least M after the close.
+            let published = t + 1;
+            assert!(published > close + SEED_MARGIN_SECS);
+            // Reveals: open just before the close while the seed round is
+            // not on chain; closed by the clock or by any round ≥ S.
+            assert!(reveal_open(&clock, close - 1, anchor, s - 1));
+            assert!(!reveal_open(&clock, close, anchor, 0));
+            assert!(!reveal_open(&clock, anchor, anchor, s));
+            assert!(!reveal_open(&clock, anchor, anchor, s + 1_000));
+        }
+    }
+}
+
+// ------------------------------------------------------------ doctrines (§4.1, O5)
+
+#[test]
+fn doctrines_are_asymmetric_bounded_and_never_multiply_a_scored_fact() {
+    assert_eq!(validate_table(&DOCTRINES), Ok(()));
+    // Three drilled doctrines cover the stance cycle once each.
+    let mut drills: Vec<Stance> = DOCTRINES
+        .iter()
+        .filter_map(|d| d.drill.map(|x| x.0))
+        .collect();
+    drills.sort();
+    assert_eq!(drills, vec![Stance::Assault, Stance::Flank, Stance::Brace]);
+    // The drill applies only in its stance, never in Hold or Disarray.
+    for d in &DOCTRINES {
+        for s in STANCES {
+            let m = d.dealt_bps(Posture::Stance(s), false);
+            match d.drill {
+                Some((ds, bps)) if ds == s => assert_eq!(m, bps),
+                _ => assert_eq!(m, BPS_ONE),
+            }
+        }
+        assert_eq!(d.dealt_bps(Posture::Disarray, false), BPS_ONE);
+        assert_eq!(
+            d.dealt_bps(Posture::Stance(Stance::Hold), true),
+            d.arrival_bps
+        );
+        // Out-of-supply attrition never exceeds the kernel's.
+        let after = supply_attrition(100_000, 6);
+        assert!(d.attrition(100_000, after) >= after);
+        assert!(d.attrition(100_000, after) <= 100_000);
+    }
+    let a = doctrine::of_faction(0).unwrap();
+    assert_eq!(a.siege_bells(100, true), required_bells(100, 0) + 12);
+    assert_eq!(a.siege_bells(100, false), required_bells(100, 0));
+    // The bounds bite.
+    let strong = Doctrine {
+        drill: Some((Stance::Assault, 13_000)),
+        ..DOCTRINES[2]
+    };
+    assert_eq!(strong.validate(), Err(DoctrineError::Combat));
+    let hold = Doctrine {
+        drill: Some((Stance::Hold, 10_500)),
+        ..DOCTRINES[2]
+    };
+    assert_eq!(hold.validate(), Err(DoctrineError::HoldDrill));
+    let free = Doctrine {
+        upkeep_bps: 1_000,
+        ..DOCTRINES[5]
+    };
+    assert_eq!(free.validate(), Err(DoctrineError::Discount));
+    let mut twins = DOCTRINES;
+    twins[1] = twins[0];
+    assert_eq!(validate_table(&twins), Err(DoctrineError::Shape));
+    let mut bare = DOCTRINES;
+    bare[4] = Doctrine {
+        name: "E bare",
+        ..doctrine::NEUTRAL
+    };
+    assert_eq!(validate_table(&bare), Err(DoctrineError::Shape));
 }

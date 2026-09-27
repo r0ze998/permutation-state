@@ -970,3 +970,218 @@ pub fn resolve_clash(rules: &Ruleset, inp: &ClashInput) -> Result<ClashOutcome, 
         engagements,
     })
 }
+
+// ------------------------------------------------------------ arrival quotas at Reveal
+
+/// ArrivalSlots per (province, bell, faction) (design §6.2).
+pub const FACTION_ARRIVAL_SLOTS: usize = 4;
+
+/// What one ArrivalSlot records about a revealed arrival.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct SlotEntry {
+    pub host_id: u64,
+    /// The citizen who owns the host (one arrival per citizen per province
+    /// per bell).
+    pub citizen: u64,
+    pub troops: MilliTroops,
+}
+
+/// A faction's ArrivalSlots for one (province, bell).
+pub type FactionSlots = [Option<SlotEntry>; FACTION_ARRIVAL_SLOTS];
+
+/// Tie key of an arrival for the quota: known at Reveal (the bell seed is
+/// not yet), the same whoever computes it and whenever:
+/// `sha256("frontier/slot" ‖ P ‖ Q ‖ b ‖ host_id)`.
+pub fn slot_key(p: ProvinceCoord, bell: u32, host_id: u64) -> u64 {
+    let seed = sha256(&[
+        b"frontier/slot",
+        &p.p.to_le_bytes(),
+        &p.q.to_le_bytes(),
+        &bell.to_le_bytes(),
+    ]);
+    tie_key(&seed, host_id)
+}
+
+/// Quota rank: more troops first, then the lower slot key, then the lower
+/// host id. A strict total order on distinct hosts.
+fn slot_rank(
+    p: ProvinceCoord,
+    bell: u32,
+    e: &SlotEntry,
+) -> (core::cmp::Reverse<MilliTroops>, u64, u64) {
+    (
+        core::cmp::Reverse(e.troops),
+        slot_key(p, bell, e.host_id),
+        e.host_id,
+    )
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SlotDecision {
+    /// Written into the free slot `slot`.
+    Fill { slot: u8 },
+    /// Written over slot `slot`; the displaced arrival bounces home with no
+    /// loss.
+    Displace { slot: u8, displaced: SlotEntry },
+    /// Not admitted: the arrival bounces home with no loss.
+    Refuse(SlotRefusal),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SlotRefusal {
+    /// This host already holds a slot.
+    AlreadyIn,
+    /// Its citizen already holds a slot with a higher-ranked host.
+    CitizenHasLarger,
+    /// Every slot holds a higher-ranked arrival.
+    Full,
+}
+
+/// Reveal-time quota (design §6.2, A3): where a revealed arrival goes in
+/// its faction's four ArrivalSlots. One arrival per citizen: a citizen's
+/// second arrival competes only with the citizen's own slot. Otherwise a
+/// free slot is filled, or the lowest-ranked arrival is displaced if the
+/// new one ranks higher. Each Reveal writes at most one slot.
+///
+/// Whatever order the reveals land in, the final set is the four
+/// highest-ranked arrivals among each citizen's highest-ranked arrival
+/// ([`quota_set`]; property test `arrival_slots_are_the_four_largest_*`).
+pub fn admit_arrival(
+    p: ProvinceCoord,
+    bell: u32,
+    slots: &FactionSlots,
+    x: SlotEntry,
+) -> SlotDecision {
+    let rank = |e: &SlotEntry| slot_rank(p, bell, e);
+    if slots.iter().flatten().any(|e| e.host_id == x.host_id) {
+        return SlotDecision::Refuse(SlotRefusal::AlreadyIn);
+    }
+    if let Some((i, e)) = slots
+        .iter()
+        .enumerate()
+        .find_map(|(i, e)| e.filter(|e| e.citizen == x.citizen).map(|e| (i, e)))
+    {
+        return if rank(&x) < rank(&e) {
+            SlotDecision::Displace {
+                slot: i as u8,
+                displaced: e,
+            }
+        } else {
+            SlotDecision::Refuse(SlotRefusal::CitizenHasLarger)
+        };
+    }
+    if let Some(i) = slots.iter().position(Option::is_none) {
+        return SlotDecision::Fill { slot: i as u8 };
+    }
+    let (i, low) = slots
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| e.map(|e| (i, e)))
+        .max_by_key(|(_, e)| rank(e))
+        .expect("full");
+    if rank(&x) < rank(&low) {
+        SlotDecision::Displace {
+            slot: i as u8,
+            displaced: low,
+        }
+    } else {
+        SlotDecision::Refuse(SlotRefusal::Full)
+    }
+}
+
+/// Apply a decision to the slots (what the Reveal instruction writes).
+pub fn apply_slot(slots: &mut FactionSlots, x: SlotEntry, d: SlotDecision) {
+    match d {
+        SlotDecision::Fill { slot } | SlotDecision::Displace { slot, .. } => {
+            slots[slot as usize] = Some(x)
+        }
+        SlotDecision::Refuse(_) => {}
+    }
+}
+
+/// The quota's order-free definition: each citizen's highest-ranked
+/// arrival, then the four highest-ranked of those, sorted by host id.
+pub fn quota_set(p: ProvinceCoord, bell: u32, arrivals: &[SlotEntry]) -> Vec<SlotEntry> {
+    let rank = |e: &SlotEntry| slot_rank(p, bell, e);
+    let mut best: Vec<SlotEntry> = Vec::new();
+    for a in arrivals {
+        match best.iter_mut().find(|e| e.citizen == a.citizen) {
+            Some(e) if e.host_id == a.host_id => {}
+            Some(e) => {
+                if rank(a) < rank(e) {
+                    *e = *a;
+                }
+            }
+            None => best.push(*a),
+        }
+    }
+    best.sort_by_key(rank);
+    best.truncate(FACTION_ARRIVAL_SLOTS);
+    best.sort_by_key(|e| e.host_id);
+    best
+}
+
+// ------------------------------------------------------------ reveal window and seed round
+
+/// Reveal window after the bell's beacon is anchored for the region:
+/// reveals close at `A(b, r) + 600 s` (design §6.2, §8.4).
+pub const REVEAL_WINDOW_SECS: i64 = 600;
+/// Seed-round margin M (M0 report §4.2 item 6): the bell seed is the first
+/// round at least this long after the reveal close. `round_at` rounds down
+/// and beacons appear 0.8–2.0 s after their round time [measured,
+/// S-TLOCK], so without a margin the seed could be public before reveals
+/// close. Review against measured Solana clock skew.
+pub const SEED_MARGIN_SECS: i64 = 60;
+const _: () = assert!(SEED_MARGIN_SECS >= 60, "M0 review: M ≥ 60 s");
+
+/// A drand network's clock (one network per season, owner decision O1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BeaconClock {
+    /// Unix time of round 1.
+    pub genesis: i64,
+    /// Seconds between rounds.
+    pub period: i64,
+}
+
+/// drand quicknet (League of Entropy): round 1 at 1692803367, every 3 s.
+pub const QUICKNET: BeaconClock = BeaconClock {
+    genesis: 1_692_803_367,
+    period: 3,
+};
+
+impl BeaconClock {
+    /// Scheduled time of `round` (≥ 1).
+    pub const fn round_time(&self, round: u64) -> i64 {
+        self.genesis + (round.saturating_sub(1) as i64) * self.period
+    }
+
+    /// The first round scheduled at or after `ts` (1 if `ts` is before
+    /// genesis).
+    pub const fn first_round_from(&self, ts: i64) -> u64 {
+        if ts <= self.genesis {
+            return 1;
+        }
+        let d = ts - self.genesis;
+        (d / self.period + (d % self.period != 0) as i64) as u64 + 1
+    }
+}
+
+/// Reveal close of a bell whose beacon was anchored at `anchor_ts`.
+pub const fn reveal_close(anchor_ts: i64) -> i64 {
+    anchor_ts + REVEAL_WINDOW_SECS
+}
+
+/// The bell seed's round `S(b, r)`: the first round scheduled at or after
+/// the reveal close plus the margin, so `round_time(S) ≥ close + M`.
+pub const fn seed_round(clock: &BeaconClock, anchor_ts: i64) -> u64 {
+    clock.first_round_from(reveal_close(anchor_ts) + SEED_MARGIN_SECS)
+}
+
+/// Whether a Reveal is still accepted: before the reveal close by the
+/// chain's clock, and while no round at or after the seed round is on
+/// chain (`latest_round`: the highest round any anchor or cache of the
+/// season has verified). Either condition alone closes the window, so a
+/// fast Clock and an early beacon both refuse late reveals.
+pub const fn reveal_open(clock: &BeaconClock, now: i64, anchor_ts: i64, latest_round: u64) -> bool {
+    now < reveal_close(anchor_ts) && latest_round < seed_round(clock, anchor_ts)
+}

@@ -3,7 +3,7 @@
 
 use std::fmt::Write;
 
-use crate::model::{doctrine_set, Arch, ARCHS};
+use crate::model::{Arch, ARCHS};
 use crate::settle::{AgentOut, Outcome};
 use crate::sim::{Sim, LAUREL};
 use permutation_rules::frontier::index::INDEX_ONE;
@@ -163,7 +163,7 @@ pub fn faction_table(sim: &Sim, o: &Outcome) -> String {
             "| {} | {} | {} | {} | {:.0} | {:.0} | {:.0} | {:.0} | {:.3} | {:.3} | {:.3} | {:.3} |",
             k,
             if sim.cfg.doctrines {
-                doctrine_set(sim.cfg.doctrines_tuned)[(k + sim.cfg.doctrine_rotation) % 6].name
+                sim.doctrine[k].name()
             } else {
                 "-"
             },

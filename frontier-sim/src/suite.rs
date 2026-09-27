@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 use crate::config::{Config, Emission, LateStake};
-use crate::model::{doctrine_set, Arch};
+use crate::model::Arch;
 use crate::report::*;
 use crate::settle::{settle_run, Outcome};
 use crate::sim::Sim;
@@ -732,104 +732,19 @@ pub fn suite(base: &Config, seeds: u64, only: Option<&str>) -> String {
 
     // ---- §E doctrines
     if want("doctrines") {
+        use crate::balance;
+        use crate::model::DoctrineSet;
         let dseeds = seeds * 20;
-        for tuned in [false, true] {
-            let mut jobs = Vec::new();
-            for rot in 0..6 {
-                for k in 1..=dseeds {
-                    jobs.push(Job {
-                        cfg: Config {
-                            seed: 1000 + k * 7 + rot as u64,
-                            doctrines: true,
-                            doctrines_tuned: tuned,
-                            doctrine_rotation: rot,
-                            stratified: false,
-                            ..base.clone()
-                        },
-                        gammas: vec![],
-                    });
-                }
-            }
-            let done = run_all(jobs);
-            let (ok, n) = all_pass(&done);
-            checks_ok += ok;
-            checks_n += n;
-            let set = doctrine_set(tuned);
-            writeln!(
-                s,
-                "## E{}. Doctrines: {}\n",
-                if tuned { 2 } else { 1 },
-                if tuned {
-                    "tuned proposal (no direct multipliers on scored facts)"
-                } else {
-                    "draft table of design §4.1"
-                }
-            )
-            .unwrap();
-            writeln!(
-                s,
-                "{} seasons: every doctrine in every wedge (6 rotations × {} seeds), {} wallets, equal expected sizes with each wallet's faction drawn at random (so faction composition varies as it would in a real season). \"Win\" = highest s_k at the Reckoning. CI band: 16.7% ± 2 points [sim].\n",
-                done.len(),
-                dseeds,
-                base.agents
-            )
-            .unwrap();
-            writeln!(s, "| Doctrine | win rate | in band | mean undamped index | sd across seasons | Dominion/cap ÷ civ | Prosperity/cap ÷ civ | Knowledge/cap ÷ civ | Concord/cap ÷ civ | claims / paid |").unwrap();
-            writeln!(s, "|---|---|---|---|---|---|---|---|---|---|").unwrap();
-            let mut wins = [0u32; 6];
-            let mut idx = [0f64; 6];
-            let mut idx2 = [0f64; 6];
-            let mut path = [[0f64; 4]; 6];
-            let mut mult = [Mult::default(); 6];
-            for d in &done {
-                let o = &d.outs[0];
-                let best = (0..6)
-                    .max_by_key(|&k| (o.index[k], std::cmp::Reverse(k)))
-                    .unwrap();
-                let dk = |k: usize| (k + d.cfg.doctrine_rotation) % 6;
-                wins[dk(best)] += 1;
-                let act_all: f64 = o.facts.iter().map(|f| f.active as f64).sum();
-                for k in 0..6 {
-                    idx[dk(k)] += fx(o.raw[k]);
-                    idx2[dk(k)] += fx(o.raw[k]) * fx(o.raw[k]);
-                    for p in 0..4 {
-                        let all: f64 = o.facts.iter().map(|f| f.path[p] as f64).sum();
-                        let pc = o.facts[k].path[p] as f64 / o.facts[k].active.max(1) as f64;
-                        path[dk(k)][p] += pc / (all / act_all);
-                    }
-                }
-                for a in o.agents.iter().filter(|a| !a.shade) {
-                    mult[dk(a.faction as usize)].add(a);
-                }
-            }
-            let nd = done.len() as f64;
-            let mut in_band = 0;
-            for k in 0..6 {
-                let w = 100.0 * wins[k] as f64 / nd;
-                let ok = (w - 100.0 / 6.0).abs() <= 2.0;
-                in_band += ok as u32;
-                writeln!(
-                    s,
-                    "| {} | {:.1}% | {} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} | {:.3} |",
-                    set[k].name,
-                    w,
-                    if ok { "yes" } else { "**no**" },
-                    idx[k] / nd,
-                    (idx2[k] / nd - (idx[k] / nd).powi(2)).max(0.0).sqrt(),
-                    path[k][0] / nd,
-                    path[k][1] / nd,
-                    path[k][2] / nd,
-                    path[k][3] / nd,
-                    mult[k].x()
-                )
-                .unwrap();
-            }
-            let se = (1.0f64 / 6.0 * 5.0 / 6.0 / nd).sqrt() * 100.0;
-            writeln!(
-                s,
-                "\n{in_band} of 6 doctrines in the band. Binomial standard error of one win rate at this sample: {se:.1} points.\n"
-            )
-            .unwrap();
+        for (i, set) in [DoctrineSet::Draft, DoctrineSet::M0, DoctrineSet::Kernel]
+            .into_iter()
+            .enumerate()
+        {
+            let spec = balance::Spec::new(base.agents, dseeds, set);
+            let b = balance::run(base, &spec);
+            checks_ok += b.checks_ok;
+            checks_n += b.seasons;
+            writeln!(s, "## E{}. Doctrines: {}\n", i + 1, set.label()).unwrap();
+            writeln!(s, "{}", balance::table(&b)).unwrap();
         }
     }
 

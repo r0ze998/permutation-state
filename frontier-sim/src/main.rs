@@ -4,11 +4,16 @@
 //! frontier-sim run   [--agents N] [--seed S] [--sizes 3,1,1,1,1,1] [--bots 0.05]
 //!                    [--doctrines] [--rotation K] [--gamma 3/5] [--day0 0.6]
 //! frontier-sim suite [--agents N] [--seeds K] [--out PATH]
+//! frontier-sim doctrines [--agents N] [--seeds K] [--set kernel|draft|m0]
+//!                    [--dx "C.arrival=10500,D.drill=10500"] [--unpaired]
+//!                    [--first-seed N] [--gate]
+//! frontier-sim doctrine-gate [--set kernel|draft|m0]   (the CI gate's harness)
 //! ```
 //!
 //! `run` plays one season and prints its report; `suite` runs every M0
 //! measurement and writes the markdown results.
 
+mod balance;
 mod config;
 mod model;
 mod report;
@@ -36,6 +41,9 @@ fn main() {
     let mut seeds = 3u64;
     let mut out: Option<String> = None;
     let mut only: Option<String> = None;
+    let mut paired = true;
+    let mut gate = false;
+    let mut first_seed = 0u64;
     let mut i = 2;
     while i < args.len() {
         let v = args.get(i + 1).cloned().unwrap_or_default();
@@ -56,9 +64,22 @@ fn main() {
                 let w: Vec<u32> = v.split(',').map(|x| x.parse().expect("--sizes")).collect();
                 cfg.faction_weights.copy_from_slice(&w[..6]);
             }
-            "--doctrines-tuned" => {
+            "--set" => {
                 cfg.doctrines = true;
-                cfg.doctrines_tuned = true;
+                cfg.doctrine_set = model::DoctrineSet::parse(&v);
+            }
+            "--dx" => {
+                cfg.doctrines = true;
+                cfg.doctrine_tweaks = v;
+            }
+            "--first-seed" => first_seed = v.parse().expect("--first-seed"),
+            "--unpaired" => {
+                paired = false;
+                i += 1;
+                continue;
+            }
+            "--gate" => {
+                gate = true;
                 i += 1;
                 continue;
             }
@@ -116,6 +137,36 @@ fn main() {
                     eprintln!("wrote {p}");
                 }
                 None => println!("{text}"),
+            }
+        }
+        "doctrines" => {
+            let spec = balance::Spec {
+                agents: cfg.agents,
+                seeds,
+                first_seed,
+                set: cfg.doctrine_set,
+                tweaks: cfg.doctrine_tweaks.clone(),
+                paired,
+            };
+            let b = balance::run(&cfg, &spec);
+            let text = balance::table(&b);
+            match out {
+                Some(p) => {
+                    std::fs::write(&p, &text).expect("write results");
+                    eprintln!("wrote {p}");
+                }
+                None => println!("{text}"),
+            }
+            if gate && b.in_band < 6 {
+                std::process::exit(1);
+            }
+        }
+        "doctrine-gate" => {
+            let b = balance::gate_run(cfg.doctrine_set);
+            println!("{}", balance::table(&b));
+            if let Err(e) = balance::gate_check(&b) {
+                eprintln!("gate failed: {e}");
+                std::process::exit(1);
             }
         }
         other => panic!("unknown command {other}"),

@@ -350,9 +350,10 @@ impl Sim {
     pub fn new(cfg: &Config) -> Sim {
         let mut rng = Rng::new(cfg.seed);
         let end_bell = cfg.days * BELLS_PER_DAY;
+        let table = doctrine_table(cfg.doctrine_set, &cfg.doctrine_tweaks);
         let doctrine: [Doctrine; 6] = core::array::from_fn(|k| {
             if cfg.doctrines {
-                doctrine_set(cfg.doctrines_tuned)[(k + cfg.doctrine_rotation) % 6]
+                table[(k + cfg.doctrine_rotation) % 6]
             } else {
                 NEUTRAL_DOCTRINE
             }
@@ -850,8 +851,8 @@ impl Sim {
             return;
         }
         let d = self.doctrine[x.faction as usize];
-        let per = troop_upkeep_per_hour(&[(UnitType::Spearman, x.garrison), (d.unit, x.away)]);
-        let mut per = bps_mul(per, d.upkeep_bps);
+        let per = troop_upkeep_per_hour(&[(UnitType::Spearman, x.garrison), (d.k.unit, x.away)]);
+        let mut per = d.k.upkeep(per);
         if self.crisis[x.faction as usize] {
             per = per * 11 / 10;
         }
@@ -1455,7 +1456,7 @@ impl Sim {
             let tier = x.h.tier;
             let want = WALL_STEP * tier_idx(tier) as u32;
             let stock = x.h.stock_at(now);
-            let cost = bps_mul(WALL_COST_STONE, d.wall_cost_bps) * MILLI;
+            let cost = d.k.wall_cost(WALL_COST_STONE) * MILLI;
             let reserve = tier_up(tier).map(|c| c.0[2] * MILLI).unwrap_or(0);
             let slots = x.h.tier.queue_slots();
             let busy = x.h.queue.iter().filter(|q| q.is_some()).count();
@@ -1678,7 +1679,7 @@ impl Sim {
         }
         let d = self.doctrine[faction as usize];
         let hexes = 9 * dist + 3;
-        let secs = open_ground_secs(hexes, false, d.unit) * d.travel_bps as u64 / BPS_ONE as u64;
+        let secs = d.k.travel_secs(open_ground_secs(hexes, false, d.k.unit));
         let arrive = earliest_arrival_bell(0, now_of(depart), secs as u32).max(depart + 2);
         Some((arrive, march_stamina(hexes.min(32))))
     }
@@ -1689,7 +1690,7 @@ impl Sim {
             // A defender who sees the siege horn counters the attacker's
             // doctrine stance.
             if self.rng.chance(q) {
-                if let Some((s, _)) = self.doctrine[enemy as usize].stance_bonus {
+                if let Some((s, _)) = self.doctrine[enemy as usize].k.drill {
                     return match s {
                         Stance::Assault => Stance::Brace,
                         Stance::Brace => Stance::Flank,
@@ -1697,14 +1698,14 @@ impl Sim {
                         Stance::Hold => Stance::Hold,
                     };
                 }
-                if let Some((s, _)) = d.stance_bonus {
+                if let Some((s, _)) = d.k.drill {
                     return s;
                 }
                 return Stance::Hold;
             }
             return Stance::Hold;
         }
-        if let Some((s, _)) = d.stance_bonus {
+        if let Some((s, _)) = d.k.drill {
             if self.rng.chance(q) {
                 return s;
             }
@@ -1734,7 +1735,7 @@ impl Sim {
             return None;
         }
         // Unit variant surcharge over a Spearman (horses, iron).
-        let extra = permutation_rules::units::stats(d.unit).prod_cost as i64 - 6;
+        let extra = permutation_rules::units::stats(d.k.unit).prod_cost as i64 - 6;
         if extra > 0 {
             let k = n_troops as i64 / (100 * MILLI);
             let c: [Milli; RESOURCES] = [
@@ -1765,7 +1766,7 @@ impl Sim {
             owner: a,
             home: from,
             faction,
-            unit: d.unit,
+            unit: d.k.unit,
             troops: n_troops,
             stamina,
             ready_bell: b,
@@ -1817,7 +1818,7 @@ impl Sim {
             owner: a,
             home: hid,
             faction,
-            unit: d.unit,
+            unit: d.k.unit,
             troops: n_troops,
             stamina: Stamina::full(b),
             ready_bell: b,
@@ -1970,7 +1971,7 @@ impl Sim {
             return 0;
         }
         let d = self.doctrine[faction as usize];
-        let per_troop = permutation_rules::units::stats(d.unit).strength as f64;
+        let per_troop = permutation_rules::units::stats(d.k.unit).strength as f64;
         // Best source: the largest garrison.
         let Some(&src) = hs.iter().max_by_key(|&&h| self.holds[h as usize].garrison) else {
             return 0;
@@ -2157,7 +2158,7 @@ impl Sim {
         };
         let est = ct as f64 * self.rng.lognormal(0.6 * (1.0 - p.q) + 0.05);
         let faction = self.agents[a as usize].faction;
-        let per = permutation_rules::units::stats(self.doctrine[faction as usize].unit).strength
+        let per = permutation_rules::units::stats(self.doctrine[faction as usize].k.unit).strength
             as f64
             / 10.0;
         let need = (est * 2.5 / per) as MilliTroops;
@@ -2211,7 +2212,7 @@ impl Sim {
             return;
         }
         let per =
-            permutation_rules::units::stats(self.doctrine[faction as usize].unit).strength as f64;
+            permutation_rules::units::stats(self.doctrine[faction as usize].k.unit).strength as f64;
         let est = hostile as f64 * self.rng.lognormal(0.6 * (1.0 - p.q) + 0.05);
         let need = ((est * 1.5 / per) as MilliTroops).max(troops(300));
         let keep = troops(garrison_target(self.holds[src as usize].h.tier) / 3);
@@ -2323,15 +2324,7 @@ impl Sim {
                 _ => Posture::Stance(x.stance),
             }
         };
-        let mut dealt = BPS_ONE as u64;
-        if let (Some((s, bonus)), Posture::Stance(ps)) = (d.stance_bonus, posture) {
-            if s == ps {
-                dealt = dealt * bonus as u64 / BPS_ONE as u64;
-            }
-        }
-        if arrival {
-            dealt = dealt * d.arrival_bps as u64 / BPS_ONE as u64;
-        }
+        let dealt = d.k.dealt_bps(posture, arrival);
         Fighter {
             id: h as u64 + 1,
             faction: x.faction,
@@ -2344,7 +2337,7 @@ impl Sim {
                 p => p,
             },
             retreat_bps: if arrival { x.retreat } else { None },
-            dealt_bps: dealt as Bps,
+            dealt_bps: dealt,
         }
     }
 
@@ -2761,7 +2754,7 @@ impl Sim {
         self.agents[att as usize].facts[0] += 36 * 1000;
         let faction = self.agents[att as usize].faction;
         let order = self.agents[att as usize].holdings.len() as u8 + 1;
-        let keep_walls = self.doctrine[faction as usize].name.starts_with('F');
+        let keep_walls = self.doctrine[faction as usize].k.keeps_walls_on_capture;
         let ht = self.hosts[host as usize].troops;
         self.unstation(pi, host);
         {
@@ -2833,8 +2826,10 @@ impl Sim {
             if b % HOUR_BELLS == 0 {
                 for (h, _) in holders {
                     let f = self.hosts[h as usize].faction;
+                    let d = self.doctrine[f as usize].k;
                     let c = self.prov(pi).coord;
-                    let supplied = self.provinces_near(c, 3).into_iter().any(|q| {
+                    let range = d.supply_range(3);
+                    let supplied = self.provinces_near(c, range).into_iter().any(|q| {
                         self.prov(q)
                             .site_h
                             .iter()
@@ -2843,7 +2838,7 @@ impl Sim {
                     if !supplied {
                         let x = &mut self.hosts[h as usize];
                         let before = x.troops;
-                        x.troops = supply_attrition(x.troops, HOUR_BELLS);
+                        x.troops = d.attrition(before, supply_attrition(before, HOUR_BELLS));
                         let home = x.home;
                         let lost = before - x.troops;
                         self.holds[home as usize].away =
