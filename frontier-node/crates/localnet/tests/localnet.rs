@@ -263,7 +263,9 @@ fn block_caps_40m_per_writable_account_and_100m_per_block() {
     }
     let r = c.produce_block();
     assert_eq!((r.landed, r.deferred), (28, 2), "{r:?}");
-    assert_eq!(r.cu, 28 * 1_400_000);
+    // The §10.1 cost: 1.4M + 720 (1 signature) + 2 × 300 (write locks) +
+    // 8 × 2 (64 KiB loaded).
+    assert_eq!(r.cu, 28 * 1_401_336);
     let r = c.produce_block();
     assert_eq!((r.landed, r.deferred), (2, 0), "{r:?}");
 
@@ -279,6 +281,35 @@ fn block_caps_40m_per_writable_account_and_100m_per_block() {
     assert!(r.cu <= localnet::chain::BLOCK_CU);
     let r = c.produce_block();
     assert_eq!((r.landed, r.deferred), (4, 0), "{r:?}");
+}
+
+/// The caps count Agave's cost (§10.1: CU limit + 720 per signature + 300
+/// per write lock + 8 per 32 KiB loaded), not the CU limit alone
+/// (integ-W2 review of W2-C): 40 transfers of 1,000,000 CU into one
+/// account fit the 40M account cap by CU, but cost 1,001,328 each, so 39
+/// fit and one waits.
+#[test]
+fn block_caps_count_the_cost_not_the_cu_limit() {
+    let mut c = Chain::new(Config::default());
+    let ps = payers(&mut c, 40, 40);
+    let (bh, _) = c.latest_blockhash();
+    let hot = Address::new_from_array([0xAC; 32]);
+    let b = tx::TxBudget {
+        cu_limit: 1_000_000,
+        cu_price: 0,
+        loaded_limit: 32_768,
+        heap: None,
+    };
+    for p in &ps {
+        let t = tx::build(&[tx::transfer(p.pubkey(), hot, 1_000_000)], &b, &[p], &bh).unwrap();
+        assert_eq!(tx::priority(&t.message).1, 1_001_328);
+        c.submit(&tx::wire(&t)).unwrap();
+    }
+    let r = c.produce_block();
+    assert_eq!((r.landed, r.deferred), (39, 1), "{r:?}");
+    assert_eq!(r.cu, 39 * 1_001_328);
+    let r = c.produce_block();
+    assert_eq!((r.landed, r.deferred), (1, 0), "{r:?}");
 }
 
 #[test]

@@ -106,15 +106,38 @@ pub struct Report {
 }
 
 /// Whether a URL's host is loopback (`127.0.0.1`, `[::1]`, `localhost`).
+///
+/// The authority (up to the first `/`, `?` or `#`) must be exactly
+/// `host[:port]` with a numeric port: an authority with userinfo
+/// (`127.0.0.1:x@api.drand.sh`, which curl sends to the public host), a
+/// backslash, a percent-escape or whitespace is never loopback (integ-W2
+/// review of W2-C: the O-M1-12 guard and the public rate cap key on this).
 pub fn is_loopback(url: &str) -> bool {
     let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
-    let host_port = rest.split('/').next().unwrap_or("");
-    let host = if let Some(h) = host_port.strip_prefix('[') {
-        h.split(']').next().unwrap_or("")
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..end];
+    if authority
+        .chars()
+        .any(|c| matches!(c, '@' | '\\' | '%') || c.is_whitespace() || c.is_control())
+    {
+        return false;
+    }
+    let (host, port) = if let Some(h) = authority.strip_prefix('[') {
+        match h.split_once(']') {
+            Some((host, tail)) => (host, tail),
+            None => return false,
+        }
     } else {
-        host_port.split(':').next().unwrap_or("")
+        match authority.find(':') {
+            Some(i) => (&authority[..i], &authority[i..]),
+            None => (authority, ""),
+        }
     };
-    matches!(host, "127.0.0.1" | "::1" | "localhost")
+    let port_ok = port.is_empty()
+        || port.strip_prefix(':').is_some_and(|p| {
+            !p.is_empty() && p.len() <= 5 && p.bytes().all(|b| b.is_ascii_digit())
+        });
+    port_ok && matches!(host, "127.0.0.1" | "::1" | "localhost")
 }
 
 /// Refuses endpoints the options do not allow (checked before any request).
@@ -497,5 +520,25 @@ mod tests {
         );
         assert!(!is_loopback("http://127.0.0.2.example.com/"));
         assert!(!is_loopback("http://drand.cloudflare.com"));
+        // Userinfo and other crafted authorities reach the public host with
+        // curl: never loopback, so refused without --approved O-M1-12.
+        for bypass in [
+            "https://127.0.0.1:x@api.drand.sh",
+            "http://localhost:1@drand.cloudflare.com/",
+            "http://127.0.0.1@api.drand.sh/public/1",
+            "http://[::1]@api.drand.sh",
+            "http://[::1]:41020@api.drand.sh",
+            "http://127.0.0.1:41020\\@api.drand.sh",
+            "http://127.0.0.1:41020%40api.drand.sh",
+            "http://127.0.0.1:abc",
+            "http://127.0.0.1:41020x",
+            "http://[::1",
+        ] {
+            assert!(!is_loopback(bypass), "{bypass}");
+            let e = check_endpoints(&o(&[bypass], false, Fetcher::Curl)).unwrap_err();
+            assert!(e.contains("O-M1-12"), "{bypass}: {e}");
+        }
+        assert!(is_loopback("http://localhost:41020/public/7?x=1"));
+        assert!(is_loopback("http://127.0.0.1"));
     }
 }

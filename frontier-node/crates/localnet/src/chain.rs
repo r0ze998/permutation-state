@@ -13,11 +13,15 @@
 //! time while the node was down does not advance the game clock.
 //!
 //! **Blocks.** Pending transactions are ordered by priority (§10.1, highest
-//! first; ties by arrival) and executed in sequence while the block's
-//! requested CU stay ≤ 100M and each writable account's ≤ 40M (Agave's cost
-//! tracker counts the requested limit; read-only accounts are not capped);
-//! the rest wait for the next slot, and are dropped when their blockhash
-//! expires (150 slots).
+//! first; ties by arrival) and executed in sequence while the block's cost
+//! stays ≤ 100M and each writable account's ≤ 40M. The cost is Agave's
+//! cost-tracker cost, the §10.1 formula `fees::cost` = the requested CU
+//! limit + 720 per signature + 300 per write lock + 8 per 32 KiB of the
+//! loaded-data limit (not the CU limit alone: integ-W2 review of W2-C);
+//! read-only accounts are not capped. The rest wait for the next slot, and
+//! are dropped when their blockhash expires (150 slots). A transaction that
+//! cannot execute at block time (fee payer short, account missing) gives
+//! its cost back and counts as dropped.
 //!
 //! **Contention emulator** (`frontier_hold(keys, priority_milli, slots)`).
 //! A hold stands for an attacker's filler stream: transactions at priority
@@ -144,7 +148,8 @@ struct Pending {
     wire: Vec<u8>,
     arrival: u64,
     priority_milli: u64,
-    cu_limit: u64,
+    /// The §10.1 cost the block and account caps count.
+    cost: u64,
     blockhash_slot: u64,
     writable: Vec<Address>,
 }
@@ -246,7 +251,7 @@ pub struct BlockReport {
     pub failed: usize,
     pub deferred: usize,
     pub dropped: usize,
-    /// Requested CU of the executed transactions plus the holds' filler.
+    /// §10.1 cost of the executed transactions plus the holds' filler.
     pub cu: u64,
     /// Of `cu`, the part the holds' filler took.
     pub hold_cu: u64,
@@ -915,8 +920,7 @@ impl Chain {
             .filter(|s| s + BLOCKHASH_SLOTS >= self.slot)
             .ok_or(SendError::BlockhashNotFound)?;
         t.verify().map_err(|e| SendError::Invalid(e.to_string()))?;
-        let (priority_milli, _) = tx::priority(&t.message);
-        let cu_limit = tx::parse_budget(&t.message).effective_cu_limit() as u64;
+        let (priority_milli, cost) = tx::priority(&t.message);
         let writable = Self::writable_keys(&t.message);
         self.arrivals += 1;
         self.dropped.remove(&sig);
@@ -925,7 +929,7 @@ impl Chain {
             wire: wire.to_vec(),
             arrival: self.arrivals,
             priority_milli,
-            cu_limit,
+            cost,
             blockhash_slot: bslot,
             writable,
         });
@@ -1228,27 +1232,33 @@ impl Chain {
                 self.dropped.insert(tx::signature(&p.tx));
                 continue;
             }
-            let fits = block_cu + p.cu_limit <= BLOCK_CU
+            let fits = block_cu + p.cost <= BLOCK_CU
                 && p.writable
                     .iter()
-                    .all(|k| per_account.get(k).copied().unwrap_or(0) + p.cu_limit <= ACCOUNT_CU);
+                    .all(|k| per_account.get(k).copied().unwrap_or(0) + p.cost <= ACCOUNT_CU);
             if !fits {
                 report.deferred += 1;
                 self.mempool.push(p);
                 continue;
             }
-            block_cu += p.cu_limit;
-            for k in &p.writable {
-                *per_account.entry(*k).or_default() += p.cu_limit;
-            }
-            if let Some(mut l) = self.execute(p.tx, p.wire) {
-                if l.err.is_some() {
-                    report.failed += 1;
-                } else {
-                    report.landed += 1;
+            let (cost, writable) = (p.cost, p.writable.clone());
+            match self.execute(p.tx, p.wire) {
+                Some(mut l) => {
+                    block_cu += cost;
+                    for k in &writable {
+                        *per_account.entry(*k).or_default() += cost;
+                    }
+                    if l.err.is_some() {
+                        report.failed += 1;
+                    } else {
+                        report.landed += 1;
+                    }
+                    l.seq = self.landed.len() as u64 + entries.len() as u64 + 1;
+                    entries.push(l);
                 }
-                l.seq = self.landed.len() as u64 + entries.len() as u64 + 1;
-                entries.push(l);
+                // Not executable at block time (not charged): it takes no
+                // room in the block (integ-W2 review of W2-C).
+                None => report.dropped += 1,
             }
         }
         while next_hold < active.len() {

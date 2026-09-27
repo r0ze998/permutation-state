@@ -193,8 +193,10 @@ fn acct_opts(cfg: Option<&Value>) -> Result<AcctOpts, RpcErr> {
 fn acct_json(a: &Account, o: &AcctOpts) -> Value {
     let data: &[u8] = match o.slice {
         Some((off, len)) => {
+            // Saturating: an offset + length past usize::MAX is "to the
+            // end", never a wrap and a panic (integ-W2 review of W2-C).
             let s = off.min(a.data.len());
-            &a.data[s..(s + len).min(a.data.len())]
+            &a.data[s..s.saturating_add(len).min(a.data.len())]
         }
         None => &a.data,
     };
@@ -392,7 +394,9 @@ fn handle(state: &Shared, method: &str, p: &Value) -> Result<Value, RpcErr> {
                                 }
                             });
                             return bytes.is_some_and(|b| {
-                                a.data.get(off..off + b.len()) == Some(b.as_slice())
+                                off.checked_add(b.len())
+                                    .and_then(|end| a.data.get(off..end))
+                                    == Some(b.as_slice())
                             });
                         }
                         true
@@ -850,6 +854,32 @@ pub async fn start_with(state: Shared, port: u16, ws_port: u16) -> Result<Runnin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An oversized or overflowing `dataSlice` is clipped to the account's
+    /// data, never a wrap and a worker panic (integ-W2 review of W2-C:
+    /// offset 1, length u64::MAX panicked the release build).
+    #[test]
+    fn data_slice_past_the_end_is_clipped() {
+        let a = Account {
+            lamports: 1,
+            data: vec![1, 2, 3],
+            owner: Address::new_from_array([7; 32]),
+            executable: false,
+        };
+        for (off, len, want) in [
+            (1usize, usize::MAX, vec![2u8, 3]),
+            (usize::MAX, usize::MAX, vec![]),
+            (5, 1, vec![]),
+            (0, 2, vec![1, 2]),
+        ] {
+            let o = AcctOpts {
+                base58: false,
+                slice: Some((off, len)),
+            };
+            let v = acct_json(&a, &o);
+            assert_eq!(v["data"][0], B64.encode(&want), "offset {off} length {len}");
+        }
+    }
 
     #[test]
     fn ports_and_base58() {
