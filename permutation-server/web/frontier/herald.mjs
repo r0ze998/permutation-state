@@ -11,6 +11,7 @@
 // in flight, else 30 s; overviews once per bell with a 0–15 s jitter after
 // the bell; errors back off ×2 up to 5 min; a hidden page pauses polling.
 import { fromBase64 } from '../sdk/bytes.mjs';
+import { encode as toB58 } from '../sdk/base58.mjs';
 import { decode } from './fcodec.mjs';
 
 // ------------------------------------------------------------------ HTTP
@@ -57,9 +58,12 @@ const check = (cond, code, msg) => { if (!cond) throw new HeraldError(code, msg)
 /**
  * A province envelope (§9.2) → decoded accounts, each checked against its
  * key and the season: `{bell, slot, seq, head, province, slots: [{key,
- * slot, account}], day, inputs}`. Throws HeraldError on any mismatch.
+ * slot, account}], day, inputs}`. With `bell` (a per-bell file, not
+ * `latest`), the envelope, every slot, the day and the inputs must be that
+ * bell's (W3-F, the deferred envelope-bell check of integ-W2). Throws
+ * HeraldError on any mismatch.
  */
-export function parseEnvelope(env, { seasonId, p, q } = {}) {
+export function parseEnvelope(env, { seasonId, p, q, bell } = {}) {
   check(env && env.v === 1, 'BadEnvelope', 'not a v1 envelope');
   const m = KEY.pv.exec(env.key ?? '');
   check(m, 'BadEnvelope', `key ${env.key}`);
@@ -88,6 +92,12 @@ export function parseEnvelope(env, { seasonId, p, q } = {}) {
     check(k, 'BadEnvelope', `inputs key ${env.inputs.key}`);
     inputs = decode('ClashInputs', bytesOf(env.inputs.bytes), { seasonId });
     check(inputs.p === +k[1] && inputs.q === +k[2] && inputs.bell === +k[3] && inputs.p === P && inputs.q === Q, 'WrongKey', 'inputs bytes');
+  }
+  if (Number.isInteger(bell)) {
+    check(env.bell === bell, 'WrongKey', `asked for bell ${bell}, got ${env.bell}`);
+    check(slots.every(s => s.account.bell === bell), 'WrongKey', 'a slot of another bell');
+    check(!day || day.day === Math.floor(bell / 144), 'WrongKey', 'the day of another bell');
+    check(!inputs || inputs.bell === bell, 'WrongKey', 'the inputs of another bell');
   }
   return { bell: env.bell, slot: env.slot, seq: String(env.seq ?? ''), head: env.head ?? null, province, slots, day, inputs };
 }
@@ -209,6 +219,29 @@ export function staleness({ latestUnix, chainNow, behind: measured }) {
   return { behind, stale: behind > STALE_AFTER };
 }
 
+// ------------------------------------------------------------------ `me` key checks
+/**
+ * The viewer's own record must be the viewer's (W3-F, the deferred `me`
+ * check of integ-W2): the Citizen at the canonical address of `wallet` and
+ * naming it; each Holding at its canonical address, owned by that Citizen
+ * and one of the Citizen's holdings; at most three. Throws HeraldError.
+ */
+export function checkMe(addresses, wallet, record, citizen, holdings) {
+  const want = addresses.of('Citizen', { wallet });
+  if (citizen) {
+    check(toB58(citizen.wallet) === wallet, 'WrongKey', 'the Citizen names another wallet');
+    if (record.citizen?.address !== undefined) check(record.citizen.address === want, 'WrongKey', 'the Citizen is not at its canonical address');
+  }
+  check(holdings.length <= 3, 'BadRecord', 'more than three holdings');
+  check(!holdings.length || citizen, 'BadRecord', 'holdings without a Citizen');
+  holdings.forEach((h, i) => {
+    check(toB58(h.ownerCitizen) === want, 'WrongKey', 'a Holding of another Citizen');
+    const at = addresses.of('Holding', { p: h.p, q: h.q, site: h.site });
+    if (record.holdings?.[i]?.address !== undefined) check(record.holdings[i].address === at, 'WrongKey', 'a Holding not at its canonical address');
+    check(citizen.holding.some(r => r.p === h.p && r.q === h.q && r.site === h.site), 'WrongKey', 'a Holding the Citizen does not name');
+  });
+}
+
 // ------------------------------------------------------------------ the client
 /**
  * A herald client for one season. Every call answers `{ok, …}` and never
@@ -218,6 +251,7 @@ export function createHerald({ base = '', fetch: f = (...a) => globalThis.fetch(
   const root = String(base).replace(/\/+$/, '');
   const cache = new Lru(cacheSize);
   let pinned = seasonId === null ? null : String(seasonId);
+  let addrs = null;
   const guard = fn => { try { return { ok: true, ...fn() }; } catch (e) { return fail(e.code ?? 'BadRecord', e.message); } };
 
   async function cached(key, immutable, load) {
@@ -229,7 +263,8 @@ export function createHerald({ base = '', fetch: f = (...a) => globalThis.fetch(
 
   return {
     cache,
-    pin(id) { pinned = String(id); },
+    /** Pin the season (and, for the `me` key checks, its recomputed addresses: faddr.seasonAddresses). */
+    pin(id, addresses = null) { pinned = String(id); addrs = addresses; },
     /** GET /h/season: the record, with the Season account decoded and checked. */
     async season() {
       const r = await get(f, `${root}/h/season`);
@@ -247,7 +282,7 @@ export function createHerald({ base = '', fetch: f = (...a) => globalThis.fetch(
       const immutable = bell !== 'latest';
       return cached(`pv:${p},${q}@${bell}`, immutable, async () => {
         const r = await get(f, `${root}/h/province/${p},${q}/${bell}`);
-        return r.ok ? guard(() => parseEnvelope(r.json, { seasonId: pinned ?? undefined, p, q })) : r;
+        return r.ok ? guard(() => parseEnvelope(r.json, { seasonId: pinned ?? undefined, p, q, bell: immutable ? Number(bell) : undefined })) : r;
       });
     },
     /** GET /h/overview/{ring}/{bell|latest}.bin. */
@@ -278,6 +313,7 @@ export function createHerald({ base = '', fetch: f = (...a) => globalThis.fetch(
         const opts = { seasonId: pinned ?? undefined };
         const citizen = j.citizen?.bytes_b64 ? decode('Citizen', bytesOf(j.citizen.bytes_b64), opts) : null;
         const holdings = (j.holdings ?? []).map(h => decode('Holding', bytesOf(h.bytes_b64), opts));
+        if (addrs) checkMe(addrs, wallet, j, citizen, holdings);
         return { record: j, citizen, holdings };
       });
     },

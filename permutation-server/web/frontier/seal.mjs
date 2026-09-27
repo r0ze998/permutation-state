@@ -13,6 +13,8 @@ import { sha256 } from '../sdk/sha256.mjs';
 import { toHex } from '../sdk/bytes.mjs';
 import { QUICKNET, TEST_BEACON } from './abi.mjs';
 
+/** Season.network of a quicknet season (§5.3). */
+export const QUICKNET_NETWORK = 2;
 export const PLAIN_LEN = 37;
 export const SEAL_LEN = 165;
 export const PATH_BYTES = 12;
@@ -153,10 +155,13 @@ export function sealRound(clock, arriveBell) {
  * `/h/season` (`{publicKey, chainHash?, period, genesis}`) must be quicknet
  * — or, only when the pinned cluster is `localnet`, the deterministic test
  * key (I-53) — and sha256(publicKey) must equal the Season account's
- * `quicknet_pk_hash`. `{ok: true, kind: 'quicknet'|'test'}` or
- * `{ok: false, code}`.
+ * `quicknet_pk_hash`; with `seasonNetwork` (the Season's NETWORK byte) it
+ * must be 2. `{ok: true, kind: 'quicknet'|'test'}` or `{ok: false, code}`.
  */
-export function checkBeacon({ drand, seasonPkHash, cluster }) {
+export function checkBeacon({ drand, seasonPkHash, cluster, seasonNetwork }) {
+  // The Season's NETWORK byte names the beacon scheme: 2 = quicknet (the
+  // test key of I-53 signs in the same scheme). W3-F: the deferred check of integ-W2.
+  if (seasonNetwork !== undefined && seasonNetwork !== null && Number(seasonNetwork) !== QUICKNET_NETWORK) return { ok: false, code: 'NotQuicknet' };
   const pk = String(drand?.publicKey ?? '').toLowerCase();
   const period = Number(drand?.period), genesis = Number(drand?.genesis);
   let pin = null, kind = null;
