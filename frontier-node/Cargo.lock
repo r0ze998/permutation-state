@@ -4759,7 +4759,15 @@ name = "verify"
 version = "0.1.0"
 dependencies = [
  "fclient",
+ "findex",
+ "frontier-abi",
+ "hex",
+ "keeper",
+ "localnet",
+ "permutation-rules",
  "serde_json",
+ "solana-address 2.6.1",
+ "tokio",
 ]
 
 [[package]]
