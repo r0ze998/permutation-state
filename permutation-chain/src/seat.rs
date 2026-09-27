@@ -2,15 +2,16 @@
 //! functions so the replay verifier seats exactly the same.
 //!
 //! `Register` cannot compare a session key with the other members' (each is
-//! in its own account), and every session key is public in its Member
-//! account, so two members can register the same one: by accident (one
-//! browser, two wallets) or on purpose (a copied key). The rules seat a key
-//! only once (`gov::join` refuses it with `AlreadyMember`), members are
-//! seated in registration order, and `OpenGovernment` needs every member
-//! seated, so one duplicate used to stop the season in `Seating` for good,
-//! with every entry fee locked (there is no refund).
+//! in its own account), so two members can register the same one. Since
+//! WP17 a session key co-signs its own `Register`, so nobody can register a
+//! key they do not hold: a duplicate means one key holder registered two of
+//! its own wallets (one browser, two wallets). The rules seat a key only
+//! once (`gov::join` refuses it with `AlreadyMember`), members are seated in
+//! registration order, and `OpenGovernment` needs every member seated, so
+//! one duplicate used to stop the season in `Seating` for good, with every
+//! entry fee locked. The substitute rule stays so that it cannot.
 //!
-//! Now the first member to register a key is seated with it, and a later one
+//! The first member to register a key is seated with it, and a later one
 //! with a substitute nobody can sign with:
 //! `sha256("permutation-state/duplicate-session" ‖ season_id u64le ‖ wallet)`.
 //! That member cannot sign orders or governance this season (its wallet
@@ -65,13 +66,17 @@ pub fn seat_key(state: &WorldState, m: &MemberAccount) -> [u8; 32] {
 }
 
 /// Seat `m`, the next member in registration order: join its nation with
-/// `seat_key`, then apply its pre-season candidacy and votes, signed by that
-/// key (the rules ignore an entry whose signer is not the member's key).
-/// Returns the member as `PS_SEAT` lists it.
+/// `seat_key`, then apply its pre-season candidacy and, with `pre_votes`,
+/// its votes, signed by that key (the rules ignore an entry whose signer is
+/// not the member's key). Votes are applied only in seasons without
+/// operator AI members (`pre_votes = ai_count == 0`, WP10): in the others
+/// the first election is drawn among the candidates, and the record lists
+/// no votes. Returns the member as `PS_SEAT` lists it.
 pub fn seat_member(
     state: &mut WorldState,
     rules: &Ruleset,
     m: &MemberAccount,
+    pre_votes: bool,
 ) -> Result<Seat, RulesError> {
     let key = seat_key(state, m);
     let id = gov::join(state, rules, m.civ, key)?;
@@ -80,8 +85,9 @@ pub fn seat_member(
         signer: key,
         action: GovAction::Stand { roles: m.stand },
     }];
+    let votes = if pre_votes { m.votes } else { [NOBODY; 4] };
     for role in Role::ALL {
-        let candidate = m.votes[role.index()];
+        let candidate = votes[role.index()];
         if candidate != NOBODY {
             entries.push(GovEntry {
                 member: id,
@@ -91,7 +97,7 @@ pub fn seat_member(
         }
     }
     gov::apply_pre_season(state, rules, &entries)?;
-    Ok((m.civ, key, m.stand, m.votes))
+    Ok((m.civ, key, m.stand, votes))
 }
 
 #[cfg(test)]
@@ -146,7 +152,7 @@ mod tests {
         let (rules, mut s) = world();
         for (i, key) in [[1u8; 32], [2; 32]].into_iter().enumerate() {
             let m = member(i as u32, 0, 10 + i as u8, key, 1);
-            let seat = seat_member(&mut s, &rules, &m).unwrap();
+            let seat = seat_member(&mut s, &rules, &m, true).unwrap();
             assert_eq!(seat, (0, key, 1, [NOBODY; 4]));
         }
         assert_eq!(s.members[1].key, [2; 32]);
@@ -160,13 +166,13 @@ mod tests {
         let a = member(0, 0, 10, [1; 32], Role::Steward.bit());
         let mut b = member(1, 0, 11, [1; 32], Role::General.bit());
         b.votes[Role::General.index()] = 1;
-        seat_member(&mut s, &rules, &a).unwrap();
+        seat_member(&mut s, &rules, &a, true).unwrap();
         // What the program did before: the rules refuse the key twice.
         assert_eq!(
             gov::join(&mut s.clone(), &rules, 0, [1; 32]),
             Err(RulesError::AlreadyMember)
         );
-        let seat = seat_member(&mut s, &rules, &b).unwrap();
+        let seat = seat_member(&mut s, &rules, &b, true).unwrap();
         let sub = substitute_key(SEASON, &[11; 32]);
         assert_eq!(seat.1, sub);
         assert_eq!(s.members[0].key, [1; 32]);
@@ -176,7 +182,7 @@ mod tests {
         // A third copy of the key gets its own wallet's substitute.
         let c = member(2, 1, 12, [1; 32], 0);
         assert_eq!(
-            seat_member(&mut s, &rules, &c).unwrap().1,
+            seat_member(&mut s, &rules, &c, true).unwrap().1,
             substitute_key(SEASON, &[12; 32])
         );
         gov::first_election(&mut s, &rules).unwrap();
@@ -197,7 +203,7 @@ mod tests {
         ];
         let seats: Vec<Seat> = members
             .iter()
-            .map(|m| seat_member(&mut s, &rules, m).unwrap())
+            .map(|m| seat_member(&mut s, &rules, m, true).unwrap())
             .collect();
         let third = seats[2].1;
         assert_ne!(third, squat);
@@ -207,5 +213,23 @@ mod tests {
             hashv(&[DUPLICATE_SESSION, &SEASON.to_le_bytes(), &[12; 32], &squat]).to_bytes()
         );
         assert_eq!(s.members.len(), 3);
+    }
+
+    /// In a season with operator AI members (`pre_votes = false`) only the
+    /// candidacy is applied: a self-vote does not count, and `PS_SEAT` lists
+    /// no votes.
+    #[test]
+    fn pre_season_votes_are_ignored_in_ai_seasons() {
+        let (rules, mut s) = world();
+        let mut a = member(0, 0, 10, [1; 32], Role::General.bit());
+        a.votes[Role::General.index()] = 0;
+        let seat = seat_member(&mut s, &rules, &a, false).unwrap();
+        assert_eq!(seat, (0, [1; 32], Role::General.bit(), [NOBODY; 4]));
+        assert_eq!(s.members[0].standing_for, Role::General.bit());
+        assert_eq!(s.vote(0, Role::General), NOBODY);
+        // The same member with votes on: its self-vote counts.
+        let (_, mut t) = world();
+        seat_member(&mut t, &rules, &a, true).unwrap();
+        assert_eq!(t.vote(0, Role::General), 0);
     }
 }

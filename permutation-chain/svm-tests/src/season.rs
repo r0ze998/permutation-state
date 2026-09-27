@@ -1,5 +1,7 @@
 //! `SeasonFx`: a season built through the program itself (CreateSeason,
-//! AllocWorld, AllocNation, Register), and the accounts around it.
+//! AllocWorld, AllocNation, Register), and the accounts around it. Every
+//! chain a season is built on gets the VRF stand-in (`vrf`): StartSeason
+//! names the base queue, and the season seed comes from it.
 
 use solana_address::Address;
 use solana_keypair::Keypair;
@@ -18,6 +20,8 @@ pub struct Params {
     pub tick_seconds: u32,
     pub market: bool,
     pub decimals: u8,
+    /// The treasury deposit every member pays (0: none; market only).
+    pub deposit: u64,
 }
 
 impl Default for Params {
@@ -30,6 +34,7 @@ impl Default for Params {
             tick_seconds: 30,
             market: true,
             decimals: 6,
+            deposit: 0,
         }
     }
 }
@@ -74,6 +79,7 @@ pub struct SeasonFx {
 impl SeasonFx {
     /// The keys and addresses of a season, before anything is sent.
     pub fn bare(c: &mut Chain, p: Params) -> SeasonFx {
+        install_vrf(c);
         let admin = c.funded();
         let crank = c.funded();
         let mint = c.mint(p.decimals);
@@ -194,19 +200,58 @@ impl SeasonFx {
         )
     }
 
+    /// Who pays for a registration: the wallet itself, or in a season with
+    /// operator AI members the crank (every join there is operator-paid,
+    /// as the gateway's x402 facilitator pays).
+    pub fn registration_payer(&self, wallet: &Keypair) -> Keypair {
+        if self.ai.is_empty() {
+            wallet.insecure_clone()
+        } else {
+            self.crank.insecure_clone()
+        }
+    }
+
     /// Registers a new member of `civ` (standing for every office, no votes)
-    /// that deposits `deposit`; returns its index.
+    /// that deposits `deposit` (the season's deposit); returns its index.
+    /// The wallet and the session key sign; `registration_payer` pays.
     pub fn register(&mut self, c: &mut Chain, civ: u16, deposit: u64) -> usize {
         let m = self.new_member(c, civ, self.p.fee + deposit);
-        let ix = self.register_ix(&m, &m.wallet.pubkey(), deposit);
-        let wallet = m.wallet.insecure_clone();
-        c.send(vec![ix], &[&wallet]).expect("Register");
+        let payer = self.registration_payer(&m.wallet);
+        let ix = self.register_ix(&m, &payer.pubkey(), deposit);
+        let (wallet, session) = (m.wallet.insecure_clone(), m.session.insecure_clone());
+        c.send(vec![ix], &[&payer, &wallet, &session])
+            .expect("Register");
         self.members.push(m);
         self.members.len() - 1
     }
 
-    /// Registers with a given session key, candidacy, first-election votes,
-    /// deposit and tag.
+    /// Registers with a given session key (signing), candidacy,
+    /// first-election votes, deposit and tag.
+    pub fn register_keyed(
+        &mut self,
+        c: &mut Chain,
+        civ: u16,
+        session: &Keypair,
+        stand: u8,
+        votes: [u32; 4],
+        deposit: u64,
+        tag: [u8; 32],
+    ) -> usize {
+        let mut m = self.new_member(c, civ, self.p.fee + deposit);
+        m.session = session.insecure_clone();
+        let payer = self.registration_payer(&m.wallet);
+        let key = session.pubkey().to_bytes();
+        let ix = self.register_ix_with(&m, &payer.pubkey(), key, stand, votes, deposit, tag);
+        let wallet = m.wallet.insecure_clone();
+        c.send(vec![ix], &[&payer, &wallet, session])
+            .expect("Register");
+        self.members.push(m);
+        self.members.len() - 1
+    }
+
+    /// Registers with a session key that is only a public key (the play
+    /// server's bots), candidacy, votes, deposit and tag: sent with
+    /// `send_as`, so the chain must run with sigverify off.
     pub fn register_raw(
         &mut self,
         c: &mut Chain,
@@ -217,19 +262,25 @@ impl SeasonFx {
         deposit: u64,
         tag: [u8; 32],
     ) -> usize {
+        assert!(
+            !c.sigverify,
+            "register_raw signs as a bare key: Chain::new_opts(false), or register_keyed"
+        );
         let m = self.new_member(c, civ, self.p.fee + deposit);
-        let ix = self.register_ix_with(&m, &m.wallet.pubkey(), session, stand, votes, deposit, tag);
-        let wallet = m.wallet.insecure_clone();
-        c.send(vec![ix], &[&wallet]).expect("Register");
+        let payer = self.registration_payer(&m.wallet).pubkey();
+        let ix = self.register_ix_with(&m, &payer, session, stand, votes, deposit, tag);
+        c.send_as(vec![ix], &payer).expect("Register");
         self.members.push(m);
         self.members.len() - 1
     }
 
-    /// Registers operator AI `i` with its roster tag; returns its member index.
+    /// Registers operator AI `i` with its roster tag (the crank pays);
+    /// returns its member index.
     pub fn register_ai(&mut self, c: &mut Chain, i: usize) -> usize {
         let wallet = self.ai[i].wallet.insecure_clone();
         let civ = self.ai[i].civ;
-        let token = c.token_account(&self.mint, &wallet.pubkey(), self.p.fee);
+        let deposit = self.p.deposit;
+        let token = c.token_account(&self.mint, &wallet.pubkey(), self.p.fee + deposit);
         let m = MemberFx {
             member: self.member_pda(&wallet.pubkey()),
             wallet,
@@ -237,17 +288,19 @@ impl SeasonFx {
             token,
             civ,
         };
+        let crank = self.crank.insecure_clone();
         let ix = self.register_ix_with(
             &m,
-            &m.wallet.pubkey(),
+            &crank.pubkey(),
             m.session.pubkey().to_bytes(),
             0x0f,
             [u32::MAX; 4],
-            0,
+            deposit,
             self.ai[i].tag,
         );
-        let wallet = m.wallet.insecure_clone();
-        c.send(vec![ix], &[&wallet]).expect("AI registers");
+        let (wallet, session) = (m.wallet.insecure_clone(), m.session.insecure_clone());
+        c.send(vec![ix], &[&crank, &wallet, &session])
+            .expect("AI registers");
         self.members.push(m);
         self.ai[i].member = Some(self.members.len() - 1);
         self.members.len() - 1
@@ -289,4 +342,28 @@ impl SeasonFx {
     pub fn rules(&self) -> permutation_rules::Ruleset {
         crate::rules(self.p.preset, self.p.market)
     }
+}
+
+/// Registers the VRF stand-in and both oracle queues on `c` once
+/// (`Chain::with_vrf`, in place): StartSeason checks the base queue and the
+/// VRF program, and the drivers answer the season seed with it.
+pub fn install_vrf(c: &mut Chain) {
+    use solana_program_runtime::solana_sbpf::program::BuiltinFunctionDefinition;
+    if c.owner(&crate::vrf::queue_base()).is_some() {
+        return;
+    }
+    c.svm.add_builtin(
+        crate::vrf::vrf_program(),
+        crate::vrf::mock::MockVrf::register,
+    );
+    c.put(
+        crate::vrf::queue_base(),
+        crate::vrf::vrf_program(),
+        vec![0; 1024],
+    );
+    c.put(
+        crate::vrf::queue_er(),
+        crate::vrf::vrf_program(),
+        vec![0; 1024],
+    );
 }
