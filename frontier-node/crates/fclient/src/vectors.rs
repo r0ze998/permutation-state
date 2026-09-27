@@ -363,7 +363,7 @@ fn shapes() -> Value {
     let a = Addresses::new(vector_program(), 1);
     let (wallet, session, relay, keeper) = (kp(1), kp(2), kp(3), kp(4));
     let bh = Hash::new_from_array([0x11; 32]);
-    let budgets = crate::budgets::Budgets::placeholder();
+    let budgets = crate::budgets::Budgets::canonical();
     let h = ix::HoldingRef {
         p: -3,
         q: 7,

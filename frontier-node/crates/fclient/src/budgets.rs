@@ -34,7 +34,19 @@ impl Default for Budgets {
     }
 }
 
+/// The canonical generated table (`frontier-abi/vectors/budgets.json`), the
+/// one the keeper, the bots and the JS SDK read.
+pub const CANONICAL_JSON: &str = include_str!("../../../../frontier-abi/vectors/budgets.json");
+
 impl Budgets {
+    /// The canonical table ([`CANONICAL_JSON`]). integ-W4: the shape vectors
+    /// used [`Budgets::placeholder`] (`L` = 1 MiB), which stopped matching
+    /// the generated `L(kind)` once the wave-4 `.so` outgrew 1 MiB.
+    pub fn canonical() -> Budgets {
+        Budgets::from_json(&serde_json::from_str(CANONICAL_JSON).expect("budgets.json parses"))
+            .expect("budgets.json is a budgets table")
+    }
+
     /// §5.5 CU budgets and `L` = 1 MiB for every kind (wave 1).
     pub fn placeholder() -> Budgets {
         let by_tag = INSTRUCTIONS

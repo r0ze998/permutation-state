@@ -246,7 +246,10 @@ test('budgets: the prefix is limit, price 0, L(kind), as fclient builds it', () 
     assert.equal(B.budgetOf(r.name).tag, r.tag);
   }
   const [lim, price, loaded] = B.budgetPrefix('Depart').map(B.parseComputeBudgetIx);
-  assert.deepEqual([lim, price, loaded], [{ kind: 'limit', value: 24_500 }, { kind: 'price', value: 0n }, { kind: 'loaded', value: 1_048_576 }]);
+  // L(Depart) from the generated table (integ-W4: no longer the 1-MiB default).
+  const depart = rows.find(r => r.name === 'Depart');
+  assert.deepEqual([lim, price, loaded], [{ kind: 'limit', value: 24_500 }, { kind: 'price', value: 0n }, { kind: 'loaded', value: depart.loaded_limit }]);
+  assert.ok(depart.loaded_limit >= 1_048_576);
   assert.equal(B.parseComputeBudgetIx({ programId: B.COMPUTE_BUDGET_PROGRAM, keys: [], data: new Uint8Array([2, 0, 0]) }), null);
   assert.equal(B.budgetPrefix('Reveal', { heap: 262_144 }).length, 4);
 });

@@ -17,6 +17,11 @@ import * as io from '../../permutation-server/web/frontier/fchainio.mjs';
 import { RULESET_HASH } from '../../permutation-server/web/frontier/abi.mjs';
 import { COMPUTE_BUDGET_PROGRAM, compileMessage, wireTransaction } from '../../permutation-server/web/sdk/solana-tx.mjs';
 import { frontierIx } from '../../permutation-server/web/sdk/frontier/shapes.mjs';
+import { budgetOf } from '../../permutation-server/web/sdk/frontier/budgets.mjs';
+
+// L(kind) from the generated table (integ-W4: no longer the 1-MiB default).
+const L_HARVEST = budgetOf(0x40).loadedLimit;
+const L_SETTLE_TRANSIT = budgetOf(0x54).loadedLimit;
 
 const F = JSON.parse(readFileSync(new URL('./frontier-vectors.json', import.meta.url), 'utf8')).addresses;
 const key = () => bs58.encode(generateKeyPairSync('ed25519').publicKey.export({ format: 'der', type: 'spki' }).subarray(-32));
@@ -46,7 +51,7 @@ function harvest({ price = 0, tag = 0x40, extra = [], prefix = null, payer = fee
     data: Uint8Array.of(tag),
   };
   if (swap) [frontier.keys[swap[0]], frontier.keys[swap[1]]] = [frontier.keys[swap[1]], frontier.keys[swap[0]]];
-  const instructions = prefix ?? [cb(2, u32(17_500)), cb(3, u64(price)), cb(4, u32(1_048_576))];
+  const instructions = prefix ?? [cb(2, u32(17_500)), cb(3, u64(price)), cb(4, u32(L_HARVEST))];
   return compileMessage({ feePayer: payer, recentBlockhash: blockhash, instructions: [...instructions, frontier, ...extra] });
 }
 
@@ -61,7 +66,7 @@ test('pins: the Season PDA and bump are found here; another season address or ru
 
 test('message checks: a good player shape passes; every deviation is named', () => {
   io.setPin({ programId: F.program, cluster: 'localnet', seasonId: 1 });
-  const ok = { feePayer, blockhash, tag: 0x40, signers: [session], cuLimit: 17_500, loadedLimit: 1_048_576, expected: expectedHarvest() };
+  const ok = { feePayer, blockhash, tag: 0x40, signers: [session], cuLimit: 17_500, loadedLimit: L_HARVEST, expected: expectedHarvest() };
   assert.deepEqual(io.messageProblems(harvest(), ok), []);
   const has = (msg, opts, re) => assert.ok(io.messageProblems(msg, opts).some(p => re.test(p)), `${re}: ${io.messageProblems(msg, opts)}`);
   has(harvest({ price: 1 }), ok, /CU price is not 0/);
@@ -73,7 +78,7 @@ test('message checks: a good player shape passes; every deviation is named', () 
   has(harvest(), { ...ok, cuLimit: 99 }, /CU limit/);
   has(harvest(), { ...ok, loadedLimit: 65_536 }, /loaded-data limit/);
   has(harvest({ signers: [session, key()] }), ok, /signers/);
-  has(harvest({ prefix: [cb(2, u32(17_500)), cb(4, u32(1_048_576)), cb(3, u64(0))] }), ok, /compute-budget prefix/);
+  has(harvest({ prefix: [cb(2, u32(17_500)), cb(4, u32(L_HARVEST)), cb(3, u64(0))] }), ok, /compute-budget prefix/);
   has(harvest({ extra: [{ programId: key(), keys: [], data: Uint8Array.of(1) }] }), ok, /instructions|unexpected program/);
   has(Uint8Array.of(1, 2, 3), ok, /unparseable/);
   // §9.4 "accounts recomputed" (integ-W2 review of W2-E): the blockhash and
@@ -105,7 +110,7 @@ test('message checks: a good player shape passes; every deviation is named', () 
     slot: key(), home_province: key(), anchor_or_archive: key(), slot_beneficiary: feePayer, resolver: feePayer, holding_rent_payer: key(), settle_beneficiary: feePayer };
   const settle = frontierIx(io.pinned().programId, 'SettleTransit', settleAccounts,
     { transit_slot: 1, commit: new Uint8Array(32), seal: new Uint8Array(165), beneficiary: bs58.decode(feePayer) });
-  const settleMsg = compileMessage({ feePayer, recentBlockhash: blockhash, instructions: [cb(2, u32(85_000)), cb(3, u64(0)), cb(4, u32(1_048_576)), settle] });
+  const settleMsg = compileMessage({ feePayer, recentBlockhash: blockhash, instructions: [cb(2, u32(85_000)), cb(3, u64(0)), cb(4, u32(L_SETTLE_TRANSIT)), settle] });
   assert.deepEqual(io.messageProblems(settleMsg, { feePayer, blockhash, tag: 0x54, signers: [], expected: settle }), []);
 });
 
