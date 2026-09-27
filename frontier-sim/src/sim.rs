@@ -32,7 +32,7 @@ use permutation_rules::frontier::laurel::{
     siege_settle, strength_weight, PairHistory, RewardIndex, Stake, Tier as LTier, EMIT_FULL,
     LAUREL_ONE, RELIC_EMISSION_PER_BELL_REV2, SIEGE_STAKE,
 };
-use permutation_rules::frontier::mandate::{MandateTerm, Reserve, TERM_DAYS};
+use permutation_rules::frontier::mandate::{share_floor, MandateTerm, Reserve, TERM_DAYS};
 use permutation_rules::frontier::pools::{Entry, EntrySchedule, Pools};
 use permutation_rules::frontier::siege::{
     auto_reinforce, completion, may_besiege, BellReport, Completion, Donor, HoldingKind, Relation,
@@ -307,8 +307,28 @@ enum Ev {
     Return(u32),
 }
 
+/// One resolved clash (`Config::clash_log`).
+#[derive(Clone, Copy, Debug)]
+pub struct ClashRow {
+    pub bell: u32,
+    /// Factions with an admitted arrival (bit f).
+    pub arr_mask: u8,
+    /// Factions with a resident host or a garrison in the province.
+    pub def_mask: u8,
+    /// A barbarian camp stands in the province.
+    #[allow(dead_code)]
+    pub camp: bool,
+    /// Troops arriving, by faction (admitted arrivals).
+    pub arr_troops: [u32; 6],
+}
+
 pub struct Sim {
     pub cfg: Config,
+    /// Every resolved clash, when `cfg.clash_log` (C4 participation).
+    pub clash_log: Vec<ClashRow>,
+    /// Troops routed by the C4 counterfactual (`cfg.attack`).
+    pub attack_routed: u64,
+    pub attack_disarray: u64,
     pub profiles: [Profile; 6],
     pub rng: Rng,
     rules: Ruleset,
@@ -344,6 +364,9 @@ pub struct Sim {
     pub mandate: [MandateTerm; 6],
     /// Completers of the open term and their shares.
     term_completers: Vec<Vec<(u32, u64)>>,
+    /// Factions whose Ministers are at least half bots this term
+    /// (`Config::bot_mandates`).
+    bot_steered: [bool; 6],
     pub engine_total: u64,
     pub engine_stages: u8,
     pub relics: Vec<u32>,
@@ -413,6 +436,10 @@ impl Sim {
             reserve: [Reserve::default(); 6],
             mandate: [MandateTerm::new(0); 6],
             term_completers: vec![Vec::new(); 6],
+            clash_log: Vec::new(),
+            attack_routed: 0,
+            attack_disarray: 0,
+            bot_steered: [false; 6],
             engine_total: 0,
             engine_stages: 0,
             relics: Vec::new(),
@@ -490,11 +517,17 @@ impl Sim {
                     break;
                 }
             }
-            let day = if rng.chance(cfg.day0_share) {
+            let mut day = if rng.chance(cfg.day0_share) {
                 0
             } else {
                 1 + rng.below(21) as u32
             };
+            // A bot's chosen join window (drawn from a separate stream so
+            // the main stream, and every other wallet, is unchanged).
+            if let (Some((lo, hi)), Arch::Bot, false) = (cfg.bot_join_days, arch, shade) {
+                let mut r = Rng::fork(cfg.seed, 0xB07_D4F ^ ((i as u64) << 20));
+                day = lo + r.below((hi - lo + 1) as u64) as u32;
+            }
             let join_bell = day * BELLS_PER_DAY + rng.below(BELLS_PER_DAY as u64) as u32;
             let stake_p = cfg.stake_optin[arch.idx()];
             let fee = self.sched.citizen_fee(day).unwrap_or(0);
@@ -1295,7 +1328,18 @@ impl Sim {
         }
         // Mandate of the term.
         let term = b / BELLS_PER_DAY / TERM_DAYS;
-        if budget > 2 && self.agents[a as usize].mandate_term != term && self.rng.chance(p.mandate)
+        let steer = match self.cfg.bot_mandates {
+            Some(m)
+                if arch != Arch::Bot
+                    && self.bot_steered[self.agents[a as usize].faction as usize] =>
+            {
+                m
+            }
+            _ => 1.0,
+        };
+        if budget > 2
+            && self.agents[a as usize].mandate_term != term
+            && self.rng.chance(p.mandate * steer)
         {
             let f = self.agents[a as usize].faction as usize;
             self.agents[a as usize].mandate_term = term;
@@ -2255,8 +2299,13 @@ impl Sim {
             if self.hosts[h as usize].state != (HState::Marching { arrive: b }) {
                 continue;
             }
-            // Unrevealed by the reveal close: routed (design §6.2).
-            if self.hosts[h as usize].unrevealed {
+            // Unrevealed by the reveal close: routed (design §6.2). The C4
+            // counterfactual excludes the attacked faction's reveals.
+            let attacked = self.attacked(self.hosts[h as usize].faction, b);
+            if attacked {
+                self.attack_routed += self.hosts[h as usize].troops as u64;
+            }
+            if self.hosts[h as usize].unrevealed || attacked {
                 self.stats.routs += 1;
                 let x = &mut self.hosts[h as usize];
                 let before = x.troops;
@@ -2324,6 +2373,21 @@ impl Sim {
         false
     }
 
+    /// The C4 counterfactual: is faction `f`'s reveal excluded in bell `b`?
+    pub fn attacked(&self, f: u8, b: u32) -> bool {
+        matches!(self.cfg.attack, Some((af, lo, hi)) if af == f && b >= lo && b <= hi)
+    }
+
+    /// A committed posture of an attacked faction is never revealed:
+    /// Disarray (the default Hold is public and needs no reveal).
+    fn posture_under_attack(&self, f: u8, b: u32, p: Posture) -> Posture {
+        if p != Posture::default() && self.attacked(f, b) {
+            Posture::Disarray
+        } else {
+            p
+        }
+    }
+
     fn fighter(&self, h: u32, b: u32, arrival: bool) -> Fighter {
         let x = &self.hosts[h as usize];
         let d = self.doctrine[x.faction as usize];
@@ -2331,7 +2395,9 @@ impl Sim {
             Posture::Stance(x.stance)
         } else {
             match x.mission {
-                Mission::Defend(hid) => self.holds[hid as usize].posture,
+                Mission::Defend(hid) => {
+                    self.posture_under_attack(x.faction, b, self.holds[hid as usize].posture)
+                }
                 _ => Posture::Stance(x.stance),
             }
         };
@@ -2408,10 +2474,19 @@ impl Sim {
                     tile: y.tile,
                     troops: y.garrison,
                     walls: y.h.walls_at(now_of(b)).unwrap_or(y.h.walls) > 0,
-                    posture: y.posture,
+                    posture: self.posture_under_attack(y.faction, b, y.posture),
                 }
             })
             .collect();
+        let disarray_n = if self.cfg.attack.is_some() {
+            garrisons
+                .iter()
+                .filter(|g| g.posture == Posture::Disarray && self.attacked(g.faction, b))
+                .count() as u64
+        } else {
+            0
+        };
+        let has_camp = p.camp.is_some();
         let arr: Vec<Fighter> = admitted.iter().map(|&h| self.fighter(h, b, true)).collect();
         let seed = sha256(&[b"sim/bell", &self.cfg.seed.to_le_bytes(), &b.to_le_bytes()]);
         let inp = ClashInput {
@@ -2436,6 +2511,29 @@ impl Sim {
         };
         self.stats.clashes += 1;
         self.stats.engagements += out.engagements as u64;
+        self.attack_disarray += disarray_n;
+        if self.cfg.clash_log {
+            let mut row = ClashRow {
+                bell: b,
+                arr_mask: 0,
+                def_mask: 0,
+                camp: has_camp,
+                arr_troops: [0; 6],
+            };
+            for a in &arr {
+                if (a.faction as usize) < 6 {
+                    row.arr_mask |= 1 << a.faction;
+                    row.arr_troops[a.faction as usize] += a.troops;
+                }
+            }
+            for r in residents.iter().filter(|r| (r.faction as usize) < 6) {
+                row.def_mask |= 1 << r.faction;
+            }
+            for g in garrisons.iter().filter(|g| (g.faction as usize) < 6) {
+                row.def_mask |= 1 << g.faction;
+            }
+            self.clash_log.push(row);
+        }
         // Garrisons.
         for g in &out.garrisons {
             let hid = g.id as u32;
@@ -2953,6 +3051,17 @@ impl Sim {
     /// the average holding's term emission, the rest back to the reserve).
     fn term_end(&mut self, term: u32) {
         let officers = self.seat_officers(term);
+        for f in 0..6u8 {
+            let (mut bots, mut all) = (0, 0);
+            // Ministers are pushed with 2 shares, paid Wardens with 1.
+            for &(a, sh, g) in &officers {
+                if g == f && sh == 2 {
+                    all += 1;
+                    bots += (self.agents[a as usize].arch == Arch::Bot) as u32;
+                }
+            }
+            self.bot_steered[f as usize] = all > 0 && 2 * bots >= all;
+        }
         let laurel_pay = self.cfg.office_pay == OfficePay::Laurels;
         for f in 0..6 {
             let mut who = std::mem::take(&mut self.term_completers[f]);
@@ -2971,7 +3080,25 @@ impl Sim {
                 }
             }
             let mut t = self.mandate[f];
-            t.close(&mut self.reserve[f]).expect("close term");
+            let floor = if self.cfg.mandate_floor {
+                let term_start = term * TERM_DAYS;
+                let active = self
+                    .agents
+                    .iter()
+                    .filter(|a| {
+                        a.faction as usize == f
+                            && a.stake > 0
+                            && a.state == JoinState::Settled
+                            && a.last_active_day != NONE
+                            && a.last_active_day >= term_start
+                    })
+                    .count() as u64;
+                share_floor(active)
+            } else {
+                0
+            };
+            t.close_with_floor(&mut self.reserve[f], floor)
+                .expect("close term");
             for (a, sh) in who {
                 let pay = t.claim(&mut self.reserve[f], sh).expect("mandate claim");
                 self.agents[a as usize].laurels += pay;
@@ -3004,6 +3131,10 @@ impl Sim {
                             || (a.arch == Arch::Bot && bot_officers))
                         && a.last_active_day != NONE
                         && a.last_active_day >= term_start
+                        && self
+                            .cfg
+                            .office_term_limit
+                            .is_none_or(|l| a.minister_terms + a.warden_terms < l)
                 })
                 .map(|(i, a)| (self.rng.below(1_000) * (1 + a.sessions as u64), i as u32))
                 .collect();
@@ -3052,8 +3183,13 @@ impl Sim {
                 .iter()
                 .copied()
                 .filter(|&a| {
-                    !self.agents[a as usize].shade
-                        && (bot_officers || self.agents[a as usize].arch != Arch::Bot)
+                    let ag = &self.agents[a as usize];
+                    !ag.shade
+                        && (bot_officers || ag.arch != Arch::Bot)
+                        && self
+                            .cfg
+                            .office_term_limit
+                            .is_none_or(|l| ag.minister_terms + ag.warden_terms < l)
                 })
                 .max_by_key(|&a| (self.agents[a as usize].sessions, a));
             if let Some(w) = warden {

@@ -101,6 +101,34 @@ pub struct Config {
     /// most engaged win): a review variant; by default bots never hold a
     /// paid office.
     pub bot_officers: bool,
+    /// Scripted bots (not Shades) choose their join window: each joins on a
+    /// day drawn uniformly from `lo..=hi` instead of the human join-day mix
+    /// (`day0_share`). A bot operator picks its join day, so the bot
+    /// criterion is taken as the maximum over these windows (review of
+    /// K3). `None` = bots draw their day like humans (the SDK default).
+    pub bot_join_days: Option<(u32, u32)>,
+    /// Review variant (bots steer Mandates): in a faction-term whose
+    /// Ministers are at least half bots (seated at the end of the previous
+    /// term, as re-elected), the Ministers pick always-online tasks, and a
+    /// human completes the term's Mandate with this multiple of its usual
+    /// chance (0 = no human can). Bots complete as usual. `None` = off.
+    pub bot_mandates: Option<f64>,
+    /// At most this many office-terms (Minister or paid Warden) per wallet
+    /// per season; `None` = no limit (design rule under review).
+    pub office_term_limit: Option<u32>,
+    /// Mandate share floor (m0c, kernel `mandate::share_floor`): the term's
+    /// divisor is at least half of the faction's stakers active in it.
+    /// `false` = the K3 kernel without the floor.
+    pub mandate_floor: bool,
+    /// Record one row per resolved clash (`Sim::clash_log`): the per-bell
+    /// participation metric of the restated C4 (SP-FEE, m0c).
+    pub clash_log: bool,
+    /// C4 counterfactual (m0c): every arrival of faction `.0` landing in
+    /// bells `.1..=.2` is excluded from the reveal window (routed at 50%, as
+    /// an unrevealed arrival), and its holdings' committed postures in those
+    /// bells fall into Disarray, as if an attacker bought every block of
+    /// the reveal window at the keepers' price.
+    pub attack: Option<(u8, u32, u32)>,
     /// Payout parameters of the settlement (office ceiling, Works rate).
     pub payout: PayoutParams,
     /// Laurel-stake accrual ramp, bps (`EntrySchedule::stake_ramp_bps`).
@@ -141,6 +169,12 @@ impl Default for Config {
             works_cap: crate::model::WORKS_DAY_CAP,
             late_stake: LateStake::None,
             bot_officers: false,
+            bot_join_days: None,
+            bot_mandates: None,
+            office_term_limit: None,
+            mandate_floor: true,
+            clash_log: false,
+            attack: None,
             payout: PayoutParams::REV3,
             stake_ramp_bps: permutation_rules::frontier::pools::EntrySchedule::SEASON1
                 .stake_ramp_bps,
@@ -162,5 +196,6 @@ impl Config {
         self.payout = PayoutParams::REV2;
         self.stake_ramp_bps = 0;
         self.mandate_stakers_only = false;
+        self.mandate_floor = false;
     }
 }

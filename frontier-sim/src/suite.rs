@@ -992,6 +992,8 @@ pub struct CriterionRow {
     pub bot_stake_max: f64,
     pub cells: Vec<Mult>,
     pub swept_pct: f64,
+    /// Share of office-terms (Ministers + paid Wardens) held by bots, %.
+    pub bot_office_pct: f64,
 }
 
 /// Honest cells reported next to the bot: (label, archetype, staker).
@@ -1048,7 +1050,10 @@ pub fn criterion_rows(
                 let mut mx = f64::MIN;
                 let mut cells = vec![Mult::default(); HONEST_CELLS.len()];
                 let (mut swept, mut prize) = (0u128, 0u128);
+                let (mut bot_terms, mut terms) = (0u64, 0u64);
                 for d in &ds {
+                    bot_terms += d.stats.bot_office_terms;
+                    terms += d.stats.minister_terms + d.stats.warden_terms;
                     let o = &d.outs[0];
                     assert!(o.checks.iter().all(|c| c.ok), "conservation failed");
                     let m = arch_mult(o, Arch::Bot, true);
@@ -1068,6 +1073,7 @@ pub fn criterion_rows(
                     bot_stake_max: mx,
                     cells,
                     swept_pct: 100.0 * swept as f64 / prize.max(1) as f64,
+                    bot_office_pct: 100.0 * bot_terms as f64 / terms.max(1) as f64,
                 });
             }
         }
@@ -1079,7 +1085,7 @@ pub fn criterion_table(rows: &[CriterionRow]) -> String {
     let mut s = String::new();
     write!(
         s,
-        "| variant | bots in office | bot share | **bot + stake** | max seed |"
+        "| variant | bots in office | bot share | **bot + stake** | max seed | bots' share of office-terms | skill premium (very skilled + stake − bot + stake) |"
     )
     .unwrap();
     for (l, _, _) in HONEST_CELLS {
@@ -1088,19 +1094,21 @@ pub fn criterion_table(rows: &[CriterionRow]) -> String {
     writeln!(s, " swept % of prize |").unwrap();
     writeln!(
         s,
-        "|---|---|---|---|---|{}---|",
+        "|---|---|---|---|---|---|---|{}---|",
         "---|".repeat(HONEST_CELLS.len())
     )
     .unwrap();
     for r in rows {
         write!(
             s,
-            "| {} | {} | {:.0}% | **{:.3}** | {:.3} |",
+            "| {} | {} | {:.0}% | **{:.3}** | {:.3} | {:.1}% | {:+.3} |",
             r.label,
             if r.offices { "yes" } else { "no" },
             r.share * 100.0,
             r.bot_stake.x(),
-            r.bot_stake_max
+            r.bot_stake_max,
+            r.bot_office_pct,
+            r.cells[1].x() - r.bot_stake.x()
         )
         .unwrap();
         for c in &r.cells {
@@ -1137,6 +1145,176 @@ pub fn criterion_table(rows: &[CriterionRow]) -> String {
         }
     }
     s
+}
+
+/// A bot operator's join window: `None` = the SDK default (the human
+/// join-day mix), else every bot joins on a day drawn from `lo..=hi`.
+pub const BOT_WINDOWS: [(Option<(u32, u32)>, &str); 5] = [
+    (None, "default mix"),
+    (Some((0, 0)), "day 0"),
+    (Some((1, 7)), "days 1-7"),
+    (Some((8, 14)), "days 8-14"),
+    (Some((15, 21)), "days 15-21"),
+];
+
+pub struct BestRow {
+    pub offices: bool,
+    pub share: f64,
+    /// By window (`BOT_WINDOWS` order): bot + stake, bot fee only, bots'
+    /// share of office-terms (%), very skilled + stake (same seasons).
+    pub stake: Vec<Mult>,
+    pub fee: Vec<Mult>,
+    pub stake_max_seed: Vec<f64>,
+    pub office_pct: Vec<f64>,
+    pub very_skilled: Vec<Mult>,
+}
+
+impl BestRow {
+    /// The bot's best choice: the largest multiple over join window ×
+    /// stake or not (office is the row).
+    pub fn best(&self) -> (f64, String) {
+        let mut b = (f64::MIN, String::new());
+        for (w, (_, name)) in BOT_WINDOWS.iter().enumerate() {
+            for (m, what) in [(&self.stake[w], "stake"), (&self.fee[w], "fee only")] {
+                if m.n > 0 && m.x() > b.0 {
+                    b = (m.x(), format!("{name}, {what}"));
+                }
+            }
+        }
+        b
+    }
+}
+
+/// The bot criterion as the maximum over the bot's own choices (review of
+/// K3): join window × stake or not × office or not, at 1, 2, 5 and 10%.
+/// Every bot of a season makes the same choice, so each cell has the
+/// whole bot share in it (n = share × wallets per seed), not the ~10 per
+/// seed of the SDK-default mix.
+pub fn criterion_best(base: &Config, seeds: u64, offices: &[bool]) -> Vec<BestRow> {
+    let mut jobs = Vec::new();
+    let mut tags = Vec::new();
+    for &off in offices {
+        for &b in &CRITERION_SHARES {
+            for (w, (win, _)) in BOT_WINDOWS.iter().enumerate() {
+                for k in 1..=seeds {
+                    jobs.push(Job {
+                        cfg: Config {
+                            seed: 200 + k,
+                            bot_share: b,
+                            bot_officers: off,
+                            bot_join_days: *win,
+                            ..base.clone()
+                        },
+                        gammas: vec![],
+                    });
+                    tags.push((off, b, w));
+                }
+            }
+        }
+    }
+    let done = run_all(jobs);
+    let mut rows = Vec::new();
+    for &off in offices {
+        for &b in &CRITERION_SHARES {
+            let nw = BOT_WINDOWS.len();
+            let mut r = BestRow {
+                offices: off,
+                share: b,
+                stake: vec![Mult::default(); nw],
+                fee: vec![Mult::default(); nw],
+                stake_max_seed: vec![f64::MIN; nw],
+                office_pct: vec![0.0; nw],
+                very_skilled: vec![Mult::default(); nw],
+            };
+            for w in 0..nw {
+                let (mut bt, mut t) = (0u64, 0u64);
+                for (d, _) in done.iter().zip(&tags).filter(|(_, tg)| **tg == (off, b, w)) {
+                    let o = &d.outs[0];
+                    assert!(o.checks.iter().all(|c| c.ok), "conservation failed");
+                    let m = arch_mult(o, Arch::Bot, true);
+                    r.stake_max_seed[w] = r.stake_max_seed[w].max(m.x());
+                    r.stake[w].merge(&m);
+                    r.fee[w].merge(&arch_mult(o, Arch::Bot, false));
+                    r.very_skilled[w].merge(&arch_mult(o, Arch::VerySkilled, true));
+                    bt += d.stats.bot_office_terms;
+                    t += d.stats.minister_terms + d.stats.warden_terms;
+                }
+                r.office_pct[w] = 100.0 * bt as f64 / t.max(1) as f64;
+            }
+            rows.push(r);
+        }
+    }
+    rows
+}
+
+/// Markdown for [`criterion_best`], with the verdict: passes only if every
+/// choice returns < 1.0.
+pub fn criterion_best_table(rows: &[BestRow]) -> (String, f64) {
+    let mut s = String::new();
+    write!(s, "| bots in office | bot share |").unwrap();
+    for (_, n) in BOT_WINDOWS {
+        write!(s, " {n}: stake / fee only (max seed) |").unwrap();
+    }
+    writeln!(
+        s,
+        " **bot's best choice** | margin under 1.0 | bots' office-terms (default mix → best window) | skill premium at the best window |"
+    )
+    .unwrap();
+    writeln!(
+        s,
+        "|---|---|{}---|---|---|---|",
+        "---|".repeat(BOT_WINDOWS.len())
+    )
+    .unwrap();
+    let mut worst = f64::MIN;
+    for r in rows {
+        let (bx, bwhat) = r.best();
+        worst = worst.max(bx);
+        write!(
+            s,
+            "| {} | {:.0}% |",
+            if r.offices { "yes" } else { "no" },
+            r.share * 100.0
+        )
+        .unwrap();
+        for w in 0..BOT_WINDOWS.len() {
+            write!(
+                s,
+                " {:.3} / {:.3} ({:.3}) |",
+                r.stake[w].x(),
+                r.fee[w].x(),
+                r.stake_max_seed[w]
+            )
+            .unwrap();
+        }
+        let bw = BOT_WINDOWS
+            .iter()
+            .position(|(_, n)| bwhat.starts_with(n))
+            .unwrap_or(0);
+        writeln!(
+            s,
+            " **{:.3}** ({}) | {:+.1} pt | {:.0}% → {:.0}% | {:+.3} |",
+            bx,
+            bwhat,
+            100.0 * (1.0 - bx),
+            r.office_pct[0],
+            r.office_pct[bw],
+            r.very_skilled[bw].x() - r.stake[bw].x()
+        )
+        .unwrap();
+    }
+    writeln!(
+        s,
+        "\nWorst bot choice over every cell: **{:.3}** → **{}** [sim].",
+        worst,
+        if worst < 1.0 {
+            "passes (< 1.0 for every join window, stake choice and office choice at 1, 2, 5, 10%)"
+        } else {
+            "fails"
+        }
+    )
+    .unwrap();
+    (s, worst)
 }
 
 /// β for path p (0..4) or the undamped index (p = 4), faction 0 vs 1..6.
@@ -1235,5 +1413,91 @@ mod tests {
         });
         assert!(o.checks.iter().all(|c| c.ok));
         assert!(o.facts[0].members > o.facts[1].members);
+    }
+
+    /// m0c: a bot operator's join window (`--bot-join-days`) puts every
+    /// scripted bot, and no human or Shade, in that window; the default
+    /// (None) leaves the season bit-identical.
+    #[test]
+    fn bots_join_in_their_chosen_window() {
+        let cfg = Config {
+            bot_join_days: Some((8, 14)),
+            bot_share: 0.05,
+            ..small(5)
+        };
+        let (_, o) = play(&cfg);
+        assert!(o.checks.iter().all(|c| c.ok));
+        let bots: Vec<_> = o
+            .agents
+            .iter()
+            .filter(|a| a.arch == Arch::Bot && !a.shade)
+            .collect();
+        assert!(!bots.is_empty());
+        assert!(bots.iter().all(|a| (8..=14).contains(&a.join_day)));
+        assert!(o
+            .agents
+            .iter()
+            .any(|a| a.arch != Arch::Bot && a.join_day == 0));
+        assert_eq!(
+            play(&Config {
+                bot_join_days: None,
+                ..small(5)
+            })
+            .1
+            .digest,
+            play(&small(5)).1.digest
+        );
+    }
+
+    /// m0c: the C4 counterfactual routes the attacked faction's arrivals of
+    /// the attacked bell (and nobody else's), and the season still
+    /// conserves money and laurels.
+    #[test]
+    fn a_c4_attack_routes_the_target_and_conserves() {
+        let base = Config {
+            clash_log: true,
+            ..small(7)
+        };
+        let (sim, _) = play(&base);
+        let row = sim
+            .clash_log
+            .iter()
+            .find(|r| r.arr_mask != 0 && r.bell > 144)
+            .copied()
+            .expect("a clash with arrivals");
+        let f = row.arr_mask.trailing_zeros() as u8;
+        let (sim2, o2) = play(&Config {
+            attack: Some((f, row.bell, row.bell)),
+            ..small(7)
+        });
+        assert!(sim2.attack_routed > 0);
+        assert!(o2.checks.iter().all(|c| c.ok));
+        assert!(sim.attack_routed == 0);
+    }
+
+    /// m0c: bot officers steering Mandates (humans cannot complete) with the
+    /// share floor: every term still conserves, and the floor's cut is
+    /// burned, not paid.
+    #[test]
+    fn steered_mandates_are_bounded_by_the_share_floor() {
+        let (sim, o) = play(&Config {
+            bot_officers: true,
+            bot_mandates: Some(0.0),
+            bot_share: 0.05,
+            ..small(3)
+        });
+        for c in &o.checks {
+            assert!(c.ok, "{} ({})", c.name, c.detail);
+        }
+        let burned: u128 = sim.reserve.iter().map(|r| r.burned).sum();
+        assert!(burned > 0, "the floor never bound in a steered season");
+        let (plain, _) = play(&Config {
+            bot_officers: true,
+            bot_mandates: Some(0.0),
+            bot_share: 0.05,
+            mandate_floor: false,
+            ..small(3)
+        });
+        assert!(plain.stats.mandate_paid > sim.stats.mandate_paid);
     }
 }

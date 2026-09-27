@@ -247,7 +247,11 @@ pub fn settle_run(sim: &Sim, p: &IndexParams) -> Outcome {
     // ---- laurel conservation (zero-sum emission, §5.4)
     let (emitted, orphaned) = sim.laurels_minted();
     let held: u128 = sim.agents.iter().map(|a| a.laurels as u128).sum::<u128>()
-        + sim.reserve.iter().map(|r| r.balance as u128).sum::<u128>()
+        + sim
+            .reserve
+            .iter()
+            .map(|r| r.balance as u128 + r.burned)
+            .sum::<u128>()
         + sim.escrow as u128
         + sim.stats.siege_stake_orphaned as u128
         + sim.stats.laurels_burned as u128;
@@ -258,23 +262,27 @@ pub fn settle_run(sim: &Sim, p: &IndexParams) -> Outcome {
         held == sources,
         format!("held {held} sources {sources}"),
     );
-    // Mandate reserve (O10): deposited = balance + paid, every term swept.
-    let (dep, bal, rpaid, open) = sim
-        .reserve
-        .iter()
-        .fold((0u128, 0u128, 0u128, 0u128), |a, r| {
-            (
-                a.0 + r.deposited,
-                a.1 + r.balance as u128,
-                a.2 + r.paid,
-                a.3 + r.outstanding().expect("outstanding"),
-            )
-        });
+    // Mandate reserve (O10): deposited = balance + paid + burned (the m0c
+    // share floor's cut), every term swept.
+    let (dep, bal, rpaid, open, burned) =
+        sim.reserve
+            .iter()
+            .fold((0u128, 0u128, 0u128, 0u128, 0u128), |a, r| {
+                (
+                    a.0 + r.deposited,
+                    a.1 + r.balance as u128,
+                    a.2 + r.paid,
+                    a.3 + r.outstanding().expect("outstanding"),
+                    a.4 + r.burned,
+                )
+            });
     check(
         &mut checks,
-        "Mandate reserve: deposited = balance + paid",
-        dep == bal + rpaid && open == 0 && rpaid == sim.stats.mandate_paid as u128,
-        format!("deposited {dep} = balance {bal} + paid {rpaid}; open {open}"),
+        "Mandate reserve: deposited = balance + paid + burned",
+        dep == bal + rpaid + burned && open == 0 && rpaid == sim.stats.mandate_paid as u128,
+        format!(
+            "deposited {dep} = balance {bal} + paid {rpaid} + floor burned {burned}; open {open}"
+        ),
     );
     let idx_dust = emitted as i128 - sim.laurel_credited as i128 - orphaned as i128;
     check(

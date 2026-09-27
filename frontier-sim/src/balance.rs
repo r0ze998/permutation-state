@@ -331,30 +331,56 @@ pub fn table(b: &Balance) -> String {
 }
 
 /// CI gate sizes: wallets per season and seeds (× 6 rotations).
+///
+/// **What the gate is.** A proxy for O5, not O5 itself. It bounds each
+/// doctrine's mean undamped index (the systematic quantity) at a size a CI
+/// job can afford: 30 paired seeds × 6 rotations = 180 seasons, index SE
+/// ≈ 0.05% [sim], bound ±0.2% (≈ 4 SE). It catches an edge of about 0.25%
+/// of index or more (≈ 4 win points at 10k wallets), which is what the
+/// negative controls below are: the draft table (+8%), F on the Knight line
+/// (−0.22% on these seeds with the final table: it fails, but only just)
+/// and a within-bounds A boost (+0.38%). It does
+/// **not** catch an edge under ≈ 0.15% of index, and the win-rate bound
+/// (±10 points at SE 2.8) is only a guard against a gross outlier. The
+/// O5 band itself (every doctrine 16.7% ± 2 points) is checked on ≥ 1,500
+/// paired seasons by the scheduled workflow `doctrine-balance.yml`
+/// (`frontier-sim doctrines --seeds 250 --first-seed 10000 --gate`).
+///
+/// The seeds are fixed (1..=30) so CI is deterministic; the scheduled
+/// workflow also runs a fresh seed set every night, so a table tuned to
+/// the CI seeds is caught there.
 pub const GATE_AGENTS: usize = 10_000;
-pub const GATE_SEEDS: u64 = 12;
+pub const GATE_SEEDS: u64 = 30;
 /// CI gate bounds: mean undamped index within this many % of the mean over
 /// doctrines, and win rate within 16.7 ± this many points.
-pub const GATE_MAX_DELTA_PCT: f64 = 0.3;
-pub const GATE_MAX_WIN_GAP: f64 = 15.0;
+pub const GATE_MAX_DELTA_PCT: f64 = 0.2;
+pub const GATE_MAX_WIN_GAP: f64 = 10.0;
+/// Seeds of the draft control (a 10-point outlier needs no more).
+pub const GATE_DRAFT_SEEDS: u64 = 12;
 
 /// The CI gate on a finished run: conservation, every doctrine's mean
 /// index within `GATE_MAX_DELTA_PCT` of the mean and its win rate within
 /// 16.7 ± `GATE_MAX_WIN_GAP` points.
 pub fn gate_check(b: &Balance) -> Result<(), String> {
+    gate_check_with(b, GATE_MAX_DELTA_PCT, GATE_MAX_WIN_GAP)
+}
+
+/// [`gate_check`] with explicit bounds (the scheduled fresh-seed run uses
+/// a tighter index bound at 1,500 seasons).
+pub fn gate_check_with(b: &Balance, max_delta_pct: f64, max_win_gap: f64) -> Result<(), String> {
     if b.checks_ok != b.seasons {
         return Err(format!("conservation: {} of {}", b.checks_ok, b.seasons));
     }
     for r in &b.rows {
-        if r.delta_pct.abs() > GATE_MAX_DELTA_PCT {
+        if r.delta_pct.abs() > max_delta_pct {
             return Err(format!(
-                "{}: mean index {:+.3}% off the mean (gate ±{GATE_MAX_DELTA_PCT}%)",
+                "{}: mean index {:+.3}% off the mean (gate ±{max_delta_pct}%)",
                 r.name, r.delta_pct
             ));
         }
-        if (r.win_pct - 100.0 / 6.0).abs() > GATE_MAX_WIN_GAP {
+        if (r.win_pct - 100.0 / 6.0).abs() > max_win_gap {
             return Err(format!(
-                "{}: win rate {:.1}% (gate 16.7 ± {GATE_MAX_WIN_GAP})",
+                "{}: win rate {:.1}% (gate 16.7 ± {max_win_gap})",
                 r.name, r.win_pct
             ));
         }
@@ -364,8 +390,22 @@ pub fn gate_check(b: &Balance) -> Result<(), String> {
 
 /// The CI gate's harness: the kernel table (or `set`) at the gate's size.
 pub fn gate_run(set: DoctrineSet) -> Balance {
-    run(&Config::default(), &Spec::new(GATE_AGENTS, GATE_SEEDS, set))
+    gate_run_with(set, "", GATE_SEEDS)
 }
+
+/// The gate's harness with doctrine overrides (`--dx` syntax) and a seed
+/// count: the negative controls.
+pub fn gate_run_with(set: DoctrineSet, tweaks: &str, seeds: u64) -> Balance {
+    let mut spec = Spec::new(GATE_AGENTS, seeds, set);
+    spec.tweaks = tweaks.to_string();
+    run(&Config::default(), &spec)
+}
+
+/// Negative controls: tables the gate must reject. The Knight line for F
+/// (the K3 tuning's outlier, −0.22% on the gate seeds with the final
+/// table) and an A boost that stays inside every doctrine bound (+0.38%).
+pub const GATE_KNIGHT: &str = "F.unit=knight,F.variant=10000";
+pub const GATE_A_BOOST: &str = "A.walls=5000,A.drill=11500,A.travel=7000";
 
 #[cfg(test)]
 mod tests {
@@ -391,10 +431,41 @@ mod tests {
     #[test]
     #[cfg_attr(debug_assertions, ignore = "release only: cargo test --release")]
     fn doctrine_balance_gate_rejects_the_draft() {
-        let b = gate_run(DoctrineSet::Draft);
+        let b = gate_run_with(DoctrineSet::Draft, "", GATE_DRAFT_SEEDS);
         assert!(
             gate_check(&b).is_err(),
             "draft table passed the gate: {}",
+            table(&b)
+        );
+    }
+
+    /// Negative control (review of K3): F on the Knight line, which the K3
+    /// gate (12 seeds, ±0.3%) let through on some seed sets.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "release only: cargo test --release")]
+    fn doctrine_balance_gate_rejects_the_knight() {
+        let b = gate_run_with(DoctrineSet::Kernel, GATE_KNIGHT, GATE_SEEDS);
+        assert!(
+            gate_check(&b).is_err(),
+            "the Knight table passed the gate: {}",
+            table(&b)
+        );
+    }
+
+    /// Negative control: a quiet edge inside every doctrine bound (walls
+    /// ×0.5, a ×1.15 drill, marches ×0.7 for A).
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "release only: cargo test --release")]
+    fn doctrine_balance_gate_rejects_a_quiet_a_boost() {
+        let t = crate::model::doctrine_table(DoctrineSet::Kernel, GATE_A_BOOST);
+        assert!(
+            t.iter().all(|d| d.k.validate().is_ok()),
+            "the control must be a valid table"
+        );
+        let b = gate_run_with(DoctrineSet::Kernel, GATE_A_BOOST, GATE_SEEDS);
+        assert!(
+            gate_check(&b).is_err(),
+            "the A boost passed the gate: {}",
             table(&b)
         );
     }

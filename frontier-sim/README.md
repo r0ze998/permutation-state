@@ -18,9 +18,13 @@ cargo run --release -- suite --agents 10000 --seeds 5 --out RESULTS-suite.md
 # doctrine balance: 6 rotations × K seeds, paired (the rotations of a seed share it)
 cargo run --release -- doctrines --agents 10000 --seeds 250 --first-seed 10000 --set kernel --gate
 cargo run --release -- doctrines --seeds 50 --dx "C.drill=10250,F.upkeep=8000"   # try overrides
-cargo run --release -- doctrine-gate                   # the CI gate's harness (10k × 12 seeds × 6)
+cargo run --release -- doctrine-gate --controls        # the CI gate's harness (10k × 30 seeds × 6) and its negative controls
 cargo run --release -- criterion --seeds 5                  # bot criterion (O4), 1/2/5/10% bots, with and without offices
 cargo run --release -- criterion --seeds 5 --rev2-economy   # the same on the M0 economy
+cargo run --release -- criterion --best-response --seeds 3 --gate   # the max over the bot's join window × stake × office
+cargo run --release -- criterion --seeds 5 --bot-mandates 0.25      # bot officers steer Mandates (humans complete ×0.25)
+cargo run --release -- c4 --agents 50000 --seeds 3 --out c4.md      # restated C4: per-bell participation, tail episodes,
+                                                                    # counterfactual value of one attacked bell
 ```
 
 The default economy is K3's (owner decisions O3, O4, O6, O10; see
@@ -28,7 +32,14 @@ The default economy is K3's (owner decisions O3, O4, O6, O10; see
 of what the wallet paid, 105 Works per USDC, the laurel stake priced by
 expected accrual left (`EntrySchedule::SEASON1`), holdings emit by their
 order factor, Relic Sites pay no laurels, the Mandate reserve pays only
-staker completers through `frontier::mandate`, γ = 0.6.
+staker completers through `frontier::mandate` with its share floor (the
+divisor is at least half of the faction's active stakers; the unclaimable
+part is burned), γ = 0.6.
+
+The O5 doctrine band (16.7% ± 2 on ≥ 1,500 paired seasons) is checked by
+`.github/workflows/doctrine-balance.yml` (nightly); the per-push CI test is a
+180-season proxy on the mean index with three negative controls (see
+`balance.rs`).
 
 Options: `--bots SHARE`, `--bot-q Q`, `--bot-aggression A`, `--day0 SHARE`,
 `--rotation K`, `--set kernel|draft|m0` (doctrine table), `--dx OVERRIDES`
@@ -37,7 +48,9 @@ Options: `--bots SHARE`, `--bot-q Q`, `--bot-aggression A`, `--day0 SHARE`,
 `--relics`, `--no-relics`, `--works-cap N`, `--works-per-usdc N`,
 `--stake-ramp BPS`, `--office-ceiling BPS|none`,
 `--office-pay usdc|share:BPS|laurels`, `--mandate-all`, `--rev2-economy`,
-`--bot-officers`, `--late-stake none|bots|stakers`, `--verbose`.
+`--bot-officers`, `--late-stake none|bots|stakers`, `--bot-join-days LO-HI`,
+`--bot-mandates MULT`, `--office-term-limit N`, `--no-mandate-floor`,
+`--first-seed N`, `--gate-index PCT`, `--verbose`.
 `suite --only` takes a comma list of
 `payout,variant,herding,bots,decompose,ladder,doctrines,determinism`.
 
@@ -47,4 +60,5 @@ Options: `--bots SHARE`, `--bot-q Q`, `--bot-aggression A`, `--day0 SHARE`,
 | `src/balance.rs` | the doctrine balance harness and its CI gate (`doctrine_balance_gate`) |
 | `src/sim.rs` | the season loop: map growth, joins, sessions, economy, marches, clashes, sieges, relics, folds |
 | `src/settle.rs` | Shade voiding, faction index, settlement, claims, conservation checks |
-| `src/report.rs`, `src/suite.rs` | tables and the M0 measurement suite |
+| `src/report.rs`, `src/suite.rs` | tables, the M0 measurement suite and the bot criterion (default mix and best response) |
+| `src/c4.rs` | restated C4 from the simulator: per-bell participation, tail episodes, counterfactual attacks (`Config::attack`) |

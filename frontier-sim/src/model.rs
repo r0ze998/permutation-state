@@ -435,6 +435,7 @@ pub fn apply_tweaks(t: &mut [Doctrine; 6], tweaks: &str) {
                 };
             }
             "arrival" => k.arrival_bps = num(),
+            "variant" => k.variant_bps = num(),
             "travel" => k.travel_bps = num(),
             "upkeep" => k.upkeep_bps = num(),
             "walls" => k.wall_cost_bps = num(),

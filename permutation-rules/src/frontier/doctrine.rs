@@ -58,6 +58,11 @@ pub struct Doctrine {
     /// Road building speed (bps; Engineers build roads ×2). *Not simulated
     /// directly*; the simulator's proxy is `travel_bps`.
     pub road_build_bps: Bps,
+    /// Damage the variant deals in every stance (not in Disarray), bps: the
+    /// weight of a heavy unit (F's heavy cavalry). 1.0 = a plain unit. It
+    /// is what makes two doctrines on the same unit line field different
+    /// armies (`validate_table`).
+    pub variant_bps: Bps,
 
     // ---- tech bias
     /// Damage dealt on the bell a host arrives (bps).
@@ -98,6 +103,7 @@ pub const NEUTRAL: Doctrine = Doctrine {
     unit: UnitType::Spearman,
     drill: None,
     road_build_bps: BPS_ONE,
+    variant_bps: BPS_ONE,
     arrival_bps: BPS_ONE,
     travel_bps: BPS_ONE,
     upkeep_bps: BPS_ONE,
@@ -115,10 +121,18 @@ pub const NEUTRAL: Doctrine = Doctrine {
 
 /// The Season 1 doctrine table (rules v10), faction 0..6 = A..F.
 ///
+/// **Provisional** until the mechanisms the simulator does not play yet
+/// land (M1–M3): B's caravans, Bourse fee and Waystone, A's heartland
+/// sieges, C's war horn, E's roads and survey charters. Those knobs are
+/// balanced by argument only; the win-rate band (O5) is measured on the
+/// simulated knobs. Each mechanism gets its own balance-gate row when it
+/// starts being simulated.
+///
 /// Tuned in `frontier-sim` (see `scratchpad/frontier/m0b/sim/DOCTRINES.md`)
 /// from the M0 proposal (the draft table minus its multipliers on scored
 /// facts). Changes from the design §4.1 draft:
-/// * A: unchanged (Pikes drilled in Brace, walls −10%, heartland +12).
+/// * A: Pikes drilled in Brace, heartland +12; walls −5% (m0c: A was the
+///   most consistent residual, +0.07–0.11% of index, at −10%).
 /// * B: unchanged (light cavalry, caravans, Bourse fee, Waystone).
 /// * C: the arrival-bell bonus and the Assault drill are smaller.
 /// * D: "+10% food, cheaper Hamlets" → Foraging (half supply attrition);
@@ -132,12 +146,16 @@ pub const NEUTRAL: Doctrine = Doctrine {
 ///   index below the mean in every tuning run whatever its upkeep (×0.5)
 ///   or muster discount (×0.25), and pulled its neighbours off balance
 ///   [sim]; from the Horseman line all six doctrines land in the band.
+///   So that F does not field B's army (review of K3), its heavy cavalry
+///   is the Horseman line with `variant_bps` ×1.10 in every stance (m0c
+///   tuning, paired seeds 20001–20150: largest |Δ index| 0.045% with A's
+///   walls at −5%; confirmed on 10001–10250, see DOCTRINES/m0c).
 pub const DOCTRINES: [Doctrine; 6] = [
     Doctrine {
         name: "A Wardens of Stone",
         unit: UnitType::Spearman,
         drill: Some((Stance::Brace, 11_000)),
-        wall_cost_bps: 9_000,
+        wall_cost_bps: 9_500,
         heartland_siege_extra_bells: 12,
         ..NEUTRAL
     },
@@ -176,6 +194,7 @@ pub const DOCTRINES: [Doctrine; 6] = [
     Doctrine {
         name: "F Iron",
         unit: UnitType::Horseman,
+        variant_bps: 11_000,
         upkeep_bps: 9_000,
         keeps_walls_on_capture: true,
         ..NEUTRAL
@@ -216,17 +235,23 @@ pub enum DoctrineError {
     /// The table does not give every doctrine a tech bias, a unit variant
     /// and a civic power, or two doctrines are identical.
     Shape,
+    /// Two doctrines field the same army (unit line, drill and variant
+    /// weight), however their other knobs differ.
+    SameArmy,
 }
 
 impl Doctrine {
-    /// Damage multiplier (bps) for `Fighter::dealt_bps`: the drill applies
-    /// when the host fights in its drilled stance (not in Disarray), the
-    /// arrival bonus on the bell it arrives.
+    /// Damage multiplier (bps) for `Fighter::dealt_bps`: the variant's
+    /// weight in every stance and the drill in its drilled stance (neither
+    /// in Disarray), the arrival bonus on the bell it arrives.
     pub const fn dealt_bps(&self, posture: Posture, arrival: bool) -> Bps {
         let mut m = BPS_ONE as u64;
-        if let (Some((s, bps)), Posture::Stance(p)) = (self.drill, posture) {
-            if s as u8 == p as u8 {
-                m = m * bps as u64 / BPS_ONE as u64;
+        if let Posture::Stance(p) = posture {
+            m = m * self.variant_bps as u64 / BPS_ONE as u64;
+            if let Some((s, bps)) = self.drill {
+                if s as u8 == p as u8 {
+                    m = m * bps as u64 / BPS_ONE as u64;
+                }
             }
         }
         if arrival {
@@ -288,7 +313,10 @@ impl Doctrine {
     }
 
     fn has_unit_variant(&self) -> bool {
-        self.unit != UnitType::Spearman || self.drill.is_some() || self.road_build_bps != BPS_ONE
+        self.unit != UnitType::Spearman
+            || self.drill.is_some()
+            || self.road_build_bps != BPS_ONE
+            || self.variant_bps != BPS_ONE
     }
 
     fn has_civic_power(&self) -> bool {
@@ -313,7 +341,7 @@ impl Doctrine {
                 return Err(DoctrineError::Combat);
             }
         }
-        if !combat_ok(self.arrival_bps) {
+        if !combat_ok(self.arrival_bps) || !combat_ok(self.variant_bps) {
             return Err(DoctrineError::Combat);
         }
         if ![
@@ -346,7 +374,9 @@ impl Doctrine {
 }
 
 /// The whole table: every doctrine valid, each with a tech bias, a unit
-/// variant and a civic power, no two alike.
+/// variant and a civic power, no two alike, and no two fielding the same
+/// army (unit line, drill, variant weight): knobs such as caravans or a
+/// Bourse fee do not make two armies different.
 pub fn validate_table(t: &[Doctrine; 6]) -> Result<(), DoctrineError> {
     for (i, d) in t.iter().enumerate() {
         d.validate()?;
@@ -355,6 +385,12 @@ pub fn validate_table(t: &[Doctrine; 6]) -> Result<(), DoctrineError> {
         }
         if t[..i].iter().any(|e| e == d || e.name == d.name) {
             return Err(DoctrineError::Shape);
+        }
+        if t[..i]
+            .iter()
+            .any(|e| e.unit == d.unit && e.drill == d.drill && e.variant_bps == d.variant_bps)
+        {
+            return Err(DoctrineError::SameArmy);
         }
     }
     Ok(())

@@ -1,0 +1,45 @@
+# The O5 criterion itself (design §4.1, owner decision O5): every doctrine
+# wins 16.7% ± 2 points of seasons. The per-push CI job (`frontier-sim` in
+# ci.yml) runs only a 180-season proxy that bounds each doctrine's mean
+# index; this workflow runs the full check on 1,500 paired seasons.
+#
+# Step 1 is deterministic: the fixed confirmation set (seeds 10001..10250),
+# which no tuning run uses. Step 2 draws a fresh seed set every run, so a
+# table tuned to the public CI seeds is caught; at 1,500 seasons a win rate
+# has a binomial SE of 1.0 point, and even a perfectly balanced table puts
+# all six in the ± 2 band only ~75% of the time, so the fresh set gates the
+# mean index (±0.12%, ≈ 7 SE) rather than the win-rate band.
+name: Doctrine balance (O5, full)
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  doctrines:
+    name: 1,500 paired seasons, fixed and fresh seed sets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    defaults:
+      run:
+        working-directory: frontier-sim
+    steps:
+      - uses: actions/checkout@v7
+      - name: Rust toolchain (rust-toolchain.toml pins 1.89.0)
+        run: rustup toolchain install 1.89.0 --profile minimal
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            frontier-sim/target
+          key: frontier-sim-${{ hashFiles('frontier-sim/Cargo.lock', 'rust-toolchain.toml') }}
+      - name: Build
+        run: cargo build --locked --release
+      - name: CI gate and its negative controls
+        run: ./target/release/frontier-sim doctrine-gate --controls
+      - name: O5 band on the fixed confirmation set (6 of 6 in 16.7 ± 2)
+        run: ./target/release/frontier-sim doctrines --agents 10000 --seeds 250 --first-seed 10000 --set kernel --gate
+      - name: Fresh seed set (mean index within ±0.12%)
+        run: ./target/release/frontier-sim doctrines --agents 10000 --seeds 250 --first-seed $((100000 + ${{ github.run_number }} * 1000)) --set kernel --gate-index 0.12

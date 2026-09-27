@@ -2645,19 +2645,25 @@ fn doctrines_are_asymmetric_bounded_and_never_multiply_a_scored_fact() {
         .collect();
     drills.sort();
     assert_eq!(drills, vec![Stance::Assault, Stance::Flank, Stance::Brace]);
-    // The drill applies only in its stance, never in Hold or Disarray.
+    // The drill applies only in its stance, the variant weight in every
+    // stance, neither in Disarray.
     for d in &DOCTRINES {
         for s in STANCES {
             let m = d.dealt_bps(Posture::Stance(s), false);
             match d.drill {
-                Some((ds, bps)) if ds == s => assert_eq!(m, bps),
-                _ => assert_eq!(m, BPS_ONE),
+                Some((ds, bps)) if ds == s => {
+                    assert_eq!(
+                        m,
+                        (bps as u64 * d.variant_bps as u64 / BPS_ONE as u64) as u32
+                    )
+                }
+                _ => assert_eq!(m, d.variant_bps),
             }
         }
         assert_eq!(d.dealt_bps(Posture::Disarray, false), BPS_ONE);
         assert_eq!(
             d.dealt_bps(Posture::Stance(Stance::Hold), true),
-            d.arrival_bps
+            (d.arrival_bps as u64 * d.variant_bps as u64 / BPS_ONE as u64) as u32
         );
         // Out-of-supply attrition never exceeds the kernel's.
         let after = supply_attrition(100_000, 6);
@@ -2686,6 +2692,20 @@ fn doctrines_are_asymmetric_bounded_and_never_multiply_a_scored_fact() {
     let mut twins = DOCTRINES;
     twins[1] = twins[0];
     assert_eq!(validate_table(&twins), Err(DoctrineError::Shape));
+    // No two doctrines field the same army: F's heavy cavalry is not B's
+    // light cavalry, whatever their unsimulated knobs.
+    assert_ne!(DOCTRINES[1].variant_bps, DOCTRINES[5].variant_bps);
+    let mut same_army = DOCTRINES;
+    same_army[5] = Doctrine {
+        variant_bps: BPS_ONE,
+        ..DOCTRINES[5]
+    };
+    assert_eq!(validate_table(&same_army), Err(DoctrineError::SameArmy));
+    let heavy = Doctrine {
+        variant_bps: 12_000,
+        ..DOCTRINES[5]
+    };
+    assert_eq!(heavy.validate(), Err(DoctrineError::Combat));
     let mut bare = DOCTRINES;
     bare[4] = Doctrine {
         name: "E bare",

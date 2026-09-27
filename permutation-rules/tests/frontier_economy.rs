@@ -17,7 +17,9 @@ use permutation_rules::frontier::laurel::{
     strength_weight, transfer, PairHistory, RewardIndex, Stake, Tier, EMIT_FULL,
     HOLDING_EMISSION_PER_BELL, LAUREL_ONE, SIEGE_STAKE, WEIGHT_ONE,
 };
-use permutation_rules::frontier::mandate::{MandateTerm, Reserve, TermState, MANDATE_CAP_PER_TERM};
+use permutation_rules::frontier::mandate::{
+    share_floor, MandateTerm, Reserve, TermState, MANDATE_CAP_PER_TERM,
+};
 use permutation_rules::frontier::payout::{
     claim, settle, tenure_units, CitizenRecord, FactionTotals, Ledger, PayoutParams, Settlement,
     TENURE_ONE,
@@ -1259,7 +1261,7 @@ fn mandate_reserve_pays_staker_completers_in_closed_form() {
             assert_eq!(reserve.outstanding().unwrap(), sitting, "seed {seed}");
             assert_eq!(
                 reserve.deposited,
-                reserve.balance as u128 + sitting + reserve.paid
+                reserve.balance as u128 + sitting + reserve.paid + reserve.burned
             );
         };
         for term in 0..7u32 {
@@ -1284,7 +1286,14 @@ fn mandate_reserve_pays_staker_completers_in_closed_form() {
                     }
                 }
             }
-            let budget = t.close(&mut reserve).unwrap();
+            // m0c: half of the terms close with a share floor (a random
+            // count of stakers active in the term).
+            let floor = if r.chance(50) {
+                share_floor(r.below(2 * wallets as u64 + 1))
+            } else {
+                0
+            };
+            let budget = t.close_with_floor(&mut reserve, floor).unwrap();
             assert_eq!(t.complete(true), Err(EconError::TermState));
             // Reference: the member loop.
             let s_all: u64 = who.iter().map(|x| x.1).sum();
@@ -1292,7 +1301,7 @@ fn mandate_reserve_pays_staker_completers_in_closed_form() {
                 if s_all == 0 {
                     0
                 } else {
-                    ((budget as u128 * sh as u128 / s_all as u128) as u64)
+                    ((budget as u128 * sh as u128 / s_all.max(floor) as u128) as u64)
                         .min(MANDATE_CAP_PER_TERM * sh)
                 }
             };
@@ -1313,13 +1322,13 @@ fn mandate_reserve_pays_staker_completers_in_closed_form() {
                 term_paid += got;
                 check(&reserve, &[t]);
             }
-            assert!(term_paid <= budget);
+            assert!(term_paid <= budget - t.floor_cut);
             let all_claimed = t.claimed_shares == t.shares;
             if !all_claimed {
                 assert_eq!(t.sweep(&mut reserve, false), Err(EconError::TermState));
             }
             let back = t.sweep(&mut reserve, true).unwrap();
-            assert_eq!(back, budget - term_paid);
+            assert_eq!(back, budget - term_paid - t.floor_cut);
             assert_eq!(t.claim(&mut reserve, 1), Err(EconError::TermState));
             open.push(t);
             check(&reserve, &open);
@@ -1331,7 +1340,7 @@ fn mandate_reserve_pays_staker_completers_in_closed_form() {
         }
         assert_eq!(
             reserve.deposited,
-            reserve.balance as u128 + reserve.paid,
+            reserve.balance as u128 + reserve.paid + reserve.burned,
             "seed {seed}: every term swept"
         );
     }

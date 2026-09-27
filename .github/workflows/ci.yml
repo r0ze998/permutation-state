@@ -131,8 +131,11 @@ jobs:
           cargo fmt -- --check
           cargo clippy --locked --release --all-targets -- -D warnings
       # Includes `balance::tests::doctrine_balance_gate` (the rules-v10
-      # doctrine table on a reduced paired harness) and its negative
-      # control `doctrine_balance_gate_rejects_the_draft` (design §4.1, O5).
+      # doctrine table on a 180-season paired harness: each mean index
+      # within ±0.2%, a proxy for O5) and its negative controls, which must
+      # fail: the draft table, F on the Knight line and an in-bounds A
+      # boost (design §4.1, O5). The O5 band itself (16.7 ± 2 on 1,500
+      # seasons) runs in doctrine-balance.yml, nightly and on demand.
       - name: Simulator tests
         run: cargo test --locked --release
 
