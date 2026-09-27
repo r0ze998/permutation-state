@@ -151,7 +151,7 @@ fn header(what: &str) -> Vec<(&'static str, J)> {
     vec![
         ("generator", st("frontier-abi abi-vectors")),
         ("abi_version", n(frontier_abi::ABI_VERSION)),
-        ("contract", st("docs/frontier/m1/M1-CONTRACT.md v1.1")),
+        ("contract", st("docs/frontier/m1/M1-CONTRACT.md v1.3")),
         ("content", st(what)),
     ]
 }
@@ -739,7 +739,7 @@ fn addresses_file() -> J {
         e.push(addr_entry(
             &ctx,
             "AnchorArchive",
-            o(vec![("region", n(r)), ("day", n(b))]),
+            o(vec![("region", n(r)), ("part", n(b))]),
             &addr::anchor_archive_seed(r, b),
         ));
     }
@@ -1211,7 +1211,7 @@ fn ix_file() -> J {
     }
     let aa = ix::ArchiveAnchors {
         region: 15,
-        day: 7,
+        part: 14,
         n: 3,
         bells: [1_008, 1_009, 1_010, 0, 0, 0, 0, 0],
     };

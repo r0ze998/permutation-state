@@ -19,6 +19,22 @@
 //! Every handler has the signature `fn(&Pubkey, &[AccountInfo], &[u8]) ->
 //! R<()>`; `RELEASE_CHECK=1` (G13, wave 5) fails while any path still
 //! returns `NotImplemented`.
+//!
+//! **Hand-over rules for W3-A, W3-B, W4-A and W4-B (v1.3, integ-W2):**
+//! - `init::close_to` does **not** log: every close path (CloseProvince,
+//!   CloseHolding, CloseCitizen, ReleaseDormant, ArchiveAnchors' anchor
+//!   closes, CloseSeedCache, CloseClashInputs, CloseArrivalDay,
+//!   CloseArrivalSlot, the slot close of SettleTransit, CloseSeason) emits
+//!   `CLOSE` (§6: kind, key, the final seq and head of a chained account,
+//!   recipient, lamports) itself, **before** calling `close_to`, or the
+//!   verifier's chain walk breaks (§4.2 as amended).
+//! - The player prologue calls the same Season address check as
+//!   `prologue::{season, keeper}` (`addr::season_pda`, §3.3).
+//! - The seal opener never returns code 3: a seal to another round fails
+//!   the FO check and is code 1 (§5.3 as amended; W1-C's `wrong_round`
+//!   vector).
+//! - AnchorArchives are per region and half day (`part = bell / 72`,
+//!   6,144 B, v1.3): address every archive with `archive_part_of(bell)`.
 
 pub mod beacon;
 pub mod citizen;

@@ -83,7 +83,21 @@ pub const POST_ANCHOR_MULTI: &[Cover] = &[
         "g01_loaded_limit::g01_loaded_limit_post_anchor_multi",
         &[Loaded],
     ),
-    Cover::Pending("W5-A: BadData (mask 0 or > 7 regions), WrongRound, BadAddress, BadAccount"),
+    Cover::Test(
+        "g03_forgery::g03_anchor_and_archive_forged_in_post_anchor_multi",
+        &[
+            Err(E::BadAddress),
+            Err(E::BadAccount),
+            Err(E::BadData),
+            Err(E::Archived),
+            Lands("PostAnchorMulti with one present anchor"),
+        ],
+    ),
+    Cover::Test(
+        "g05_one_anchor::g05_multi_anchor_equals_single_anchors",
+        &[Err(E::BadData)],
+    ),
+    Cover::Pending("W5-A: WrongRound"),
 ];
 
 pub const POST_SEED: &[Cover] = &[

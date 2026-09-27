@@ -57,6 +57,9 @@ export function seed(tag, raw = []) {
 export const citizenTag15 = wallet => sha256(utf8('PSF-CIT'), pubkeyBytes(wallet)).slice(0, 15);
 /** The DefenceClaim keeper key: `sha256("PSF-KPR" ‖ beneficiary)[0..8]`. */
 export const keeperTag8 = beneficiary => sha256(utf8('PSF-KPR'), pubkeyBytes(beneficiary)).slice(0, 8);
+/** The AnchorArchive part of a bell: `bell / 72` (v1.3, half-day archives). */
+export const archivePart = bell => Math.floor(Number(bell) / 72);
+
 /** The quota's citizen id: the first 8 bytes of the Citizen address, little-endian (a bigint). */
 export function citizenTag(citizenAddress) {
   const b = pubkeyBytes(citizenAddress);
@@ -86,7 +89,8 @@ export const seeds = Object.freeze({
   sealVerdictReserved: (host, bell) => seed('sv', concat(u64le(host), u32le(bell))),
   bellAnchor: (bell, region) => seed('an', concat(u32le(bell), u8(region))),
   seedCache: (bell, region, nonce) => seed('sd', concat(u32le(bell), u8(region), u8(nonce))),
-  anchorArchive: (region, day) => seed('aa', concat(u8(region), u32le(day))),
+  /** v1.3: one archive per region and half day, `part = archivePart(bell)`. */
+  anchorArchive: (region, part) => seed('aa', concat(u8(region), u32le(part))),
   defenceClaim: (beneficiary, day) => seed('dc', concat(keeperTag8(beneficiary), u32le(day))),
 });
 
@@ -132,7 +136,7 @@ export class FrontierAddresses {
   clashInputs(p, q, bell) { return this.of(seeds.clashInputs(p, q, bell)); }
   bellAnchor(bell, region) { return this.of(seeds.bellAnchor(bell, region)); }
   seedCache(bell, region, nonce) { return this.of(seeds.seedCache(bell, region, nonce)); }
-  anchorArchive(region, day) { return this.of(seeds.anchorArchive(region, day)); }
+  anchorArchive(region, part) { return this.of(seeds.anchorArchive(region, part)); }
   defenceClaim(beneficiary, day) { return this.of(seeds.defenceClaim(beneficiary, day)); }
   /** The Holding that owns a host (from its id), or null for an id that is not one. */
   holdingOfHost(id) {

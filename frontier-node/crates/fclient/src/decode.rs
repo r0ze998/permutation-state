@@ -1170,9 +1170,10 @@ pub struct ArchiveEntry {
 pub struct AnchorArchive {
     pub season_id: u64,
     pub region: u8,
-    pub day: u32,
-    pub tombstone: [u8; 18],
-    pub archived: [u8; 18],
+    /// The half day it covers (`bell / 72`, v1.3).
+    pub part: u32,
+    pub tombstone: [u8; 9],
+    pub archived: [u8; 9],
     pub entries: Vec<ArchiveEntry>,
     pub rent_to: Address,
 }
@@ -1184,10 +1185,10 @@ impl AnchorArchive {
         Ok(AnchorArchive {
             season_id: b.u64(l::sh::SEASON_ID),
             region: b.u8(a::REGION),
-            day: b.u32(a::DAY),
+            part: b.u32(a::PART),
             tombstone: b.arr(a::TOMBSTONE),
             archived: b.arr(a::ARCHIVED),
-            entries: (0..144)
+            entries: (0..a::ENTRIES_N)
                 .map(|i| {
                     let o = a::ENTRIES + i * a::ENTRY_STRIDE;
                     ArchiveEntry {
@@ -1200,8 +1201,8 @@ impl AnchorArchive {
             rent_to: b.key(a::RENT_TO),
         })
     }
-    fn bit(bits: &[u8; 18], bell: u32) -> bool {
-        let k = (bell % crate::abi::BELLS_PER_DAY) as usize;
+    fn bit(bits: &[u8; 9], bell: u32) -> bool {
+        let k = bell as usize % l::anchor_archive::ENTRIES_N;
         bits[k / 8] & (1 << (k % 8)) != 0
     }
     pub fn tombstoned(&self, bell: u32) -> bool {

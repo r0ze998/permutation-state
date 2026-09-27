@@ -133,14 +133,14 @@ const fn ix(
 /// ResolveClash = 50 rows.
 pub const INSTRUCTIONS: [IxInfo; 50] = [
     ix(0x01, "CreateSeason", Class::O, 70_000, 1_100, false),
-    ix(0x02, "InitShards", Class::O, 40_000, 600, false),
+    ix(0x02, "InitShards", Class::O, 45_000, 600, false),
     ix(0x03, "ConsumeGenesisSeed", Class::D, 345_000, 760, true),
     ix(0x04, "EndSeason", Class::N, 10_000, 300, false),
     ix(0x05, "CloseSeason", Class::O, 60_000, 1_232, false),
     ix(0x06, "AbortSeason", Class::N, 20_000, 300, false),
     ix(0x07, "SetWindowSchedule", Class::O, 5_000, 200, false),
-    ix(0x08, "AnnounceSeason", Class::O, 18_000, 480, false),
-    ix(0x09, "InitBeaconLogs", Class::O, 60_000, 900, false),
+    ix(0x08, "AnnounceSeason", Class::O, 25_000, 480, false),
+    ix(0x09, "InitBeaconLogs", Class::O, 80_000, 900, false),
     ix(0x10, "PostAnchor", Class::D, 345_000, 800, true),
     ix(0x11, "PostAnchorMulti", Class::D, 400_000, 1_232, true),
     ix(0x12, "PostSeed", Class::D, 345_000, 800, true),
@@ -241,7 +241,7 @@ pub mod size {
     pub const CLASH_INPUTS: usize = 1_280;
     pub const BELL_ANCHOR: usize = 144;
     pub const SEED_CACHE: usize = 144;
-    pub const ANCHOR_ARCHIVE: usize = 12_192;
+    pub const ANCHOR_ARCHIVE: usize = 6_144;
     pub const DEFENCE_CLAIM: usize = 128;
 }
 
@@ -911,16 +911,19 @@ pub mod layout {
         pub const RENT_TO: usize = 112;
         pub const END: usize = 144;
     }
+    /// v1.3: one archive per region and half day (`part = bell / 72`).
     pub mod anchor_archive {
         pub const REGION: usize = 16;
-        pub const DAY: usize = 20;
+        pub const PART: usize = 20;
         pub const TOMBSTONE: usize = 24;
-        pub const ARCHIVED: usize = 42;
+        pub const ARCHIVED: usize = 33;
         pub const ENTRIES: usize = 64;
+        /// Bells per archive.
+        pub const ENTRIES_N: usize = 72;
         /// {a_off u32, seed [32], sig [48]}.
         pub const ENTRY_STRIDE: usize = 84;
-        pub const RENT_TO: usize = 12_160;
-        pub const END: usize = 12_192;
+        pub const RENT_TO: usize = 6_112;
+        pub const END: usize = 6_144;
     }
     pub mod defence_claim {
         pub const BENEFICIARY: usize = 16;
@@ -978,7 +981,8 @@ const _: () = {
     assert!(layout::bell_anchor::END <= size::BELL_ANCHOR);
     assert!(layout::seed_cache::END <= size::SEED_CACHE);
     assert!(
-        layout::anchor_archive::ENTRIES + 144 * layout::anchor_archive::ENTRY_STRIDE
+        layout::anchor_archive::ENTRIES
+            + layout::anchor_archive::ENTRIES_N * layout::anchor_archive::ENTRY_STRIDE
             == layout::anchor_archive::RENT_TO
     );
     assert!(layout::defence_claim::END <= size::DEFENCE_CLAIM);
@@ -1020,7 +1024,7 @@ mod tests {
         // Rent figures quoted in §5.2.
         assert_eq!(rent(size::SEASON), 11_054_080);
         assert_eq!(rent(size::CITIZEN) + rent(size::HOLDING), 9_753_600);
-        assert_eq!(rent(size::ANCHOR_ARCHIVE), 62_585_600);
+        assert_eq!(rent(size::ANCHOR_ARCHIVE), 31_861_760);
         assert_eq!(rent(size::PROVINCE), 21_457_920);
     }
 }

@@ -37,29 +37,43 @@ pub mod seed_cache {
     pub const SEED_DOMAIN: &[u8] = b"PSF-SEED-v1";
 }
 
-/// AnchorArchive (12,192, v1.1): `aa‖region,day`.
+/// AnchorArchive (6,144, v1.3): `aa‖region,part` — one archive per region
+/// and **half day** (`part = bell / 72`, 72 bells). v1.1's one-a-day archive
+/// was 12,192 B, more than a program can allocate by CPI in one instruction
+/// (`MAX_PERMITTED_DATA_INCREASE` = 10,240 B, W2-A F2 [measured]); halving
+/// it keeps a single-step creation in ArchiveAnchors (integ-W2, §19).
 pub mod anchor_archive {
-    crate::layout::short!(b"PSF1ARCH", 12_192;
+    crate::layout::short!(b"PSF1ARCH", 6_144;
         REGION @ 16 : "u8" = 1;
         RSV_17 @ 17 : "rsv" = 3;
-        DAY @ 20 : "u32" = 4;
-        TOMBSTONE @ 24 : "[u8;18]" = 18;
-        ARCHIVED @ 42 : "[u8;18]" = 18;
-        RSV_60 @ 60 : "rsv" = 4;
-        ENTRIES @ 64 : "rec:ArchiveEntry x144" = 12_096;
-        RENT_TO @ 12160 : "[u8;32]" = 32;
+        PART @ 20 : "u32" = 4;
+        TOMBSTONE @ 24 : "[u8;9]" = 9;
+        ARCHIVED @ 33 : "[u8;9]" = 9;
+        RSV_42 @ 42 : "rsv" = 22;
+        ENTRIES @ 64 : "rec:ArchiveEntry x72" = 6_048;
+        RENT_TO @ 6112 : "[u8;32]" = 32;
     );
-    pub const ENTRIES_N: usize = 144;
+    /// Bells per archive (a half day).
+    pub const ENTRIES_N: usize = 72;
     /// Seconds after `A` an anchor may be archived (default `archive_after`).
     pub const ARCHIVE_AFTER_DEFAULT: u32 = 172_800;
+    /// Largest account a program creates by CPI in one instruction
+    /// (the runtime's `MAX_PERMITTED_DATA_INCREASE`).
+    pub const CPI_ALLOC_MAX: usize = 10_240;
+    const _: () = assert!(SIZE <= CPI_ALLOC_MAX);
+    const _: () = assert!(ENTRIES + ENTRIES_N * super::archive_entry::SIZE == RENT_TO);
 
-    /// Offset of `entries[b mod 144]`.
-    pub const fn entry(b: u32) -> usize {
-        ENTRIES + (b % 144) as usize * super::archive_entry::SIZE
+    /// The archive part of bell `b`: `b / 72`.
+    pub const fn part_of(b: u32) -> u32 {
+        b / ENTRIES_N as u32
     }
-    /// Byte offset and mask of bell `b` in a 144-bit bitmap starting at `base`.
+    /// Offset of `entries[b mod 72]`.
+    pub const fn entry(b: u32) -> usize {
+        ENTRIES + (b % ENTRIES_N as u32) as usize * super::archive_entry::SIZE
+    }
+    /// Byte offset and mask of bell `b` in a 72-bit bitmap starting at `base`.
     pub const fn bit(base: usize, b: u32) -> (usize, u8) {
-        let i = (b % 144) as usize;
+        let i = (b % ENTRIES_N as u32) as usize;
         (base + i / 8, 1u8 << (i % 8))
     }
 }

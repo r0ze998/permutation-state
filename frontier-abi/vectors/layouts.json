@@ -1,7 +1,7 @@
 {
   "generator": "frontier-abi abi-vectors",
   "abi_version": 1,
-  "contract": "docs/frontier/m1/M1-CONTRACT.md v1.1",
+  "contract": "docs/frontier/m1/M1-CONTRACT.md v1.3",
   "content": "account layouts (§4.3, §5.3), sub-records, SeasonParams",
   "accounts": [
     {
@@ -2234,8 +2234,8 @@
       "kind": "AnchorArchive",
       "code": 16,
       "magic": "PSF1ARCH",
-      "size": 12192,
-      "rent": 62585600,
+      "size": 6144,
+      "rent": 31861760,
       "chained": false,
       "seed_tag": "aa",
       "raw_key_len": 5,
@@ -2265,7 +2265,7 @@
           "ty": "rsv"
         },
         {
-          "name": "DAY",
+          "name": "PART",
           "off": 20,
           "len": 4,
           "ty": "u32"
@@ -2273,30 +2273,30 @@
         {
           "name": "TOMBSTONE",
           "off": 24,
-          "len": 18,
-          "ty": "[u8;18]"
+          "len": 9,
+          "ty": "[u8;9]"
         },
         {
           "name": "ARCHIVED",
-          "off": 42,
-          "len": 18,
-          "ty": "[u8;18]"
+          "off": 33,
+          "len": 9,
+          "ty": "[u8;9]"
         },
         {
-          "name": "RSV_60",
-          "off": 60,
-          "len": 4,
+          "name": "RSV_42",
+          "off": 42,
+          "len": 22,
           "ty": "rsv"
         },
         {
           "name": "ENTRIES",
           "off": 64,
-          "len": 12096,
-          "ty": "rec:ArchiveEntry x144"
+          "len": 6048,
+          "ty": "rec:ArchiveEntry x72"
         },
         {
           "name": "RENT_TO",
-          "off": 12160,
+          "off": 6112,
           "len": 32,
           "ty": "[u8;32]"
         }

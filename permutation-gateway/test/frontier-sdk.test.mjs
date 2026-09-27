@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { Keypair } from '@solana/web3.js';
+import { Keypair, PublicKey } from '@solana/web3.js';
 import { fromBase64, fromHex, toHex } from '../client/src/bytes.mjs';
 import { compileMessage, parseTransaction, wireTransaction } from '../client/src/solana-tx.mjs';
 import * as A from '../client/src/frontier/addresses.mjs';
@@ -113,7 +113,7 @@ test('addresses: every seed and address of frontier-abi\'s vector', () => {
     JoinShard: k => A.seeds.joinShard(k.faction, k.shard), BeaconLog: k => A.seeds.beaconLog(k.region), Citizen: k => A.seeds.citizen(k.wallet),
     Province: k => A.seeds.province(k.p, k.q), Holding: k => A.seeds.holding(k.p, k.q, k.site), ArrivalSlot: k => A.seeds.arrivalSlot(k.p, k.q, k.bell, k.faction, k.i),
     ArrivalDay: k => A.seeds.arrivalDay(k.p, k.q, k.day), ClashInputs: k => A.seeds.clashInputs(k.p, k.q, k.bell), BellAnchor: k => A.seeds.bellAnchor(k.bell, k.region),
-    SeedCache: k => A.seeds.seedCache(k.bell, k.region, k.nonce), AnchorArchive: k => A.seeds.anchorArchive(k.region, k.day),
+    SeedCache: k => A.seeds.seedCache(k.bell, k.region, k.nonce), AnchorArchive: k => A.seeds.anchorArchive(k.region, k.part),
     DefenceClaim: k => A.seeds.defenceClaim(k.beneficiary, k.day), 'PosturePDA (reserved, M3)': k => A.seeds.posture(k.p, k.q, k.bell, k.pos),
     'SealVerdict (reserved, removed v1.1)': k => A.seeds.sealVerdictReserved(k.host_id, k.arrive_bell),
   };
@@ -330,11 +330,37 @@ test('shapes: the allowlist refuses what the relay must not sponsor', () => {
     ['actor does not sign', [...good.slice(0, 3), { ...good[3], keys: good[3].keys.map((k, i) => (i === 0 ? { ...k, isSigner: false } : k)) }]],
     ['an extra signer', [...good.slice(0, 3), { ...good[3], keys: good[3].keys.map((k, i) => (i === 4 ? { ...k, isSigner: true } : k)) }]],
     ['the authority is the fee payer', SH.shapeIxs(programId, 'Harvest', { ...accounts, actor: relay }, {})],
+    // A read-only ABI account marked writable (integ-W2 review of W2-D): a
+    // relay-paid write lock on the Season.
+    ['the season marked writable', [...good.slice(0, 3), { ...good[3], keys: good[3].keys.map(k => (k.pubkey === a.season ? { ...k, isWritable: true } : k)) }]],
   ];
   for (const [what, ixs] of cases) {
     const r = SH.classify(txOf(ixs), { programId });
     assert.equal(r.ok, false, what);
     assert.equal(r.code, 'RelayRejected', what);
+  }
+  // An account key no instruction references (still write-locked by the
+  // runtime, invisible to the program and to simulation): refused, whether
+  // writable or read-only (integ-W2 review of W2-D).
+  const withExtraKey = (tx, writable) => {
+    const extra = Keypair.generate().publicKey;
+    const { numRequiredSignatures: ns, numReadonlySignedAccounts: rs, numReadonlyUnsignedAccounts: ru } = tx.header;
+    const at = writable ? ns : tx.accountKeys.length; // first unsigned-writable slot, or the read-only tail
+    const keys = [...tx.accountKeys.slice(0, at).map(k => new PublicKey(k).toBytes()), extra.toBytes(), ...tx.accountKeys.slice(at).map(k => new PublicKey(k).toBytes())];
+    const shift = i => (i >= at ? i + 1 : i);
+    const out = [ns, rs, writable ? ru : ru + 1, keys.length, ...keys.flatMap(k => [...k]), ...new PublicKey(tx.recentBlockhash).toBytes(), tx.instructions.length];
+    for (const ix of tx.instructions) {
+      assert.ok(ix.accounts.length < 128 && ix.data.length < 128);
+      out.push(shift(ix.programIdIndex), ix.accounts.length, ...ix.accounts.map(shift), ix.data.length, ...ix.data);
+    }
+    return parseTransaction(wireTransaction(Uint8Array.from(out), new Array(ns).fill(new Uint8Array(64))));
+  };
+  for (const writable of [true, false]) {
+    const t = withExtraKey(txOf(good), writable);
+    assert.equal(t.accountKeys.length, txOf(good).accountKeys.length + 1);
+    const r = SH.classify(t, { programId });
+    assert.equal(r.ok, false, `unreferenced ${writable ? 'writable' : 'read-only'} key`);
+    assert.match(r.problem, /no instruction of the shape uses/);
   }
   // A Reveal anywhere, even after a valid prefix: UseRevealRoute.
   assert.equal(SH.classify(txOf([...good.slice(0, 3), { ...good[3], data: Uint8Array.from([0x51]) }]), { programId }).code, 'UseRevealRoute');

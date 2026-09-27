@@ -27,7 +27,7 @@ use permutation_frontier_svm_tests::chain::{
 };
 use permutation_frontier_svm_tests::ix::beacon::post_anchor_regions;
 use permutation_frontier_svm_tests::ix::season::set_window_schedule;
-use permutation_frontier_svm_tests::world::{day_of, World};
+use permutation_frontier_svm_tests::world::{archive_part, World};
 use permutation_frontier_svm_tests::{Instruction, Keypair, Signer};
 
 /// Fixture round `T(0)` is placed on.
@@ -169,7 +169,7 @@ fn crafted_for_anchors(regions: &[u8]) -> (Chain, World) {
     assert!(a >= rt, "A after T(0)'s publication");
     c.set_time(a);
     for r in regions {
-        w.craft_archive(&mut c, *r, day_of(0), &[]);
+        w.craft_archive(&mut c, *r, archive_part(0), &[]);
     }
     (c, w)
 }
@@ -211,6 +211,71 @@ fn g01_loaded_limit_post_anchor_multi() {
         &w.keeper.pubkey(),
     );
     check(&c, Ix::PostAnchorMulti, &[ix], &[&w.keeper]);
+}
+
+/// The no-op path loads more: THE anchor (or cache) is present, so its
+/// data counts (integ-W2 review of W2-B: the worst set of PostAnchor,
+/// PostAnchorMulti and PostSeed is the present one, which `L(kind)`
+/// already counts at full size).
+#[test]
+fn g01_loaded_limit_post_anchor_present() {
+    let (mut c, w) = crafted_for_anchors(&[6]);
+    let ix = permutation_frontier_svm_tests::ix::beacon::post_anchor(
+        &w.a,
+        w.keeper.pubkey(),
+        6,
+        0,
+        &w.beacons.must(R_T),
+        &w.keeper.pubkey(),
+    );
+    expect_lands(
+        c.send(std::slice::from_ref(&ix), &[&w.keeper]),
+        "PostAnchor",
+    );
+    c.svm.expire_blockhash();
+    check(&c, Ix::PostAnchor, &[ix], &[&w.keeper]);
+}
+
+#[test]
+fn g01_loaded_limit_post_anchor_multi_present() {
+    let regions = [0u8, 2, 4, 6, 8, 10, 12];
+    let (mut c, w) = crafted_for_anchors(&regions);
+    let ix = post_anchor_regions(
+        &w.a,
+        w.keeper.pubkey(),
+        0,
+        &w.beacons.must(R_T),
+        &regions,
+        &w.keeper.pubkey(),
+    );
+    expect_lands(
+        c.send(std::slice::from_ref(&ix), &[&w.keeper]),
+        "PostAnchorMulti",
+    );
+    c.svm.expire_blockhash();
+    check(&c, Ix::PostAnchorMulti, &[ix], &[&w.keeper]);
+}
+
+#[test]
+fn g01_loaded_limit_post_seed_present() {
+    let (mut c, w) = crafted_for_anchors(&[9]);
+    let ix = permutation_frontier_svm_tests::ix::beacon::post_anchor(
+        &w.a,
+        w.keeper.pubkey(),
+        9,
+        0,
+        &w.beacons.must(R_T),
+        &w.keeper.pubkey(),
+    );
+    expect_lands(c.send(&[ix], &[&w.keeper]), "PostAnchor (crafted genesis)");
+    c.set_time(World::round_time(R_S) + 2);
+    let seed = w.seed_ix(0, 9, 0, R_S);
+    expect_lands(
+        c.send(std::slice::from_ref(&seed), &[&w.keeper]),
+        "PostSeed",
+    );
+    c.svm.expire_blockhash();
+    check(&c, Ix::PostSeed, &[seed], &[&w.keeper]);
 }
 
 #[test]

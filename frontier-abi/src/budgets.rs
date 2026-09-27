@@ -100,10 +100,10 @@ const fn limit_of(cu: u32, per: u32) -> u32 {
 }
 
 budgets! {
-    AnnounceSeason: 18_000, 0, 480;
+    AnnounceSeason: 25_000, 0, 480;
     CreateSeason: 70_000, 0, 1_100;
-    InitBeaconLogs: 60_000, 0, 900;
-    InitShards: 40_000, 0, 600;
+    InitBeaconLogs: 80_000, 0, 900;
+    InitShards: 45_000, 0, 600;
     ConsumeGenesisSeed: 345_000, 0, 760;
     EndSeason: 10_000, 0, 300;
     CloseSeason: 60_000, 0, 1_232;

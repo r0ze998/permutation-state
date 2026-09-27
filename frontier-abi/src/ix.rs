@@ -293,11 +293,12 @@ impl FileTicket {
     }
 }
 
-/// 0x14 ArchiveAnchors: `region u8, day u32, n u8 (1–8), bells [n] u32`.
+/// 0x14 ArchiveAnchors: `region u8, part u32, n u8 (1–8), bells [n] u32`
+/// (`part` = `bell / 72`, v1.3 half-day archives).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ArchiveAnchors {
     pub region: u8,
-    pub day: u32,
+    pub part: u32,
     pub n: u8,
     pub bells: [u32; MAX_ARCHIVE_BELLS],
 }
@@ -317,7 +318,7 @@ impl ArchiveAnchors {
         let mut w = Writer::new(out);
         w.u8(Self::IX.tag())
             .u8(self.region)
-            .u32(self.day)
+            .u32(self.part)
             .u8(self.n);
         for b in &self.bells[..self.n as usize] {
             w.u32(*b);
@@ -332,7 +333,7 @@ impl ArchiveAnchors {
         }
         let mut c = Cursor::new(&d[1..]);
         let region = c.u8().ok_or(bad)?;
-        let day = c.u32().ok_or(bad)?;
+        let part = c.u32().ok_or(bad)?;
         let n = c.u8().ok_or(bad)?;
         if n == 0 || n as usize > MAX_ARCHIVE_BELLS || d.len() != 7 + 4 * n as usize {
             return Err(bad);
@@ -343,7 +344,7 @@ impl ArchiveAnchors {
         }
         Ok(ArchiveAnchors {
             region,
-            day,
+            part,
             n,
             bells,
         })
@@ -571,7 +572,7 @@ mod tests {
 
         let a = ArchiveAnchors {
             region: 3,
-            day: 9,
+            part: 9,
             n: 8,
             bells: [1, 2, 3, 4, 5, 6, 7, 8],
         };

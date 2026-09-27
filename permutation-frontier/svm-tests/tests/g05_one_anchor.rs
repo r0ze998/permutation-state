@@ -14,7 +14,7 @@ use permutation_frontier_svm_tests::chain::{assert_code, expect_lands, Chain};
 use permutation_frontier_svm_tests::ix::beacon::{post_anchor, post_anchor_regions, post_seed};
 use permutation_frontier_svm_tests::ix::season::consume_genesis_seed;
 use permutation_frontier_svm_tests::records::{self, le, ChainWatch};
-use permutation_frontier_svm_tests::world::{day_of, World};
+use permutation_frontier_svm_tests::world::{archive_part, World};
 use permutation_frontier_svm_tests::{FrontierError as E, Signer};
 
 #[test]
@@ -127,7 +127,9 @@ fn g05_multi_anchor_equals_single_anchors() {
         &[0, 1, 2, 3, 4, 5, 6, 7],
         &w.keeper.pubkey(),
     );
-    assert!(c.send(&[ix], &[&w.keeper]).is_err(), "8 regions refused");
+    let r = c.send(&[ix], &[&w.keeper]);
+    assert!(r.is_err(), "8 regions refused");
+    assert_code(r, E::BadData);
 }
 
 #[test]
@@ -249,7 +251,7 @@ fn g05_no_second_anchor_after_archive() {
     expect_lands(w.post_anchor(&mut c, bell, r), "PostAnchor");
     let old_a = w.anchor_a(&c, bell, r).unwrap();
     c.advance(172_800);
-    w.craft_archive(&mut c, r, day_of(bell), &[bell]);
+    w.craft_archive(&mut c, r, archive_part(bell), &[bell]);
     c.remove(&w.a.anchor(bell, r));
     assert_code(w.post_anchor(&mut c, bell, r), E::Archived);
     let arg = w.beacons.must(w.tlock_round(bell));

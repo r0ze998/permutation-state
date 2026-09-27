@@ -17,8 +17,8 @@ use frontier_abi::layout::world::{beacon_log as BL, season as S};
 use permutation_frontier_svm_tests::chain::{
     assert_code, assert_refused, expect_lands, with_account, Chain, SendResult,
 };
-use permutation_frontier_svm_tests::ix::beacon::{at, seed_at};
-use permutation_frontier_svm_tests::world::{day_of, World};
+use permutation_frontier_svm_tests::ix::beacon::{at, post_anchor_regions, seed_at};
+use permutation_frontier_svm_tests::world::{archive_part, World};
 use permutation_frontier_svm_tests::{
     sha256, Address, FrontierError as E, Instruction, Keypair, Signer,
 };
@@ -106,6 +106,131 @@ fn g03_season_forged_in_keeper_and_authority_instructions() {
             assert!(r.is_err(), "{label}: Season with a forged {what} accepted");
             assert_code(r, E::BadAccount);
         }
+    }
+}
+
+/// A program-owned copy of the Season at another address, and the genuine
+/// Season with one byte of its id flipped (the stored id no longer gives
+/// the canonical PDA): both `BadAddress` (§3.3, `prologue::{season,
+/// keeper}` recompute the PDA).
+fn season_copy_and_id_flip(c: &Chain, w: &World, label: &str, ix: &Instruction, signer: &Keypair) {
+    let mut f = c.fork();
+    let fake = copy_to_fresh(&mut f, &w.a.season, label.as_bytes());
+    let r = f.send(&[with_account(ix.clone(), 1, fake)], &[signer]);
+    assert!(r.is_err(), "{label}: a copied Season accepted");
+    assert_code(r, E::BadAddress);
+    let mut f = c.fork();
+    f.edit(&w.a.season, |d| d[8] ^= 0x01);
+    let r = f.send(std::slice::from_ref(ix), &[signer]);
+    assert!(r.is_err(), "{label}: a Season with a flipped id accepted");
+    assert_code(r, E::BadAddress);
+}
+
+#[test]
+fn g03_season_copy_and_id_flip_in_every_w2a_instruction() {
+    // Every W2-A instruction that lists the Season (integ-W2 review of W2-B:
+    // one test per instruction, so a regression in any single prologue is
+    // caught). CreateSeason reads an Announced Season, InitBeaconLogs,
+    // InitShards and ConsumeGenesisSeed a Created one, the beacon writes
+    // and SetWindowSchedule a Running one.
+    let mut c = Chain::release();
+    let w = World::announced(&mut c, 1);
+    c.set_time(w.t_create_min);
+    season_copy_and_id_flip(&c, &w, "CreateSeason", &w.create_ix(), &w.authority);
+    expect_lands(w.create(&mut c), "CreateSeason");
+    let six = |f: fn(&permutation_frontier_svm_tests::Addresses, Address) -> Instruction| {
+        f(&w.a, w.authority.pubkey())
+    };
+    season_copy_and_id_flip(
+        &c,
+        &w,
+        "InitBeaconLogs",
+        &six(permutation_frontier_svm_tests::ix::season::init_beacon_logs),
+        &w.authority,
+    );
+    let shards =
+        permutation_frontier_svm_tests::ix::season::init_shards(&w.a, w.authority.pubkey(), 0);
+    season_copy_and_id_flip(&c, &w, "InitShards", &shards, &w.authority);
+    let t = World::round_time(w.genesis_round());
+    if c.now < t {
+        c.set_time(t);
+    }
+    let genesis = permutation_frontier_svm_tests::ix::season::consume_genesis_seed(
+        &w.a,
+        w.keeper.pubkey(),
+        &w.genesis_arg(),
+    );
+    season_copy_and_id_flip(&c, &w, "ConsumeGenesisSeed", &genesis, &w.keeper);
+
+    let (mut c, w) = common::test_beacon();
+    let (bell, r) = (3u32, 4u8);
+    w.to_anchor_time(&mut c, bell);
+    season_copy_and_id_flip(&c, &w, "PostAnchor", &w.anchor_ix(bell, r), &w.keeper);
+    let arg = w.beacons.must(w.tlock_round(bell));
+    let multi = post_anchor_regions(
+        &w.a,
+        w.keeper.pubkey(),
+        bell,
+        &arg,
+        &[r, r + 1],
+        &w.keeper.pubkey(),
+    );
+    season_copy_and_id_flip(&c, &w, "PostAnchorMulti", &multi, &w.keeper);
+    expect_lands(w.post_anchor(&mut c, bell, r), "PostAnchor");
+    let round = w.seed_round(&c, bell, r);
+    let t = World::round_time(round);
+    if c.now < t {
+        c.set_time(t);
+    }
+    season_copy_and_id_flip(&c, &w, "PostSeed", &w.seed_ix(bell, r, 0, round), &w.keeper);
+    season_copy_and_id_flip(&c, &w, "PostBeacon", &w.beacon_ix(r, round), &w.keeper);
+    let from = w.bell_at(c.now).expect("running") + 200;
+    let win = permutation_frontier_svm_tests::ix::season::set_window_schedule(
+        &w.a,
+        w.authority.pubkey(),
+        900,
+        from,
+    );
+    season_copy_and_id_flip(&c, &w, "SetWindowSchedule", &win, &w.authority);
+}
+
+#[test]
+fn g03_forged_present_targets_of_the_init_instructions() {
+    // A program-owned account that is not a genuine instance at a target
+    // address of CreateSeason, InitBeaconLogs or InitShards is `BadAccount`
+    // (a genuine present one is `AlreadyDone` for the last two, g13).
+    let mut c = Chain::release();
+    let w = World::announced(&mut c, 1);
+    c.set_time(w.t_create_min);
+    let targets = [w.a.frontier(), w.a.province_fund(3), w.a.defence_pool()];
+    for t in targets {
+        let mut f = c.fork();
+        f.put_program_account(t, vec![0x5a; 128]);
+        let r = f.send(&[w.create_ix()], &[&w.authority]);
+        assert!(r.is_err(), "CreateSeason over a forged {t}");
+        assert_code(r, E::BadAccount);
+    }
+    expect_lands(w.create(&mut c), "CreateSeason");
+    // A present-looking BeaconLog / JoinShard: a genuine one's bytes with
+    // the season id flipped (every other field right).
+    let mut g = c.fork();
+    expect_lands(w.init_logs(&mut g), "InitBeaconLogs");
+    expect_lands(w.init_shards(&mut g, 2), "InitShards");
+    for (k, label) in [
+        (w.a.beacon_log(7), "BeaconLog"),
+        (w.a.join_shard(2, 5), "JoinShard"),
+    ] {
+        let mut d = g.data(&k);
+        d[8] ^= 0x01;
+        let mut f = c.fork();
+        f.put_program_account(k, d);
+        let r = if label == "BeaconLog" {
+            w.init_logs(&mut f)
+        } else {
+            w.init_shards(&mut f, 2)
+        };
+        assert!(r.is_err(), "Init over a forged {label}");
+        assert_code(r, E::BadAccount);
     }
 }
 
@@ -232,8 +357,8 @@ fn g03_anchor_and_archive_forged_in_post_anchor() {
     assert_code(keeper_send(&mut f, &w, ix), E::BadAddress);
     // Archive at a non-canonical address: another day's, and a random one.
     for wrong in [
-        w.a.archive(r, day_of(bell) + 1),
-        w.a.archive(r + 1, day_of(bell)),
+        w.a.archive(r, archive_part(bell) + 1),
+        w.a.archive(r + 1, archive_part(bell)),
         Address::new_from_array(sha256(&[b"archive?"])),
     ] {
         let mut f = c.fork();
@@ -242,12 +367,12 @@ fn g03_anchor_and_archive_forged_in_post_anchor() {
     }
     // A forged archive at the canonical address (key field: the day).
     let mut g = c.fork();
-    w.craft_archive(&mut g, r, day_of(bell), &[]);
+    w.craft_archive(&mut g, r, archive_part(bell), &[]);
     each_forgery_is(
         E::BadAccount,
         &g,
-        &w.a.archive(r, day_of(bell)),
-        AA::DAY,
+        &w.a.archive(r, archive_part(bell)),
+        AA::PART,
         |f| {
             let ix = w.anchor_ix(bell, r);
             keeper_send(f, &w, ix)
@@ -264,11 +389,115 @@ fn g03_anchor_and_archive_forged_in_post_anchor() {
     });
     // The genuine path lands (with a present, untombstoned archive).
     let mut g = c.fork();
-    w.craft_archive(&mut g, r, day_of(bell), &[bell + 1]);
+    w.craft_archive(&mut g, r, archive_part(bell), &[bell + 1]);
     expect_lands(
         w.post_anchor(&mut g, bell, r),
         "PostAnchor with an archive of other bells",
     );
+}
+
+// ------------------------------------------------------------ BellAnchor, AnchorArchive (PostAnchorMulti)
+
+/// PostAnchorMulti's account positions for `k` regions: anchors at
+/// `2..2+k`, archives at `2+k..2+2k` (§5.8).
+fn multi_anchor_at(i: usize) -> usize {
+    2 + i
+}
+fn multi_archive_at(k: usize, i: usize) -> usize {
+    2 + k + i
+}
+
+#[test]
+fn g03_anchor_and_archive_forged_in_post_anchor_multi() {
+    // §13.2 G3 "a forged anchor/cache/archive in every instruction that
+    // reads one": PostAnchorMulti reads k anchors and k archives, and skips
+    // present anchors, so a forged "present" anchor must be refused rather
+    // than skipped (integ-W2 review of W2-B).
+    let (mut c, w) = common::test_beacon();
+    let bell = 5u32;
+    w.to_anchor_time(&mut c, bell);
+    let regions = [2u8, 5, 11];
+    let k = regions.len();
+    let day = archive_part(bell);
+    let arg = w.beacons.must(w.tlock_round(bell));
+    let multi = |rs: &[u8]| {
+        post_anchor_regions(&w.a, w.keeper.pubkey(), bell, &arg, rs, &w.keeper.pubkey())
+    };
+    // Non-canonical anchors: another bell's, another region's, a random one.
+    for wrong in [
+        w.a.anchor(bell + 1, 5),
+        w.a.anchor(bell, 6),
+        Address::new_from_array(sha256(&[b"anchor?"])),
+    ] {
+        let mut f = c.fork();
+        let ix = with_account(multi(&regions), multi_anchor_at(1), wrong);
+        assert_code(keeper_send(&mut f, &w, ix), E::BadAddress);
+    }
+    // Non-canonical archives: another day's, another region's, a random one.
+    for wrong in [
+        w.a.archive(5, day + 1),
+        w.a.archive(6, day),
+        Address::new_from_array(sha256(&[b"archive?"])),
+    ] {
+        let mut f = c.fork();
+        let ix = with_account(multi(&regions), multi_archive_at(k, 1), wrong);
+        assert_code(keeper_send(&mut f, &w, ix), E::BadAddress);
+    }
+    // Swapped positions: each account is canonical, for another region.
+    let mut f = c.fork();
+    let mut ix = multi(&regions);
+    ix.accounts.swap(multi_anchor_at(0), multi_anchor_at(2));
+    assert_code(keeper_send(&mut f, &w, ix), E::BadAddress);
+    let mut f = c.fork();
+    let mut ix = multi(&regions);
+    ix.accounts
+        .swap(multi_archive_at(k, 0), multi_archive_at(k, 1));
+    assert_code(keeper_send(&mut f, &w, ix), E::BadAddress);
+    // The mask names other regions than the accounts (region 12 for 11).
+    let mut f = c.fork();
+    let mut ix = multi(&[2, 5, 12]);
+    ix.accounts = multi(&regions).accounts;
+    assert_code(keeper_send(&mut f, &w, ix), E::BadAddress);
+    // An empty mask.
+    let mut f = c.fork();
+    assert_code(keeper_send(&mut f, &w, multi(&[])), E::BadData);
+    // A forged "present" anchor at a Multi position (key field: the bell),
+    // with the other positions absent (so it would be skipped as present).
+    let mut g = c.fork();
+    expect_lands(w.post_anchor(&mut g, bell, 5), "PostAnchor");
+    each_forgery_is(E::BadAccount, &g, &w.a.anchor(bell, 5), BA::BELL, |f| {
+        keeper_send(f, &w, multi(&regions))
+    });
+    // …and with the region byte changed.
+    each_forgery_is(E::BadAccount, &g, &w.a.anchor(bell, 5), BA::REGION, |f| {
+        keeper_send(f, &w, multi(&regions))
+    });
+    // A forged archive at its canonical address (key field: the day).
+    let mut g = c.fork();
+    w.craft_archive(&mut g, 11, day, &[]);
+    each_forgery_is(E::BadAccount, &g, &w.a.archive(11, day), AA::PART, |f| {
+        keeper_send(f, &w, multi(&regions))
+    });
+    // …and a tombstoning one is `Archived` for its region.
+    let mut g = c.fork();
+    w.craft_archive(&mut g, 11, day, &[bell]);
+    assert_code(keeper_send(&mut g, &w, multi(&regions)), E::Archived);
+    // The genuine path: one present anchor skipped, the others created.
+    let mut g = c.fork();
+    expect_lands(w.post_anchor(&mut g, bell, 5), "PostAnchor");
+    let before = g.data(&w.a.anchor(bell, 5));
+    expect_lands(
+        keeper_send(&mut g, &w, multi(&regions)),
+        "PostAnchorMulti with one present anchor",
+    );
+    assert_eq!(
+        g.data(&w.a.anchor(bell, 5)),
+        before,
+        "present anchor unchanged"
+    );
+    for r in [2u8, 11] {
+        assert!(g.lamports(&w.a.anchor(bell, r)) > 0, "anchor {r} created");
+    }
 }
 
 #[test]

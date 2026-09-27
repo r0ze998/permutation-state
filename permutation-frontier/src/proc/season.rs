@@ -11,8 +11,10 @@
 //! `docs/frontier/m1/W2-A-NOTES.md`): a present target of an init
 //! instruction is `AlreadyDone` (52); CreateSeason before `t_create_min` is
 //! `TooEarly`, after the 7-day window `Announce`; parameters that fail
-//! `SeasonParams::validate`, name another beacon key than the binary's, or
-//! carry invalid `PayoutParams` are `BadData`.
+//! `SeasonParams::validate`, name another beacon key than the binary's,
+//! name another `program_version` than [`crate::PROGRAM_VERSION`] (integ-W2
+//! review), or carry invalid `PayoutParams` are `BadData`. A second
+//! SetWindowSchedule is `AlreadyDone` (one change per season, v1.3).
 
 use borsh::BorshDeserialize;
 use solana_program::{account_info::AccountInfo, pubkey::Pubkey};
@@ -265,7 +267,10 @@ pub fn create_season(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
         return Err(FrontierError::Announce.into());
     }
     let prm = x.params;
-    if prm.validate().is_err() || prm.quicknet_pk_hash != crate::QUICKNET_PK_HASH {
+    if prm.validate().is_err()
+        || prm.quicknet_pk_hash != crate::QUICKNET_PK_HASH
+        || prm.program_version != crate::PROGRAM_VERSION
+    {
         return Err(FrontierError::BadData.into());
     }
     let payout = PayoutParams::try_from_slice(x.payout).map_err(|_| FrontierError::BadData)?;
@@ -522,10 +527,14 @@ pub fn consume_genesis_seed(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
 }
 
 /// 0x07 SetWindowSchedule: `[authority s] [season w]`, data `window,
-/// from_bell`. `600 ≤ window ≤ 1,800` (`BadData`); `from_bell ≥ now_bell +
-/// 144` (`TooEarly`); no pending change (`TooEarly` while the previous
-/// change has not been in effect for 144 bells, so collapsing it into
-/// `reveal_window` only re-reads the window of bells more than a day old).
+/// from_bell`. `600 ≤ window ≤ 1,800` and `from_bell < end_bell` (which
+/// also refuses the `u32::MAX` "no change" sentinel) else `BadData`;
+/// `from_bell ≥ now_bell + 144` (`TooEarly`); **one change per season**
+/// (contract v1.3 §5.7): once `window_from_bell` is set, any further call
+/// is `AlreadyDone`. `reveal_window` is never rewritten, so `W(b)` of a
+/// bell never changes after the bell exists (a fold would re-read `W` for
+/// bells whose seed caches, gathers or settlements may still be pending,
+/// integ-W2 review).
 pub fn set_window_schedule(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
     check_accounts(Ix::SetWindowSchedule, a, None)?;
     let x = aix::SetWindowSchedule::decode(d)?;
@@ -535,7 +544,7 @@ pub fn set_window_schedule(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
     let now = prologue::now()?;
     let hdr = prologue::season(season_ai, p, Some(&crate::RULESET_HASH), &EARLY, now.ts)?;
     check_authority(season_ai, authority)?;
-    if !beacon::window_valid(x.window) {
+    if !beacon::window_valid(x.window) || x.from_bell >= hdr.end_bell {
         return Err(FrontierError::BadData.into());
     }
     let now_bell = hdr.bell(now.ts).unwrap_or(0);
@@ -545,13 +554,8 @@ pub fn set_window_schedule(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
     let mut sd = season_ai.try_borrow_mut_data()?;
     {
         let mut w = Rw(&mut sd);
-        let old_from = w.u32(S::WINDOW_FROM_BELL)?;
-        if old_from != S::WINDOW_NONE {
-            if (now_bell as u64) < old_from as u64 + beacon::WINDOW_NOTICE_BELLS as u64 {
-                return Err(FrontierError::TooEarly.into());
-            }
-            let next = w.u32(S::WINDOW_NEXT)?;
-            w.set_u32(S::REVEAL_WINDOW, next)?;
+        if w.u32(S::WINDOW_FROM_BELL)? != S::WINDOW_NONE {
+            return Err(FrontierError::AlreadyDone.into());
         }
         w.set_u32(S::WINDOW_NEXT, x.window)?;
         w.set_u32(S::WINDOW_FROM_BELL, x.from_bell)?;
@@ -579,7 +583,19 @@ mod tests {
         assert_eq!(wedge_share(18_000_000_000), 3_000_000_000);
         assert_eq!(wedge_share(7), 1);
         let b = PayoutParams::REV3.to_borsh();
-        assert_eq!(payout_params_hash(&b), sha256(&[&b]));
+        // Fixed vectors (integ-W2 review: not the function body): the
+        // REV3 borsh is `frontier-abi/vectors/presets.json`'s
+        // `payout_params_rev3_borsh`, and its hash is pinned here for the
+        // verifier (`sha256` of those 28 bytes, computed independently).
+        let hex = |v: &[u8]| v.iter().map(|x| format!("{x:02x}")).collect::<String>();
+        assert_eq!(
+            hex(&b),
+            "28230000f401000005000000000000001c2500006900000000000000"
+        );
+        assert_eq!(
+            hex(&payout_params_hash(&b)),
+            "91dc5b2b7701b836c77dfbda55029e74af0152c38ead9370982b44797a77bb87"
+        );
         let back = PayoutParams::try_from_slice(&b).unwrap();
         assert_eq!(back, PayoutParams::REV3);
         assert!(back.validate_for_season().is_ok());

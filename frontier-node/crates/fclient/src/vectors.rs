@@ -84,7 +84,7 @@ fn layouts() -> Value {
             PRESENT, FATE, TROOPS_AFTER),
         "bell_anchor": offsets!(bell_anchor; BELL, REGION, NET, ROUND, A, SLOT, SIG48, RENT_TO, EV_PRICE, EV_LIMIT),
         "seed_cache": offsets!(seed_cache; BELL, REGION, NONCE, ROUND, SEED, ANCHOR_KEY, A, SLOT, RENT_TO),
-        "anchor_archive": offsets!(anchor_archive; REGION, DAY, TOMBSTONE, ARCHIVED, ENTRIES, ENTRY_STRIDE, RENT_TO),
+        "anchor_archive": offsets!(anchor_archive; REGION, PART, TOMBSTONE, ARCHIVED, ENTRIES, ENTRY_STRIDE, RENT_TO),
         "defence_claim": offsets!(defence_claim; BENEFICIARY, DAY, CLAIMED, COUNT),
     })
 }

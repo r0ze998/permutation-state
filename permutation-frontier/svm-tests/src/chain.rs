@@ -415,8 +415,10 @@ pub fn assert_code(r: SendResult, e: FrontierError) -> Fail {
     }
 }
 
-/// Asserts that the program refused (any code; used where the contract pins
-/// the refusal but not its code).
+/// Asserts that the program refused (any program code; used where the
+/// contract pins the refusal but not its code). A failure outside the
+/// Frontier program (a runtime or builder error) is not a refusal
+/// (integ-W2 review of W2-B).
 #[track_caller]
 pub fn assert_refused(r: SendResult, what: &str) -> Fail {
     match r {
@@ -425,6 +427,10 @@ pub fn assert_refused(r: SendResult, what: &str) -> Fail {
             assert!(
                 !f.loaded_exceeded(),
                 "{what}: refused for loaded data, not by the program: {f:?}"
+            );
+            assert!(
+                f.code.is_some(),
+                "{what}: failed without a program error code (not a program refusal): {f:?}"
             );
             f
         }
@@ -855,8 +861,14 @@ impl Chain {
             }),
             Err(f) => {
                 let err = format!("{:?}", f.err);
+                let code = custom_code(&err);
+                // G13 (§5.4, §13.3): with RELEASE_CHECK=1 no path may
+                // return NotImplemented (99), whatever the test asserts.
+                if code == Some(99) && std::env::var("RELEASE_CHECK").is_ok_and(|v| v == "1") {
+                    panic!("RELEASE_CHECK=1: a path returned NotImplemented (99): {err}");
+                }
                 Err(Fail {
-                    code: custom_code(&err),
+                    code,
                     charged: f.meta.fee > 0,
                     fee: f.meta.fee,
                     err,

@@ -340,15 +340,16 @@ impl World {
 
     // ------------------------------------------------------------ crafted accounts
 
-    /// A region-day AnchorArchive written as ArchiveAnchors (W4-B) leaves
-    /// it: `tombstone` and `archived` bits set for `bells`, entries empty.
-    pub fn craft_archive(&self, c: &mut Chain, region: u8, day: u32, bells: &[u32]) -> Address {
-        let k = self.a.archive(region, day);
+    /// A region-half-day AnchorArchive (`part` = [`archive_part`], v1.3)
+    /// written as ArchiveAnchors (W4-B) leaves it: `tombstone` and
+    /// `archived` bits set for `bells`, entries empty.
+    pub fn craft_archive(&self, c: &mut Chain, region: u8, part: u32, bells: &[u32]) -> Address {
+        let k = self.a.archive(region, part);
         let mut d = vec![0u8; AA::SIZE];
         d[..8].copy_from_slice(&AA::MAGIC);
         d[8..16].copy_from_slice(&self.id.to_le_bytes());
         d[AA::REGION] = region;
-        d[AA::DAY..AA::DAY + 4].copy_from_slice(&day.to_le_bytes());
+        d[AA::PART..AA::PART + 4].copy_from_slice(&part.to_le_bytes());
         for b in bells {
             for base in [AA::TOMBSTONE, AA::ARCHIVED] {
                 let (i, m) = AA::bit(base, *b);
@@ -364,4 +365,9 @@ impl World {
 /// `day(b)`.
 pub fn day_of(bell: u32) -> u32 {
     addr::day_of(bell)
+}
+
+/// The AnchorArchive part of bell `b` (`b / 72`, v1.3 half-day archives).
+pub fn archive_part(bell: u32) -> u32 {
+    addr::archive_part(bell)
 }

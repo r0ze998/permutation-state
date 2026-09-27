@@ -67,10 +67,10 @@ impl Cache {
     }
 }
 
-/// The region and day an AnchorArchive covers.
+/// The region and part (half day, v1.3) an AnchorArchive covers.
 pub fn archive_key(d: &[u8]) -> R<(u8, u32)> {
     let r = Ro(d);
-    Ok((r.u8(anchor_archive::REGION)?, r.u32(anchor_archive::DAY)?))
+    Ok((r.u8(anchor_archive::REGION)?, r.u32(anchor_archive::PART)?))
 }
 
 /// Whether the archive tombstones bell `b` (its anchor was archived and
@@ -108,8 +108,8 @@ mod tests {
         init_header(&mut d, AccountKind::AnchorArchive, 1).unwrap();
         let mut w = Rw(&mut d);
         w.set_u8(anchor_archive::REGION, 7).unwrap();
-        w.set_u32(anchor_archive::DAY, 3).unwrap();
-        let b = 3 * 144 + 143;
+        w.set_u32(anchor_archive::PART, 3).unwrap();
+        let b = 3 * 72 + 71;
         let (at, m) = anchor_archive::bit(anchor_archive::TOMBSTONE, b);
         w.set_u8(at, m).unwrap();
         let o = anchor_archive::entry(b);

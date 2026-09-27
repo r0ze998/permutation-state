@@ -16,7 +16,7 @@ use frontier_abi::log::Kind;
 use permutation_frontier_svm_tests::chain::{assert_code, assert_refused, expect_lands};
 use permutation_frontier_svm_tests::ix::season::set_window_schedule;
 use permutation_frontier_svm_tests::records::{self, le};
-use permutation_frontier_svm_tests::world::{day_of, World};
+use permutation_frontier_svm_tests::world::{archive_part, World};
 use permutation_frontier_svm_tests::{FrontierError as E, Rng, Signer};
 use permutation_rules::frontier::beacon as kb;
 use permutation_rules::frontier::clash::QUICKNET;
@@ -58,14 +58,10 @@ fn g04_anchor_records_the_clock_at_creation() {
 fn g04_tombstoned_bell_refuses_an_anchor() {
     let (mut c, w) = common::test_beacon();
     for (bell, region) in [(0u32, 0u8), (143, 15), (144, 7)] {
-        w.craft_archive(&mut c, region, day_of(bell), &[bell]);
+        w.craft_archive(&mut c, region, archive_part(bell), &[bell]);
         assert_code(w.post_anchor(&mut c, bell, region), E::Archived);
         // The same archive does not block the day's other bells.
-        let other = if bell % 144 == 143 {
-            bell - 1
-        } else {
-            bell + 1
-        };
+        let other = if bell % 72 == 71 { bell - 1 } else { bell + 1 };
         expect_lands(
             w.post_anchor(&mut c, other, region),
             "PostAnchor of an untombstoned bell",
@@ -137,10 +133,56 @@ fn g04_window_schedule_needs_notice_and_range() {
     assert_eq!(w.window(&c, from), 1_200);
     let rec = records::one(&l.logs, Kind::WINDOW);
     assert_eq!(rec.u64("window_next"), 1_200);
-    // A second change while one is pending is refused (§5.7).
-    assert_refused(
+    // One change per season (v1.3 §5.7, integ-W2 review): a second change
+    // is `AlreadyDone`, while the first is pending and long after it took
+    // effect, and `reveal_window` is never rewritten, so `W(b)` of every
+    // bell stays what it was when the bell existed.
+    assert_code(
         c.send(&[ix(900, from + 10)], &[&w.authority]),
-        "a second pending change",
+        E::AlreadyDone,
+    );
+    c.set_time(w.genesis_ts() + 600 * i64::from(from + 150));
+    let later = w.bell_at(c.now).expect("running");
+    assert!(
+        later >= from + 144,
+        "the first change has been in effect a day"
+    );
+    assert_code(
+        c.send(&[ix(900, later + 144)], &[&w.authority]),
+        E::AlreadyDone,
+    );
+    assert_eq!(
+        w.season_u32(&c, S::REVEAL_WINDOW),
+        w.params.season.reveal_window,
+        "no fold"
+    );
+    assert_eq!(w.window(&c, from - 1), w.params.season.reveal_window);
+    assert_eq!(w.window(&c, from), 1_200);
+}
+
+#[test]
+fn g04_window_schedule_from_bell_inside_the_season() {
+    // `from_bell ≥ end_bell` (including the u32::MAX "no change" sentinel,
+    // which would log a change that never takes effect) is `BadData`; the
+    // range refusals are `BadData` too.
+    let (mut c, w) = common::release();
+    let now_bell = w.bell_at(c.now).expect("running");
+    let end = w.params.season.end_bell;
+    let ix = |win: u32, from: u32| set_window_schedule(&w.a, w.authority.pubkey(), win, from);
+    for (win, from, what) in [
+        (900, u32::MAX, "from_bell = u32::MAX"),
+        (900, end, "from_bell = end_bell"),
+        (599, now_bell + 144, "window 599 s"),
+        (1_801, now_bell + 144, "window 1,801 s"),
+    ] {
+        let r = c.send(&[ix(win, from)], &[&w.authority]);
+        assert!(r.is_err(), "{what} accepted");
+        assert_code(r, E::BadData);
+    }
+    assert_eq!(w.season_u32(&c, S::WINDOW_FROM_BELL), S::WINDOW_NONE);
+    expect_lands(
+        c.send(&[ix(900, end - 1)], &[&w.authority]),
+        "SetWindowSchedule at the last bell",
     );
 }
 

@@ -6,9 +6,7 @@
 mod common;
 
 use frontier_abi::presets;
-use permutation_frontier_svm_tests::chain::{
-    assert_code, assert_refused, expect_lands, with_account, Chain,
-};
+use permutation_frontier_svm_tests::chain::{assert_code, expect_lands, with_account, Chain};
 use permutation_frontier_svm_tests::ix::{beacon as bix, season as six};
 use permutation_frontier_svm_tests::world::World;
 use permutation_frontier_svm_tests::{
@@ -38,17 +36,11 @@ fn g13_create_season_window_hash_params_status() {
     let w = World::announced(&mut c, 1);
     // Before t_create_min.
     c.set_time(w.t_create_min - 1);
-    assert_refused(
-        c.send(&[w.create_ix()], &[&w.authority]),
-        "CreateSeason before t_create_min",
-    );
+    assert_code(c.send(&[w.create_ix()], &[&w.authority]), E::TooEarly);
     // At or after t_create_min + 7 days.
     let mut late = c.fork();
     late.set_time(w.t_create_min + presets::CREATE_WINDOW_SECS);
-    assert_refused(
-        late.send(&[w.create_ix()], &[&w.authority]),
-        "CreateSeason after the 7-day window",
-    );
+    assert_code(late.send(&[w.create_ix()], &[&w.authority]), E::Announce);
     c.set_time(w.t_create_min);
     // Parameters that do not hash to the announced params_hash: Announce.
     let mut other = w.params.clone();
@@ -61,7 +53,7 @@ fn g13_create_season_window_hash_params_status() {
     wb.t_create_min = bad.now + presets::MIN_ANNOUNCE_LEAD_SECS + 60;
     wb.params.season.reveal_window = 599;
     expect_lands(wb.announce(&mut bad), "AnnounceSeason of invalid params");
-    assert_refused(wb.create(&mut bad), "CreateSeason with reveal_window 599");
+    assert_code(wb.create(&mut bad), E::BadData);
     // Parameters naming another beacon key than the binary's.
     let mut bad = c.fork();
     let mut wk = World::new(&mut bad, 10);
@@ -71,10 +63,18 @@ fn g13_create_season_window_hash_params_status() {
         wk.announce(&mut bad),
         "AnnounceSeason of a foreign beacon key",
     );
-    assert_refused(
-        wk.create(&mut bad),
-        "CreateSeason with another QUICKNET_PK_HASH",
+    assert_code(wk.create(&mut bad), E::BadData);
+    // Parameters naming another program version than the binary's
+    // (integ-W2 review: the stored version is the code's).
+    let mut bad = c.fork();
+    let mut wv = World::new(&mut bad, 11);
+    wv.t_create_min = bad.now + presets::MIN_ANNOUNCE_LEAD_SECS + 60;
+    wv.params.season.program_version += 1;
+    expect_lands(
+        wv.announce(&mut bad),
+        "AnnounceSeason of another program version",
     );
+    assert_code(wv.create(&mut bad), E::BadData);
     // The genuine create lands; a second is WrongStatus (not Announced).
     expect_lands(w.create(&mut c), "CreateSeason");
     assert_code(w.create(&mut c), E::WrongStatus);
@@ -102,13 +102,14 @@ fn g13_init_beacon_logs_and_shards_status_authority_repeat() {
         stranger.pubkey(),
     );
     assert_code(c.send(&[ix], &[&stranger]), E::Auth);
-    // Faction 6: refused.
-    assert_refused(w.init_shards(&mut c, 6), "InitShards(6)");
-    // Genuine, then repeats refused.
+    // Faction 6: BadData.
+    assert_code(w.init_shards(&mut c, 6), E::BadData);
+    // Genuine, then repeats: AlreadyDone (a present target, W2-A's pinned code).
     expect_lands(w.init_logs(&mut c), "InitBeaconLogs");
     expect_lands(w.init_shards(&mut c, 1), "InitShards(1)");
-    assert_refused(w.init_logs(&mut c), "InitBeaconLogs repeat");
-    assert_refused(w.init_shards(&mut c, 1), "InitShards(1) repeat");
+    c.svm.expire_blockhash();
+    assert_code(w.init_logs(&mut c), E::AlreadyDone);
+    assert_code(w.init_shards(&mut c, 1), E::AlreadyDone);
 }
 
 /// The probe deployed next to the Frontier program, for CPIs.

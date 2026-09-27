@@ -1,8 +1,8 @@
 //! Archive duty (M1 contract §5.8, §8.2 "Archive"; I-44, I-49).
 //!
 //! 48 h after an anchor landed (`A + archive_after`), `ArchiveAnchors`
-//! moves up to 8 bells of one region-day into the region-day's
-//! AnchorArchive — the program sets the tombstone and archived bits first,
+//! moves up to 8 bells of one region-half-day into its AnchorArchive (v1.3:
+//! one archive per region and `part = bell / 72`) — the program sets the tombstone and archived bits first,
 //! stores `{a_off, seed, sig}`, then closes each anchor **to its `rent_to`**,
 //! the keeper payer that created it (I-49: the pool refills). Once a bell is
 //! archived its seed caches close to their own `rent_to` (`CloseSeedCache`,
@@ -14,7 +14,8 @@ use std::sync::Arc;
 
 use solana_address::Address;
 
-use fclient::abi::{tag, Class, BELLS_PER_DAY};
+use fclient::abi::{tag, Class};
+use fclient::addr::archive_part;
 use fclient::ix::{self, ArchiveItem};
 
 use crate::beacon::AnchorInfo;
@@ -28,12 +29,14 @@ pub const ARCHIVE_BATCH: usize = 8;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArchiveBatch {
     pub region: u8,
-    pub day: u32,
+    /// The archive part (half day, `bell / 72`, v1.3).
+    pub part: u32,
     pub items: Vec<ArchiveItem>,
 }
 
 /// Groups every archivable anchor (`now ≥ A + archive_after`, its seed cache
-/// known, not archived yet) by region-day, in bell order, ≤ 8 per batch.
+/// known, not archived yet) by region and archive part, in bell order, ≤ 8
+/// per batch.
 pub fn plan_archive(
     anchors: &BTreeMap<(u32, u8), AnchorInfo>,
     now: i64,
@@ -45,7 +48,7 @@ pub fn plan_archive(
             continue;
         }
         let Some(c) = a.cache else { continue };
-        by.entry((r, b / BELLS_PER_DAY))
+        by.entry((r, archive_part(b)))
             .or_default()
             .push(ArchiveItem {
                 bell: b,
@@ -54,12 +57,12 @@ pub fn plan_archive(
             });
     }
     let mut out = vec![];
-    for ((region, day), mut items) in by {
+    for ((region, part), mut items) in by {
         items.sort_by_key(|i| i.bell);
         for chunk in items.chunks(ARCHIVE_BATCH) {
             out.push(ArchiveBatch {
                 region,
-                day,
+                part,
                 items: chunk.to_vec(),
             });
         }
@@ -71,7 +74,7 @@ pub fn batch_key(b: &ArchiveBatch) -> String {
     format!(
         "archive:{}:{}:{}",
         b.region,
-        b.day,
+        b.part,
         b.items.first().map_or(0, |i| i.bell)
     )
 }
@@ -109,7 +112,7 @@ impl ArchiveDuty {
         for batch in plan_archive(anchors, t.now, t.clock.archive_after) {
             let (a, (r, d, items)) = (
                 t.addrs.clone(),
-                (batch.region, batch.day, batch.items.clone()),
+                (batch.region, batch.part, batch.items.clone()),
             );
             let added = engine.ensure(
                 WriteSpec {
@@ -218,7 +221,8 @@ mod tests {
         }
     }
 
-    /// Only anchors 48 h old with a known cache, grouped by region-day, ≤ 8
+    /// Only anchors 48 h old with a known cache, grouped by region and half
+    /// day (v1.3), ≤ 8
     /// bells per transaction, each item carrying the anchor's own `rent_to`
     /// (the payer that created it gets its rent back, I-49).
     #[test]
@@ -233,14 +237,14 @@ mod tests {
         let plan = plan_archive(&m, now, 172_800);
         let shape: Vec<(u8, u32, Vec<u32>)> = plan
             .iter()
-            .map(|b| (b.region, b.day, b.items.iter().map(|i| i.bell).collect()))
+            .map(|b| (b.region, b.part, b.items.iter().map(|i| i.bell).collect()))
             .collect();
         assert_eq!(
             shape,
             vec![
-                (3, 0, vec![140, 141, 142, 143]),
-                (3, 1, vec![144, 145, 146, 147, 148, 149, 151, 152]),
-                (4, 0, vec![141]),
+                (3, 1, vec![140, 141, 142, 143]),
+                (3, 2, vec![144, 145, 146, 147, 148, 149, 151, 152]),
+                (4, 1, vec![141]),
             ],
             "150 has no cache yet; 153+ are younger than 48 h"
         );
@@ -255,7 +259,7 @@ mod tests {
         assert_eq!(d.archived_bells, 8);
         assert_eq!(d.to_close.len(), 8);
         assert!(
-            plan_archive(&m, now, 172_800).iter().all(|b| b.day == 0),
+            plan_archive(&m, now, 172_800).iter().all(|b| b.part == 1),
             "archived bells are not planned again"
         );
     }

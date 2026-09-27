@@ -21,7 +21,7 @@ use frontier_abi::layout::world::{
     season as S,
 };
 use permutation_frontier_svm_tests::chain::{assert_code, expect_lands, Chain};
-use permutation_frontier_svm_tests::world::{day_of, World};
+use permutation_frontier_svm_tests::world::{archive_part, World};
 use permutation_frontier_svm_tests::{FrontierError as E, Signer};
 
 #[test]
@@ -257,7 +257,7 @@ fn g02_recreate_bell_anchor_refused_after_archive() {
     // pre-funded) — PostAnchor and PostAnchorMulti refuse `Archived`.
     let (mut c, w) = common::test_beacon();
     expect_lands(w.post_anchor(&mut c, 3, 2), "PostAnchor");
-    w.craft_archive(&mut c, 2, day_of(3), &[3]);
+    w.craft_archive(&mut c, 2, archive_part(3), &[3]);
     c.remove(&w.a.anchor(3, 2));
     c.prefund(&w.a.anchor(3, 2), c.rent(BA::SIZE));
     assert_code(w.post_anchor(&mut c, 3, 2), E::Archived);
@@ -282,7 +282,7 @@ fn g02_recreate_seed_cache_refused_after_archive() {
     expect_lands(w.post_anchor(&mut c, 4, 1), "PostAnchor");
     let r = w.seed_round(&c, 4, 1);
     expect_lands(w.post_seed(&mut c, 4, 1, 0), "PostSeed");
-    w.craft_archive(&mut c, 1, day_of(4), &[4]);
+    w.craft_archive(&mut c, 1, archive_part(4), &[4]);
     c.remove(&w.a.anchor(4, 1));
     c.remove(&w.a.seed_cache(4, 1, 0));
     let ix = w.seed_ix(4, 1, 0, r);

@@ -24,7 +24,7 @@
 
 use solana_program::{account_info::AccountInfo, pubkey::Pubkey};
 
-use frontier_abi::addr::{bell_anchor_seed, day_of, seed_cache_seed};
+use frontier_abi::addr::{archive_part_of, bell_anchor_seed, seed_cache_seed};
 use frontier_abi::ix as aix;
 use frontier_abi::layout::AccountKind;
 use frontier_abi::log::{Kind, NO_BELL};
@@ -59,8 +59,9 @@ fn season_clock(season: &AccountInfo) -> R<SeasonClock> {
     SeasonClock::read(&d)
 }
 
-/// The archive `aa‖(region, day(bell))` at its canonical address: `true`
-/// if it tombstones `bell` (absent: not archived).
+/// The archive `aa‖(region, part(bell))` (v1.3: half-day archives, `part =
+/// bell / 72`) at its canonical address: `true` if it tombstones `bell`
+/// (absent: not archived).
 fn archived(
     p: &Pubkey,
     ctx: &AddrCtx,
@@ -69,13 +70,13 @@ fn archived(
     bell: u32,
     region: u8,
 ) -> R<bool> {
-    let day = day_of(bell);
-    expect_key(archive, &ctx.anchor_archive(region, day))?;
+    let part = archive_part_of(bell);
+    expect_key(archive, &ctx.anchor_archive(region, part))?;
     if !prologue::presence(archive, p, AccountKind::AnchorArchive, season_id)? {
         return Ok(false);
     }
     let d = archive.try_borrow_data()?;
-    if crate::layout::beacon::archive_key(&d)? != (region, day) {
+    if crate::layout::beacon::archive_key(&d)? != (region, part) {
         return Err(BAD_ACCOUNT);
     }
     archive_tombstoned(&d, bell)

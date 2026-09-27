@@ -248,7 +248,7 @@ pub fn post_anchor(
         ws(fee_payer),
         r(a.season),
         w(a.anchor(bell, region)),
-        r(a.archive(region, addr::day_of(bell))),
+        r(a.archive(region, addr::archive_part(bell))),
         r(addr::instructions_sysvar()),
         r(addr::system_program()),
     ];
@@ -276,7 +276,7 @@ pub fn post_anchor_multi(
     m.extend(
         regions
             .iter()
-            .map(|&rg| r(a.archive(rg, addr::day_of(bell)))),
+            .map(|&rg| r(a.archive(rg, addr::archive_part(bell)))),
     );
     m.push(r(addr::instructions_sysvar()));
     m.push(r(addr::system_program()));
@@ -328,24 +328,25 @@ pub struct ArchiveItem {
     pub anchor_rent_to: Address,
 }
 
-/// 0x14 ArchiveAnchors: `[payer s,w] [season] [archive w] [system] ([anchor w] [cache r] [anchor_beneficiary w]) × ≤ 8`.
+/// 0x14 ArchiveAnchors: `[payer s,w] [season] [archive w] [system] ([anchor w] [cache r] [anchor_beneficiary w]) × ≤ 8`;
+/// `part` = [`addr::archive_part`] of the bells (v1.3, half-day archives).
 pub fn archive_anchors(
     a: &Addresses,
     payer: Address,
     region: u8,
-    day: u32,
+    part: u32,
     items: &[ArchiveItem],
 ) -> Instruction {
     assert!(items.len() <= 8, "≤ 8 bells per ArchiveAnchors");
     let mut m = vec![
         ws(payer),
         r(a.season),
-        w(a.archive(region, day)),
+        w(a.archive(region, part)),
         r(addr::system_program()),
     ];
     let mut d = Data::new(tag::ARCHIVE_ANCHORS)
         .u8(region)
-        .u32(day)
+        .u32(part)
         .u8(items.len() as u8);
     for it in items {
         m.push(w(a.anchor(it.bell, region)));
@@ -369,7 +370,7 @@ pub fn close_seed_cache(
         rs(any),
         r(a.season),
         w(a.seed_cache(bell, region, nonce)),
-        r(a.archive(region, addr::day_of(bell))),
+        r(a.archive(region, addr::archive_part(bell))),
         w(rent_to),
     ];
     build(
@@ -566,7 +567,7 @@ pub fn seed_pair(a: &Addresses, bell: u32, region: u8, src: SeedSource) -> [Acco
             r(a.anchor(bell, region)),
         ],
         SeedSource::Archive => {
-            let ar = a.archive(region, addr::day_of(bell));
+            let ar = a.archive(region, addr::archive_part(bell));
             [r(ar), r(ar)]
         }
     }
@@ -892,7 +893,7 @@ pub fn reveal(a: &Addresses, fee_payer: Address, x: &RevealArgs) -> Instruction 
         r(a.season),
         r(x.holding.address(a)),
         r(a.anchor(x.arrive, rg)),
-        r(a.archive(rg, addr::day_of(x.arrive))),
+        r(a.archive(rg, addr::archive_part(x.arrive))),
         r(a.beacon_log(rg)),
         r(a.clash_inputs(p, q, x.arrive)),
         r(a.province(p, q)),
@@ -966,7 +967,7 @@ pub fn settle_transit(a: &Addresses, payer: Address, x: &SettleTransitArgs) -> I
     let anchor = if x.anchor_present {
         a.anchor(x.arrive, rg)
     } else {
-        a.archive(rg, addr::day_of(x.arrive))
+        a.archive(rg, addr::archive_part(x.arrive))
     };
     let m = vec![
         ws(payer),
@@ -1012,7 +1013,7 @@ pub enum AnchorSource {
 fn anchor_or_archive(a: &Addresses, bell: u32, region: u8, s: AnchorSource) -> Address {
     match s {
         AnchorSource::Anchor => a.anchor(bell, region),
-        AnchorSource::Archive => a.archive(region, addr::day_of(bell)),
+        AnchorSource::Archive => a.archive(region, addr::archive_part(bell)),
     }
 }
 

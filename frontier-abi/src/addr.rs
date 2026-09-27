@@ -208,8 +208,10 @@ pub fn bell_anchor_seed(bell: u32, region: u8) -> Seed {
 pub fn seed_cache_seed(bell: u32, region: u8, nonce: u8) -> Seed {
     Seed::of_kernel(ka::seed_cache(bell, region, nonce))
 }
-pub fn anchor_archive_seed(region: u8, day: u32) -> Seed {
-    Seed::of_kernel(ka::anchor_archive(region, day))
+/// `aa‖region,part` with `part` = [`archive_part_of`] of the bell (v1.3:
+/// half-day archives; the kernel's seed takes the u32 as it is).
+pub fn anchor_archive_seed(region: u8, part: u32) -> Seed {
+    Seed::of_kernel(ka::anchor_archive(region, part))
 }
 /// DefenceClaim seed from the keeper tag ([`keeper_tag8`]).
 pub fn defence_claim_seed(keeper_tag: &[u8; 8], day: u32) -> Seed {
@@ -226,9 +228,14 @@ pub fn join_shard_of(wallet: &[u8; 32]) -> u8 {
     sha256(&[wallet])[0] % crate::layout::world::join_shard::SHARDS_PER_FACTION
 }
 
-/// `day(b) = b / 144`.
+/// `day(b) = b / 144` (ArrivalDay, DefenceClaim).
 pub const fn day_of(bell: u32) -> u32 {
     bell / crate::layout::clash::BELLS_PER_DAY
+}
+
+/// The AnchorArchive part of a bell: `b / 72` (v1.3, half-day archives).
+pub const fn archive_part_of(bell: u32) -> u32 {
+    crate::layout::beacon::anchor_archive::part_of(bell)
 }
 
 // ------------------------------------------------------------ host ids
@@ -345,8 +352,8 @@ impl AddrCtx {
     pub fn seed_cache(&self, bell: u32, region: u8, nonce: u8) -> [u8; 32] {
         self.of(&seed_cache_seed(bell, region, nonce))
     }
-    pub fn anchor_archive(&self, region: u8, day: u32) -> [u8; 32] {
-        self.of(&anchor_archive_seed(region, day))
+    pub fn anchor_archive(&self, region: u8, part: u32) -> [u8; 32] {
+        self.of(&anchor_archive_seed(region, part))
     }
     pub fn defence_claim(&self, beneficiary: &[u8; 32], day: u32) -> [u8; 32] {
         self.of(&defence_claim_seed(&keeper_tag8(beneficiary), day))

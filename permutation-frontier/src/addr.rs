@@ -16,8 +16,8 @@
 //! address with the seed formatting).
 
 pub use frontier_abi::addr::{
-    citizen_tag, citizen_tag15, day_of, host_id, join_shard_of, keeper_tag8, split_host_id,
-    with_seed, AddrCtx, HostParts, Seed,
+    archive_part_of, citizen_tag, citizen_tag15, day_of, host_id, join_shard_of, keeper_tag8,
+    split_host_id, with_seed, AddrCtx, HostParts, Seed,
 };
 pub use frontier_abi::prologue::ids;
 

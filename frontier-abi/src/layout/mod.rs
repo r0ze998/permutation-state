@@ -395,7 +395,7 @@ mod tests {
             (ClashInputs, 1_280, 7_152_640),
             (BellAnchor, 144, 1_381_760),
             (SeedCache, 144, 1_381_760),
-            (AnchorArchive, 12_192, 62_585_600),
+            (AnchorArchive, 6_144, 31_861_760),
             (DefenceClaim, 128, 1_300_480),
         ];
         for (k, size, r) in table {

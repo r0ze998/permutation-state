@@ -1,7 +1,7 @@
 {
   "generator": "frontier-abi abi-vectors",
   "abi_version": 1,
-  "contract": "docs/frontier/m1/M1-CONTRACT.md v1.1",
+  "contract": "docs/frontier/m1/M1-CONTRACT.md v1.3",
   "content": "full with-seed addresses (§4.1) for a fixed season PDA and program id",
   "season_pda": {
     "hex": "8db97aff8091890a32a3e24f077828f0524400ab35b705c71fdea3d0c49ae27a",
@@ -322,7 +322,7 @@
       "kind": "AnchorArchive",
       "key": {
         "region": 0,
-        "day": 0
+        "part": 0
       },
       "seed": "aa0000000000",
       "address_hex": "ae2a4e0eb2c15b4c456284b46020a3eaa45d0e465f1fba92a87df3dc54a59400",
@@ -353,7 +353,7 @@
       "kind": "AnchorArchive",
       "key": {
         "region": 15,
-        "day": 4294967295
+        "part": 4294967295
       },
       "seed": "aa0fffffffff",
       "address_hex": "7c2ce862558015ac2fa19064a6d86bb5f2d3295d54910dcd03d7ed1f846b1b86",

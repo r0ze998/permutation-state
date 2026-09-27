@@ -1,7 +1,7 @@
 {
   "generator": "frontier-abi abi-vectors",
   "abi_version": 1,
-  "contract": "docs/frontier/m1/M1-CONTRACT.md v1.1",
+  "contract": "docs/frontier/m1/M1-CONTRACT.md v1.3",
   "content": "budgets (§5.5, §10.1, §10.2): wave-1 placeholders; L(kind) from the worst account sets",
   "constants": {
     "heap_gate": 28672,
@@ -38,9 +38,9 @@
       "name": "InitShards",
       "tag": 2,
       "class": "O",
-      "cu_budget": 40000,
+      "cu_budget": 45000,
       "cu_per_unit": 0,
-      "cu_limit": 40000,
+      "cu_limit": 45000,
       "tx_contract": 600,
       "tx_ceiling": 600,
       "tx_worst_estimate": 562,
@@ -140,9 +140,9 @@
       "name": "AnnounceSeason",
       "tag": 8,
       "class": "O",
-      "cu_budget": 18000,
+      "cu_budget": 25000,
       "cu_per_unit": 0,
-      "cu_limit": 18000,
+      "cu_limit": 25000,
       "tx_contract": 480,
       "tx_ceiling": 480,
       "tx_worst_estimate": 419,
@@ -157,9 +157,9 @@
       "name": "InitBeaconLogs",
       "tag": 9,
       "class": "O",
-      "cu_budget": 60000,
+      "cu_budget": 80000,
       "cu_per_unit": 0,
-      "cu_limit": 60000,
+      "cu_limit": 80000,
       "tx_contract": 900,
       "tx_ceiling": 900,
       "tx_worst_estimate": 825,
@@ -183,7 +183,7 @@
       "builder_limited": false,
       "accounts": [6, 6],
       "write_locks_worst": 2,
-      "loaded_need_placeholder": 691766,
+      "loaded_need_placeholder": 685718,
       "loaded_limit": 1048576,
       "heap": 28672
     },
@@ -200,7 +200,7 @@
       "builder_limited": false,
       "accounts": [6, 18],
       "write_locks_worst": 8,
-      "loaded_need_placeholder": 766947,
+      "loaded_need_placeholder": 724611,
       "loaded_limit": 1048576,
       "heap": 28672
     },
@@ -251,7 +251,7 @@
       "builder_limited": false,
       "accounts": [7, 28],
       "write_locks_worst": 18,
-      "loaded_need_placeholder": 694577,
+      "loaded_need_placeholder": 688529,
       "loaded_limit": 1048576,
       "heap": 28672
     },
@@ -268,7 +268,7 @@
       "builder_limited": false,
       "accounts": [5, 5],
       "write_locks_worst": 2,
-      "loaded_need_placeholder": 690881,
+      "loaded_need_placeholder": 684833,
       "loaded_limit": 1048576,
       "heap": 28672
     },
@@ -438,7 +438,7 @@
       "builder_limited": false,
       "accounts": [9, 14],
       "write_locks_worst": 10,
-      "loaded_need_placeholder": 718417,
+      "loaded_need_placeholder": 706321,
       "loaded_limit": 1048576,
       "heap": 28672
     },
@@ -625,7 +625,7 @@
       "builder_limited": false,
       "accounts": [6, 6],
       "write_locks_worst": 2,
-      "loaded_need_placeholder": 704657,
+      "loaded_need_placeholder": 692561,
       "loaded_limit": 1048576,
       "heap": 28672
     },
@@ -676,7 +676,7 @@
       "builder_limited": false,
       "accounts": [15, 18],
       "write_locks_worst": 6,
-      "loaded_need_placeholder": 712490,
+      "loaded_need_placeholder": 706442,
       "loaded_limit": 1048576,
       "heap": 28672
     },
@@ -710,7 +710,7 @@
       "builder_limited": false,
       "accounts": [13, 13],
       "write_locks_worst": 10,
-      "loaded_need_placeholder": 702225,
+      "loaded_need_placeholder": 696177,
       "loaded_limit": 1048576,
       "heap": 28672
     },
@@ -744,7 +744,7 @@
       "builder_limited": true,
       "accounts": [8, 42],
       "write_locks_worst": 2,
-      "loaded_need_placeholder": 716885,
+      "loaded_need_placeholder": 710837,
       "loaded_limit": 1048576,
       "heap": 28672
     },
@@ -761,7 +761,7 @@
       "builder_limited": false,
       "accounts": [7, 7],
       "write_locks_worst": 3,
-      "loaded_need_placeholder": 708876,
+      "loaded_need_placeholder": 696780,
       "loaded_limit": 1048576,
       "heap": 28672
     },
@@ -795,7 +795,7 @@
       "builder_limited": false,
       "accounts": [6, 29],
       "write_locks_worst": 1,
-      "loaded_need_placeholder": 976977,
+      "loaded_need_placeholder": 831825,
       "loaded_limit": 1048576,
       "heap": 28672
     },

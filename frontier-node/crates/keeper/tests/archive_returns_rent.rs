@@ -57,19 +57,21 @@ async fn archive_closes_anchors_to_the_payer_that_paid() {
 
     // ---- day 0 archived, anchors and caches closed
     let sc = fclient::clock::SeasonClock::from_season(&w.season());
-    for r in 0..16u8 {
+    // (v1.3: day 0 is two half-day archives, parts 0 and 1.)
+    for (r, part) in (0..16u8).flat_map(|r| [(r, 0u32), (r, 1)]) {
         let a =
             w.ip.lock()
-                .account(&w.addrs.archive(r, 0))
+                .account(&w.addrs.archive(r, part))
                 .expect("archive");
         let arch = AnchorArchive::decode(&a.data).unwrap();
+        assert_eq!(arch.part, part);
         assert!(k.payers.delay.addresses().contains(&arch.rent_to));
-        for b in 0..144u32 {
+        for b in 72 * part..72 * (part + 1) {
             assert!(
                 arch.tombstoned(b) && arch.is_archived(b),
                 "bell {b} region {r}"
             );
-            let e = &arch.entries[b as usize];
+            let e = &arch.entries[b as usize % 72];
             let t = sc.tlock_round(b);
             assert_eq!(
                 e.sig,
@@ -138,9 +140,9 @@ async fn archive_closes_anchors_to_the_payer_that_paid() {
                 *want.entry(ben).or_default() += fclient::abi::rent(size::BELL_ANCHOR);
             }
             let payer = m.account_keys[0];
-            let day = u32::from_le_bytes(ci.data[2..6].try_into().unwrap());
-            let archive = w.addrs.archive(ci.data[1], day);
-            // The first batch of a region-day also pays the archive's rent.
+            let part = u32::from_le_bytes(ci.data[2..6].try_into().unwrap());
+            let archive = w.addrs.archive(ci.data[1], part);
+            // The first batch of a region-half-day also pays the archive's rent.
             let created_archive = seen_archives.insert(archive);
             for (ben, credit) in want {
                 let before = *bal.get(&ben).expect("a pool payer");

@@ -1,7 +1,7 @@
 {
   "generator": "frontier-abi abi-vectors",
   "abi_version": 1,
-  "contract": "docs/frontier/m1/M1-CONTRACT.md v1.1",
+  "contract": "docs/frontier/m1/M1-CONTRACT.md v1.3",
   "content": "one encoded sample per instruction (data with the tag, hex)",
   "samples": [
     {
@@ -86,7 +86,7 @@
       "name": "ArchiveAnchors",
       "tag": 20,
       "len": 19,
-      "data": "140f0700000003f0030000f1030000f2030000"
+      "data": "140f0e00000003f0030000f1030000f2030000"
     },
     {
       "name": "CloseSeedCache",

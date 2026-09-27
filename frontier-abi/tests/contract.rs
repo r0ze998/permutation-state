@@ -77,7 +77,7 @@ fn offsets_match_the_contract_text() {
         ("anchor.ev_limit", beacon::bell_anchor::EV_LIMIT, 136),
         ("cache.rent_to", beacon::seed_cache::RENT_TO, 112),
         ("archive.entries", beacon::anchor_archive::ENTRIES, 64),
-        ("archive.rent_to", beacon::anchor_archive::RENT_TO, 12_160),
+        ("archive.rent_to", beacon::anchor_archive::RENT_TO, 6_112),
         ("claim.count", beacon::defence_claim::COUNT, 64),
     ];
     for (name, got, want) in table {

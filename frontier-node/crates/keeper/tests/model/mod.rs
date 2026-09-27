@@ -708,7 +708,7 @@ fn post_anchor(ic: &mut InvokeContext, c: &mut Cursor, multi: bool) -> R<()> {
         }
         let arch_seed = seed_str(
             fclient::addr::SeedKind::AnchorArchive,
-            &fclient::addr::raw_archive(r, bell / 144),
+            &fclient::addr::raw_archive(r, arc::part_of(bell)),
         );
         if fclient::addr::with_seed(&season.key, &arch_seed, &prog) != key(ic, xi)? {
             return Err(e(BAD_ADDRESS));
@@ -718,9 +718,9 @@ fn post_anchor(ic: &mut InvokeContext, c: &mut Cursor, multi: bool) -> R<()> {
             continue; // present: success, no-op
         }
         let (xo, xd, _) = read(ic, xi)?;
-        if xo == prog && xd.len() > 60 {
-            let i = (bell % 144) as usize;
-            if xd[24 + i / 8] & (1 << (i % 8)) != 0 {
+        if xo == prog && xd.len() > arc::ENTRIES {
+            let (o, m) = arc::bit(arc::TOMBSTONE, bell);
+            if xd[o] & m != 0 {
                 return Err(e(ARCHIVED));
             }
         }
@@ -981,7 +981,7 @@ fn close(ic: &InvokeContext, acct: u16, to: u16) -> R<()> {
 fn archive_anchors(ic: &mut InvokeContext, c: &mut Cursor) -> R<()> {
     consume(ic, 40_000)?;
     let region = c.u8()?;
-    let day = c.u32()?;
+    let part = c.u32()?;
     let n = c.u8()? as usize;
     let mut bells = vec![];
     for _ in 0..n {
@@ -995,7 +995,7 @@ fn archive_anchors(ic: &mut InvokeContext, c: &mut Cursor) -> R<()> {
     let prog = program_id(ic)?;
     let aseed = seed_str(
         fclient::addr::SeedKind::AnchorArchive,
-        &fclient::addr::raw_archive(region, day),
+        &fclient::addr::raw_archive(region, part),
     );
     if fclient::addr::with_seed(&season.key, &aseed, &prog) != key(ic, 2)? {
         return Err(e(BAD_ADDRESS));
@@ -1006,7 +1006,7 @@ fn archive_anchors(ic: &mut InvokeContext, c: &mut Cursor) -> R<()> {
         let mut d = vec![0u8; arc::SIZE];
         header(&mut d, arc::MAGIC, season.id, false);
         d[arc::REGION] = region;
-        put(&mut d, arc::DAY, day.to_le_bytes());
+        put(&mut d, arc::PART, part.to_le_bytes());
         put(&mut d, arc::RENT_TO, key(ic, 0)?.to_bytes());
         write(ic, 2, &d)?;
     }
@@ -1015,7 +1015,7 @@ fn archive_anchors(ic: &mut InvokeContext, c: &mut Cursor) -> R<()> {
     let sc = season_clock(&s);
     for (j, &b) in bells.iter().enumerate() {
         let (ai, ci, ri) = (4 + 3 * j as u16, 5 + 3 * j as u16, 6 + 3 * j as u16);
-        if b / 144 != day {
+        if arc::part_of(b) != part {
             return Err(e(BAD_DATA));
         }
         let seed = seed_str(

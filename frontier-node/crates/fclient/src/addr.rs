@@ -211,10 +211,11 @@ pub fn raw_seed_cache(bell: u32, region: u8, nonce: u8) -> [u8; 6] {
     r[5] = nonce;
     r
 }
-pub fn raw_archive(region: u8, day: u32) -> [u8; 5] {
+/// `aa‖region,part` (v1.3: `part` = [`archive_part`] of the bell).
+pub fn raw_archive(region: u8, part: u32) -> [u8; 5] {
     let mut r = [0u8; 5];
     r[0] = region;
-    r[1..].copy_from_slice(&day.to_le_bytes());
+    r[1..].copy_from_slice(&part.to_le_bytes());
     r
 }
 pub fn raw_defence_claim(beneficiary: &[u8; 32], day: u32) -> [u8; 12] {
@@ -252,9 +253,14 @@ pub fn citizen_tag_u64(citizen: &Address) -> u64 {
     u64::from_le_bytes(citizen.as_ref()[..8].try_into().expect("8"))
 }
 
-/// `day(b) = b / 144`.
+/// `day(b) = b / 144` (ArrivalDay, DefenceClaim, the game day).
 pub const fn day_of(bell: u32) -> u32 {
     bell / abi::BELLS_PER_DAY
+}
+
+/// The AnchorArchive part of a bell: `b / 72` (v1.3, half-day archives).
+pub const fn archive_part(bell: u32) -> u32 {
+    bell / abi::layout::anchor_archive::ENTRIES_N as u32
 }
 
 // ---------------------------------------------------------------- host id
@@ -374,8 +380,9 @@ impl Addresses {
     pub fn seed_cache(&self, bell: u32, region: u8, nonce: u8) -> Address {
         self.of(SeedKind::SeedCache, &raw_seed_cache(bell, region, nonce))
     }
-    pub fn archive(&self, region: u8, day: u32) -> Address {
-        self.of(SeedKind::AnchorArchive, &raw_archive(region, day))
+    /// The archive of `part` ([`archive_part`] of a bell, v1.3).
+    pub fn archive(&self, region: u8, part: u32) -> Address {
+        self.of(SeedKind::AnchorArchive, &raw_archive(region, part))
     }
     pub fn defence_claim(&self, beneficiary: &Address, day: u32) -> Address {
         self.of(

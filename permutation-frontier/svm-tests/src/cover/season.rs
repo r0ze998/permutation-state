@@ -46,9 +46,9 @@ pub const CREATE_SEASON: &[Cover] = &[
         &[
             Err(E::Announce),
             Err(E::WrongStatus),
-            Refused("create_ix()"),
-            Refused("wb.create("),
-            Refused("wk.create("),
+            Err(E::TooEarly),
+            Err(E::BadData),
+            Lands("CreateSeason"),
         ],
     ),
     Cover::Test(
@@ -69,7 +69,7 @@ pub const INIT_BEACON_LOGS: &[Cover] = &[
     ),
     Cover::Test(
         "g13_season_beacon::g13_init_beacon_logs_and_shards_status_authority_repeat",
-        &[Err(E::WrongStatus), Err(E::Auth), Refused("w.init_logs(")],
+        &[Err(E::WrongStatus), Err(E::Auth), Err(E::AlreadyDone)],
     ),
     Cover::Test(
         "g03_forgery::g03_init_logs_and_shards_targets_must_be_canonical",
@@ -88,7 +88,12 @@ pub const INIT_SHARDS: &[Cover] = &[
     ),
     Cover::Test(
         "g13_season_beacon::g13_init_beacon_logs_and_shards_status_authority_repeat",
-        &[Err(E::WrongStatus), Err(E::Auth), Refused("w.init_shards(")],
+        &[
+            Err(E::WrongStatus),
+            Err(E::Auth),
+            Err(E::BadData),
+            Err(E::AlreadyDone),
+        ],
     ),
     Cover::Test(
         "g03_forgery::g03_init_logs_and_shards_targets_must_be_canonical",
@@ -120,7 +125,16 @@ pub const CONSUME_GENESIS_SEED: &[Cover] = &[
 pub const SET_WINDOW_SCHEDULE: &[Cover] = &[
     Cover::Test(
         "g04_reveal_window::g04_window_schedule_needs_notice_and_range",
-        &[Err(E::Auth), Refused("c.send("), Lands("SetWindowSchedule")],
+        &[
+            Err(E::Auth),
+            Err(E::AlreadyDone),
+            Refused("c.send("),
+            Lands("SetWindowSchedule"),
+        ],
+    ),
+    Cover::Test(
+        "g04_reveal_window::g04_window_schedule_from_bell_inside_the_season",
+        &[Err(E::BadData), Lands("SetWindowSchedule at the last bell")],
     ),
     Cover::Test(
         "g03_forgery::g03_season_forged_in_keeper_and_authority_instructions",

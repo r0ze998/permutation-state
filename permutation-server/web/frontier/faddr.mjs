@@ -42,7 +42,9 @@ export const RAW = Object.freeze({
   ClashInputs: ({ p, q, bell }) => concat(i32(p), i32(q), u32(bell)),
   BellAnchor: ({ bell, region }) => concat(u32(bell), u8(region)),
   SeedCache: ({ bell, region, nonce }) => concat(u32(bell), u8(region), u8(nonce)),
-  AnchorArchive: ({ region, day }) => concat(u8(region), u32(day)),
+  // v1.3: the u32 is the archive part (bell / 72, half-day archives); the
+  // kernel's addr-vectors-v1.json still names that u32 `day`.
+  AnchorArchive: ({ region, part, day }) => concat(u8(region), u32(part ?? day)),
   DefenceClaim: ({ beneficiary, day }) => concat(keeperTag8(beneficiary), u32(day)),
 });
 
