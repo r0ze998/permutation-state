@@ -17,14 +17,19 @@ const BOUNTY: u64 = 1_000_003;
 const BOND: u64 = 4_000_007;
 const DAY: i64 = ABORT_GRACE_SECONDS;
 
-/// Three AIs and nine people (deposits of 2 USDC), registered.
+/// Three AIs and nine people (the season's deposit of 2 USDC each, WP12),
+/// registered.
 fn twelve(c: &mut Chain) -> SeasonFx {
-    let mut s = SeasonFx::create_ai(c, Params::default(), &[0, 1, 0], BOUNTY, BOND);
+    let p = Params {
+        deposit: 2_000_000,
+        ..Params::default()
+    };
+    let mut s = SeasonFx::create_ai(c, p, &[0, 1, 0], BOUNTY, BOND);
     for i in 0..3 {
         s.register_ai(c, i);
     }
     for i in 0..9 {
-        s.register(c, (i % 2) as u16, 2_000_000);
+        s.register(c, (i % 2) as u16, s.p.deposit);
     }
     s
 }

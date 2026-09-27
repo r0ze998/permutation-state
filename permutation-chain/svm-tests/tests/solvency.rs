@@ -64,11 +64,15 @@ fn a_full_settlement_empties_the_vault() {
 fn voided_season_refunds_paid_in() {
     let mut c = Chain::new();
     let (bounty, bond) = (1_000_000, 4_000_000);
-    let mut s = SeasonFx::create_ai(&mut c, Params::default(), &[0], bounty, bond);
+    // One deposit per season (WP12), paid by the AI member too.
+    let p = Params {
+        deposit: 2_000_000,
+        ..Params::default()
+    };
+    let mut s = SeasonFx::create_ai(&mut c, p, &[0], bounty, bond);
     s.register_ai(&mut c, 0);
-    let deposits = [0u64, 3_000_000, 1_000_000];
-    for (i, d) in deposits.iter().enumerate() {
-        s.register(&mut c, (i % 2) as u16, *d);
+    for i in 0..3 {
+        s.register(&mut c, (i % 2) as u16, s.p.deposit);
     }
     s.genesis(&mut c);
     s.seat_and_open(&mut c);
@@ -95,7 +99,9 @@ fn voided_season_refunds_paid_in() {
         assert_eq!(claim_amount(&season, &m), s.p.fee + m.shares);
     }
     let out = s.settle(&mut c);
-    assert_eq!(out.ops, bounty + bond, "the operator's escrow");
+    // `genesis` topped the bond up to its floor (PostBond, WP09).
+    assert_eq!(out.ops, bounty + season.bond, "the operator's escrow");
+    assert!(season.bond >= bond);
     assert_eq!((out.left, s.season(&c).outstanding), (0, 0));
 }
 

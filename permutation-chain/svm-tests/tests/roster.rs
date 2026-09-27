@@ -365,16 +365,20 @@ fn self_reveal_cannot_break_the_roster() {
     let m = s.new_member(&mut c, 0, s.p.fee);
     let wallet = m.wallet.insecure_clone();
     let tag = permutation_rules::roster::roster_tag(s.p.id, &wallet.pubkey().to_bytes(), &salt);
+    // Operator-paid, as every join of an AI season; the session key signs
+    // too (WP17).
+    let payer = s.registration_payer(&wallet);
     let ix = s.register_ix_with(
         &m,
-        &wallet.pubkey(),
+        &payer.pubkey(),
         m.session.pubkey().to_bytes(),
         0x0f,
         [u32::MAX; 4],
         0,
         tag,
     );
-    c.send(vec![ix], &[&wallet]).unwrap();
+    let session = m.session.insecure_clone();
+    c.send(vec![ix], &[&payer, &wallet, &session]).unwrap();
     s.members.push(m);
     let griefer = s.members.len() - 1;
     s.genesis(&mut c);
@@ -395,20 +399,19 @@ fn self_reveal_cannot_break_the_roster() {
     assert_eq!(s.season(&c).roster_outcome, ROSTER_REVEALED);
 }
 
-/// Two AIs of nation 0 each holding a deposit of `dep` (as Register records
-/// it), one person in nation 1 depositing `dep`; nation 1's treasury then
-/// flows to nation 0, so the AI nation ends with more than it deposited.
+/// Two AIs of nation 0 and one person in nation 1, each depositing `dep`
+/// (the season's deposit, WP12); nation 1's treasury then flows to nation
+/// 0, so the AI nation ends with more than it deposited.
 fn drained_into_the_ai_nation(c: &mut Chain, dep: u64) -> SeasonFx {
-    let mut s = SeasonFx::create_ai(c, Params::default(), &[0, 0], BOUNTY, BOND);
+    let p = Params {
+        deposit: dep,
+        ..Params::default()
+    };
+    let mut s = SeasonFx::create_ai(c, p, &[0, 0], BOUNTY, BOND);
     for i in 0..2 {
-        let k = s.register_ai(c, i);
-        let member = s.members[k].member;
-        c.edit::<MemberAccount>(&member, |m| m.shares = dep);
+        s.register_ai(c, i);
     }
     s.register(c, 1, dep);
-    c.edit::<Season>(&s.season, |x| x.treasury[0] += 2 * dep);
-    let vault = c.balance(&s.vault);
-    c.set_balance(&s.vault, vault + 2 * dep);
     s.genesis(c);
     s.seat_and_open(c);
     s.fast_forward_to_end(c);
