@@ -91,3 +91,14 @@ Late stakers (days 15–21, with stake), ramp 2.0 → 1.0 [sim, `suite --only pa
 4. If W1-A/W1-B change outcomes (CL-09, CL-10, I-43): re-run `doctrine-gate --controls`, `criterion --best-response --seeds 3 --first-seed 30001 --gate`, and overnight the O5 band (`doctrines --agents 10000 --seeds 250 --first-seed 10000 --set kernel --gate`); compare with §3.
 5. Fill the "on merge" cells of `m0/M0-CLOSE.md` and confirm part A's relayed answers in `DECISIONS.md`.
 6. CI jobs are defined, not run: the first approved push shows whether the runner needs different time limits (the simulator job gains ≈ 5 min for the held-out criterion).
+
+## 6. Integration window addendum (integ-W1, 2026-09-27)
+
+Answered by the integrator (`integ-W1-NOTES.md` §D; numbers there):
+- **Deviation 1 withdrawn:** the doctrine proxy gate runs the shipping economy (D23) at 60 gate seeds and keeps all three controls (DECISIONS G12).
+- **The simulator's D23 now exempts the caretaker first term** (H2, as the kernel); the criterion and the O5 band were re-run.
+- **Deviation 2 withdrawn:** `catalog_equality` compiles unconditionally (`build.rs` removed), with the extra cases the review asked for.
+- `FactionBook` counts swept draws; the per-wallet entitlement bound stays a sim-side identity (an independent entitlement is the verifier's V13, W4-D).
+- CI steps match §12 (`cargo test --no-default-features`, `svm-tests/run.sh --release`, frontier-node `--release`).
+- **Dependency request (was missing):** `[profile.release.package.permutation-frontier] overflow-checks = true` in the root `Cargo.toml` (CL-36); the integrator applies it when the crate lands (W2-A), since a profile entry for a non-member package warns today.
+- F2: the `core.test.mjs` change is a relaxed, guarded assertion under option (a), not a stale count (DECISIONS F2 corrected).

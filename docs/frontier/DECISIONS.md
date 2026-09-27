@@ -1,6 +1,6 @@
 # The Sixfold Frontier: decisions log
 
-Kept with the M1 integration contract (`m1/M1-CONTRACT.md`, **v1.1**, 2026-09-27; v1.0 kept as `lab/contract-rev/DECISIONS.v1.0.md`). Committed here by unit W1-D (CL-37) and linked from `README.md`; `m1/DECISIONS.md` is a pointer to this file. Earlier decisions (O1–O10, D1–D25) are in DESIGN.md §14. Part F records what the first M1 week measured for the questions still open.
+Kept with the M1 integration contract (`m1/M1-CONTRACT.md`, **v1.2**, 2026-09-27; v1.0 kept as `lab/contract-rev/DECISIONS.v1.0.md`). Committed here by unit W1-D (CL-37) and linked from `README.md`; `m1/DECISIONS.md` is a pointer to this file. Earlier decisions (O1–O10, D1–D25) are in DESIGN.md §14. Part F records what the first M1 week measured for the questions still open.
 
 **Standing rule:** every devnet step and every push needs the owner's separate approval. One push of `codex/frontier` was approved and made on 2026-09-27 (`d95fa25`); no further push is assumed. Local commits on work branches are allowed.
 
@@ -139,12 +139,33 @@ Numbers match the conflict register (`M1-CONTRACT.md` §2).
 | # | Record | Evidence |
 |---|---|---|
 | F1 (CL-34) | GitHub CI run 36303403992 (push of `d95fa25`, 2026-09-27 07:32 UTC): "Rules, program (host + SBF + LiteSVM), server" **passed in 13 min 42 s** (the SBF + LiteSVM step 8 min 22 s); "Frontier simulator" **passed in 34 min 39 s** (its tests 34 min 12 s), inside the 15–40 min estimate; "Gateway and web client" passed (1 min 02 s); "Solana receipt scaffold" passed (2 min 07 s); "Browser source smoke test" **failed** on the two legacy civilization tests | `gh run view 36303403992 --json jobs` (read-only) |
-| F2 (CL-35) | The two legacy failures were stale expectations, fixed locally (option a): the lens test expected 8 building kinds (9 since `cb92a2f` added the warehouse); the 15-minute run expected every building active, but the storage capacity of `cb92a2f` blocks a producer whose shared store is full (designed back-pressure). 47/47 pass locally; **no push** | `node --test permutation-state-prototype/civilization/*.test.mjs` |
+| F2 (CL-35) | The two legacy failures were stale expectations, fixed locally (option a): the lens test expected 8 building kinds (9 since `cb92a2f` added the warehouse); the 15-minute run expected every building active, but the storage capacity of `cb92a2f` blocks a producer whose shared store is full (designed back-pressure). **The second change is a relaxed assertion under option (a), not a stale count** (integ-W1 review): `core.test.mjs` now allows a building blocked by storage back-pressure, guarded by the blocking reason text and the store's capacity. 47/47 pass locally; **no push** | `node --test permutation-state-prototype/civilization/*.test.mjs` |
 | F3 (CL-36) | CI jobs defined for M1: the held-out criterion step in the simulator job; `frontier-program` (root fmt, rules and ABI lints, ABI tests and vector freshness, program host tests, SBF v2 build twice, LiteSVM suite, the v9 no-touch diff), `frontier-node`, `frontier-wasm`; each step runs once its crate exists | `.github/workflows/ci.yml` |
 | F4 (CL-31) | D23 is the simulator default. Criterion with D23: 0.979 (seeds 201–203), **0.985 on the held-out seeds 30002–30004** (Gate W1's `--first-seed 30001 --gate`); bots' office-terms at 1% bots 60% → 9% | DESIGN §21.4 |
-| F5 (CL-31) | **Finding: with D23 on, the doctrine proxy gate loses its Knight control** (−0.178% against the ±0.2% bound on the 30 gate seeds; the kernel table passes at 0.152%, the draft control is rejected). The per-push proxy keeps its calibrated economy (no term limit, `balance::gate_config`); the O5 band with D23 on passes 6/6 on 1,500 paired seasons (largest gap 1.0 point). Re-calibrate the proxy (more seeds or a tighter bound) at the W5 Phase B gate | `m1/W1-D-NOTES.md` §3 |
+| F5 (CL-31) | **Finding: with D23 on, the doctrine proxy gate loses its Knight control** (−0.178% against the ±0.2% bound on the 30 gate seeds; the kernel table passes at 0.152%, the draft control is rejected). The per-push proxy keeps its calibrated economy (no term limit, `balance::gate_config`); the O5 band with D23 on passes 6/6 on 1,500 paired seasons (largest gap 1.0 point). Re-calibrate the proxy (more seeds or a tighter bound) at the W5 Phase B gate. **Superseded by G12** (re-calibrated in the integ-W1 window) | `m1/W1-D-NOTES.md` §3 |
 | F6 (CL-26, I-49) | c4 v3: C4 passes on valuation (a) with the pool at 2.0 and ≥ 150 rotating payers (11.8–47.9× at 600 s, 23.5–95.9× at 1,200 s); fails at the minimum tip at 600 s. **R99 = 243 reveals per bell at 50k [sim]** against the contract's default 4,000 for the payer band (kept until M1 measures reveals in play) | DESIGN §21.2, §21.3 |
 
+
+## G. Integration window W1 (integrator, 2026-09-27, after the wave-1 review)
+
+Contract amendments are in `M1-CONTRACT.md` v1.2 §18; the review response item by item is `m1/integ-W1-NOTES.md`.
+
+| # | Decision | Status | Evidence |
+|---|---|---|---|
+| G1 (CL-01) | A garrison never exceeds `MAX_HOST_TROOPS` (30,000 troops): `GarrisonState::change` refuses past `room()`, `settle`/`apply_clash`/`new` clamp. `clash::validate` keeps refusing a garrison above the cap (review option a). A program path that must not fail (a host returning home) adds at most `room()` | architect | `a_garrison_at_the_cap_resolves_and_cannot_pass_it` |
+| G2 (CL-10, W1-A D1) | The cap recount is **one pass** into free hex slots, not the closeout's "until the counts are stable" cascade (which doubled K3 and let a refused arrival displace an admitted host) | architect | W1-A notes §4 D1; `the_cap_recount_takes_only_free_hex_slots` |
+| G3 (CL-10, W1-A D3) | Civilians (Scout, Settler) never engage, contest a hex, hold it or count for a siege either way; DESIGN §6.1 reconciled | architect | `scouts_do_not_contest_a_tile` |
+| G4 (CL-09) | A vigil change skips the new schedule's first window unless it starts ≥ 1 day after the last old window started: no run of covered bells > 48, ≤ 48 covered in any 144 | architect | `no_vigil_covers_more_than_48_bells_across_a_change` |
+| G5 (CL-02) | Holding caps pinned from simulator peaks ×2 (walls 1,200, production 1,000/h), not from the catalog maximum × 3; the walls cap is a new player-visible refusal (`AboveCap` → `Kernel` 15), gameplay limit 1,200 wall points | architect (W1-B deviation) | W1-B notes §2 |
+| G6 (§3.2) | `RULESET_HASH` binds a version for **every** frontier module, the doctrine and stance tables and `KERNEL_CONSTANTS`; v10 is pre-deployment, so no `RULES_VERSION_FRONTIER` bump; modules changed in wave 1 are at v2. Hash `1ac11f85…d03f` | architect | `ruleset_hash_binds_versions_and_catalog`, `ruleset_hash_is_the_kernels` |
+| G7 (§5.12) | ArrivalSlot flags bit 2 = created_day; the priority fee in the refund rounds **up** like the runtime | architect | `evidence_reads_the_created_day_flag`, `defence_refund_equals_the_kernels` |
+| G8 (§5.9) | FoldOccupancy has three parts (24 shards, 24 shards, 6 funds); SettleTicket's seed position is `seedcache\|archive`; `MULTI_MAX_REGIONS` = 7; §5.5 tx ceilings: gate on `budgets::tx_ceiling` (the byte model), the table values are informative | architect | frontier-abi budgets tests |
+| G9 (§6, §4.1) | RING_SEED chains nothing; `po` seed is 13 raw / 28 B (SP-V2); SEASON_CREATED (138 B) is a third exception to the 128-B soft ceiling | architect | W1-E notes |
+| G10 (Concord) | The Concord (0,0) has no wedge: OpenProvince of ring 0 is funded from wedge 0's ProvinceFund (`pf‖0`) | default (W3-A implements; owner may change) | `ProvinceCoord::wedge() == None` |
+| G11 (CL-31) | The simulator's D23 exempts the caretaker first term (H2), as the kernel's `office::counts_toward_limit` | architect | `one_office_term_per_wallet_and_vacant_seats` |
+| G12 (CL-31) | The doctrine proxy gate runs the shipping economy (D23 on) at **60 seeds** (was 30 seeds on the pre-D23 economy); bound ±0.2% unchanged | architect | integ-W1 notes §D; `doctrine-gate --controls` |
+| G13 (§8.7) | drand-replay serves a round when `round_time + delay ≤ game_now`, `game_now` = the last observed chain Clock | architect | `chain_clock_never_extrapolates` |
+| G14 | `frontier-abi` is a dev-dependency of `fclient` (path only) for the twin tests; fclient re-exports the kernel's seal, clock and host-id rules | architect | fclient `twin_tests` |
 
 ## E. Change log
 
@@ -153,3 +174,4 @@ Numbers match the conflict register (`M1-CONTRACT.md` §2).
 | v1.0 | 2026-09-27 | First issue with the M1 integration contract v1.0 |
 | v1.1 | 2026-09-27 | Review revision: 21 issues (5 blocker, 16 major; 3 merged as duplicates) answered in `M1-CONTRACT.md` §17; new I-43..I-58; I-04, I-05, I-08, I-14, I-15, I-19, I-21, I-22, I-25..I-28, I-31, I-39, I-41 revised; new O-M1-19..24; O-M1-12 dated and sized |
 | v1.1 (W1-D) | 2026-09-27 | Moved to `docs/frontier/DECISIONS.md`; the relayed answers to part C recorded; part D updated with the CL-30/32/33 measurements; part F (wave-1 records) added |
+| v1.2 (integ-W1) | 2026-09-27 | Part G (the integration window's decisions after the wave-1 review); F2 wording corrected; contract v1.2 |

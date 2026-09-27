@@ -83,3 +83,11 @@ Not run by this unit (other units' files or integrator items): frontier-abi test
 - Tests: `permutation-rules/tests/frontier_shared.rs`
 - Vectors: `permutation-rules/vectors/{clock-vectors-v1,addr-vectors-v1,seal-vectors-v1}.json`, generator `permutation-rules/vectors/seal-vectors-gen.rs`
 - Lab: `scratchpad/frontier/m1/lab/w1c-seal-vectors/` (session scratch)
+
+## Integration window addendum (integ-W1, 2026-09-27)
+
+Answered by the integrator (`integ-W1-NOTES.md` §C):
+- `RULESET_HASH` now binds every frontier module's version (23), the doctrine and stance tables and `KERNEL_CONSTANTS`: **`1ac11f85fde3b898ebcd8c246964d9be2a29b4144a7a7ddfa81006999a6dd03f`** (the value above is superseded). frontier-abi embeds it as `presets::RULESET_HASH`.
+- ArrivalSlot flags bit 2 = created_day (contract v1.2); `fees::fee_of_price` rounds up.
+- `seal-vectors-v1.json` regenerated with 7 more bad-plaintext cases (tile, direction, path 33, host/arrive mismatch): 24 cases, sha256 `9b93a9fb89e4c254942a78037210228ec91642f311b55cfefa076e5b9e294887`; the first 17 are byte-identical. fclient consumes it.
+- `addr::seed` refuses a wrong-length raw key (`try_seed`); the `IntoChecked` adapter is gone; the `po` erratum is amended (§4.1).

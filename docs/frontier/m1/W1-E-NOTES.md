@@ -88,3 +88,12 @@ git diff --quiet d95fa25 -- permutation-server/web/session.mjs permutation-chain
 Plus the I-37 scratch probe above (`cargo metadata --locked`, host `cargo check`, `cargo-build-sbf --arch v2`), outside the repo.
 
 Not run (not W1-E files, or not present on this branch): the frontier-sim, frontier-node, gateway `npm test` and civilization items of Gate W1. No O-M1-12 item is needed by this unit (nothing downloaded or installed; the SBF build used the installed 3.1.9 tools). No service was started, no port bound, no chain transaction, no push.
+
+## Integration window addendum (integ-W1, 2026-09-27)
+
+Answered by the integrator (`integ-W1-NOTES.md` §E):
+- §5.6 order: status before ruleset (`read_season`, `check_ruleset`, `check_season(.., Option<ruleset>, allowed, now)`), bucket before end bell (`PlayerStart::finish`), `Auth` only for signatures.
+- `addr` delegates to the kernel; `budgets::loaded_limit_for` calls `fees::loaded_limit` (ProgramData's 64 B now counted: `loaded_need_placeholder` +64, limits unchanged).
+- FoldOccupancy in three parts (contract v1.2 §5.9); `MULTI_MAX_REGIONS` = 7, the ceilings, `po`, RING_SEED, SEASON_CREATED and the Concord fund are amended or decided (DECISIONS G8–G10).
+- `chains_of` CLOSE is bounds-checked; drand genesis/period pinned in `SeasonParams::validate`; `payout_borsh` from the kernel's borsh; `bell_at` checked; refund floor `rent(0)`; `arrival_slot::evidence` + `FLAG_CREATED_DAY`; `RULESET_HASH` const.
+- Not done: the full §5.3 offset transcription in `offsets_match_the_contract_text` (the review compared every layout by hand and found no mismatch; a text-driven test is W2-A's).

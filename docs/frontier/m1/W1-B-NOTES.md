@@ -150,3 +150,11 @@ Not run by W1-B (other units' files or the integrator's): `frontier-abi`, `front
 ## 7. Dependency requests
 
 None: no manifest, lockfile, toolchain or `.gitignore` was changed.
+
+## 8. Integration window addendum (integ-W1, 2026-09-27)
+
+Answered by the integrator (`integ-W1-NOTES.md` §B):
+- **CL-09 (major):** the first new vigil window is skipped unless it starts ≥ 1 day after the last old window started; `bells_outside_vigil` cuts the two days after a change. Bell-granular test `no_vigil_covers_more_than_48_bells_across_a_change` (the old rule gives 96 covered bells for 16:00 → 00:01).
+- **Deviation added to §4:** CL-02 caps were pinned from simulator peaks × 2 (walls 1,200; production 1,000 units/h), not from the catalog maximum × `MAX_HOLDINGS_PER_WALLET`; the walls cap is a new refusal (`AboveCap` → `Kernel` 15, contract v1.2 §5.10; DECISIONS G5).
+- `from_index`/`index` are total (CL-04); `final_sweep(open_terms)` refuses while a term is open (CL-15); `troop_upkeep_per_hour` saturates (CL-02).
+- Version decision (DECISIONS G6): `HOLDING_VERSION`, `HOST_VERSION`, `SIEGE_VERSION`, `MANDATE_VERSION`, `PAYOUT_VERSION` = 2 in the ruleset hash.

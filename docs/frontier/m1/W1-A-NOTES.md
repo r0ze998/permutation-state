@@ -123,3 +123,12 @@ Not run by this unit (other units' files): `frontier-abi`, `frontier-node`, `per
 - Code: `permutation-rules/src/frontier/{clash,doctrine,stance}.rs`; tests `permutation-rules/tests/frontier_clash_{bounds,equiv}.rs`.
 - Lab: `scratchpad/frontier/m1/lab/rfi-search/` (`README.md`, `RESULTS.md`, `results/t5d_rfi_all_fills-v2.json`, `results/t5_gather_resolve-v2.json`, `results/t5b_kernel_breakdown-v2.json`, `logs/run-w1a.log`, `run.sh`).
 - Session scratch: `scratchpad/w1a/` (`base-sim/` = `d95fa25` copy with the golden and failing-first harnesses, `mutate.py`, `logs/`, sim outputs).
+
+## 8. Integration window addendum (integ-W1, 2026-09-27)
+
+The wave-1 review of this unit was answered by the integrator (`integ-W1-NOTES.md` §A):
+- **Garrison cap (major):** option (a). `host::GarrisonState` never exceeds `MAX_HOST_TROOPS` (refused past `room()`, clamped on settle), so a Garrison top-up can no longer freeze a province; `clash::validate` keeps the CL-01 refusal. The note above that "an honest program never builds" such input now holds by construction (test `a_garrison_at_the_cap_resolves_and_cannot_pass_it`).
+- `clash::valid_faction` private copy + `clash_faction_rule_equals_geometry`; the occupancy test asserts the I-43 caps; the stance test pins 12,500 / 14,375; the refund rule is one `const fn` and `the_refund_starts_at_exactly_ten_times` kills the `refund-strict` mutant (both bodies call the one rule; `mutate.py` was not re-run; the other survivor, `withdraw-mask-update`, is equivalent).
+- Dependency request resolved: `CLASH_VERSION = 2` is in `KERNEL_VERSIONS` (W1-C's file, by the integrator). frontier-abi takes `ENTRIES_N` from `Occupancy::STORAGE`.
+- 707e65d (the shim in W1-B/W1-D files) was accepted under the integration window (Gate W1 record).
+- D1 and D3 are in DECISIONS part G (G2, G3); DESIGN §6.1 reconciled. The `resolve_clash_ref` cfg superset stays (harmless; no manifest change).

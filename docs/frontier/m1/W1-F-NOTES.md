@@ -125,3 +125,12 @@ Run from the worktree on 2026-09-27 [measured]:
 - **W2-C:** `localnet::chain::Chain` has the hooks (`produce_block`, `set_scale`, `set_paused`, `loaded_size`, `deploy`); snapshot/WAL, `frontier_hold` and WS remain. `drand_replay::Source` takes a new archive format beside the fixture directory.
 - **W2-A:** the test-beacon `pk` and `QUICKNET_PK_HASH` are in `frontier-vectors.json` → `beacon.test_key`; `MULTI_MAX_REGIONS` ≤ 7 (finding 2).
 - **W2-D:** `frontier-vectors.json` carries codec offsets, addresses, the seal both ways, fees and signed shapes; its sections are documented in `crates/fclient/src/vectors.rs`.
+
+## 8. Integration window addendum (integ-W1, 2026-09-27)
+
+Answered by the integrator (`integ-W1-NOTES.md` §F):
+- **§5 correction:** the rustfmt and clippy components for 1.95.0 are now present on this machine (installed by someone other than this session, 2026-09-27 ≈ 21:08 JST); the frontier-node fmt/clippy gate line was run as written and **passes** after the two lint fixes. It is no longer PENDING-OWNER.
+- fclient re-exports the kernel's seal rules (tile check), clock functions and host-id codec; tests over the kernel's seal, clock and addr vectors; `frontier-abi` dev-dependency with twin tests (errors, instruction table, magics, builder bounds); error names `Auth` / `Reserved14`.
+- ResolveClash oracle builder in frontier-abi's shape; SettleTicket seed position resolved in the contract (`seedcache|archive`); `Budgets::from_json` reads budgets.json; fold builder in three parts.
+- Port checks use the §10.3 `lsof` rule; the localnet control asserts 602,471 B independently; drand-replay's chain clock no longer extrapolates.
+- Still open: the I-45 solana-test-validator drill (W2-B) that settles the absent-account accounting.
