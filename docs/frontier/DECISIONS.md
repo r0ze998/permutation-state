@@ -168,6 +168,18 @@ Contract amendments are in `M1-CONTRACT.md` v1.2 §18; the review response item 
 | G13 (§8.7) | drand-replay serves a round when `round_time + delay ≤ game_now`, `game_now` = the last observed chain Clock | architect | `chain_clock_never_extrapolates` |
 | G14 | `frontier-abi` is a dev-dependency of `fclient` (path only) for the twin tests; fclient re-exports the kernel's seal, clock and host-id rules | architect | fclient `twin_tests` |
 
+## H. Integration window W2 (integrator, 2026-09-28)
+
+The wave-2 merge, the gate fixes and the Gate W2 record are in `m1/integ-W2-NOTES.md`. No contract amendment in this window.
+
+| # | Decision | Status | Evidence |
+|---|---|---|---|
+| H1 (§4.1, G3) | A present BellAnchor or SeedCache is a no-op only when authenticated (owner, magic, season, stored key fields); any other non-absent account at the canonical address is `BadAccount` | architect (fixes a W2-A path) | `g03_anchor_and_archive_forged_in_post_anchor`, `g03_anchor_and_cache_forged_in_post_seed` |
+| H2 (§3.3, §5.6) | Every season/keeper prologue recomputes the Season PDA from the stored id and bump with `sol_sha256` (`BadAddress`), right after the structural read and before the status; the player prologue (W3-A) does the same | architect (reverses W2-A's "presence rule" deviation) | `season_pda_is_the_runtimes_program_address`, `g03_season_forged_in_keeper_and_authority_instructions` |
+| H3 | The rustfmt/clippy install is recorded once (part A, W2-A's row); the other wave-2 copies were dropped at merge | integrator | merge commits of W2-B…W2-E |
+| H4 (I-55) | W2-E's optional direct `@noble/curves` devDependency is not added (locked transitively at 1.9.7; `vendor-noble.mjs` pins it); W2-A's `Kind::spec` change in frontier-abi is deferred (not a gate item; the build script refuses the relocation it would cause) | integrator | integ-W2 notes §2 |
+| H5 (open) | W2-A F2 (AnchorArchive above the 10,240-B CPI allocation limit) and F3 (InitBeaconLogs ≈ 80k, InitShards 45k, AnnounceSeason 25k) need a contract amendment before W4-B / W5-A | open (integrator/owner) | W2-A notes §4; integ-W2 notes §5 |
+
 ## E. Change log
 
 | Version | Date | Change |
@@ -176,3 +188,4 @@ Contract amendments are in `M1-CONTRACT.md` v1.2 §18; the review response item 
 | v1.1 | 2026-09-27 | Review revision: 21 issues (5 blocker, 16 major; 3 merged as duplicates) answered in `M1-CONTRACT.md` §17; new I-43..I-58; I-04, I-05, I-08, I-14, I-15, I-19, I-21, I-22, I-25..I-28, I-31, I-39, I-41 revised; new O-M1-19..24; O-M1-12 dated and sized |
 | v1.1 (W1-D) | 2026-09-27 | Moved to `docs/frontier/DECISIONS.md`; the relayed answers to part C recorded; part D updated with the CL-30/32/33 measurements; part F (wave-1 records) added |
 | v1.2 (integ-W1) | 2026-09-27 | Part G (the integration window's decisions after the wave-1 review); F2 wording corrected; contract v1.2 |
+| v1.2 (integ-W2) | 2026-09-28 | Part H (the wave-2 integration window); the rustfmt/clippy install recorded once in part A |
