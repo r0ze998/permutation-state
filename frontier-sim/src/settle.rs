@@ -10,7 +10,7 @@ use permutation_rules::frontier::index::{
     clamped_mean, faction_index, herding, FactionFacts, IndexParams, FACTIONS,
 };
 use permutation_rules::frontier::payout::{
-    claim, settle, tenure_units, CitizenRecord, Claim, FactionTotals, Ledger, PayoutParams,
+    claim, settle, tenure_units, CitizenRecord, Claim, FactionTotals, PayoutParams, SeasonLedger,
     Settlement,
 };
 use permutation_rules::frontier::pools::{steward_rows, Pools};
@@ -63,7 +63,7 @@ pub struct Outcome {
     pub settlement: Settlement,
     pub pools: Pools,
     pub agents: Vec<AgentOut>,
-    pub ledger: Ledger,
+    pub ledger: SeasonLedger,
     /// CL-07/CL-08: the money and laurel books the bound checks read.
     pub books: Books,
     pub checks: Vec<Check>,
@@ -303,7 +303,8 @@ pub fn settle_run(sim: &Sim, p: &IndexParams) -> Outcome {
     let herd: [u64; FACTIONS] = core::array::from_fn(|k| herding(facts[k].members, members_all, p));
     let st = settle(&sim.pools, &totals, &index, sim.engine_stages, &pp).expect("settle");
     let prize = sim.pools.prize().expect("prize");
-    let mut ledger = Ledger::new(prize);
+    let mut ledger = SeasonLedger::new(&st).expect("ledger");
+    assert_eq!(ledger.prize, prize);
     let mut agents = Vec::with_capacity(recs.len());
     let mut checks = Vec::new();
     let mut over_cap = 0u64;
@@ -314,7 +315,7 @@ pub fn settle_run(sim: &Sim, p: &IndexParams) -> Outcome {
     let mut wallets = Vec::with_capacity(recs.len());
     for (i, r) in &recs {
         let c = claim(&st, r).expect("claim");
-        ledger.record(&c).expect("ledger");
+        ledger.record(r.faction, &c).expect("ledger");
         wallets.push(WalletBook {
             faction: r.faction,
             paid_in: r.paid(),

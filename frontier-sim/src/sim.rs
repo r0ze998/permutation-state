@@ -32,7 +32,9 @@ use permutation_rules::frontier::laurel::{
     siege_settle, strength_weight, PairHistory, RewardIndex, Stake, Tier as LTier, EMIT_FULL,
     LAUREL_ONE, RELIC_EMISSION_PER_BELL_REV2, SIEGE_STAKE,
 };
-use permutation_rules::frontier::mandate::{share_floor, MandateTerm, Reserve, TERM_DAYS};
+use permutation_rules::frontier::mandate::{
+    share_floor, MandateTerm, Reserve, TERM_DAYS, TERM_SECS,
+};
 use permutation_rules::frontier::pools::{Entry, EntrySchedule, Pools};
 use permutation_rules::frontier::siege::{
     auto_reinforce, completion, may_besiege, BellReport, Completion, Donor, HoldingKind, Relation,
@@ -3171,15 +3173,21 @@ impl Sim {
             } else {
                 0
             };
-            t.close_with_floor(&mut self.reserve[f], floor)
+            // CL-15: the term ends now; claims close one term later (or at
+            // the end of the banking window). The sim claims at once.
+            let term_end = (term as i64 + 1) * TERM_SECS;
+            let season_end = self.cfg.days as i64 * 86_400;
+            t.close_with_floor(&mut self.reserve[f], floor, term_end, season_end)
                 .expect("close term");
             for (a, sh) in who {
-                let pay = t.claim(&mut self.reserve[f], sh).expect("mandate claim");
+                let pay = t
+                    .claim(term_end, &mut self.reserve[f], sh)
+                    .expect("mandate claim");
                 self.agents[a as usize].laurels += pay;
                 self.agents[a as usize].earned.mandate += pay;
                 self.stats.mandate_paid += pay;
             }
-            t.sweep(&mut self.reserve[f], false).expect("sweep term");
+            t.sweep(term_end, &mut self.reserve[f]).expect("sweep term");
             self.mandate[f] = MandateTerm::new(term + 1);
         }
     }
