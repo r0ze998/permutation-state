@@ -35,6 +35,7 @@ use permutation_rules::frontier::laurel::{
 use permutation_rules::frontier::mandate::{
     share_floor, MandateTerm, Reserve, TERM_DAYS, TERM_SECS,
 };
+use permutation_rules::frontier::office;
 use permutation_rules::frontier::pools::{Entry, EntrySchedule, Pools};
 use permutation_rules::frontier::siege::{
     auto_reinforce, completion, may_besiege, BellReport, Completion, Donor, HoldingKind, Relation,
@@ -264,6 +265,9 @@ pub struct Agent {
     pub facts: [u64; PATHS],
     pub minister_terms: u32,
     pub warden_terms: u32,
+    /// Office terms that count toward D23's limit: every term but the
+    /// caretaker first term (H2; kernel `office::counts_toward_limit`).
+    pub limit_terms: u32,
     pub mandate_term: u32,
     pub tz: u32,
     pub pairs: Vec<(u32, u32)>,
@@ -620,6 +624,7 @@ impl Sim {
                 facts: [0; PATHS],
                 minister_terms: 0,
                 warden_terms: 0,
+                limit_terms: 0,
                 mandate_term: NONE,
                 tz: rng.below(BELLS_PER_DAY as u64) as u32,
                 pairs: Vec::new(),
@@ -3198,6 +3203,14 @@ impl Sim {
     fn seat_officers(&mut self, term: u32) -> Vec<(u32, u64, u8)> {
         let mut out = Vec::new();
         let bot_officers = self.cfg.bot_officers;
+        // D23 counts every term but the caretaker first term (H2, CL-31;
+        // the kernel's `office::TermKind::Caretaker`). integ-W1 review: the
+        // first version counted term 0 too.
+        let counted = office::counts_toward_limit(if term == 0 {
+            office::TermKind::Caretaker
+        } else {
+            office::TermKind::Elected
+        }) as u32;
         // Ministers: 4 per faction among active humans who stand (skilled
         // and very skilled), weighted by sessions this term.
         let term_start = term * TERM_DAYS;
@@ -3213,10 +3226,7 @@ impl Sim {
                             || (a.arch == Arch::Bot && bot_officers))
                         && a.last_active_day != NONE
                         && a.last_active_day >= term_start
-                        && self
-                            .cfg
-                            .office_term_limit
-                            .is_none_or(|l| a.minister_terms + a.warden_terms < l)
+                        && self.cfg.office_term_limit.is_none_or(|l| a.limit_terms < l)
                 })
                 .map(|(i, a)| (self.rng.below(1_000) * (1 + a.sessions as u64), i as u32))
                 .collect();
@@ -3224,6 +3234,7 @@ impl Sim {
             self.stats.minister_vacant += 4 - cands.len().min(4) as u64;
             for &(_, a) in cands.iter().take(4) {
                 self.agents[a as usize].minister_terms += 1;
+                self.agents[a as usize].limit_terms += counted;
                 self.stats.minister_terms += 1;
                 self.stats.bot_office_terms += (self.agents[a as usize].arch == Arch::Bot) as u64;
                 out.push((a, 2, f));
@@ -3272,7 +3283,7 @@ impl Sim {
                         && self
                             .cfg
                             .office_term_limit
-                            .is_none_or(|l| ag.minister_terms + ag.warden_terms < l)
+                            .is_none_or(|l| ag.limit_terms < l)
                 })
                 .max_by_key(|&a| (self.agents[a as usize].sessions, a));
             if warden.is_none() {
@@ -3280,6 +3291,7 @@ impl Sim {
             }
             if let Some(w) = warden {
                 self.agents[w as usize].warden_terms += 1;
+                self.agents[w as usize].limit_terms += counted;
                 self.stats.warden_terms += 1;
                 self.stats.bot_office_terms += (self.agents[w as usize].arch == Arch::Bot) as u64;
                 out.push((w, 1, k.1));

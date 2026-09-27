@@ -1,6 +1,6 @@
 # The O5 criterion itself (design §4.1, owner decision O5): every doctrine
 # wins 16.7% ± 2 points of seasons. The per-push CI job (`frontier-sim` in
-# ci.yml) runs only a 180-season proxy that bounds each doctrine's mean
+# ci.yml) runs only a 360-season proxy that bounds each doctrine's mean
 # index; this workflow runs the full check on 1,500 paired seasons.
 #
 # Step 1 is deterministic: the fixed confirmation set (seeds 10001..10250),
@@ -11,10 +11,10 @@
 # mean index (±0.12%, ≈ 7 SE) rather than the win-rate band.
 #
 # M1 (CL-31): the simulator's default economy now has D23's office-term
-# limit, so both O5 steps check the Season-1 rules. The CI proxy
-# (`doctrine-gate`) keeps the economy it was calibrated on (no term limit,
-# `balance::gate_config`), because with the limit its Knight control moves
-# inside the ±0.2% bound on the 30 gate seeds.
+# limit (caretaker term exempt), so both O5 steps check the Season-1 rules.
+# The CI proxy (`doctrine-gate`) runs the same economy since the integ-W1
+# re-calibration (60 gate seeds: kernel 0.063%, Knight −0.294%, A boost
+# +0.338% against ±0.2%).
 name: Doctrine balance (O5, full)
 
 on:

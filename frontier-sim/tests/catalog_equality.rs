@@ -22,23 +22,15 @@
 //! * walls: exactly one building item has `Effect::Walls`; its item id is
 //!   the rules crate's choice.
 
-#[cfg(not(rules_catalog))]
-#[test]
-fn catalog_equality_waits_for_the_rules_catalog() {
-    let msg = "permutation-rules has no `frontier::catalog` yet (W1-C): \
-               catalog equality is not compared on this tree";
-    if std::env::var_os("FRONTIER_REQUIRE_CATALOG").is_some() {
-        panic!("{msg}");
-    }
-    eprintln!("{msg}");
-}
-
-#[cfg(rules_catalog)]
+// integ-W1 review: compiled unconditionally. The first version compiled
+// the comparison only when a build script found `pub mod catalog` in the
+// rules crate and otherwise passed a placeholder test unless
+// FRONTIER_REQUIRE_CATALOG was set, so a moved module would have turned the
+// Gate W1 pass condition into a silent no-op.
 #[allow(dead_code, unused_imports, clippy::all)]
 #[path = "../src/model.rs"]
 mod model;
 
-#[cfg(rules_catalog)]
 mod eq {
     use super::model;
     use permutation_rules::fixed::{BPS_ONE, MILLI};
@@ -64,21 +56,6 @@ mod eq {
 
     fn v<T: Copy + TryInto<i128>>(xs: &[T]) -> Vec<i128> {
         xs.iter().map(|&x| n(x)).collect()
-    }
-
-    /// `duplicate_cost` is `u64` before W1-B's CL-03 and `Option<u64>` after.
-    trait Cost {
-        fn get(self) -> u64;
-    }
-    impl Cost for u64 {
-        fn get(self) -> u64 {
-            self
-        }
-    }
-    impl Cost for Option<u64> {
-        fn get(self) -> u64 {
-            self.expect("duplicate_cost")
-        }
     }
 
     /// Equal in units or in milli-units (one scale for the whole vector).
@@ -135,7 +112,7 @@ mod eq {
                     let want: Vec<i128> = m
                         .cost
                         .iter()
-                        .map(|&c| n(duplicate_cost(c as u64, copy).get()))
+                        .map(|&c| n(duplicate_cost(c as u64, copy).expect("duplicate_cost")))
                         .collect();
                     assert!(
                         same_cost(&v(&cost), &want),
@@ -162,7 +139,31 @@ mod eq {
                 .filter(|(_, e, _)| matches!(e, Effect::Walls { .. }))
                 .collect();
             assert_eq!(walls.len(), 1, "{}: one walls item", d.name);
+            // No other item exists: an extra production item added to the
+            // rules catalog would show here.
+            let known = model::BUILDINGS.len() as u8;
+            for i in 0..=u8::MAX {
+                let is_walls = cat::building(i, 1, d)
+                    .is_some_and(|(_, e, _)| matches!(e, Effect::Walls { .. }));
+                if i >= known && !is_walls {
+                    assert!(cat::building(i, 1, d).is_none(), "{}: item {i}", d.name);
+                }
+            }
             let (cost, effect, secs) = walls[0];
+            // Walls cost the same for every copy (the sim has no copies).
+            let wi = (0..=u8::MAX)
+                .find(|&i| {
+                    cat::building(i, 1, d)
+                        .is_some_and(|(_, e, _)| matches!(e, Effect::Walls { .. }))
+                })
+                .expect("walls item");
+            for copy in [2u32, 5, 12] {
+                assert_eq!(
+                    cat::building(wi, copy, d),
+                    Some(walls[0]),
+                    "walls copy {copy}"
+                );
+            }
             let mut want = vec![0i128; 8];
             want[2] = n(d.wall_cost(model::WALL_COST_STONE));
             assert!(same_cost(&v(&cost), &want), "{}: walls cost", d.name);
@@ -195,6 +196,18 @@ mod eq {
                     v(&got)
                 );
             }
+        }
+        // Not a multiple of 100: paid by the started hundred (contract §7,
+        // ⌈n / 100⌉), and 0 troops is refused.
+        for u in UNITS {
+            for (n_troops, hundreds) in [(1u32, 1u32), (99, 1), (150, 2), (201, 3)] {
+                assert_eq!(
+                    cat::train(u as u8, n_troops),
+                    cat::train(u as u8, hundreds * 100),
+                    "{u:?} × {n_troops}"
+                );
+            }
+            assert!(cat::train(u as u8, 0).is_none(), "{u:?} × 0");
         }
         assert!(
             cat::train(UnitType::Settler as u8, 100).is_none(),

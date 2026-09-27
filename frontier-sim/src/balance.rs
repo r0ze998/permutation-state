@@ -334,23 +334,26 @@ pub fn table(b: &Balance) -> String {
 ///
 /// **What the gate is.** A proxy for O5, not O5 itself. It bounds each
 /// doctrine's mean undamped index (the systematic quantity) at a size a CI
-/// job can afford: 30 paired seeds × 6 rotations = 180 seasons, index SE
-/// ≈ 0.05% [sim], bound ±0.2% (≈ 4 SE). It catches an edge of about 0.25%
-/// of index or more (≈ 4 win points at 10k wallets), which is what the
-/// negative controls below are: the draft table (+8%), F on the Knight line
-/// (−0.22% on these seeds with the final table: it fails, but only just)
-/// and a within-bounds A boost (+0.38%). It does
-/// **not** catch an edge under ≈ 0.15% of index, and the win-rate bound
-/// (±10 points at SE 2.8) is only a guard against a gross outlier. The
-/// O5 band itself (every doctrine 16.7% ± 2 points) is checked on ≥ 1,500
-/// paired seasons by the scheduled workflow `doctrine-balance.yml`
-/// (`frontier-sim doctrines --seeds 250 --first-seed 10000 --gate`).
+/// job can afford: 60 paired seeds × 6 rotations = 360 seasons, index SE
+/// ≈ 0.035% [sim], bound ±0.2% (≈ 6 SE). **Re-calibrated under the
+/// Season-1 economy (D23 on, caretaker term exempt) in the M1 integ-W1
+/// window**: at v1.1's 30 seeds under D23 the Knight control sat inside
+/// the bound (−0.178%), so W1-D had pinned the gate to the pre-D23
+/// economy; at 60 seeds the kernel table's largest |Δ| is 0.063% and the
+/// controls are rejected: F on the Knight line −0.294%, the within-bounds
+/// A boost +0.338%, the draft table (12 seeds) +8.77% (E's Knowledge
+/// weight) [sim, integ-W1 lab `gate-cal/`]. It does **not** catch an
+/// edge under ≈ 0.15% of index, and the win-rate bound (±10 points) is
+/// only a guard against a gross outlier. The O5 band itself (every
+/// doctrine 16.7% ± 2 points) is checked on ≥ 1,500 paired seasons by the
+/// scheduled workflow `doctrine-balance.yml` (`frontier-sim doctrines
+/// --seeds 250 --first-seed 10000 --gate`).
 ///
-/// The seeds are fixed (1..=30) so CI is deterministic; the scheduled
+/// The seeds are fixed (1..=60) so CI is deterministic; the scheduled
 /// workflow also runs a fresh seed set every night, so a table tuned to
 /// the CI seeds is caught there.
 pub const GATE_AGENTS: usize = 10_000;
-pub const GATE_SEEDS: u64 = 30;
+pub const GATE_SEEDS: u64 = 60;
 /// CI gate bounds: mean undamped index within this many % of the mean over
 /// doctrines, and win rate within 16.7 ± this many points.
 pub const GATE_MAX_DELTA_PCT: f64 = 0.2;
@@ -401,25 +404,19 @@ pub fn gate_run_with(set: DoctrineSet, tweaks: &str, seeds: u64) -> Balance {
     run(&gate_config(), &spec)
 }
 
-/// The economy the CI proxy gate was calibrated on (m0c): the K3 default
-/// **without** D23's office-term limit. M1 (CL-31) made the limit the
-/// simulator's default; on the gate's 30 seeds it moves the Knight
-/// control from −0.219% to −0.178%, inside the ±0.2% bound, so the gate
-/// would lose that control. The per-push gate therefore keeps its
-/// calibrated harness (it detects doctrine-table edits); the Season-1
-/// economy with D23 is checked by the O5 band itself on 1,500 paired
-/// seasons (`doctrines ... --gate`, `doctrine-balance.yml`, which runs the
-/// default config). Re-calibrate the proxy at the W5 Phase B gate.
+/// The economy the CI proxy gate runs on: the simulator's default, i.e.
+/// the Season-1 economy with D23's office-term limit (caretaker term
+/// exempt). integ-W1 review: W1-D had pinned it to the pre-D23 economy
+/// (`office_term_limit: None`) because the 30-seed gate lost its Knight
+/// control under D23; the gate was re-calibrated instead (60 seeds, see
+/// `GATE_SEEDS`), so it tests the economy that ships.
 pub fn gate_config() -> Config {
-    Config {
-        office_term_limit: None,
-        ..Config::default()
-    }
+    Config::default()
 }
 
 /// Negative controls: tables the gate must reject. The Knight line for F
-/// (the K3 tuning's outlier, −0.22% on the gate seeds with the final
-/// table) and an A boost that stays inside every doctrine bound (+0.38%).
+/// (the K3 tuning's outlier, −0.29% on the 60 gate seeds under D23) and an
+/// A boost that stays inside every doctrine bound (+0.34%).
 pub const GATE_KNIGHT: &str = "F.unit=knight,F.variant=10000";
 pub const GATE_A_BOOST: &str = "A.walls=5000,A.drill=11500,A.travel=7000";
 

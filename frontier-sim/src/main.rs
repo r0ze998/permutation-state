@@ -20,8 +20,10 @@
 //!                    stake and office choices; exit 1 with --gate if any ≥ 1.0;
 //!                    CL-16: `--first-seed 30001` is the held-out set)
 //! frontier-sim c4 ... [--relics]
-//!                    (c4 v3, CL-26/CL-30: per-bell write counts, 600/1,200-s
-//!                    windows, relic tip, the D18 pool table and R99)
+//!                    (c4 v3, CL-26/CL-30: the per-bell write counts and R99;
+//!                    the 600/1,200-s window, relic-tip and D18 pool tables are
+//!                    computed from its JSON by the lab scripts c4_model_v3.py
+//!                    and d18_model.py, scratchpad/frontier/m1/lab/{c4-v3,d18})
 //! ```
 //!
 //! `run` plays one season and prints its report; `suite` runs every M0

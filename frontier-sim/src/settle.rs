@@ -154,7 +154,10 @@ impl FactionBook {
         }
         let civ = self.civ + w.entitled.civ as u128;
         let pot = self.pot[k] + w.entitled.civ as u128;
-        let paid = self.paid[k] + w.paid_out as u128;
+        // What the claim draws from the faction's pots: paid **and** swept
+        // (the kernel `payout::FactionLedger` draws `claimed + swept`;
+        // integ-W1 review: paid alone let a paid + swept over-draw pass).
+        let paid = self.paid[k] + w.paid_out as u128 + w.swept as u128;
         if civ > self.civ_pot {
             return Err(format!("civ shares {civ} > civ pot {}", self.civ_pot));
         }

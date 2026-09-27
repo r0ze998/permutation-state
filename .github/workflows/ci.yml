@@ -131,7 +131,7 @@ jobs:
           cargo fmt -- --check
           cargo clippy --locked --release --all-targets -- -D warnings
       # Includes `balance::tests::doctrine_balance_gate` (the rules-v10
-      # doctrine table on a 180-season paired harness: each mean index
+      # doctrine table on a 360-season paired harness, D23 on: each mean index
       # within ±0.2%, a proxy for O5) and its negative controls, which must
       # fail: the draft table, F on the Knight line and an in-bounds A
       # boost (design §4.1, O5). The O5 band itself (16.7 ± 2 on 1,500
@@ -202,7 +202,7 @@ jobs:
         run: |
           cargo clippy --locked -p permutation-frontier --all-targets -- -D warnings
           cargo test --locked -p permutation-frontier
-          cargo check --locked -p permutation-frontier --no-default-features
+          cargo test --locked -p permutation-frontier --no-default-features
       - name: Install Agave 3.1.9 (cargo-build-sbf, platform-tools v1.52)
         if: hashFiles('scripts/build-frontier.sh') != ''
         run: |
@@ -215,7 +215,8 @@ jobs:
         run: scripts/build-frontier.sh --twice
       - name: LiteSVM suite (G1-G13 against the SBF build)
         if: hashFiles('permutation-frontier/svm-tests/run.sh') != ''
-        run: permutation-frontier/svm-tests/run.sh
+        working-directory: permutation-frontier/svm-tests
+        run: ./run.sh --release
         env:
           RELEASE_CHECK: ${{ (startsWith(github.ref, 'refs/tags/') || startsWith(github.ref, 'refs/heads/release/')) && '1' || '' }}
 
@@ -242,6 +243,7 @@ jobs:
           cargo fmt --all -- --check
           cargo clippy --locked --workspace --all-targets -- -D warnings
           cargo test --locked --workspace
+          cargo test --locked --release --workspace
 
   frontier-wasm:
     name: Frontier M1 web kernels (WASM build and hash)

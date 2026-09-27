@@ -1527,10 +1527,15 @@ mod tests {
         let (sim, o) = play(&small(3));
         assert!(o.checks.iter().all(|c| c.ok));
         assert!(sim.stats.minister_terms > 0);
-        assert!(sim
-            .agents
-            .iter()
-            .all(|a| a.minister_terms + a.warden_terms <= 1));
+        // The caretaker first term does not count (H2): at most one
+        // counted term, at most two in all.
+        assert!(sim.agents.iter().all(|a| a.limit_terms <= 1));
+        assert!(
+            sim.agents
+                .iter()
+                .any(|a| a.minister_terms + a.warden_terms == 2),
+            "a caretaker can serve again"
+        );
         // 120 wallets over 4 terms: too few eligible wallets to fill 24
         // Minister seats a term once each has served.
         let (tiny, t) = play(&Config {
