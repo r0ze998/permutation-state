@@ -5,12 +5,13 @@
 # resolve together with the program's MagicBlock SDK.
 [workspace]
 resolver = "2"
-members = ["permutation-chain", "permutation-rules"]
+members = ["permutation-chain", "permutation-rules", "frontier-abi"]
 exclude = [
     "frontier-sim",
     "permutation-server",
     "permutation-state-solana-receipt-spike",
     "permutation-chain/svm-tests",
+    "frontier-node",
 ]
 
 # Audit WP08: overflow in the program's own code (registration, finalize,
