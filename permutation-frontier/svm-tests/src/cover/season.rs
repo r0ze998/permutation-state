@@ -1,5 +1,5 @@
 //! Coverage of the season lifecycle (§5.7). W2-A's six instructions are
-//! covered from wave 2; EndSeason, AbortSeason and CloseSeason are W4-B's
+//! covered from wave 2; EndSeason, AbortSeason and CloseSeason by W4-B
 //! (this file is handed over to W4-B in wave 4, §11).
 
 use super::{Cover, Err, Lands, Loaded, Refused, E};
@@ -146,6 +146,51 @@ pub const SET_WINDOW_SCHEDULE: &[Cover] = &[
     ),
 ];
 
-pub const END_SEASON: &[Cover] = &[Cover::Pending("W4-B")];
-pub const CLOSE_SEASON: &[Cover] = &[Cover::Pending("W4-B")];
-pub const ABORT_SEASON: &[Cover] = &[Cover::Pending("W4-B")];
+pub const END_SEASON: &[Cover] = &[
+    Cover::Test(
+        "lifecycle::g13_end_season",
+        &[
+            Err(E::WrongStatus),
+            Err(E::TooEarly),
+            Err(E::AlreadyDone),
+            Lands("end_season("),
+        ],
+    ),
+    Cover::Test("lifecycle::g01_loaded_limit_w4b_lifecycle", &[Loaded]),
+    Cover::Pending("W5-A: BadAccount, BadAddress, TooManyAccounts"),
+];
+
+pub const CLOSE_SEASON: &[Cover] = &[
+    Cover::Test(
+        "lifecycle::g13_close_season_in_parts",
+        &[
+            Err(E::TooEarly),
+            Err(E::Auth),
+            Err(E::BadData),
+            Err(E::AlreadyDone),
+            Err(E::Announce),
+            Lands("close_part("),
+        ],
+    ),
+    Cover::Test(
+        "lifecycle::close_season_after_abort",
+        &[Lands("close_part(")],
+    ),
+    Cover::Test("lifecycle::g01_loaded_limit_w4b_lifecycle", &[Loaded]),
+    Cover::Pending("W5-A: WrongStatus, BadAddress, TooManyAccounts"),
+];
+
+pub const ABORT_SEASON: &[Cover] = &[
+    Cover::Test(
+        "lifecycle::g13_abort_season_bond_rule",
+        &[
+            Err(E::Auth),
+            Err(E::BadAddress),
+            Err(E::WrongStatus),
+            Err(E::TooEarly),
+            Lands("abort_season("),
+        ],
+    ),
+    Cover::Test("lifecycle::g01_loaded_limit_w4b_lifecycle", &[Loaded]),
+    Cover::Pending("W5-A: BadAccount, TooManyAccounts"),
+];

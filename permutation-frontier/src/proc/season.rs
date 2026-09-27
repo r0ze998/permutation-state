@@ -4,8 +4,8 @@
 //! only, I-51), CreateSeason (0x01: the Season filled, Frontier, 6 wedge
 //! ProvinceFunds, DefencePool; `join_gate`, `reveal_loaded_limit`),
 //! InitBeaconLogs (0x09), InitShards (0x02), ConsumeGenesisSeed (0x03) and
-//! SetWindowSchedule (0x07). EndSeason, AbortSeason and CloseSeason are
-//! stubs until W4-B.
+//! SetWindowSchedule (0x07). Wave 4 (W4-B): EndSeason (0x04), AbortSeason
+//! (0x06) and CloseSeason (0x05), below the W2-A instructions.
 //!
 //! Refusal codes the contract leaves open are pinned here (and listed in
 //! `docs/frontier/m1/W2-A-NOTES.md`): a present target of an init
@@ -21,7 +21,7 @@ use solana_program::{account_info::AccountInfo, pubkey::Pubkey};
 
 use frontier_abi::ix as aix;
 use frontier_abi::layout::AccountKind;
-use frontier_abi::log::{EntityKind, Kind, NO_BELL};
+use frontier_abi::log::{bond_outcome, EntityKind, Kind, NO_BELL};
 use frontier_abi::presets::{self, SeasonParams, SEASON_PARAMS_LEN};
 use frontier_abi::prologue::ids::LOADER_V3;
 use frontier_abi::tags::Ix;
@@ -42,8 +42,6 @@ use crate::layout::{
 };
 use crate::prologue::{self, check_accounts, expect_key, key};
 use crate::{FrontierError, R};
-
-super::stubs!(end_season, abort_season, close_season);
 
 /// The authority stored in the Season must have signed (the flags were
 /// checked by `check_accounts`); `Auth` otherwise.
@@ -572,6 +570,398 @@ pub fn set_window_schedule(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
             data: &mut sd,
         }],
     )
+}
+
+// ------------------------------------------------------------ W4-B: end, abort, close
+
+/// Emits `SEASON_STATUS {old, new, bond outcome}` (Season chained).
+fn emit_status(season_ai: &AccountInfo, id: u64, bell: u32, old: u8, new: u8, bond: u8) -> R<()> {
+    let key8 = id.to_le_bytes();
+    let payload = [old, new, bond];
+    let mut sd = season_ai.try_borrow_mut_data()?;
+    events::emit(
+        Kind::SEASON_STATUS,
+        bell,
+        &key8,
+        &payload,
+        &mut [Chained {
+            entity: EntityKind::Season,
+            data: &mut sd,
+        }],
+    )
+}
+
+/// 0x04 EndSeason: `[any s] [season w]`, class N (§5.7). Effective status
+/// Running and `bell(now) ≥ end_bell` (`TooEarly` before); an Ended season
+/// is `AlreadyDone` (keeper idempotency). Status Ended; `SEASON_STATUS`
+/// (old 3 Running, new 4).
+pub fn end_season(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
+    check_accounts(Ix::EndSeason, a, None)?;
+    aix::EndSeason::decode(d)?;
+    let now = prologue::now()?;
+    let [_any, season_ai] = a else {
+        return Err(FrontierError::TooManyAccounts.into());
+    };
+    let hdr = prologue::season(
+        season_ai,
+        p,
+        Some(&crate::RULESET_HASH),
+        &[S::STATUS_RUNNING, S::STATUS_ENDED],
+        now.ts,
+    )?;
+    if hdr.status == S::STATUS_ENDED {
+        return Err(FrontierError::AlreadyDone.into());
+    }
+    let bell = hdr.bell(now.ts).ok_or(FrontierError::WrongStatus)?;
+    if bell < hdr.end_bell {
+        return Err(FrontierError::TooEarly.into());
+    }
+    {
+        let mut sd = season_ai.try_borrow_mut_data()?;
+        Rw(&mut sd).set_u8(S::STATUS, S::STATUS_ENDED)?;
+    }
+    emit_status(
+        season_ai,
+        hdr.id,
+        bell,
+        S::STATUS_RUNNING,
+        S::STATUS_ENDED,
+        bond_outcome::NONE,
+    )
+}
+
+/// Unix time of the genesis round the bond rule compares with (CL-24): the
+/// stored round once CreateSeason fixed it; for an Announced season the
+/// earliest round CreateSeason could fix (`genesis_seed_round(t_create_min,
+/// 60)`, the smallest margin `SeasonParams::validate` allows), so a
+/// pre-creation abort never outlives the burn rule.
+pub fn genesis_round_time(
+    stored_status: u8,
+    genesis_round: u64,
+    clock: &SeasonClock,
+    t_create_min: i64,
+) -> i64 {
+    let q = permutation_rules::frontier::clash::QUICKNET;
+    if stored_status == S::STATUS_ANNOUNCED {
+        let r = beacon::genesis_seed_round(
+            &q,
+            t_create_min,
+            permutation_rules::frontier::clash::SEED_MARGIN_SECS as u32,
+        );
+        beacon::round_time(q.genesis, q.period as u32, r)
+    } else {
+        clock.round_time(genesis_round)
+    }
+}
+
+/// 0x06 AbortSeason: `[any s] [season w] [authority w] [incinerator w]`,
+/// class N/O (§5.7, CL-24). (a) the authority signs and the season has not
+/// started (Announced, Created before `genesis_ts`, Seeded before it); or
+/// (b) anyone, once a season still Announced or Created missed its
+/// creation window (`now ≥ t_create_min + 7 d`). Otherwise: a season that
+/// is running, ended, closed or aborted is `WrongStatus`; an Announced or
+/// Created one inside its window, for anyone but the authority, is
+/// `TooEarly`. `authority` must be the stored authority (`BadAddress`).
+/// Effects: status Aborted; the creation bond goes to the authority if
+/// `now < round_time(genesis_round)`, else it is **burned** to the
+/// incinerator; `SEASON_STATUS` with the bond outcome.
+pub fn abort_season(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
+    check_accounts(Ix::AbortSeason, a, None)?;
+    aix::AbortSeason::decode(d)?;
+    let now = prologue::now()?;
+    let [any, season_ai, authority_ai, incinerator] = a else {
+        return Err(FrontierError::TooManyAccounts.into());
+    };
+    let hdr = prologue::season(
+        season_ai,
+        p,
+        None,
+        &[S::STATUS_ANNOUNCED, S::STATUS_CREATED, S::STATUS_SEEDED],
+        now.ts,
+    )?;
+    let core = {
+        let sd = season_ai.try_borrow_data()?;
+        SeasonCore::read(&sd)?
+    };
+    expect_key(authority_ai, &core.authority)?;
+    let (t_create_min, genesis_round, bond, clock) = {
+        let sd = season_ai.try_borrow_data()?;
+        let r = Ro(&sd);
+        (
+            r.i64(S::T_CREATE_MIN)?,
+            r.u64(S::GENESIS_ROUND)?,
+            r.u64(S::CREATION_BOND)?,
+            SeasonClock::read(&sd)?,
+        )
+    };
+    let by_authority = key(any) == core.authority;
+    let path_a = by_authority && (hdr.status == S::STATUS_ANNOUNCED || now.ts < hdr.genesis_ts);
+    let window_end = t_create_min
+        .checked_add(presets::CREATE_WINDOW_SECS)
+        .ok_or(OVERFLOW)?;
+    let early = matches!(hdr.status, S::STATUS_ANNOUNCED | S::STATUS_CREATED);
+    let path_b = early && now.ts >= window_end;
+    if !path_a && !path_b {
+        return Err(if early {
+            FrontierError::TooEarly
+        } else {
+            FrontierError::Auth
+        }
+        .into());
+    }
+    let returned =
+        now.ts < genesis_round_time(hdr.stored_status, genesis_round, &clock, t_create_min);
+    let outcome = if bond == 0 {
+        bond_outcome::NONE
+    } else if returned {
+        init::move_lamports(season_ai, authority_ai, bond)?;
+        bond_outcome::RETURNED
+    } else {
+        init::move_lamports(season_ai, incinerator, bond)?;
+        bond_outcome::BURNED
+    };
+    {
+        let mut sd = season_ai.try_borrow_mut_data()?;
+        let mut w = Rw(&mut sd);
+        w.set_u64(S::CREATION_BOND, 0)?;
+        w.set_u8(S::STATUS, S::STATUS_ABORTED)?;
+    }
+    emit_status(
+        season_ai,
+        hdr.id,
+        hdr.bell(now.ts).unwrap_or(NO_BELL),
+        hdr.status,
+        S::STATUS_ABORTED,
+        outcome,
+    )
+}
+
+/// CloseSeason parts (pinned here, §5.7 leaves the split to the program):
+/// part `f` ∈ 0..=5 closes faction f's 8 JoinShards, part 6 the 16
+/// BeaconLogs, part 7 (final) the Frontier, the 6 ProvinceFunds and the
+/// DefencePool and shrinks the Season to its 128-B tombstone (status
+/// Closed). The repeat counts of the account groups `[auth, season,
+/// frontier] [pfund × 6] [dpool] [js × n] [blog × m]` per part.
+pub const fn close_part_counts(part: u8) -> Option<[u8; 5]> {
+    match part {
+        0..=5 => Some([1, 6, 1, JS::SHARDS_PER_FACTION, 0]),
+        6 => Some([1, 6, 1, 0, 16]),
+        CLOSE_FINAL_PART => Some([1, 6, 1, 0, 0]),
+        _ => None,
+    }
+}
+
+/// The final CloseSeason part.
+pub const CLOSE_FINAL_PART: u8 = 7;
+
+/// A Season tombstone (128 B, status Closed) at its PDA: `(id, authority)`.
+fn tombstone(season_ai: &AccountInfo, p: &Pubkey) -> R<(u64, [u8; 32])> {
+    if season_ai.owner != p || season_ai.data_len() != S::TOMBSTONE_SIZE {
+        return Err(BAD_ACCOUNT);
+    }
+    let d = season_ai.try_borrow_data()?;
+    let r = Ro(&d);
+    if r.arr::<8>(0)? != S::MAGIC || r.u8(S::STATUS)? != S::STATUS_CLOSED {
+        return Err(BAD_ACCOUNT);
+    }
+    let id = r.u64(S::SEASON_ID)?;
+    if addr::season_pda(id, r.u8(S::BUMP)?, &p.to_bytes()) != key(season_ai) {
+        return Err(FrontierError::BadAddress.into());
+    }
+    Ok((id, r.arr(S::AUTHORITY)?))
+}
+
+/// Closes a present program account to the authority, logging `CLOSE`
+/// first (chained accounts with their final head, short ones with none).
+#[allow(clippy::too_many_arguments)]
+fn close_one<'a>(
+    p: &Pubkey,
+    ai: &AccountInfo<'a>,
+    expected: &[u8; 32],
+    kind: AccountKind,
+    raw: &[u8],
+    season_id: u64,
+    authority: &AccountInfo<'a>,
+    bell: u32,
+) -> R<bool> {
+    expect_key(ai, expected)?;
+    if !prologue::presence(ai, p, kind, season_id)? {
+        return Ok(false);
+    }
+    let lamports = ai.lamports();
+    match EntityKind::of_account(kind) {
+        Some(entity) => {
+            let mut d = ai.try_borrow_mut_data()?;
+            super::map::emit_close(kind, entity, raw, &mut d, &key(authority), lamports, bell)?;
+        }
+        None => super::beacon::emit_close_short(kind, raw, &key(authority), lamports, bell)?,
+    }
+    init::close_to(p, ai, authority, &init::Sink::Never, bell)?;
+    Ok(true)
+}
+
+/// 0x05 CloseSeason(part): `[authority s,w] [season w] [frontier w] [pfund
+/// × 6 w] [dpool w] [js × n w] [blog × m w]`, class O (§5.7), repeatable
+/// in parts ([`close_part_counts`]). The Season Ended with `now ≥ end + 72
+/// h` (`TooEarly` before), or Aborted; parts 0–6 also run on the Closed
+/// tombstone, so a shard or log left behind can still be closed after the
+/// final part. The signer must be the stored authority (`Auth`). Absent
+/// accounts of a part are skipped (a repeat is a success). The final part
+/// needs every ProvinceFund shard's `provinces_opened == 0` (`TooEarly`),
+/// and on a tombstone is `AlreadyDone`. Every close logs `CLOSE` and
+/// refunds the authority; the final part logs `SEASON_STATUS` (new 5
+/// Closed) and shrinks the Season to 128 B, the lamports above its rent
+/// (the creation bond included) going to the authority.
+///
+/// Not reachable from this account list (W4-B notes, F3): RingSeeds,
+/// AnchorArchives and DefenceClaims, which §5.2 lists as closed by
+/// CloseSeason.
+pub fn close_season(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
+    let x = aix::CloseSeason::decode(d)?;
+    let counts = close_part_counts(x.part).ok_or(FrontierError::BadData)?;
+    check_accounts(Ix::CloseSeason, a, Some(&counts))?;
+    let now = prologue::now()?;
+    let (authority, season_ai, frontier_ai, funds, dpool, rest) = match a {
+        [au, s, fr, f0, f1, f2, f3, f4, f5, dp, rest @ ..] => {
+            (au, s, fr, [f0, f1, f2, f3, f4, f5], dp, rest)
+        }
+        _ => return Err(FrontierError::TooManyAccounts.into()),
+    };
+    let tomb = season_ai.owner == p && season_ai.data_len() == S::TOMBSTONE_SIZE;
+    let (id, stored_authority, status, bell) = if tomb {
+        let (id, au) = tombstone(season_ai, p)?;
+        (id, au, S::STATUS_CLOSED, NO_BELL)
+    } else {
+        // No ruleset check: a season aborted while Announced never stored
+        // one, and its Season must still close (its rent to the authority).
+        let hdr = prologue::season(
+            season_ai,
+            p,
+            None,
+            &[S::STATUS_ENDED, S::STATUS_ABORTED],
+            now.ts,
+        )?;
+        if hdr.status == S::STATUS_ENDED {
+            let at = super::map::season_end_ts(&hdr)
+                .checked_add(super::map::END_GRACE_SECS)
+                .ok_or(OVERFLOW)?;
+            if now.ts < at {
+                return Err(FrontierError::TooEarly.into());
+            }
+        }
+        let core = {
+            let sd = season_ai.try_borrow_data()?;
+            SeasonCore::read(&sd)?
+        };
+        (
+            hdr.id,
+            core.authority,
+            hdr.status,
+            hdr.bell(now.ts).unwrap_or(NO_BELL),
+        )
+    };
+    if key(authority) != stored_authority {
+        return Err(FrontierError::Auth.into());
+    }
+    let ctx = addr::ctx(&key(season_ai), &p.to_bytes());
+    match x.part {
+        0..=5 => {
+            for (s, shard) in rest.iter().enumerate() {
+                let s = s as u8;
+                close_one(
+                    p,
+                    shard,
+                    &ctx.join_shard(x.part, s),
+                    AccountKind::JoinShard,
+                    &[x.part, s],
+                    id,
+                    authority,
+                    bell,
+                )?;
+            }
+            Ok(())
+        }
+        6 => {
+            for (r, log) in rest.iter().enumerate() {
+                let r = r as u8;
+                close_one(
+                    p,
+                    log,
+                    &ctx.beacon_log(r),
+                    AccountKind::BeaconLog,
+                    &[r],
+                    id,
+                    authority,
+                    bell,
+                )?;
+            }
+            Ok(())
+        }
+        _ => {
+            if tomb {
+                return Err(FrontierError::AlreadyDone.into());
+            }
+            for (w, f) in funds.iter().enumerate() {
+                expect_key(f, &ctx.province_fund(w as u8))?;
+                if prologue::presence(f, p, AccountKind::ProvinceFund, id)? {
+                    let fd = f.try_borrow_data()?;
+                    if Ro(&fd).u32(PF::PROVINCES_OPENED)? != 0 {
+                        return Err(FrontierError::TooEarly.into());
+                    }
+                }
+            }
+            close_one(
+                p,
+                frontier_ai,
+                &ctx.frontier(),
+                AccountKind::Frontier,
+                &[],
+                id,
+                authority,
+                bell,
+            )?;
+            for (w, f) in funds.iter().enumerate() {
+                close_one(
+                    p,
+                    f,
+                    &ctx.province_fund(w as u8),
+                    AccountKind::ProvinceFund,
+                    &[w as u8],
+                    id,
+                    authority,
+                    bell,
+                )?;
+            }
+            close_one(
+                p,
+                dpool,
+                &ctx.defence_pool(),
+                AccountKind::DefencePool,
+                &[],
+                id,
+                authority,
+                bell,
+            )?;
+            {
+                let mut sd = season_ai.try_borrow_mut_data()?;
+                let mut w = Rw(&mut sd);
+                w.set_u8(S::STATUS, S::STATUS_CLOSED)?;
+                w.set_u64(S::CREATION_BOND, 0)?;
+            }
+            emit_status(
+                season_ai,
+                id,
+                bell,
+                status,
+                S::STATUS_CLOSED,
+                bond_outcome::NONE,
+            )?;
+            season_ai.resize(S::TOMBSTONE_SIZE)?;
+            let keep = init::rent(S::TOMBSTONE_SIZE)?;
+            let extra = season_ai.lamports().saturating_sub(keep);
+            init::move_lamports(season_ai, authority, extra)
+        }
+    }
 }
 
 #[cfg(test)]

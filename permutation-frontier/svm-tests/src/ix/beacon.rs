@@ -46,3 +46,22 @@ pub mod seed_at {
     pub const CACHE: usize = 3;
     pub const IX_SYSVAR: usize = 4;
 }
+
+/// Positions of ArchiveAnchors' accounts (§5.8); bell `k`'s triple starts
+/// at `FIRST_BELL + 3k` (anchor, cache, anchor rent_to).
+pub mod archive_at {
+    pub const PAYER: usize = 0;
+    pub const SEASON: usize = 1;
+    pub const ARCHIVE: usize = 2;
+    pub const SYSTEM: usize = 3;
+    pub const FIRST_BELL: usize = 4;
+}
+
+/// Positions of CloseSeedCache's accounts (§5.8).
+pub mod close_cache_at {
+    pub const ANY: usize = 0;
+    pub const SEASON: usize = 1;
+    pub const CACHE: usize = 2;
+    pub const ARCHIVE: usize = 3;
+    pub const RENT_TO: usize = 4;
+}

@@ -48,4 +48,28 @@ pub fn create(a: &Addresses, authority: Address, p: &Params) -> Instruction {
     fclient::ix::create_season(a, authority, &p.season_bytes(), &p.payout)
 }
 
-pub use fclient::ix::{consume_genesis_seed, init_beacon_logs, init_shards, set_window_schedule};
+pub use fclient::ix::{
+    abort_season, close_season, consume_genesis_seed, end_season, init_beacon_logs, init_shards,
+    set_window_schedule,
+};
+
+/// CloseSeason's shards and logs of `part` (W4-B's split: part f ∈ 0..=5
+/// the faction's 8 JoinShards, part 6 the 16 BeaconLogs, part 7 the
+/// Frontier, funds, pool and the Season tombstone).
+pub fn close_part(a: &Addresses, authority: Address, part: u8) -> Instruction {
+    let shards: Vec<(u8, u8)> = if part < 6 {
+        (0..8).map(|s| (part, s)).collect()
+    } else {
+        vec![]
+    };
+    let logs: Vec<u8> = if part == 6 { (0..16).collect() } else { vec![] };
+    close_season(a, authority, part, &shards, &logs)
+}
+
+/// Positions of AbortSeason's accounts (§5.7).
+pub mod abort_at {
+    pub const ANY: usize = 0;
+    pub const SEASON: usize = 1;
+    pub const AUTHORITY: usize = 2;
+    pub const INCINERATOR: usize = 3;
+}
