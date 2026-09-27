@@ -230,6 +230,87 @@ fn blocks_order_by_priority_and_feed_keeps_failures() {
     });
 }
 
+/// Distinct funded payers `base..base+n`.
+fn payers(c: &mut Chain, base: u8, n: u8) -> Vec<Keypair> {
+    (0..n).map(|i| funded(c, base + i)).collect()
+}
+
+fn heavy(payer: &Keypair, dest: Address, bh: &fclient::Hash) -> fclient::Transaction {
+    tx::build(
+        &[tx::transfer(payer.pubkey(), dest, 1_000_000)],
+        &tx::TxBudget {
+            cu_limit: 1_400_000,
+            cu_price: 0,
+            loaded_limit: 65_536,
+            heap: None,
+        },
+        &[payer],
+        bh,
+    )
+    .unwrap()
+}
+
+#[test]
+fn block_caps_40m_per_writable_account_and_100m_per_block() {
+    // 30 transactions requesting 1.4M CU each, all writing one account:
+    // ⌊40M / 1.4M⌋ = 28 fit in a block, 2 wait for the next.
+    let mut c = Chain::new(Config::default());
+    let ps = payers(&mut c, 10, 30);
+    let (bh, _) = c.latest_blockhash();
+    let hot = Address::new_from_array([0xAB; 32]);
+    for p in &ps {
+        c.submit(&tx::wire(&heavy(p, hot, &bh))).unwrap();
+    }
+    let r = c.produce_block();
+    assert_eq!((r.landed, r.deferred), (28, 2), "{r:?}");
+    assert_eq!(r.cu, 28 * 1_400_000);
+    let r = c.produce_block();
+    assert_eq!((r.landed, r.deferred), (2, 0), "{r:?}");
+
+    // 75 transactions of 1.4M on distinct accounts: ⌊100M / 1.4M⌋ = 71 fit.
+    let ps = payers(&mut c, 100, 75);
+    let (bh, _) = c.latest_blockhash();
+    for (i, p) in ps.iter().enumerate() {
+        let dest = Address::new_from_array([i as u8 + 1; 32]);
+        c.submit(&tx::wire(&heavy(p, dest, &bh))).unwrap();
+    }
+    let r = c.produce_block();
+    assert_eq!((r.landed, r.deferred), (71, 4), "{r:?}");
+    assert!(r.cu <= localnet::chain::BLOCK_CU);
+    let r = c.produce_block();
+    assert_eq!((r.landed, r.deferred), (4, 0), "{r:?}");
+}
+
+#[test]
+fn a_deferred_transaction_expires_with_its_blockhash() {
+    let mut c = Chain::new(Config::default());
+    let p = funded(&mut c, 7);
+    let (bh, _) = c.latest_blockhash();
+    let hot = Address::new_from_array([0xCD; 32]);
+    // Hold the account for longer than a blockhash lives: the transfer
+    // never lands and is dropped once its blockhash is 150 slots old.
+    c.hold(vec![hot], u64::MAX, 400).unwrap();
+    let t = heavy(&p, hot, &bh);
+    let s = c.submit(&tx::wire(&t)).unwrap();
+    for _ in 0..localnet::chain::BLOCKHASH_SLOTS {
+        let r = c.produce_block();
+        assert_eq!(r.deferred, 1);
+    }
+    let r = c.produce_block();
+    assert_eq!((r.dropped, r.deferred), (1, 0));
+    assert!(c.status(&s).is_none() && c.is_dropped(&s));
+    assert_eq!(c.pending(), 0);
+    // And a new submission with that blockhash is refused.
+    let t2 = tx::build(
+        &[tx::transfer(p.pubkey(), hot, 5)],
+        &budget(65_536),
+        &[&p],
+        &bh,
+    )
+    .unwrap();
+    assert!(c.submit(&tx::wire(&t2)).is_err());
+}
+
 #[test]
 fn virtual_time_scales_the_clock_per_slot() {
     let ip = InProcess::new(
