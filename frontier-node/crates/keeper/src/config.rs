@@ -18,6 +18,7 @@
 //! token_file = "keeper.token"
 //! master_seed_file = "keeper.seed"
 //! journal = "keeper.journal.sqlite"
+//! beneficiary_key_file = "beneficiary.key"   # W4-C: ClaimDefence signer (= beneficiary)
 //! ```
 //!
 //! The parser reads the flat subset of TOML the file uses (`key = value`
@@ -34,8 +35,9 @@ use solana_address::Address;
 /// Duties (§8.2 `roles`). W2-F runs `beacon` (genesis seed, anchors, seed
 /// caches, beacon logs) and `archive`; W3-C runs `rings` (every ring, its
 /// seed and provinces), `fold`, `tickets`, `explore`, `dormancy` (releases
-/// and stranded hosts) and `sweep`, and the `/v1/reveal` accept path; the
-/// others are accepted and wait for their waves (W4-C).
+/// and stranded hosts) and `sweep`, and the `/v1/reveal` accept path; W4-C
+/// runs `reveal`, `settle-departure` (with the §21 returns), `gather`,
+/// `resolve`, `skip`, `settle`, `close` and `claims`.
 pub const ROLES: [&str; 16] = [
     "beacon",
     "reveal",
@@ -222,6 +224,17 @@ pub struct KeeperConfig {
     pub stranded_scan_slots: u64,
     /// Pools below their contract minimum are allowed (tests, local drills).
     pub dev: bool,
+    /// W4-C: the beneficiary's key file (32-byte secret seed or 64-byte
+    /// keypair, like `master_seed_file`); ClaimDefence needs the
+    /// beneficiary's signature (§5.12). Without it the `claims` role is idle.
+    pub beneficiary_key_file: Option<PathBuf>,
+    /// The claim signer's address (set from `beneficiary_key_file`, or by
+    /// [`crate::Keeper::set_claim_key`]).
+    pub claim_key: Option<Address>,
+    /// W4-C: a random 0..=n-slot start jitter on play writes (offchain
+    /// design §6.5, several keepers racing); 0 (off) for the operator's
+    /// keeper, whose latency the exit criteria measure.
+    pub race_jitter_slots: u64,
 }
 
 impl KeeperConfig {
@@ -260,6 +273,9 @@ impl KeeperConfig {
             land_scan_slots: 8,
             stranded_scan_slots: 450,
             dev: false,
+            beneficiary_key_file: None,
+            claim_key: None,
+            race_jitter_slots: 0,
         }
     }
 
@@ -345,6 +361,7 @@ impl KeeperConfig {
         num!("care_every_slots", care_every_slots, u64);
         num!("land_scan_slots", land_scan_slots, u64);
         num!("stranded_scan_slots", stranded_scan_slots, u64);
+        num!("race_jitter_slots", race_jitter_slots, u64);
         if let Some(v) = take("reveal_floor") {
             c.reveal_floor = Some(int(v, "reveal_floor")?);
         }
@@ -379,6 +396,7 @@ impl KeeperConfig {
             ("master_seed_file", &mut c.master_seed_file),
             ("journal", &mut c.journal),
             ("budgets_file", &mut c.budgets_file),
+            ("beneficiary_key_file", &mut c.beneficiary_key_file),
         ] {
             if let Some(v) = take(k) {
                 *f = Some(PathBuf::from(s(v, k)?));

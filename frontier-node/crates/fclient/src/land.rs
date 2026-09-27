@@ -74,6 +74,19 @@ pub fn cohort_closed(cohorts: &[Cohort], ticket_bell: u32, now_bell: u32) -> boo
         .all(|c| cohort_free(c, now_bell))
 }
 
+/// DECISIONS K9 (decided 2026-09-28, the candidate program rule): a
+/// **fresh** settlement at a site of a Province waits while an **earlier**
+/// ticket cohort of the same Province is still open (not every ticket
+/// settled and fewer than 24 bells passed), so a later cohort can never
+/// make an earlier winner `taken` and I-47's 24-bell bound holds. The
+/// keeper does not send such a settlement (the program refuses or defers
+/// it); displacement and `taken` are unaffected.
+pub fn earlier_cohort_open(cohorts: &[Cohort], ticket_bell: u32, now_bell: u32) -> bool {
+    cohorts
+        .iter()
+        .any(|c| c.filed > 0 && c.bell < ticket_bell && !cohort_free(c, now_bell))
+}
+
 /// What SettleTicket will do with a ticket's current site, as far as the
 /// chain shows before it lands.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -392,5 +405,23 @@ mod tests {
         h.transit[2].state = 0;
         h.order = 2;
         assert!(!releasable(&h, &s, 2_000_000), "order 1 only");
+    }
+    #[test]
+    fn a_fresh_settlement_waits_for_an_earlier_open_cohort() {
+        // DECISIONS K9: cohorts of bells 10 (open: 1 of 2 settled) and 12.
+        let c = |bell, filed, settled| Cohort {
+            bell,
+            filed,
+            settled,
+        };
+        let cs = [c(10, 2, 1), c(12, 1, 0), Cohort::default()];
+        assert!(earlier_cohort_open(&cs, 12, 13), "bell 10 still open");
+        assert!(!earlier_cohort_open(&cs, 10, 13), "no earlier cohort");
+        assert!(
+            !earlier_cohort_open(&cs, 12, 34),
+            "bell 10 expired (24 bells)"
+        );
+        let cs = [c(10, 2, 2), c(12, 1, 0)];
+        assert!(!earlier_cohort_open(&cs, 12, 13), "bell 10 settled");
     }
 }

@@ -363,14 +363,38 @@ pub mod err {
     pub const NOT_DORMANT: u32 = 46;
     pub const NOT_IMPLEMENTED: u32 = 99;
     pub const NO_TICKET: u32 = 23;
+    /// Play (W4-C).
+    pub const TOO_EARLY: u32 = 13;
+    pub const NOT_RESIDENT: u32 = 26;
+    pub const TRANSIT_STATE: u32 = 30;
+    pub const COMMIT_MISMATCH: u32 = 33;
+    pub const NEED_ARRIVAL_DAY: u32 = 36;
+    pub const DEPARTURE_UNSETTLED: u32 = 38;
+    pub const OUT_OF_ORDER: u32 = 40;
+    pub const NOT_QUIET: u32 = 41;
+    pub const INPUTS_OPEN: u32 = 42;
+    pub const NOT_ELIGIBLE: u32 = 43;
+    pub const BAD_PLAINTEXT: u32 = 55;
 
     /// A refusal that means the write's work is done (v1.5 §5.4 keeper
     /// mapping): `AlreadyDone` for every write; `NoTicket` for SettleTicket
     /// (the ticket ended — this write's or another version's settlement,
     /// an expiry, or the last preference taken — so nothing is left to
     /// settle; wave-3 review, W3-A).
+    ///
+    /// W4-C adds the refusals that can only mean "another version or
+    /// another keeper did it" for the play writes it sends: a
+    /// SettleDeparture or SettleTransit whose transit is no longer in the
+    /// state it needs (`TransitState`, the record moved on), a
+    /// ResolveFromInputs or SkipQuiet whose bell is no longer
+    /// `resolved_next` (`OutOfOrder`: the province moved past it). The duty
+    /// re-reads the chain before planning anything else for the object.
     pub fn is_done(tag: u8, code: u32) -> bool {
-        code == ALREADY_DONE || (tag == super::tag::SETTLE_TICKET && code == NO_TICKET)
+        use super::tag as t;
+        code == ALREADY_DONE
+            || (tag == t::SETTLE_TICKET && code == NO_TICKET)
+            || (matches!(tag, t::SETTLE_DEPARTURE | t::SETTLE_TRANSIT) && code == TRANSIT_STATE)
+            || (matches!(tag, t::RESOLVE_FROM_INPUTS | t::SKIP_QUIET) && code == OUT_OF_ORDER)
     }
 
     /// The window of this write is gone for good: stop retrying.

@@ -41,7 +41,38 @@ pub struct Attempt {
 
 pub struct Journal {
     pub conn: Connection,
+    /// Crash injection (tests, offchain design §6.7): panics at a chosen
+    /// journal write, as a `kill -9` at that point would stop the process.
+    pub crash: Option<CrashAt>,
 }
+
+/// Where [`Journal::crash`] fires: the `nth` write at `point`
+/// (`"attempt"`, `"status"` or `"plaintext"`) whose attempt kind is one of
+/// `kinds` (`"*"` = any). The write itself does not happen.
+#[derive(Debug)]
+pub struct CrashAt {
+    pub point: &'static str,
+    pub kinds: Vec<&'static str>,
+    pub nth: u32,
+    pub seen: std::cell::Cell<u32>,
+}
+
+impl CrashAt {
+    pub fn new(point: &'static str, kinds: &[&'static str], nth: u32) -> CrashAt {
+        CrashAt {
+            point,
+            kinds: kinds.to_vec(),
+            nth,
+            seen: std::cell::Cell::new(0),
+        }
+    }
+}
+
+/// A journalled `(plaintext, salt)`.
+pub type PlainSalt = (Vec<u8>, Vec<u8>);
+
+/// The panic message of an injected crash.
+pub const INJECTED_CRASH: &str = "injected crash";
 
 fn sql<T>(r: rusqlite::Result<T>) -> Result<T, String> {
     r.map_err(|e| e.to_string())
@@ -88,10 +119,23 @@ impl Journal {
              CREATE TABLE IF NOT EXISTS alerts(id INTEGER PRIMARY KEY AUTOINCREMENT, slot INTEGER NOT NULL,
                  kind TEXT NOT NULL, detail TEXT NOT NULL);",
         ))?;
-        Ok(Journal { conn })
+        Ok(Journal { conn, crash: None })
+    }
+
+    fn maybe_crash(&self, point: &str, kind: &str) {
+        let Some(c) = &self.crash else { return };
+        if c.point != point || !(c.kinds.contains(&"*") || c.kinds.contains(&kind)) {
+            return;
+        }
+        let n = c.seen.get() + 1;
+        c.seen.set(n);
+        if n == c.nth {
+            panic!("{INJECTED_CRASH} at journal {point} #{n} ({kind})");
+        }
     }
 
     pub fn record_attempt(&self, a: &Attempt) -> Result<(), String> {
+        self.maybe_crash("attempt", &a.kind);
         sql(self.conn.execute(
             "INSERT OR REPLACE INTO attempts(sig, kind, object_key, bell, region, class, payer, bid_milli, cu_limit,
                  heap, first_valid_slot, sent_slot, landed_slot, status, code)
@@ -125,6 +169,18 @@ impl Journal {
         landed_slot: Option<u64>,
         code: Option<u32>,
     ) -> Result<(), String> {
+        if self.crash.is_some() {
+            let kind: Option<String> = self
+                .conn
+                .query_row(
+                    "SELECT kind FROM attempts WHERE sig = ?1",
+                    params![sig],
+                    |r| r.get(0),
+                )
+                .optional()
+                .unwrap_or(None);
+            self.maybe_crash("status", kind.as_deref().unwrap_or(""));
+        }
         sql(self.conn.execute(
             "UPDATE attempts SET status = ?2, landed_slot = ?3, code = ?4 WHERE sig = ?1",
             params![sig, status, landed_slot.map(|s| s as i64), code],
@@ -222,11 +278,24 @@ impl Journal {
         plain: &[u8],
         salt: &[u8],
     ) -> Result<(), String> {
+        self.maybe_crash("plaintext", "reveal");
         sql(self.conn.execute(
             "INSERT OR REPLACE INTO plaintexts(host, bell, plain, salt) VALUES(?1, ?2, ?3, ?4)",
             params![host as i64, bell, plain, salt],
         ))
         .map(|_| ())
+    }
+
+    /// A journalled plaintext and salt (W4-C's reveal cache).
+    pub fn plaintext(&self, host: u64, bell: u32) -> Result<Option<PlainSalt>, String> {
+        sql(self
+            .conn
+            .query_row(
+                "SELECT plain, salt FROM plaintexts WHERE host = ?1 AND bell = ?2",
+                params![host as i64, bell],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional())
     }
 
     pub fn note_payer(
