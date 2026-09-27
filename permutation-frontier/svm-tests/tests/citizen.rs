@@ -1556,6 +1556,12 @@ fn displacement_setup(c: &mut Chain, crafted_seed: bool) -> (World, Citizen, Dis
     } else {
         (y, x)
     };
+    // DECISIONS K9 (integ-W4): the fresh settle waits while an earlier
+    // cohort is open, so it lands at bell + 23, when the seven filler
+    // cohorts (bells bell − 7 … bell − 1) have expired and this ticket has
+    // not (bell + 24). The records stay in the tables (expiry does not
+    // rewrite them), so the displacement below still scans the full table.
+    c.set_time(w.genesis_ts() + (bell as i64 + 23) * 600 + 1);
     expect_lands(w.settle_ticket(c, &lo, 0, None), "fresh");
     let d = w.displaced_at(c, sites[0].p, sites[0].q, 0, 0);
     (w, hi, d)
