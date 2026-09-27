@@ -199,6 +199,17 @@ The wave-2 review (six units, verdict needs-fix for each) was answered in the sa
 | I11 (§9.1, §9.4) | Web clock rate 1 off localnet; staleness against the local clock; `messageProblems` requires blockhash and the expected instruction; `sealMarch` derives T(arrive_bell) | architect | `web-frontier-{clock,chainio,seal}.test.mjs` |
 | I12 | Deferred with owners (not gate items, recorded in integ-W2 notes §6): W2-C snapshot/ledger binding, airdrop pre-balances, snapshot path restriction, `--program` mismatch, WS `Lagged`, archive verify-on-serve (W5 hardening); W2-F nonce duplicates, write-ahead journal, Dead backoff, D-class start bid, payer-care idempotence, daily budget (W3-C keeper land / W5); W2-E herald key checks, beacon NETWORK byte, geometry bounds, `plan_path`, ClashArgs codec, `ps-fui` (W3-F / W4-A / W4-E); W2-B per-(instruction, code) completeness table (W5-A) | integrator | integ-W2 notes §6 |
 
+## J. Integration window W3 (integrator, 2026-09-28; contract v1.4 §20)
+
+The wave-3 merge (W3-A, W3-B, W3-C, W3-D, W3-E, W3-F) and Gate W3. The record is `m1/integ-W3-NOTES.md`.
+
+| # | Decision | Status | Evidence |
+|---|---|---|---|
+| J1 (§5.5) | Budget FileTicket 14k → 17k CU | architect (amendment v1.4) | W3-A F3; 16,048 CU [measured] at the §13.1 fill on the merged release `.so` |
+| J2 (§3.3) | W3-D request R3 (`flate2 =1.1.10` and four new crates) **not applied**: it is outside the contract's expected dependency set, which is what the owner approved on 2026-09-27. The herald writes no `.gz` siblings in wave 3 (a changed file still drops a stale sibling; the server still serves a sibling placed by other means). §8.4's `.br`/`.gz` siblings wait for the owner | **owner question** (approve `flate2` for the `.gz` siblings, and whether `brotli` for `.br`) | W3-D notes D5, R3; integ-W3 commit "W3-D dependency requests R1, R2, R4 (R3 not applied)" |
+| J3 (§3.3 kernels) | W3-A F2's terrain kernel patch applied (const `tile_offset`/`tile_index` tables, the terrain base hash once per province): outcome-identical, so no `TERRAIN_VERSION` or ruleset change | integrator | W3-A: 331 provinces bit-identical on chain; new unit test `tile_tables_equal_the_former_loops`; OpenProvince worst 284,896 → 148,401 CU [measured] |
+| J4 | Gate test fix, not a program change: `g03_announce_season_addresses_and_authority` sends its forged-ProgramData case with a loaded limit for two ProgramData (W3-B F5) | integrator | merged release `.so` 565,912 B: two ProgramData = 1,417,762 B > 1 MiB |
+
 ## E. Change log
 
 | Version | Date | Change |
@@ -209,3 +220,4 @@ The wave-2 review (six units, verdict needs-fix for each) was answered in the sa
 | v1.2 (integ-W1) | 2026-09-27 | Part G (the integration window's decisions after the wave-1 review); F2 wording corrected; contract v1.2 |
 | v1.2 (integ-W2) | 2026-09-28 | Part H (the wave-2 integration window); the rustfmt/clippy install recorded once in part A |
 | v1.3 (integ-W2 review) | 2026-09-28 | Part I (the wave-2 review response); H5 closed; contract v1.3 (§19) |
+| v1.4 (integ-W3) | 2026-09-28 | Part J (the wave-3 integration window); contract v1.4 (§20) |

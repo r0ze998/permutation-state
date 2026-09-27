@@ -1,6 +1,6 @@
 # M1 "First Bell": the integration contract
 
-**Version v1.3** (2026-09-28, integ-W2 amendments after the wave-2 review; sections changed: §4.1, §4.2, §5.2, §5.3, §5.5, §5.7, §5.8, §5.11, §8.2, §8.3, §8.7, §9.1, §9.4, §12, §13.1; **§19 lists each change**). **v1.2** (2026-09-27, integ-W1 amendments after the wave-1 review; sections changed: §3.2, §4.1, §4.2, §5.3, §5.4, §5.5, §5.6, §5.9, §5.10, §5.12, §6, §7, §8.7, §12; **§18 lists each change**). **v1.1** (2026-09-27, review revision of v1.0). v1.1 answers a review of 21 issues (5 marked blocker, 16 major; three duplicate others and are merged, so 18 distinct findings). **§17 gives each issue's verdict with its evidence and the sections it changed.** Where v1.1 and v1.0 differ, v1.1 wins; the first issue is kept as `lab/contract-rev/M1-CONTRACT.v1.0.md`.
+**Version v1.4** (2026-09-28, integ-W3 amendment in the wave-3 integration window; section changed: §5.5; **§20 lists the change**). **v1.3** (2026-09-28, integ-W2 amendments after the wave-2 review; sections changed: §4.1, §4.2, §5.2, §5.3, §5.5, §5.7, §5.8, §5.11, §8.2, §8.3, §8.7, §9.1, §9.4, §12, §13.1; **§19 lists each change**). **v1.2** (2026-09-27, integ-W1 amendments after the wave-1 review; sections changed: §3.2, §4.1, §4.2, §5.3, §5.4, §5.5, §5.6, §5.9, §5.10, §5.12, §6, §7, §8.7, §12; **§18 lists each change**). **v1.1** (2026-09-27, review revision of v1.0). v1.1 answers a review of 21 issues (5 marked blocker, 16 major; three duplicate others and are merged, so 18 distinct findings). **§17 gives each issue's verdict with its evidence and the sections it changed.** Where v1.1 and v1.0 differ, v1.1 wins; the first issue is kept as `lab/contract-rev/M1-CONTRACT.v1.0.md`.
 
 - **Date:** 2026-09-27. **Role:** M1 integration architect. **Status:** normative for every M1 implementer from the moment the owner accepts it (owner decisions still open are listed in §15 and in `DECISIONS.md`; each has a working default that implementers build to).
 - **Base:** branch `codex/frontier` at `d95fa25` (worktree `.claude/worktrees/frontier-integ`, clean). Planning phase: nothing in the repo was changed, no commit, no push, no server, no chain transaction.
@@ -517,7 +517,7 @@ Instruction data: byte 0 = tag, then the listed fields, little-endian, fixed wid
 | 0x30 | Join | P (wallet) | Citizen (init), JoinShard; `join_gate` co-signs when set (I-51) | 25k | 700 | — |
 | 0x31 | SetSession | P (wallet) | Citizen | 6k | 300 | — |
 | 0x32 | SetVigil | P | Citizen | 6k | 250 | — |
-| 0x33 | FileTicket(≤ 3) | P | Citizen (+ Holding-rent escrow), ≤ 3 Provinces (cohort counters, I-47) | 14k | 560 | — |
+| 0x33 | FileTicket(≤ 3) | P | Citizen (+ Holding-rent escrow), ≤ 3 Provinces (cohort counters, I-47) | **17k** (v1.4) | 560 | — |
 | 0x34 | SettleTicket(k) | **D** | Holding, Province, Citizen, JoinShard, ≤ 2 more ticket Provinces (cohort), displaced Holding's rent payer (+ displaced Citizen, JoinShard) | 40k | 900 | — |
 | 0x35 | ReleaseDormant | N | Holding (close), Province, Citizen, JoinShard, DefencePool (`pool_owed`) | 25k | 480 | — |
 | 0x36 | CloseHolding | N | Holding (close), DefencePool (`pool_owed`) | 15k | 330 | — |
@@ -1467,3 +1467,15 @@ The wave-2 review (six units) was answered in the integration window (§3.4). Ea
 | §9.1 | The web chain clock runs at rate 1 except on a localnet season (estimated there, never below 1); staleness is measured against the local clock, not the herald-derived estimate | W2-E major |
 | §9.4 | `messageProblems` requires the blockhash and the expected instruction and runs the relay allowlist; `sealMarch` derives the round from the season clock (T(arrive_bell)) and refuses any other | W2-E majors |
 | §12 | Gate W2 runs `g01_budget_` too; `one_day_beacons` rings are exercised against the program from Gate W3 (OpenRing is W3-A's) | W2-A major (no CU gate); W2-F missing item (gate text vs the unit split) |
+
+---
+
+## 20. Amendments v1.4 (integ-W3, 2026-09-28)
+
+Made in the wave-3 integration window (§3.4) to answer a Gate W3 item; normative from v1.4; the code landed on `frontier/m1-integ` in the integ-W3 commits; the decision is copied to `DECISIONS.md` part J; the record is `integ-W3-NOTES.md`.
+
+| Section | Change | Why |
+|---|---|---|
+| §5.5 | Budget FileTicket 14k → **17k** CU (`frontier-abi::budgets`, vectors, fclient mirror, synced JS) | W3-A F3: 16,048 CU [measured, `g01_file_ticket_three_provinces_full_cohorts`: 3 provinces, 7 open cohorts each, the §13.1 fill] on the merged release `.so`; the cost is the player prologue (≈ 3.6k), three canonical Province addresses and their cohorts (≈ 3.7k), the escrow System CPI (≈ 2.2k) and the 4-chain `TICKET` (≈ 3.5k). FileTicket is class P (relay-sponsored, priority 0, no liveness role), so the budget moves no fee or tip formula |
+
+Not amended in this window (open for the wave-3 review; recorded in `integ-W3-NOTES.md`): W3-A F4 (`chains_of(SETTLE)` and a shared JoinShard), F5 (§5.9 Join's wedge-fund clause), F8 (terrain encoding and ticket score in a shared crate), W3-B's presets request (`reveal_cu_limit`, `reveal_loaded_limit`, `tip_min`: to be regenerated from the release `.so` at W5), W3-C F1 (crowding rule), W3-D D2/D3/D6, W3-F R4 (`reachable`'s signature).

@@ -155,7 +155,7 @@ pub const INSTRUCTIONS: [IxInfo; 50] = [
     ix(0x30, "Join", Class::P, 25_000, 700, false),
     ix(0x31, "SetSession", Class::P, 6_000, 300, false),
     ix(0x32, "SetVigil", Class::P, 6_000, 250, false),
-    ix(0x33, "FileTicket", Class::P, 14_000, 560, false),
+    ix(0x33, "FileTicket", Class::P, 17_000, 560, false),
     ix(0x34, "SettleTicket", Class::D, 40_000, 900, false),
     ix(0x35, "ReleaseDormant", Class::N, 25_000, 480, false),
     ix(0x36, "CloseHolding", Class::N, 15_000, 330, false),

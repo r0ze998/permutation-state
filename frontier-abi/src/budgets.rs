@@ -123,7 +123,7 @@ budgets! {
     Join: 25_000, 0, 700;
     SetSession: 6_000, 0, 300;
     SetVigil: 6_000, 0, 250;
-    FileTicket: 14_000, 0, 560;
+    FileTicket: 17_000, 0, 560;
     SettleTicket: 40_000, 0, 900;
     ReleaseDormant: 25_000, 0, 480;
     CloseHolding: 15_000, 0, 330;
