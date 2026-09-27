@@ -15,7 +15,7 @@ use crate::rng::Rng;
 use permutation_rules::fixed::{Bps, Milli, MilliTroops, BPS_ONE, MILLI};
 use permutation_rules::frontier::clash::{
     frontier_ruleset, ready_bell_after, resolve_clash, ClashInput, Fate, Fighter, Garrison,
-    Relations, NEUTRAL,
+    Occupancy, Relations, NEUTRAL,
 };
 use permutation_rules::frontier::geometry::{
     march_of, provinces_within, ring_provinces, ProvinceCoord, PROVINCE_TILES,
@@ -2498,6 +2498,7 @@ impl Sim {
             garrisons: &garrisons,
             arrivals: &arr,
             relations: Relations::ALL_HOSTILE,
+            occupancy: Occupancy::EMPTY,
         };
         let out = match resolve_clash(&self.rules, &inp) {
             Ok(o) => o,
