@@ -2,28 +2,31 @@
 //! (`/{chain}/info`, `/{chain}/public/latest`, `/{chain}/public/{round}`,
 //! and the same paths without the chain hash) over
 //!
-//! - **an archive** of recorded quicknet rounds (a directory of
-//!   `{round}.json`, every round verified with blstrs on load; the W1 MVP
-//!   serves the 32 SP-V2 fixture rounds; the contiguous ≈ 250k-round archive
-//!   waits for O-M1-12 and W2-C's prefetch tool), or
+//! - **a packed archive** ([`archive`]: segments of contiguous rounds with
+//!   a manifest; sha256-checked and sample-verified with blstrs at load,
+//!   fully verified by `drand-replay verify --all`) built by the
+//!   [`prefetch`] tool, which verifies every round as it fetches it (the
+//!   contiguous ≈ 250k-round quicknet archive waits for O-M1-12);
+//! - **a fixture directory** of `{round}.json` (the 32 SP-V2 rounds), every
+//!   round verified on load; or
 //! - **`--test-key`**: rounds signed on demand by the deterministic local key
 //!   of `fclient::beacon::TestKey` (accepted only by a `test-beacon` build of
-//!   the program; never deployable).
+//!   the program; never deployable), cached after the first signing.
 //!
 //! **Gating.** A round is served only once the *game* clock has reached its
 //! publication time: `round_time(r) + delay ≤ game_now`, where `delay` is
 //! quicknet's observed publication latency (0.8–2.0 s, default 1.0 s of
 //! game time). Earlier requests get `425 Too Early`, so seal secrecy holds
-//! for every component pointed at this server. (The contract's text reads
-//! `round_time ≤ game_now + delay`; that would serve rounds up to `delay`
-//! early, so the latency is applied after the round time instead — see the
-//! W1-F notes.)
+//! for every component pointed at this server (contract v1.2 §8.7).
 //!
 //! The game clock comes from the local chain node's Clock sysvar
-//! ([`ClockSource::Chain`], extrapolated with `GameClock` between polls), a
+//! ([`ClockSource::Chain`]: the last observed Clock, never extrapolated), a
 //! fixed value (tests), or wall time scaled from a start value.
 
-use std::collections::BTreeMap;
+pub mod archive;
+pub mod prefetch;
+
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -40,11 +43,32 @@ use fclient::ports::{Beacon, ChainInfo, ChainPort};
 
 /// Where rounds come from.
 pub enum Source {
+    /// A fixture directory of `{round}.json`.
     Archive {
         info: ChainInfo,
         rounds: BTreeMap<u64, Beacon>,
     },
+    /// A packed archive ([`archive::Archive`]).
+    Packed(archive::Archive),
     TestKey(TestKey),
+}
+
+/// Test-key signatures already computed (one hash-to-curve and a scalar
+/// multiplication each; the keeper, herald and bots ask for the same
+/// rounds many times). The key is the fixed `TestKey::new()`.
+fn test_key_sig(k: &TestKey, r: u64) -> [u8; 48] {
+    static CACHE: std::sync::OnceLock<Mutex<HashMap<u64, [u8; 48]>>> = std::sync::OnceLock::new();
+    let c = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(s) = c.lock().unwrap_or_else(|p| p.into_inner()).get(&r) {
+        return *s;
+    }
+    let s = k.sign(r);
+    let mut g = c.lock().unwrap_or_else(|p| p.into_inner());
+    if g.len() >= 65_536 {
+        g.clear();
+    }
+    g.insert(r, s);
+    s
 }
 
 impl Source {
@@ -57,9 +81,20 @@ impl Source {
         })
     }
 
+    /// A packed archive if `dir` has a manifest, else a fixture directory;
+    /// either way pinned to `info`.
+    pub fn open(dir: &Path, info: ChainInfo) -> Result<Source, String> {
+        if archive::Archive::is_packed(dir) {
+            Ok(Source::Packed(archive::Archive::load(dir, &info)?))
+        } else {
+            Source::archive(dir, info)
+        }
+    }
+
     pub fn info(&self) -> ChainInfo {
         match self {
             Source::Archive { info, .. } => info.clone(),
+            Source::Packed(a) => a.info.clone(),
             Source::TestKey(k) => k.info(),
         }
     }
@@ -67,7 +102,11 @@ impl Source {
     fn get(&self, r: u64) -> Option<Beacon> {
         match self {
             Source::Archive { rounds, .. } => rounds.get(&r).copied(),
-            Source::TestKey(k) => Some(k.beacon(r)),
+            Source::Packed(a) => a.get(r),
+            Source::TestKey(k) => Some(Beacon {
+                round: r,
+                sig48: test_key_sig(k, r),
+            }),
         }
     }
 
@@ -75,7 +114,11 @@ impl Source {
     fn latest_upto(&self, max: u64) -> Option<Beacon> {
         match self {
             Source::Archive { rounds, .. } => rounds.range(..=max).next_back().map(|(_, b)| *b),
-            Source::TestKey(k) => (max >= 1).then(|| k.beacon(max)),
+            Source::Packed(a) => a.latest_upto(max),
+            Source::TestKey(k) => (max >= 1).then(|| Beacon {
+                round: max,
+                sig48: test_key_sig(k, max),
+            }),
         }
     }
 }
@@ -224,7 +267,19 @@ async fn public(State(s): State<Shared>, UrlPath(which): UrlPath<String>) -> Res
         }
     };
     match r {
-        Ok(b) => Json(beacon::beacon_json(&b)).into_response(),
+        Ok(b) => {
+            // A published round never changes; `latest` does.
+            let cache = if which == "latest" {
+                "no-store"
+            } else {
+                "public, max-age=31536000, immutable"
+            };
+            (
+                [(axum::http::header::CACHE_CONTROL, cache)],
+                Json(beacon::beacon_json(&b)),
+            )
+                .into_response()
+        }
         Err(e) => refusal(e),
     }
 }
