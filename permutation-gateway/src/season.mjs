@@ -333,7 +333,7 @@ export async function registerPlanned({ base, cfg, store, entry, blockhash, keys
       name: entry.name, kind: 2, session: session.publicKey, stand: roleMask(entry.stand), votes: [NOBODY, NOBODY, NOBODY, NOBODY], deposit, tag: fromHex(entry.tag) }));
     tx.feePayer = crank.publicKey;
     tx.recentBlockhash = blockhash.blockhash;
-    tx.sign(crank, wallet);
+    tx.sign(crank, wallet, session);
     try {
       await sendWire(base, tx.serialize(), `register ${entry.name}`, { lastValidBlockHeight: blockhash.lastValidBlockHeight, fetch: false });
     } catch (e) {

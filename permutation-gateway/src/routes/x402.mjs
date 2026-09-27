@@ -18,8 +18,9 @@
 //
 // What it co-signs (a public route: the crank pays the fee and the member
 // account's rent): exactly one instruction, Register (no compute-budget
-// instruction), signed by exactly two keys — the facilitator (fee payer,
-// first) and the wallet, whose signature is checked here — for this season,
+// instruction), signed by exactly three keys — the facilitator (fee payer,
+// first), the wallet and the session key (never the facilitator or the
+// wallet), whose signatures are checked here — for this season,
 // vault and mint; a wallet that is not a member yet; a session key no member
 // has (a second one could not act, V5 §18); kind 2 (undeclared) in a season
 // with operator AI members (nobody's kind is shown there, V5 §18.2), and
@@ -50,7 +51,7 @@ import { RouteError, routeSeason } from './errors.mjs';
 const b64json = v => Buffer.from(JSON.stringify(v)).toString('base64');
 export const x402Network = cluster => (cluster === 'devnet' ? 'solana-devnet' : cluster === 'mainnet' ? 'solana' : 'solana-localnet');
 /** Register's accounts (chain.mjs `register`), by position. */
-export const REGISTER_KEYS = Object.freeze({ wallet: 0, feePayer: 1, season: 2, member: 3, walletToken: 4, vault: 5, mint: 6, tokenProgram: 7, system: 8 });
+export const REGISTER_KEYS = Object.freeze({ wallet: 0, feePayer: 1, season: 2, member: 3, walletToken: 4, vault: 5, mint: 6, tokenProgram: 7, system: 8, session: 9 });
 
 /** The member account, read through transient RPC errors (null if it is not there). */
 const memberAccount = (base, pda) => poll(() => base.getAccountInfo(pda, 'confirmed'), { attempts: 6, delayMs: 1000 });
@@ -110,9 +111,10 @@ export function parsePayment(header) {
 /**
  * What is wrong with a payment (empty if nothing), `tx` parsed
  * (solana-tx.mjs): exactly one instruction, this program's Register, for
- * this season, vault and mint and the requested nation; exactly two signers,
- * the facilitator (fee payer, first; also Register's fee payer) and the
- * wallet (never the facilitator), whose signature is valid. Keys base58.
+ * this season, vault and mint and the requested nation; exactly three
+ * signers, the facilitator (fee payer, first; also Register's fee payer),
+ * the wallet (never the facilitator) and the session key named in the data
+ * (account 9; a key of its own), whose signatures are valid. Keys base58.
  */
 export function paymentProblems({ payment, tx, network, programId, season, vault, mint = null, facilitator, civ = null }) {
   const problems = [];
@@ -121,9 +123,9 @@ export function paymentProblems({ payment, tx, network, programId, season, vault
   if (!ix || ix.programId !== programId || ix.data[0] !== IX_TAG.register) problems.push('must contain exactly one Register and nothing else (no compute-budget instructions)');
   const register = ix && ix.programId === programId ? decodeRegister(ix.data) : null;
   if (ix && ix.programId === programId && ix.data[0] === IX_TAG.register && !register) problems.push('malformed Register data');
-  if (tx.signers.length !== 2 || tx.signers[0] !== facilitator) problems.push('the fee payer must be the facilitator, and the wallet the only other signer');
+  if (tx.signers.length !== 3 || tx.signers[0] !== facilitator) problems.push('three signers: the facilitator (fee payer, first), the wallet and the session key');
   const keys = ix?.keys ?? [];
-  if (register && keys.length !== 9) problems.push('Register takes 9 accounts');
+  if (register && keys.length !== 10) problems.push('Register takes 10 accounts (the last is the session key, a signer)');
   if (register && keys[REGISTER_KEYS.feePayer]?.pubkey !== facilitator) problems.push('Register\'s fee payer must be the facilitator');
   if (register && (keys[REGISTER_KEYS.season]?.pubkey !== season || keys[REGISTER_KEYS.vault]?.pubkey !== vault)) problems.push('wrong season or vault');
   if (register && mint && keys[REGISTER_KEYS.mint]?.pubkey !== mint) problems.push('wrong mint');
@@ -131,6 +133,10 @@ export function paymentProblems({ payment, tx, network, programId, season, vault
   // The facilitator only ever pays the fee: it must never be the one paying the entry.
   if (payer && payer === facilitator) problems.push('payer must not be the facilitator');
   else if (payer && !signedBy(tx, payer)) problems.push('payer signature missing or invalid');
+  const session = register ? base58(register.session) : null;
+  if (register && keys[REGISTER_KEYS.session]?.pubkey !== session) problems.push('account 9 must be the session key named in the data');
+  else if (session && (session === facilitator || session === payer)) problems.push('the session key must be a key of its own (not the facilitator, not the wallet)');
+  else if (session && !signedBy(tx, session)) problems.push('session key signature missing or invalid');
   if (register && civ !== null && register.civ !== civ) problems.push('the transaction registers for another nation than requested');
   return { problems, payer, register };
 }

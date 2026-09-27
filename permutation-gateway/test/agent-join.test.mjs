@@ -13,7 +13,8 @@ import { GameClient } from '../client/src/game.mjs';
 import { ASSOCIATED_TOKEN_PROGRAM, ata } from '../client/src/player.mjs';
 import { parseTransaction } from '../client/src/solana-tx.mjs';
 import { joinViaX402, randomOffices } from '../client/src/x402-client.mjs';
-import { claimPrize, joinSeason } from '../agents/runner.mjs';
+import { claimPrize, govern, joinSeason, toPropose } from '../agents/runner.mjs';
+import { verifyTalk } from '../client/src/talk-node.mjs';
 import { decodeRegister } from '../src/routes/x402.mjs';
 import { gateway, memberData, programId } from './gateway-fixtures.mjs';
 
@@ -52,6 +53,10 @@ test('agents/runner joinSeason: the faucet, then x402 with the SDK\'s defaults: 
     const [reg] = s.registers();
     assert.deepEqual([reg.kind, reg.deposit, reg.stand, reg.votes, reg.name], [2, 2_500_000n, roleMask(['Science', 'Diplomat']), [NOBODY, NOBODY, NOBODY, NOBODY], 'Gaia']);
     assert.deepEqual(s.requests, ['POST /faucet', 'POST /x402/join', 'POST /x402/join']);
+    // The payment was signed by the wallet and the session key (the program takes only a session key that signed).
+    const sent = parseTransaction(s.g.base.sent.find(raw => parseTransaction(raw).instructions.length === 1));
+    assert.deepEqual(sent.signers.slice(1).sort(), [wallet.publicKey.toBase58(), session.publicKey.toBase58()].sort());
+    for (const [i, k] of sent.signers.entries()) assert.ok(verifyTalk(sent.message, sent.signatures[i], new PublicKey(k).toBytes()), `signature ${i}`);
   } finally {
     await s.close();
   }
@@ -105,4 +110,18 @@ test('agents/runner claimPrize: never the faucet (closed after registration); in
   } finally {
     await s.close();
   }
+});
+
+test('agents/runner: treasury orders for offices it does not hold are dropped, not proposed (the rest of the group still is)', async () => {
+  const view = { units: [], gov: { proposals: [] } };
+  const envoy = { type: 'SendEnvoy', cityState: 1, influence: 5 };
+  const offer = { type: 'OfferContract', to: 2, term: { kind: 'Peace' }, usdc: 1, deadline: 9 };
+  const logs = [];
+  const proposals = toPropose([offer, envoy, { type: 'SetResearch', techs: ['Writing'] }], ['Science'], view, m => logs.push(m));
+  assert.deepEqual(proposals, [envoy]);
+  assert.equal(logs.length, 1, 'said once');
+  const proposed = [];
+  const game = { member: 3, propose: async (role, orders) => { proposed.push([role, orders]); return { ok: true }; } };
+  await govern({ game, view: { ...view, tick: 10 }, proposals, stand: [], proposedAt: new Map(), log: () => {} });
+  assert.deepEqual(proposed, [['Diplomat', [envoy]]]);
 });

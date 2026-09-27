@@ -8,7 +8,10 @@
 //! * `errors`: program error codes and names;
 //! * `constants`: layout sizes, limits, PDA seeds, magics and names;
 //! * `offices`: which offices may give each order (`role_allows_static`);
-//! * `claims`: inputs and outputs of the program's `claim_amount`.
+//! * `claims`: inputs and outputs of the program's `claim_amount`;
+//! * `govSlots`, `govQuota`, `bond`, `lifecycle`, `vrf`: the pure helpers the
+//!   clients mirror (`state::gov_slots`, `gov_quota`, `bond_floor`,
+//!   `forfeit_penalty`, `lifecycle::*`, `randomness::*`).
 //!
 //! `UPDATE_VECTORS=1 cargo test --test codec_vectors` rewrites the file;
 //! otherwise the file must match (so a Rust-side change fails loudly).
@@ -19,24 +22,35 @@
 use borsh::BorshDeserialize;
 use permutation_chain::error::ChainError;
 use permutation_chain::instruction::ChainInstruction;
+use permutation_chain::lifecycle::{
+    check_abort, escrow, ops_after_abort, refund_amount, running_deadline, WorldView,
+};
+use permutation_chain::randomness::{
+    self, RAND_DEV, RAND_FALLBACK, RAND_NONE, RAND_PENDING, RAND_VRF, SEED_DEV, SEED_NONE,
+    SEED_PENDING, SEED_VRF, VRF_PROGRAM_ID, VRF_QUEUE_BASE, VRF_QUEUE_ER,
+};
 use permutation_chain::state::{
-    MemberAccount, NationAccount, RollSeat, RosterAccount, RosterEntry, Season, SeasonStatus,
-    WorldMeta, ABORT_GRACE_SECONDS, CHUNK, DEGRADED, FINISH_GRACE_SECONDS, GENESIS_MAGIC,
-    GOV_QUOTA_MAX, GOV_QUOTA_MIN, GOV_SLOTS_PER_TICK, GOV_SLOT_BYTES, INPUT_CHUNK,
-    LEGACY_SEASON_MAGIC, MAX_AI, MAX_BOND, MAX_BOUNTY, MAX_DEPOSIT, MAX_ENTRY_FEE,
-    MAX_GENESIS_WORK, MAX_GOV_ACTION_BYTES, MAX_GOV_PER_SIGNER, MAX_MEMBERS, MAX_NAME, MAX_NATIONS,
-    MAX_NATIONS_PER_INTENT, MAX_REGISTRATION_SECONDS, MAX_REVEAL_BYTES, MAX_TICK_SECONDS,
-    MEMBER_MAGIC, MEMBER_SEED, NATION_MAGIC, NATION_MEMBER_CAP, NATION_SEED, REVEAL_ROOM,
-    ROSTER_GRACE_SECONDS, ROSTER_MAGIC, ROSTER_SEED, SEASON_MAGIC, SEASON_MEMBER_CAP, SEASON_SEED,
-    SEED_RETRY_SECONDS, TAKEOVER_SECONDS, TICK0_GRACE_SECONDS, TICK_OVERHEAD_SECONDS,
+    all_targets, bond_floor, degrade_after, forfeit_penalty, gov_quota, gov_slots, MemberAccount,
+    NationAccount, RollSeat, RosterAccount, RosterEntry, Season, SeasonStatus, WorldMeta,
+    ABORT_GRACE_SECONDS, CHUNK, DEGRADED, FINISH_GRACE_SECONDS, GENESIS_MAGIC, GOV_QUOTA_MAX,
+    GOV_QUOTA_MIN, GOV_SLOTS_PER_TICK, GOV_SLOT_BYTES, INPUT_CHUNK, LEGACY_SEASON_MAGIC, MAX_AI,
+    MAX_BOND, MAX_BOUNTY, MAX_DEPOSIT, MAX_ENTRY_FEE, MAX_GENESIS_WORK, MAX_GOV_ACTION_BYTES,
+    MAX_GOV_PER_SIGNER, MAX_MEMBERS, MAX_NAME, MAX_NATIONS, MAX_NATIONS_PER_INTENT,
+    MAX_REGISTRATION_SECONDS, MAX_REVEAL_BYTES, MAX_TICK_SECONDS, MEMBER_MAGIC, MEMBER_SEED,
+    MIN_NATIONS, NATION_HEAD_LEN, NATION_MAGIC, NATION_MEMBER_CAP, NATION_SEED, PRESET_BLITZ,
+    REVEAL_ROOM, ROSTER_GRACE_SECONDS, ROSTER_MAGIC, ROSTER_SEED, SEASON_MAGIC, SEASON_MEMBER_CAP,
+    SEASON_SEED, SEED_RETRY_SECONDS, TAKEOVER_SECONDS, TICK0_GRACE_SECONDS, TICK_OVERHEAD_SECONDS,
     USDC_DECIMALS, VAULT_SEED, VRF_GIVEUP_SECONDS, VRF_RETRY_SECONDS, WORLD_BODY_MAX, WORLD_CHUNKS,
     WORLD_HEADER, WORLD_MAGIC, WORLD_META_SPACE, WORLD_SEED,
 };
-use permutation_chain::{payout::claim_amount, state::NATION_TARGET};
+use permutation_chain::{payout::claim_amount, state::NATION_TARGET, CANONICAL_PROGRAM_ID};
 use permutation_rules::decision::{MAX_POLICY, MAX_RATIONALE};
 use permutation_rules::genesis::NATIONS;
 use permutation_rules::gov::Role;
-use permutation_rules::orders::role_allows_static;
+use permutation_rules::orders::{
+    role_allows_static, MAX_BATCH_ORDERS, MAX_FREE_ORDERS, MAX_ORDER_COORD,
+};
+use permutation_rules::params::{Preset, Ruleset};
 use permutation_server::api::{GovDto, OrderDto};
 use permutation_server::ledger::BATCH_BYTES;
 use serde_json::{json, Value};
@@ -235,35 +249,76 @@ fn status_name(s: SeasonStatus) -> String {
     format!("{s:?}")
 }
 
+/// `Season::aborted_from` as the JS decoder names it (a `SeasonStatus`).
+fn status_of(tag: u8) -> String {
+    status_name(SeasonStatus::try_from_slice(&[tag]).unwrap())
+}
+
+/// A season's decoded JSON, as `decodeSeason` returns it.
+fn season_json(s: &Season) -> Value {
+    json!({
+        "seasonId": s.season_id.to_string(), "bump": s.bump, "vaultBump": s.vault_bump, "admin": hex(&s.admin), "crank": hex(&s.crank),
+        "usdcMint": hex(&s.usdc_mint), "usdcDecimals": s.usdc_decimals, "preset": s.preset, "nations": s.nations,
+        "entryFee": s.entry_fee.to_string(), "tickSeconds": s.tick_seconds, "market": s.market, "status": status_name(s.status),
+        "worldSeed": hex(&s.world_seed), "seasonSeed": hex(&s.season_seed), "memberCount": s.member_count,
+        "nationMembers": s.nation_members, "seated": s.seated, "pool": s.pool.to_string(), "ops": s.ops.to_string(),
+        "opsWithdrawn": s.ops_withdrawn, "treasury": u64s(&s.treasury), "treasuryFinal": u64s(&s.treasury_final),
+        "payouts": u64s(&s.payouts), "finalRoot": hex(&s.final_root),
+        "prevSeasonId": s.prev_season_id.to_string(), "prevHistoryRoot": hex(&s.prev_history_root), "historyRoot": hex(&s.history_root),
+        "aiCount": s.ai_count, "rosterCommit": hex(&s.roster_commit), "bountyEach": s.bounty_each.to_string(), "bond": s.bond.to_string(),
+        "rosterAcc": hex(&s.roster_acc), "rosterRevealed": s.roster_revealed,
+        "rosterOutcome": (["none", "revealed", "forfeited"][s.roster_outcome as usize]), "bountyPaid": u64s(&s.bounty_paid),
+        "delegated": s.delegated, "rosterBlind": hex(&s.roster_blind), "refundBase": u64s(&s.refund_base),
+        "refundInPayout": hex(&s.refund_in_payout), "seedState": s.seed_state, "seedOracle": hex(&s.seed_oracle),
+        "seedRequestedAt": s.seed_requested_at, "seedRequests": s.seed_requests, "deposit": s.deposit.to_string(),
+        "outstanding": s.outstanding.to_string(), "voided": s.voided, "startBy": s.start_by, "stageAt": s.stage_at,
+        "rolledBack": s.rolled_back, "abortedFrom": status_of(s.aborted_from), "validator": hex(&s.validator),
+        "rulesVersion": s.rules_version, "rulesHash": hex(&s.rules_hash), "logicVersion": s.logic_version,
+        "createdSlot": s.created_slot.to_string(), "legacy": s.magic == LEGACY_SEASON_MAGIC,
+    })
+}
+
+/// A `PSSEASN7` account as the previous program left it: the fields up to
+/// `bounty_paid`, then zeros (read by `load_season_compat`; every v8 tail
+/// field decodes as zero / empty from them).
+fn legacy_season() -> Season {
+    let s = sample_season();
+    Season {
+        magic: LEGACY_SEASON_MAGIC,
+        delegated: 0,
+        roster_blind: [0; 32],
+        refund_base: vec![],
+        refund_in_payout: vec![],
+        seed_state: 0,
+        seed_oracle: [0; 32],
+        seed_requested_at: 0,
+        seed_requests: 0,
+        deposit: 0,
+        outstanding: 0,
+        voided: false,
+        start_by: 0,
+        stage_at: 0,
+        rolled_back: 0,
+        aborted_from: 0,
+        validator: [0; 32],
+        rules_version: 0,
+        rules_hash: [0; 32],
+        logic_version: 0,
+        created_slot: 0,
+        ..s
+    }
+}
+
 fn account_vectors() -> Value {
     let s = sample_season();
+    let legacy = legacy_season();
     let ro = sample_roster();
     let m = sample_member();
     let n = sample_nation();
     let meta = sample_meta();
     json!({
-        "season": {
-            "hex": hex(&borsh::to_vec(&s).unwrap()),
-            "decoded": {
-                "seasonId": s.season_id.to_string(), "bump": s.bump, "vaultBump": s.vault_bump, "admin": hex(&s.admin), "crank": hex(&s.crank),
-                "usdcMint": hex(&s.usdc_mint), "usdcDecimals": s.usdc_decimals, "preset": s.preset, "nations": s.nations,
-                "entryFee": s.entry_fee.to_string(), "tickSeconds": s.tick_seconds, "market": s.market, "status": status_name(s.status),
-                "worldSeed": hex(&s.world_seed), "seasonSeed": hex(&s.season_seed), "memberCount": s.member_count,
-                "nationMembers": s.nation_members, "seated": s.seated, "pool": s.pool.to_string(), "ops": s.ops.to_string(),
-                "opsWithdrawn": s.ops_withdrawn, "treasury": u64s(&s.treasury), "treasuryFinal": u64s(&s.treasury_final),
-                "payouts": u64s(&s.payouts), "finalRoot": hex(&s.final_root),
-                "prevSeasonId": s.prev_season_id.to_string(), "prevHistoryRoot": hex(&s.prev_history_root), "historyRoot": hex(&s.history_root),
-                "aiCount": s.ai_count, "rosterCommit": hex(&s.roster_commit), "bountyEach": s.bounty_each.to_string(), "bond": s.bond.to_string(),
-                "rosterAcc": hex(&s.roster_acc), "rosterRevealed": s.roster_revealed, "rosterOutcome": "revealed", "bountyPaid": u64s(&s.bounty_paid),
-                "delegated": s.delegated, "rosterBlind": hex(&s.roster_blind), "refundBase": u64s(&s.refund_base),
-                "refundInPayout": hex(&s.refund_in_payout), "seedState": s.seed_state, "seedOracle": hex(&s.seed_oracle),
-                "seedRequestedAt": s.seed_requested_at, "seedRequests": s.seed_requests, "deposit": s.deposit.to_string(),
-                "outstanding": s.outstanding.to_string(), "voided": s.voided, "startBy": s.start_by, "stageAt": s.stage_at,
-                "rolledBack": s.rolled_back, "abortedFrom": s.aborted_from, "validator": hex(&s.validator),
-                "rulesVersion": s.rules_version, "rulesHash": hex(&s.rules_hash), "logicVersion": s.logic_version,
-                "createdSlot": s.created_slot.to_string(),
-            },
-        },
+        "season": { "hex": hex(&borsh::to_vec(&s).unwrap()), "decoded": season_json(&s) },
+        "legacySeason": { "hex": hex(&borsh::to_vec(&legacy).unwrap()), "decoded": season_json(&legacy) },
         "roster": {
             "hex": hex(&borsh::to_vec(&ro).unwrap()),
             "decoded": {
@@ -288,8 +343,11 @@ fn account_vectors() -> Value {
                 "frozen": n.frozen, "revealing": n.revealing, "deadline": n.deadline, "committed": n.committed,
                 "commits": n.commits.iter().map(|k| hex(k)).collect::<Vec<_>>(),
                 "salts": n.salts.iter().map(|k| hex(k)).collect::<Vec<_>>(), "govQuota": n.gov_quota,
-                "roll": n.roll.iter().map(|r| json!({"member": r.member, "key8": hex(&r.key8)})).collect::<Vec<_>>(),
             },
+            // `decodeNationHeader` reads the fixed front (`NationHead`,
+            // `NATION_HEAD_LEN` bytes); the roll comes after the batches and
+            // the inbox.
+            "headLen": NATION_HEAD_LEN,
         },
         "worldHeader": {
             "hex": hex(&world_header(&meta, 23_456)),
@@ -330,6 +388,16 @@ fn constant_vectors() -> Value {
         "TICK_OVERHEAD_SECONDS": TICK_OVERHEAD_SECONDS, "TAKEOVER_SECONDS": TAKEOVER_SECONDS, "TICK0_GRACE_SECONDS": TICK0_GRACE_SECONDS,
         "DEGRADED": DEGRADED, "VRF_RETRY_SECONDS": VRF_RETRY_SECONDS, "VRF_GIVEUP_SECONDS": VRF_GIVEUP_SECONDS,
         "SEED_RETRY_SECONDS": SEED_RETRY_SECONDS, "MAX_NATIONS_PER_INTENT": MAX_NATIONS_PER_INTENT,
+        "PRESET_BLITZ": PRESET_BLITZ, "MIN_NATIONS": MIN_NATIONS, "NATION_HEAD_LEN": NATION_HEAD_LEN,
+        "NATION_BASE_LEN": NationAccount::base_len(0), "MAX_BATCH_ORDERS": MAX_BATCH_ORDERS, "MAX_FREE_ORDERS": MAX_FREE_ORDERS,
+        "TICKS_PER_SEASON": Ruleset::new(Preset::Blitz).ticks_per_season,
+        "EXCHANGE_MAX_PRICE": Ruleset::new(Preset::Blitz).exchange_max_price.to_string(),
+        "MAX_TRADE_AMOUNT": Ruleset::new(Preset::Blitz).max_trade_amount, "MAX_ORDER_COORD": MAX_ORDER_COORD,
+        "RAND": { "none": RAND_NONE, "pending": RAND_PENDING, "vrf": RAND_VRF, "fallback": RAND_FALLBACK, "dev": RAND_DEV },
+        "SEED": { "none": SEED_NONE, "pending": SEED_PENDING, "vrf": SEED_VRF, "dev": SEED_DEV },
+        "VRF_PROGRAM_ID": VRF_PROGRAM_ID.to_string(), "VRF_QUEUE_BASE": VRF_QUEUE_BASE.to_string(),
+        "VRF_QUEUE_ER": VRF_QUEUE_ER.to_string(), "CANONICAL_PROGRAM_ID": CANONICAL_PROGRAM_ID,
+        "degradeAfter": ([1u32, 30, 300, 301, 600, 14_400]).iter().map(|t| json!([t, degrade_after(*t)])).collect::<Vec<_>>(),
         "SEEDS": { "season": text(SEASON_SEED), "world": text(WORLD_SEED), "nation": text(NATION_SEED), "member": text(MEMBER_SEED), "vault": text(VAULT_SEED), "roster": text(ROSTER_SEED) },
         "MAGIC": { "season": text(&SEASON_MAGIC), "legacySeason": text(&LEGACY_SEASON_MAGIC), "member": text(&MEMBER_MAGIC), "nation": text(&NATION_MAGIC), "world": text(&WORLD_MAGIC), "genesis": text(&GENESIS_MAGIC), "roster": text(&ROSTER_MAGIC) },
         "NATIONS": NATIONS,
@@ -352,14 +420,64 @@ fn roster_vectors() -> Value {
             "seasonId": s.to_string(), "wallet": hex(w), "salt": hex(x), "tag": hex(t),
         })).collect::<Vec<_>>(),
         "chain": hex(&roster_chain(&tags)),
+        // WP09's blinded commitment `sha256("permutation-rules/roster-commit"
+        // ‖ blind ‖ chain)`, which CreateSeason stores and the completing
+        // RevealRoster opens (the formula of WP09 §4.1).
+        "commits": ([[0u8; 32], [3; 32], [0xa5; 32]]).iter().map(|blind| {
+            let chain = roster_chain(&tags);
+            json!({"blind": hex(blind), "chain": hex(&chain),
+                   "commit": hex(&permutation_rules::hash::sha256(&[b"permutation-rules/roster-commit", blind, &chain]))})
+        }).collect::<Vec<_>>(),
+    })
+}
+
+/// The season inputs of `claim_amount` and the lifecycle helpers, as the JS
+/// side takes them (a subset of `decodeSeason`).
+fn money_json(s: &Season) -> Value {
+    json!({
+        "status": status_name(s.status), "abortedFrom": status_of(s.aborted_from), "entryFee": s.entry_fee.to_string(),
+        "memberCount": s.member_count, "aiCount": s.ai_count, "bountyEach": s.bounty_each.to_string(), "bond": s.bond.to_string(),
+        "payouts": u64s(&s.payouts), "treasury": u64s(&s.treasury), "treasuryFinal": u64s(&s.treasury_final),
+        "refundBase": u64s(&s.refund_base), "refundInPayout": hex(&s.refund_in_payout), "legacy": s.magic == LEGACY_SEASON_MAGIC,
     })
 }
 
 /// (payouts, treasury, treasury_final, member index, civ, shares)
 type ClaimCase = (Vec<u64>, Vec<u64>, Vec<u64>, u32, u16, u64);
 
+/// Whether this build's `claim_amount` has the v9 rules (WP10 refund flags
+/// and base, WP14 refunds after an abort). The JS client implements them;
+/// its test holds the cases that need them to the vectors only once the
+/// program does (the vectors are regenerated when it lands).
+fn claim_rule_v9() -> bool {
+    let flagged = Season {
+        payouts: vec![7],
+        treasury: vec![10],
+        treasury_final: vec![10],
+        refund_base: vec![10],
+        refund_in_payout: vec![1],
+        ..sample_season()
+    };
+    let m = MemberAccount {
+        index: 0,
+        civ: 0,
+        shares: 10,
+        ..sample_member()
+    };
+    let aborted = Season {
+        status: SeasonStatus::Aborted,
+        aborted_from: SeasonStatus::Seating as u8,
+        ..sample_season()
+    };
+    claim_amount(&flagged, &m) == 7 && claim_amount(&aborted, &m) == refund_amount(&aborted, &m)
+}
+
 fn claim_vectors() -> Value {
-    let base = sample_season();
+    let base = Season {
+        refund_base: vec![],
+        refund_in_payout: vec![],
+        ..sample_season()
+    };
     let cases: Vec<ClaimCase> = vec![
         (
             vec![12_000_000, 0, 7],
@@ -397,18 +515,354 @@ fn claim_vectors() -> Value {
             u64::MAX / 3,
         ),
     ];
-    let out: Vec<Value> = cases
+    // Legacy rule (empty `refund_base`: the refund is over `treasury`), for
+    // PSSEASN7 seasons and every season before FinishSeason.
+    let mut out: Vec<(Season, MemberAccount, bool)> = cases
         .into_iter()
         .map(|(payouts, treasury, treasury_final, index, civ, shares)| {
-            let season = Season { payouts: payouts.clone(), treasury: treasury.clone(), treasury_final: treasury_final.clone(), ..base.clone() };
-            let member = MemberAccount { index, civ, shares, ..sample_member() };
+            let season = Season {
+                payouts,
+                treasury,
+                treasury_final,
+                ..base.clone()
+            };
+            (
+                season,
+                MemberAccount {
+                    index,
+                    civ,
+                    shares,
+                    ..sample_member()
+                },
+                false,
+            )
+        })
+        .collect();
+    let finalized = Season {
+        payouts: vec![12_000_000, 3_000_000, 1_000_000, 9, 4],
+        treasury: vec![5_000_000, 2_000_000],
+        treasury_final: vec![4_000_000, 3_000_000],
+        refund_base: vec![4_000_000, 2_000_000],
+        refund_in_payout: vec![0b0000_0110],
+        ..base.clone()
+    };
+    let member = |index, civ, shares| MemberAccount {
+        index,
+        civ,
+        shares,
+        ..sample_member()
+    };
+    // WP10: refund over `refund_base`; flagged members (revealed AIs) get their payout alone.
+    out.push((finalized.clone(), member(0, 0, 2_500_000), true));
+    out.push((finalized.clone(), member(1, 0, 1_000_000), true));
+    out.push((finalized.clone(), member(2, 1, 2_000_000), true));
+    out.push((finalized.clone(), member(3, 1, 2_000_000), true));
+    out.push((
+        Season {
+            refund_base: vec![0, 2_000_000],
+            ..finalized.clone()
+        },
+        member(4, 0, 5),
+        true,
+    ));
+    out.push((
+        Season {
+            payouts: vec![u64::MAX],
+            ..finalized.clone()
+        },
+        member(0, 0, 4_000_000),
+        true,
+    ));
+    // A legacy PSSEASN7 season: its tail is zero, so the legacy rule.
+    let legacy = legacy_season();
+    out.push((legacy.clone(), member(0, 0, 2_500_000), false));
+    // WP14: after an abort, what Register took (plus a forfeited escrow share).
+    for from in [
+        SeasonStatus::Registering,
+        SeasonStatus::Seeding,
+        SeasonStatus::Seating,
+        SeasonStatus::Running,
+    ] {
+        let s = Season {
+            status: SeasonStatus::Aborted,
+            aborted_from: from as u8,
+            member_count: 7,
+            ai_count: 3,
+            bounty_each: 1_000_003,
+            bond: 60_000_001,
+            ..finalized.clone()
+        };
+        out.push((s, member(1, 0, 2_000_000), true));
+    }
+    // Until the program has the v9 rules, their cases carry no amount (the
+    // HEAD rule would even overflow on the saturating one).
+    let rule_v9 = claim_rule_v9();
+    Value::Array(
+        out.into_iter()
+            .map(|(season, m, v9)| {
+                let amount = (rule_v9 || !v9).then(|| claim_amount(&season, &m).to_string());
+                json!({
+                    "season": money_json(&season), "index": m.index, "civ": m.civ, "shares": m.shares.to_string(),
+                    "amount": amount, "v9": v9,
+                })
+            })
+            .collect(),
+    )
+}
+
+/// `gov_slots` of every governance vector plus proposals at and past the
+/// size limit (`None` → null).
+fn gov_slot_vectors(govs: &[Value]) -> Value {
+    let step = |i: i32| json!([i, -i]);
+    let path: Vec<Value> = (0..12).map(step).collect();
+    let long: Vec<Value> = (0..40).map(step).collect();
+    let mv = |p: &Vec<Value>| json!({"type": "MoveUnit", "unit": 7, "path": p});
+    let mut all: Vec<Value> = govs.to_vec();
+    all.push(json!({"type": "Propose", "role": "General", "orders": [mv(&path), mv(&path), mv(&path), mv(&path)]}));
+    all.push(json!({"type": "Propose", "role": "Steward", "orders": (0..5).map(|c| json!({"type": "Purchase", "city": c, "gold": 9})).collect::<Vec<_>>()}));
+    all.push(json!({"type": "Propose", "role": "General", "orders": [mv(&long), mv(&long)]}));
+    all.push(json!({"type": "Propose", "role": "Science", "orders": []}));
+    Value::Array(
+        all.into_iter()
+            .map(|dto| {
+                let action = serde_json::from_value::<GovDto>(dto.clone()).unwrap().to_action().unwrap();
+                json!({"dto": dto, "bytes": borsh::object_length(&action).unwrap(), "slots": gov_slots(&action)})
+            })
+            .collect(),
+    )
+}
+
+/// `gov_quota(members, here)` over the season and nation sizes a Blitz season can have.
+fn gov_quota_vectors() -> Value {
+    let mut out = Vec::new();
+    for members in [1u32, 2, 5, 8, 12, 17, 24, 36, 48, 96, 256] {
+        for here in [1u32, 2, 4, 8, 12, 16, 24] {
+            if here <= members {
+                out.push(json!([members, here, gov_quota(members, here)]));
+            }
+        }
+    }
+    Value::Array(out)
+}
+
+/// `forfeit_penalty` and `bond_floor` (WP09) for seasons around the caps.
+fn bond_vectors() -> Value {
+    let fee = 10_000_000u64;
+    let mut out = Vec::new();
+    for (n, a, bounty, deposits) in [
+        (0u32, 0u16, 0u64, 0u64),
+        (5, 0, 5_000_000, 0),
+        (3, 3, 5_000_000, 0),
+        (4, 3, 5_000_000, 0),
+        (12, 3, 5_000_000, 2_000_000),
+        (48, 47, 1_000_000_000, 1_000_000_000),
+        (48, 40, 1_000_000, 0),
+        (2, 1, 0, 0),
+        (48, 12, 1_000_000_000, 48_000_000_000),
+    ] {
+        let s = Season {
+            entry_fee: fee,
+            member_count: n,
+            ai_count: a,
+            bounty_each: bounty,
+            pool: n as u64 * fee * 8 / 10,
+            treasury: vec![deposits, 0, 3, 0, 0, 0],
+            ..sample_season()
+        };
+        out.push(json!({
+            "entryFee": s.entry_fee.to_string(), "memberCount": n, "aiCount": a, "bountyEach": bounty.to_string(),
+            "pool": s.pool.to_string(), "treasury": u64s(&s.treasury),
+            "forfeitPenalty": forfeit_penalty(&s).to_string(), "bondFloor": bond_floor(&s).to_string(),
+        }));
+    }
+    let max = Season {
+        entry_fee: u64::MAX,
+        member_count: 48,
+        ai_count: 47,
+        pool: u64::MAX,
+        bounty_each: u64::MAX,
+        treasury: vec![u64::MAX; 6],
+        ..sample_season()
+    };
+    out.push(json!({
+        "entryFee": max.entry_fee.to_string(), "memberCount": 48, "aiCount": 47, "bountyEach": max.bounty_each.to_string(),
+        "pool": max.pool.to_string(), "treasury": u64s(&max.treasury),
+        "forfeitPenalty": forfeit_penalty(&max).to_string(), "bondFloor": bond_floor(&max).to_string(),
+    }));
+    Value::Array(out)
+}
+
+/// `lifecycle`: running deadlines, `check_abort` verdicts, and the refunds after an abort.
+fn lifecycle_vectors() -> Value {
+    let base = Season {
+        start_by: 1_000,
+        stage_at: 500,
+        tick_seconds: 30,
+        delegated: 0,
+        member_count: 12,
+        ..sample_season()
+    };
+    let ticks = Ruleset::new(Preset::Blitz).ticks_per_season;
+    let home = |finished: bool, precheck_ok: bool| WorldView {
+        all_home: true,
+        chunk0_home: true,
+        is_world: true,
+        finished,
+        deadline: 530,
+        precheck_ok,
+    };
+    let away = WorldView {
+        all_home: false,
+        chunk0_home: false,
+        is_world: false,
+        finished: false,
+        deadline: 530,
+        precheck_ok: false,
+    };
+    let running = Season {
+        status: SeasonStatus::Running,
+        ..base.clone()
+    };
+    let delegated = Season {
+        delegated: all_targets(6),
+        ..running.clone()
+    };
+    let rd = running_deadline(&delegated, ticks);
+    let day = ABORT_GRACE_SECONDS;
+    let with = |status| Season {
+        status,
+        ..base.clone()
+    };
+    let mut cases: Vec<(Season, Option<WorldView>, bool, i64)> = vec![
+        (with(SeasonStatus::Registering), None, true, 0),
+        (
+            with(SeasonStatus::Registering),
+            None,
+            false,
+            1_000 + day - 1,
+        ),
+        (with(SeasonStatus::Registering), None, false, 1_000 + day),
+        (with(SeasonStatus::Seeding), None, true, 500 + day - 1),
+        (with(SeasonStatus::Seeding), None, false, 500 + day),
+        (with(SeasonStatus::Genesis), None, true, 500 + day - 1),
+        (with(SeasonStatus::Seating), None, false, 500 + day),
+        (
+            running.clone(),
+            Some(home(false, false)),
+            false,
+            530 + day - 1,
+        ),
+        (running.clone(), Some(home(false, false)), false, 530 + day),
+        (
+            running.clone(),
+            Some(WorldView {
+                deadline: 530 + day,
+                ..home(false, false)
+            }),
+            false,
+            530 + day,
+        ),
+        (running.clone(), None, false, rd),
+        (delegated.clone(), Some(away), false, 530 + day),
+        (delegated.clone(), Some(away), false, rd - 1),
+        (delegated.clone(), Some(away), false, rd),
+        (delegated.clone(), Some(home(true, true)), false, rd),
+        (
+            delegated.clone(),
+            Some(home(true, true)),
+            false,
+            rd + FINISH_GRACE_SECONDS - 1,
+        ),
+        (
+            delegated.clone(),
+            Some(home(true, true)),
+            false,
+            rd + FINISH_GRACE_SECONDS,
+        ),
+        (delegated.clone(), Some(home(true, false)), false, rd),
+        (with(SeasonStatus::Finalized), None, true, i64::MAX),
+        (with(SeasonStatus::Aborted), None, true, i64::MAX),
+    ];
+    let long = Season {
+        stage_at: i64::MAX - 10,
+        ..delegated.clone()
+    };
+    cases.push((long, Some(away), false, i64::MAX));
+    let view_json = |w: &WorldView| {
+        json!({"allHome": w.all_home, "chunk0Home": w.chunk0_home, "isWorld": w.is_world, "finished": w.finished,
+               "deadline": w.deadline, "precheckOk": w.precheck_ok})
+    };
+    let season_json = |s: &Season| {
+        json!({"status": status_name(s.status), "startBy": s.start_by, "stageAt": s.stage_at, "tickSeconds": s.tick_seconds,
+               "delegated": s.delegated})
+    };
+    let abort: Vec<Value> = cases
+        .iter()
+        .map(|(s, w, operator, now)| {
             json!({
-                "payouts": u64s(&payouts), "treasury": u64s(&treasury), "treasuryFinal": u64s(&treasury_final),
-                "index": index, "civ": civ, "shares": shares.to_string(), "amount": claim_amount(&season, &member).to_string(),
+                "season": season_json(s), "view": w.as_ref().map(view_json), "operator": operator, "now": now.to_string(),
+                "runningDeadline": running_deadline(s, ticks).to_string(),
+                "result": check_abort(s, ticks, w.as_ref(), *operator, *now).err().map(|e| e.name()),
             })
         })
         .collect();
-    Value::Array(out)
+    let mut refunds = Vec::new();
+    for (from, n, ai, bounty, bond, shares) in [
+        (
+            SeasonStatus::Registering,
+            12u32,
+            3u16,
+            1_000_000u64,
+            6_000_000u64,
+            2_000_000u64,
+        ),
+        (
+            SeasonStatus::Seating,
+            12,
+            3,
+            1_000_000,
+            6_000_000,
+            2_000_000,
+        ),
+        (SeasonStatus::Seeding, 7, 2, 333_333, 1, 0),
+        (SeasonStatus::Running, 48, 47, 1_000_003, 777_777_777, 0),
+        (SeasonStatus::Genesis, 0, 0, 0, 5, 0),
+        (SeasonStatus::Running, 5, 2, u64::MAX, u64::MAX, u64::MAX),
+    ] {
+        let s = Season {
+            status: SeasonStatus::Aborted,
+            aborted_from: from as u8,
+            member_count: n,
+            ai_count: ai,
+            bounty_each: bounty,
+            bond,
+            ..base.clone()
+        };
+        let m = MemberAccount {
+            shares,
+            ..sample_member()
+        };
+        refunds.push(json!({
+            "season": money_json(&s), "shares": shares.to_string(), "escrow": escrow(&s).to_string(),
+            "refund": refund_amount(&s, &m).to_string(), "opsAfterAbort": ops_after_abort(&s).to_string(),
+        }));
+    }
+    json!({ "ticksPerSeason": ticks, "abort": abort, "refunds": refunds })
+}
+
+/// The program's identity PDA (it signs VRF requests) and the VRF's scoped
+/// identity (it signs the callbacks), for the canonical program id.
+fn vrf_vectors() -> Value {
+    // The chain's `Pubkey` type, without naming its crate (not a dependency here).
+    fn parse_as<T: std::str::FromStr>(_: &T, s: &str) -> T {
+        s.parse().ok().unwrap()
+    }
+    let program = parse_as(&VRF_PROGRAM_ID, CANONICAL_PROGRAM_ID);
+    json!({
+        "programId": CANONICAL_PROGRAM_ID,
+        "programIdentity": randomness::program_identity(&program).0.to_string(),
+        "vrfIdentity": randomness::scoped_vrf_identity(&program).to_string(),
+    })
 }
 
 #[test]
@@ -685,7 +1139,7 @@ fn vectors_match_the_js_encoder_fixture() {
                 .filter(|r| role_allows_static(**r, order))
                 .map(|r| format!("{r:?}"))
                 .collect();
-            json!({"dto": dto, "offices": roles})
+            json!({"dto": dto, "offices": roles, "treasury": order.is_treasury_order(), "free": order.cost() == 0})
         })
         .collect();
     let errors: Vec<Value> = ChainError::ALL
@@ -695,7 +1149,9 @@ fn vectors_match_the_js_encoder_fixture() {
     let doc = json!({
         "orders": order_vectors, "gov": gov_vectors, "instructions": ix_vectors,
         "accounts": account_vectors(), "errors": errors, "constants": constant_vectors(),
-        "offices": office_vectors, "claims": claim_vectors(), "commitment": commitment, "roster": roster_vectors(),
+        "offices": office_vectors, "claims": claim_vectors(), "claimRuleV9": claim_rule_v9(), "commitment": commitment,
+        "roster": roster_vectors(), "govSlots": gov_slot_vectors(&govs), "govQuota": gov_quota_vectors(), "bond": bond_vectors(),
+        "lifecycle": lifecycle_vectors(), "vrf": vrf_vectors(),
     });
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../permutation-gateway/test/vectors.json");

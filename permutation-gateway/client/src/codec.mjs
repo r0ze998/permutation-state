@@ -19,34 +19,130 @@ import { sha256 } from './sha256.mjs';
 /** World chunk accounts per season, and the size of each (bytes). */
 export const WORLD_CHUNKS = 20;
 export const CHUNK = 4 * 1024;
-/** Chunk 0 header: magic (8) + body length (4) + `WorldMeta` padded to 64. */
-export const WORLD_HEADER = 8 + 4 + 64;
+/** Chunk 0's `WorldMeta` space, and its header: magic (8) + body length (4) + meta. */
+export const WORLD_META_SPACE = 244;
+export const WORLD_HEADER = 8 + 4 + WORLD_META_SPACE;
+/** Bytes of the world chunks after the header; the body is followed by its 32-byte root (`sha256(body)`). */
+export const WORLD_BODY_MAX = WORLD_CHUNKS * CHUNK - WORLD_HEADER;
 /** `Delegate { target }` etc.: 0..WORLD_CHUNKS = a world chunk; NATION_TARGET + civ = a nation account. */
 export const NATION_TARGET = 1000;
 /** Bytes of tick input per `PS_INPUT` log record. */
-export const INPUT_CHUNK = 6000;
+export const INPUT_CHUNK = 5000;
 export const MAX_NATIONS = 8;
 /** Member names, in UTF-8 bytes. */
 export const MAX_NAME = 24;
+/** Members a season account can describe (a layout bound; `SEASON_MEMBER_CAP` is the real cap). */
 export const MAX_MEMBERS = 256;
+/** Members per season and per nation (`Register` refuses more: `SeasonFull`). */
+export const SEASON_MEMBER_CAP = 48;
+export const NATION_MEMBER_CAP = 24;
 /** Governance actions one signer may queue per tick. */
 export const MAX_GOV_PER_SIGNER = 8;
+/**
+ * Governance slots (`state::gov_slots`, `gov_quota`): an action is at most
+ * MAX_GOV_ACTION_BYTES; each member may queue `NationHeader.govQuota`
+ * slots per tick (GOV_QUOTA_MIN..GOV_QUOTA_MAX, an even share of
+ * GOV_SLOTS_PER_TICK); an action costs one slot per entry and per proposed
+ * order, and at least one per GOV_SLOT_BYTES stored.
+ */
+export const MAX_GOV_ACTION_BYTES = 480;
+export const GOV_SLOT_BYTES = 48;
+export const GOV_SLOTS_PER_TICK = 96;
+export const GOV_QUOTA_MIN = 2;
+export const GOV_QUOTA_MAX = 12;
+/** A nation account's fixed front (`NationHead`, what `decodeNationHeader` reads), and an open account's length with an empty roll. */
+export const NATION_HEAD_LEN = 499;
+export const NATION_BASE_LEN = 511;
 /** Encoded orders that fit in one RevealOrders transaction (packet limit 1232 bytes); the server's `BATCH_BYTES`. */
 export const BATCH_BYTES = 800;
+/**
+ * Batch caps (`RevealOrders`, `permutation_rules::orders`): at most
+ * MAX_BATCH_ORDERS orders counting the adopted proposals' ones, at most
+ * MAX_FREE_ORDERS of them free (`isFree`), and MAX_REVEAL_BYTES of encoded
+ * orders. REVEAL_ROOM is what the nation account keeps per office.
+ */
+export const MAX_BATCH_ORDERS = 24;
+export const MAX_FREE_ORDERS = 8;
+export const MAX_REVEAL_BYTES = 950;
+export const REVEAL_ROOM = 1100;
+/** Orders the budget does not count (`Order::cost() == 0`). */
+export const FREE_ORDERS = new Set(['ExchangeOrder', 'RevealRationale', 'ConsentWar', 'ConsentSpend']);
+export const isFree = o => FREE_ORDERS.has(o.type);
+/**
+ * Order value bounds (`check_structure`, WP08): a batch with an order past
+ * them is refused whole at RevealOrders (`Rules`), so clients check first
+ * (`orderOutOfRange`).
+ */
+export const EXCHANGE_MAX_PRICE = 100_000_000n;
+export const MAX_TRADE_AMOUNT = 10_000;
+export const MAX_ORDER_COORD = 255;
+/** Why `order` is past the program's value bounds, or null. */
+export function orderOutOfRange(o) {
+  const hexes = o.type === 'MoveUnit' ? o.path : o.type === 'SetStanding' && o.rule?.kind === 'Patrol' ? o.rule.route : [];
+  if ((hexes ?? []).some(([q, r]) => Math.abs(q) > MAX_ORDER_COORD || Math.abs(r) > MAX_ORDER_COORD)) return `${o.type}: a hex coordinate beyond ±${MAX_ORDER_COORD}`;
+  if (['ExchangeOrder', 'MarketTrade', 'Transfer'].includes(o.type) && o.amount > MAX_TRADE_AMOUNT) return `${o.type}: amount above ${MAX_TRADE_AMOUNT}`;
+  if (o.type === 'ExchangeOrder' && BigInt(o.price) > EXCHANGE_MAX_PRICE) return `ExchangeOrder: price above ${EXCHANGE_MAX_PRICE} base units (100 USDC) per unit`;
+  return null;
+}
 /** Operator AI members per season (V5 §18.2). */
 export const MAX_AI = 64;
 /** Seconds after the last tick the operator has to reveal its roster (V5 §18.2). */
 export const ROSTER_GRACE_SECONDS = 3600;
+/** The only creatable preset (Blitz), and its ticks per season; nations per season. */
+export const PRESET_BLITZ = 0;
+export const TICKS_PER_SEASON = 180;
+export const MIN_NATIONS = 2;
+export const MAX_GENESIS_WORK = 50;
+/** USDC amounts (base units) `CreateSeason` accepts at most; the mint's decimals. */
+export const USDC_DECIMALS = 6;
+export const MAX_ENTRY_FEE = 1_000_000_000n;
+export const MAX_DEPOSIT = 1_000_000_000n;
+export const MAX_BOUNTY = 1_000_000_000n;
+export const MAX_BOND = 100_000_000_000_000n;
+/** Deadlines of the escape hatches (`lifecycle.rs`, seconds). */
+export const ABORT_GRACE_SECONDS = 86_400;
+export const FINISH_GRACE_SECONDS = 604_800;
+export const MAX_REGISTRATION_SECONDS = 1_209_600;
+export const MAX_TICK_SECONDS = 14_400;
+export const TICK_OVERHEAD_SECONDS = 60;
+export const TAKEOVER_SECONDS = 600;
+/** Tick 0's grace after OpenGovernment (the crank's StartClock shortens it). */
+export const TICK0_GRACE_SECONDS = 600;
+/** `ResolveTick { to }` bit 7: one degraded phase, once `degradeAfter(tickSeconds)` passed the reveal deadline. */
+export const DEGRADED = 0x80;
+export const degradeAfter = tickSeconds => Math.max(600, 2 * tickSeconds);
+/** Nations one `CommitPart` / `UndelegatePart` intent may carry. */
+export const MAX_NATIONS_PER_INTENT = 3;
+/**
+ * Randomness (MagicBlock VRF): `WorldMeta.randState` and `Season.seedState`
+ * codes, the VRF program and its oracle queues (the ER's for a delegated
+ * season's ticks, the base layer's for the season seed and base play), and
+ * the retry and give-up times (seconds).
+ */
+export const RAND = Object.freeze({ none: 0, pending: 1, vrf: 2, fallback: 3, dev: 4 });
+export const SEED = Object.freeze({ none: 0, pending: 1, vrf: 2, dev: 4 });
+export const VRF_PROGRAM_ID = 'Vrf1RNUjXmQGjmQrQLvJHs9SNkvDJEsRVFPkfSQUwGz';
+export const VRF_QUEUE_BASE = 'Cuj97ggrhhidhbu39TijNVqE74xvKJ69gDervRUXAxGh';
+export const VRF_QUEUE_ER = '5hBR571xnXppuCPveTrctfTU7tJLSN94nq7kv7FRK5Tc';
+export const VRF_RETRY_SECONDS = 10;
+export const VRF_GIVEUP_SECONDS = 600;
+export const SEED_RETRY_SECONDS = 60;
+/** The program's deployed id (the verifier's default). */
+export const CANONICAL_PROGRAM_ID = 'J4aZxe3ynkS7kcvCpKbp6aFYw8d9vtrRDsgSEi1niU6n';
 /** PDA seeds (first component). */
 export const SEEDS = Object.freeze({ season: 'season', world: 'world', nation: 'nation', member: 'member', vault: 'vault', roster: 'roster' });
-/** Account magics (first 8 bytes). `genesis` marks a world whose genesis is still being built. */
-export const MAGIC = Object.freeze({ season: 'PSSEASN7', member: 'PSMEMBR6', nation: 'PSNATN07', world: 'PSWORLD5', genesis: 'PSGENJB1', roster: 'PSROSTR1' });
+/**
+ * Account magics (first 8 bytes). `genesis` marks a world whose genesis is
+ * still being built; `legacySeason` is the previous Season layout, still
+ * readable (claims of seasons created before this program).
+ */
+export const MAGIC = Object.freeze({ season: 'PSSEASN8', legacySeason: 'PSSEASN7', member: 'PSMEMBR6', nation: 'PSNATN08', world: 'PSWORLD6', genesis: 'PSGENJB2', roster: 'PSROSTR2' });
 /** Nation names, in civ order (`permutation_rules::genesis::NATIONS`). */
 export const NATIONS = Object.freeze(['Aster', 'Borealis', 'Cinder', 'Dunmar', 'Ember', 'Fjordal']);
 /** Offices (V5 §5.1), in `Role` order. */
 export const ROLES = Object.freeze(['General', 'Steward', 'Science', 'Diplomat']);
 /** `SeasonStatus`, in tag order. */
-export const SEASON_STATUS = Object.freeze(['Registering', 'Genesis', 'Seating', 'Running', 'Finalized']);
+export const SEASON_STATUS = Object.freeze(['Registering', 'Genesis', 'Seating', 'Running', 'Finalized', 'Seeding', 'Aborted']);
 /** `MemberAccount.kind` (self-declared, V5 D16), as the gateway names it. */
 export const MEMBER_KINDS = Object.freeze(['human', 'agent', 'undeclared']);
 /** `u32::MAX`: no member (a vacant office, no vote). */
@@ -211,35 +307,72 @@ export function encodeGov(w, a) {
 }
 
 /**
+ * Governance slots one action costs (`state::gov_slots`): one per entry and
+ * per proposed order, and at least one per GOV_SLOT_BYTES stored; null when
+ * the action is larger than MAX_GOV_ACTION_BYTES (`SubmitGov` refuses it).
+ */
+export function govSlots(action) {
+  const bytes = encodeGov(new Writer(), action).toBytes().length;
+  if (bytes > MAX_GOV_ACTION_BYTES) return null;
+  const orders = action.type === 'Propose' ? action.orders.length : 0;
+  return Math.max(1 + orders, Math.ceil((4 + 32 + bytes) / GOV_SLOT_BYTES));
+}
+
+/**
+ * Per-member governance quota of a nation of `here` members in a season of
+ * `members` (`state::gov_quota`; OpenGovernment stores it in each nation
+ * account, `NationHeader.govQuota`).
+ */
+export function govQuota(members, here) {
+  const share = Math.min(Math.floor(GOV_SLOTS_PER_TICK / Math.max(members, 1)), 0xffff);
+  const q = Math.min(Math.max(share, GOV_QUOTA_MIN), GOV_QUOTA_MAX);
+  const base = NATION_BASE_LEN + 12 * here;
+  const space = Math.max(0, 8 * 1024 - (4 * REVEAL_ROOM + base));
+  return Math.min(q, Math.floor(space / (GOV_SLOT_BYTES * Math.max(here, 1))));
+}
+
+/**
  * `ChainInstruction` tags (the first byte of instruction data). Security
- * filters (the gateway's relays and x402) match on these. `commit` and
- * `commitAndUndelegate` (whole-world intents) are superseded by
- * `commitPart` / `undelegatePart`; the client builds neither.
+ * filters (the gateway's relays and x402) match on these. Retired tags
+ * (`RETIRED_IX`) always fail on chain; the VRF callbacks
+ * (`consumeTickRandomness`, `consumeSeasonSeed`) come from the VRF program.
  */
 export const IX_TAG = Object.freeze({
   createSeason: 0, allocWorld: 1, register: 2, startSeason: 3, genesisStep: 4, delegate: 5, submitOrders: 6, resolveTick: 7,
   commit: 8, commitAndUndelegate: 9, finishSeason: 10, claim: 11, undelegatePart: 12, updateMember: 13, allocNation: 14,
   seatMembers: 15, openGovernment: 16, submitGov: 17, withdrawOps: 18, logTickInput: 19, commitPart: 20,
-  closeCommits: 21, commitOrders: 22, revealOrders: 23, revealRoster: 24, anchorTalk: 25,
+  closeCommits: 21, commitOrders: 22, revealOrders: 23, revealRoster: 24, anchorTalk: 25, startClock: 26, postBond: 27,
+  freezeTick: 28, consumeTickRandomness: 29, retryTickRandomness: 30, consumeSeasonSeed: 31, retrySeasonSeed: 32, abort: 33,
+  requestUndelegation: 34, rollbackUndelegation: 35, closeSeasonAccounts: 36,
 });
 
-/** Instructions the program still decodes but always refuses (`Retired`); the client builds none. */
-export const RETIRED_IX = Object.freeze(['submitOrders']);
+/**
+ * Instructions the program still decodes but always refuses (`Retired`);
+ * the client builds none. `commit` and `commitAndUndelegate` (whole-world
+ * intents) are superseded by `commitPart` / `undelegatePart`.
+ */
+export const RETIRED_IX = Object.freeze(['submitOrders', 'commit', 'commitAndUndelegate']);
 
 /** Program instruction data (enum `ChainInstruction`). Keys are 32-byte arrays. */
 const votes4 = (w, v) => { for (let i = 0; i < 4; i++) w.u32(v?.[i] ?? NOBODY); return w; };
 const ixWriter = name => { if (!(name in IX_TAG)) throw new Error(`unknown instruction ${name}`); return new Writer().u8(IX_TAG[name]); };
 const targets = (w, list) => w.vec(list, (x, t) => x.u16(t));
+/** borsh i64 (two's complement). */
+const i64 = (w, v) => w.u64(BigInt.asUintN(64, BigInt(v)));
+const ZERO32 = new Uint8Array(32);
 export const IX = {
-  createSeason: a => ixWriter('createSeason').u64(a.seasonId).u8(a.preset).u8(a.nations).u64(a.entryFee)
+  /** `validator`: the ER validator every account is delegated to; `startBy`: unix time StartSeason is due by. */
+  createSeason: a => i64(ixWriter('createSeason').u64(a.seasonId).u8(a.preset).u8(a.nations).u64(a.entryFee)
     .u32(a.tickSeconds).fixed(a.worldSeed, 32).fixed(a.crank, 32).bool(a.market ?? true).u64(a.prevSeasonId ?? 0n)
-    .u16(a.aiCount ?? 0).fixed(a.rosterChain ?? new Uint8Array(32), 32).u64(a.bountyEach ?? 0n).u64(a.bond ?? 0n).toBytes(),
+    .u16(a.aiCount ?? 0).fixed(a.rosterCommit ?? ZERO32, 32).u64(a.bountyEach ?? 0n).u64(a.bond ?? 0n).u64(a.deposit ?? 0n), a.startBy)
+    .fixed(a.validator, 32).toBytes(),
   allocWorld: chunk => ixWriter('allocWorld').u8(chunk).toBytes(),
-  register: a => votes4(ixWriter('register').u16(a.civ).string(a.name).u8(a.kind).fixed(a.session, 32).fixed(a.attestation ?? new Uint8Array(32), 32)
+  register: a => votes4(ixWriter('register').u16(a.civ).string(a.name).u8(a.kind).fixed(a.session, 32).fixed(a.attestation ?? ZERO32, 32)
     .u8(a.stand ?? 0), a.votes).u64(a.deposit ?? 0n).fixed(a.tag, 32).toBytes(),
   startSeason: () => ixWriter('startSeason').toBytes(),
   genesisStep: work => ixWriter('genesisStep').u32(work).toBytes(),
   delegate: target => ixWriter('delegate').u16(target).toBytes(),
+  /** `to`: the last phase to run (12 = the whole tick); `DEGRADED | 0` for one degraded phase. */
   resolveTick: (to = 12) => ixWriter('resolveTick').u8(to).toBytes(),
   finishSeason: () => ixWriter('finishSeason').toBytes(),
   claim: () => ixWriter('claim').toBytes(),
@@ -256,8 +389,22 @@ export const IX = {
   commitOrders: a => ixWriter('commitOrders').u8(roleIndex(a.role)).u16(a.tick).fixed(a.commitment, 32).toBytes(),
   revealOrders: a => ixWriter('revealOrders').u8(roleIndex(a.role)).u16(a.tick).fixed(a.decisionDigest, 32).vec(a.orders, encodeOrder)
     .vec(a.adopt ?? [], (w, id) => w.u32(id)).fixed(a.salt, 32).toBytes(),
-  revealRoster: salts => ixWriter('revealRoster').vec(salts, (w, x) => w.fixed(x, 32)).toBytes(),
+  /** The next AI members' salts from roster position `from`; the batch that completes the roster carries the `blind`. */
+  revealRoster: a => ixWriter('revealRoster').u16(a.from).vec(a.salts, (w, x) => w.fixed(x, 32)).fixed(a.blind ?? ZERO32, 32).toBytes(),
   anchorTalk: a => ixWriter('anchorTalk').u16(a.tick).u32(a.count).fixed(a.root, 32).toBytes(),
+  startClock: () => ixWriter('startClock').toBytes(),
+  postBond: amount => ixWriter('postBond').u64(amount).toBytes(),
+  freezeTick: () => ixWriter('freezeTick').toBytes(),
+  /** The VRF program's callback data (`tag ‖ randomness ‖ season_id ‖ tick`); clients never send it. */
+  consumeTickRandomness: a => ixWriter('consumeTickRandomness').fixed(a.randomness, 32).u64(a.seasonId).u16(a.tick).toBytes(),
+  retryTickRandomness: () => ixWriter('retryTickRandomness').toBytes(),
+  /** The VRF program's callback data (`tag ‖ randomness ‖ season_id`). */
+  consumeSeasonSeed: a => ixWriter('consumeSeasonSeed').fixed(a.randomness, 32).u64(a.seasonId).toBytes(),
+  retrySeasonSeed: () => ixWriter('retrySeasonSeed').toBytes(),
+  abort: () => ixWriter('abort').toBytes(),
+  requestUndelegation: target => ixWriter('requestUndelegation').u16(target).toBytes(),
+  rollbackUndelegation: target => ixWriter('rollbackUndelegation').u16(target).toBytes(),
+  closeSeasonAccounts: list => targets(ixWriter('closeSeasonAccounts'), list).toBytes(),
 };
 
 /**
@@ -272,27 +419,53 @@ export const orderCommitment = (b, salt) => sha256(new TextEncoder().encode('per
 
 /**
  * Operator AI members (V5 §18.2), as `permutation_rules::roster`: the tag an
- * AI registers with, and the chain over the tags committed at creation.
+ * AI registers with, and the chain over the tags, committed blinded at
+ * creation (`rosterCommit`).
  */
 export const rosterTag = (seasonId, wallet, salt) => sha256(new TextEncoder().encode('permutation-rules/ai'), u64le(seasonId), wallet, salt);
 export const rosterLink = (prev, tag) => sha256(new TextEncoder().encode('permutation-rules/roster'), prev, tag);
 export const rosterChain = tags => tags.reduce((acc, t) => rosterLink(acc, t), new Uint8Array(32));
+/**
+ * The blinded roster commitment `CreateSeason` stores: the chain hidden by
+ * the operator's secret 32-byte `blind`, which the RevealRoster completing
+ * the roster opens (WP09).
+ */
+export const rosterCommit = (blind, chain) => sha256(new TextEncoder().encode('permutation-rules/roster-commit'), blind, chain);
 
 // ------------------------------------------------------------------ accounts
 
 const magicOf = r => new TextDecoder().decode(r.fixed(8));
+const ROSTER_OUTCOMES = ['none', 'revealed', 'forfeited'];
 
+/**
+ * A season account (`PSSEASN8`, or a `PSSEASN7` one from before this
+ * program: `legacy`, its v8 fields zero). The fields after `bountyPaid` are
+ * the v8 tail: delegation, the roster blind, treasury refund bases and flags
+ * (after FinishSeason), the season seed, the deposit and what the vault
+ * still owes, the escape-hatch clock (`startBy`, `stageAt`, `abortedFrom`:
+ * the status an Aborted season was aborted from), the pinned ER validator
+ * and the rules and settlement logic the season was created under.
+ */
 export function decodeSeason(data) {
   const r = new Reader(data);
-  if (magicOf(r) !== MAGIC.season) throw new Error('not a V5 season account');
+  const magic = magicOf(r);
+  if (magic !== MAGIC.season && magic !== MAGIC.legacySeason) throw new Error('not a V5 season account');
   const s = { seasonId: r.u64(), bump: r.u8(), vaultBump: r.u8(), admin: r.fixed(32), crank: r.fixed(32), usdcMint: r.fixed(32), usdcDecimals: r.u8(),
     preset: r.u8(), nations: r.u8(), entryFee: r.u64(), tickSeconds: r.u32(), market: r.bool(), status: SEASON_STATUS[r.u8()],
     worldSeed: r.fixed(32), seasonSeed: r.fixed(32), memberCount: r.u32() };
   s.nationMembers = r.vec(x => x.u32()); s.seated = r.u32(); s.pool = r.u64(); s.ops = r.u64(); s.opsWithdrawn = r.bool();
   s.treasury = r.vec(x => x.u64()); s.treasuryFinal = r.vec(x => x.u64()); s.payouts = r.vec(x => x.u64()); s.finalRoot = r.fixed(32);
   s.prevSeasonId = r.u64(); s.prevHistoryRoot = r.fixed(32); s.historyRoot = r.fixed(32);
-  s.aiCount = r.u16(); s.rosterChain = r.fixed(32); s.bountyEach = r.u64(); s.bond = r.u64();
-  s.rosterAcc = r.fixed(32); s.rosterRevealed = r.u16(); s.rosterOutcome = ['none', 'revealed', 'forfeited'][r.u8()]; s.bountyPaid = r.vec(x => x.u64());
+  s.aiCount = r.u16(); s.rosterCommit = r.fixed(32); s.bountyEach = r.u64(); s.bond = r.u64();
+  s.rosterAcc = r.fixed(32); s.rosterRevealed = r.u16(); s.rosterOutcome = ROSTER_OUTCOMES[r.u8()]; s.bountyPaid = r.vec(x => x.u64());
+  s.delegated = r.u32();
+  s.rosterBlind = r.fixed(32);
+  s.refundBase = r.vec(x => x.u64()); s.refundInPayout = r.bytes();
+  s.seedState = r.u8(); s.seedOracle = r.fixed(32); s.seedRequestedAt = Number(r.i64()); s.seedRequests = r.u8();
+  s.deposit = r.u64(); s.outstanding = r.u64(); s.voided = r.bool();
+  s.startBy = Number(r.i64()); s.stageAt = Number(r.i64()); s.rolledBack = r.u32(); s.abortedFrom = SEASON_STATUS[r.u8()]; s.validator = r.fixed(32);
+  s.rulesVersion = r.u16(); s.rulesHash = r.fixed(32); s.logicVersion = r.u16(); s.createdSlot = r.u64();
+  s.legacy = magic === MAGIC.legacySeason;
   return s;
 }
 
@@ -306,14 +479,19 @@ export function decodeMember(data) {
   return m;
 }
 
-/** The operator's revealed AI roster (V5 §18.2). */
+/** The operator's revealed AI roster (V5 §18.2): each AI member, its nation, salt and deposit shares. */
 export function decodeRoster(data) {
   const r = new Reader(data);
   if (magicOf(r) !== MAGIC.roster) throw new Error('not a roster account');
-  return { seasonId: r.u64(), bump: r.u8(), entries: r.vec(x => ({ member: x.u32(), civ: x.u16(), salt: x.fixed(32) })) };
+  return { seasonId: r.u64(), bump: r.u8(), entries: r.vec(x => ({ member: x.u32(), civ: x.u16(), salt: x.fixed(32), shares: x.u64() })) };
 }
 
-/** The fixed front of a nation account: office holders, keys, budgets, who submitted. */
+/**
+ * The fixed front of a nation account (`NationHead`, NATION_HEAD_LEN bytes):
+ * office holders, keys, budgets, who committed and revealed, and each
+ * member's governance quota per tick. `deadline` is the commit deadline
+ * while the tick is open and the end of the reveal window while revealing.
+ */
 export function decodeNationHeader(data) {
   const r = new Reader(data);
   if (magicOf(r) !== MAGIC.nation) throw new Error('not a nation account');
@@ -324,32 +502,59 @@ export function decodeNationHeader(data) {
   n.submitted = [r.u16(), r.u16(), r.u16(), r.u16()];
   n.frozen = r.bool();
   n.revealing = r.bool();
-  n.revealDeadline = Number(r.i64());
+  n.deadline = Number(r.i64());
   n.committed = [r.u16(), r.u16(), r.u16(), r.u16()];
   n.commits = [r.fixed(32), r.fixed(32), r.fixed(32), r.fixed(32)];
   n.salts = [r.fixed(32), r.fixed(32), r.fixed(32), r.fixed(32)];
+  n.govQuota = r.u16();
   return n;
 }
 
-/** World header (chunk 0): magic (`MAGIC.world`, or `MAGIC.genesis` while genesis runs), body length, `WorldMeta`. */
+/**
+ * World header (chunk 0): magic (`MAGIC.world`, or `MAGIC.genesis` while
+ * genesis runs), body length, `WorldMeta`: the open tick's deadline and
+ * phase flags, the wind-up counter (`undelegated`), the published input's
+ * hash, the tick randomness (`randState`: RAND codes; the salts' hash
+ * `randPre`, the oracle's output `randOut`, when it was frozen and last
+ * requested, how many requests) and whether USDC conservation ever broke.
+ */
 export function decodeWorldHeader(data) {
   const r = new Reader(data);
   const magic = magicOf(r);
   const len = r.u32();
   const meta = { seasonId: r.u64(), preset: r.u8(), civs: r.u8(), tickSeconds: r.u32(), deadline: Number(r.i64()), finished: r.bool(), market: r.bool(),
-    frozen: r.bool(), vrf: r.fixed(32), inputChunks: r.u16(), inputLogged: r.u16(), revealing: r.bool() };
+    frozen: r.bool(), vrf: r.fixed(32), inputChunks: r.u16(), inputLogged: r.u16(), revealing: r.bool(), undelegated: r.u8(), inputHash: r.fixed(32),
+    randState: r.u8(), randTick: r.u16(), randPre: r.fixed(32), randOut: r.fixed(32), frozenAt: Number(r.i64()), randRequestedAt: Number(r.i64()),
+    randRequests: r.u8(), usdcBroken: r.bool() };
   return { magic, len, meta, bodyOffset: WORLD_HEADER };
 }
 
 /** The program's log records (`sol_log_data`, logged as `Program data:`). */
-export const RECORD_TAGS = Object.freeze(['PS_TICK', 'PS_INPUT', 'PS_GENESIS', 'PS_SEAT', 'PS_OPEN', 'PS_COMMITS', 'PS_SALTS', 'PS_HISTORY', 'PS_TALK']);
+export const RECORD_TAGS = Object.freeze(['PS_TICK', 'PS_INPUT', 'PS_GENESIS', 'PS_SEAT', 'PS_OPEN', 'PS_COMMITS', 'PS_SALTS', 'PS_HISTORY', 'PS_TALK',
+  'PS_FREEZE', 'PS_RAND', 'PS_SEED', 'PS_ABORT', 'PS_ROLLBACK']);
+
+/**
+ * The phases a `PS_TICK` record's resolve part ran (the effective `to`,
+ * shared by the gateway index, the play server and the verifier): a v8
+ * record (6 fields) runs up to `min(to, 12)`; a v9 record (9 fields) has
+ * bit 7 set for one degraded phase (`0x80 | stop`).
+ */
+export function effectiveTo(to, fieldCount = 9) {
+  if (fieldCount < 9) return { stop: Math.min(to, 12), degraded: false };
+  return { stop: Math.min(to & 0x7f, 12), degraded: (to & DEGRADED) !== 0 };
+}
 
 /** Parse a `Program data:` log of one of the `RECORD_TAGS` records (fields already base64-decoded). */
 export function parseRecord(fields) {
   const tag = new TextDecoder().decode(fields[0]);
   const u16 = f => new DataView(f.buffer, f.byteOffset).getUint16(0, true);
+  const u64 = f => new DataView(f.buffer, f.byteOffset).getBigUint64(0, true);
+  // One resolve part: `to` is the raw byte (see `effectiveTo`); v9 adds the tick randomness.
   if (tag === 'PS_TICK') {
-    return { tag, tick: u16(fields[1]), to: fields[2][0], preRoot: fields[3], root: fields[4], inputHash: fields[5] };
+    const to = fields[2][0];
+    const rec = { tag, tick: u16(fields[1]), to, ...effectiveTo(to, fields.length), preRoot: fields[3], root: fields[4], inputHash: fields[5], version: fields.length >= 9 ? 9 : 8 };
+    if (fields.length >= 9) Object.assign(rec, { randState: fields[6][0], randPre: fields[7], randOut: fields[8] });
+    return rec;
   }
   // One chunk of a tick's input (borsh TickInput); `hash` is the whole input's sha256.
   if (tag === 'PS_INPUT') return { tag, tick: u16(fields[1]), chunk: u16(fields[2]), total: u16(fields[3]), hash: fields[4], bytes: fields[5] ?? new Uint8Array() };
@@ -361,11 +566,26 @@ export function parseRecord(fields) {
     const r = new Reader(fields[2]);
     return { tag, tick: u16(fields[1]), commits: r.vec(x => ({ civ: x.u16(), role: ROLES[x.u8()], member: x.u32(), commitment: x.fixed(32) })) };
   }
-  // Input frozen: the pre-state root and the revealed salts, borsh Vec<(civ u16, role u8, salt [32])>.
+  // The frozen input's revealed salts, borsh Vec<(civ u16, role u8, salt [32])>, and their hash the
+  // randomness was requested with (`randPre`; a v8 record had the tick's pre-state root there).
   if (tag === 'PS_SALTS') {
     const r = new Reader(fields[3]);
-    return { tag, tick: u16(fields[1]), preRoot: fields[2], salts: r.vec(x => ({ civ: x.u16(), role: ROLES[x.u8()], salt: x.fixed(32) })) };
+    return { tag, tick: u16(fields[1]), randPre: fields[2], salts: r.vec(x => ({ civ: x.u16(), role: ROLES[x.u8()], salt: x.fixed(32) })) };
   }
+  // A tick froze: the salts' hash, and the offices that committed but did not reveal, borsh Vec<(civ u16, role u8, member u32)>.
+  if (tag === 'PS_FREEZE') {
+    const r = new Reader(fields[3]);
+    return { tag, tick: u16(fields[1]), randPre: fields[2], lapsed: r.vec(x => ({ civ: x.u16(), role: ROLES[x.u8()], member: x.u32() })) };
+  }
+  // The tick randomness was drawn: its source (RAND), the oracle's output E and the tick's vrf.
+  if (tag === 'PS_RAND') return { tag, tick: u16(fields[1]), state: fields[2][0], oracle: fields[3], vrf: fields[4] };
+  // The season seed was drawn: its source (SEED), the oracle's output and the seed.
+  if (tag === 'PS_SEED') return { tag, seasonId: u64(fields[1]), state: fields[2][0], oracle: fields[3], seasonSeed: fields[4] };
+  if (tag === 'PS_ABORT') {
+    return { tag, seasonId: u64(fields[1]), abortedFrom: SEASON_STATUS[fields[2][0]], at: Number(new DataView(fields[3].buffer, fields[3].byteOffset).getBigInt64(0, true)) };
+  }
+  // A delegated account taken back with its last committed data: the target and sha256 of the data restored.
+  if (tag === 'PS_ROLLBACK') return { tag, seasonId: u64(fields[1]), target: u16(fields[2]), hash: fields[3] };
   // A finalized season's history (permutation_rules::history): its record, borsh SeasonRecord.
   if (tag === 'PS_HISTORY') {
     const r = new Reader(fields[4]);
@@ -375,36 +595,144 @@ export function parseRecord(fields) {
     const opt = (x, f) => (x.u8() ? f(x) : null);
     const cities = r.vec(x => ({ q: x.i32(), r: x.i32(), founder: x.u16(), foundedTick: x.u16(), owner: opt(x, y => y.u16()), capturedFrom: opt(x, y => y.u16()), pop: x.u32(), alive: x.bool() }));
     const ruins = r.vec(x => ({ q: x.i32(), r: x.i32(), peak: x.u16() }));
-    return { tag, seasonId: new DataView(fields[1].buffer, fields[1].byteOffset).getBigUint64(0, true), prevHistoryRoot: fields[2], historyRoot: fields[3], record: { finalRoot, nations, cities, ruins } };
+    return { tag, seasonId: u64(fields[1]), prevHistoryRoot: fields[2], historyRoot: fields[3], record: { finalRoot, nations, cities, ruins } };
   }
   // A tick's relayed messages (V5 §18.7): season, tick, count, Merkle root.
   if (tag === 'PS_TALK') {
-    return { tag, seasonId: new DataView(fields[1].buffer, fields[1].byteOffset).getBigUint64(0, true), tick: u16(fields[2]),
+    return { tag, seasonId: u64(fields[1]), tick: u16(fields[2]),
       count: new DataView(fields[3].buffer, fields[3].byteOffset).getUint32(0, true), root: fields[4] };
   }
   return { tag };
 }
 
+// ------------------------------------------------------------------ money
+// BigInt mirrors of the program's settlement and escape-hatch arithmetic
+// (`payout::claim_amount`, `state::bond_floor`, `lifecycle.rs`), checked
+// against the Rust vectors. u64 sums saturate as the program's do.
+
+const U64_MAX = (1n << 64n) - 1n;
+const I64_MAX = (1n << 63n) - 1n;
+const sat = x => (x > U64_MAX ? U64_MAX : x);
+const satI = x => (x > I64_MAX ? I64_MAX : x);
+const big = x => BigInt(x ?? 0);
+const bytesOf = b => (typeof b === 'string' ? fromHex(b) : b ?? []);
+const abortedFromRegistering = season => (season.abortedFrom ?? 'Registering') === 'Registering';
+
+/** The operator's escrow: the AI bounties and the bond. */
+export const escrow = season => sat(sat(big(season.bountyEach) * big(season.aiCount)) + big(season.bond));
+
+/** Whether an abort forfeits the escrow to the members: every abort after registration closed (a Registering cancel is free). */
+export const escrowForfeited = season => !abortedFromRegistering(season);
+
 /**
- * What a member can claim once the season is finalized: its prize plus its
- * share of what is left in its nation's treasury (V5 §7.5), exactly as the
- * program's `claim_amount`. `season` and `member` as decoded above.
+ * What `Claim` pays a member after an abort (`lifecycle::refund_amount`):
+ * what Register took (fee and deposit), plus an equal share of a forfeited
+ * escrow; `forfeit` is that share.
+ */
+export function abortRefund(season, member) {
+  const n = big(season.memberCount);
+  const forfeit = escrowForfeited(season) && n > 0n ? escrow(season) / n : 0n;
+  const refund = sat(big(season.entryFee) + big(member.shares));
+  return { refund, forfeit, total: sat(refund + forfeit) };
+}
+
+/** What `WithdrawOps` pays the operator after an abort: the whole escrow after a free cancel, else the split's remainder. */
+export function opsAfterAbort(season) {
+  const n = big(season.memberCount);
+  return !escrowForfeited(season) || n === 0n ? escrow(season) : escrow(season) % n;
+}
+
+/**
+ * What a member can claim (`payout::claim_amount`). Finalized: its prize
+ * plus its share of what is left in its nation's treasury (V5 §7.5), over
+ * the nation's `refundBase` (the people's deposit shares; a season without
+ * one, legacy, over `treasury`); a member flagged in `refundInPayout` (a
+ * revealed AI member) has its refund inside the prize. Aborted: its refund
+ * (`abortRefund`). `season` and `member` as decoded above.
  */
 export function claimParts(season, member) {
-  const prize = BigInt(season.payouts[member.index] ?? 0n);
-  const deposited = BigInt(season.treasury[member.civ] ?? 0n);
-  const left = BigInt(season.treasuryFinal[member.civ] ?? 0n);
-  const refund = deposited === 0n ? 0n : (BigInt(member.shares) * left) / deposited;
-  return { prize, refund, total: prize + refund };
+  if (season.status === 'Aborted') {
+    const { refund, forfeit, total } = abortRefund(season, member);
+    return { prize: 0n, refund, forfeit, total };
+  }
+  const i = member.index;
+  const prize = big(season.payouts?.[i]);
+  const flags = bytesOf(season.refundInPayout);
+  if (((flags[i >> 3] ?? 0) >> (i & 7)) & 1) return { prize, refund: 0n, total: prize };
+  const legacy = !season.refundBase?.length;
+  const base = big((legacy ? season.treasury : season.refundBase)?.[member.civ]);
+  const left = big(season.treasuryFinal?.[member.civ]);
+  const refund = base === 0n ? 0n : BigInt.asUintN(64, (big(member.shares) * left) / base);
+  return { prize, refund, total: sat(prize + refund) };
 }
 export const claimAmount = (season, member) => claimParts(season, member).total;
+
+/** What withholding the roster costs the operator at least: the AI members' entry fees (`state::forfeit_penalty`). */
+export const forfeitPenalty = season => sat(big(season.entryFee) * big(season.aiCount));
+
+/**
+ * The smallest bond `StartSeason` accepts (`state::bond_floor`, WP09):
+ * `ceil((a·p0 + n·penalty) / (n − a))` with `a = min(aiCount, n − 1)` and
+ * `p0` = pool + bounties + deposits; 0 without AI members or people.
+ */
+export function bondFloor(season) {
+  const n = big(season.memberCount);
+  const ai = big(season.aiCount);
+  if (ai === 0n || n === 0n || n === ai) return 0n;
+  const a = ai < n - 1n ? ai : n - 1n;
+  const deposits = (season.treasury ?? []).reduce((t, x) => t + big(x), 0n);
+  const p0 = big(season.pool) + big(season.bountyEach) * ai + deposits;
+  const num = a * p0 + n * forfeitPenalty(season);
+  const d = n - a;
+  return sat((num + d - 1n) / d);
+}
+
+/**
+ * Latest time a Running season is expected to be finalized by
+ * (`lifecycle::running_deadline`, unix seconds as a BigInt): tick 0's grace,
+ * every tick at twice its length plus a minute, the roster grace and a day,
+ * from `stageAt` (when the government opened).
+ */
+export function runningDeadline(season, ticksPerSeason = TICKS_PER_SEASON) {
+  const perTick = 2n * big(season.tickSeconds) + BigInt(TICK_OVERHEAD_SECONDS);
+  return [BigInt(TICK0_GRACE_SECONDS), BigInt(ticksPerSeason) * perTick, BigInt(ROSTER_GRACE_SECONDS), BigInt(ABORT_GRACE_SECONDS)]
+    .reduce((t, x) => satI(t + x), big(season.stageAt));
+}
+
+/**
+ * Whether `Abort` may run at `now` (unix seconds): null if so, else the
+ * program's error (`TooEarly`, `WrongStatus`; `WorldTooSmall` for a Running
+ * season without `view`). `operator`: the caller is the admin or the crank.
+ * `view` (Running only) is what Abort sees of the world on base:
+ * `{allHome, chunk0Home, isWorld, finished, deadline, precheckOk}`.
+ */
+export function checkAbort(season, view, operator, now, ticksPerSeason = TICKS_PER_SEASON) {
+  const t = BigInt(now);
+  const due = at => (t >= satI(at) ? null : 'TooEarly');
+  const day = BigInt(ABORT_GRACE_SECONDS);
+  switch (season.status) {
+    case 'Registering': return operator ? null : due(big(season.startBy) + day);
+    case 'Seeding': case 'Genesis': case 'Seating': return due(big(season.stageAt) + day);
+    case 'Running': {
+      if (!view) return 'WorldTooSmall';
+      const moved = big(season.stageAt) > big(view.deadline) ? big(season.stageAt) : big(view.deadline);
+      if ((season.delegated & 1) === 0 && view.chunk0Home && view.isWorld && !view.finished && t >= satI(moved + day)) return null;
+      const rd = runningDeadline(season, ticksPerSeason);
+      if (t >= satI(rd + BigInt(FINISH_GRACE_SECONDS))) return null;
+      if (t >= rd && !view.precheckOk) return null;
+      return 'TooEarly';
+    }
+    default: return 'WrongStatus';
+  }
+}
 
 /** Program errors (`ChainError`, surfaced as `{"Custom": code}`), in code order from 1. */
 export const CHAIN_ERRORS = Object.freeze(['InvalidInstruction', 'MissingSignature', 'WrongPda', 'AlreadyInitialized', 'NotInitialized', 'WrongStatus',
   'Unauthorized', 'SeasonFull', 'InvalidName', 'WrongMint', 'WrongTokenAccount', 'WorldTooSmall', 'Rules', 'WrongTick', 'OverBudget', 'TooEarly',
   'MissingNation', 'WrongDelegationProgram', 'WrongMagicProgram', 'AlreadyClaimed', 'NothingToClaim', 'SeasonNotOver', 'WrongOffice',
   'InvalidParams', 'WrongWorld', 'InboxFull', 'TickFrozen', 'InputNotPublished', 'WrongPhase', 'CommitMismatch', 'Retired',
-  'RosterPending', 'RosterMismatch']);
+  'RosterPending', 'RosterMismatch', 'NotAlone', 'UndelegationOrder', 'AlreadyDelegated', 'BondTooSmall', 'RandomnessPending', 'WrongOracle',
+  'Insolvent', 'DelegationOrder', 'WorldRolledBack', 'WrongValidator', 'RulesMismatch']);
 
 /**
  * The program error named in a transaction error message, or null. Reads

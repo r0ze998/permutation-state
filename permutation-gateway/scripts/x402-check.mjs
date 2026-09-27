@@ -70,7 +70,7 @@ const chain = new ChainClient(x.programId, BigInt(x.seasonId));
 // Registered like everyone (with AI members the gateway refuses anything else: kind 2, the default deposit, 1–2 offices).
 const join = (feePayer = new PublicKey(x.feePayer), o = {}) => chain.register({ wallet: wallet.publicKey, feePayer, civ: 5, walletToken: new PublicKey(usdcAccount),
   mint: new PublicKey(req.asset), name: 'Mallory', kind, session: session.publicKey, stand: roleMask(['Steward']), deposit: BigInt(x.deposit ?? 0), ...o });
-const build = (ixs, feePayer = new PublicKey(x.feePayer)) => { const t = new Transaction().add(...ixs); t.feePayer = feePayer; t.recentBlockhash = x.recentBlockhash; t.partialSign(wallet); return t; };
+const build = (ixs, feePayer = new PublicKey(x.feePayer)) => { const t = new Transaction().add(...ixs); t.feePayer = feePayer; t.recentBlockhash = x.recentBlockhash; t.partialSign(wallet, session); return t; };
 
 // A payment that also drains the fee payer: an extra instruction.
 const drain = SystemProgram.transfer({ fromPubkey: new PublicKey(x.feePayer), toPubkey: wallet.publicKey, lamports: 1_000_000 });
@@ -133,7 +133,7 @@ const twinAccount = (await paced(() => game.faucet(twin.publicKey))).usdcAccount
 const again = await post();
 const t = new Transaction().add(...chain.register({ wallet: twin.publicKey, feePayer: new PublicKey(x.feePayer), civ: 5, walletToken: new PublicKey(twinAccount),
   mint: new PublicKey(req.asset), name: 'Twin', kind, session: session.publicKey, stand: roleMask(['General', 'Science']), deposit: BigInt(x.deposit ?? 0) }));
-t.feePayer = new PublicKey(x.feePayer); t.recentBlockhash = again.body.accepts[0].extra.recentBlockhash; t.partialSign(twin);
+t.feePayer = new PublicKey(x.feePayer); t.recentBlockhash = again.body.accepts[0].extra.recentBlockhash; t.partialSign(twin, session);
 r = await post(pay(req, t));
 assert.deepEqual([r.status, r.body.code], [409, 'SessionInUse']);
 console.log('✓ a second member with the same session key → 409 SessionInUse');

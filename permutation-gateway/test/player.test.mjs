@@ -26,7 +26,7 @@ const chain = new ChainClient(programId, seasonId);
 /**
  * Both builds of one transaction compile to the same message bytes, and
  * signed (first by `member`, then by the fee payer, as the relays do) to the
- * same wire bytes. `feePayer` and `member` are Keypairs.
+ * same wire bytes. `feePayer` is a Keypair, `member` a Keypair or several.
  */
 function same(web3Ixs, ours, feePayer, member = null) {
   const recentBlockhash = key().toBase58();
@@ -37,9 +37,10 @@ function same(web3Ixs, ours, feePayer, member = null) {
   const got = compileMessage({ feePayer: feePayer.publicKey.toBase58(), recentBlockhash, instructions: ours });
   assert.deepEqual(Buffer.from(got), want);
   const sigs = {};
-  if (member) {
-    tx.partialSign(member);
-    sigs[member.publicKey.toBase58()] = ed25519(got, member);
+  const members = member === null ? [] : [member].flat();
+  if (members.length) {
+    tx.partialSign(...members);
+    for (const m of members) sigs[m.publicKey.toBase58()] = ed25519(got, m);
     assert.deepEqual(Buffer.from(wireTransaction(got, sigs)), tx.serialize({ requireAllSignatures: false, verifySignatures: false }));
   }
   tx.partialSign(feePayer);
@@ -87,9 +88,10 @@ test('ata is the associated token address', () => {
   }
 });
 
-test('registerIx is chain.register: one instruction, fee payer first, the wallet a read-only signer', () => {
+test('registerIx is chain.register: one instruction, fee payer first, the wallet and the session key read-only signers (the session last)', () => {
   for (let i = 0; i < 20; i++) {
-    const crank = Keypair.generate(), walletKey = Keypair.generate(), wallet = walletKey.publicKey, session = key(), walletToken = key(), mint = key();
+    const crank = Keypair.generate(), walletKey = Keypair.generate(), wallet = walletKey.publicKey, sessionKey = Keypair.generate(), session = sessionKey.publicKey;
+    const walletToken = key(), mint = key();
     const tag = new Uint8Array(randomBytes(32));
     const attestation = i % 2 ? new Uint8Array(randomBytes(32)) : undefined;
     const votes = i % 3 ? [1, NOBODY, 7, 2] : undefined;
@@ -98,11 +100,14 @@ test('registerIx is chain.register: one instruction, fee payer first, the wallet
     const want = chain.register({ ...o, wallet, feePayer: crank.publicKey, kind: 2, stand: stand.reduce((m, r) => m | (1 << ROLES.indexOf(r)), 0) });
     const ours = [registerIx({ ...o, programId, seasonId, wallet: wallet.toBase58(), feePayer: crank.publicKey, walletToken: walletToken.toBase58(), mint: mint.toBase58(),
       session: session.toBase58(), stand })];
-    const message = same(want, ours, crank, walletKey);
+    const message = same(want, ours, crank, [walletKey, sessionKey]);
     const p = parseMessage(message);
     assert.equal(p.instructions.length, 1, 'no compute-budget instruction');
-    assert.deepEqual(p.signers, [crank.publicKey.toBase58(), wallet.toBase58()]);
-    assert.equal(p.header.numReadonlySignedAccounts, 1);
+    assert.equal(p.signers[0], crank.publicKey.toBase58());
+    assert.deepEqual(p.signers.slice(1).sort(), [wallet.toBase58(), session.toBase58()].sort());
+    assert.equal(p.header.numReadonlySignedAccounts, 2);
+    assert.equal(ours[0].keys.length, 10);
+    assert.deepEqual(ours[0].keys[9], { pubkey: session.toBase58(), isSigner: true, isWritable: false });
   }
   // Defaults: kind 2 (undeclared), votes nobody, no deposit, a fresh random tag.
   const session = key();

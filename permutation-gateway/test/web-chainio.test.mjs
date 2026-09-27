@@ -137,17 +137,18 @@ test('join: registers with kind 2, votes NOBODY and the public deposit; the wall
   assert.equal(payment.scheme, 'exact');
   assert.equal(payment.network, 'solana-localnet');
   const tx = parseTransaction(Buffer.from(payment.payload.transaction, 'base64'));
-  // Fee payer first (its signature left for the gateway), the wallet a read-only signer.
-  assert.deepEqual(tx.signers, [CRANK, w.address]);
-  assert.equal(tx.header.numReadonlySignedAccounts, 1);
+  // Fee payer first (its signature left for the gateway), the wallet and the session key read-only signers.
+  assert.equal(tx.signers[0], CRANK);
+  assert.deepEqual(tx.signers.slice(1).sort(), [w.address, session.publicKey].sort());
+  assert.equal(tx.header.numReadonlySignedAccounts, 2);
   assert.ok(tx.signatures[0].every(x => x === 0));
-  assert.ok(nodeOk(w.address, tx.message, tx.signatures[1]));
+  for (const k of [w.address, session.publicKey]) assert.ok(nodeOk(k, tx.message, tx.signatures[tx.signers.indexOf(k)]), k);
   assert.equal(tx.recentBlockhash, BLOCKHASH);
   assert.equal(tx.instructions.length, 1); // no compute budget instruction
   const ix = tx.instructions[0];
   assert.equal(ix.programId, PROGRAM);
   assert.deepEqual(ix.keys.map(k => k.pubkey), [w.address, CRANK, pda.season(PROGRAM, SEASON_ID), pda.member(PROGRAM, SEASON_ID, w.address), ata(w.address, MINT),
-    pda.vault(PROGRAM, SEASON_ID), MINT, 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA', '11111111111111111111111111111111']);
+    pda.vault(PROGRAM, SEASON_ID), MINT, 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA', '11111111111111111111111111111111', session.publicKey]);
   const d = decodeRegister(ix.data);
   assert.deepEqual({ ...d }, { tag: IX_TAG.register, civ: 1, name: 'Ada K.', kind: 2, session: session.publicKey, stand: roleMask(['Science', 'Diplomat']),
     votes: [NOBODY, NOBODY, NOBODY, NOBODY], deposit: 0n, rest: 0 });

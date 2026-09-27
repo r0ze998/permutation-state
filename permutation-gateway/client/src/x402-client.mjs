@@ -3,7 +3,8 @@
 //   1. POST /x402/join → 402 with PaymentRequirements (scheme "exact").
 //   2. Sign the program's Register (it moves exactly the entry fee, plus any
 //      treasury `deposit`, from `usdcAccount` into the season vault) with
-//      `wallet`; the facilitator is the fee payer and adds its signature.
+//      `wallet` and `session` (the program takes only a session key that
+//      signed); the facilitator is the fee payer and adds its signature.
 //   3. POST again with X-PAYMENT → 200 + X-PAYMENT-RESPONSE.
 //
 // By default a member registers like everyone else, the operator's AI
@@ -31,7 +32,7 @@ export function randomOffices(rand = n => randomInt(n)) {
 
 /**
  * @param {string} gateway  gateway base URL
- * @param {object} o  wallet, session (Keypairs); civ (default: the smallest nation); name (default: `memberName`
+ * @param {object} o  wallet, session (Keypairs: both sign Register); civ (default: the smallest nation); name (default: `memberName`
  *                    of fresh random bytes); kind (0 human, 1 agent, 2 undeclared; default: 2 when the season has
  *                    operator AI members, where it is the only kind the gateway accepts, else 1); usdcAccount;
  *                    stand (office names; default, or empty: 1–2 at random); votes (member id per office, in
@@ -60,7 +61,7 @@ export async function joinViaX402(gateway, { wallet, session, civ, name, kind, u
     votes: ROLES.map((_, i) => votes[i] ?? NOBODY), deposit: BigInt(deposit ?? x.deposit ?? 0) }));
   tx.feePayer = feePayer;
   tx.recentBlockhash = x.recentBlockhash;
-  tx.partialSign(wallet);
+  tx.partialSign(wallet, session);
   const payment = { x402Version: 1, scheme: 'exact', network: req.network, payload: { transaction: tx.serialize({ requireAllSignatures: false }).toString('base64') } };
   const second = await request(url, { method: 'POST', body: { civ: pick, name: drawn }, headers: { 'X-PAYMENT': b64json(payment) } });
   if (second.status !== 200) throw new HttpError(second.status, second.body, url);

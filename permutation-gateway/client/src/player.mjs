@@ -1,6 +1,6 @@
 // A member's own transactions without web3.js (the browser builds, signs and
-// sends them itself, like any agent): program addresses, Register and Claim
-// (the wallet signs), CommitOrders, RevealOrders and SubmitGov (the session
+// sends them itself, like any agent): program addresses, Register (the
+// wallet and the session key sign), Claim (the wallet signs), CommitOrders, RevealOrders and SubmitGov (the session
 // key signs), the token account a prize goes to, and the seal receipt the
 // gateway checks before it keeps a sealed batch.
 //
@@ -56,15 +56,16 @@ const bytes32 = (b, what) => {
 };
 
 /**
- * Register (the wallet signs; the entry fee and `deposit` move from
- * `walletToken`). `stand` is a role mask or office names; `votes` default to
- * nobody; `kind` defaults to 2 (undeclared), which every member of a season
- * with operator AI members must use; `tag` defaults to 32 random bytes.
+ * Register (the wallet and the session key sign; the entry fee and `deposit`
+ * move from `walletToken`, a token account the wallet owns). `stand` is a
+ * role mask or office names; `votes` default to nobody; `kind` defaults to 2
+ * (undeclared), which every member of a season with operator AI members
+ * must use; `tag` defaults to 32 random bytes.
  */
 export function registerIx({ programId, seasonId, wallet, feePayer, civ, walletToken, mint, name, kind = 2, session, attestation, stand = 0, votes,
   deposit = 0n, tag = randomBytes(32) }) {
   return ix(programId, [R(wallet, true), W(feePayer, true), W(pda.season(programId, seasonId)), W(pda.member(programId, seasonId, wallet)), W(walletToken),
-    W(pda.vault(programId, seasonId)), R(mint), R(TOKEN_PROGRAM), R(SYSTEM_PROGRAM)],
+    W(pda.vault(programId, seasonId)), R(mint), R(TOKEN_PROGRAM), R(SYSTEM_PROGRAM), R(session, true)],
   IX.register({ civ, name, kind, session: pubkeyBytes(session), attestation, stand: Array.isArray(stand) ? roleMask(stand) : stand, votes,
     deposit: BigInt(deposit), tag }));
 }

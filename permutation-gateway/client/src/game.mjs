@@ -28,10 +28,10 @@ import { PublicKey, Transaction, TransactionInstruction } from '@solana/web3.js'
 import { packBatch } from './batch.mjs';
 import { fromHex, toHex } from './bytes.mjs';
 import { ChainClient } from './chain.mjs';
-import { BATCH_BYTES, orderCommitment } from './codec.mjs';
+import { BATCH_BYTES, MAX_BATCH_ORDERS, MAX_FREE_ORDERS, orderCommitment } from './codec.mjs';
 import { commit } from './decision.mjs';
 import { DEFAULT_GATEWAY, DEFAULT_SERVER, errorCode, GameError, HttpError, requestJson } from './http.mjs';
-import { splitByOffice } from './offices.mjs';
+import { isTreasuryOrder, splitByOffice } from './offices.mjs';
 import { ata, createAtaIdempotentIx } from './player.mjs';
 import { joinViaX402 } from './x402-client.mjs';
 
@@ -157,7 +157,10 @@ export class GameClient {
    * they come back in `notHeld` (propose them instead).
    *
    * Every batch is packed before any is sent: if one does not fit a
-   * transaction, nothing is sent (`{ok: false, code: 'BatchTooLarge'}`).
+   * transaction or the batch caps (orders, free orders, counting the
+   * orders of the proposals it adopts), nothing is sent (`{ok: false,
+   * code: 'BatchTooLarge'}`); an adopted proposal id that `view` does not
+   * list for that office fails the same way (`UnknownProposal`).
    * Each office is relayed on its own; `offices` lists each one's
    * signature or `error`/`code`, and `ok` is true only if all went through
    * (`code` is then the first failure's, e.g. `TickFrozen`).
@@ -175,15 +178,31 @@ export class GameClient {
     if (!v.decision?.obsRoot) throw new GameError('NoObservation', 'the game server has no observation root for this tick yet');
     const held = this.myOffices(v);
     const { byOffice, notHeld } = splitByOffice(orders, held, v);
-    const plans = held.map(role => ({
-      role,
-      own: byOffice[role],
-      commitment: { ...commit({ tick, obsRoot: v.decision.obsRoot, policy, text: rationale }), role },
-      ...packBatch({ orders: byOffice[role], pending: this.pendingReveals(role, tick) }),
-    }));
+    // The adopted proposals' orders run in the batch and count towards its caps.
+    const proposals = v.gov?.proposals ?? [];
+    const adoptedOrders = role => (adopt[role] ?? []).flatMap(id => {
+      const p = proposals.find(x => x.id === id && x.role === role);
+      if (!p) throw new GameError('UnknownProposal', `${role}: no open proposal ${id} for this office in the view`);
+      return p.orders ?? [];
+    });
+    let plans;
+    try {
+      plans = held.map(role => ({
+        role,
+        own: byOffice[role],
+        commitment: { ...commit({ tick, obsRoot: v.decision.obsRoot, policy, text: rationale }), role },
+        ...packBatch({ orders: byOffice[role], pending: this.pendingReveals(role, tick), adopted: adoptedOrders(role) }),
+      }));
+    } catch (e) {
+      if (e.code !== 'UnknownProposal') throw e;
+      return { ok: false, tick, code: e.code, error: e.message, offices: [], notHeld, warnings: [] };
+    }
     const tooLarge = plans.filter(p => !p.fits);
     if (tooLarge.length) {
-      const error = tooLarge.map(p => `${p.role}: batch too large for one transaction (${p.used} > ${BATCH_BYTES} bytes of orders)`).join('; ');
+      const why = { bytes: p => `batch too large for one transaction (${p.used} > ${BATCH_BYTES} bytes of orders)`,
+        free: () => `more than ${MAX_FREE_ORDERS} free orders (exchange orders, consents, reveals)`,
+        orders: () => `more than ${MAX_BATCH_ORDERS} orders, counting the adopted proposals' orders` };
+      const error = tooLarge.map(p => `${p.role}: ${why[p.reason](p)}`).join('; ');
       return { ok: false, tick, code: 'BatchTooLarge', error, offices: [], notHeld, warnings: [] };
     }
     const check = await this.validate(orders.filter(o => !notHeld.includes(o)));
@@ -286,16 +305,19 @@ export class GameClient {
 
   /**
    * After the season is finalized: claim your prize and your share of the
-   * nation treasury into `usdcAccount` (a token account of the season's
-   * mint your wallet owns). Without one: your associated token account if
-   * you have it, else your largest account of the mint (GET /usdc), else
-   * your associated token account, created in the same transaction with the
-   * gateway paying the rent. Your wallet signs; the gateway only pays the
+   * nation treasury; after it was aborted: your refund (entry fee, deposit
+   * and any share of the operator's forfeited escrow). Into `usdcAccount`
+   * (a token account of the season's mint your wallet owns). Without one:
+   * your associated token account if you have it, else your largest account
+   * of the mint (GET /usdc), else your associated token account, created in
+   * the same transaction with the gateway paying the rent. Your wallet signs; the gateway only pays the
    * fee. (The faucet is not needed, and closes with registration.)
    */
   async claim({ wallet, usdcAccount }) {
     const relay = await this.get(this.gateway, '/claim-relay');
-    if (relay.status !== 'Finalized') throw new GameError('NotFinalized', `the season is ${relay.status}; claims open once it is Finalized`);
+    if (relay.status !== 'Finalized' && relay.status !== 'Aborted') {
+      throw new GameError('NotFinalized', `the season is ${relay.status}; claims open once it is Finalized or Aborted`);
+    }
     const chain = await this.chainClient();
     const { dest, create } = usdcAccount ? { dest: String(usdcAccount), create: false } : await this.claimDestination(wallet.publicKey.toBase58(), relay.mint);
     const prefix = create ? [web3Ix(createAtaIdempotentIx({ payer: relay.feePayer, owner: wallet.publicKey.toBase58(), mint: relay.mint }))] : [];
@@ -345,7 +367,11 @@ export class GameClient {
   messages(since = 0) { return this.get(this.gateway, `/talk?since=${since}`); }
   /** The operator's AI members as far as they are public, and the bounty. */
   roster() { return this.get(this.gateway, '/roster'); }
-  propose(role, orders) { return this.gov({ type: 'Propose', role, orders }); }
+  /** Propose orders to `role`'s holder. Treasury orders (`isTreasuryOrder`) cannot be proposed (V5 §7.5): only that officer gives them. */
+  async propose(role, orders) {
+    if (orders.some(isTreasuryOrder)) throw new Error('treasury orders cannot be proposed (V5 §7.5): only the officer who holds the office can give them');
+    return this.gov({ type: 'Propose', role, orders });
+  }
   support(proposal) { return this.gov({ type: 'Support', proposal }); }
   vote(role, candidate) { return this.gov({ type: 'Vote', role, candidate }); }
   stand(roles) { return this.gov({ type: 'Stand', roles }); }

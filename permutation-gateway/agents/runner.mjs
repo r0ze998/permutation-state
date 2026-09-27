@@ -7,7 +7,7 @@ import path from 'node:path';
 import { GameClient, loadOrCreateKeypair } from '../client/src/index.mjs';
 import { ROLES } from '../client/src/codec.mjs';
 import { errorCode } from '../client/src/http.mjs';
-import { officeOf, splitByOffice } from '../client/src/offices.mjs';
+import { isTreasuryOrder, officeOf, splitByOffice } from '../client/src/offices.mjs';
 import { retry, sleep } from '../client/src/retry.mjs';
 import { randomOffices } from '../client/src/x402-client.mjs';
 import { DEFAULTS, parseArgs } from '../src/config.mjs';
@@ -91,7 +91,7 @@ export async function runAgent({ name, policy, decide, args }) {
     // Governance first (proposals of the orders for offices we do not hold,
     // support, votes): it closes with the commitments at the tick's deadline,
     // and later actions wait for the next tick.
-    const notHeld = splitByOffice(decision.orders || [], held, v).notHeld.filter(o => officeOf(o, v));
+    const notHeld = toPropose(decision.orders || [], held, v, log);
     await govern({ game, view: v, proposals: notHeld, stand, proposedAt, log });
     if (held.length) {
       // Retry a failed submission a few times within the tick (e.g. the ER
@@ -168,12 +168,29 @@ export async function claimPrize({ game, wallet, seatFile, log, retryOpts = { at
   }
 }
 
+let warnedTreasury = false;
+/**
+ * The decided orders to propose to their offices: those of offices we do
+ * not hold, less treasury orders, which only that officer can give (V5
+ * §7.5; `game.propose` refuses them, and one in a group would sink the
+ * others with it).
+ */
+export function toPropose(orders, held, view, log = () => {}) {
+  const notHeld = splitByOffice(orders, held, view).notHeld.filter(o => officeOf(o, view));
+  const out = notHeld.filter(o => !isTreasuryOrder(o));
+  if (out.length < notHeld.length && !warnedTreasury) {
+    warnedTreasury = true;
+    log('treasury orders for offices we do not hold are dropped: only that officer can give them');
+  }
+  return out;
+}
+
 /**
  * Governance as a member: propose orders for offices we do not hold (each
  * office at most every 5 ticks), support nation-mates' proposals that would
  * still work, vote for ourselves (or the incumbent) in the vote window.
  */
-async function govern({ game, view: v, proposals, stand, proposedAt, log }) {
+export async function govern({ game, view: v, proposals, stand, proposedAt, log }) {
   const gov = v.gov || {};
   const byRole = {};
   for (const o of proposals) (byRole[officeOf(o, v)] ||= []).push(o);
