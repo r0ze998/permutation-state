@@ -10,8 +10,8 @@
 //!   snapshots and link addresses come from the logs alone. It stops at a
 //!   transaction the node cannot return yet and resumes there next time.
 //!   It also stops at a signature it has seen, so a server that ignores
-//!   `until` still terminates; a server that ignores `before` (the local
-//!   node's MVP) is detected when it serves a page twice and the pull fails
+//!   `until` still terminates; a server that ignores `before` (as the
+//!   W1 local node MVP did; W2-C's node honours it) is detected when it serves a page twice and the pull fails
 //!   with `Unsupported` rather than archive a gap — such a server must be
 //!   polled before one page (≤ 1,000 transactions) fills.
 

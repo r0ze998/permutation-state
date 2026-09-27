@@ -138,7 +138,10 @@ async fn feed_and_rpc_poll_archive_the_same_transactions_and_resume() {
 
 mod fake_rpc {
     //! A JSON-RPC server that honours `before`, `until` and `limit` (as a
-    //! public RPC does) over a fixed list of transactions.
+    //! public RPC does) over a fixed list of transactions; with
+    //! `ignore_before` set it serves the newest page whatever `before` says
+    //! (the W1 local node MVP's behaviour).
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
 
     use axum::{extract::State, routing::post, Json, Router};
@@ -146,7 +149,13 @@ mod fake_rpc {
     use serde_json::{json, Value};
 
     #[derive(Clone, Default)]
-    pub struct Txs(pub Arc<Mutex<Vec<(String, u64)>>>);
+    pub struct Txs(pub Arc<Mutex<Vec<(String, u64)>>>, pub Arc<AtomicBool>);
+
+    impl Txs {
+        pub fn ignore_before(&self) {
+            self.1.store(true, Ordering::SeqCst);
+        }
+    }
 
     async fn rpc(State(s): State<Txs>, Json(req): Json<Value>) -> Json<Value> {
         let id = req.get("id").cloned().unwrap_or(json!(1));
@@ -156,7 +165,10 @@ mod fake_rpc {
             "getSignaturesForAddress" => {
                 let cfg = p.get(1).cloned().unwrap_or(json!({}));
                 let limit = cfg.get("limit").and_then(|x| x.as_u64()).unwrap_or(1000) as usize;
-                let before = cfg.get("before").and_then(|x| x.as_str());
+                let before = cfg
+                    .get("before")
+                    .and_then(|x| x.as_str())
+                    .filter(|_| !s.1.load(Ordering::SeqCst));
                 let until = cfg.get("until").and_then(|x| x.as_str());
                 let mut newest: Vec<&(String, u64)> = all.iter().rev().collect();
                 if let Some(b) = before {
@@ -232,21 +244,45 @@ async fn rpc_poll_pages_back_to_the_last_signature() {
     assert!(findex::Source::pull(&mut again).await.unwrap().is_empty());
 }
 
-/// The local node's MVP ignores `before`: paging is refused, not gapped.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// A server that ignores `before`: paging is refused, not gapped.
+#[tokio::test]
 async fn rpc_poll_refuses_a_server_that_ignores_before() {
-    let ip = InProcess::new(Config::default(), None);
-    let payer = Keypair::new_from_array([43; 32]);
-    let to = Address::new_from_array([44; 32]);
-    ip.lock().airdrop(&payer.pubkey(), 50_000_000_000).unwrap();
-    transfers(&ip, &payer, to, 5, 1_000_000).await;
-    let node = server::start(ip.chain.clone(), 0).await.unwrap();
-    let mut poll = RpcPoll::new(node.url(), to);
+    let txs = fake_rpc::Txs::default();
+    let sig = |i: u8| fclient::ports::Signature::from([i; 64]).to_string();
+    for i in 1..=5u8 {
+        txs.0.lock().unwrap().push((sig(i), i as u64));
+    }
+    txs.ignore_before();
+    let url = fake_rpc::start(txs).await;
+    let mut poll = RpcPoll::new(url, Address::new_from_array([1; 32]));
     poll.page = 2;
     let e = findex::Source::pull(&mut poll).await.unwrap_err();
     assert!(
         matches!(e, fclient::ports::PortError::Unsupported(_)),
         "{e:?}"
     );
+}
+
+/// The local chain node honours `before` since W2-C: RpcPoll pages it in
+/// pages smaller than the history and archives every transaction, oldest
+/// first, the same set the in-process feed gives.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rpc_poll_pages_the_local_node() {
+    let ip = InProcess::new(Config::default(), None);
+    let payer = Keypair::new_from_array([43; 32]);
+    let to = Address::new_from_array([44; 32]);
+    ip.lock().airdrop(&payer.pubkey(), 50_000_000_000).unwrap();
+    let feed_port = InProcess::from_chain(ip.chain.clone(), Some(to));
+    transfers(&ip, &payer, to, 5, 1_000_000).await;
+    let node = server::start(ip.chain.clone(), 0).await.unwrap();
+    let mut poll = RpcPoll::new(node.url(), to);
+    poll.page = 2;
+    let got = findex::Source::pull(&mut poll).await.unwrap();
+    let mut feed = LocalnetFeed::new(feed_port);
+    let want = findex::Source::pull(&mut feed).await.unwrap();
+    assert_eq!(got.len(), 5, "three pages of 2");
+    let sigs = |v: &[fclient::ports::TxRecord]| v.iter().map(|r| r.signature).collect::<Vec<_>>();
+    assert_eq!(sigs(&got), sigs(&want), "same transactions, oldest first");
+    assert!(findex::Source::pull(&mut poll).await.unwrap().is_empty());
     node.stop();
 }
