@@ -144,14 +144,18 @@ impl Reserve {
             .ok_or(EconError::Underflow)
     }
 
-    /// The Reckoning's sweep (CL-15): once every closed term of the faction
-    /// has been swept (`outstanding() == 0`; otherwise `TermState`), move
-    /// the whole balance out of the reserve and return it: the program adds
-    /// it to the faction's laurel pool general split before
-    /// `FinalizeFaction`. After it `deposited == paid + burned +
-    /// final_swept`, and the reserve takes no more deposits or closes.
-    pub fn final_sweep(&mut self) -> Result<u64, EconError> {
-        if self.finalized || self.outstanding()? != 0 {
+    /// The Reckoning's sweep (CL-15): once **every term of the season is
+    /// closed** (`open_terms`, the faction's terms still `Open`, is 0: the
+    /// last CloseTerm runs at T_end, Reckoning rule 2) and every closed term
+    /// has been swept (`outstanding() == 0`), move the whole balance out of
+    /// the reserve and return it: the program adds it to the faction's
+    /// laurel pool general split before `FinalizeFaction`. Otherwise
+    /// `TermState`: a sweep while a term is still open would strand its
+    /// completers (a later close is refused). After it `deposited == paid +
+    /// burned + final_swept`, and the reserve takes no more deposits or
+    /// closes.
+    pub fn final_sweep(&mut self, open_terms: u32) -> Result<u64, EconError> {
+        if self.finalized || open_terms != 0 || self.outstanding()? != 0 {
             return Err(EconError::TermState);
         }
         let out = self.balance;
@@ -238,7 +242,9 @@ impl MandateTerm {
     /// claim deadline from the term's end and the season's end (CL-15; the
     /// last term closes at the season end). With no shares the term closes
     /// empty and the reserve keeps its balance. Refused after the reserve's
-    /// final sweep.
+    /// final sweep. **Precondition (the caller's):** `term_end` is the end
+    /// of `self.term` computed from the season's start (`start + (term + 1)
+    /// × TERM_BELLS × 600`), and terms close in order.
     pub fn close_with_floor(
         &mut self,
         reserve: &mut Reserve,

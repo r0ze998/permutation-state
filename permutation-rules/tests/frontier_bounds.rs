@@ -266,6 +266,19 @@ fn accruals_at_the_caps_do_not_overflow() {
         assert!(h.stores[r].rate >= -MAX_UPKEEP_PER_HOUR);
         assert!(h.stores[r].rate <= MAX_PRODUCTION_PER_HOUR - MAX_UPKEEP_PER_HOUR);
     }
+    // Troop upkeep saturates instead of wrapping (integ-W1 review): a
+    // thousand max-size entries, then u32::MAX troops each.
+    use permutation_rules::frontier::holding::troop_upkeep_per_hour;
+    let small = troop_upkeep_per_hour(&[(UnitType::Knight, 30_000 * MILLI as u32)]);
+    assert!(small > 0 && small < i64::MAX);
+    let many = vec![(UnitType::Knight, 30_000 * MILLI as u32); 1_000];
+    let big = troop_upkeep_per_hour(&many);
+    assert!(big >= small, "monotone, no wrap to a negative rate");
+    let huge = vec![(UnitType::Knight, u32::MAX); 100_000];
+    assert_eq!(troop_upkeep_per_hour(&huge), i64::MAX);
+    h.set_upkeep(GENESIS + secs, Resource::Food, troop_upkeep_per_hour(&huge))
+        .unwrap();
+    assert!(h.stores[Resource::Food as usize].rate >= -MAX_UPKEEP_PER_HOUR);
 }
 
 // ------------------------------------------------------------ CL-03
@@ -331,6 +344,30 @@ fn province_coordinates_are_checked() {
     }
     assert_eq!(ProvinceCoord::checked_from_index(n), None);
     assert_eq!(ProvinceCoord::checked_from_index(u32::MAX), None);
+    // The unchecked forms are total too (integ-W1): beyond ring 128
+    // `index` gives u32::MAX and never wraps, even at the i32 extremes.
+    for (p, q) in [(129, 0), (i32::MAX, 0), (i32::MIN, i32::MAX), (-40_000, 1)] {
+        assert_eq!(ProvinceCoord::new(p, q).index(), u32::MAX, "({p}, {q})");
+        assert_eq!(ProvinceCoord::new(p, q).checked_index(), None);
+    }
+    assert_eq!(
+        ProvinceCoord::new(128, 0).index(),
+        n - 6 * 128,
+        "first of ring 128"
+    );
+}
+
+/// `from_index` beyond ring 128 is a caller bug: a debug build asserts
+/// (it can no longer overflow `provinces_within`), a release build gives
+/// the Concord.
+#[test]
+fn from_index_beyond_ring_128_is_refused() {
+    let r = std::panic::catch_unwind(|| ProvinceCoord::from_index(u32::MAX));
+    if cfg!(debug_assertions) {
+        assert!(r.is_err(), "debug build asserts");
+    } else {
+        assert_eq!(r.ok(), Some(ProvinceCoord::CONCORD));
+    }
 }
 
 // ------------------------------------------------------------ CL-05
@@ -641,12 +678,129 @@ fn no_vigil_window_exceeds_8h_across_a_change() {
     assert_eq!(naive, 16 * HOUR, "the control must find the long vigil");
 }
 
+/// A model of the vigil across one change, with the first new window's
+/// skip rule as a parameter: `skip(prev, ws)` says whether the new
+/// schedule's first window (starting at `ws`) is dropped, `prev` being the
+/// last old window's start.
+fn model_covers(old: i64, new: i64, from: i64, skip: impl Fn(i64, i64) -> bool, t: i64) -> bool {
+    let prev = from - DAY + old; // the last old window starting before `from`
+    let first = from + new;
+    let in_old = {
+        let ws = t - (t - old).rem_euclid(DAY);
+        ws < from && t < ws + VIGIL_SECS
+    };
+    let in_new = {
+        let ws = t - (t - first).rem_euclid(DAY);
+        ws >= first && t < ws + VIGIL_SECS && !(ws == first && skip(prev, first))
+    };
+    in_old || in_new
+}
+
+/// Longest run of covered bell starts, and the most covered bell starts in
+/// any 144 consecutive bells, over `n` bells from `b0`.
+fn bell_runs(covers: impl Fn(i64) -> bool, genesis: i64, b0: i64, n: usize) -> (usize, usize) {
+    let c: Vec<bool> = (0..n as i64)
+        .map(|k| covers(genesis + (b0 + k) * 600))
+        .collect();
+    let (mut run, mut longest) = (0, 0);
+    for &x in &c {
+        run = if x { run + 1 } else { 0 };
+        longest = longest.max(run);
+    }
+    let mut most = 0;
+    let mut w: usize = c[..144].iter().filter(|&&x| x).count();
+    most = most.max(w);
+    for i in 144..c.len() {
+        w = w + c[i] as usize - c[i - 144] as usize;
+        most = most.max(w);
+    }
+    (longest, most)
+}
+
+/// CL-09 at the granularity a siege counts (integ-W1 review): bells start
+/// every 600 s at a genesis offset that is not a multiple of 600, changes
+/// are requested on a 60-s grid, and across any change no run of covered
+/// bell starts exceeds 48 and no 144 consecutive bells hold more than 48
+/// covered ones. The kernel equals the model with the day rule. Controls:
+/// the naive midnight switch and the first window rule (skip only if the
+/// new window starts before the old one ends) both give 96 consecutive
+/// covered bells for 16:00 → 00:01.
+#[test]
+fn no_vigil_covers_more_than_48_bells_across_a_change() {
+    let genesis = GENESIS + 7 * 60 + 13; // hh:m7:13, not a bell boundary
+    let now = GENESIS + 3 * DAY + 5_000;
+    let day_rule = |prev: i64, ws: i64| ws < prev + DAY;
+    let check = |old: i64, new: i64| {
+        let mut v = Vigil::new(old as u32).unwrap();
+        let from = v.request_change(now, new as u32).unwrap();
+        let b0 = (from - 2 * DAY - genesis) / 600;
+        let n = 5 * 144;
+        let (longest, most) = bell_runs(|t| v.covers(t), genesis, b0, n);
+        assert!(
+            longest <= 48,
+            "{old} -> {new}: {longest} covered bells in a row"
+        );
+        assert!(most <= 48, "{old} -> {new}: {most} covered bells in a day");
+        for k in 0..n as i64 {
+            let t = genesis + (b0 + k) * 600;
+            assert_eq!(
+                v.covers(t),
+                model_covers(old, new, from, day_rule, t),
+                "{old} -> {new} at bell {}",
+                b0 + k
+            );
+        }
+        // The new schedule is in force from the second day on.
+        let ws = from + DAY + new;
+        assert!(v.covers(ws) && v.covers(ws + VIGIL_SECS - 1) && !v.covers(ws + VIGIL_SECS));
+    };
+    // Every pair on a 30-minute grid.
+    for old in (0..DAY).step_by(1_800) {
+        for new in (0..DAY).step_by(1_800) {
+            check(old, new);
+        }
+    }
+    // 60-s grids around the two edges: the new window starting near the old
+    // one's end (new ≈ old + 8 h) and near the old start (new ≈ old, where
+    // the skip switches), for every old start on a 60-s grid.
+    for old in (0..DAY).step_by(60) {
+        for d in (-600..=600).step_by(60) {
+            for new in [old + VIGIL_SECS + d, old + d] {
+                check(old, new.rem_euclid(DAY));
+            }
+        }
+    }
+    // Controls.
+    let from = change_effective_at(now);
+    let b0 = (from - 2 * DAY - genesis) / 600;
+    let naive = |t| naive_covers(16 * 3_600, 0, from, t);
+    assert_eq!(bell_runs(naive, genesis, b0, 720).0, 96, "naive midnight");
+    let first_rule = |prev: i64, ws: i64| ws <= prev + VIGIL_SECS;
+    for new in [60, 0] {
+        let old = 16 * 3_600 - if new == 0 { 60 } else { 0 };
+        let r = bell_runs(
+            |t| model_covers(old, new, from, first_rule, t),
+            genesis,
+            b0,
+            720,
+        );
+        assert_eq!(r.0, 96, "first rule {old} -> {new}");
+        let r = bell_runs(
+            |t| model_covers(old, new, from, day_rule, t),
+            genesis,
+            b0,
+            720,
+        );
+        assert!(r.0 <= 48 && r.1 <= 48, "day rule {old} -> {new}: {r:?}");
+    }
+}
+
 /// The O(1) count of bells outside the vigil equals counting bell by bell
 /// across changes (the day after a change is not periodic).
 #[test]
 fn bells_outside_vigil_matches_bell_by_bell_across_a_change() {
     let mut r = Rng(0xC1_09);
-    for case in 0..300 {
+    for case in 0..3_000 {
         let mut v = Vigil::new(r.below(DAY as u64) as u32).unwrap();
         let mut at = GENESIS + r.below(3 * DAY as u64) as i64;
         for _ in 0..r.below(3) {
@@ -865,7 +1019,7 @@ fn mandate_claims_close_before_the_reckoning() {
         Err(EconError::TermState)
     );
     // … and the reserve cannot be finalised while the term is open.
-    assert_eq!(reserve.final_sweep(), Err(EconError::TermState));
+    assert_eq!(reserve.final_sweep(0), Err(EconError::TermState));
     assert_eq!(
         t.sweep(t.claim_deadline, &mut reserve),
         Err(EconError::TermState),
@@ -873,15 +1027,22 @@ fn mandate_claims_close_before_the_reckoning() {
     );
     let back = t.sweep(t.claim_deadline + 1, &mut reserve).unwrap();
     assert_eq!(back, 10_000 - 3_333);
+    // A term still open (its completers not yet paid) blocks the final
+    // sweep even though every closed term is swept (integ-W1 review).
+    let mut open = MandateTerm::new(7);
+    open.complete(true).unwrap();
+    assert_eq!(reserve.outstanding(), Ok(0));
+    assert_eq!(reserve.final_sweep(1), Err(EconError::TermState));
+    assert!(!reserve.finalized);
     // The final sweep takes the whole balance to the laurel split.
-    assert_eq!(reserve.final_sweep().unwrap(), 10_000 - 3_333);
+    assert_eq!(reserve.final_sweep(0).unwrap(), 10_000 - 3_333);
     assert_eq!(reserve.balance, 0);
     assert_eq!(
         reserve.deposited,
         reserve.paid + reserve.burned + reserve.final_swept
     );
     // Nothing happens after it.
-    assert_eq!(reserve.final_sweep(), Err(EconError::TermState));
+    assert_eq!(reserve.final_sweep(0), Err(EconError::TermState));
     assert_eq!(reserve.deposit(1), Err(EconError::TermState));
     let mut late = MandateTerm::new(7);
     late.complete(true).unwrap();
@@ -935,7 +1096,7 @@ fn final_sweep_conserves() {
             }
             t.sweep(t.claim_deadline + 1, &mut reserve).unwrap();
         }
-        let out = reserve.final_sweep().unwrap();
+        let out = reserve.final_sweep(0).unwrap();
         swept_nonzero += (out > 0) as u32;
         assert_eq!(reserve.balance, 0, "seed {seed}");
         assert_eq!(

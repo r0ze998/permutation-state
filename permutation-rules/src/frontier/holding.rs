@@ -177,15 +177,24 @@ pub const fn shield_secs(day: u32) -> i64 {
 
 /// Troop upkeep of a holding's hosts and garrison in food (and gold) per
 /// hour: `economy::upkeep_of_effective` (reused) with troops counted in
-/// hundreds, T2 troops ×1.5 [design].
+/// hundreds, T2 troops ×1.5 [design]. Saturates at `Milli::MAX` for any
+/// input (CL-02: no wrap for attacker-shaped entry lists; `set_upkeep`
+/// then caps the rate).
 pub fn troop_upkeep_per_hour(troops: &[(UnitType, MilliTroops)]) -> Milli {
     const PER: u64 = 100; // troops per upkeep unit
     let eff: u64 = troops
         .iter()
         .filter(|(u, _)| !u.is_civilian())
         .map(|(u, t)| *t as u64 * stats(*u).upkeep_bps as u64 / BPS_ONE as u64)
-        .sum();
-    upkeep_of_effective(eff / PER) as Milli * MILLI
+        .fold(0u64, u64::saturating_add);
+    let e = eff / PER;
+    // upkeep_of_effective squares e / 1000: keep it inside u64.
+    if e / 1000 > 1 << 31 {
+        return Milli::MAX;
+    }
+    i64::try_from(upkeep_of_effective(e))
+        .unwrap_or(Milli::MAX)
+        .saturating_mul(MILLI)
 }
 
 /// One lazily accrued quantity: `value` at `t0`, growing at `rate` per hour

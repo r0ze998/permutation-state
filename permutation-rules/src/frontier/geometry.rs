@@ -233,11 +233,16 @@ impl ProvinceCoord {
     /// Dense index: rings in order, and inside ring d ≥ 1 wedge by wedge,
     /// `k·d + (position in the wedge)`. The Concord is 0; ring d starts at
     /// `1 + 3d(d − 1)`. For coordinates from data use
-    /// [`ProvinceCoord::checked_index`] (ring ≤ 128).
+    /// [`ProvinceCoord::checked_index`] (ring ≤ 128). Beyond ring 128 the
+    /// result is `u32::MAX` (never a valid index, and no arithmetic can
+    /// wrap; integ-W1 review of CL-04).
     pub fn index(self) -> u32 {
         let d = self.ring();
         if d == 0 {
             return 0;
+        }
+        if d > R_MAX_HARD as u32 {
+            return u32::MAX;
         }
         let k = self.as_hex().sextant();
         let w = self.as_hex().turned(k); // q > 0, r ≥ 0, q + r = d
@@ -245,9 +250,16 @@ impl ProvinceCoord {
     }
 
     /// Inverse of [`ProvinceCoord::index`]. For indices from data use
-    /// [`ProvinceCoord::checked_from_index`] (`i < 49,537`).
+    /// [`ProvinceCoord::checked_from_index`] (`i < 49,537`). An index at or
+    /// beyond `provinces_within(R_MAX_HARD)` gives the Concord (a debug
+    /// build asserts), so no input can overflow `provinces_within` or wrap
+    /// in an SBF release (integ-W1 review of CL-04).
     pub fn from_index(i: u32) -> Self {
         if i == 0 {
+            return Self::CONCORD;
+        }
+        if i >= provinces_within(R_MAX_HARD as u32) {
+            debug_assert!(false, "from_index beyond ring 128: use checked_from_index");
             return Self::CONCORD;
         }
         // smallest d with 1 + 3d(d + 1) > i

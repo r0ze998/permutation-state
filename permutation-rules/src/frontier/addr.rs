@@ -49,7 +49,7 @@
 //! **Host id (pinned):** `host_id = province_index(P, Q) << 44 | site << 40
 //! | gen << 32 | seq` ([`host_id`], inverse [`host_parts`]).
 
-use super::geometry::{provinces_within, ProvinceCoord, R_MAX_HARD, SITES_PER_PROVINCE};
+use super::geometry::{ProvinceCoord, SITES_PER_PROVINCE};
 use crate::hash::sha256;
 
 /// Kernel version of this module (part of the ruleset hash).
@@ -415,20 +415,17 @@ pub struct HostParts {
     pub seq: u32,
 }
 
-/// Ring of `(p, q)` computed in i64 (no overflow on i32 extremes).
-fn ring_i64(p: i32, q: i32) -> i64 {
-    let (p, q) = (p as i64, q as i64);
-    p.abs().max(q.abs()).max((p + q).abs())
-}
-
 /// `host_id = province_index(P, Q) << 44 | site << 40 | gen << 32 | seq`
 /// (pinned). Coordinates beyond ring `R_MAX_HARD` (128) or a site ≥ 12
 /// give [`HOST_ID_INVALID`].
 pub fn host_id(p: i32, q: i32, site: u8, gen: u8, seq: u32) -> u64 {
-    if ring_i64(p, q) > R_MAX_HARD as i64 || site as usize >= SITES_PER_PROVINCE {
+    if site as usize >= SITES_PER_PROVINCE {
         return HOST_ID_INVALID;
     }
-    let idx = ProvinceCoord::new(p, q).index() as u64;
+    let Some(idx) = ProvinceCoord::new(p, q).checked_index() else {
+        return HOST_ID_INVALID;
+    };
+    let idx = idx as u64;
     idx << HOST_PROVINCE_SHIFT
         | (site as u64) << HOST_SITE_SHIFT
         | (gen as u64) << HOST_GEN_SHIFT
@@ -442,11 +439,10 @@ pub fn host_parts(id: u64) -> Option<HostParts> {
     let site = ((id >> HOST_SITE_SHIFT) & 0xf) as u8;
     let gen = ((id >> HOST_GEN_SHIFT) & 0xff) as u8;
     let seq = id as u32;
-    if province_index >= provinces_within(R_MAX_HARD as u32) || site as usize >= SITES_PER_PROVINCE
-    {
+    if site as usize >= SITES_PER_PROVINCE {
         return None;
     }
-    let c = ProvinceCoord::from_index(province_index);
+    let c = ProvinceCoord::checked_from_index(province_index)?;
     Some(HostParts {
         province_index,
         p: c.p,
@@ -527,6 +523,7 @@ mod tests {
         assert_eq!(host_id(0, 0, 12, 0, 0), HOST_ID_INVALID);
         assert_eq!(host_parts(HOST_ID_INVALID), None);
         // The pinned layout: index < 2^20 for R ≤ 128.
+        use crate::frontier::geometry::{provinces_within, R_MAX_HARD};
         assert!(provinces_within(R_MAX_HARD as u32) < 1 << 20);
     }
 }

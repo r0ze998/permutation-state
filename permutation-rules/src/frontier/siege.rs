@@ -77,10 +77,15 @@ pub const fn required_bells(walls: u32, extra: u32) -> u32 {
 /// midnight at least [`VIGIL_NOTICE`] after the request. Each 8-hour window
 /// belongs to the schedule in force when it **starts**, so a window that
 /// began before the change runs to its end. The first window of the new
-/// schedule is skipped if it would start before the last old window has
-/// ended (it would join it into one long vigil). So no covered stretch is
-/// ever longer than 8 hours: before this rule a change at an arbitrary time
-/// could create one vigil of about 16 hours (first-pass review).
+/// schedule is skipped unless it starts at least one day after the last
+/// old window started (integ-W1 review of CL-09). So at least 16 hours stay
+/// open after the last old window, no 24-hour span is covered for more than
+/// 8 hours, and at bell granularity (600-s bells, the unit a siege counts)
+/// no run of covered bell starts is longer than 48 and no 144 consecutive
+/// bells hold more than 48 covered ones. The first rule ("skipped if it
+/// starts before the last old window has ended") still allowed a 16-hour
+/// vigil at bell granularity: 16:00 → 00:01 gave 96 consecutive covered
+/// bells, with a one-minute gap that falls between two bell starts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Vigil {
     /// `(effective_from_ts, start_secs_of_day)`, oldest first.
@@ -140,10 +145,10 @@ impl Vigil {
             return self.window_start(t.min(from - 1), j - 1);
         }
         if ws - DAY < from {
-            // Entry j's first window: skipped if it would join the last
-            // window of the previous entry into one stretch.
+            // Entry j's first window: skipped unless it starts a full day
+            // after the previous entry's last window started.
             let prev = self.window_start(from - 1, j - 1);
-            if ws <= prev + VIGIL_SECS {
+            if ws < prev.saturating_add(DAY) {
                 return prev;
             }
         }
@@ -342,7 +347,7 @@ impl BellReport {
 /// (bell b starts at `genesis_ts + 600 b`). O(1) in the length of the
 /// range: a day is exactly 144 bells, so whole days are counted once per
 /// schedule segment and only the remainder bell by bell (≤ 2 × 144 checks
-/// per segment, ≤ 3 segments).
+/// per segment, ≤ 10 segments).
 pub fn bells_outside_vigil(vigil: &Vigil, genesis_ts: i64, b0: u32, b1: u32) -> u32 {
     const BELL: i64 = 600;
     const PER_DAY: u32 = (DAY / BELL) as u32;
@@ -351,15 +356,17 @@ pub fn bells_outside_vigil(vigil: &Vigil, genesis_ts: i64, b0: u32, b1: u32) -> 
         return 0;
     }
     // Segment boundaries: the first bell starting at or after each change,
-    // and one day later. Coverage is periodic between them: the day after a
-    // change holds the last old window's tail and the new schedule's first
-    // (possibly skipped) window, so it is counted bell by bell (CL-09).
+    // and one and two days later. Coverage is periodic between them: the
+    // two days after a change hold the last old window's tail and the new
+    // schedule's first (possibly skipped) window, which can start late in
+    // the first day and run into the second, so each is counted on its own
+    // (CL-09).
     let mut cuts: Vec<u32> = vec![b0];
     for (from, _) in vigil.schedule {
         if from == i64::MIN {
             continue;
         }
-        for t in [from, from.saturating_add(DAY)] {
+        for t in [from, from.saturating_add(DAY), from.saturating_add(2 * DAY)] {
             let k = if t <= genesis_ts {
                 0
             } else {
