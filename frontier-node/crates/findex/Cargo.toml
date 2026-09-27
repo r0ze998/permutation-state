@@ -1,6 +1,6 @@
 [package]
 name = "findex"
-description = "Frontier ingest and index: ordered transaction feed, PS2 records, archive (skeleton in W1; W2-F builds it)"
+description = "Frontier ingest and index: RpcPoll and LocalnetFeed ingest, append-only archive with manifest, SQLite entity index, account snapshots (M1 contract §8.1, offchain design §4.3)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,4 +9,17 @@ license.workspace = true
 
 [dependencies]
 fclient.workspace = true
+frontier-abi.workspace = true
+solana-address.workspace = true
+rusqlite.workspace = true
+sha2.workspace = true
+hex.workspace = true
+base64.workspace = true
 serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+localnet.workspace = true
+axum.workspace = true
+solana-keypair.workspace = true
+solana-signer.workspace = true

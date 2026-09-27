@@ -67,6 +67,14 @@ serde_json = "=1.0.151"
 rand = "=0.8.8"
 tokio = { version = "=1.53.1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util", "signal"] }
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio", "query"] }
+# W2-F (dependency request R1 in docs/frontier/m1/W2-F-NOTES.md): the keeper
+# journal and the findex entity index (contract §3.3 expected set: rusqlite,
+# bundled).
+rusqlite = { version = "=0.40.2", features = ["bundled"] }
+# W2-F (request R2): the native model of the beacon instructions that the
+# keeper's in-process tests register as a LiteSVM builtin while the program
+# (W2-A) is not on this branch. Test-only; already in this lock through LiteSVM.
+solana-program-runtime = "=4.2.2"
 
 [profile.dev.package."*"]
 # The BLS pairing, LiteSVM and tlock are unusably slow unoptimised.
