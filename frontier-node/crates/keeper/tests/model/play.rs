@@ -959,6 +959,11 @@ pub fn gather(ic: &mut InvokeContext, c: &mut Cursor) -> R<()> {
     let bitmap = c.u32()?;
     let _beneficiary = c.arr::<32>()?;
     c.done()?;
+    // The program checks the range first, the fast path included:
+    // `n == 0` or past the 24 positions is `BadData` (integ-W4).
+    if n == 0 || start + n > 24 {
+        return Err(e(BAD_DATA));
+    }
     if !is_signer(ic, 0)? {
         return Err(e(AUTH));
     }
@@ -1034,7 +1039,8 @@ pub fn gather(ic: &mut InvokeContext, c: &mut Cursor) -> R<()> {
                 &fa::raw_arrival_slot(pi, qi, bell, f, i),
                 magic::ARRIVAL_SLOT,
             )?;
-            let expected = bitmap & (1 << j) != 0;
+            // bit k = absolute position k (§5.11, as the program reads it)
+            let expected = bitmap & (1 << k) != 0;
             let hk = if expected {
                 let x = hi;
                 hi += 1;

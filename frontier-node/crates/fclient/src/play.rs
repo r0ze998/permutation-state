@@ -189,8 +189,11 @@ pub struct GatherPart {
     pub slots: Vec<(u8, u8)>,
     /// The owner Holding of every present position, in position order.
     pub holdings: Vec<Address>,
-    /// Bit `j` set ⇔ position `start + j` is expected present (its Holding
-    /// is in `holdings`).
+    /// Bit `k` set ⇔ **position** `k` (absolute, `start ≤ k < start + n`)
+    /// is expected present (its Holding is in `holdings`): contract §5.11
+    /// "which positions are expected present", as the program reads it
+    /// (integ-W4: bit `j` relative to `start` made every part with
+    /// `start > 0` fail `TooManyAccounts` or `BadData` on the program).
     pub bitmap: u32,
 }
 
@@ -227,11 +230,10 @@ pub fn gather_parts(mask: u32, present: &[Option<Address>; POSITIONS]) -> Vec<Ga
             holdings: vec![],
             bitmap: 0,
         });
-        let j = c.slots.len();
         c.slots.push(((k / 4) as u8, (k % 4) as u8));
         if let Some(h) = pres {
             c.holdings.push(*h);
-            c.bitmap |= 1 << j;
+            c.bitmap |= 1 << k;
         }
     }
     if let Some(c) = cur {
@@ -320,7 +322,12 @@ mod tests {
             assert!(p.holdings.len() <= GATHER_MAX_HOLDINGS);
             assert!(p.slots.len() + p.holdings.len() <= GATHER_MAX_KEYS);
             assert_eq!(p.bitmap.count_ones() as usize, p.holdings.len());
+            // absolute positions, inside the part's range (§5.11)
+            let n = p.slots.len() as u32;
+            let range = ((1u32 << n) - 1) << p.start;
+            assert_eq!(p.bitmap & !range, 0, "part at {}", p.start);
         }
+        assert!(parts.iter().any(|p| p.start > 0 && p.bitmap != 0));
         assert!(parts.len() <= 3, "a full province-bell needs ≤ 3 gathers");
         // Positions already gathered are skipped.
         let parts = gather_parts(0x00FF_FFF0, &present);

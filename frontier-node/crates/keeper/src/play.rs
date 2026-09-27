@@ -1273,7 +1273,10 @@ impl PlayDuty {
             let a = t.addrs.clone();
             let ben = t.cfg.beneficiary;
             if !bit {
-                // The no-arrival fast path (one gather).
+                // The no-arrival fast path (one gather). The program takes
+                // a non-empty range even here (`n == 0` is `BadData`):
+                // position 0's slot, absent (the day bit is clear and the
+                // window closed), with no Holding (integ-W4).
                 engine.ensure(
                     WriteSpec {
                         key: format!("gather:{pk}:{b}:all"),
@@ -1290,7 +1293,7 @@ impl PlayDuty {
                                 b,
                                 src,
                                 0,
-                                &[],
+                                &[(0, 0)],
                                 &[],
                                 0,
                                 &ben,
