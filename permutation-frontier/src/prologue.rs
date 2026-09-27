@@ -110,14 +110,15 @@ pub fn top_level(ix: Ix) -> R<()> {
 }
 
 /// The Season, structurally and by status (§5.6 step 1): owner, magic,
-/// size, effective status in `allowed` (`WrongStatus`), then the ruleset
-/// when `ruleset` is given (`RulesetMismatch`).
+/// size (`BadAccount`); the address recomputed from the stored id and bump
+/// (`BadAddress`); effective status in `allowed` (`WrongStatus`), then the
+/// ruleset when `ruleset` is given (`RulesetMismatch`).
 ///
-/// The Season's address is not recomputed: only AnnounceSeason creates a
-/// program-owned account with the Season magic, and only at the canonical
-/// PDA of the id it stores, so a present program-owned Season *is* the
-/// canonical one for its id (§4.1 presence rule). Every with-seed address
-/// the handler derives hangs off this key.
+/// The address is recomputed (§3.3 "recompute every keyed address a reader
+/// trusts"; `frontier_abi::prologue::read_season` leaves it to the caller):
+/// every with-seed address the handler derives hangs off this key, and a
+/// program-owned copy of a Season at another address must never pass for
+/// it (§13.2 G3).
 pub fn season(
     ai: &AccountInfo,
     program: &Pubkey,
@@ -126,8 +127,10 @@ pub fn season(
     now: i64,
 ) -> R<SeasonHdr> {
     let d = ai.try_borrow_data()?;
+    let v = view(ai, &d);
+    canonical_season(&v, program, now)?;
     Ok(ap::check_season(
-        &view(ai, &d),
+        &v,
         program.as_array(),
         ruleset,
         allowed,
@@ -135,8 +138,20 @@ pub fn season(
     )?)
 }
 
+/// `read_season` (owner, magic, size: `BadAccount`), then the key must be
+/// the Season PDA of the stored id and bump (`BadAddress`).
+fn canonical_season(v: &AccountView, program: &Pubkey, now: i64) -> R<()> {
+    let s = ap::read_season(v, program.as_array(), now)?;
+    if crate::addr::season_pda(s.id, s.bump, program.as_array()) != *v.key {
+        return Err(FrontierError::BadAddress.into());
+    }
+    Ok(())
+}
+
 /// The keeper-write prologue (§5.6): `[fee_payer s,w] [season]`, the
-/// season's status in `allowed`, then the ruleset.
+/// Season structurally and at its recomputed PDA (as [`season`]), the
+/// season's status in `allowed`, then the ruleset. The fee payer's flags
+/// were checked by [`check_accounts`] before this runs.
 pub fn keeper(
     accounts: &[AccountInfo],
     program: &Pubkey,
@@ -148,6 +163,7 @@ pub fn keeper(
     };
     let d = season_ai.try_borrow_data()?;
     let views = [view(fee_payer, &[]), view(season_ai, &d)];
+    canonical_season(&views[1], program, now)?;
     Ok(ap::keeper_prologue(
         &views,
         program.as_array(),

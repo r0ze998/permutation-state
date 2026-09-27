@@ -29,6 +29,23 @@ pub fn season_seed_id(id: u64) -> [u8; 8] {
     id.to_le_bytes()
 }
 
+/// The Season PDA of `id` with its stored `bump`, recomputed the way the
+/// runtime's `create_program_address` hashes it: `sha256("season" ‖ le64(id)
+/// ‖ [bump] ‖ program ‖ "ProgramDerivedAddress")` (the `sol_sha256`
+/// syscall on chain, ≈ 0.2k CU instead of the 1.5k-CU PDA syscall). The
+/// off-curve test is not repeated: AnnounceSeason found `bump` with
+/// `find_program_address`, so the stored one is off the curve, and a key
+/// equal to this hash is that derivation whatever the curve says.
+pub fn season_pda(id: u64, bump: u8, program: &[u8; 32]) -> [u8; 32] {
+    permutation_rules::hash::sha256(&[
+        SEASON_PREFIX,
+        &season_seed_id(id),
+        &[bump],
+        program,
+        b"ProgramDerivedAddress",
+    ])
+}
+
 /// Absent: owned by the System program and holding no data (§4.1).
 pub fn absent(owner: &[u8; 32], data_len: usize) -> bool {
     *owner == ids::SYSTEM_PROGRAM && data_len == 0
@@ -64,6 +81,20 @@ mod tests {
         assert!(absent(&[0; 32], 0));
         assert!(!absent(&[1; 32], 0));
         assert!(!absent(&[0; 32], 1));
+    }
+
+    #[test]
+    fn season_pda_is_the_runtimes_program_address() {
+        use solana_program::pubkey::Pubkey;
+        for (id, prog) in [(0u64, [9u8; 32]), (3, [1u8; 32]), (u64::MAX, [0xa5u8; 32])] {
+            let program = Pubkey::new_from_array(prog);
+            let (pda, bump) =
+                Pubkey::find_program_address(&[SEASON_PREFIX, &season_seed_id(id)], &program);
+            assert_eq!(season_pda(id, bump, &prog), pda.to_bytes());
+            // Another bump or id is another address.
+            assert_ne!(season_pda(id, bump.wrapping_sub(1), &prog), pda.to_bytes());
+            assert_ne!(season_pda(id ^ 1, bump, &prog), pda.to_bytes());
+        }
     }
 
     #[test]
