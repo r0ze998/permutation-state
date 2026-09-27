@@ -180,6 +180,9 @@ struct Pending {
     cu_limit: u32,
     heap: Option<u32>,
     contested: bool,
+    /// Added to every version's bid (milli): orders the Reveals of one
+    /// group sent in the same slot so a block lands them in rank order (W4-C).
+    bonus_milli: u64,
 }
 
 /// What one step did.
@@ -292,10 +295,28 @@ impl Engine {
                 cu_limit: b.cu_limit,
                 heap: None,
                 contested: false,
+                bonus_milli: 0,
                 spec,
             },
         );
         true
+    }
+
+    /// Sets the CU limit of a pending write (a duty that sizes its own,
+    /// e.g. SkipQuiet's `60k + 30k` per recomputed bell, I-50); the retry
+    /// ladder continues from it.
+    pub fn set_cu_limit(&mut self, key: &str, cu: u32) {
+        if let Some(p) = self.pending.get_mut(key) {
+            p.cu_limit = cu.min(abi::CU_MAX);
+        }
+    }
+
+    /// Adds `milli` to every version's bid of a pending write (W4-C: the
+    /// rank order of a reveal group sent in one slot).
+    pub fn set_bid_bonus(&mut self, key: &str, milli: u64) {
+        if let Some(p) = self.pending.get_mut(key) {
+            p.bonus_milli = milli;
+        }
     }
 
     /// Stops a write (its object is done on chain by another path). Versions
@@ -611,7 +632,7 @@ impl Engine {
                 continue;
             }
             let slots_waiting = p.first_slot.map_or(0, |f| slot.saturating_sub(f));
-            let bid = self.params.bid(p.spec.class, slots_waiting);
+            let bid = self.params.bid(p.spec.class, slots_waiting) + p.bonus_milli;
             let payer = match p.spec.fixed_payer {
                 Some(a) => match payers.keypair(&a) {
                     Some(k) => k.insecure_clone(),

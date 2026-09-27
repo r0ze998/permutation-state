@@ -175,10 +175,23 @@ async fn main() {
             }),
         None => String::new(),
     };
+    let claim_seed = cfg.beneficiary_key_file.clone().map(|p| {
+        read_seed(&p).unwrap_or_else(|e| {
+            eprintln!("beneficiary_key_file: {e}");
+            std::process::exit(2)
+        })
+    });
     let mut k = Keeper::new(cfg, port, drand, &master, Some(journal)).unwrap_or_else(|e| {
         eprintln!("{e}");
         std::process::exit(2)
     });
+    if let Some(seed) = claim_seed {
+        let kp = fclient::Keypair::new_from_array(seed);
+        if let Err(e) = k.set_claim_key(kp) {
+            eprintln!("{e}");
+            std::process::exit(2)
+        }
+    }
     let running = match api_addr {
         Some(a) => Some(
             api::serve_with(a, k.shared.clone(), token, Some(gate))

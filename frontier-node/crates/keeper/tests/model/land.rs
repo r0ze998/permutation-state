@@ -13,7 +13,7 @@
 //! | 0x23 FoldOccupancy | three parts, `FoldStale` between parts | — |
 //! | 0x30 Join | Citizen, JoinShard members | the capacity rule (a ring can always open here), join gate |
 //! | 0x33 FileTicket | sites (ring ≥ 2, opened ring, province present, own wedge), cohorts, `CohortFull`, escrow from the payer | the bucket; the adjacent-wedge fallback |
-//! | 0x34 SettleTicket | expired / fresh / displace / taken, the score, seed from THE anchor's cache or the archive, cohorts, escrow → Holding, displaced Citizen and JoinShard | — |
+//! | 0x34 SettleTicket | expired / fresh / displace / taken, the score, seed from THE anchor's cache or the archive, cohorts, escrow → Holding, displaced Citizen and JoinShard; DECISIONS K9 (W4-C): a fresh settlement refused `TicketState` while an earlier cohort of the Province is open | — |
 //! | 0x35 ReleaseDormant | dormancy, transits, site released-free, Citizen refugee, JoinShard, `pool_owed` → pool, close to the rent payer | — |
 //! | 0x43 Muster | **simplified**: no reserve or cap check; the entry is a roster entry at once | reserve, caps, the pending state |
 //! | 0x46 Explore | **simplified**: host entry in this province, tiles not explored, record free | the Scout unit, tile adjacency |
@@ -65,20 +65,20 @@ const SEEDED: u8 = 2;
 const RUNNING: u8 = 3;
 const ENDED: u8 = 4;
 
-fn i16_at(d: &[u8], o: usize) -> i16 {
+pub(super) fn i16_at(d: &[u8], o: usize) -> i16 {
     i16::from_le_bytes(get(d, o))
 }
-fn u16_at(d: &[u8], o: usize) -> u16 {
+pub(super) fn u16_at(d: &[u8], o: usize) -> u16 {
     u16::from_le_bytes(get(d, o))
 }
 
-fn addr_of(season: &SeasonRef, prog: &Address, kind: SeedKind, raw: &[u8]) -> Address {
+pub(super) fn addr_of(season: &SeasonRef, prog: &Address, kind: SeedKind, raw: &[u8]) -> Address {
     fa::with_seed(&season.key, &seed_str(kind, raw), prog)
 }
 
 /// Reads account `i` as the program's account of `magic`/`size` at the
 /// canonical address of `(kind, raw)`.
-fn owned(
+pub(super) fn owned(
     ic: &InvokeContext,
     i: u16,
     season: &SeasonRef,
@@ -98,7 +98,7 @@ fn owned(
     Ok(d)
 }
 
-fn body(kind: Kind, bell: u32, key: &[u8], payload: &[u8]) -> Vec<u8> {
+pub(super) fn body(kind: Kind, bell: u32, key: &[u8], payload: &[u8]) -> Vec<u8> {
     let mut b = vec![0u8; 512];
     let n = frontier_abi::log::write_body(kind, bell, key, payload, &mut b).expect("widths");
     b.truncate(n);
@@ -106,18 +106,18 @@ fn body(kind: Kind, bell: u32, key: &[u8], payload: &[u8]) -> Vec<u8> {
     b
 }
 
-fn pqs(p: i16, q: i16, site: u8) -> Vec<u8> {
+pub(super) fn pqs(p: i16, q: i16, site: u8) -> Vec<u8> {
     let mut k = (p as i32).to_le_bytes().to_vec();
     k.extend_from_slice(&(q as i32).to_le_bytes());
     k.push(site);
     k
 }
 
-fn now_bell(s: &[u8], now: i64) -> u32 {
+pub(super) fn now_bell(s: &[u8], now: i64) -> u32 {
     season_clock(s).bell_at(now).unwrap_or(0)
 }
 
-fn running(s: &[u8], now: i64) -> R<()> {
+pub(super) fn running(s: &[u8], now: i64) -> R<()> {
     if effective(s, now) != RUNNING {
         return Err(e(WRONG_STATUS));
     }
@@ -127,15 +127,15 @@ fn running(s: &[u8], now: i64) -> R<()> {
 // ------------------------------------------------------------------ player prologue
 
 /// `[0 actor s] [1 payer s,w] [2 season] [3 citizen w]` (§5.6, no bucket).
-struct Player {
-    season: SeasonRef,
-    s: Vec<u8>,
-    c: Vec<u8>,
-    now: i64,
-    bell: u32,
+pub(super) struct Player {
+    pub(super) season: SeasonRef,
+    pub(super) s: Vec<u8>,
+    pub(super) c: Vec<u8>,
+    pub(super) now: i64,
+    pub(super) bell: u32,
 }
 
-fn player(ic: &InvokeContext) -> R<Player> {
+pub(super) fn player(ic: &InvokeContext) -> R<Player> {
     let (season, s) = season_at(ic, 2)?;
     let (_, now) = clock(ic)?;
     running(&s, now)?;
@@ -172,7 +172,7 @@ fn player(ic: &InvokeContext) -> R<Player> {
 }
 
 /// The holding at account `i` owned by the player's citizen.
-fn own_holding(ic: &InvokeContext, pl: &Player, i: u16) -> R<Vec<u8>> {
+pub(super) fn own_holding(ic: &InvokeContext, pl: &Player, i: u16) -> R<Vec<u8>> {
     let (o, h, _) = read(ic, i)?;
     let prog = program_id(ic)?;
     if o != prog || h.len() != fclient::abi::size::HOLDING {
@@ -1053,6 +1053,16 @@ pub fn settle_ticket(ic: &mut InvokeContext, c: &mut Cursor) -> R<()> {
         let hrent = rent(fclient::abi::size::HOLDING);
         let funder = Address::new_from_array(get(&cz, l::citizen::TICKET_FUNDER));
         let esc = u64_at(&cz, l::citizen::TICKET_ESCROW);
+        // DECISIONS K9: a fresh settlement waits while an earlier cohort
+        // of this Province is open (the model refuses `TicketState`; the
+        // program's code is the integrator's choice).
+        if outcome == 0
+            && cohorts(&pv)
+                .iter()
+                .any(|c| c.2 > 0 && c.1 < tb && c.3 < c.2 && bell < c.1.saturating_add(24))
+        {
+            return Err(e(TICKET_STATE));
+        }
         match outcome {
             0 => {
                 // Fresh: the Holding funded from the Citizen's escrow.

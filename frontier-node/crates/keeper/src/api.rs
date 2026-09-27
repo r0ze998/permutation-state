@@ -8,8 +8,8 @@
 //! |---|---|
 //! | `GET /v1/status` | duties, pools, spend, latencies (live) |
 //! | `GET /metrics` | Prometheus text (live) |
-//! | `POST /v1/reveal` | shape checks (`400`), plaintext rules (`422 BadPlaintext`), then (W3-C) the accept path against chain ([`crate::reveal_accept`]: `409 CommitMismatch` / `TransitState`, `410 WindowClosed`, `422 BadPlaintext` against the transit), then queued with a track id (`202`; the same material again answers the same track). The sending is W4-C's pipeline |
-//! | `POST /v1/nudge` | queued (`{queued, blocking: []}`); the blocking set is W4-C's |
+//! | `POST /v1/reveal` | shape checks (`400`), plaintext rules (`422 BadPlaintext`), then (W3-C) the accept path against chain ([`crate::reveal_accept`]: `409 CommitMismatch` / `TransitState`, `410 WindowClosed`, `422 BadPlaintext` against the transit), then queued with a track id (`202`; the same material again answers the same track). W4-C's pipeline ([`crate::play`]) sends it from the bell start and moves the track: `sent`, `landed` (signature, slot), `refused` (`QuotaRefused`), `expired` (`WindowClosed`) |
+//! | `POST /v1/nudge` | queued; the province is caught up at once (W4-C); `blocking` lists what holds it now (`[{kind, key}]`: its lag, writes in flight on it, departures waiting for its resolve), as of the last tick |
 //! | `GET /v1/track/{id}` | the track's state |
 
 use std::net::SocketAddr;
@@ -208,8 +208,16 @@ async fn nudge(State(st): State<ApiState>, h: HeaderMap, Json(v): Json<Value>) -
             "`{province: [P, Q], bell}`",
         );
     }
-    lock(&st.shared).nudges.push(v);
-    Json(json!({"queued": true, "blocking": []})).into_response()
+    let pq = v
+        .get("province")
+        .and_then(|p| p.as_array())
+        .map(|a| (a[0].as_i64().unwrap_or(0), a[1].as_i64().unwrap_or(0)));
+    let mut s = lock(&st.shared);
+    let blocking = pq
+        .and_then(|(p, q)| s.blocking.get(&format!("{p},{q}")).cloned())
+        .unwrap_or_default();
+    s.nudges.push(v);
+    Json(json!({"queued": true, "blocking": blocking})).into_response()
 }
 
 async fn track(State(st): State<ApiState>, h: HeaderMap, Path(id): Path<String>) -> Response {
@@ -384,7 +392,11 @@ mod tests {
         bad["plain_b64"] = json!(B64.encode(fclient::seal::pack(&q)));
         let (c, v) = call(a, "POST", "/v1/reveal", Some(&tok), Some(bad)).await;
         assert_eq!((c, v["code"].as_str()), (422, Some("BadPlaintext")));
-        // /v1/nudge
+        // /v1/nudge: the blocking set the play duty published (W4-C).
+        lock(&shared).blocking.insert(
+            "2,-1".into(),
+            vec![json!({"kind": "departure", "key": "7:3"})],
+        );
         let (c, v) = call(
             a,
             "POST",
@@ -394,6 +406,7 @@ mod tests {
         )
         .await;
         assert_eq!((c, v["queued"].as_bool()), (200, Some(true)));
+        assert_eq!(v["blocking"][0]["kind"], "departure");
         assert_eq!(lock(&shared).nudges.len(), 1);
         assert_eq!(lock(&shared).reveals.len(), 1);
         assert_eq!(

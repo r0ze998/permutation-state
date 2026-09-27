@@ -31,6 +31,9 @@ pub struct Payers {
     pub funders: Funders,
     balances: HashMap<Address, u64>,
     pub refreshed_slot: Option<u64>,
+    /// Keys that sign as fixed payers besides the pools (the claim key of
+    /// ClaimDefence: the beneficiary, W4-C).
+    pub extra: Vec<Keypair>,
 }
 
 impl Payers {
@@ -68,6 +71,7 @@ impl Payers {
             funders: Funders::new(master, cfg.funders, cfg.dev)?,
             balances: HashMap::new(),
             refreshed_slot: None,
+            extra: vec![],
         })
     }
 
@@ -131,6 +135,7 @@ impl Payers {
             .iter()
             .chain(self.delay.keys.iter())
             .chain(self.funders.keys.iter())
+            .chain(self.extra.iter())
             .find(|k| k.pubkey() == *a)
     }
 

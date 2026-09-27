@@ -360,6 +360,16 @@ impl TicketDuty {
                         self.held += 1;
                         continue;
                     }
+                    // DECISIONS K9: an earlier cohort of this Province is
+                    // still open, so the program refuses a fresh settlement
+                    // here; its own tickets settle first (oldest cohort).
+                    let now_bell = t.clock.bell_at(t.now).unwrap_or(0);
+                    if provs.get(&(site.0, site.1)).is_some_and(|pv| {
+                        land::earlier_cohort_open(&pv.cohorts, top.ticket_bell, now_bell)
+                    }) {
+                        self.held += 1;
+                        continue;
+                    }
                     self.send(t, engine, top, None, "fresh");
                 }
                 SiteOutcome::Displace {

@@ -938,6 +938,26 @@ pub fn settle_departure(
     build(a, m, Data::new(tag::SETTLE_DEPARTURE).u8(transit_slot))
 }
 
+/// `transit_slot` of SettleDeparture that asks for the **return settle**
+/// (v1.5 §21): W4-A's choice (its `proc/clash.rs` `RETURN_SLOT`, to be
+/// recorded in v1.6). Same accounts as SettleDeparture; every state-3
+/// `Leave` entry of that Holding in that Province is freed and
+/// `reserve[unit] += troops / 1,000` credited to the Holding when it is live
+/// with the host's generation (else the troops are lost); nothing to
+/// return is `AlreadyDone`.
+pub const RETURN_SLOT: u8 = 0xFF;
+
+/// The return settle: SettleDeparture `[payer s] [season] [province w]
+/// [holding w]` with `transit_slot = RETURN_SLOT`.
+pub fn settle_return(
+    a: &Addresses,
+    payer: Address,
+    province: (i16, i16),
+    h: HoldingRef,
+) -> Instruction {
+    settle_departure(a, payer, province, h, RETURN_SLOT)
+}
+
 /// SettleTransit's inputs (§5.11).
 #[derive(Clone, Debug)]
 pub struct SettleTransitArgs {

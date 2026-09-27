@@ -18,6 +18,8 @@
 //! | [`landindex`] | the land objects the feed's PS2 records name (W3-C) |
 //! | [`seeds`] | where a `(bell, region)` seed is read and its value (W3-C) |
 //! | [`reveal_accept`] | the `/v1/reveal` accept path against chain (W3-C) |
+//! | [`playindex`] | transits, reveals, gathers, clashes and closes the feed names (W4-C) |
+//! | [`play`] | decrypt, the reveal pipeline, SettleDeparture and returns, the gather/resolve/skip scheduler, SettleTransit, closes, claims (W4-C) |
 //! | [`api`] | the loopback API (`/v1/*`, `/metrics`) |
 //!
 //! [`Keeper::tick`] runs once per slot: it reads the Clock, plans every
@@ -41,6 +43,8 @@ pub mod genesis;
 pub mod holdings;
 pub mod journal;
 pub mod landindex;
+pub mod play;
+pub mod playindex;
 pub mod pools;
 pub mod reveal_accept;
 pub mod rings;
@@ -72,6 +76,7 @@ use crate::genesis::GenesisDuty;
 use crate::holdings::HoldingDuty;
 use crate::journal::Journal;
 use crate::landindex::LandIndex;
+use crate::play::PlayDuty;
 use crate::pools::Payers;
 use crate::rings::RingDuty;
 use crate::rounds::Rounds;
@@ -80,6 +85,17 @@ use crate::tickets::TicketDuty;
 
 /// Land roles that need the feed index.
 const LAND_ROLES: [&str; 5] = ["tickets", "explore", "dormancy", "sweep", "fold"];
+/// Play roles (W4-C).
+pub const PLAY_ROLES: [&str; 8] = [
+    "reveal",
+    "settle-departure",
+    "gather",
+    "resolve",
+    "skip",
+    "settle",
+    "close",
+    "claims",
+];
 
 /// The role a land write key belongs to (for "the program lacks it").
 fn role_of_key(key: &str) -> Option<&'static str> {
@@ -89,6 +105,14 @@ fn role_of_key(key: &str) -> Option<&'static str> {
         "explore" => Some("explore"),
         "release" | "stranded" => Some("dormancy"),
         "sweep" => Some("sweep"),
+        "reveal" => Some("reveal"),
+        "sdep" | "return" => Some("settle-departure"),
+        "gather" => Some("gather"),
+        "resolve" => Some("resolve"),
+        "skip" => Some("skip"),
+        "settle" => Some("settle"),
+        "close" => Some("close"),
+        "claim" => Some("claims"),
         _ => None,
     }
 }
@@ -139,6 +163,8 @@ pub struct Shared {
     pub tracks: BTreeMap<String, Value>,
     pub nudges: Vec<Value>,
     pub next_track: u64,
+    /// `"P,Q"` → what holds the province now (W4-C, `/v1/nudge`).
+    pub blocking: BTreeMap<String, Vec<Value>>,
 }
 
 /// What one tick did.
@@ -183,6 +209,8 @@ pub struct Keeper<P: ChainPort, D: DrandPort> {
     pub holdings: HoldingDuty,
     pub index: LandIndex,
     pub seeds: SeedFinder,
+    /// Play (W4-C).
+    pub play: PlayDuty,
     /// Land roles the program answered NotImplemented (99) for: off.
     pub unsupported_roles: BTreeSet<&'static str>,
     pub shared: Arc<Mutex<Shared>>,
@@ -252,6 +280,7 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
             holdings: HoldingDuty::default(),
             index: LandIndex::default(),
             seeds: SeedFinder::default(),
+            play: PlayDuty::default(),
             unsupported_roles: BTreeSet::new(),
             shared: Arc::new(Mutex::new(Shared::default())),
             last_slot: None,
@@ -264,6 +293,22 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
             port,
             drand,
         })
+    }
+
+    /// Sets the ClaimDefence signer: the beneficiary's key (§5.12: the
+    /// keeper that claims is the beneficiary of the slots).
+    pub fn set_claim_key(&mut self, kp: fclient::Keypair) -> Result<(), String> {
+        use solana_signer::Signer as _;
+        if kp.pubkey() != self.cfg.beneficiary {
+            return Err(format!(
+                "the claim key {} is not the beneficiary {}",
+                kp.pubkey(),
+                self.cfg.beneficiary
+            ));
+        }
+        self.cfg.claim_key = Some(kp.pubkey());
+        self.payers.extra.push(kp);
+        Ok(())
     }
 
     fn alert(&mut self, slot: u64, kind: &str, detail: String) {
@@ -409,6 +454,13 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
             if k.starts_with("ticket:") {
                 self.tickets.on_outcome(k, o);
             }
+            let tracks = self.play.on_outcome(k, o);
+            if !tracks.is_empty() {
+                let mut s = self.shared.lock().unwrap_or_else(|p| p.into_inner());
+                for (id, v) in tracks {
+                    s.tracks.insert(id, v);
+                }
+            }
         }
         // Duties.
         if let Some(season) = self.season.clone() {
@@ -530,6 +582,75 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
                     .map_err(|e| e.to_string())?;
             }
         }
+        // Play (W4-C).
+        if let Some(season) = self.season.clone() {
+            if PLAY_ROLES.iter().any(|r| self.cfg.has_role(r))
+                && !PLAY_ROLES
+                    .iter()
+                    .all(|r| self.unsupported_roles.contains(r))
+            {
+                let cfg_eff;
+                let cfg = if self.unsupported_roles.is_empty() {
+                    &self.cfg
+                } else {
+                    let mut c = self.cfg.clone();
+                    c.roles
+                        .retain(|r| !self.unsupported_roles.contains(r.as_str()));
+                    cfg_eff = c;
+                    &cfg_eff
+                };
+                let t = Tick {
+                    slot,
+                    now,
+                    season: &season,
+                    clock: SeasonClock::from_season(&season),
+                    addrs: &self.addrs,
+                    cfg,
+                };
+                let mut provinces = self.rings.opened.clone();
+                provinces.extend(
+                    self.index
+                        .provinces
+                        .iter()
+                        .map(|&(p, q)| (p as i32, q as i32)),
+                );
+                let mut shared =
+                    std::mem::take(&mut *self.shared.lock().unwrap_or_else(|p| p.into_inner()));
+                let r2 = self
+                    .play
+                    .plan(
+                        &t,
+                        &self.port,
+                        &self.drand,
+                        &mut self.rounds,
+                        &mut self.engine,
+                        &self.beacon.anchors,
+                        &mut self.seeds,
+                        &mut shared,
+                        self.journal.as_ref(),
+                        &provinces.into_iter().collect::<Vec<_>>(),
+                    )
+                    .await;
+                self.play.guard_reveals(&t, &mut self.engine);
+                shared.blocking = self.play.blocking(&t, &self.engine);
+                {
+                    // Merge back: the API may have queued more meanwhile.
+                    let mut s = self.shared.lock().unwrap_or_else(|p| p.into_inner());
+                    let newer_reveals = std::mem::take(&mut s.reveals);
+                    let newer_nudges = std::mem::take(&mut s.nudges);
+                    let newer_tracks = std::mem::take(&mut s.tracks);
+                    let newer_keys = std::mem::take(&mut s.reveal_keys);
+                    let next = s.next_track.max(shared.next_track);
+                    *s = shared;
+                    s.reveals.extend(newer_reveals);
+                    s.nudges.extend(newer_nudges);
+                    s.tracks.extend(newer_tracks);
+                    s.reveal_keys.extend(newer_keys);
+                    s.next_track = next;
+                }
+                r2.map_err(|e| e.to_string())?;
+            }
+        }
         // Send the next versions.
         self.engine
             .send(
@@ -577,6 +698,15 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
                         abi::err::SEED_NOT_READY,
                         abi::err::FOLD_STALE,
                         abi::err::TICKET_STATE,
+                        // Play (W4-C): a skip that meets a contested bell
+                        // (gathered and resolved instead), a slot index
+                        // another Reveal took, a quota refusal (settled
+                        // bounced), a settlement or gather a little early.
+                        abi::err::NOT_QUIET,
+                        abi::err::SLOT_MOVED,
+                        abi::err::QUOTA_REFUSED,
+                        abi::err::TOO_EARLY,
+                        abi::err::DEPARTURE_UNSETTLED,
                     ];
                     if !code.is_some_and(|c| expected.contains(&c)) {
                         self.alert(slot, "failed", format!("{k}: {code:?} {err}"));
@@ -686,6 +816,7 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
                 "p_tip_milli": self.engine.params.p_tip_milli, "p_start_milli": self.engine.params.p_start_milli,
                 "p_def_milli": self.engine.params.p_def_milli, "p_delay_milli": self.engine.params.p_delay_milli,
             },
+            "play": self.play.status(),
             "spend_by_day": self.spend_by_day,
             "alerts": self.alerts.len(),
         })
@@ -763,6 +894,25 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
             "frontier_keeper_rounds_bad_total",
             self.rounds.bad.to_string(),
         );
+        let ps = &self.play.stats;
+        for (k, v) in [
+            ("seals_opened", ps.opened),
+            ("bad_seals", ps.bad_seals),
+            ("reveals_sent", ps.reveals_sent),
+            ("reveals_landed", ps.reveals_landed),
+            ("reveals_refused", ps.reveals_refused),
+            ("reveals_missed", ps.reveals_missed),
+            ("slot_moved", ps.slot_moved),
+            ("skipped_bells", ps.skipped_bells),
+        ] {
+            line(&format!("frontier_keeper_play_{k}_total"), v.to_string());
+        }
+        if let Some(p) = quantile(&ps.resolve_latency, 0.99) {
+            line(
+                "frontier_keeper_close_to_resolve_slots{q=\"0.99\"}",
+                p.to_string(),
+            );
+        }
         m
     }
 
@@ -786,6 +936,21 @@ pub const W3C_TAGS: [(u8, Class); 9] = [
     (tag::RELEASE_DORMANT, Class::N),
     (tag::DISBAND_STRANDED, Class::N),
     (tag::SWEEP_POOL_OWED, Class::N),
+];
+
+/// The play instruction tags W4-C sends, with their §5.5 class (the §21
+/// return settle is SettleDeparture with `transit_slot = 0xFF`).
+pub const W4C_TAGS: [(u8, Class); 10] = [
+    (tag::REVEAL, Class::W),
+    (tag::SETTLE_DEPARTURE, Class::D),
+    (tag::GATHER_CLASH, Class::D),
+    (tag::RESOLVE_FROM_INPUTS, Class::D),
+    (tag::SKIP_QUIET, Class::D),
+    (tag::SETTLE_TRANSIT, Class::D),
+    (tag::CLAIM_DEFENCE, Class::D),
+    (tag::CLOSE_CLASH_INPUTS, Class::N),
+    (tag::CLOSE_ARRIVAL_DAY, Class::N),
+    (tag::CLOSE_ARRIVAL_SLOT, Class::N),
 ];
 
 /// The keeper-write instruction tags this unit sends (budget coverage test).
@@ -844,5 +1009,29 @@ mod tests {
         assert_eq!(role_of_key("ticket:x:5:0"), Some("tickets"));
         assert_eq!(role_of_key("stranded:2,0:9"), Some("dormancy"));
         assert_eq!(role_of_key("anchor:1:2"), None);
+    }
+
+    #[test]
+    fn play_writes_have_their_contract_class_and_a_budget() {
+        let b = Budgets::from_json(&serde_json::from_str(CANONICAL_BUDGETS).unwrap()).unwrap();
+        for (t, class) in W4C_TAGS {
+            assert_eq!(abi::ix_info(t).unwrap().class, class, "tag {t:#x}");
+            let x = b.get(t);
+            assert!(x.cu_limit > 0 && x.loaded_limit >= fees::PAGE, "tag {t:#x}");
+        }
+        for (k, role) in [
+            ("reveal:1:2", "reveal"),
+            ("sdep:1:2:3,4", "settle-departure"),
+            ("return:1,2,3:3,4", "settle-departure"),
+            ("gather:3,4:9:0", "gather"),
+            ("resolve:3,4:9", "resolve"),
+            ("skip:3,4:9:24", "skip"),
+            ("settle:1:2", "settle"),
+            ("close:slot:3,4:9:0:1", "close"),
+            ("claim:0:x", "claims"),
+        ] {
+            assert_eq!(role_of_key(k), Some(role), "{k}");
+            assert!(PLAY_ROLES.contains(&role));
+        }
     }
 }

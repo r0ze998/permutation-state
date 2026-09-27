@@ -14,6 +14,7 @@
 //! | 0x02, 0x20–0x23, 0x30, 0x33–0x35, 0x43, 0x46–0x48, 0x55 | land (W3-C): see `land.rs` | as listed there |
 //! | 0x14 ArchiveAnchors | archive init (`rent_to` = payer), `now ≥ A + archive_after`, the cache of THE anchor, entry `{a_off, seed, sig}`, tombstone and archived bits first, anchor closed to its `rent_to` | the `ARCHIVE`/`CLOSE` records |
 //! | 0x15 CloseSeedCache | archived bit, `rent_to` match, close | the `CLOSE` record |
+//! | 0x44, 0x50–0x54, 0x60–0x66, 0x70 | play (W4-C): see `play.rs` | as listed there |
 //! | other | `NotImplemented` (99) | — |
 //!
 //! Compute: each instruction consumes roughly the program's measured cost
@@ -22,6 +23,7 @@
 #![allow(dead_code)]
 
 mod land;
+mod play;
 
 use std::sync::OnceLock;
 
@@ -382,6 +384,18 @@ fn process(ic: &mut InvokeContext) -> R<()> {
         0x47 => land::settle_explore(ic, &mut c),
         0x48 => land::disband_stranded(ic, &mut c),
         0x55 => land::sweep_pool_owed(ic, &mut c),
+        0x44 => play::dissolve(ic, &mut c),
+        0x50 => play::depart(ic, &mut c),
+        0x51 => play::reveal(ic, &mut c),
+        0x52 => play::settle_departure(ic, &mut c),
+        0x54 => play::settle_transit(ic, &mut c),
+        0x60 => play::gather(ic, &mut c),
+        0x61 => play::resolve(ic, &mut c),
+        0x63 => play::skip(ic, &mut c),
+        0x64 => play::close_clash_inputs(ic, &mut c),
+        0x65 => play::close_arrival_day(ic, &mut c),
+        0x66 => play::close_arrival_slot(ic, &mut c),
+        0x70 => play::claim_defence(ic, &mut c),
         0x14 => archive_anchors(ic, &mut c),
         0x15 => close_seed_cache(ic, &mut c),
         _ => Err(e(NOT_IMPLEMENTED)),
