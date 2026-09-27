@@ -83,10 +83,14 @@ export async function relayInfo(opts) {
   return r;
 }
 
-/** POST /f/relay with a wire transaction signed by every signer but the fee payer. */
-export const sendTx = (wire, opts) => request('POST', '/f/relay', { ...opts, body: { tx: toBase64(wire) } });
+/**
+ * POST /f/relay with a wire transaction signed by every signer but the fee
+ * payer. `opts.extra`: more body fields (`lastValidBlockHeight`; a settle
+ * shape's `requester`, `requesterSig`, `citizen`, §8.3 v1.3).
+ */
+export const sendTx = (wire, { extra = {}, ...opts } = {}) => request('POST', '/f/relay', { ...opts, body: { ...extra, tx: toBase64(wire) } });
 /** POST /f/join: the wallet-signed Join (with an invite when the season is gated). */
-export const sendJoin = (wire, invite, opts) => request('POST', '/f/join', { ...opts, body: invite ? { tx: toBase64(wire), invite } : { tx: toBase64(wire) } });
+export const sendJoin = (wire, invite, { extra = {}, ...opts } = {}) => request('POST', '/f/join', { ...opts, body: { ...extra, tx: toBase64(wire), ...(invite ? { invite } : {}) } });
 /** POST /f/reveal: reveal material, no signature (I-24; marchbook.revealMaterial). */
 export const reveal = (material, opts) => request('POST', '/f/reveal', { ...opts, body: material });
 /** POST /f/nudge: ask the keeper to catch a province up (a resident action waits on it). */

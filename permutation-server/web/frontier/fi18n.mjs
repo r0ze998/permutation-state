@@ -149,6 +149,126 @@ const CLIENT_TEXT = {
   WasmHashMismatch: () => L`ルールのプログラムが公開されたものと一致しません`,
   PinMismatch: () => L`シーズンの口座がプログラムから導いたものと一致しません`,
   RelayMessageChanged: () => L`中継が署名前の取引を書き換えました`,
+  // ---- the relay's refusals (permutation-gateway src/frontier, §8.3; W3-F)
+  RelayRejected: () => L`中継がこの取引の形を受け付けませんでした`,
+  UseRevealRoute: () => L`開封は取引ではなく開封の材料として送ります`,
+  QuotaExceeded: () => L`今日の中継の枠を使い切りました。次のゲーム日まで待ってください`,
+  InviteRequired: () => L`このシーズンに参加するには招待が必要です`,
+  OperatorLowFunds: () => L`中継の支払い用の資金が足りません。しばらくしてから試してください`,
+  BadSignature: () => L`署名を確認できませんでした`,
+  Duplicate: () => L`同じ取引はすでに送られています`,
+  AlreadyProcessed: () => L`同じ取引はすでに送られています`,
+  BlockhashExpired: () => L`取引の期限が切れました。もう一度送ってください`,
+  RateLimited: () => L`送信が速すぎます。少し待ってください`,
+  ProgramError: () => L`別のプログラムがこの取引を拒みました`,
+  SimulationFailed: () => L`試しの実行でこの取引は失敗しました`,
+  SimulationIncomplete: () => L`中継が試しの実行の結果を読めませんでした`,
+  InvalidTransaction: () => L`取引の形が正しくありません`,
+  KeeperUnavailable: () => L`キーパーにつながっていません。キーパーは鐘のビーコンの後で開封します`,
+  GateUnavailable: () => L`中継が招待の鍵を持っていません`,
+  InvitesUnavailable: () => L`招待を扱えません`,
+  WorldUnavailable: () => L`シーズンの口座を読めません`,
+  InsufficientFunds: () => L`残高が足りません`,
+  BodyTooLarge: () => L`送る内容が大きすぎます`,
+  InvalidJson: () => L`送る内容が読めませんでした`,
+  BadRequest: () => L`頼み方が正しくありません`,
+  OperatorOnly: () => L`運営者だけの操作です`,
+  TokenError: () => L`運営者の鍵が正しくありません`,
+  TimeoutError: () => L`時間内に答えがありませんでした`,
+  Unavailable: () => L`いまは使えません。しばらくしてから試してください`,
+  // ---- this page's own steps (W3-F)
+  NoRelay: () => L`中継の場所がわかりません`,
+  NoPin: () => L`シーズンがまだ決まっていません`,
+  BadRelayAnswer: () => L`中継の答えを読めませんでした`,
+  MessageRefused: () => L`署名する前の点検で取引を止めました`,
+  BuildFailed: () => L`取引を組み立てられませんでした`,
+  TooLarge: () => L`取引が大きすぎます`,
+  SignFailed: () => L`署名できませんでした`,
+  WalletAlteredMessage: () => L`ウォレットが署名した文面が違います`,
+  WalletRejected: () => L`ウォレットで取り消されました`,
+  WalletError: () => L`ウォレットのエラーです`,
+  NoWallet: () => L`ウォレットが接続されていません`,
+  NoSession: () => L`ゲーム内の鍵がありません。鍵を作ってください`,
+  SessionMismatch: () => L`このゲーム内の鍵は市民に登録されたものと違います`,
+  Expired: () => L`取引は期限までに記録されませんでした`,
+  Unconfirmed: () => L`取引がまだ確認できません。あとで状態を確かめます`,
+  TransactionFailed: () => L`取引は記録されましたが失敗しました`,
+  NotSaved: () => L`この端末に進軍の記録を保存できないため、送りませんでした`,
+  AlreadySent: () => L`この進軍はすでに送られています`,
+  NoKernel: () => L`ルールのモジュールがまだ読み込まれていません`,
+  NoWasm: () => L`このサーバーにはルールのモジュール（frontier.wasm）がまだありません`,
+  PlannerRefused: () => L`道を探せませんでした`,
+  NoPath: () => L`そこまでの道が見つかりません`,
+  NoDestination: () => L`行き先を選んでください`,
+  BadTile: () => L`そのマスはありません`,
+  Stance: () => L`構えを選んでください`,
+  Retreat: () => L`撤退比が正しくありません（0.0001〜6 倍）`,
+  NotScout: () => L`探索できるのは斥候だけです`,
+  NoClock: () => L`シーズンの時計がまだありません`,
+  WrongRound: () => L`封のラウンドが到着の鐘と合いません`,
+  WorkerFailed: () => L`封の処理が止まりました。もう一度試してください`,
+  SealFailed: () => L`封を作れませんでした`,
+  BadPoint: () => L`封の点が正しくありません`,
+  FoCheck: () => L`封の検査に失敗しました`,
+  BeaconClockMismatch: () => L`ビーコンの時計がシーズンの記録と一致しません`,
+  ChainHashMismatch: () => L`ビーコンのチェーンがシーズンの記録と一致しません`,
+  NoExport: () => L`ルールのモジュールにその関数がありません`,
+  MissingExport: () => L`ルールのモジュールが古いか壊れています`,
+  WasmAbiMismatch: () => L`ルールのモジュールの版が違います`,
+  BadEnvelope: () => L`州の記録の形が正しくありません`,
+  BadOverview: () => L`全体図の記録の形が正しくありません`,
+  BadRecord: () => L`記録を読めませんでした`,
+  BadBody: () => L`答えを読めませんでした`,
+  WrongMagic: () => L`口座の種類が違います`,
+  WrongSize: () => L`口座の大きさが違います`,
+  WrongKind: () => L`口座の種類が違います`,
+  BadLayout: () => L`口座の形の表が壊れています`,
+  BadBackup: () => L`鍵のバックアップを読めませんでした`,
+  WalletBadSignature: () => L`ウォレットの署名を確認できませんでした`,
+  WalletUnsupported: () => L`このウォレットは使えません`,
+  NoAccount: () => L`ウォレットにこのネットワークで使えるアカウントがありません`,
+  BadSessionText: () => L`鍵の文面を作れませんでした`,
 };
 /** A client-side refusal's text (falls back to the program table, then the code). */
 export const clientText = code => (CLIENT_TEXT[code] ? CLIENT_TEXT[code]() : errorText(code));
+/** Every client and relay code that has a text (web-frontier-errors.test.mjs checks the relay's codes against it). */
+export const CLIENT_CODES = Object.freeze(Object.keys(CLIENT_TEXT));
+
+/**
+ * The text for a failed answer `{code, programCode?, httpStatus?}` from the
+ * relay, the herald, the keeper link or this page (§9.6): a program error
+ * by its number first (the relay passes `programCode`), then by name, then
+ * this page's and the relay's own codes; `HTTP429`-style codes by status.
+ */
+export function failureText(r) {
+  if (!r) return L`不明なエラー（${'?'}）`;
+  if (Number.isInteger(r.programCode) && ERRORS.some(e => e[0] === r.programCode)) return errorText(r.programCode);
+  const code = r.code ?? null;
+  if (code && ERROR_TEXT[code]) return ERROR_TEXT[code]();
+  if (code && CLIENT_TEXT[code]) return CLIENT_TEXT[code]();
+  const m = /^HTTP(\d{3})$/.exec(String(code ?? ''));
+  const status = m ? +m[1] : r.httpStatus;
+  if (status === 429) return CLIENT_TEXT.QuotaExceeded();
+  if (status >= 500) return CLIENT_TEXT.Unavailable();
+  return L`不明なエラー（${code ?? status ?? '?'}）`;
+}
+
+// ------------------------------------------------------------------ play tables (W3-F)
+/** Doctrines A–F by faction id (kernel `doctrine::of_faction`); C shows as "Flame" (I-34). */
+export const DOCTRINE_NAMES = lazyTable({
+  0: () => L`石の守り手`, 1: () => L`潮`, 2: () => DOCTRINE_C(), 3: () => L`新緑`, 4: () => L`光明`, 5: () => L`鉄`,
+});
+/** Buildings by the resource they produce (catalog items 0–5), and the walls (item 6). */
+export const BUILDINGS = lazyTable({
+  Food: () => L`農場`, Wood: () => L`伐採場`, Stone: () => L`石切り場`, Ore: () => L`鉱山`, Gold: () => L`造幣所`, Science: () => L`書庫`, Walls: () => L`城壁`,
+});
+/** Holding states. */
+export const HOLDING_STATES = lazyTable({
+  none: () => L`なし`, provisional: () => L`仮の拠点`, final: () => L`確定した拠点`, released: () => L`手放された`,
+});
+/** TRANSIT_SETTLED outcomes (flog.TRANSIT_OUTCOMES). */
+export const TRANSIT_OUTCOME_TEXT = lazyTable({
+  Stays: () => L`戦場に残った`, Withdrew: () => L`隣の味方の地へ退いた`, Bounced: () => L`押し戻された（損失なし）`, Retreated: () => L`撤退比で引き返した（損失なし）`,
+  Destroyed: () => L`壊滅した`, BouncedUnranked: () => L`到着枠に入れず押し戻された（損失なし）`, Routed: () => L`敗走した（兵・体力・チップの半分を失った）`,
+  BadSeal: () => L`封が不正だったため失われた`,
+});

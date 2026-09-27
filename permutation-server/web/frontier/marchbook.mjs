@@ -9,10 +9,14 @@
 //   {v:1, host:"u64 dec", transitSlot, departBell, arriveBell, plain_b64,
 //    salt_b64, commit_hex, sealRoot_hex, round, tip, state, attempts:[{t,
 //    route:"self"|"keeper", result}]}
-// plus three fields this module adds (additive, recorded in W2-E notes):
+// plus fields this module adds (additive, recorded in W2-E and W3-F notes):
 // `holding` (the Holding address the reveal names), `ctHash_hex` (the
-// reveal's ct_hash: the seal root cannot give it back) and `revealDelay`
-// (the 0–20 s self-reveal delay, drawn once).
+// reveal's ct_hash: the seal root cannot give it back), `revealDelay`
+// (the 0–20 s self-reveal delay, drawn once), and — W3-F — `seal_b64`
+// (the 165-byte seal Depart publishes anyway, so this browser can offer
+// SettleTransit with the logged pair without searching the event log; it
+// is used only after sha256(commit ‖ sha256(seal)) equals the transit's
+// seal_root), `signature` and `failure` (the send flow's record).
 //
 // Self-reveal (§9.1): at bell_start(arrive) + the delay, once; again only
 // if the ArrivalSlot is still absent 60 s later and the window is open;
@@ -71,6 +75,7 @@ export function entryOf(m, random = Math.random) {
     commit_hex: toHex(m.commit),
     sealRoot_hex: toHex(m.sealRoot),
     ctHash_hex: toHex(m.ctHash),
+    ...(m.seal ? { seal_b64: toBase64(m.seal) } : {}),
     round: Number(m.round),
     tip: String(m.tip),
     state: 'sealed',
