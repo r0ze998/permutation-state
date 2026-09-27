@@ -43,15 +43,8 @@ use super::travel::MAX_PATH_STEPS;
 pub const SEAL_VERSION: u16 = 1;
 
 /// "Never retreat" is 0; a ratio above this (bps) is an invalid plaintext
-/// (I-27).
-///
-/// **Integration note (W1-C, v1.1):** the contract defines this constant
-/// once, in `clash.rs` (unit W1-A), and has `seal` re-export it. W1-A and
-/// W1-C are built in parallel from the same base, where `clash.rs` does
-/// not yet define it, so this branch carries the value and the integrator
-/// replaces the line with `pub use super::clash::RETREAT_MAX_BPS;` once
-/// W1-A is merged (dependency request in `W1-C-NOTES.md`).
-pub const RETREAT_MAX_BPS: u16 = 60_000;
+/// (I-27). Defined once, in `clash` (W1-A), and re-exported here.
+pub use super::clash::RETREAT_MAX_BPS;
 
 pub const DOMAIN_MARCH: &[u8] = b"PS-FRONTIER-MARCH-v1";
 /// M3 postures (reserved).
