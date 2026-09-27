@@ -1,16 +1,28 @@
 [package]
 name = "bots"
-description = "Frontier bot runner (skeleton in W1; W3 builds it)"
+description = "Frontier bot runner: 1,000 bots per process over the herald read path and the relay, Rust tlock seals, owner reveals, the adversarial personas (M1 contract §8.6, W3-E)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
 
+[lib]
+name = "frontier_bots"
+
 [[bin]]
 name = "frontier-bots"
 path = "src/main.rs"
 
+# Dependency sections belong to the integrator (contract §3.4, I-55). W3-E
+# request R2 (docs/frontier/m1/W3-E-NOTES.md): workspace crates already in
+# frontier-node/Cargo.lock; only the `bots` package's dependency list in
+# the lock changes.
 [dependencies]
 fclient.workspace = true
 agents = { path = "../agents" }
+permutation-rules.workspace = true
+tokio.workspace = true
+serde_json.workspace = true
+hex.workspace = true
+rand.workspace = true
