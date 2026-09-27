@@ -7,7 +7,7 @@
 //! | [`overview`] | the §9.3 overview binary |
 //! | [`records`] | PS2 records decoded, account and record keys |
 //! | [`views`] | live answers: `/h/season`, `latest` provinces, `/h/me` |
-//! | [`files`] | atomic writes with deterministic `.gz` siblings |
+//! | [`files`] | atomic writes (no `.gz` siblings in wave 3: R3 waits for the owner) |
 //! | [`checkpoint`] | the fold's state saved and restored |
 //! | [`runner`] | findex → fold → files and diffs → checkpoints |
 //! | [`server`] | `/h/*`, `WS /h/ws`, `/frontier/*`, `/gw/*`, security headers and CSP |

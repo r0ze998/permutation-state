@@ -1648,7 +1648,23 @@ dependencies = [
 name = "herald"
 version = "0.1.0"
 dependencies = [
+ "axum",
+ "base64 0.22.1",
  "fclient",
+ "findex",
+ "frontier-abi",
+ "hex",
+ "hyper",
+ "hyper-util",
+ "keeper",
+ "localnet",
+ "permutation-rules",
+ "serde_json",
+ "sha2 0.10.9",
+ "solana-address 2.6.1",
+ "solana-instruction",
+ "solana-program-runtime",
+ "tokio",
 ]
 
 [[package]]
