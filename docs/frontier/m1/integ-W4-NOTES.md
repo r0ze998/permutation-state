@@ -113,8 +113,53 @@ Commits (first parent, oldest first): `ec54fe6`, `853c292`, `1c48afb`, `b0ee509`
 - **Pre-existing, not gate lines:** svm-tests clippy errors in W3-B's `tests/host.rs:574`, `tests/holding.rs:466` (W4-A notes).
 - **Contract text, not amended here:** W4-F's note that §5.10 lists Depart with Dissolve/Explore for `HostInTransit` although Depart checks `NotResident` and `HostBusy` first.
 
+## 6. Wave-4 review response (contract v1.7 §23, DECISIONS part M)
+
+Each blocker, major and missing item of the review was checked against the code. A real finding was fixed with a test that fails on the old rule or measures the new bound. A false one is rebutted in one line. Commits: `ef9a99a` (program, ABI v1.7), `c617966` (keeper), `4886140` (verifier), `c46601e` (bots, itest), `891b229` (web), `5289317` (svm-tests lock), then this notes commit.
+
+| Unit | Finding (review) | Verdict | Fix and evidence |
+|---|---|---|---|
+| W4-A | SkipQuiet over its budget on a kernel-quiet roster; a stop that commits the stop bell's camp check | **real** (G1 breach) | M1: the camp check is provisional and undone at the stop; budget 90k + 30k per unit. 112,410 CU at n = 24 (48 residents), 82,338 CU at n = 1; `g11_skip_stop_commits_exactly_its_bells`. The keeper takes the limit from `cu_gate` and treats out-of-CU as NotQuiet |
+| W4-A | "SkipQuiet stops a province for good" | **false as stated** | The keeper's CU ladder doubles on failure, and a contested roster is gathered and resolved, not skipped. The budget part is real and fixed above |
+| W4-A | The return settle loop is unbounded | real | M2: `RETURN_MAX` = 3; `clash_return_settle_is_bounded` 10,082 CU |
+| W4-A/B | CloseClashInputs vs SettleTransit settled bits (L10) | real | M3: present records only; no-arrival inputs close once skipped past; closes after Ended + 72 h. Three svm tests |
+| W4-A | Unchecked `b0 + k`, `bell + 1` | real | Checked arithmetic |
+| W4-B | F1: a bad seal's destination is the settler's word | real | M4: GatherClash stamps the transit, and SettleTransit settles only at the stamp. `g12_gathered_bad_seal_settles_only_at_its_destination` shows the old escape. GatherClash 46,347 CU (budget 49k) |
+| W4-B | A valid seal to an absent province cannot settle | real | M5: routed at the canonical absent address; `g12_valid_seal_to_an_absent_province_routes` |
+| W4-B | The camp's Works (I-56) are never credited | real | M6: optional `camp_citizen`; `g12_settle_credits_the_camp_works_to_one_winner` |
+| W4-B | F3: player accounts cannot close after CloseSeason | real (players' part) | M7: CloseHolding and CloseCitizen on the tombstone. RingSeeds, AnchorArchives and DefenceClaims are **deferred** to the architect (W5; no money in M1) |
+| W4-B | "CloseSeason closing JoinShards is unsafe" | **false** | No instruction reads a shard after End |
+| W4-B | ClaimDefence 3.7% CU margin (F6) | real | M8: 25,500 (24,111 measured) |
+| W4-B | Notes count "32 tests" | real | 33 (16 + 5 + 6 + 6); W4-B notes corrected |
+| W4-C | Blocker: one unrevealable top member blocks its whole reveal group | real | M9: refused-for-good members leave the group, and outranked members are re-planned. `reveal_group_survives_an_unrevealable_top` on the program |
+| W4-C | The play scenarios are not valid on the program (fixed arrival bell, straight paths) | real | Marches use `agents::path::plan` and one common arrival bell, and expectations come from the recorded fates. All 7 play tests pass on the test-beacon `.so`; **new Gate W4 line** (M10) |
+| W4-C | G7 does not show the hold took effect | real | Close → resolve 10 slots unheld vs 190 held (from the feed); the destination's result is compared. The every-outcome digest is not G7: a bad seal's Forfeit moves with the hold |
+| W4-C | "The keeper's CloseClashInputs predicate differs from the program's" | resolved by M3 | Both now use present records |
+| W4-D | V-checks fail an honest program season; no program recording | real | M11/M12: shared `fclient::clash_model`; v1.6 digests; write-back; InTx by account order; CHAIN_GAP; V8, V11 and V13 fixes. `march-program.json.gz` (strict day) PASS; program tamper tests FAIL with their codes; `mutate.sh` all green |
+| W4-D | "T13 must FAIL on the program recording" | **not applicable** | The program refuses a Reveal after THE anchor, so the recording has no late reveal to select. T13 stays on the land and march fixtures |
+| W4-D | SKIP quiet check at every bell (V7), V5 MissingData for an absent T(arrive) signature, HoldingReplayMismatch | **deferred** | W5 (verifier owner). ArchiveAnchors check order is pinned as implemented |
+| W4-E | The page's builder disagrees with the program (camp units, 12-garrison limit, zero-delta slots, dealt 0, id order, `certain`) | real | M14: fixed; `clash_model` cross-vectors (4 cases), with native digest equality in the real `frontier.wasm` |
+| W4-E | `anchorSeed` accepts a cache without A | real | Now refused (test) |
+| W4-E | Notes: wasm hash and gzip size; the respawn claim | real | W4-E notes §7 (sha256 `782c9f30…`, 78,358 B as `build-wasm.sh` reports it; the respawn flag now covers a present camp) |
+| W4-F | transits-settled-or-routed counts, not pairs; feed errors skipped | real | M13: one-to-one pairing keyed (host, arrive); orphans and double settles fail; feed errors fail the run |
+| W4-F | Bots ignore residency (NotResident refusals) | real | Residency gate and nudge (retried); condition `resident-liveness`. Strict day: NotResident 0, nudges 1,127 |
+| W4-F | The gate can shrink silently; stub mode passes; fixtures recorded from the stub world | real | Size guard (`ITEST_ALLOW_SMALL`), stub mode fails, recording only from the strict day, at bell 96. The recorded herald drives 2 kernel-checked marches (0 at the end of play: no hosts left) |
+| W4-F | The bounced-resident Leave rule | **deferred** | Architect; the doc is corrected, test W5-A |
+| all | Heap peaks of the v1.7 paths; W4-A D8 (model into `frontier-abi`), D9, D10; web SettleTransit camp-citizen hand-over | **deferred** | W5-A (heap, D8–D10); W5-E (web) |
+
+**Program size after v1.7:** release `.so` 1,032,184 B (the 1-MiB `L(kind)` placeholder leaves ≈ 16 KB). RFI worst 331,843 CU (≤ 340k).
+
+**Gate W4 re-run (v1.7 §12, `integ-w4r/gate/`):** **27/27 items exit 0 on `5289317` (run 2, 11:30–12:00), no PENDING-OWNER item.** Run 1 (on `891b229`) failed the three svm-tests lines (exit 101): `fclient` now depends on `frontier-abi` (the shared builder), so the svm-tests workspace lock needed that edge. Fixed in `5289317` (one lock line, resolved offline), then the whole gate was run again. Pass conditions:
+  - svm-tests: 210 passed, 0 failed (4 ignored by design), including every v1.7 test above. RFI worst 331,843 CU ≤ 340k.
+  - `inproc_day` strict (100 bots, 144 bells + 26 drain; the same code's recording run, `integ-w4r/day3.log`): all 11 conditions PASS. That covers zero stuck province-bells (37 provinces through 144), 62 departs settled one to one, 12 bad seals BAD_SEAL with the stock code, NotResident 0 of 55/52/62, 1,127 nudges, and the herald folding 11,894 events with every clash report matching.
+  - The lag gate and crash injection pass on the model (item 25), and **the keeper play tests pass on the program** (item 26, new line, 7/7).
+  - Verifier tamper tests 34/34 (item 27). The committed fixtures (land, march-synth, march-program) PASS in the workspace tests. `mutate.sh` (a W5 line, run for the record): every disabled check lets its tampers PASS.
+  - Not a gate line, recorded honestly: `cargo metadata --locked` without `--offline` in `frontier-node`, run to check the lock, fetched the sources of two crates already pinned in the lock (`rsqlite-vfs 0.1.1`, `sqlite-wasm-rs 0.5.5`, wasm-target-only) into the local cargo cache. No manifest or lock changed.
+
+**Verdict:** Gate W4 (v1.7) is green on `5289317`. `codex/frontier` is fast-forwarded to this branch's head after this notes commit.
+
 ## Links
 
-- Contract: `docs/frontier/m1/M1-CONTRACT.md` (v1.6, §22). Decisions: `docs/frontier/DECISIONS.md` (parts A, C, J, K updated; part L new).
+- Contract: `docs/frontier/m1/M1-CONTRACT.md` (v1.7, §23; v1.6, §22). Decisions: `docs/frontier/DECISIONS.md` (parts A, C, J, K updated; parts L and M new).
 - Unit notes: `docs/frontier/m1/W4-A-NOTES.md` … `W4-F-NOTES.md`.
 - Artefact: `permutation-server/web/frontier/wasm/frontier.wasm` (+ `.sha256`); build script `scripts/build-wasm.sh`.

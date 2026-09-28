@@ -12,7 +12,7 @@
 | `permutation-frontier/src/proc/season.rs` | **EndSeason** (0x04), **AbortSeason** (0x06, CL-24 bond rule), **CloseSeason** (0x05, in parts, down to the 128-B tombstone) |
 | `permutation-frontier/svm-tests/src/world/transit.rs` | marches in flight (`trip`, `trip_from`, `depart_trip`), anchors, reveals, the archive of a trip's bell, crafted resolved ClashInputs / Stays entries / skipped destinations (W4-A's instructions are the same wave), settlement builders, `loaded_check` |
 | `permutation-frontier/svm-tests/src/{ix,cover}/{transit,defence,beacon,season}.rs` | builders (fclient's) and forgery positions; the G13 registry rows of the eight instructions (+ the re-creation refusals added to PostAnchor and PostSeed) |
-| `permutation-frontier/svm-tests/tests/{transit,defence,archive,lifecycle}.rs` | 32 program tests (§5) |
+| `permutation-frontier/svm-tests/tests/{transit,defence,archive,lifecycle}.rs` | 33 program tests (§5) |
 
 No manifest, lock, toolchain or `.gitignore` change: **no dependency request**. No file outside §11's W4-B row was edited.
 
@@ -72,7 +72,7 @@ All figures from the final builds above (test-beacon `fab47d3e…`, release `78c
 - **Extra, not in §12:** the keeper against this `.so` (`PSF_FRONTIER_SO=…/deploy-test-beacon/permutation_frontier.so`): `archive_returns_rent` — 3.0 game days, **2,336 bells archived and 2,336 caches closed through the program**, every anchor's rent back to its payer (3,227,791,360 lamports); `land` (`land_season`, `overlapping_fallbacks_never_displace`) — **SweepPoolOwed now runs on the program** (12,345 lamports swept), all duties green.
 - Not run: the rest of Gate W4's frontier-node lines (`inproc_`, `lag_gate`, `crash_injection`, `verify tamper_`), which belong to W4-C, W4-D and W4-F and need their merges; Playwright, the drand archive and Agave stay PENDING-OWNER (not needed by this unit). No port bound, no validator started, no devnet/mainnet transaction.
 
-## 5. Tests (32)
+## 5. Tests (33)
 
 | File | Tests |
 |---|---|
