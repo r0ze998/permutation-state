@@ -829,15 +829,19 @@ fn duties(obs: &Observation, cx: &Ctx, prof: &Profile, rng: &mut Rng, out: &mut 
             Some(Persona::LateRevealer) => {
                 // After `A + W` by THE anchor when the bell file is in view,
                 // else two bells after the arrival bell (past the window and
-                // the first gather at W = 1 bell).
+                // the first gather at W = 1 bell). W6-C: judged on the time
+                // the herald has **observed** on chain, never on the
+                // runner's extrapolated clock, which can run ahead of it.
+                let seen = obs.now.min(obs.season.latest_unix);
+                let seen_bell = obs.season.bell_at(seen);
                 let region = fclient::ix::region_of(m.dest.0, m.dest.1);
                 let closed = match obs
                     .bells
                     .get(&(m.arrive_bell, region))
                     .and_then(|b| b.close(obs.season.w))
                 {
-                    Some(close) => obs.now >= close && bell > m.arrive_bell,
-                    None => bell >= m.arrive_bell + 2,
+                    Some(close) => seen >= close && seen_bell > m.arrive_bell,
+                    None => seen_bell >= m.arrive_bell + 2,
                 };
                 if !m.late_done && closed {
                     out.push(Intent::Reveal {

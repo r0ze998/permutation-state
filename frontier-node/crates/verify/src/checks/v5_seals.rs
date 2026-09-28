@@ -19,8 +19,10 @@
 //! a Reveal, a settlement, an unsettled march whose arrival bell ended a
 //! bell before the archive does (W5-D, the integ-W4 review).
 //!
-//! Warnings (liveness, E5 gates them): a valid seal never revealed
-//! (`ValidSealUnrevealed`, with the signatures of failed Reveal attempts),
+//! Warnings (liveness, E5 gates them): a valid seal never revealed that
+//! settled `ROUTED` (`ValidSealUnrevealed`, with the signatures of failed
+//! Reveal attempts; one that settled with another outcome, bounced by rule,
+//! is listed in `unrevealed_by_rule`, W6-C),
 //! a bad seal still unsettled at the end (`BadSealUnsettled`).
 //!
 //! Codes: `RevealCommitMismatch`, `VerdictDisagreesWithTlock`,
@@ -261,7 +263,17 @@ pub fn run(cx: &mut Ctx) {
                         "a valid seal destroyed as bad",
                     );
                 }
-                if j.code == 0 && !revealed.contains(&d) {
+                // W6-C (W5-C F4, E5 criterion 4): the liveness warning is a
+                // valid seal that settled ROUTED unrevealed; one that
+                // settled with another outcome unrevealed (bounced-unranked:
+                // outranked, quota-refused or the citizen's second arrival)
+                // lost nothing by rule and is listed apart.
+                if j.code == 0 && !revealed.contains(&d) && outcome != transit_outcome::ROUTED {
+                    cx.liveness
+                        .unrevealed_by_rule
+                        .push((host, dr.pu32("arrive_bell"), outcome));
+                }
+                if j.code == 0 && !revealed.contains(&d) && outcome == transit_outcome::ROUTED {
                     let attempts = failed_reveals(w, host);
                     cx.warn(
                         V,

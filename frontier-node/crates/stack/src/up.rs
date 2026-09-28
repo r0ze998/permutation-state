@@ -1156,6 +1156,15 @@ async fn supervise(
             let mut provinces: Option<Vec<fclient::decode::Province>> = None;
             let mut pending: Option<adversary::Pending> = None;
             let mut transit_slots = 4u8;
+            let mut season_now: Option<fclient::decode::Season> = None;
+            // W6-C: the ring-opening and claim-grace holds read their
+            // situation only while they wait.
+            let want_ring = holds
+                .iter()
+                .any(|h| !h.done && now >= h.plan.at && h.plan.kind == "frontier-fund");
+            let want_claims = holds
+                .iter()
+                .any(|h| !h.done && now >= h.plan.at && h.plan.kind == "defence-pool");
             for h in holds.iter_mut().filter(|h| !h.done && now >= h.plan.at) {
                 if provinces.is_none() {
                     provinces = Some(
@@ -1166,6 +1175,7 @@ async fn supervise(
                     );
                     if let Ok(Some(s)) = st.chain.season(&st.addrs).await {
                         transit_slots = s.transit_slots.max(1);
+                        season_now = Some(s);
                     }
                 }
                 let ps = provinces.as_deref().unwrap_or(&[]);
@@ -1177,6 +1187,22 @@ async fn supervise(
                         .map(|p| st.addrs.arrival_day(p.p as i32, p.q as i32, day))
                         .collect();
                     let there = st.chain.accounts(&keys).await.unwrap_or_default();
+                    let (ring_opening, open_claims) = match &season_now {
+                        Some(season) if want_ring || want_claims => {
+                            adversary::probe_land_and_claims(
+                                &st.chain,
+                                &st.addrs,
+                                &st.program,
+                                season,
+                                ps,
+                                now,
+                                want_ring,
+                                want_claims,
+                            )
+                            .await
+                        }
+                        _ => (None, vec![]),
+                    };
                     pending = Some(adversary::Pending {
                         arrivals_today: ps
                             .iter()
@@ -1185,6 +1211,9 @@ async fn supervise(
                             .map(|(p, _)| (p.p, p.q))
                             .collect(),
                         require: true,
+                        now,
+                        ring_opening,
+                        open_claims,
                     });
                 }
                 match adversary::keys_for_pending(

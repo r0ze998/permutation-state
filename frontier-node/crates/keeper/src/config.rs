@@ -214,8 +214,17 @@ pub struct KeeperConfig {
     pub nonce_switch_slots: u64,
     /// Bells scanned back for missing anchors at start.
     pub rescan_bells: u32,
-    /// Payer care every this many slots (at rest).
+    /// Payer care every this many slots (at rest), at the latest.
     pub care_every_slots: u64,
+    /// Payer care every this many game seconds (at rest), at the latest
+    /// (W6-C, W5-B F1: a cadence in slots alone ran every 10 bells at 100×
+    /// and the reveal pool starved). A pool below its minimum effective N
+    /// is cared for at once (§8.2 "tops up at once").
+    pub care_every_game_secs: u64,
+    /// D and N writes: slots between versions while one is in flight and
+    /// the bid rises / at the class cap (`engine::EngineParams`).
+    pub d_resend_slots: u64,
+    pub cap_resend_slots: u64,
     /// Land (W3-C): Holdings the feed named are re-read every this many
     /// slots (dormancy, sweeps).
     pub land_scan_slots: u64,
@@ -270,6 +279,9 @@ impl KeeperConfig {
             nonce_switch_slots: 2,
             rescan_bells: 288,
             care_every_slots: 150,
+            care_every_game_secs: 300,
+            d_resend_slots: 2,
+            cap_resend_slots: 16,
             land_scan_slots: 8,
             stranded_scan_slots: 450,
             dev: false,
@@ -359,6 +371,9 @@ impl KeeperConfig {
         num!("nonce_switch_slots", nonce_switch_slots, u64);
         num!("rescan_bells", rescan_bells, u32);
         num!("care_every_slots", care_every_slots, u64);
+        num!("care_every_game_secs", care_every_game_secs, u64);
+        num!("d_resend_slots", d_resend_slots, u64);
+        num!("cap_resend_slots", cap_resend_slots, u64);
         num!("land_scan_slots", land_scan_slots, u64);
         num!("stranded_scan_slots", stranded_scan_slots, u64);
         num!("race_jitter_slots", race_jitter_slots, u64);

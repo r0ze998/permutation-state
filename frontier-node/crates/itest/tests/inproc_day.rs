@@ -19,8 +19,9 @@
 //! is `PENDING` (printed, never a pass). Environment: `ITEST_BOTS` (100),
 //! `ITEST_BELLS` (144), `ITEST_SUMMARY=<file>` (the run's JSON summary),
 //! `FRONTIER_RECORD_FIXTURES=1` (re-record `crates/agents/fixtures/
-//! herald-recorded` from this run's herald at `ITEST_RECORD_BELL`, default
-//! 96), `PSF_FRONTIER_SO`,
+//! herald-recorded` from this run's herald at the first bell from
+//! `ITEST_RECORD_BELL`, default 96, whose herald drives an unrested march;
+//! W6-C), `PSF_FRONTIER_SO`,
 //! `ITEST_NO_BUILD` (see `itest::program`).
 
 use itest::day::{self, DayCfg};

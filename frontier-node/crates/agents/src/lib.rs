@@ -11,6 +11,7 @@
 //! | [`path`] | march paths over observed provinces (Reveal check 6) |
 //! | [`policy`] | [`policy::decide`]: observation → intents, deterministic in (seed, observation) |
 //! | [`fixture`] | the fixed herald world the unit tests read |
+//! | [`recorded`] | the recorded herald fixtures: load one, and the marches its wallets plan (W6-C) |
 //!
 //! The runner, transports, sealing and journal are `frontier-bots`.
 
@@ -21,6 +22,7 @@ pub mod path;
 pub mod persona;
 pub mod policy;
 pub mod profile;
+pub mod recorded;
 pub mod rng;
 
 pub use persona::Persona;

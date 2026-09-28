@@ -173,10 +173,25 @@ fn march_synth_passes() {
         outcomes.iter().any(|x| x.1 == 5),
         "the bad plaintext's code 5"
     );
+    // W6-C (W5-C F4): only the rout is a liveness warning; the refused
+    // arrival settled bounced-unranked (no loss by rule) is listed apart.
+    assert_eq!(r.liveness.valid_unrevealed.len(), 1, "the rout");
     assert_eq!(
-        r.liveness.valid_unrevealed.len(),
-        2,
-        "the rout and the refused arrival"
+        r.liveness
+            .unrevealed_by_rule
+            .iter()
+            .map(|x| x.2)
+            .collect::<Vec<_>>(),
+        vec![o::BOUNCED_UNRANKED],
+        "the refused arrival, bounced by rule"
+    );
+    assert_eq!(
+        r.findings
+            .iter()
+            .filter(|f| f.code == "ValidSealUnrevealed")
+            .count(),
+        1,
+        "one warning"
     );
     assert!(
         w.txs.iter().any(|t| !t.ok && t.code == Some(34)),

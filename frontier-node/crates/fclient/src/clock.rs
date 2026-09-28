@@ -161,10 +161,21 @@ impl GameClock {
     }
 
     /// Records a Clock read. Samples that go backwards in slot are dropped
-    /// (a lagging RPC node), so the clock is monotone.
+    /// (a lagging RPC node), so the clock is monotone. A read equal to the
+    /// last one (slot and time) carries no new information and is dropped
+    /// too (W6-C:
+    /// the bots sample the herald's `latestSlot`, which stays put between
+    /// folds; each repeat measured a scale of 0, cleared the window, and the
+    /// next fold's jump over a fraction of a second then set a scale tens of
+    /// times too high — the W6-C stack run's fleet extrapolated past its
+    /// `until` at bell ≈ 102 of 144 and stopped).
     pub fn observe(&mut self, clock: ClockSysvar, at: Instant) {
         if let Some(last) = self.samples.back() {
-            if clock.slot < last.clock.slot || clock.unix_timestamp < last.clock.unix_timestamp {
+            if clock.slot < last.clock.slot
+                || clock.unix_timestamp < last.clock.unix_timestamp
+                || (clock.slot == last.clock.slot
+                    && clock.unix_timestamp == last.clock.unix_timestamp)
+            {
                 return;
             }
             // A scale change (frontier_setScale) restarts the estimate.
@@ -318,6 +329,36 @@ mod tests {
             at,
         );
         assert_eq!(g.last().unwrap().slot, 105);
+    }
+
+    /// W6-C: a source that repeats its latest slot (the herald between
+    /// folds) and then jumps does not inflate the scale.
+    #[test]
+    fn repeated_slots_do_not_inflate_the_scale() {
+        let t0 = Instant::now();
+        let mut g = GameClock::new(100.0);
+        let c = |slot: u64| ClockSysvar {
+            slot,
+            unix_timestamp: 1_000 + 40 * (slot as i64 - 100),
+            ..Default::default()
+        };
+        // 100×: 40 game s per 400-ms slot, sampled every slot.
+        for i in 0..4u64 {
+            g.observe(c(100 + i), t0 + Duration::from_millis(400 * i));
+        }
+        assert!((g.scale() - 100.0).abs() < 1e-6);
+        // The source then repeats slot 103 for 5 s and jumps 13 slots,
+        // read 0.2 s after its last repeat.
+        for k in 1..=10u64 {
+            g.observe(c(103), t0 + Duration::from_millis(1_200 + 500 * k));
+        }
+        g.observe(c(116), t0 + Duration::from_millis(1_200 + 5_200));
+        let s = g.scale();
+        assert!(
+            s < 150.0,
+            "scale {s} (before W6-C: 2,600 from one 0.2-s jump)"
+        );
+        assert_eq!(g.last().unwrap().slot, 116);
     }
 
     fn kernel_vectors(name: &str) -> serde_json::Value {

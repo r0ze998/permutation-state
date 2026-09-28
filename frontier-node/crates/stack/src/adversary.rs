@@ -12,9 +12,15 @@
 //! transactions that wrote a held key inside the window and when the
 //! first one landed after it (the hold's effect), and lists the windows
 //! where a liveness finding is expected (criterion 4: `ValidSealUnrevealed`
-//! only where the hold was above the keeper cap). The `frontier-fund` and
-//! `defence-pool` holds still fire at a planned time, not at a ring opening
-//! or inside a claim grace (open, W6-C).
+//! only where the hold was above the keeper cap). W6-C: the
+//! `frontier-fund` hold waits for a ring opening (a ring with provinces
+//! still to open, or a crowding ring due by the folded values:
+//! `fclient::land::ring_opening`) and holds Frontier and the ProvinceFund
+//! of the wedge paying for it; the `defence-pool` hold waits for an open
+//! defence claim (a late Reveal's refund inside its grace:
+//! `fclient::play::open_claim`, the keeper's own rule) whose grace outlasts
+//! the hold by a bell, so claims wait and none is lost. Both are armed over
+//! the whole play window like the ticket hold.
 //!
 //! | kind | keys | price (milli) | length | expected |
 //! |---|---|---|---|---|
@@ -24,8 +30,8 @@
 //! | `keeper-payers` | 20 of keeper A's reveal payers | 3,000 | 1 bell | the keeper draws other payers (effective N ≥ 150 − 20) |
 //! | `lag` | an origin Province + its region's next anchor | 1,000 | 2 bells | the destination's result is unchanged (G7 in play) |
 //! | `ticket` | a Province with an open ticket cohort | 1,000 | 2 bells | finality waits for the cohort; the higher score still wins |
-//! | `frontier-fund` | Frontier + one ProvinceFund | 1,000 | 1 bell | ring openings and folds wait (delay) |
-//! | `defence-pool` | the DefencePool | 1,000 | 3 bells (half the claim grace) | claims and sweeps wait; none lost inside the grace |
+//! | `frontier-fund` | Frontier + the ProvinceFund of the wedge a ring opening draws on (during the opening) | 1,000 | 1 bell | ring openings and folds wait (delay) |
+//! | `defence-pool` | the DefencePool, while a defence claim is open (≥ 4 bells of its grace left) | 1,000 | 3 bells (half the claim grace) | claims and sweeps wait; none lost inside the grace |
 //! | `relay-payers` | 20 of the relay pool's payers | 3,000 | 1 bell | the relay draws other payers |
 
 use fclient::addr::Addresses;
@@ -80,13 +86,16 @@ pub fn plan(start: i64, end: i64) -> Vec<Planned> {
             };
             // Tickets are filed as bots join, early in play: the ticket hold
             // is armed from the first bell and fires at the first open
-            // cohort it sees.
-            let at = if *k == "ticket" {
-                start + 600
-            } else {
-                start + 3_600 + span * i as i64 / n
+            // cohort it sees. W6-C: the ring-opening and claim-grace holds
+            // are armed likewise (from the first hour) and fire when their
+            // situation arises.
+            let armed = matches!(*k, "ticket" | "frontier-fund" | "defence-pool");
+            let at = match *k {
+                "ticket" => start + 600,
+                "frontier-fund" | "defence-pool" => start + 3_600,
+                _ => start + 3_600 + span * i as i64 / n,
             };
-            let deadline = if *k == "ticket" { end } else { at + 3_600 };
+            let deadline = if armed { end } else { at + 3_600 };
             Planned {
                 kind: k,
                 at,
@@ -170,9 +179,101 @@ pub fn keys_for(
 pub struct Pending {
     /// Provinces with an ArrivalDay for today (arrivals are due there).
     pub arrivals_today: Vec<(i16, i16)>,
-    /// Whether the slot holds need arrivals (false only in unit tests of
+    /// Whether the holds need their situation (false only in unit tests of
     /// the key shapes).
     pub require: bool,
+    /// Game time of the probe.
+    pub now: i64,
+    /// The ring opening under way or due (W6-C).
+    pub ring_opening: Option<fclient::land::RingOpening>,
+    /// Open defence claims: `(ArrivalSlot, grace end)` (W6-C).
+    pub open_claims: Vec<(Address, i64)>,
+}
+
+/// Length of the `defence-pool` hold, game seconds (half the claim grace).
+pub const DEFENCE_HOLD_SECS: i64 = 1_800;
+
+/// The ring opening and the open defence claims, read from the chain (W6-C;
+/// only when a `frontier-fund` or `defence-pool` hold is waiting).
+#[allow(clippy::too_many_arguments)]
+pub async fn probe_land_and_claims(
+    chain: &crate::chain::Chain,
+    a: &Addresses,
+    program: &Address,
+    season: &fclient::decode::Season,
+    ps: &[Province],
+    now: i64,
+    want_ring: bool,
+    want_claims: bool,
+) -> (Option<fclient::land::RingOpening>, Vec<(Address, i64)>) {
+    let mut ring = None;
+    if want_ring {
+        let mut keys = vec![a.frontier()];
+        keys.extend(a.province_funds());
+        if let Ok(got) = chain.accounts(&keys).await {
+            let fr = got
+                .first()
+                .and_then(|x| x.as_ref())
+                .filter(|x| x.owner == *program)
+                .and_then(|x| fclient::decode::Frontier::decode(&x.data).ok());
+            let mut funds = [0u64; 6];
+            for (w, x) in got.iter().skip(1).take(6).enumerate() {
+                funds[w] = x.as_ref().map_or(0, |x| x.lamports);
+            }
+            let on: std::collections::BTreeSet<(i32, i32)> =
+                ps.iter().map(|p| (p.p as i32, p.q as i32)).collect();
+            if let Some(fr) = fr {
+                ring = fclient::land::ring_opening(season, &fr, &funds, &on, now);
+            }
+        }
+    }
+    let mut claims = vec![];
+    if want_claims {
+        let v = chain
+            .call(
+                "getProgramAccounts",
+                json!([program.to_string(), {"encoding": "base64",
+                    "filters": [{"dataSize": fclient::abi::size::ARRIVAL_SLOT}]}]),
+            )
+            .await
+            .unwrap_or(Value::Null);
+        let rows = v
+            .as_array()
+            .or_else(|| v.get("value").and_then(|x| x.as_array()))
+            .cloned()
+            .unwrap_or_default();
+        let mut slots = vec![];
+        for r in rows {
+            let Some(key) = r["pubkey"].as_str().and_then(|k| k.parse::<Address>().ok()) else {
+                continue;
+            };
+            if let Ok(Some(acc)) = fclient::rpc::parse_account(&r["account"]) {
+                if let Ok(sl) = fclient::decode::ArrivalSlot::decode(&acc.data) {
+                    if sl.season_id == season.h.season_id && sl.claimed == 0 && sl.ev_slot > 0 {
+                        slots.push((key, sl));
+                    }
+                }
+            }
+        }
+        let anchors: Vec<Address> = slots
+            .iter()
+            .map(|(_, sl)| a.anchor(sl.bell, fclient::ix::region_of(sl.p as i32, sl.q as i32)))
+            .collect();
+        let got = chain.accounts(&anchors).await.unwrap_or_default();
+        for ((key, sl), an) in slots.iter().zip(got.iter()) {
+            let Some(an) = an
+                .as_ref()
+                .filter(|x| x.owner == *program)
+                .and_then(|x| fclient::decode::BellAnchor::decode(&x.data).ok())
+            else {
+                continue;
+            };
+            if let Some(end) = fclient::play::open_claim(sl, an.slot, an.a, season, now) {
+                claims.push((*key, end));
+            }
+        }
+    }
+    (ring, claims)
 }
 
 /// The origin of a march in flight: the Province with the most departed
@@ -260,13 +361,50 @@ pub fn keys_for_pending(
             ))
         }
         "frontier-fund" => {
-            let w = ps
-                .iter()
-                .max_by_key(|p| p.opened_bell)
-                .map_or(0, |p| p.wedge);
-            Some((vec![a.frontier(), a.province_fund(w)], json!({"wedge": w})))
+            use fclient::land::RingOpening;
+            match &pending.ring_opening {
+                Some(RingOpening::InProgress {
+                    ring,
+                    wedge,
+                    missing,
+                }) => Some((
+                    vec![a.frontier(), a.province_fund(*wedge)],
+                    json!({"ring": ring, "wedge": wedge, "missing_provinces": missing,
+                        "why": "a ring opening under way (provinces still to open)"}),
+                )),
+                Some(RingOpening::Due { ring, wedge }) => Some((
+                    vec![a.frontier(), a.province_fund(*wedge)],
+                    json!({"ring": ring, "wedge": wedge,
+                        "why": "a crowding ring due by the folded values"}),
+                )),
+                None if pending.require => None,
+                None => {
+                    let w = ps
+                        .iter()
+                        .max_by_key(|p| p.opened_bell)
+                        .map_or(0, |p| p.wedge);
+                    Some((vec![a.frontier(), a.province_fund(w)], json!({"wedge": w})))
+                }
+            }
         }
-        "defence-pool" => Some((vec![a.defence_pool()], json!({}))),
+        "defence-pool" => {
+            // A claim whose grace outlasts the hold by a bell (so it can
+            // still be claimed after the hold: none lost).
+            let live: Vec<i64> = pending
+                .open_claims
+                .iter()
+                .map(|c| c.1)
+                .filter(|&end| end - pending.now >= DEFENCE_HOLD_SECS + 600)
+                .collect();
+            if pending.require && live.is_empty() {
+                return None;
+            }
+            Some((
+                vec![a.defence_pool()],
+                json!({"open_claims": live.len(), "grace_end_min": live.iter().min(),
+                    "why": "defence claims open inside their grace"}),
+            ))
+        }
         "relay-payers" => (!relay_payers.is_empty()).then(|| {
             (
                 relay_payers.iter().take(20).copied().collect(),
@@ -308,7 +446,18 @@ mod tests {
             (1_600, 1_000 + 86_400),
             "armed over the whole play"
         );
-        let others: Vec<_> = p.iter().filter(|x| x.kind != "ticket").collect();
+        for k in ["frontier-fund", "defence-pool"] {
+            let h = p.iter().find(|x| x.kind == k).unwrap();
+            assert_eq!(
+                (h.at, h.deadline),
+                (1_000 + 3_600, 1_000 + 86_400),
+                "{k}: armed from the first hour to the end"
+            );
+        }
+        let others: Vec<_> = p
+            .iter()
+            .filter(|x| !matches!(x.kind, "ticket" | "frontier-fund" | "defence-pool"))
+            .collect();
         assert!(others.windows(2).all(|w| w[0].at < w[1].at));
         assert!(!above_cap("slots-below", 1_500), "below the W cap 2.0");
         assert!(above_cap("slots-above", 3_000));
@@ -368,6 +517,7 @@ mod tests {
         let need = Pending {
             arrivals_today: vec![],
             require: true,
+            ..Pending::default()
         };
         assert!(
             keys_for_pending("slots-above", &ad, &ps, &need, 10, 4, &[], &[]).is_none(),
@@ -376,6 +526,7 @@ mod tests {
         let due = Pending {
             arrivals_today: vec![(0, 0)],
             require: true,
+            ..Pending::default()
         };
         let (_, d) = keys_for_pending("slots-above", &ad, &ps, &due, 10, 4, &[], &[]).unwrap();
         assert_eq!(
@@ -390,5 +541,45 @@ mod tests {
         assert_eq!(k[0], ad.province(1, 0), "the origin of the march in flight");
         let (_, d) = keys_for("ticket", &ad, &ps2, 10, 4, &[], &[]).unwrap();
         assert_eq!(d["until_bell"], 24, "through the cohort's 24 bells");
+        // W6-C: the ring-opening and claim-grace holds wait for their
+        // situation.
+        assert!(keys_for_pending("frontier-fund", &ad, &ps, &need, 10, 4, &[], &[]).is_none());
+        let opening = Pending {
+            ring_opening: Some(fclient::land::RingOpening::InProgress {
+                ring: 3,
+                wedge: 2,
+                missing: 5,
+            }),
+            ..need.clone()
+        };
+        let (k, d) =
+            keys_for_pending("frontier-fund", &ad, &ps, &opening, 10, 4, &[], &[]).unwrap();
+        assert_eq!(k, vec![ad.frontier(), ad.province_fund(2)]);
+        assert_eq!(d["ring"], 3);
+        let due = Pending {
+            ring_opening: Some(fclient::land::RingOpening::Due { ring: 4, wedge: 5 }),
+            ..need.clone()
+        };
+        let (k, _) = keys_for_pending("frontier-fund", &ad, &ps, &due, 10, 4, &[], &[]).unwrap();
+        assert_eq!(k[1], ad.province_fund(5));
+        assert!(keys_for_pending("defence-pool", &ad, &ps, &need, 10, 4, &[], &[]).is_none());
+        let slot = Address::new_from_array([3; 32]);
+        let short = Pending {
+            now: 10_000,
+            open_claims: vec![(slot, 10_000 + DEFENCE_HOLD_SECS + 599)],
+            ..need.clone()
+        };
+        assert!(
+            keys_for_pending("defence-pool", &ad, &ps, &short, 10, 4, &[], &[]).is_none(),
+            "a grace the hold would outlast: claims could be lost, so not this one"
+        );
+        let open = Pending {
+            now: 10_000,
+            open_claims: vec![(slot, 10_000 + 3_000)],
+            ..need.clone()
+        };
+        let (k, d) = keys_for_pending("defence-pool", &ad, &ps, &open, 10, 4, &[], &[]).unwrap();
+        assert_eq!(k, vec![ad.defence_pool()]);
+        assert_eq!(d["open_claims"], 1);
     }
 }

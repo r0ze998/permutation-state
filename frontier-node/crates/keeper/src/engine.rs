@@ -24,10 +24,24 @@
 //! keeper alerts and its duties react (anchor fallbacks every slot).
 //!
 //! **Duplicates:** only one version can take effect; the others fail
-//! (`AlreadyDone`) or no-op and still pay their fee. New versions stop once
-//! the versions' fees could exceed `per_write_cap` (§8.2's bound
-//! `resends × (base + fee) ≤ per_write_cap`); the write then waits on the
-//! versions already sent.
+//! (`AlreadyDone`, `OutOfOrder`) or no-op and still pay their fee. New
+//! versions stop once the versions' fees could exceed `per_write_cap`
+//! (§8.2's bound `resends × (base + fee) ≤ per_write_cap`); the write then
+//! waits on the versions already sent.
+//!
+//! **Resend cadence of D and N writes (W6-C, amendment requested):** W
+//! writes get a new version every slot. A D or N write whose earlier
+//! version is still in flight (sent, status unknown, blockhash valid) gets
+//! the next one only [`EngineParams::d_resend_slots`] (2) slots after the
+//! last while its bid still rises, and only every
+//! [`EngineParams::cap_resend_slots`] (16) slots once the bid is at the
+//! class cap (D: P_delay; N: its fixed bid), since a version at the same
+//! bid buys nothing but a fresh payer. A version whose status is known
+//! (a failure the retry ladder answers) is followed at once. Measured
+//! before (W5-B runs): a SkipQuiet held 24 slots by the `lag` hold sent 24
+//! versions, and when the hold ended one landed and 23 failed `OutOfOrder`;
+//! a keeper tick that ran past its slot sent a second version of writes
+//! whose first landed one slot later (3 `OutOfOrder` in the smoke).
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -98,6 +112,12 @@ pub struct EngineParams {
     pub per_write_cap: u64,
     /// Hard stop on versions of one write.
     pub max_versions: u32,
+    /// D and N writes with a version in flight: slots between versions
+    /// while the bid rises (W writes: every slot).
+    pub d_resend_slots: u64,
+    /// D and N writes with a version in flight: slots between versions at
+    /// the class cap.
+    pub cap_resend_slots: u64,
 }
 
 impl Default for EngineParams {
@@ -112,6 +132,8 @@ impl Default for EngineParams {
             contested_slots: 2,
             per_write_cap: 20_000_000,
             max_versions: 64,
+            d_resend_slots: 2,
+            cap_resend_slots: 16,
         }
     }
 }
@@ -143,6 +165,10 @@ pub struct Version {
     pub cu_limit: u32,
     pub heap: Option<u32>,
     pub sent_slot: u64,
+    /// The chain's slot when the version actually went out (a Clock read
+    /// in the same `send`; ≥ `sent_slot`, the tick's slot, when the tick ran
+    /// late). The resend cadence counts from it (W6-C).
+    pub chain_slot: u64,
     /// Fee if it lands (base + priority).
     pub fee: u64,
 }
@@ -347,6 +373,7 @@ impl Engine {
                     cu_limit: a.cu_limit,
                     heap: a.heap,
                     sent_slot: a.sent_slot,
+                    chain_slot: a.sent_slot,
                     fee: 0,
                 });
         }
@@ -582,6 +609,7 @@ impl Engine {
     ) {
         let keys: Vec<String> = self.pending.keys().cloned().collect();
         let mut blockhash: Option<Hash> = None;
+        let mut chain_slot: Option<u64> = None;
         for k in keys {
             let Some(p) = self.pending.get(&k) else {
                 continue;
@@ -648,10 +676,15 @@ impl Engine {
             }
             let fees_out: u64 = p.versions.iter().map(|v| v.fee).sum();
             if p.versions.len() as u32 >= self.params.max_versions {
+                self.mark_contested(&k, slot, journal, report);
                 continue;
             }
             let slots_waiting = p.first_slot.map_or(0, |f| slot.saturating_sub(f));
             let bid = self.params.bid(p.spec.class, slots_waiting) + p.bonus_milli;
+            if self.resend_waits(p, bid, slot) {
+                self.mark_contested(&k, slot, journal, report);
+                continue;
+            }
             let payer = match p.spec.fixed_payer {
                 Some(a) => match payers.keypair(&a) {
                     Some(k) => k.insecure_clone(),
@@ -678,6 +711,9 @@ impl Engine {
                 heap: p.heap,
             };
             if blockhash.is_none() {
+                // The chain's slot now (a late tick sends in a later slot
+                // than it read at its start).
+                chain_slot = port.clock().await.ok().map(|c| c.slot);
                 match port.blockhash().await {
                     Ok((h, _)) => blockhash = Some(h),
                     Err(e) => {
@@ -732,6 +768,7 @@ impl Engine {
                 cu_limit: budget.cu_limit,
                 heap: budget.heap,
                 sent_slot: slot,
+                chain_slot: chain_slot.unwrap_or(slot).max(slot),
                 fee,
             };
             if let Some(j) = journal {
@@ -756,22 +793,70 @@ impl Engine {
             p.versions.push(v);
             self.stats.entry(p.spec.kind).or_default().versions += 1;
             report.sent += 1;
-            // Contested: not landed `contested_slots` after a bid ≥ p_tip.
-            let first = p.first_slot.unwrap_or(slot);
-            if !p.contested
-                && slot.saturating_sub(first) >= self.params.contested_slots
-                && p.versions.iter().any(|v| {
-                    v.bid_milli >= self.params.p_tip_milli
-                        && v.sent_slot + self.params.contested_slots <= slot
-                })
-            {
-                p.contested = true;
-                report
-                    .contested
-                    .push((p.spec.bell, p.spec.region, k.clone()));
-                if let Some(j) = journal {
-                    let _ = j.alert(slot, "contested", &k);
-                }
+            self.mark_contested(&k, slot, journal, report);
+        }
+    }
+
+    /// Whether a D or N write waits for its version in flight instead of
+    /// sending the next one now (module docs, "Resend cadence").
+    fn resend_waits(&self, p: &Pending, bid: u64, slot: u64) -> bool {
+        if p.spec.class == Class::W {
+            return false;
+        }
+        let Some(last) = p.versions.last() else {
+            return false;
+        };
+        // The retry ladder changed the limits: the next version goes now.
+        if last.cu_limit != p.cu_limit || last.heap != p.heap {
+            return false;
+        }
+        let in_flight = p
+            .versions
+            .iter()
+            .any(|v| !p.settled.contains(&v.sig) && slot <= v.sent_slot + EXPIRY_SLOTS);
+        if !in_flight {
+            return false;
+        }
+        let gap = if bid > last.bid_milli {
+            self.params.d_resend_slots
+        } else {
+            self.params.cap_resend_slots
+        };
+        // Counted from the slot the version really went out in: a keeper
+        // tick that ran two slots late sent a version that could not land
+        // before the next tick, and a second version went out (the W6-C
+        // stack run with eager personas: 8 of 12 `OutOfOrder`).
+        slot < last.chain_slot.max(last.sent_slot) + gap.max(1)
+    }
+
+    /// Contested: not landed `contested_slots` after a bid ≥ p_tip (checked
+    /// every slot, whether or not a version went out).
+    fn mark_contested(
+        &mut self,
+        k: &str,
+        slot: u64,
+        journal: Option<&Journal>,
+        report: &mut StepReport,
+    ) {
+        let Some(p) = self.pending.get_mut(k) else {
+            return;
+        };
+        let Some(first) = p.first_slot else {
+            return;
+        };
+        if !p.contested
+            && slot.saturating_sub(first) >= self.params.contested_slots
+            && p.versions.iter().any(|v| {
+                v.bid_milli >= self.params.p_tip_milli
+                    && v.sent_slot + self.params.contested_slots <= slot
+            })
+        {
+            p.contested = true;
+            report
+                .contested
+                .push((p.spec.bell, p.spec.region, k.to_string()));
+            if let Some(j) = journal {
+                let _ = j.alert(slot, "contested", k);
             }
         }
     }
@@ -792,6 +877,8 @@ mod tests {
         /// The status a transaction gets once sent (`None` = never lands).
         answer: Mutex<Answer>,
         statuses: Mutex<HashMap<Signature, Status>>,
+        /// The Clock's slot (`send` reads it; 0 by default).
+        clock_slot: std::sync::atomic::AtomicU64,
     }
 
     impl Default for Script {
@@ -800,13 +887,17 @@ mod tests {
                 sent: Mutex::new(vec![]),
                 answer: Mutex::new(Box::new(|_| None)),
                 statuses: Mutex::new(HashMap::new()),
+                clock_slot: std::sync::atomic::AtomicU64::new(0),
             }
         }
     }
 
     impl ChainPort for Script {
         async fn clock(&self) -> PortResult<ClockSysvar> {
-            Ok(ClockSysvar::default())
+            Ok(ClockSysvar {
+                slot: self.clock_slot.load(std::sync::atomic::Ordering::SeqCst),
+                ..ClockSysvar::default()
+            })
         }
         async fn accounts(&self, keys: &[Address], _: u64) -> PortResult<Vec<Option<Account>>> {
             Ok(keys
@@ -1081,9 +1172,10 @@ mod tests {
             }
         }
         assert_eq!(sent, 3, "the version cap");
+        // D versions at slots 0, 2 and 4 (the resend cadence, W6-C).
         assert_eq!(
             end_slot,
-            2 + EXPIRY_SLOTS + 1,
+            4 + EXPIRY_SLOTS + 1,
             "ends once the last version expired"
         );
         assert!(matches!(ended, Some(Outcome::Failed { code: None, .. })));
@@ -1112,6 +1204,110 @@ mod tests {
         assert!(
             (95..=105).contains(&last),
             "a fresh escalation starts low: {last}"
+        );
+    }
+
+    /// W6-C (W5-B F4): a D write whose version is in flight gets the next
+    /// one 2 slots later while its bid rises and every 16 slots at P_delay;
+    /// an N write (fixed bid) every 16 slots; a W write every slot. A held
+    /// SkipQuiet therefore leaves a handful of losing versions, not one per
+    /// slot of the hold, and contested detection still runs every slot.
+    #[tokio::test]
+    async fn d_and_n_writes_resend_on_their_cadence() {
+        let port = Script::default();
+        let mut payers = payers();
+        payers.refresh(&port, 0).await.unwrap();
+        let mut e = Engine::new(Budgets::placeholder(), EngineParams::default());
+        e.ensure(spec("skip:1,0:5:3", Class::D, abi::tag::SKIP_QUIET), 0);
+        e.ensure(spec("close:x", Class::N, abi::tag::SKIP_QUIET), 0);
+        e.ensure(spec("reveal:1:2", Class::W, abi::tag::REVEAL), 0);
+        let mut at: BTreeMap<String, Vec<u64>> = BTreeMap::new();
+        let mut contested = vec![];
+        for s in 0..40 {
+            let before = port.sent.lock().unwrap().len();
+            let r = e.step(&port, &mut payers, None, s).await;
+            contested.extend(r.contested.into_iter().map(|c| c.2));
+            let sent = port.sent.lock().unwrap()[before..].to_vec();
+            for t in sent {
+                // W draws from the reveal pool; D and N share the delay pool.
+                let payer = t.message.account_keys[0];
+                let k = if payers.reveal.addresses().contains(&payer) {
+                    "W"
+                } else {
+                    "DN"
+                };
+                at.entry(k.into()).or_default().push(s);
+            }
+        }
+        assert_eq!(at["W"], (0..40).collect::<Vec<u64>>(), "W: every slot");
+        let dn = &at["DN"];
+        // D: 0, 2, 4 (bids 100, 400, 500), then 20, 36 at the cap;
+        // N: 0, 16, 32.
+        let mut want = vec![0, 0, 2, 4, 16, 20, 32, 36];
+        want.sort_unstable();
+        assert_eq!(dn, &want, "D and N versions on the cadence");
+        assert!(
+            contested.iter().any(|k| k == "skip:1,0:5:3"),
+            "a D write at a bid ≥ p_tip is still marked contested: {contested:?}"
+        );
+    }
+
+    /// W6-C: a keeper tick that runs late (the chain two slots past the
+    /// slot the tick read) sends its version in a later slot; the cadence
+    /// counts from that slot, so the next tick does not send a second
+    /// version that the first would beat into the same block.
+    #[tokio::test]
+    async fn the_cadence_counts_from_the_slot_the_version_went_out_in() {
+        use std::sync::atomic::Ordering;
+        let port = Script::default();
+        let mut payers = payers();
+        payers.refresh(&port, 0).await.unwrap();
+        let mut e = Engine::new(Budgets::placeholder(), EngineParams::default());
+        e.ensure(spec("skip:1,0:5:3", Class::D, abi::tag::SKIP_QUIET), 10);
+        let mut sent = vec![];
+        for s in 10..40u64 {
+            // Every tick reads slot s but sends when the chain is at s + 2.
+            port.clock_slot.store(s + 2, Ordering::SeqCst);
+            if e.step(&port, &mut payers, None, s).await.sent > 0 {
+                sent.push(s);
+            }
+        }
+        // Chain slots 12 (bid 100), 16 (bid 500, the cap), then 16 + 16;
+        // counted from the tick's slot it would have been 10, 12, 14, 30.
+        assert_eq!(
+            sent,
+            vec![10, 14, 32],
+            "from the chain's slot, not the tick's"
+        );
+    }
+
+    /// A D write whose version is known to have failed (a program refusal
+    /// the ladder answers) is followed at once; the cadence only waits on
+    /// versions in flight.
+    #[tokio::test]
+    async fn a_known_failure_is_followed_at_once() {
+        let port = Script::default();
+        *port.answer.lock().unwrap() = Box::new(|_| {
+            Some(Status {
+                slot: 1,
+                err: Some("InstructionError(3, ComputationalBudgetExceeded)".into()),
+                code: None,
+            })
+        });
+        let mut payers = payers();
+        payers.refresh(&port, 0).await.unwrap();
+        let mut e = Engine::new(Budgets::placeholder(), EngineParams::default());
+        e.ensure(spec("r", Class::D, abi::tag::RESOLVE_FROM_INPUTS), 0);
+        let mut sent = vec![];
+        for s in 0..3 {
+            if e.step(&port, &mut payers, None, s).await.sent > 0 {
+                sent.push(s);
+            }
+        }
+        assert_eq!(
+            sent,
+            vec![0, 1, 2],
+            "the ladder's next rung goes out at once"
         );
     }
 
