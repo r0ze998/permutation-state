@@ -502,6 +502,8 @@ async fn a_slow_socket_sees_a_gap_then_is_dropped() {
             head: None,
             bytes: vec![],
             scope: Scope::Province(2, 0),
+            t_ms: 0,
+            wire: Default::default(),
         })
     };
     // Two in order.

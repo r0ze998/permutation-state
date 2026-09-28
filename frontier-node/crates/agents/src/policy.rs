@@ -416,6 +416,22 @@ fn ready_host(h: &Holding, e: &Entry, bell: u32, scout: bool) -> bool {
         && !in_transit(h, e.id)
 }
 
+/// A host that can march now: ready, and with the stamina Depart charges
+/// (the maximum `march_stamina(MAX_PATH_STEPS)`, I-32; the program refuses
+/// less as `Cooldown`). W5-C: without the stamina test the bots asked the
+/// relay for about 2,400 refused Departs over two game days.
+fn can_depart(h: &Holding, e: &Entry, bell: u32) -> bool {
+    use permutation_rules::frontier::host::Stamina;
+    use permutation_rules::frontier::travel::{march_stamina, MAX_PATH_STEPS};
+    ready_host(h, e, bell, false)
+        && Stamina {
+            value: e.stamina_value,
+            bell: e.stamina_bell,
+        }
+        .at(bell)
+            >= march_stamina(MAX_PATH_STEPS as u32)
+}
+
 /// The sim's `pick_stance`: with probability `q` the faction's drilled
 /// stance, else a uniform one.
 pub fn pick_stance(faction: u8, q: f64, rng: &mut Rng) -> u8 {
@@ -1310,7 +1326,7 @@ fn military(
     let hosts = own_hosts(obs, h);
     let mut ready: Vec<&((i16, i16), Entry)> = hosts
         .iter()
-        .filter(|(_, e)| ready_host(h, e, bell, false))
+        .filter(|(_, e)| can_depart(h, e, bell))
         .collect();
     if ready.is_empty() {
         return;

@@ -45,10 +45,12 @@ use fclient::decode::{chained_header, AnchorArchive, Province, Season};
 use fclient::log::bodies_from_logs;
 use fclient::ports::TxRecord;
 use frontier_abi::addr::AddrCtx;
+use frontier_abi::layout::player::holding as HL;
 use frontier_abi::layout::AccountKind;
 use frontier_abi::log::{self as plog, Kind};
 use permutation_rules::frontier::beacon;
 use permutation_rules::frontier::clash::BeaconClock;
+use permutation_rules::frontier::holding::DORMANT_AFTER;
 
 use crate::clash::{fighters_json, ClashBuilder};
 use crate::files::{Out, Written};
@@ -161,7 +163,7 @@ pub enum Scope {
     None,
 }
 
-/// One WS message before numbering: `{seq, kind, key, slot, head,
+/// One WS message before numbering: `{seq, kind, key, slot, head, t,
 /// bytes_b64}` (§8.4).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diff {
@@ -174,6 +176,14 @@ pub struct Diff {
     pub head: Option<[u8; 32]>,
     pub bytes: Vec<u8>,
     pub scope: Scope,
+    /// Unix milliseconds at which the herald ingested the transaction this
+    /// diff comes from (0 until the runner stamps it); sent as `t`, so a
+    /// viewer measures ingest → WS latency (§13.4 criterion 6, W5-C).
+    pub t_ms: u64,
+    /// The message's JSON after `seq` (`ws::message`), built once for
+    /// every socket (W5-C: 1,000 WS viewers serialised and base64-encoded
+    /// each diff 1,000 times).
+    pub wire: std::sync::OnceLock<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -421,6 +431,8 @@ impl Fold {
                             head: None,
                             bytes: vec![],
                             scope,
+                            t_ms: 0,
+                            wire: Default::default(),
                         });
                     }
                     self.st.accounts.remove(&key);
@@ -498,6 +510,8 @@ impl Fold {
                         head,
                         bytes: d,
                         scope,
+                        t_ms: 0,
+                        wire: Default::default(),
                     });
                 }
             }
@@ -528,6 +542,8 @@ impl Fold {
                 head: None,
                 bytes: body.clone(),
                 scope,
+                t_ms: 0,
+                wire: Default::default(),
             });
             match r.kind {
                 Kind::SEED => {
@@ -675,6 +691,8 @@ impl Fold {
             head: cap.head().map(|h| h.1),
             bytes: vec![],
             scope: Scope::Province(pq.0 as i32, pq.1 as i32),
+            t_ms: 0,
+            wire: Default::default(),
         });
         self.st.pending.insert((pq.0, pq.1, b), cap);
     }
@@ -822,6 +840,9 @@ impl Fold {
         let rep = json!({
             "v": 1, "key": format!("ci:{p},{q},{b}"), "bell": b, "province": [p, q], "slot": tx.slot,
             "inputs_b64": B64.encode(&inputs), "seed": seed.map(|s| hex::encode(s.0)),
+            // W4-E R2: the Province the resolve read, so a page can rebuild
+            // the kernel input itself (§22 `resolve_from_inputs`).
+            "province_before_b64": B64.encode(&prov_before),
             "anchor": anchor_v, "cache": cache_v, "archive": archive_v,
             "outcomeDigest": hex::encode(outcome_digest), "inputDigest": hex::encode(input_digest),
             "decoded": {"fighters": fighters, "engagements": engagements, "fates": fates.to_vec()},
@@ -841,6 +862,8 @@ impl Fold {
             head: None,
             bytes: vec![],
             scope: Scope::Province(p, q),
+            t_ms: 0,
+            wire: Default::default(),
         });
     }
 
@@ -850,12 +873,32 @@ impl Fold {
         if self.st.clashes.contains(&(pv.p, pv.q, bell)) {
             f |= overview::FLAG_CLASH;
         }
+        // Dormant at the bell's end by the kernel's rule (`Holding::
+        // is_dormant`: last owner action + DORMANT_AFTER), not only by the
+        // Holding's cache bit: the program refreshes that bit on owner
+        // writes only, when it is always clear (K11, W5-C).
+        let t_end = self
+            .season
+            .as_ref()
+            .map(|s| beacon::bell_end(s.genesis_ts, bell));
         let dormant = (0..(pv.site_count as usize).min(12)).any(|i| {
             pv.site_mirror[i].state == 1
                 && self
                     .cap(&self.ctx.holding(pv.p as i32, pv.q as i32, i as u8))
-                    .and_then(|c| c.data.get(115).copied())
-                    .is_some_and(|fl| fl & 1 != 0)
+                    .is_some_and(|c| {
+                        let cached = c
+                            .data
+                            .get(HL::FLAGS)
+                            .is_some_and(|fl| fl & HL::FLAG_DORMANT_CACHE != 0);
+                        let idle = c
+                            .data
+                            .get(HL::LAST_OWNER_ACTION..HL::LAST_OWNER_ACTION + 8)
+                            .and_then(|b| b.try_into().ok())
+                            .map(i64::from_le_bytes)
+                            .zip(t_end)
+                            .is_some_and(|(last, t)| t >= last.saturating_add(DORMANT_AFTER));
+                        cached || idle
+                    })
         });
         if dormant {
             f |= overview::FLAG_DORMANT;
@@ -915,6 +958,8 @@ impl Fold {
                     head: None,
                     bytes: vec![],
                     scope: Scope::Ring(d),
+                    t_ms: 0,
+                    wire: Default::default(),
                 });
             }
             for pq in &provs {
@@ -1043,6 +1088,8 @@ impl Fold {
             head: None,
             bytes: vec![],
             scope: Scope::Bells,
+            t_ms: 0,
+            wire: Default::default(),
         });
     }
 

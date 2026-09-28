@@ -81,6 +81,10 @@ async fn shapes_are_checked_before_co_signing() {
     assert_eq!(s, 409, "{v}");
     assert_eq!(v["ok"], false);
     assert!(r.state.stats.lock().unwrap().sent.is_empty());
+    // A refused transaction does not hold its replay key (W5-C): the same
+    // bytes again meet the same refusal, not `Duplicate`.
+    let (s2, v2) = post(&r, "/f/relay", &json!({"tx": txb::wire_b64(&t)})).await;
+    assert_eq!((s2, &v2["code"]), (409, &v["code"]), "{v2}");
 
     // A fee payer outside the pool.
     let stranger = RelayInfo {

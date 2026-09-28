@@ -246,13 +246,25 @@ impl Sub {
     }
 }
 
-/// A diff as a numbered message.
+/// Diffs one socket write carries at most.
+const BATCH_MAX: usize = 256;
+/// Bytes one socket write carries at most (then the next write).
+const BATCH_BYTES: usize = 256 * 1024;
+
+/// A diff as a numbered message: `{"seq": n, …}` with the rest of the
+/// object serialised once per diff ([`Diff::wire`]).
 pub fn message(seq: u64, d: &Diff) -> String {
-    json!({
-        "seq": seq, "kind": d.kind, "key": d.key, "slot": d.slot,
-        "head": d.head.map(hex::encode), "bytes_b64": B64.encode(&d.bytes),
-    })
-    .to_string()
+    let tail = d.wire.get_or_init(|| {
+        let v = json!({
+            "kind": d.kind, "key": d.key, "slot": d.slot,
+            "head": d.head.map(hex::encode), "bytes_b64": B64.encode(&d.bytes),
+            "t": d.t_ms,
+        })
+        .to_string();
+        // `{…}` → `,…}` (the object is never empty).
+        format!(",{}", &v[1..])
+    });
+    format!("{{\"seq\":{seq}{tail}")
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -390,12 +402,42 @@ pub async fn serve<S>(
         tokio::select! {
             d = rx.recv() => match d {
                 Ok(d) => {
-                    if sub.wants(&d.scope) {
-                        seq += 1;
-                        let m = message(seq, &d);
-                        if let Err(e) = write_within(&mut wr, &encode_frame(OP_TEXT, m.as_bytes(), None), limit).await {
+                    // One write for the diffs already queued (a busy slot
+                    // folds hundreds at once; W5-C).
+                    let mut out: Vec<u8> = vec![];
+                    let mut next = Some(d);
+                    let mut n = 0;
+                    let mut over = false;
+                    while let Some(d) = next.take() {
+                        if sub.wants(&d.scope) {
+                            seq += 1;
+                            out.extend_from_slice(&encode_frame(OP_TEXT, message(seq, &d).as_bytes(), None));
+                        }
+                        n += 1;
+                        if n >= BATCH_MAX || out.len() >= BATCH_BYTES {
+                            break;
+                        }
+                        match rx.try_recv() {
+                            Ok(x) => next = Some(x),
+                            Err(broadcast::error::TryRecvError::Lagged(_)) => {
+                                lags += 1;
+                                seq += 1;
+                                if lags > cfg.max_lags {
+                                    over = true;
+                                }
+                                break;
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    if !out.is_empty() {
+                        if let Err(e) = write_within(&mut wr, &out, limit).await {
                             break fail(e, &stats);
                         }
+                    }
+                    if over {
+                        stats.dropped_slow.fetch_add(1, Ordering::SeqCst);
+                        break 1013;
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => {
@@ -618,6 +660,8 @@ mod tests {
                 head: None,
                 bytes: vec![0xAB; 64],
                 scope: Scope::Bells,
+                t_ms: 0,
+                wire: Default::default(),
             }));
         }
         tokio::time::timeout(Duration::from_secs(3), h)

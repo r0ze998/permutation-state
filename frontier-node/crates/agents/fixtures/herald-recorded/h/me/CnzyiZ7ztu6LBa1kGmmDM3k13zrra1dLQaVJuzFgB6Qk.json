@@ -1,0 +1,16 @@
+{
+  "citizen": null,
+  "holdings": [],
+  "hosts": [],
+  "latestSlot": 7380,
+  "quota": {
+    "lamportsLeft": null,
+    "left": 40,
+    "resetsAt": 1785716529
+  },
+  "seals": [],
+  "slots": [],
+  "transits": [],
+  "v": 1,
+  "wallet": "CnzyiZ7ztu6LBa1kGmmDM3k13zrra1dLQaVJuzFgB6Qk"
+}

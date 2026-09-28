@@ -96,6 +96,8 @@ async fn load(pollers: usize, wsv: usize, seconds: u64, think_ms: u64) {
     assert_eq!(rep["ws"]["connected"], wsv as u64);
     if wsv > 0 {
         assert!(rep["ws"]["messages"].as_u64().unwrap() > 0, "{rep}");
+        // Every diff carries the herald's ingest stamp (W5-C).
+        assert_eq!(rep["ws"]["timed"], rep["ws"]["messages"], "{rep}");
     }
     assert_eq!(rep["ws"]["gaps"], 0);
     let _ = std::fs::remove_dir_all(&dir);

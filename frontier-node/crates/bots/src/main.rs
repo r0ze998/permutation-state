@@ -6,10 +6,12 @@
 //!               [--seed 1] [--bots 1000] [--first-index 0] [--days 7]
 //!               [--personas default|off|<n per persona>]
 //!               [--journal DIR] [--report FILE] [--invites FILE]
-//!               [--game-hours H] [--scale S]
+//!               [--game-hours H] [--scale S] [--control 127.0.0.1:41070]
 //! ```
 //!
-//! Binds no port (a client of the herald, the relay and the local chain).
+//! Binds no port (a client of the herald, the relay and the local chain),
+//! except `--control` (§10.3 bots control / metrics: `GET /metrics`,
+//! `GET /health`, `POST /stop`; `frontier_bots::control`).
 //! Loopback URLs only (`http://`); the stack gives ports in 41000–41999.
 //! Exit codes: 0 done, 2 bad arguments, 1 runtime failure.
 
@@ -39,10 +41,11 @@ struct Args {
     invites: Option<PathBuf>,
     game_hours: Option<f64>,
     scale: f64,
+    control: Option<String>,
 }
 
 fn usage(e: &str) -> ! {
-    eprintln!("frontier-bots: {e}\nusage: frontier-bots --herald URL --relay URL [--rpc URL] [--seed N] [--bots N] [--first-index N] [--days N] [--personas default|off|N] [--journal DIR] [--report FILE] [--invites FILE] [--game-hours H] [--scale S]");
+    eprintln!("frontier-bots: {e}\nusage: frontier-bots --herald URL --relay URL [--rpc URL] [--seed N] [--bots N] [--first-index N] [--days N] [--personas default|off|N] [--journal DIR] [--report FILE] [--invites FILE] [--game-hours H] [--scale S] [--control 127.0.0.1:PORT]");
     std::process::exit(2);
 }
 
@@ -61,6 +64,7 @@ fn parse() -> Args {
         invites: None,
         game_hours: None,
         scale: 20.0,
+        control: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(k) = it.next() {
@@ -97,6 +101,13 @@ fn parse() -> Args {
                 a.game_hours = Some(v().parse().unwrap_or_else(|_| usage("--game-hours")))
             }
             "--scale" => a.scale = v().parse().unwrap_or_else(|_| usage("--scale")),
+            "--control" => {
+                let c = v();
+                if !frontier_bots::control::allowed(&c) {
+                    usage("--control: 127.0.0.1 and a port in 41000-41999 (not reserved)");
+                }
+                a.control = Some(c);
+            }
             "-h" | "--help" => usage("help"),
             _ => usage(&format!("unknown argument {k}")),
         }
@@ -247,6 +258,22 @@ async fn go<D: frontier_bots::ports::DirectPort + 'static>(a: Args, direct: Opti
             write_report(&rp, &v);
         }
     });
+    if let Some(c) = &a.control {
+        let sh = fleet.shared.clone();
+        let rep: Arc<dyn Fn() -> serde_json::Value + Send + Sync> = Arc::new(move || {
+            sh.report
+                .lock()
+                .map(|r| r.to_json())
+                .unwrap_or(serde_json::Value::Null)
+        });
+        match frontier_bots::control::serve(c, rep, stop.clone()).await {
+            Ok(at) => eprintln!("frontier-bots: control on {at}"),
+            Err(e) => {
+                eprintln!("frontier-bots: --control {c}: {e}");
+                return 1;
+            }
+        }
+    }
     let s2 = stop.clone();
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {

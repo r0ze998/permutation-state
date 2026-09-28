@@ -99,6 +99,18 @@ fn fold_determinism_same_archive_same_bytes() {
 
 #[tokio::test]
 async fn ingest_restart_and_crash_give_the_same_files() {
+    restart_and_crash(std::time::Duration::ZERO).await;
+}
+
+/// W5-C group commit: a crash loses the archive's uncommitted appends (the
+/// durable cursor is older), the source re-delivers them, and the files end
+/// byte-identical.
+#[tokio::test]
+async fn a_crash_inside_a_group_commit_re_ingests_and_gives_the_same_files() {
+    restart_and_crash(std::time::Duration::from_secs(3_600)).await;
+}
+
+async fn restart_and_crash(commit: std::time::Duration) {
     let txs = fixture::mini_season(BELLS);
     let reference = tmp("ref");
     fold_all(&reference.join("files"), &txs);
@@ -110,6 +122,7 @@ async fn ingest_restart_and_crash_give_the_same_files() {
     // Never checkpoint during the run: a restart must re-fold from the
     // checkpoint written at open (a crash after files were written).
     c.checkpoint_slots = u64::MAX / 2;
+    c.archive_commit = commit;
     let mut src = VecSource::new(txs.clone(), 17);
     {
         let mut ing = Ingest::open(c.clone(), diffs.clone()).unwrap();
@@ -123,11 +136,16 @@ async fn ingest_restart_and_crash_give_the_same_files() {
         let mut ing = Ingest::open(c.clone(), diffs.clone()).unwrap();
         let mut src = VecSource::new(txs.clone(), 23);
         ing.findex.resume(&mut src);
-        assert_eq!(
-            src.pos,
-            5 * 17,
-            "the source resumes from the archived cursor"
-        );
+        if commit.is_zero() {
+            assert_eq!(
+                src.pos,
+                5 * 17,
+                "the source resumes from the archived cursor"
+            );
+        } else {
+            // Nothing was committed after open: the source starts over.
+            assert_eq!(src.pos, 0, "the durable cursor is the committed one");
+        }
         ing.step(&mut src).await.unwrap();
         ing.checkpoint().unwrap();
     }
@@ -185,6 +203,29 @@ fn per_bell_files_overviews_and_bell_records() {
         assert_eq!(r["builder"], "provisional-w3d");
         assert!(r["seed"].is_string() && r["anchor"]["round"].is_u64());
         assert!(!r["decoded"]["fighters"].as_array().unwrap().is_empty());
+        // W4-E R2: the Province the resolve read, resolved up to the bell,
+        // rebuilds the same outcome with the shared builder.
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD;
+        let before = b64
+            .decode(r["province_before_b64"].as_str().unwrap())
+            .unwrap();
+        let bell = r["bell"].as_u64().unwrap() as u32;
+        assert_eq!(
+            Province::decode(&before).unwrap().resolved_next,
+            bell,
+            "{p}"
+        );
+        let inputs = b64.decode(r["inputs_b64"].as_str().unwrap()).unwrap();
+        let seed: [u8; 32] = hex::decode(r["seed"].as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let o = fclient::clash_model::build(&before, &inputs, bell, &seed)
+            .unwrap()
+            .resolve()
+            .unwrap();
+        assert_eq!(hex::encode(o.digest()), r["outcomeDigest"], "{p}");
         clashes += 1;
     }
     assert!(clashes >= 8, "{clashes} clash reports");
@@ -376,4 +417,54 @@ fn diffs_carry_heads_and_scopes() {
 fn base64_decode(s: &str) -> Vec<u8> {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD.decode(s).unwrap()
+}
+
+/// K11 (W5-C): the overview's dormant flag (2) follows the kernel's rule
+/// at the bell's end — last owner action + `DORMANT_AFTER` — and not only
+/// the Holding's cache bit, which the program refreshes on owner writes
+/// only (when it is always clear).
+#[test]
+fn the_dormant_flag_follows_the_last_owner_action() {
+    use frontier_abi::layout::player::holding as HL;
+    use permutation_rules::frontier::holding::DORMANT_AFTER;
+    let base = fixture::mini_season(4);
+    let genesis = base
+        .iter()
+        .flat_map(|t| t.post.iter())
+        .find_map(|(_, a)| {
+            let a = a.as_ref()?;
+            (a.data.len() > 8 && a.data[..8] == *b"PSF1SEAS")
+                .then(|| fclient::decode::Season::decode(&a.data).ok())
+                .flatten()
+                .map(|s| s.genesis_ts)
+        })
+        .expect("the season");
+    // The cache bit clear; the last owner action `ago` seconds before bell
+    // 1's end.
+    let with = |ago: i64| {
+        let mut txs = base.clone();
+        for t in txs.iter_mut() {
+            for (_, a) in t.post.iter_mut() {
+                if let Some(a) = a {
+                    if a.data.len() == HL::SIZE && a.data[..8] == HL::MAGIC {
+                        a.data[HL::FLAGS] &= !HL::FLAG_DORMANT_CACHE;
+                        let last = genesis + 2 * 600 - ago;
+                        a.data[HL::LAST_OWNER_ACTION..HL::LAST_OWNER_ACTION + 8]
+                            .copy_from_slice(&last.to_le_bytes());
+                    }
+                }
+            }
+        }
+        let d = tmp("dormant");
+        fold_all(&d, &txs);
+        let ov = std::fs::read(d.join("h/overview/2/1.bin")).unwrap();
+        let _ = std::fs::remove_dir_all(&d);
+        // (2, 0) is the third record, sorted by (P, Q).
+        ov[32 + 48 + 19] & 2 != 0
+    };
+    assert!(
+        with(DORMANT_AFTER),
+        "idle for DORMANT_AFTER at the bell's end"
+    );
+    assert!(!with(DORMANT_AFTER - 1), "one second short");
 }

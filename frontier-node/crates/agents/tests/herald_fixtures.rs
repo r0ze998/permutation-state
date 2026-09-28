@@ -804,6 +804,27 @@ fn the_recorded_herald_parses_and_drives_the_policies() {
             (*k, v)
         })
         .collect();
+    // W5-C: the bots march only a host with the stamina Depart charges
+    // (the program refuses less as `Cooldown`; the committed wave-4
+    // recording's two planned marches had 27 and 35 of the 74 it costs).
+    // Hosts that marched recently are tired at any recorded bell, so a
+    // wallet that plans nothing is decided again with its roster rested
+    // (stamina at the cap, as after enough bells), which still checks the
+    // plan against the recorded herald.
+    let rested: BTreeMap<_, _> = caught_up
+        .iter()
+        .map(|(k, v)| {
+            let mut v = v.clone();
+            for e in v.province.entries.iter_mut() {
+                if e.state == le::STATE_ROSTER {
+                    e.stamina_value = permutation_rules::frontier::host::STAMINA_CAP;
+                    e.stamina_bell = now_bell;
+                }
+            }
+            (*k, v)
+        })
+        .collect();
+    let mut rested_marches = 0;
     for w in wallets {
         let index = w["index"].as_u64().unwrap() as u32;
         let wallet = keys::wallet(seed, index).pubkey();
@@ -846,14 +867,42 @@ fn the_recorded_herald_parses_and_drives_the_policies() {
         let mut c = ctx(&s, &mem, true);
         c.seed = seed;
         c.wallet = wallet;
+        let planned = departs(&decide(&o, &c)).len();
         for d in departs(&decide(&o, &c)) {
             check_march(&o, d);
+            let host = o.provinces[&d.host_at]
+                .province
+                .entries
+                .iter()
+                .find(|e| e.id == d.host_id)
+                .expect("the host");
+            let st = permutation_rules::frontier::host::Stamina {
+                value: host.stamina_value,
+                bell: host.stamina_bell,
+            };
+            assert!(
+                st.at(now_bell)
+                    >= permutation_rules::frontier::travel::march_stamina(
+                        permutation_rules::frontier::travel::MAX_PATH_STEPS as u32
+                    ),
+                "a planned march has the stamina Depart charges"
+            );
             marches += 1;
+        }
+        if planned == 0 {
+            let o = Observation {
+                provinces: rested.clone(),
+                ..o
+            };
+            for d in departs(&decide(&o, &c)) {
+                check_march(&o, d);
+                rested_marches += 1;
+            }
         }
         decided += 1;
     }
     println!(
-        "recorded herald: {} provinces, {} bell-region files, {} overviews, {decided} wallets decided, {marches} marches planned and checked",
+        "recorded herald: {} provinces, {} bell-region files, {} overviews, {decided} wallets decided, {marches} marches planned and checked ({rested_marches} more with rested hosts)",
         provinces.len(),
         bells.len(),
         overviews.len()
@@ -861,7 +910,10 @@ fn the_recorded_herald_parses_and_drives_the_policies() {
     // Integ-W4 review (W4-F): a recording of the strict day, not of the
     // stub world (whose provinces never moved: every latest file was the
     // OpenProvince bytes), and one that drives marches.
-    assert!(marches > 0, "the recorded herald drives at least one march");
+    assert!(
+        marches + rested_marches > 0,
+        "the recorded herald drives at least one march"
+    );
     for (pq, v) in &provinces {
         assert!(
             v.province.resolved_next + 30 >= recorded_bell,

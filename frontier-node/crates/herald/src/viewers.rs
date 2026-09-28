@@ -7,8 +7,12 @@
 //! now and then, a page of events), send it, record the latency and status,
 //! then pause `think × U(0.5, 1.5)`. A **WS viewer** subscribes to ≤ 12
 //! provinces, the rings and the bell records, and counts messages and
-//! sequence gaps. The report gives request count, errors, p50/p99/max
-//! latency and the request rate.
+//! sequence gaps, and the **ingest → WS latency** of every message (its `t`,
+//! the herald's ingest stamp, against the viewer's clock: one machine in
+//! the stack runs). The report gives request count, errors, the error rate,
+//! p50/p99/max latency, the request rate, the WS latency quantiles and the
+//! §13.4 criterion-6 verdict ([`targets`]: file p99 ≤ 250 ms, ingest → WS
+//! p99 ≤ 2 s, error rate < 0.1%).
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -102,14 +106,74 @@ pub struct Stats {
     pub ws_messages: AtomicU64,
     pub ws_gaps: AtomicU64,
     pub ws_errors: AtomicU64,
+    /// Ingest → WS latency of every diff message that carried `t`.
+    pub ws_lat: Histogram,
+    pub ws_lat_max_us: AtomicU64,
+}
+
+/// §13.4 criterion 6 (E5) and the Gate W5 load line: file p99 ≤ 250 ms.
+pub const TARGET_FILE_P99_MS: f64 = 250.0;
+/// Ingest → WS p99 ≤ 2 s.
+pub const TARGET_WS_P99_MS: f64 = 2_000.0;
+/// Error rate < 0.1%.
+pub const TARGET_ERROR_RATE: f64 = 0.001;
+
+/// The criterion-6 misses of a report (empty: met). A report with no
+/// request, or WS viewers but no timed message, cannot meet it.
+pub fn targets(rep: &Value) -> Vec<String> {
+    let f = |p: &[&str]| {
+        let mut v = rep;
+        for k in p {
+            v = &v[*k];
+        }
+        v.as_f64().unwrap_or(f64::NAN)
+    };
+    // NaN (a missing field) meets nothing.
+    let above = |x: f64, lim: f64| x.is_finite() && x > lim;
+    let below = |x: f64, lim: f64| x.is_finite() && x < lim;
+    let at_most = |x: f64, lim: f64| x.is_finite() && x <= lim;
+    let mut miss = vec![];
+    if !above(f(&["requests"]), 0.0) {
+        miss.push("no request was answered".to_string());
+    }
+    let p99 = f(&["p99_ms"]);
+    if !at_most(p99, TARGET_FILE_P99_MS) {
+        miss.push(format!("file p99 {p99} ms > {TARGET_FILE_P99_MS} ms"));
+    }
+    let er = f(&["errorRate"]);
+    if !below(er, TARGET_ERROR_RATE) {
+        miss.push(format!("error rate {er} ≥ {TARGET_ERROR_RATE}"));
+    }
+    if f(&["wsViewers"]) > 0.0 {
+        if !above(f(&["ws", "timed"]), 0.0) {
+            miss.push("no WS message carried an ingest stamp".to_string());
+        }
+        let w = f(&["ws", "ingest_p99_ms"]);
+        if !at_most(w, TARGET_WS_P99_MS) {
+            miss.push(format!("ingest → WS p99 {w} ms > {TARGET_WS_P99_MS} ms"));
+        }
+    }
+    miss
 }
 
 impl Stats {
     pub fn report(&self, elapsed: Duration) -> Value {
         let n = self.requests.load(Ordering::SeqCst);
+        let errors = self.errors.load(Ordering::SeqCst);
+        let ws_connected = self.ws_connected.load(Ordering::SeqCst);
+        let ws_errors = self.ws_errors.load(Ordering::SeqCst);
+        // Failed requests and failed or dropped WS sessions over every
+        // request and WS session.
+        let attempts = n + ws_connected + ws_errors;
+        let rate = if attempts == 0 {
+            0.0
+        } else {
+            (errors + ws_errors) as f64 / attempts as f64
+        };
         json!({
             "requests": n,
-            "errors": self.errors.load(Ordering::SeqCst),
+            "errors": errors,
+            "errorRate": rate,
             "notFound": self.not_found.load(Ordering::SeqCst),
             "p50_ms": self.hist.quantile_ms(0.50),
             "p99_ms": self.hist.quantile_ms(0.99),
@@ -120,7 +184,11 @@ impl Stats {
                 "connected": self.ws_connected.load(Ordering::SeqCst),
                 "messages": self.ws_messages.load(Ordering::SeqCst),
                 "gaps": self.ws_gaps.load(Ordering::SeqCst),
-                "errors": self.ws_errors.load(Ordering::SeqCst),
+                "errors": ws_errors,
+                "timed": self.ws_lat.count(),
+                "ingest_p50_ms": self.ws_lat.quantile_ms(0.50),
+                "ingest_p99_ms": self.ws_lat.quantile_ms(0.99),
+                "ingest_max_ms": self.ws_lat_max_us.load(Ordering::SeqCst) as f64 / 1_000.0,
             },
         })
     }
@@ -220,10 +288,18 @@ impl KeepAlive {
 }
 
 fn pick(cfg: &ViewerCfg, r: &mut Rng) -> String {
-    let ring = cfg.rings[r.below(cfg.rings.len() as u64) as usize];
-    let (p, q) = cfg.provinces[r.below(cfg.provinces.len() as u64) as usize];
     let bell = r.below(cfg.bells.max(1) as u64);
-    match r.below(100) {
+    let roll = r.below(100);
+    // No rings or provinces named (a season before genesis): the season
+    // record only, instead of a panic in every viewer (W5-C).
+    let (Some(&ring), Some(&(p, q))) = (
+        cfg.rings.get(r.below(cfg.rings.len() as u64) as usize),
+        cfg.provinces
+            .get(r.below(cfg.provinces.len() as u64) as usize),
+    ) else {
+        return "/h/season".into();
+    };
+    match roll {
         0..=4 => "/h/season".into(),
         5..=24 => format!("/h/overview/{ring}/latest.bin"),
         25..=44 => format!("/h/overview/{ring}/{bell}.bin"),
@@ -282,9 +358,11 @@ async fn ws_viewer(id: usize, cfg: Arc<ViewerCfg>, stats: Arc<Stats>, deadline: 
     stats.ws_connected.fetch_add(1, Ordering::Relaxed);
     let n = (1 + r.below(12)) as usize;
     let provs: Vec<Value> = (0..n)
-        .map(|_| {
-            let (p, q) = cfg.provinces[r.below(cfg.provinces.len() as u64) as usize];
-            json!([p, q])
+        .filter_map(|_| {
+            let &(p, q) = cfg
+                .provinces
+                .get(r.below(cfg.provinces.len() as u64) as usize)?;
+            Some(json!([p, q]))
         })
         .collect();
     let sub = json!({"op": "sub", "provinces": provs, "rings": cfg.rings, "bells": true});
@@ -305,6 +383,11 @@ async fn ws_viewer(id: usize, cfg: Arc<ViewerCfg>, stats: Arc<Stats>, deadline: 
                 };
                 if let Some(seq) = v.get("seq").and_then(|s| s.as_u64()) {
                     stats.ws_messages.fetch_add(1, Ordering::Relaxed);
+                    if let Some(t) = v.get("t").and_then(|t| t.as_u64()).filter(|t| *t > 0) {
+                        let us = crate::runner::unix_ms().saturating_sub(t) * 1_000;
+                        stats.ws_lat.record(Duration::from_micros(us));
+                        stats.ws_lat_max_us.fetch_max(us, Ordering::Relaxed);
+                    }
                     if last.is_some_and(|l| seq != l + 1) {
                         stats.ws_gaps.fetch_add(1, Ordering::Relaxed);
                     }
@@ -348,6 +431,9 @@ pub async fn run(cfg: ViewerCfg, stats: Arc<Stats>) -> Value {
     let mut rep = stats.report(t0.elapsed());
     rep["viewers"] = json!(cfg.viewers);
     rep["wsViewers"] = json!(cfg.ws);
+    let miss = targets(&rep);
+    rep["targetsMet"] = json!(miss.is_empty());
+    rep["targetMisses"] = json!(miss);
     rep
 }
 

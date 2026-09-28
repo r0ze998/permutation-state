@@ -101,6 +101,14 @@ impl Findex {
         })
     }
 
+    /// Makes every archived record durable (group commit, see
+    /// [`archive`]); a no-op when nothing is pending.
+    pub fn commit(&mut self) -> Result<(), IngestError> {
+        self.archive
+            .commit()
+            .map_err(|e| IngestError::Store(e.to_string()))
+    }
+
     /// Resumes `src` from the archived cursor.
     pub fn resume<S: Source>(&self, src: &mut S) {
         src.restore(self.archive.cursor());

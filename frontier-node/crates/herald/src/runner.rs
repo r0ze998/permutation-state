@@ -42,6 +42,11 @@ pub struct IngestCfg {
     /// 400-ms slots by default).
     pub checkpoint_slots: u64,
     pub segment_bytes: u64,
+    /// The findex archive's group-commit interval (W5-C: its per-batch
+    /// `F_FULLFSYNC`s held the ingest behind a busy chain); every fold
+    /// checkpoint commits first, so a checkpoint never covers records the
+    /// archive could lose.
+    pub archive_commit: Duration,
 }
 
 impl IngestCfg {
@@ -54,6 +59,7 @@ impl IngestCfg {
             exact_post: true,
             checkpoint_slots: 150,
             segment_bytes: findex::archive::SEGMENT_BYTES,
+            archive_commit: Duration::from_secs(1),
         }
     }
     pub fn findex_dir(&self) -> PathBuf {
@@ -78,8 +84,17 @@ pub struct Ingest {
     last_ckpt_slot: u64,
 }
 
-fn send(diffs: &broadcast::Sender<Arc<Diff>>, fold: &mut Fold) {
-    for d in fold.take_diffs() {
+/// Unix milliseconds now (the ingest stamp of the WS diffs).
+pub fn unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn send(diffs: &broadcast::Sender<Arc<Diff>>, fold: &mut Fold, t_ms: u64) {
+    for mut d in fold.take_diffs() {
+        d.t_ms = t_ms;
         // No receiver is not an error (no socket open yet).
         let _ = diffs.send(Arc::new(d));
     }
@@ -96,6 +111,8 @@ impl Ingest {
             cfg.segment_bytes,
         )
         .map_err(|e| e.to_string())?;
+        let mut findex = findex;
+        findex.archive.commit_every = cfg.archive_commit;
         let fcfg = FoldCfg {
             program: cfg.program,
             season_id: cfg.season_id,
@@ -124,7 +141,7 @@ impl Ingest {
             })
             .map_err(|e| e.to_string())?;
         let last = fold.st.last_slot;
-        let ing = Ingest {
+        let mut ing = Ingest {
             cfg,
             findex,
             fold: Arc::new(RwLock::new(fold)),
@@ -136,8 +153,10 @@ impl Ingest {
     }
 
     /// The state to save and the files it covers (taken together, under
-    /// the lock).
-    fn snapshot(&self) -> Result<(crate::fold::State, Vec<PathBuf>), String> {
+    /// the lock), after the archive's pending group commit: the checkpoint
+    /// never covers a record the archive could still lose.
+    fn snapshot(&mut self) -> Result<(crate::fold::State, Vec<PathBuf>), String> {
+        self.findex.commit().map_err(|e| e.to_string())?;
         let f = self.fold.read().map_err(|_| "fold lock poisoned")?;
         Ok((f.st.clone(), f.out.take_dirty()))
     }
@@ -157,14 +176,14 @@ impl Ingest {
     /// Syncs the files written since the last checkpoint, then saves the
     /// fold's state (blocking; use [`Ingest::checkpoint_async`] on a
     /// runtime worker).
-    pub fn checkpoint(&self) -> Result<(), String> {
+    pub fn checkpoint(&mut self) -> Result<(), String> {
         let (st, dirty) = self.snapshot()?;
         Self::save(&self.cfg, &st, &dirty)
     }
 
     /// [`Ingest::checkpoint`] off the runtime's workers (the syncs take
     /// ≈ 10 ms per file on APFS), without holding the fold lock.
-    pub async fn checkpoint_async(&self) -> Result<(), String> {
+    pub async fn checkpoint_async(&mut self) -> Result<(), String> {
         let (st, dirty) = self.snapshot()?;
         let cfg = self.cfg.clone();
         tokio::task::spawn_blocking(move || Self::save(&cfg, &st, &dirty))
@@ -175,6 +194,9 @@ impl Ingest {
     /// One pull of `src`: archive, index, fold, publish; returns the number
     /// of transactions folded.
     pub async fn step<S: Source>(&mut self, src: &mut S) -> Result<usize, String> {
+        // The stamp is taken before the pull, so `t` covers the pull, the
+        // archive's sync, the index, the fold and the fan-out.
+        let t_ms = unix_ms();
         let got = self.findex.ingest(src).await.map_err(|e| e.to_string())?;
         if got.is_empty() {
             return Ok(0);
@@ -184,7 +206,7 @@ impl Ingest {
             for r in &got {
                 f.apply(r);
             }
-            send(&self.diffs, &mut f);
+            send(&self.diffs, &mut f, t_ms);
             f.st.last_slot
         };
         if slot
