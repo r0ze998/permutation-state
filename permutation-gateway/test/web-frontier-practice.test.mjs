@@ -192,7 +192,7 @@ const P = 2, Q = 0, BELL = 40;
 const NO_BELL = 0xffffffff;
 const hid = (site, gen, seq) => hostId({ p: P, q: Q, site, gen, seq });
 
-function provinceBefore({ camp = { tile: 33, state: 1, troops: 250, gen: 3 }, extra = [] } = {}) {
+function provinceBefore({ camp = { tile: 33, state: 1, troops: 250, nextCheckDay: 1, gen: 3 }, extra = [] } = {}) {
   const mirror = Array.from({ length: 12 }, (_, s) => ({ state: 0, faction: 6, pend0Bell: NO_BELL, pend1Bell: NO_BELL, wallItem0Bell: NO_BELL, wallItem1Bell: NO_BELL }));
   mirror[3] = { state: 1, faction: 0, gen: 2, garrison: 300_000, pend0Bell: BELL, pend0Delta: 5_000, pend1Bell: NO_BELL, wallsCommitted: 0, wallItem0Bell: BELL, wallItem0Delta: 10, wallItem1Bell: NO_BELL };
   mirror[5] = { state: 1, faction: 1, gen: 0, garrison: 100_000, pend0Bell: NO_BELL, pend1Bell: NO_BELL, wallsCommitted: 0, wallItem0Bell: BELL + 1, wallItem0Delta: 10, wallItem1Bell: NO_BELL };
@@ -236,7 +236,8 @@ test('the §5.11 builder: residents, garrisons, walls, camp, arrivals, relations
   assert.deepEqual(a.garrisons.map(g => [g.id, g.faction, g.tile, g.troops, g.walls]), [
     [hid(3, 2, 0), 0, 14, 300_000, true],
     [hid(5, 0, 0), 1, 24, 100_000, false],
-    [0xffffffffffffffffn - 3n, 6, 33, 250, false],
+    // A camp stores whole troops: × 1,000 (integ-W4 review, W4-E).
+    [0xffffffffffffffffn - 3n, 6, 33, 250_000, false],
   ]);
   // Arrivals: present records only; stance from the reveal; retreat 0 = never.
   assert.deepEqual(a.arrivals.map(f => [f.id, f.faction, f.unit, f.troops, f.stamina, f.posture, f.retreatBps, f.dealtBps]), [
@@ -272,6 +273,44 @@ test('the builder refuses what the program cannot have built, and flags a camp r
   const r2 = rep.buildClashArgs({ province: clean, inputs: ci200, bell: 200, seed: seedOf(1) });
   assert.ok(r2.ok);
   assert.equal(r2.certain, false, 'day 1 ≤ day(200): a respawn may be due');
+  // A present camp is replaced by a spawn of the day's check too (integ-W4 review): not certain either.
+  const present = decode('Province', encodeAccount('Province', { p: P, q: Q, resolvedNext: 200, siteCount: 0, camp: { tile: 33, state: 1, troops: 90, nextCheckDay: 1, gen: 3 } }));
+  assert.equal(rep.buildClashArgs({ province: present, inputs: ci200, bell: 200, seed: seedOf(1) }).certain, false);
+  assert.equal(rep.buildClashArgs({ province: present, inputs: ci200, bell: 143, seed: seedOf(1) }).why, 'WrongKey');
+  const ci143 = decode('ClashInputs', encodeAccount('ClashInputs', { p: P, q: Q, bell: 143, flags: 2 }));
+  assert.equal(rep.buildClashArgs({ province: present, inputs: ci143, bell: 143, seed: seedOf(1) }).certain, true, 'day 0 < next_check_day 1');
+});
+
+// Integ-W4 review (W4-E): the page's builder = the native one (fclient
+// `clash_model::build`, the program's model as the herald and the verifier
+// read it) on account bytes: frontier-vectors.json `clash_model`, written by
+// fclient's `writes_frontier_vectors`.
+const CM = JSON.parse(readFileSync(new URL('frontier-vectors.json', import.meta.url), 'utf8')).clash_model;
+const postureOf = s => rep.POSTURES.indexOf(/^Stance\((\w+)\)$/.exec(s)?.[1] ?? s);
+
+test('the §5.11 builder = the native clash_model on the same account bytes (camp × 1,000 capped, the 12-garrison limit, dealt 0 = 1.0, id order, certain)', async t => {
+  assert.ok(CM.cases.length >= 4);
+  const k = await realKernel(t);
+  for (const c of CM.cases) {
+    const pv = decode('Province', Buffer.from(c.province_b64, 'base64'));
+    const ci = decode('ClashInputs', Buffer.from(c.inputs_b64, 'base64'));
+    const b = rep.buildClashArgs({ province: pv, inputs: ci, bell: c.bell, seed: hex(c.seed) });
+    assert.ok(b.ok, `${c.name}: ${js(b)}`);
+    assert.equal(b.certain, c.certain, `${c.name}: certain`);
+    if (!c.certain) continue; // the program's camp check ran: the page does not model it (and says so)
+    const a = b.args;
+    assert.deepEqual(a.residents.map(f => [String(f.id), f.troops, f.stamina, f.dealtBps, f.posture]),
+      c.residents.map(([id, tr, st, d, po]) => [id, tr, st, d, postureOf(po)]), `${c.name}: residents`);
+    assert.deepEqual(a.garrisons.map(g => [String(g.id), g.faction, g.tile, g.troops, g.walls]), c.garrisons, `${c.name}: garrisons`);
+    assert.deepEqual(a.arrivals.map(f => [String(f.id), f.troops, f.stamina, f.dealtBps, f.retreatBps, f.posture]),
+      c.arrivals.map(([id, tr, st, d, re, po]) => [id, tr, st, d, re, postureOf(po)]), `${c.name}: arrivals`);
+    assert.deepEqual(a.occupancy, { pending: c.occupancy.pending, storageFree: c.occupancy.storage_free }, `${c.name}: occupancy`);
+    if (!k) continue;
+    const r = rep.resolveArgs(k, a);
+    assert.ok(r.ok, `${c.name}: ${js(r)}`);
+    assert.equal(r.digest, c.digest, `${c.name}: the browser's outcome digest = the native one`);
+    assert.deepEqual(r.outcome.fighters.map(f => [String(f.id), f.arrival, f.troops]), c.fighters, `${c.name}: fighters`);
+  }
 });
 
 // ------------------------------------------------------------------ the seed of THE anchor
@@ -286,6 +325,8 @@ test('the anchor seed: only a cache of round S = seed_round(A + W + Δ) with THE
   assert.deepEqual({ ok: ok.ok, a: ok.a, s: ok.s, seed: ok.seed, source: ok.source }, { ok: true, a: A, s: S, seed: SEED, source: { cache: 0 } });
   assert.equal(rep.anchorSeed(CLOCK, BELL, bellRecord([{ nonce: 1, round: S + 1, seed: '11'.repeat(32), A }])).why, 'SeedNotReady', 'another round is not the seed');
   assert.equal(rep.anchorSeed(CLOCK, BELL, bellRecord([{ nonce: 1, round: S, seed: '11'.repeat(32), A: A + 3 }])).why, 'SeedNotReady', 'another anchor\'s cache');
+  // A cache that does not name its A is not THE anchor's (integ-W4 review, W4-E).
+  assert.equal(rep.anchorSeed(CLOCK, BELL, bellRecord([{ nonce: 1, round: S, seed: '11'.repeat(32) }])).why, 'SeedNotReady', 'a cache without A');
   const arch = rep.anchorSeed(CLOCK, BELL, { ok: true, anchor: null, record: { archived: true, archive: { aOff: 2, seed: 'AB'.repeat(32) } } });
   assert.deepEqual([arch.ok, arch.a, arch.seed, arch.source], [true, A, 'ab'.repeat(32), { archive: true }]);
   assert.equal(rep.anchorSeed(CLOCK, BELL, { ok: true, anchor: null, record: { caches: [] } }).why, 'NoAnchor');

@@ -76,6 +76,17 @@
 - **W5-E (screens and layout):** the new panels use the existing classes (`stores`, `callout`, `steps`, `notice`, `cards`). The report table needs the phone pass (5 columns of text at 360 px). The onboarding card's `details` line and the practice form are in scope of the 44-px pass. D8 and D10 are listed for you.
 - **W6-D:** re-record herald fixtures that include a real `/h/clash` file with `province_before_b64` from a local season; run the E7 scripted onboarding (join → site → build → scout → sealed march on a camp → report → verify green) and the spectator 24-h memory check. The spectator's state is bounded: chronicle 400, report links 12, the herald LRU 256.
 
+## 7. Integ-W4 review addendum (integrator, 2026-09-28)
+
+The review of this unit found the page's §5.11 builder out of step with the program (W4-A `model::build`) and two facts in these notes wrong. Fixed in `screens/report.mjs`, pinned against the native builder:
+
+- **The camp** stores whole troops: the page now gives the kernel `troops × 1,000`, capped at `MAX_HOST_TROOPS` (30,000,000 milli). The camp joins only while fewer than `MAX_GARRISONS` (12) garrisons stand. Garrison troops are capped too.
+- **`certain`** is false whenever the day's camp check runs at the bell (`day(bell) ≥ next_check_day`). The program may spawn a camp *or replace a present one* first (I-56, `gen + 1`). §4 D2 above claimed the respawn was flagged, but the old test flagged only an absent camp with `next_check_day ≠ 0`. A present camp's replacement, and `next_check_day = 0`, were reported as certain and could show red.
+- A pending garrison slot counts only with a **non-zero delta** (`GarrisonState::at`). `dealt` 0 reads **1.0** (10,000 bps) for residents and arrivals. Residents and arrivals go to the kernel **in id order**.
+- `anchorSeed` accepts a SeedCache only if it names THE anchor's `A`. A cache without `A` is no longer trusted.
+- **Cross-vector:** `permutation-gateway/test/frontier-vectors.json` → `clash_model` (written by fclient `writes_frontier_vectors` from `fclient::clash_model::build`, the builder the herald and the verifier share). It has four cases: camp over the cap with ids out of storage order, a small camp, twelve garrisons, and a due camp check. `web-frontier-practice.test.mjs` decodes the same bytes, builds, and compares every field. It then resolves the result in the real `frontier.wasm` and gets the native outcome digest and fighters. The old builder test expected the camp at 250 (whole troops); it now expects 250,000.
+- **§2 facts corrected:** the committed `frontier.wasm` (integ-W4 `eab82a4`) is 238,985 B raw, sha256 `782c9f307b297821b8b83c6daf636f9e23b5732d60eac5a0799a8a431dad93b3` (not `16e4eb51…`). Its gzip size is 78,353 B with `gzip -9` and 78,618 B with the default level (macOS gzip), not 78,334. It is still within the 150 KB budget.
+
 ## Links
 
 - Code: `permutation-server/web/frontier/screens/{report,practice,onboarding,spectate}.mjs`, `permutation-server/web/frontier/{onboarding,app}.mjs`, `permutation-server/web/frontier/{practice,spectate}.html`, `permutation-server/web/lang/en-frontier-play.mjs`

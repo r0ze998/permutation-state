@@ -541,6 +541,373 @@ pub fn build(existing: Option<&Value>) -> Value {
         "fees": fee_vectors(),
         "shapes": shapes(),
         "beacon": beacon_vectors(),
+        "clash_model": clash_model_vectors(),
+    })
+}
+
+// ------------------------------------------------------------------ the §5.11 builder
+// Integ-W4 review (W4-E): the web page's `buildClashArgs` is pinned against
+// the native builder (`clash_model::build`, the program's model as the
+// herald and the verifier read it) on account bytes, not on a JS copy of
+// the rules: the camp's whole troops × 1,000 capped, the camp only below
+// MAX_GARRISONS, a zero-delta pending garrison slot ignored, `dealt` 0
+// reading 1.0, residents and arrivals in id order, `certain` exactly when
+// the day's camp check does not run.
+
+struct Mirror {
+    site: u8,
+    faction: u8,
+    gen: u8,
+    garrison: u32,
+    pend0: (u32, i64),
+    walls: u32,
+}
+
+struct Res {
+    id: u64,
+    faction: u8,
+    unit: u8,
+    tile: u8,
+    troops: u32,
+    stamina: (u16, u32),
+    dealt: u16,
+    from_bell: u32,
+}
+
+struct Arr {
+    id: u64,
+    faction: u8,
+    unit: u8,
+    tile: u8,
+    troops: u32,
+    stamina: u16,
+    retreat: u16,
+    dealt: u16,
+    stance: u8,
+    present: u8,
+}
+
+struct CaseSpec {
+    name: &'static str,
+    bell: u32,
+    mirrors: Vec<Mirror>,
+    /// (tile, state, whole troops, next_check_day, gen)
+    camp: (u8, u8, u32, u32, u32),
+    residents: Vec<Res>,
+    muster_pending: u8,
+    arrivals: Vec<Arr>,
+}
+
+const VP: i32 = 2;
+const VQ: i32 = 0;
+
+fn vhid(p: i32, q: i32, site: u8, gen: u8, seq: u32) -> u64 {
+    crate::addr::host_id(p, q, site, gen, seq).expect("host id")
+}
+
+fn province_of(c: &CaseSpec) -> Vec<u8> {
+    use frontier_abi::entry::{write_entry, Entry, EntryOp};
+    use l::province as o;
+    let mut d = vec![0u8; crate::abi::size::PROVINCE];
+    d[l::h::MAGIC..l::h::MAGIC + 8].copy_from_slice(crate::abi::magic::PROVINCE);
+    let put = |d: &mut Vec<u8>, at: usize, b: &[u8]| d[at..at + b.len()].copy_from_slice(b);
+    put(&mut d, o::P, &(VP as i16).to_le_bytes());
+    put(&mut d, o::Q, &(VQ as i16).to_le_bytes());
+    put(&mut d, o::RING, &2u16.to_le_bytes());
+    put(&mut d, o::RESOLVED_NEXT, &c.bell.to_le_bytes());
+    for i in 0..61 {
+        // Grassland, a forest and a hill; wheat on tile 9.
+        d[o::TERRAIN + i] = match i {
+            7 => 2,
+            30 => 3,
+            _ => 0,
+        };
+        d[o::RESOURCE + i] = u8::from(i == 9);
+    }
+    let sites: [u8; 12] = [2, 5, 9, 14, 20, 24, 30, 36, 41, 47, 52, 58];
+    put(&mut d, o::SITES, &sites);
+    d[o::SITE_COUNT] = 12;
+    for m in &c.mirrors {
+        let b = o::SITE_MIRROR + m.site as usize * o::SITE_MIRROR_STRIDE;
+        use frontier_abi::layout::province::site as st;
+        d[b + st::STATE] = frontier_abi::layout::province::site::STATE_HOLDING;
+        d[b + st::FACTION] = m.faction;
+        d[b + st::GEN] = m.gen;
+        put(&mut d, b + st::GARRISON, &m.garrison.to_le_bytes());
+        put(&mut d, b + st::PEND0_BELL, &m.pend0.0.to_le_bytes());
+        put(&mut d, b + st::PEND0_DELTA, &m.pend0.1.to_le_bytes());
+        put(
+            &mut d,
+            b + st::PEND1_BELL,
+            &frontier_abi::layout::province::site::NO_BELL.to_le_bytes(),
+        );
+        put(&mut d, b + st::WALLS_COMMITTED, &m.walls.to_le_bytes());
+        put(
+            &mut d,
+            b + st::WALL_ITEM0_BELL,
+            &frontier_abi::layout::province::site::NO_BELL.to_le_bytes(),
+        );
+        put(
+            &mut d,
+            b + st::WALL_ITEM1_BELL,
+            &frontier_abi::layout::province::site::NO_BELL.to_le_bytes(),
+        );
+    }
+    let mut n = 0;
+    for r in &c.residents {
+        let e = Entry {
+            id: r.id,
+            faction: r.faction,
+            unit: r.unit,
+            tile: r.tile,
+            state: 1,
+            troops: r.troops,
+            stamina_value: r.stamina.0,
+            dealt_bps: r.dealt,
+            stamina_bell: r.stamina.1,
+            ready_bell: 0,
+            from_bell: r.from_bell,
+            pend_bell: 0,
+            op: EntryOp::None,
+        };
+        write_entry(&mut d, n, &e).expect("entry");
+        n += 1;
+    }
+    for k in 0..c.muster_pending {
+        let e = Entry {
+            id: vhid(VP, VQ, 3, 2, 90 + k as u32),
+            faction: 0,
+            unit: 1,
+            tile: 14,
+            state: 2,
+            troops: 100_000,
+            stamina_value: 120,
+            dealt_bps: 0,
+            stamina_bell: 0,
+            ready_bell: 0,
+            from_bell: c.bell + 1,
+            pend_bell: 0,
+            op: EntryOp::None,
+        };
+        write_entry(&mut d, n, &e).expect("entry");
+        n += 1;
+    }
+    d[o::N_ENTRIES] = n as u8;
+    let (tile, state, troops, next, gen) = c.camp;
+    d[o::CAMP] = tile;
+    d[o::CAMP + 1] = state;
+    put(&mut d, o::CAMP + 4, &troops.to_le_bytes());
+    put(&mut d, o::CAMP + 8, &next.to_le_bytes());
+    put(&mut d, o::CAMP + 12, &gen.to_le_bytes());
+    d
+}
+
+fn inputs_of(c: &CaseSpec) -> Vec<u8> {
+    use l::arrival as a;
+    use l::clash_inputs as ci;
+    let mut d = vec![0u8; crate::abi::size::CLASH_INPUTS];
+    d[l::h::MAGIC..l::h::MAGIC + 8].copy_from_slice(crate::abi::magic::CLASH_INPUTS);
+    let put = |d: &mut Vec<u8>, at: usize, b: &[u8]| d[at..at + b.len()].copy_from_slice(b);
+    put(&mut d, ci::P, &(VP as i16).to_le_bytes());
+    put(&mut d, ci::Q, &(VQ as i16).to_le_bytes());
+    put(&mut d, ci::BELL, &c.bell.to_le_bytes());
+    d[ci::FLAGS] = 1;
+    let mut mask = 0u32;
+    for (k, r) in c.arrivals.iter().enumerate() {
+        let b = ci::ARRIVALS + k * ci::ARRIVAL_STRIDE;
+        put(&mut d, b + a::HOST_ID, &r.id.to_le_bytes());
+        put(&mut d, b + a::DEP_MASS, &(r.troops / 1000).to_le_bytes());
+        put(&mut d, b + a::TROOPS, &r.troops.to_le_bytes());
+        put(&mut d, b + a::STAMINA, &r.stamina.to_le_bytes());
+        put(&mut d, b + a::RETREAT, &r.retreat.to_le_bytes());
+        put(&mut d, b + a::DEALT, &r.dealt.to_le_bytes());
+        d[b + a::FACTION] = r.faction;
+        d[b + a::UNIT] = r.unit;
+        d[b + a::TILE] = r.tile;
+        d[b + a::STANCE] = r.stance;
+        d[b + a::PRESENT] = r.present;
+        if r.present == 1 {
+            mask |= 1 << k;
+        }
+    }
+    put(&mut d, ci::ARRIVALS_MASK, &mask.to_le_bytes());
+    d[ci::N_PRESENT] = mask.count_ones() as u8;
+    d
+}
+
+fn clash_cases() -> Vec<CaseSpec> {
+    let m = |site, faction, gen, garrison| Mirror {
+        site,
+        faction,
+        gen,
+        garrison,
+        pend0: (frontier_abi::layout::province::site::NO_BELL, 0),
+        walls: 0,
+    };
+    let base_res = |bell: u32| {
+        vec![
+            // Stored out of id order; one with dealt 0 (reads 1.0).
+            Res {
+                id: vhid(VP, VQ, 5, 0, 7),
+                faction: 1,
+                unit: 2,
+                tile: 20,
+                troops: 400_000,
+                stamina: (90, bell - 5),
+                dealt: 0,
+                from_bell: bell - 3,
+            },
+            Res {
+                id: vhid(VP, VQ, 3, 2, 1),
+                faction: 0,
+                unit: 0,
+                tile: 14,
+                troops: 800_000,
+                stamina: (118, bell - 5),
+                dealt: 10_500,
+                from_bell: bell - 3,
+            },
+            Res {
+                id: vhid(VP, VQ, 3, 2, 4),
+                faction: 0,
+                unit: 6,
+                tile: 15,
+                troops: 150_000,
+                stamina: (40, bell),
+                dealt: 10_000,
+                from_bell: bell + 1,
+            },
+        ]
+    };
+    let base_arr = || {
+        vec![
+            Arr {
+                id: vhid(4, -2, 8, 0, 3),
+                faction: 2,
+                unit: 5,
+                tile: 14,
+                troops: 400_000,
+                stamina: 70,
+                retreat: 15_000,
+                dealt: 11_000,
+                stance: 3,
+                present: 1,
+            },
+            Arr {
+                id: vhid(4, -2, 7, 0, 1),
+                faction: 1,
+                unit: 0,
+                tile: 14,
+                troops: 900_000,
+                stamina: 60,
+                retreat: 0,
+                dealt: 0,
+                stance: 1,
+                present: 1,
+            },
+            Arr {
+                id: vhid(4, -2, 9, 0, 1),
+                faction: 2,
+                unit: 0,
+                tile: 20,
+                troops: 300_000,
+                stamina: 70,
+                retreat: 0,
+                dealt: 10_000,
+                stance: 2,
+                present: 0,
+            },
+            Arr {
+                id: vhid(4, -2, 6, 1, 2),
+                faction: 3,
+                unit: 1,
+                tile: 33,
+                troops: 600_000,
+                stamina: 100,
+                retreat: 0,
+                dealt: 10_000,
+                stance: 2,
+                present: 1,
+            },
+        ]
+    };
+    let mut big = m(3, 0, 2, 40_000_000);
+    big.pend0 = (10, 0); // an earlier bell, delta 0: no change, ignored
+    big.walls = 1;
+    vec![
+        CaseSpec {
+            name: "camp_capped_ids_unsorted",
+            bell: 40,
+            mirrors: vec![big, m(5, 1, 0, 100_000)],
+            camp: (33, 1, 50_000, 1, 3),
+            residents: base_res(40),
+            muster_pending: 1,
+            arrivals: base_arr(),
+        },
+        CaseSpec {
+            name: "camp_small_certain",
+            bell: 150,
+            mirrors: vec![m(5, 1, 0, 100_000)],
+            camp: (33, 1, 250, 2, 4),
+            residents: base_res(150),
+            muster_pending: 0,
+            arrivals: base_arr(),
+        },
+        CaseSpec {
+            name: "twelve_garrisons_leave_no_camp_slot",
+            bell: 40,
+            mirrors: (0..12)
+                .map(|s| m(s, s % 6, 0, 50_000 + s as u32 * 1000))
+                .collect(),
+            camp: (33, 1, 250, 1, 3),
+            residents: base_res(40),
+            muster_pending: 0,
+            arrivals: base_arr(),
+        },
+        CaseSpec {
+            name: "camp_check_due_uncertain",
+            bell: 150,
+            mirrors: vec![m(5, 1, 0, 100_000)],
+            camp: (33, 0, 0, 1, 3),
+            residents: base_res(150),
+            muster_pending: 0,
+            arrivals: base_arr(),
+        },
+    ]
+}
+
+fn clash_model_vectors() -> Value {
+    let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    let cases: Vec<Value> = clash_cases()
+        .iter()
+        .enumerate()
+        .map(|(k, c)| {
+            let pd = province_of(c);
+            let cd = inputs_of(c);
+            let seed = permutation_rules::hash::sha256(&[b"clash-model-vector", &[k as u8]]);
+            let built = crate::clash_model::build(&pd, &cd, c.bell, &seed).expect("build");
+            let out = built.resolve().expect("resolve");
+            let posture = |p: &permutation_rules::frontier::stance::Posture| format!("{p:?}");
+            json!({
+                "name": c.name,
+                "bell": c.bell,
+                "seed": hex::encode(seed),
+                "province_b64": b64(&pd),
+                "inputs_b64": b64(&cd),
+                "certain": !built.camp.checked,
+                "camp_checked": built.camp.checked,
+                "residents": built.residents.iter().map(|f| json!([f.id.to_string(), f.troops, f.stamina, f.dealt_bps, posture(&f.posture)])).collect::<Vec<_>>(),
+                "garrisons": built.garrisons.iter().map(|g| json!([g.id.to_string(), g.faction, g.tile, g.troops, g.walls])).collect::<Vec<_>>(),
+                "arrivals": built.arrivals.iter().map(|f| json!([f.id.to_string(), f.troops, f.stamina, f.dealt_bps, f.retreat_bps, posture(&f.posture)])).collect::<Vec<_>>(),
+                "occupancy": {"pending": built.occupancy.pending.to_vec(), "storage_free": built.occupancy.storage_free},
+                "digest": hex::encode(out.digest()),
+                "fighters": out.fighters.iter().map(|f| json!([f.id.to_string(), f.arrival, f.troops])).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    json!({
+        "rule": "fclient clash_model::build over (Province bytes, ClashInputs bytes, bell, seed); `certain` = the day's camp check does not run at this bell",
+        "cases": cases,
     })
 }
 

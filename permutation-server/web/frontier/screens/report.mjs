@@ -51,6 +51,14 @@ export const FATE_KINDS = Object.freeze(['Stays', 'Withdrew', 'Bounced', 'Retrea
 export const campId = gen => 0xffffffffffffffffn - BigInt(gen >>> 0);
 /** NEUTRAL faction (camps, Free Cities). */
 export const NEUTRAL = 6;
+/** A host's (and a garrison's) troop cap, milli-troops (`host::MAX_HOST_TROOPS`). */
+export const MAX_HOST_TROOPS = 30_000_000;
+/** Garrisons a clash takes (`clash::MAX_GARRISONS`); the camp only below it. */
+export const MAX_GARRISONS = 12;
+/** Milli-troops per whole troop (a camp stores whole troops). */
+export const MILLI = 1000;
+/** Doctrine multipliers are stored with 0 reading as 1.0 (the program's `bps`). */
+const bpsOf = v => (v === 0 ? 10_000 : v);
 export const PROVINCE_TILES = 61;
 export const SITES = 12;
 /** Entries a Province stores (`Occupancy::STORAGE`). */
@@ -149,15 +157,21 @@ const hexOf = b => (typeof b === 'string' ? b.toLowerCase() : toHex(b));
 /**
  * The kernel input of ResolveFromInputs (contract §5.11) from the Province
  * bytes before the resolve and the ClashInputs bytes (both decoded by
- * fcodec), for `bell` and `seed`: residents in state 1 with `from_bell ≤
- * bell` at their values at the bell, fighting at Hold; garrisons from the
- * site mirror (pending changes of earlier bells must be settled) with walls
- * effective at the bell; the camp, if present, as a NEUTRAL garrison; the
- * present arrival records with their revealed stance and retreat ("never"
- * = 0); relations from the Province; the storage room from the entry
- * states. `{ok: true, args, certain}` — `certain` is false when the day's
- * camp respawn may be due (the program respawns it first, I-56; this
- * builder does not model it) — or `{ok: false, why, detail}`.
+ * fcodec), for `bell` and `seed` — the program's `model::build` as the
+ * native readers transcribe it (fclient `clash_model`, pinned against it by
+ * the `clash_model` vectors): residents in state 1 with `from_bell ≤ bell`
+ * at their values at the bell, fighting at Hold, `dealt` 0 reading 1.0;
+ * garrisons from the site mirror (pending changes with a non-zero delta of
+ * earlier bells must be settled) capped at MAX_HOST_TROOPS, with walls
+ * effective at the bell; the camp, if present and fewer than MAX_GARRISONS
+ * garrisons stand, as a NEUTRAL garrison of `troops × 1,000` (capped);
+ * the present arrival records with their revealed stance and retreat
+ * ("never" = 0); residents and arrivals in id order; relations from the
+ * Province; the storage room from the entry states. `{ok: true, args,
+ * certain}` — `certain` is false whenever the day's camp check runs at this
+ * bell (`day(bell) ≥ next_check_day`: the program may spawn or respawn the
+ * camp first, I-56; this builder does not model it) — or `{ok: false, why,
+ * detail}`.
  */
 export function buildClashArgs({ province: pv, inputs: ci, bell, seed }) {
   if (ci.p !== pv.p || ci.q !== pv.q || ci.bell !== bell) return { ok: false, why: 'WrongKey', detail: 'inputs and province are different province-bells' };
@@ -172,7 +186,7 @@ export function buildClashArgs({ province: pv, inputs: ci, bell, seed }) {
       if (e.pendOp >= 1 && e.pendOp <= 4 && bell > e.pendBell) return { ok: false, why: 'Unsettled', detail: `host ${e.id}` };
       if (e.unit >= UNIT_ORDER.length) return { ok: false, why: 'BadUnit', detail: `host ${e.id}` };
       const stamina = bell <= e.staminaBell ? e.staminaValue : Math.min(120, e.staminaValue + (bell - e.staminaBell));
-      residents.push({ id: BigInt(e.id), faction: e.faction, unit: e.unit, troops: e.troops, stamina, tile: e.tile, posture: 0, retreatBps: null, dealtBps: e.dealtBps });
+      residents.push({ id: BigInt(e.id), faction: e.faction, unit: e.unit, troops: e.troops, stamina, tile: e.tile, posture: 0, retreatBps: null, dealtBps: bpsOf(e.dealtBps) });
     } else if (e.state === 2) {
       used++;
       if (e.faction < 8) pending[e.faction] = Math.min(255, pending[e.faction] + 1);
@@ -181,24 +195,33 @@ export function buildClashArgs({ province: pv, inputs: ci, bell, seed }) {
   for (let i = 0; i < Math.min(pv.siteCount, SITES); i++) {
     const m = pv.siteMirror[i];
     if (m.state !== 1) continue;
-    // GarrisonState::at: a pending change of an earlier bell must have been settled.
-    for (const pb of [m.pend0Bell, m.pend1Bell]) if (pb !== NO_BELL && pb < bell) return { ok: false, why: 'Unsettled', detail: `garrison ${i}` };
+    // GarrisonState::at: a pending change (delta ≠ 0) of an earlier bell must have been settled.
+    for (const [pb, d] of [[m.pend0Bell, m.pend0Delta], [m.pend1Bell, m.pend1Delta]]) {
+      if (pb !== NO_BELL && Number(d ?? 0) !== 0 && pb < bell) return { ok: false, why: 'Unsettled', detail: `garrison ${i}` };
+    }
     const walls = m.wallsCommitted > 0 || [[m.wallItem0Bell, m.wallItem0Delta], [m.wallItem1Bell, m.wallItem1Delta]].some(([eff, d]) => d > 0 && eff !== NO_BELL && eff <= bell);
-    garrisons.push({ id: hostId({ p: pv.p, q: pv.q, site: i, gen: m.gen, seq: 0 }), faction: m.faction, tile: pv.sites[i], troops: m.garrison, walls, posture: 0 });
+    garrisons.push({ id: hostId({ p: pv.p, q: pv.q, site: i, gen: m.gen, seq: 0 }), faction: m.faction, tile: pv.sites[i], troops: Math.min(m.garrison, MAX_HOST_TROOPS), walls, posture: 0 });
   }
-  if (pv.camp.state === 1) garrisons.push({ id: campId(pv.camp.gen), faction: NEUTRAL, tile: pv.camp.tile, troops: pv.camp.troops, walls: false, posture: 0 });
+  if (pv.camp.state === 1 && garrisons.length < MAX_GARRISONS) {
+    garrisons.push({ id: campId(pv.camp.gen), faction: NEUTRAL, tile: pv.camp.tile, troops: Math.min(pv.camp.troops * MILLI, MAX_HOST_TROOPS), walls: false, posture: 0 });
+  }
   for (const a of ci.arrivals) {
     if (a.present !== 1) continue;
     if (a.unit >= UNIT_ORDER.length || a.stance > 3) return { ok: false, why: 'BadRecord', detail: `arrival ${a.hostId}` };
-    arrivals.push({ id: BigInt(a.hostId), faction: a.faction, unit: a.unit, troops: a.troops, stamina: a.stamina, tile: a.tile, posture: a.stance, retreatBps: a.retreat === 0 ? null : a.retreat, dealtBps: a.dealt });
+    arrivals.push({ id: BigInt(a.hostId), faction: a.faction, unit: a.unit, troops: a.troops, stamina: a.stamina, tile: a.tile, posture: a.stance, retreatBps: a.retreat === 0 ? null : a.retreat, dealtBps: bpsOf(a.dealt) });
   }
+  // The kernel takes residents and arrivals in id order.
+  const byId = (x, y) => (x.id < y.id ? -1 : x.id > y.id ? 1 : 0);
+  residents.sort(byId);
+  arrivals.sort(byId);
   const terrain = {
     terrain: Array.from(pv.terrain),
     resource: Array.from(pv.resource, x => (x === 0 ? null : x - 1)),
     sites: Array.from(pv.sites),
     siteCount: pv.siteCount,
   };
-  const certain = !(pv.camp.state === 0 && pv.camp.nextCheckDay !== 0 && pv.camp.nextCheckDay <= dayOf(bell));
+  // The day's check runs at the first resolve (or skip) of a day with day ≥ next_check_day.
+  const certain = dayOf(bell) < (pv.camp.nextCheckDay ?? 0);
   return {
     ok: true, certain,
     args: { province: { p: pv.p, q: pv.q }, bell, seed: Uint8Array.from(seed), terrain, residents, garrisons, arrivals,
@@ -227,7 +250,8 @@ export function anchorSeed(clock, bell, bellRegion) {
   if (a === null) return { ok: false, why: 'NoAnchor' };
   const s = seedRound(clock.drand, a + clock.window(bell), clock.margin);
   if (j.archived && typeof j.archive?.seed === 'string') return { ok: true, a, s, seed: j.archive.seed.toLowerCase(), source: { archive: true } };
-  const c = (j.caches ?? []).find(x => String(x.round) === String(s) && (x.A === undefined || x.A === null || Number(x.A) === a) && typeof x.seed === 'string');
+  // The cache must name THE anchor's A (a cache without one is not trusted).
+  const c = (j.caches ?? []).find(x => String(x.round) === String(s) && x.A !== undefined && x.A !== null && Number(x.A) === a && typeof x.seed === 'string');
   return c ? { ok: true, a, s, seed: c.seed.toLowerCase(), source: { cache: c.nonce } } : { ok: false, why: 'SeedNotReady', a, s };
 }
 
