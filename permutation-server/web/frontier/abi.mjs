@@ -4,7 +4,7 @@
 // (PSF_WRITE_ABI=1 node --test test/web-frontier-codec.test.mjs rewrites it).
 export const ABI_VERSION = 1;
 export const RENT_PER_BYTE = 5080;
-export const RULESET_HASH = '1ac11f85fde3b898ebcd8c246964d9be2a29b4144a7a7ddfa81006999a6dd03f';
+export const RULESET_HASH = '72c6b5835ded6418ed98b0c00b2ae45ce4c4b082d9614447dbce2c9d2e654bd9';
 /** drand quicknet: the only beacon a deployable season uses. */
 export const QUICKNET = Object.freeze({"genesis":1692803367,"period":3,"publicKey":"83cf0f2896adee7eb8b5f01fcad3912212c437e0073e911fb90022d3e760183c8c4b450b6a0a6c3ac6a5776a2d1064510d1fec758c921cc22b0e17e63aaf4bcb5ed66304de9cf809bd274ca73bab4af5a6e9c76a4bc09e76eae8991ef5ece45a","pkHash":"96e74fcdd3a118406d3800a4e4935e67450a6befde915d47a0d6a13519cee134","chainHash":"52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971","schemeId":"bls-unchained-g1-rfc9380"});
 /** The deterministic local test key (I-53): accepted only on a localnet season. */

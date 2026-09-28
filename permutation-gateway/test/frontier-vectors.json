@@ -289,12 +289,12 @@
         "bell": 40,
         "camp_checked": false,
         "certain": true,
-        "digest": "a06320e02652e8f5b0c1e93638c677825d8122a1c25dcb24745919bc81de9b1e",
+        "digest": "e36c3e44e30ea71c69a97b5a645d181e083466503e9a3b9ff3028651f8d8afde",
         "fighters": [
           [
             "126452427128833",
             false,
-            693232
+            701367
           ],
           [
             "128642860449799",
@@ -404,12 +404,12 @@
         "bell": 150,
         "camp_checked": false,
         "certain": true,
-        "digest": "06dfecf8c63b68b3dad209f8dca00205c5ee1f0dcca6ebe79344f22ce5195b87",
+        "digest": "018ee688098f3ac4c49c80888cbaf23288e79abea0a355e978a22107090c738f",
         "fighters": [
           [
             "126452427128833",
             false,
-            586296
+            590562
           ],
           [
             "128642860449799",
@@ -419,17 +419,17 @@
           [
             "1044540341354498",
             true,
-            569921
+            571726
           ],
           [
             "1045635558014977",
             true,
-            651253
+            665369
           ],
           [
             "1046735069642755",
             true,
-            253073
+            254907
           ]
         ],
         "garrisons": [
@@ -512,17 +512,17 @@
         "bell": 40,
         "camp_checked": false,
         "certain": true,
-        "digest": "424754d2406d7738628cd4fa1bad1899635837776df512fd93fd309115538d03",
+        "digest": "a071459395ab3c5d593bb267ad0c7d20fbb67f85426115bbcf54b2b67ebc5d91",
         "fighters": [
           [
             "126452427128833",
             false,
-            648711
+            659247
           ],
           [
             "128642860449799",
             false,
-            394006
+            392989
           ],
           [
             "1044540341354498",
@@ -532,12 +532,12 @@
           [
             "1045635558014977",
             true,
-            741372
+            739832
           ],
           [
             "1046735069642755",
             true,
-            301527
+            299387
           ]
         ],
         "garrisons": [
@@ -690,12 +690,12 @@
         "bell": 150,
         "camp_checked": true,
         "certain": false,
-        "digest": "e4292d21c6ea8a377054cf35d7057ad73709c49366ae996834c14a50e298db7f",
+        "digest": "d9352f00b8dc924d8d9ca428cf0e97e50df4b1200e1393a95be8aa21a70638ef",
         "fighters": [
           [
             "126452427128833",
             false,
-            588675
+            561009
           ],
           [
             "128642860449799",
@@ -710,12 +710,12 @@
           [
             "1045635558014977",
             true,
-            660279
+            675219
           ],
           [
             "1046735069642755",
             true,
-            259470
+            253032
           ]
         ],
         "garrisons": [
@@ -2007,7 +2007,7 @@
       },
       {
         "class": "D",
-        "cu_budget": 340000,
+        "cu_budget": 290000,
         "name": "ResolveFromInputs",
         "tag": 97,
         "top_level": true,

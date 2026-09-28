@@ -1057,7 +1057,9 @@ mod tests {
             let b = tx::parse_budget(&t.message);
             Some(match n {
                 0 => {
-                    assert_eq!(b.cu_limit, Some(340_000));
+                    // The table's ResolveFromInputs budget (290,000 with
+                    // Phase B, W6-B; was 340,000).
+                    assert_eq!(b.cu_limit, Some(290_000));
                     Status {
                         slot: 1,
                         err: Some("InstructionError(3, ComputationalBudgetExceeded)".into()),
@@ -1065,7 +1067,7 @@ mod tests {
                     }
                 }
                 1 => {
-                    assert_eq!(b.cu_limit, Some(680_000));
+                    assert_eq!(b.cu_limit, Some(580_000));
                     assert_eq!(b.heap, None);
                     Status {
                         slot: 2,
@@ -1074,7 +1076,7 @@ mod tests {
                     }
                 }
                 _ => {
-                    assert_eq!(b.cu_limit, Some(680_000));
+                    assert_eq!(b.cu_limit, Some(580_000));
                     assert_eq!(b.heap, Some(262_144));
                     Status {
                         slot: 3,
@@ -1099,7 +1101,7 @@ mod tests {
         }
         assert_eq!(
             ladder.iter().map(|l| (l.1, l.2)).collect::<Vec<_>>(),
-            vec![(680_000, None), (680_000, Some(262_144))]
+            vec![(580_000, None), (580_000, Some(262_144))]
         );
         assert!(matches!(landed, Some(Outcome::Landed { versions: 3, .. })));
         assert_eq!(Budgets::retry_cu(680_000), 1_360_000);

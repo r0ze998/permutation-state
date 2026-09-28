@@ -175,7 +175,7 @@ pub const INSTRUCTIONS: [IxInfo; 50] = [
     ix(0x54, "SettleTransit", Class::D, 85_000, 1_100, false),
     ix(0x55, "SweepPoolOwed", Class::N, 8_000, 300, false),
     ix(0x60, "GatherClash", Class::D, 49_000, 1_232, true),
-    ix(0x61, "ResolveFromInputs", Class::D, 340_000, 460, true),
+    ix(0x61, "ResolveFromInputs", Class::D, 290_000, 460, true),
     ix(0x62, "ResolveClash", Class::Test, 1_400_000, 1_232, true),
     ix(0x63, "SkipQuiet", Class::D, 90_000, 1_232, true),
     ix(0x64, "CloseClashInputs", Class::N, 8_000, 300, false),
