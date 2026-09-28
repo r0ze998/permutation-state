@@ -372,12 +372,12 @@ pub const M1_LOCAL_7D: SeasonParams = SeasonParams {
     march_fee: 10_000,
     seal_bond: 20_000,
     min_reveal_priority_milli: 433,
-    // [placeholder] until W3-B measures the worst Reveal (I-08, CL-22).
-    reveal_cu_limit: 26_000,
-    // [placeholder] `L(Reveal)` at the budgets placeholder programdata
-    // (integ-W4, v1.6 §22: the wave-4 `.so` no longer fits 1 MiB; I-45);
-    // W5-A regenerates it from the final release `.so`.
-    reveal_loaded_limit: 1_343_488,
+    // W5-A: the worst Reveal (25,155 CU, FirstOfBell, release `.so`) + 5 %,
+    // rounded up to 500 = `budgets::budget(Reveal).cu_limit` (I-08, CL-22).
+    reveal_cu_limit: 26_500,
+    // W5-A: `L(Reveal)` at the release `.so`'s programdata length
+    // (`budgets::PLACEHOLDER_SO_LEN`, I-45).
+    reveal_loaded_limit: 1_146_880,
     bucket_rate_per_h: 30,
     bucket_burst: 60,
     defence_cap_milli: 2_000,
@@ -416,6 +416,15 @@ pub const M1_PLAYTEST: SeasonParams = m1_playtest(PLAYTEST_GATE_UNSET);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reveal_cu_limit_is_the_budgets_limit() {
+        assert_eq!(
+            M1_LOCAL_7D.reveal_cu_limit,
+            crate::budgets::budget(crate::tags::Ix::Reveal).cu_limit,
+            "the Reveal CU limit moved: update reveal_cu_limit"
+        );
+    }
 
     #[test]
     fn reveal_loaded_limit_is_the_budgets_l_reveal() {

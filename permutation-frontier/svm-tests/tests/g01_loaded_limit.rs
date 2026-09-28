@@ -295,3 +295,31 @@ fn g01_loaded_limit_post_seed() {
     c.prefund(&w.a.seed_cache(0, 9, 0), 1);
     check(&c, Ix::PostSeed, &[w.seed_ix(0, 9, 0, R_S)], &[&w.keeper]);
 }
+
+/// W5-A (I-45): the budgets table's `L(kind)` — what clients and keepers
+/// request — covers the release binary actually deployed: its programdata
+/// length is within the table's, so every kind's requested limit is at
+/// least `L(kind)` at the deployed length. Fails when the release `.so`
+/// outgrows `budgets::PLACEHOLDER_SO_LEN` (regenerate the table then).
+#[test]
+fn g01_loaded_limit_table_covers_the_release_so() {
+    use frontier_abi::budgets::{loaded_limit, PLACEHOLDER_PROGRAMDATA_LEN, PLACEHOLDER_SO_LEN};
+    let c = Chain::release();
+    let pd = c.programdata_len();
+    println!(
+        "release .so {} B (max_len {pd} B); table: .so {PLACEHOLDER_SO_LEN} B, programdata {PLACEHOLDER_PROGRAMDATA_LEN} B",
+        c.so_len
+    );
+    assert!(
+        pd <= PLACEHOLDER_PROGRAMDATA_LEN,
+        "the release .so ({} B, max_len {pd}) outgrew the budgets table ({PLACEHOLDER_PROGRAMDATA_LEN})",
+        c.so_len
+    );
+    for ix in Ix::ALL {
+        assert!(
+            loaded_limit(*ix) >= loaded_limit_for(*ix, pd),
+            "{}",
+            ix.name()
+        );
+    }
+}
