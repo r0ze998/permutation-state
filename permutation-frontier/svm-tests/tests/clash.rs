@@ -2380,6 +2380,124 @@ fn clash_closes_after_the_season_end() {
     expect_lands(keeper_send(&mut c, &w, ad), "CloseArrivalDay after the end");
 }
 
+// ================================================================ W6-B: the keeper float (W5-A O4)
+
+/// W6-B (W5-A O4; contract v1.8 §24, §8.2 open item): the keeper float —
+/// a SeedCache, the ClashInputs, the ArrivalDay and the ArrivalSlots of a
+/// province-bell left open when CloseSeason's final part ran — closes on
+/// the Closed tombstone at once, with the Province, THE anchor and the
+/// archive gone (every reader of those accounts needs Running or Ended);
+/// before, each close answered the prologue's refusal for good. And with
+/// the Season Ended for 72 h, CloseClashInputs and CloseArrivalDay no
+/// longer need the Province (CloseProvince may run first). Each close
+/// pays its `rent_to` and logs `CLOSE` (bell `NO_BELL` on the tombstone);
+/// the canonical addresses are still checked (`BadAddress`).
+///
+/// Crafted: the fill's accounts (module note) and the tombstone (the
+/// Season's first 128 bytes with status Closed, as CloseSeason's final
+/// part leaves them; `lifecycle::close_holding_and_citizen_on_the_tombstone`
+/// runs the real parts).
+#[test]
+fn keeper_float_closes_on_the_tombstone() {
+    use frontier_abi::log::NO_BELL;
+    let (mut c, w) = world_on(Build::TestBeacon);
+    let f = Fill::adversarial(0, 46, 8, 2);
+    ready(&mut c, &w, &f);
+    let g = w.gather_ix(&c, f.dest(), B, 0, 8);
+    expect_lands(keeper_send(&mut c, &w, g), "GatherClash (part)");
+    let (p, q) = (f.p as i16, f.q as i16);
+    let rent_to = w.keeper.pubkey();
+    let region = f.region();
+    let ci = cix::close_clash_inputs(&w.a, w.keeper.pubkey(), p, q, B, rent_to);
+    let ad = cix::close_arrival_day(&w.a, w.keeper.pubkey(), p, q, day_of(B), rent_to);
+    let sc = fclient::ix::close_seed_cache(&w.a, w.keeper.pubkey(), B, region, 0, rent_to);
+    let slots: Vec<(Address, Instruction)> = f
+        .arrivals
+        .iter()
+        .map(|(fa, i, _)| {
+            (
+                w.a.arrival_slot(f.p, f.q, B, *fa, *i),
+                cix::close_arrival_slot(&w.a, w.keeper.pubkey(), p, q, B, *fa, *i, rent_to, true),
+            )
+        })
+        .collect();
+    assert!(!slots.is_empty());
+    let targets = [
+        w.a.clash_inputs(f.p, f.q, B),
+        w.a.arrival_day(f.p, f.q, day_of(B)),
+        w.a.seed_cache(B, region, 0),
+    ];
+    for k in targets.iter().chain(slots.iter().map(|(k, _)| k)) {
+        assert!(!c.is_absent(k), "crafted and gathered");
+    }
+    let end = w.bell_start(u32_at(&c.data(&w.a.season), S::END_BELL));
+
+    // Ended ≥ 72 h, the Province closed first: inputs and day still close.
+    let mut e = c.fork();
+    e.edit(&w.a.season, |d| d[S::STATUS] = S::STATUS_ENDED);
+    e.set_time(end + 72 * 3_600);
+    e.remove(&w.a.province(f.p, f.q));
+    assert_code(
+        keeper_send(
+            &mut e,
+            &w,
+            with_account(ci.clone(), 2, w.a.province(f.p + 1, f.q)),
+        ),
+        E::BadAddress,
+    );
+    expect_lands(
+        keeper_send(&mut e, &w, ci.clone()),
+        "CloseClashInputs, Province closed",
+    );
+    expect_lands(
+        keeper_send(&mut e, &w, ad.clone()),
+        "CloseArrivalDay, Province closed",
+    );
+
+    // Still Running: every close keeps its own rule.
+    assert_code(keeper_send(&mut c.fork(), &w, ci.clone()), E::InputsOpen);
+    assert_code(keeper_send(&mut c.fork(), &w, ad.clone()), E::TooEarly);
+    assert_code(keeper_send(&mut c.fork(), &w, sc.clone()), E::TooEarly);
+    assert_code(
+        keeper_send(&mut c.fork(), &w, slots[0].1.clone()),
+        E::TooEarly,
+    );
+
+    // The tombstone, with the Province, THE anchor (and so no archive) gone.
+    c.edit(&w.a.season, |d| d[S::STATUS] = S::STATUS_CLOSED);
+    let mut tomb = c.data(&w.a.season);
+    tomb.truncate(S::TOMBSTONE_SIZE);
+    c.set_data(&w.a.season, tomb);
+    c.set_time(end + 80 * 3_600);
+    c.remove(&w.a.province(f.p, f.q));
+    c.remove(&w.a.anchor(B, region));
+    assert!(c.is_absent(&w.a.archive(region, fclient::addr::archive_part(B))));
+    let wrong_cache = with_account(sc.clone(), 2, w.a.seed_cache(B, region, 1));
+    assert_code(keeper_send(&mut c.fork(), &w, wrong_cache), E::BadAddress);
+    let wrong_slot = with_account(slots[0].1.clone(), 2, targets[0]);
+    assert_code(keeper_send(&mut c.fork(), &w, wrong_slot), E::BadAddress);
+    let mut closes: Vec<(Address, Instruction, &str)> = vec![
+        (targets[0], ci, "CloseClashInputs on the tombstone"),
+        (targets[1], ad, "CloseArrivalDay on the tombstone"),
+        (targets[2], sc.clone(), "CloseSeedCache on the tombstone"),
+    ];
+    for (k, ix) in &slots {
+        closes.push((*k, ix.clone(), "CloseArrivalSlot on the tombstone"));
+    }
+    for (k, ix, what) in closes {
+        let (before, rent) = (c.lamports(&rent_to), c.lamports(&k));
+        let l = expect_lands(keeper_send(&mut c, &w, ix), what);
+        assert!(c.is_absent(&k), "{what}: closed");
+        // The keeper signs and pays the fee; the rent comes back to it.
+        assert_eq!(c.lamports(&rent_to) + l.fee, before + rent, "{what}: rent");
+        let r = records::one(&l.logs, Kind::CLOSE);
+        assert_eq!(r.bell, NO_BELL, "{what}: CLOSE at NO_BELL");
+        assert_eq!(r.u64("lamports"), rent, "{what}: CLOSE lamports");
+    }
+    // A repeat of the cache close is a repeat.
+    assert_code(keeper_send(&mut c, &w, sc), E::AlreadyDone);
+}
+
 // ================================================================ W5-A: G13 completion
 
 /// The probe deployed next to the Frontier program, for CPIs.

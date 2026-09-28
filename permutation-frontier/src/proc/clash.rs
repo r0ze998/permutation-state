@@ -1194,6 +1194,64 @@ fn ended_long_ago(hdr: &SeasonHdr, now: i64) -> bool {
     }
 }
 
+/// The Season of a keeper-float close (W6-B, W5-A O4): live (Running,
+/// Ended or Aborted: [`CLOSE_STATUS`], the close's own rules) or the
+/// Closed tombstone (every reader of the account is gone: it closes at
+/// once).
+pub(crate) enum FloatSeason {
+    Live(SeasonHdr),
+    Tomb(u64),
+}
+
+impl FloatSeason {
+    pub(crate) fn id(&self) -> u64 {
+        match self {
+            FloatSeason::Live(h) => h.id,
+            FloatSeason::Tomb(id) => *id,
+        }
+    }
+
+    /// Whether the close's own rules apply: a live Season that has not
+    /// been Ended for 72 h (the season-end fallback and the tombstone
+    /// close without them).
+    fn rules_apply(&self, now: i64) -> bool {
+        matches!(self, FloatSeason::Live(h) if !ended_long_ago(h, now))
+    }
+
+    /// The bell of the CLOSE record (`NO_BELL` on the tombstone, as
+    /// CloseSeason logs there).
+    pub(crate) fn log_bell(&self, now: i64) -> u32 {
+        match self {
+            FloatSeason::Live(h) => h.bell(now).unwrap_or(NO_BELL),
+            FloatSeason::Tomb(_) => NO_BELL,
+        }
+    }
+}
+
+/// [`FloatSeason`] of `season_ai`: the tombstone, else the prologue with
+/// `statuses` (`CLOSE_STATUS` for the clash closes).
+pub(crate) fn float_season_with(
+    season_ai: &AccountInfo,
+    p: &Pubkey,
+    statuses: &[u8],
+    now: i64,
+) -> R<FloatSeason> {
+    if let Some(id) = super::season::float_tombstone(season_ai, p)? {
+        return Ok(FloatSeason::Tomb(id));
+    }
+    Ok(FloatSeason::Live(prologue::season(
+        season_ai,
+        p,
+        Some(&crate::RULESET_HASH),
+        statuses,
+        now,
+    )?))
+}
+
+fn float_season(season_ai: &AccountInfo, p: &Pubkey, now: i64) -> R<FloatSeason> {
+    float_season_with(season_ai, p, &CLOSE_STATUS, now)
+}
+
 /// 0x64 CloseClashInputs(P, Q, bell): `[any s] [season] [province r]
 /// [inputs w] [rent_to w]`, class N. (a) The inputs are resolved, every
 /// **present** record settled (`settled_mask`; v1.7: a record with a host
@@ -1203,7 +1261,10 @@ fn ended_long_ago(hdr: &SeasonHdr, now: i64) -> bool {
 /// inputs (`FLAG_NO_ARRIVALS`) whose bell the Province has passed by a
 /// skip (`resolved_next > bell`, v1.7: a gather of a bell that another
 /// keeper then skipped), after the grace; or (c) the Season Ended at
-/// least 72 h ago. `InputsOpen` otherwise.
+/// least 72 h ago; or (d) (W6-B, W5-A O4) the Season is the Closed
+/// tombstone. `InputsOpen` otherwise. In cases (c) and (d) the Province is
+/// not read: only its canonical address is checked, and it may be absent
+/// (CloseProvince may have run first; before W6-B that locked the inputs).
 pub fn close_clash_inputs(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
     check_accounts(Ix::CloseClashInputs, a, None)?;
     let x = aix::CloseClashInputs::decode(d)?;
@@ -1211,23 +1272,22 @@ pub fn close_clash_inputs(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
         return Err(FrontierError::TooManyAccounts.into());
     };
     let now = prologue::now()?;
-    let hdr = prologue::season(
-        season_ai,
-        p,
-        Some(&crate::RULESET_HASH),
-        &CLOSE_STATUS,
-        now.ts,
-    )?;
-    let sid = hdr.id;
+    let live = float_season(season_ai, p, now.ts)?;
+    let sid = live.id();
     let ctx = crate::addr::ctx(&key(season_ai), &p.to_bytes());
     let (pi, qi) = (x.p as i32, x.q as i32);
-    super::map::present_at(
-        province,
-        &ctx.province(pi, qi),
-        p,
-        AccountKind::Province,
-        sid,
-    )?;
+    let rules_apply = live.rules_apply(now.ts);
+    if rules_apply {
+        super::map::present_at(
+            province,
+            &ctx.province(pi, qi),
+            p,
+            AccountKind::Province,
+            sid,
+        )?;
+    } else {
+        expect_key(province, &ctx.province(pi, qi))?;
+    }
     super::map::present_at(
         inputs,
         &ctx.clash_inputs(pi, qi, x.bell),
@@ -1235,14 +1295,6 @@ pub fn close_clash_inputs(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
         AccountKind::ClashInputs,
         sid,
     )?;
-    let grace = {
-        let sd = season_ai.try_borrow_data()?;
-        Ro(&sd).u32(S::CLASH_CLOSE_GRACE)?
-    };
-    let rn = {
-        let pd = province.try_borrow_data()?;
-        Ro(&pd).u32(P::RESOLVED_NEXT)?
-    };
     {
         let cd = inputs.try_borrow_data()?;
         let r = Ro(&cd);
@@ -1250,7 +1302,15 @@ pub fn close_clash_inputs(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
             return Err(BAD_ACCOUNT);
         }
         rent_to_is(&cd, CI::RENT_TO, rent_to)?;
-        if !ended_long_ago(&hdr, now.ts) {
+        if let (true, FloatSeason::Live(hdr)) = (rules_apply, &live) {
+            let grace = {
+                let sd = season_ai.try_borrow_data()?;
+                Ro(&sd).u32(S::CLASH_CLOSE_GRACE)?
+            };
+            let rn = {
+                let pd = province.try_borrow_data()?;
+                Ro(&pd).u32(P::RESOLVED_NEXT)?
+            };
             let flags = r.u8(CI::FLAGS)?;
             let grace_secs = (grace as i64).checked_mul(600).ok_or(OVERFLOW)?;
             let since_genesis = now.ts.saturating_sub(hdr.genesis_ts);
@@ -1283,7 +1343,7 @@ pub fn close_clash_inputs(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
             }
         }
     }
-    let bell = hdr.bell(now.ts).unwrap_or(NO_BELL);
+    let bell = live.log_bell(now.ts);
     {
         let lamports = inputs.lamports();
         let mut cd = inputs.try_borrow_mut_data()?;
@@ -1304,7 +1364,9 @@ pub fn close_clash_inputs(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
 /// 0x65 CloseArrivalDay(P, Q, day): `[any s] [season] [province r] [day
 /// w] [rent_to w]`, class N, once the province resolved every bell of the
 /// day, or the Season Ended at least 72 h ago (v1.7: bells at or past
-/// `end_bell` are never resolved) (`TooEarly`).
+/// `end_bell` are never resolved), or (W6-B, W5-A O4) the Season is the
+/// Closed tombstone (`TooEarly`). In the last two cases the Province is
+/// not read (canonical address only; it may be absent).
 pub fn close_arrival_day(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
     check_accounts(Ix::CloseArrivalDay, a, None)?;
     let x = aix::CloseArrivalDay::decode(d)?;
@@ -1312,23 +1374,22 @@ pub fn close_arrival_day(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
         return Err(FrontierError::TooManyAccounts.into());
     };
     let now = prologue::now()?;
-    let hdr = prologue::season(
-        season_ai,
-        p,
-        Some(&crate::RULESET_HASH),
-        &CLOSE_STATUS,
-        now.ts,
-    )?;
-    let sid = hdr.id;
+    let live = float_season(season_ai, p, now.ts)?;
+    let sid = live.id();
     let ctx = crate::addr::ctx(&key(season_ai), &p.to_bytes());
     let (pi, qi) = (x.p as i32, x.q as i32);
-    super::map::present_at(
-        province,
-        &ctx.province(pi, qi),
-        p,
-        AccountKind::Province,
-        sid,
-    )?;
+    let rules_apply = live.rules_apply(now.ts);
+    if rules_apply {
+        super::map::present_at(
+            province,
+            &ctx.province(pi, qi),
+            p,
+            AccountKind::Province,
+            sid,
+        )?;
+    } else {
+        expect_key(province, &ctx.province(pi, qi))?;
+    }
     super::map::present_at(
         day_ai,
         &ctx.arrival_day(pi, qi, x.day),
@@ -1336,10 +1397,6 @@ pub fn close_arrival_day(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
         AccountKind::ArrivalDay,
         sid,
     )?;
-    let rn = {
-        let pd = province.try_borrow_data()?;
-        Ro(&pd).u32(P::RESOLVED_NEXT)?
-    };
     {
         let dd = day_ai.try_borrow_data()?;
         let r = Ro(&dd);
@@ -1348,11 +1405,17 @@ pub fn close_arrival_day(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
         }
         rent_to_is(&dd, AD::RENT_TO, rent_to)?;
     }
-    let need = (x.day as u64 + 1) * model::DAY_BELLS as u64;
-    if (rn as u64) < need && !ended_long_ago(&hdr, now.ts) {
-        return Err(FrontierError::TooEarly.into());
+    if rules_apply {
+        let rn = {
+            let pd = province.try_borrow_data()?;
+            Ro(&pd).u32(P::RESOLVED_NEXT)?
+        };
+        let need = (x.day as u64 + 1) * model::DAY_BELLS as u64;
+        if (rn as u64) < need {
+            return Err(FrontierError::TooEarly.into());
+        }
     }
-    let bell = hdr.bell(now.ts).unwrap_or(NO_BELL);
+    let bell = live.log_bell(now.ts);
     let mut raw = [0u8; 12];
     raw[..4].copy_from_slice(&pi.to_le_bytes());
     raw[4..8].copy_from_slice(&qi.to_le_bytes());
@@ -1373,7 +1436,9 @@ pub fn close_arrival_day(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
 /// `settled` flag and the slot is claimed or its claim grace passed
 /// (`close + 6 bells`; THE anchor gives `close`, an archived anchor —
 /// absent at its canonical address — means the grace passed long ago); or
-/// (b) the season Ended at least 72 h ago. `TooEarly` otherwise.
+/// (b) the season Ended at least 72 h ago; or (W6-B, W5-A O4) the Season
+/// is the Closed tombstone. In (b) and on the tombstone the anchor, if
+/// passed, is not read. `TooEarly` otherwise.
 pub fn close_arrival_slot(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
     check_accounts(Ix::CloseArrivalSlot, a, None)?;
     let x = aix::CloseArrivalSlot::decode(d)?;
@@ -1384,14 +1449,8 @@ pub fn close_arrival_slot(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
     };
     let season_ai = &a[1];
     let now = prologue::now()?;
-    let hdr = prologue::season(
-        season_ai,
-        p,
-        Some(&crate::RULESET_HASH),
-        &CLOSE_STATUS,
-        now.ts,
-    )?;
-    let sid = hdr.id;
+    let live = float_season(season_ai, p, now.ts)?;
+    let sid = live.id();
     let ctx = crate::addr::ctx(&key(season_ai), &p.to_bytes());
     let (pi, qi) = (x.p as i32, x.q as i32);
     super::map::present_at(
@@ -1415,36 +1474,39 @@ pub fn close_arrival_slot(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
         rent_to_is(&sd, AS::RENT_TO, rent_to)?;
         (r.u8(AS::FLAGS)?, r.u8(AS::CLAIMED)? != 0)
     };
-    let ended_long_ago = ended_long_ago(&hdr, now.ts);
-    let case_a = flags & AS::FLAG_SETTLED != 0
-        && (claimed
-            || match anchor {
-                None => false,
-                Some(an) => {
-                    let region = region_of(
-                        permutation_rules::frontier::geometry::ProvinceCoord::new(pi, qi),
-                    );
-                    expect_key(an, &ctx.bell_anchor(x.bell, region))?;
-                    if prologue::presence(an, p, AccountKind::BellAnchor, sid)? {
-                        let a_ts = {
-                            let ad = an.try_borrow_data()?;
-                            Anchor::read(&ad)?.a
-                        };
-                        let clock = {
-                            let sd = season_ai.try_borrow_data()?;
-                            SeasonClock::read(&sd)?
-                        };
-                        let grace = crate::layout::defence_claim::CLAIM_GRACE_BELLS as i64 * 600;
-                        now.ts >= clock.reveal_close(x.bell, a_ts).saturating_add(grace)
-                    } else {
-                        true
+    // (b) and (W6-B) the tombstone: the anchor is not read.
+    let rules_apply = live.rules_apply(now.ts);
+    let case_a = !rules_apply
+        || flags & AS::FLAG_SETTLED != 0
+            && (claimed
+                || match anchor {
+                    None => false,
+                    Some(an) => {
+                        let region = region_of(
+                            permutation_rules::frontier::geometry::ProvinceCoord::new(pi, qi),
+                        );
+                        expect_key(an, &ctx.bell_anchor(x.bell, region))?;
+                        if prologue::presence(an, p, AccountKind::BellAnchor, sid)? {
+                            let a_ts = {
+                                let ad = an.try_borrow_data()?;
+                                Anchor::read(&ad)?.a
+                            };
+                            let clock = {
+                                let sd = season_ai.try_borrow_data()?;
+                                SeasonClock::read(&sd)?
+                            };
+                            let grace =
+                                crate::layout::defence_claim::CLAIM_GRACE_BELLS as i64 * 600;
+                            now.ts >= clock.reveal_close(x.bell, a_ts).saturating_add(grace)
+                        } else {
+                            true
+                        }
                     }
-                }
-            });
-    if !case_a && !ended_long_ago {
+                });
+    if !case_a {
         return Err(FrontierError::TooEarly.into());
     }
-    let bell = hdr.bell(now.ts).unwrap_or(NO_BELL);
+    let bell = live.log_bell(now.ts);
     let mut raw = [0u8; 14];
     raw[..4].copy_from_slice(&pi.to_le_bytes());
     raw[4..8].copy_from_slice(&qi.to_le_bytes());

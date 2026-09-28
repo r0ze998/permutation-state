@@ -16,11 +16,17 @@
 //!   built to reach the tie-breaks (equal strengths on a hex contested
 //!   without a fight, stamina around `ENGAGE_STAMINA`), which the dense
 //!   fills never do;
-//! * `occupancy_empty_keeps_the_d95fa25_digests`: the dense fills with
+//! * `occupancy_empty_keeps_the_phase_b_digests`: the dense fills with
 //!   four residents per faction and no civilians (so neither the cap
 //!   recount, nor the scout rule, nor the storage room can apply) give
-//!   exactly the outcomes of the kernel at `d95fa25` (golden digest
-//!   recorded from that commit).
+//!   the recorded Phase B outcomes (through wave 5: exactly those of the
+//!   kernel at `d95fa25`; Phase B, `CLASH_VERSION` 3, moved only the
+//!   variance stream);
+//! * `m1_rules_keep_the_phase_b_digests`: the M1 rules over the same
+//!   fills, empty and random room (recorded at `31f1aa1` until Phase B).
+//!
+//! Both bodies carry Phase B (one hash per engagement for both dice), so
+//! every equivalence test compares Phase B with Phase B.
 
 use permutation_rules::fixed::BPS_ONE;
 use permutation_rules::frontier::clash::{
@@ -527,13 +533,18 @@ fn phase_a_equals_the_reference_on_the_refund_corner() {
     }
 }
 
-/// Golden digest of `without_m1_rules` over the 4,320 inputs, recorded with
-/// the kernel at `d95fa25` (before CL-01, CL-10, I-43 and Phase A).
-const D95FA25_DENSE_NO_M1_RULES: &str =
-    "c3946cb0ac96f8848ec17741fff672cb920853720a2f0940002aba7c1a2790bd";
+/// Golden digest of `without_m1_rules` over the 4,320 inputs on the
+/// **Phase B** kernel (`CLASH_VERSION` 3, W6-B; identical on W5-A's
+/// independent Phase B lab tree). Until Phase B this test pinned the value
+/// recorded with the kernel at `d95fa25` (before CL-01, CL-10, I-43 and
+/// Phase A), `c3946cb0ac96f8848ec17741fff672cb920853720a2f0940002aba7c1a2790bd`,
+/// and so showed that `Occupancy::EMPTY` and Phase A changed no outcome;
+/// Phase B moves the variance stream only.
+const PHASE_B_DENSE_NO_M1_RULES: &str =
+    "6b0869a2125a75591e9a303e276f11de61572c0c87b0b17d1245c1b7caf1d6f0";
 
 #[test]
-fn occupancy_empty_keeps_the_d95fa25_digests() {
+fn occupancy_empty_keeps_the_phase_b_digests() {
     let rules = frontier_ruleset();
     let mut acc = [0u8; 32];
     let mut n = 0u32;
@@ -546,8 +557,8 @@ fn occupancy_empty_keeps_the_d95fa25_digests() {
     assert_eq!(n, 4_320);
     assert_eq!(
         hex(&acc),
-        D95FA25_DENSE_NO_M1_RULES,
-        "outcomes moved against d95fa25"
+        PHASE_B_DENSE_NO_M1_RULES,
+        "outcomes moved against the Phase B recording"
     );
 }
 
@@ -645,11 +656,18 @@ fn phase_a_equals_the_reference_on_ties_and_edges() {
 /// shared helper; these digests can. `EMPTY`: `Occupancy::EMPTY`;
 /// `ROOM`: the random storage room of
 /// `phase_a_equals_the_reference_with_occupancy` (same RNG and draws).
-const M1_31F1AA1_EMPTY: &str = "679c2abe671c503ff4cd1abd891f72b421533119081e46a3b28572eae39b163b";
-const M1_31F1AA1_ROOM: &str = "de82d5204aeaf891eec3e1c60c3bee96c97d838190ca7700538573d81d8de98b";
+///
+/// **Re-recorded for Phase B** (`CLASH_VERSION` 3, W6-B): the values below
+/// come out of both this kernel and W5-A's independent Phase B lab tree,
+/// which still has the `31f1aa1` sorts (so the shared sort stays checked).
+/// The Phase A values recorded at `31f1aa1` were EMPTY
+/// `679c2abe671c503ff4cd1abd891f72b421533119081e46a3b28572eae39b163b`, ROOM
+/// `de82d5204aeaf891eec3e1c60c3bee96c97d838190ca7700538573d81d8de98b`.
+const M1_PHASE_B_EMPTY: &str = "523069855d2df8d73d00a9c021b33773d158c0f5fd5832cecd9f4d802a35e413";
+const M1_PHASE_B_ROOM: &str = "615354a0878d281ec7f6b017f2ec03c0de5413f1fed91806270d103ce6ecb0bc";
 
 #[test]
-fn m1_rules_keep_the_31f1aa1_digests() {
+fn m1_rules_keep_the_phase_b_digests() {
     let rules = frontier_ruleset();
     let (mut empty, mut room) = ([0u8; 32], [0u8; 32]);
     let mut rng = Rng(0x5EED_0CC0_u64 | 1);
@@ -680,12 +698,12 @@ fn m1_rules_keep_the_31f1aa1_digests() {
     println!("M1 rules: EMPTY {} ROOM {}", hex(&empty), hex(&room));
     assert_eq!(
         hex(&empty),
-        M1_31F1AA1_EMPTY,
-        "M1-rule outcomes moved against 31f1aa1 (EMPTY)"
+        M1_PHASE_B_EMPTY,
+        "M1-rule outcomes moved against the Phase B recording (EMPTY)"
     );
     assert_eq!(
         hex(&room),
-        M1_31F1AA1_ROOM,
-        "M1-rule outcomes moved against 31f1aa1 (room)"
+        M1_PHASE_B_ROOM,
+        "M1-rule outcomes moved against the Phase B recording (room)"
     );
 }

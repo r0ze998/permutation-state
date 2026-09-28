@@ -25,7 +25,7 @@ use frontier_abi::prologue::{cohort_closed, finality_due, HoldingHdr};
 use frontier_abi::tags::Ix;
 use permutation_frontier_svm_tests::budget::{assert_within, ceilings, Need};
 use permutation_frontier_svm_tests::chain::{
-    assert_code, expect_lands, with_account, without_signer, Build, Chain,
+    assert_code, expect_lands, loaded_limit, with_account, without_signer, Build, Chain, Profile,
 };
 use permutation_frontier_svm_tests::ix::citizen::{self as cix, player_at, settle_at};
 use permutation_frontier_svm_tests::records::one;
@@ -1823,7 +1823,18 @@ fn citizen_g13_file_ticket_forgery_shape_loaded() {
             w.a.province(ring3[1].0 as i32, ring3[1].1 as i32),
             false,
         ));
-    assert_code(c.fork().send(&[extra], &[&a.wallet]), E::TooManyAccounts);
+    // The shape check, not the loaded-data limit: `L(FileTicket)` has no
+    // room for a fourth Province (W6-B: the release `.so` grew 2,264 B, one
+    // more 4-KiB page of `max_len`, and the 267-B margin this relied on
+    // went), so this send asks for one Province (and a page) more.
+    let extra_room = PV::SIZE as u32 + 4_096;
+    let p = c
+        .profile_of(&[extra.clone()], Profile::ladder)
+        .with_loaded(loaded_limit(Ix::FileTicket, c.programdata_len()) + extra_room);
+    assert_code(
+        c.fork().send_with(&p, &[extra], &[&a.wallet]),
+        E::TooManyAccounts,
+    );
     common::loaded_check(&c, Ix::FileTicket, &[ix], &[&a.wallet]);
 }
 
