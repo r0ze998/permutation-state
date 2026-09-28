@@ -207,12 +207,24 @@ impl SlotClock {
 ///
 /// Anchor → last valid reveal and close → resolve run from chain times
 /// (THE anchor's `A`, `close = A + W`), so their slots are exact.
+///
+/// **S → resolve (integ-W6, the reading criterion 3's close → resolve
+/// target is judged on):** ResolveFromInputs needs the seed of THE anchor,
+/// and `S(b, r) = first_round_from(close + Δ)` with `Δ = seed_margin ≥ 60`
+/// (§5.1), so no resolve can land before the seed round is public, about
+/// `Δ + 1 s` after the close: a "close → resolve ≤ 60 s" reading is
+/// unattainable by construction. `s_to_resolve_*` therefore counts like
+/// round → anchor: from the first slot whose Clock shows `S(b, r)` public
+/// (slots) or from its publication instant (game seconds) to the CLASH
+/// landing. `close_to_resolve_*` is still reported (it is the seed margin
+/// plus this).
 pub fn latencies(
     recs: &[Rec],
     clock: &SlotClock,
     drand: &fclient::clock::Drand,
     delay_s: f64,
     reveal_window: u32,
+    seed_margin: u32,
 ) -> Value {
     let slot_secs = clock.slot_secs;
     let to_slots = |secs: f64| (secs / slot_secs).max(0.0);
@@ -220,6 +232,7 @@ pub fn latencies(
     let mut anchor_a: HashMap<(u32, u8), i64> = HashMap::new();
     let (mut ra_slots, mut ra_secs, mut ra_pub) = (vec![], vec![], vec![]);
     let (mut reveal_last, mut close_resolve) = (vec![], vec![]);
+    let (mut sr_slots, mut sr_secs) = (vec![], vec![]);
     // (bell, region) → the first cache's (slots, game secs).
     let mut first_cache: HashMap<(u32, u8), (u64, f64)> = HashMap::new();
     let mut last_reveal: HashMap<(i32, i32, u32), i64> = HashMap::new();
@@ -280,6 +293,11 @@ pub fn latencies(
                 {
                     let close = a + reveal_window as i64;
                     close_resolve.push(to_slots((x.time - close) as f64));
+                    let s = drand.seed_round(close, seed_margin);
+                    if let Some((slots, secs, _)) = public_lag(s, x) {
+                        sr_slots.push(slots);
+                        sr_secs.push(secs);
+                    }
                 }
             }
             _ => {}
@@ -307,10 +325,12 @@ pub fn latencies(
         "anchor_to_last_reveal_game_secs": stats(&secs(&reveal_last)),
         "close_to_resolve_slots": stats(&close_resolve),
         "close_to_resolve_game_secs": stats(&secs(&close_resolve)),
+        "s_to_resolve_slots": stats(&sr_slots),
+        "s_to_resolve_game_secs": stats(&sr_secs),
         "rounds_without_a_mapped_slot": unmapped,
-        "targets_slots_p99": {"round_to_anchor": 2, "s_to_first_cache": 2, "anchor_to_last_reveal": 4, "close_to_resolve": 8, "skips_per_idle_day": 6},
-        "targets_game_secs_p99": {"round_to_anchor": 5, "s_to_first_cache": 5, "anchor_to_last_reveal": 30, "close_to_resolve": 60},
-        "definition": "round -> anchor and S -> first cache in *_slots: landing slot minus the first slot whose Clock is at or after round_time + drand delay (publication), judged at 20x; *_game_secs: game seconds from publication to the landing slot's Clock, judged at 2x. Anchor -> last valid reveal from THE anchor's A; close -> resolve from A + W (W5-B F5, pinned by W6-A)",
+        "targets_slots_p99": {"round_to_anchor": 2, "s_to_first_cache": 2, "anchor_to_last_reveal": 4, "s_to_resolve": 8, "skips_per_idle_day": 6},
+        "targets_game_secs_p99": {"round_to_anchor": 5, "s_to_first_cache": 5, "anchor_to_last_reveal": 30, "s_to_resolve": 60},
+        "definition": "round -> anchor, S -> first cache and S -> resolve in *_slots: landing slot minus the first slot whose Clock is at or after round_time + drand delay (publication), judged at 20x; *_game_secs: game seconds from publication to the landing slot's Clock, judged at 2x. Anchor -> last valid reveal from THE anchor's A; close -> resolve from A + W, reported: the resolve needs S(b, r) = first_round_from(close + seed_margin), so criterion 3's close -> resolve target is judged on S -> resolve (W5-B F5, pinned by W6-A; integ-W6)",
     })
 }
 
@@ -813,20 +833,29 @@ pub fn decide(facts: &Value) -> Vec<Value> {
     if !slots_mode && !secs_mode {
         v.push(verdict("3", "n.a.", format!("criterion 3's targets are defined at 20x (slots) and 2x (game seconds); this run is {scale}x (figures reported); {skip_note}")));
     } else {
-        let checks: [(&str, f64, &str); 4] = if slots_mode {
-            [
-                ("round_to_anchor_slots", 2.0, "slots"),
-                ("s_to_first_cache_slots", 2.0, "slots"),
-                ("anchor_to_last_reveal_slots", 4.0, "slots"),
-                ("close_to_resolve_slots", 8.0, "slots"),
-            ]
+        // The close → resolve target is judged on S → resolve (integ-W6:
+        // the resolve needs the seed, public `seed_margin` after the
+        // close; see [`latencies`]); close → resolve itself is reported.
+        let (checks, close_key): ([(&str, f64, &str); 4], &str) = if slots_mode {
+            (
+                [
+                    ("round_to_anchor_slots", 2.0, "slots"),
+                    ("s_to_first_cache_slots", 2.0, "slots"),
+                    ("anchor_to_last_reveal_slots", 4.0, "slots"),
+                    ("s_to_resolve_slots", 8.0, "slots"),
+                ],
+                "close_to_resolve_slots",
+            )
         } else {
-            [
-                ("round_to_anchor_game_secs", 5.0, "s"),
-                ("s_to_first_cache_game_secs", 5.0, "s"),
-                ("anchor_to_last_reveal_game_secs", 30.0, "s"),
-                ("close_to_resolve_game_secs", 60.0, "s"),
-            ]
+            (
+                [
+                    ("round_to_anchor_game_secs", 5.0, "s"),
+                    ("s_to_first_cache_game_secs", 5.0, "s"),
+                    ("anchor_to_last_reveal_game_secs", 30.0, "s"),
+                    ("s_to_resolve_game_secs", 60.0, "s"),
+                ],
+                "close_to_resolve_game_secs",
+            )
         };
         let mut miss = vec![];
         let mut none = vec![];
@@ -837,6 +866,11 @@ pub fn decide(facts: &Value) -> Vec<Value> {
                 Some(x) if x > target => miss.push(format!("{k} p99 {x:.2} > {target} {unit}")),
                 Some(x) => seen.push(format!("{k} p99 {x:.2} ≤ {target} {unit}")),
             }
+        }
+        if let Some(x) = p99(close_key) {
+            seen.push(format!(
+                "{close_key} p99 {x:.2} reported (the resolve waits for S(b, r), public seed_margin after the close)"
+            ));
         }
         if slots_mode {
             if cu.is_null() {
@@ -1054,6 +1088,7 @@ pub async fn report(rd: &RunDir) -> i32 {
         &drand,
         delay_s,
         frontier_abi::presets::M1_LOCAL_7D.reveal_window,
+        frontier_abi::presets::M1_LOCAL_7D.seed_margin,
     );
     let catch = catch_up(&inp.txs, &program, genesis, bell_secs);
     let out = outcomes(&recs, last_bell);
@@ -1244,7 +1279,7 @@ pub fn markdown(r: &Value) -> String {
     ));
     let l = &r["criteria"]["3_latency_slots"];
     m.push_str(&format!(
-        "\n## Keeper latencies (a slot is {} game s)\n\nRound → anchor and S → first cache in slots count from the first slot whose Clock shows the round public (round time + drand delay) to the landing slot; in game seconds from the publication instant (W5-B F5, pinned by W6-A). Criterion 3: the slot targets at 20×, the game-second targets at 2×.\n\n| measure | n | p50 | p99 | max | target p99 (20×) | game s p50 | game s p99 | target p99 (2×) |\n|---|---|---|---|---|---|---|---|---|\n",
+        "\n## Keeper latencies (a slot is {} game s)\n\nRound → anchor, S → first cache and S → resolve in slots count from the first slot whose Clock shows the round public (round time + drand delay) to the landing slot; in game seconds from the publication instant (W5-B F5, pinned by W6-A). Criterion 3: the slot targets at 20×, the game-second targets at 2×. Close → resolve is reported: the resolve needs S(b, r) = first_round_from(close + seed_margin), so its target is judged on S → resolve (integ-W6).\n\n| measure | n | p50 | p99 | max | target p99 (20×) | game s p50 | game s p99 | target p99 (2×) |\n|---|---|---|---|---|---|---|---|---|\n",
         f(&l["slot_game_secs"])
     ));
     for (k, t, ks, ts) in [
@@ -1266,11 +1301,12 @@ pub fn markdown(r: &Value) -> String {
             "anchor_to_last_reveal_game_secs",
             "30 s",
         ),
+        ("s_to_resolve_slots", "8", "s_to_resolve_game_secs", "60 s"),
         (
             "close_to_resolve_slots",
-            "8",
+            "reported",
             "close_to_resolve_game_secs",
-            "60 s",
+            "reported",
         ),
     ] {
         let s = &l[k];
@@ -1430,7 +1466,7 @@ mod tests {
             period: 3,
         };
         let clock = SlotClock::new(&inp.txs, 8.0);
-        let lat = latencies(&recs, &clock, &drand, 1.0, 600);
+        let lat = latencies(&recs, &clock, &drand, 1.0, 600, 60);
         assert!(
             lat["round_to_anchor_slots"]["n"].as_u64().unwrap() > 0,
             "{lat}"
@@ -1442,6 +1478,17 @@ mod tests {
         assert_eq!(lat["rounds_without_a_mapped_slot"], 0, "{lat}");
         assert!(
             lat["close_to_resolve_slots"]["n"].as_u64().unwrap() > 0,
+            "{lat}"
+        );
+        // integ-W6: S → resolve has a sample per CLASH and is shorter than
+        // close → resolve by the seed margin.
+        assert_eq!(
+            lat["s_to_resolve_slots"]["n"], lat["close_to_resolve_slots"]["n"],
+            "{lat}"
+        );
+        assert!(
+            lat["s_to_resolve_game_secs"]["p50"].as_f64().unwrap()
+                < lat["close_to_resolve_game_secs"]["p50"].as_f64().unwrap(),
             "{lat}"
         );
         let out = outcomes(&recs, 144);
@@ -1461,9 +1508,11 @@ mod tests {
             "stuck_province_bells": [], "cohorts_open_past_24_bells": [], "unsettled_due": [],
             "settled_more_than_once": [], "settles_without_depart": [], "over_budget": [],
             "latency": {"slot_game_secs": 8.0, "round_to_anchor_slots": {"p99": 1.5}, "s_to_first_cache_slots": {"p99": 2.0},
-                "anchor_to_last_reveal_slots": {"p99": 3.0}, "close_to_resolve_slots": {"p99": 6.0},
+                "anchor_to_last_reveal_slots": {"p99": 3.0}, "close_to_resolve_slots": {"p99": 12.0},
+                "s_to_resolve_slots": {"p99": 6.0},
                 "round_to_anchor_game_secs": {"p99": 12.0}, "s_to_first_cache_game_secs": {"p99": 16.0},
-                "anchor_to_last_reveal_game_secs": {"p99": 24.0}, "close_to_resolve_game_secs": {"p99": 48.0}},
+                "anchor_to_last_reveal_game_secs": {"p99": 24.0}, "close_to_resolve_game_secs": {"p99": 96.0},
+                "s_to_resolve_game_secs": {"p99": 48.0}},
             "catch_up": {"idle_province_days_over_6": [], "churned_province_days_over_6": ["(1,1) day 0: 9"],
                 "skip_txs_per_idle_province_day": {"p99": 4.0, "max": 4.0}, "skip_txs_per_churned_province_day": {"p99": 9.0, "max": 9.0}},
             "clash_inputs": {"closed": 0, "open": 3, "closable_after_grace": 2, "pending": 1, "blocked": []},
@@ -1488,7 +1537,7 @@ mod tests {
         assert_eq!(st("7"), "n.a.");
         assert_eq!(criteria_exit(&d), 0);
         let mut f = good_facts();
-        f["latency"]["close_to_resolve_slots"]["p99"] = json!(9.0);
+        f["latency"]["s_to_resolve_slots"]["p99"] = json!(9.0);
         f["valid_unrevealed"] = json!([{"host_id": "1", "arrive_bell": 90}]);
         f["settled_more_than_once"] = json!(["0x1@12 x2"]);
         f["keeper_a"]["bells_below_150"] = json!([0, 1]);
