@@ -1076,7 +1076,7 @@ fn clash_camp_respawns_daily_and_is_taken_by_arrivals() {
     );
     assert_eq!(w.camp(&c, f.dest()).1, CP::STATE_NONE, "cleared");
     let cd = c.data(&w.a.clash_inputs(f.p, f.q, b));
-    assert_eq!(u32_at(&cd, CI::RSV_76), 1 << 16, "camp_mask: position 16");
+    assert_eq!(u32_at(&cd, CI::CAMP_MASK), 1 << 16, "camp_mask: position 16");
     let camps = records::of_kind(&l.logs, Kind::CAMP);
     assert_eq!(camps.last().unwrap().u64("troops"), 0, "the clear");
     let _ = spawned;

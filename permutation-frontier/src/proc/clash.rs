@@ -151,10 +151,10 @@ pub const SKIP_KERNEL_TESTS: u32 = 1;
 /// (the runtime maps 32 KiB without a heap frame).
 pub const SKIP_HEAP_STOP: u64 = 20 * 1024;
 
-/// ClashInputs' reserved word at offset 76, used as `camp_mask`: bit k set
-/// ⇔ the arrival at position k took the camp (`WORKS_CAMP`). Layout
-/// request (v1.6): name `RSV_76` `CAMP_MASK`.
-pub const CAMP_MASK: usize = CI::RSV_76;
+/// ClashInputs' `camp_mask` at offset 76: bit k set ⇔ the arrival at
+/// position k took the camp (`WORKS_CAMP`). Named in the ABI since v1.8
+/// (was `RSV_76`).
+pub const CAMP_MASK: usize = CI::CAMP_MASK;
 
 /// `Kernel` (15) sub-codes of the clash area.
 pub mod sub {

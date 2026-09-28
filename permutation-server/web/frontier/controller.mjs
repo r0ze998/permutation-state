@@ -368,17 +368,24 @@ async function settleExplore() {
  * The Citizen a SettleTransit must name when this host won the camp (v1.7,
  * I-56; the keeper's rule, fclient camp_winner): the host's arrival record
  * in the resolved ClashInputs Stays at the lowest `camp_mask` position. The
- * mask comes from the raw bytes of the herald's clash report; the fate from
- * the arrival bell's own envelope. The Holding's owner Citizen, or null.
+ * mask and the fate come from the arrival bell's own envelope (decoded
+ * `campMask`, ABI v1.8); the herald's clash report bytes are the fallback. The Holding's owner Citizen, or null.
  */
 export async function campCitizenOf(m, hostId, { heraldClient = herald, holding = FS.holdings?.[0], faction = FS.citizen?.faction } = {}) {
   const ci = m.env?.inputs;
   if (!ci || !m.dest || !m.transit || !holding || !Number.isInteger(faction)) return null;
   const k = [0, 1, 2, 3].find(i => { const r = ci.arrivals?.[faction * 4 + i]; return r?.present === 1 && String(r.hostId) === String(hostId); });
   if (k === undefined || ci.arrivals[faction * 4 + k].fate !== 1) return null;
-  const rep = await heraldClient.clash(m.dest.p, m.dest.q, m.transit.arriveBell);
-  const raw = rep?.ok && rep.report?.inputs_b64 ? fromBase64(rep.report.inputs_b64) : null;
-  if (!raw || !campWinner(campMaskOf(raw), faction, k, ci.arrivals[faction * 4 + k].fate)) return null;
+  // v1.8: the ABI names ClashInputs' camp_mask (was RSV_76), so the decoded
+  // envelope carries it; the raw /h/clash bytes remain the fallback.
+  let mask = Number.isInteger(ci.campMask) ? ci.campMask : null;
+  if (mask === null) {
+    const rep = await heraldClient.clash(m.dest.p, m.dest.q, m.transit.arriveBell);
+    const raw = rep?.ok && rep.report?.inputs_b64 ? fromBase64(rep.report.inputs_b64) : null;
+    if (!raw) return null;
+    mask = campMaskOf(raw);
+  }
+  if (!campWinner(mask, faction, k, ci.arrivals[faction * 4 + k].fate)) return null;
   return toBase58(holding.ownerCitizen);
 }
 

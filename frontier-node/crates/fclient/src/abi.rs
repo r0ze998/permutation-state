@@ -897,7 +897,7 @@ pub mod layout {
         pub const Q: usize = 66;
         pub const BELL: usize = 68;
         pub const ARRIVALS_MASK: usize = 72;
-        /// `RSV_76` read as `camp_mask` (v1.6 §22, v1.7).
+        /// `camp_mask` (v1.6 §22; named `CAMP_MASK` in the ABI since v1.8).
         pub const CAMP_MASK: usize = 76;
         pub const POSTURE_MASK: usize = 80;
         pub const FLAGS: usize = 88;

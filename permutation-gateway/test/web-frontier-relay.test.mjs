@@ -286,6 +286,11 @@ test('the camp winner (fclient camp_winner) and camp_mask read from the raw Clas
   const got = await campCitizenOf(m, 77n, { heraldClient, holding: { ownerCitizen: owner }, faction: 2 });
   assert.equal(got, new PublicKey(owner).toBase58(), 'the Holding\'s owner Citizen');
   assert.equal(await campCitizenOf(m, 78n, { heraldClient, holding: { ownerCitizen: owner }, faction: 2 }), null, 'another host');
+  // ABI v1.8: the decoded envelope carries campMask; no clash report is fetched then.
+  const noFetch = { clash: async () => { throw new Error('fetched /h/clash although the envelope has campMask'); } };
+  const md = { ...m, env: { inputs: { arrivals, campMask: 1 << (2 * 4 + 1) } } };
+  assert.equal(await campCitizenOf(md, 77n, { heraldClient: noFetch, holding: { ownerCitizen: owner }, faction: 2 }), new PublicKey(owner).toBase58(), 'decoded campMask');
+  assert.equal(await campCitizenOf({ ...md, env: { inputs: { arrivals, campMask: 1 } } }, 77n, { heraldClient: noFetch, holding: { ownerCitizen: owner }, faction: 2 }), null, 'a lower position won the camp');
   arrivals[2 * 4 + 1].fate = 3;
   assert.equal(await campCitizenOf(m, 77n, { heraldClient, holding: { ownerCitizen: owner }, faction: 2 }), null, 'not Stays');
 });

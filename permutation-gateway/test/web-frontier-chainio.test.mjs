@@ -22,6 +22,7 @@ import { budgetOf } from '../../permutation-server/web/sdk/frontier/budgets.mjs'
 // L(kind) from the generated table (integ-W4: no longer the 1-MiB default).
 const L_HARVEST = budgetOf(0x40).loadedLimit;
 const L_SETTLE_TRANSIT = budgetOf(0x54).loadedLimit;
+const CU_SETTLE_TRANSIT = budgetOf(0x54).cuLimit; // v1.8: from the budgets table (was the literal 85,000)
 
 const F = JSON.parse(readFileSync(new URL('./frontier-vectors.json', import.meta.url), 'utf8')).addresses;
 const key = () => bs58.encode(generateKeyPairSync('ed25519').publicKey.export({ format: 'der', type: 'spki' }).subarray(-32));
@@ -110,7 +111,7 @@ test('message checks: a good player shape passes; every deviation is named', () 
     slot: key(), home_province: key(), anchor_or_archive: key(), slot_beneficiary: feePayer, resolver: feePayer, holding_rent_payer: key(), settle_beneficiary: feePayer };
   const settle = frontierIx(io.pinned().programId, 'SettleTransit', settleAccounts,
     { transit_slot: 1, commit: new Uint8Array(32), seal: new Uint8Array(165), beneficiary: bs58.decode(feePayer) });
-  const settleMsg = compileMessage({ feePayer, recentBlockhash: blockhash, instructions: [cb(2, u32(85_000)), cb(3, u64(0)), cb(4, u32(L_SETTLE_TRANSIT)), settle] });
+  const settleMsg = compileMessage({ feePayer, recentBlockhash: blockhash, instructions: [cb(2, u32(CU_SETTLE_TRANSIT)), cb(3, u64(0)), cb(4, u32(L_SETTLE_TRANSIT)), settle] });
   assert.deepEqual(io.messageProblems(settleMsg, { feePayer, blockhash, tag: 0x54, signers: [], expected: settle }), []);
 });
 

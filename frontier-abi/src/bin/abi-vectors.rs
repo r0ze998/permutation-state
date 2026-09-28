@@ -151,7 +151,7 @@ fn header(what: &str) -> Vec<(&'static str, J)> {
     vec![
         ("generator", st("frontier-abi abi-vectors")),
         ("abi_version", n(frontier_abi::ABI_VERSION)),
-        ("contract", st("docs/frontier/m1/M1-CONTRACT.md v1.7")),
+        ("contract", st("docs/frontier/m1/M1-CONTRACT.md v1.8")),
         ("content", st(what)),
     ]
 }

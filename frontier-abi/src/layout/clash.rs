@@ -102,7 +102,7 @@ pub mod clash_inputs {
         Q @ 66 : "i16" = 2;
         BELL @ 68 : "u32" = 4;
         ARRIVALS_MASK @ 72 : "u32" = 4;
-        RSV_76 @ 76 : "rsv" = 4;
+        CAMP_MASK @ 76 : "u32" = 4;
         POSTURE_MASK @ 80 : "u64" = 8;
         FLAGS @ 88 : "u8" = 1;
         N_PRESENT @ 89 : "u8" = 1;

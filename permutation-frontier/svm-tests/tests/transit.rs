@@ -1268,7 +1268,7 @@ fn g12_settle_credits_the_camp_works_to_one_winner() {
     let pos = CI::position(t.faction(), 0);
     let set_mask = |c: &mut Chain, m: u32| {
         c.edit(&k, |d| {
-            d[CI::RSV_76..CI::RSV_76 + 4].copy_from_slice(&m.to_le_bytes())
+            d[CI::CAMP_MASK..CI::CAMP_MASK + 4].copy_from_slice(&m.to_le_bytes())
         })
     };
     let w0 = works_of(&c, &t.e.citizen);

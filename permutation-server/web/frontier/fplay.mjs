@@ -24,8 +24,9 @@ import { joinShardOf } from './faddr.mjs';
 
 /**
  * ClashInputs' `camp_mask` (v1.7, I-56): u32 LE at offset 76 of the raw
- * account bytes. The ABI table the page decodes still calls it RSV_76, so
- * it is read from the bytes (the herald's /h/clash `inputs_b64`).
+ * account bytes (the herald's /h/clash `inputs_b64`). Since ABI v1.8 the
+ * decoded ClashInputs carries it as `campMask`; this reader is the fallback
+ * for raw bytes.
  */
 export const CAMP_MASK_OFFSET = 76;
 export function campMaskOf(bytes) {

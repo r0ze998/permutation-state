@@ -128,15 +128,15 @@ test('the retreat list: "never" (0) first, the ratios in bps, a custom ratio wit
 
 test('the tip: exactly the three sponsored presets from the Season, never zero (I-08, I-51)', () => {
   const tipMin = minTipLamports(SEASON.minRevealPriorityMilli, SEASON.revealCuLimit, SEASON.revealLoadedLimit);
-  assert.equal(tipMin, 14_472n, '§10.1 at p 0.433, 26k CU, L(Reveal) 1,343,488 (v1.6 §22)');
+  assert.equal(tipMin, 14_668n, '§10.1 at p 0.433, 26.5k CU, L(Reveal) 1,146,880 (v1.8, W5-A)');
   assert.equal(march.seasonTipMin(SEASON), tipMin);
   const o = march.tipOptions(SEASON);
   assert.deepEqual(o.map(x => x.id), ['standard', 'decisive', 'maximum']);
   assert.deepEqual(o.map(x => x.lamports), tipPresets(tipMin));
-  assert.deepEqual(o.map(x => x.lamports), [14_472n, 21_708n, 28_944n]);
+  assert.deepEqual(o.map(x => x.lamports), [14_668n, 22_002n, 29_336n]);
   assert.ok(o.every(x => x.lamports > 0n && x.priorityMilli >= 433n));
   const costs = march.marchCosts(SEASON, o[1].lamports);
-  assert.deepEqual(costs, { tip: 21_708n, marchFee: 10_000n, sealBond: 20_000n, total: 51_708n });
+  assert.deepEqual(costs, { tip: 22_002n, marchFee: 10_000n, sealBond: 20_000n, total: 52_002n });
 });
 
 /** A final holding with one host (Spearman, 500 troops) in province (2, 0), a free transit slot. */
@@ -150,7 +150,7 @@ function world({ state = 2, stamina = 120, ready = 0, pendOp = 0, transit = [], 
 }
 const route = { dirs: [1, 0, 0], pathLen: 3, path: seal.encodePath([1, 0, 0]).path, secs: 360, hexes: 3, provinces: [{ p: 2, q: 0 }] };
 const good = (w, patch = {}) => ({ season: SEASON, nowBell: 41, resolvedNext: 40, holding: w.holding, host: w.host, dest: { p: 2, q: 0, tile: 33 }, route,
-  earliest: null, arriveBell: 43, stance: 1, retreat: { choice: 'never' }, tip: 14_472n, ...patch });
+  earliest: null, arriveBell: 43, stance: 1, retreat: { choice: 'never' }, tip: 14_668n, ...patch });
 
 test('the arrival window: depart + min_lead … depart + max_lead from the Season, raised to the planner\'s earliest bell', () => {
   assert.deepEqual(march.arrivalWindow(SEASON, 41), { min: 43, max: 113 });
@@ -256,13 +256,13 @@ test('the WASM planner, the earliest bell and `reachable` feed the composer and 
 test('the composer offers the three presets only, "never" first, and names what blocks sending', () => {
   const w = world();
   const FS = { season: SEASON, nowBell: 41, holdings: [w.holding], provinces: new Map([['2,0', { province: w.province }]]),
-    compose: { host: { ...w.host, troops: 500, unit: 0 }, dest: { p: 2, q: 0, tile: 33 }, route, arriveBell: 43, stance: 0, retreat: 'never', tip: '14472' } };
+    compose: { host: { ...w.host, troops: 500, unit: 0 }, dest: { p: 2, q: 0, tile: 33 }, route, arriveBell: 43, stance: 0, retreat: 'never', tip: '14668' } };
   const ch = composer.composerChoices(FS);
-  assert.deepEqual(ch.tips.map(t => String(t.lamports)), ['14472', '21708', '28944']);
+  assert.deepEqual(ch.tips.map(t => String(t.lamports)), ['14668', '22002', '29336']);
   assert.equal(ch.retreat[0].id, 'never');
   const out = String(composer.render(FS));
   const tips = [...out.matchAll(/name="tip" data-bind="tip" value="(\d+)"/g)].map(m => m[1]);
-  assert.deepEqual(tips, ['14472', '21708', '28944'], 'exactly the presets; no zero, no custom tip');
+  assert.deepEqual(tips, ['14668', '22002', '29336'], 'exactly the presets; no zero, no custom tip');
   assert.doesNotMatch(out, /value="0" [^>]*data-bind="tip"|data-bind="tip" value="0"/);
   assert.match(out, /<option value="never" selected>/);
   assert.match(out, /data-act="march-send" >|data-act="march-send"\s*>/, 'ready to send');
@@ -304,7 +304,7 @@ test('sendMarch: seal (T(arrive), self-audited) → marchbook saved before signi
   const f = submitted.fields;
   assert.equal(f.transit_slot, 0);
   assert.equal(f.arrive_bell, 43);
-  assert.equal(f.tip, 14_472n);
+  assert.equal(f.tip, 14_668n);
   assert.equal(f.host_id, w.id);
   assert.equal(f.seal.length, 165);
   const e = book.loadBook(storage, key)[0];
@@ -369,7 +369,7 @@ test('the Depart transaction the page builds is at most 800 bytes (§9.4) and wi
   const A = io.pinned().addresses;
   const session = b58(new Uint8Array(32).fill(7)), feePayer = b58(new Uint8Array(32).fill(9)), blockhash = b58(new Uint8Array(32).fill(3));
   const accounts = accountsFor('Depart', { addresses: A, wallet: ADDR.citizen.wallet, actor: session, holding: { p: 2, q: 0, site: 3 }, province: { p: 2, q: 0 } });
-  const fields = { host_id: 2n ** 63n, commit: new Uint8Array(32), seal: new Uint8Array(165), arrive_bell: 4_000_000, tip: 28_944n, transit_slot: 3 };
+  const fields = { host_id: 2n ** 63n, commit: new Uint8Array(32), seal: new Uint8Array(165), arrive_bell: 4_000_000, tip: 29_336n, transit_slot: 3 };
   const { message, budget, signers } = buildShape({ programId: A.programId, name: 'Depart', accounts, fields, feePayer, blockhash });
   assert.deepEqual(signers, [session]);
   const wire = wireTransaction(message, [new Uint8Array(64), new Uint8Array(64)]);

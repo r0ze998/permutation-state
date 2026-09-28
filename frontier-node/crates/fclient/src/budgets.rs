@@ -164,7 +164,8 @@ mod tests {
                 .expect("json");
         let b = Budgets::from_json(&v).expect("loads");
         let reveal = b.get(crate::abi::tag::REVEAL);
-        assert_eq!(reveal.cu_limit, 26_000);
+        // v1.8 (W5-A): G1's worst Reveal 25,155 CU + 5 % (was 26,000).
+        assert_eq!(reveal.cu_limit, 26_500);
         assert_eq!(reveal.loaded_limit % crate::fees::PAGE, 0);
         let again = Budgets::from_json(&b.to_json()).expect("round trip");
         assert_eq!(again.get(crate::abi::tag::REVEAL), reveal);
