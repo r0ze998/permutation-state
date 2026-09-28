@@ -544,6 +544,8 @@ pub struct Transit {
     pub seal_root: [u8; 32],
     pub tip: u64,
     pub flags: u8,
+    /// v1.7: the destination a GatherClash recorded it at.
+    pub gathered_at: Option<(i16, i16)>,
 }
 
 impl Transit {
@@ -570,6 +572,8 @@ impl Transit {
             seal_root: b.arr(t::SEAL_ROOT),
             tip: b.u64(t::TIP),
             flags: b.u8(t::FLAGS),
+            gathered_at: (b.u8(t::FLAGS) & t::FLAG_GATHERED != 0)
+                .then(|| (b.i16(t::DEST_P), b.i16(t::DEST_Q))),
         }
     }
 }
@@ -1029,6 +1033,8 @@ pub struct ClashInputs {
     pub q: i16,
     pub bell: u32,
     pub arrivals_mask: u32,
+    /// Offset 76: bit k, the arrival at position k took the camp.
+    pub camp_mask: u32,
     pub posture_mask: u64,
     pub flags: u8,
     pub n_present: u8,
@@ -1072,6 +1078,7 @@ impl ClashInputs {
             q: b.i16(c::Q),
             bell: b.u32(c::BELL),
             arrivals_mask: b.u32(c::ARRIVALS_MASK),
+            camp_mask: b.u32(c::CAMP_MASK),
             posture_mask: b.u64(c::POSTURE_MASK),
             flags: b.u8(c::FLAGS),
             n_present: b.u8(c::N_PRESENT),

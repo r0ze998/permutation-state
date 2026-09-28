@@ -135,5 +135,14 @@ pub const SETTLE_DEPARTURE: &[Cover] = &[
         "host::host_settle_departure_of_a_host_destroyed_at_its_origin",
         &[Lands("hix::settle_departure(")],
     ),
+    // The return settle (`transit_slot = 0xFF`, W4-A D10; integ-W4 review).
+    Cover::Test(
+        "clash::clash_dissolve_returns_troops_to_the_reserve",
+        &[Lands("cix::settle_return("), Err(E::AlreadyDone)],
+    ),
+    Cover::Test(
+        "clash::clash_return_settle_is_bounded",
+        &[Lands("return 1"), Err(E::AlreadyDone)],
+    ),
     Cover::Pending("W5-A: NotResident (entry gone), WrongStatus"),
 ];

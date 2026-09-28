@@ -552,21 +552,26 @@ pub fn accounts_of(ix: Ix) -> &'static [Group] {
         }
         Ix::SettleTransit => {
             const {
-                &[one!(&[
-                    PAYER_SW,
-                    SEASON_R,
-                    HOLDING_W,
-                    s!("dest_province", Kind(K::Province), false, W),
-                    s!("inputs", Kind(K::ClashInputs), false, W),
-                    s!("slot", Kind(K::ArrivalSlot), false, W),
-                    s!("home_province", Kind(K::Province), false, W),
-                    ANCHOR_OR_ARCHIVE,
-                    s!("slot_beneficiary", Wallet, false, W),
-                    s!("resolver", Wallet, false, W),
-                    s!("holding_rent_payer", Wallet, false, W),
-                    s!("settle_beneficiary", Wallet, false, W),
-                    SYSTEM,
-                ])]
+                &[
+                    one!(&[
+                        PAYER_SW,
+                        SEASON_R,
+                        HOLDING_W,
+                        s!("dest_province", Kind(K::Province), false, W),
+                        s!("inputs", Kind(K::ClashInputs), false, W),
+                        s!("slot", Kind(K::ArrivalSlot), false, W),
+                        s!("home_province", Kind(K::Province), false, W),
+                        ANCHOR_OR_ARCHIVE,
+                        s!("slot_beneficiary", Wallet, false, W),
+                        s!("resolver", Wallet, false, W),
+                        s!("holding_rent_payer", Wallet, false, W),
+                        s!("settle_beneficiary", Wallet, false, W),
+                        SYSTEM,
+                    ]),
+                    // v1.7: the owner's Citizen when the host earns the
+                    // camp's Works (I-56).
+                    rep!(&[s!("citizen", Kind(K::Citizen), false, W)], 0, 1),
+                ]
             }
         }
         Ix::SweepPoolOwed => {
@@ -593,7 +598,8 @@ pub fn accounts_of(ix: Ix) -> &'static [Group] {
                         SYSTEM,
                     ]),
                     rep!(&[s!("slot", Kind(K::ArrivalSlot), false, R)], 0, 24),
-                    rep!(&[s!("holding", Kind(K::Holding), false, R)], 0, 10),
+                    // v1.7 (W4-B F1): writable, the gathered transit's stamp.
+                    rep!(&[s!("holding", Kind(K::Holding), false, W)], 0, 10),
                 ]
             }
         }

@@ -7,7 +7,7 @@
 //! | SettleDeparture (`settle-departure`) | the origin resolved past `depart_bell` | SettleDeparture | D |
 //! | Gather (`gather`) | window closed, the ArrivalDay bit set, every present arrival's transit in state ≥ 2 | GatherClash parts (a clear bit after a `NotQuiet` skip: one part) | D |
 //! | Resolve (`resolve`) | all positions gathered, `resolved_next == b`, the seed of THE anchor | ResolveFromInputs | D |
-//! | Skip (`skip`) | closed windows with clear bits from `resolved_next` | SkipQuiet over ≤ 24 bells: at once when the province has pending changes, a departure to settle, a known arrival ahead, a nudge or the season's end in reach; otherwise once 24 bells are due (≤ 6 per idle province-day). CU limit `60k + 30k` per bell with pending ops (I-50), capped at 1.4M; a committed prefix is re-planned | D |
+//! | Skip (`skip`) | closed windows with clear bits from `resolved_next` | SkipQuiet over ≤ 24 bells: at once when the province has pending changes, a departure to settle, a known arrival ahead, a nudge or the season's end in reach; otherwise once 24 bells are due (≤ 6 per idle province-day). CU limit `90k + 30k` per bell with pending ops (I-50, v1.7), capped at 1.4M; a committed prefix is re-planned; running out of CU is `NotQuiet` (gather and resolve) | D |
 //! | Returns (`settle-departure`) | a `Leave` entry whose bell resolved (§21) | the return settle: SettleDeparture with `transit_slot = 0xFF` per (province, Holding) (W4-A's choice) | D |
 //! | Settle (`settle`) | `close + 600` passed and the destination resolved past `arrive` | SettleTransit for every transit incl. refused, displaced, unrevealed and bad seals, with the **logged** commitment and seal | D |
 //! | Closes (`close`) | slots settled and past the claim grace (or claimed), days whose province resolved past the day, inputs resolved, settled and past `clash_close_grace` | CloseArrivalSlot / CloseArrivalDay / CloseClashInputs | N |
@@ -80,6 +80,11 @@ pub struct TransitState {
     pub faction: u8,
     pub citizen_tag: u64,
     pub rent_payer: Address,
+    /// The Holding's owner Citizen (the camp's Works, v1.7).
+    pub owner_citizen: Address,
+    /// The destination a GatherClash stamped (v1.7, W4-B F1): the only
+    /// Province the transit settles against.
+    pub gathered_at: Option<(i16, i16)>,
     pub holding_read_slot: u64,
 }
 
@@ -170,6 +175,36 @@ fn rkey((host, b): (u64, u32)) -> String {
     format!("{host}:{b}")
 }
 
+/// Whether the program would refuse a gather of `host`'s arrival at `bell`
+/// with `DepartureUnsettled` (its gather_position): the Holding account is
+/// the program's, live (provisional or final) with the host's generation,
+/// and holds the host's transit to `bell` in state 1 (departed). Every other
+/// case gathers (as present, or as a record with `present = 0`).
+pub fn departure_unsettled(a: Option<&Account>, program: &Address, host: u64, bell: u32) -> bool {
+    let Ok((_, _, _, gen, _)) = fclient::addr::host_parts(host) else {
+        return false;
+    };
+    a.filter(|a| a.owner == *program)
+        .and_then(|a| Holding::decode(&a.data).ok())
+        .is_some_and(|h| {
+            matches!(h.state, 1 | 2)
+                && h.gen == gen
+                && h.transit
+                    .iter()
+                    .any(|x| x.state == 1 && x.host_id == host && x.arrive_bell == bell)
+        })
+}
+
+/// A Reveal refusal that may pass on a later try: the slot moved (re-read
+/// and retried), THE anchor not posted yet, too early. Anything else the
+/// program answers is final for that arrival (wave-4 review, W4-C blocker).
+fn reveal_transient(code: u32) -> bool {
+    matches!(
+        code,
+        abi::err::SLOT_MOVED | abi::err::NO_ANCHOR | abi::err::TOO_EARLY
+    )
+}
+
 fn present(a: &Option<Account>, program: &Address) -> bool {
     a.as_ref()
         .is_some_and(|a| a.owner == *program && !a.data.is_empty())
@@ -205,7 +240,7 @@ impl PlayDuty {
                     }
                 }
             }
-            ("reveal", Outcome::Failed { code, .. }) => {
+            ("reveal", Outcome::Failed { code, slot, .. }) => {
                 let Some(k) = k else { return tracks };
                 let Some(ts) = self.transits.get_mut(&k) else {
                     return tracks;
@@ -216,6 +251,28 @@ impl PlayDuty {
                         ts.slot_moved += 1;
                         if ts.slot_moved > SLOT_MOVED_RETRIES {
                             ts.refused = true;
+                        }
+                    }
+                    // A deterministic program refusal (`Path`, `ArrivalBell`,
+                    // `Shielded`, a bad plaintext, …): this arrival will never
+                    // be revealed. It leaves its group (the group is planned
+                    // again without it) and goes to settlement; before the
+                    // wave-4 review it stayed in the group, and every
+                    // lower-ranked member aimed one index off (`SlotMoved`
+                    // until refused, then routed).
+                    Some(c) if !reveal_transient(c) && c != abi::err::QUOTA_REFUSED => {
+                        let first = !ts.refused;
+                        ts.refused = true;
+                        if first {
+                            self.stats.reveals_refused += 1;
+                            self.findings.push((
+                                *slot,
+                                format!(
+                                    "reveal refused {} host {}: out of its group",
+                                    abi::error_name(c).unwrap_or("?"),
+                                    k.0
+                                ),
+                            ));
                         }
                     }
                     Some(abi::err::QUOTA_REFUSED) => {
@@ -609,15 +666,18 @@ impl PlayDuty {
                         st.transit_slot = Some(i as u8);
                         st.tstate = x.state;
                         st.faction = x.faction;
+                        st.gathered_at = x.gathered_at;
                     }
                     None => {
                         st.transit_slot = None;
                         st.tstate = 0;
+                        st.gathered_at = None;
                     }
                 }
                 st.citizen_tag =
                     u64::from_le_bytes(h.owner_citizen.to_bytes()[..8].try_into().expect("8"));
                 st.rent_payer = h.rent_payer;
+                st.owner_citizen = h.owner_citizen;
             }
         }
         Ok(())
@@ -962,6 +1022,12 @@ impl PlayDuty {
                             .tracks
                             .insert(m.track.clone(), json!({"state": "sent"}));
                     }
+                } else {
+                    // Not sent (a backoff after a transient refusal): the
+                    // members ranked below it cannot know their index until
+                    // it lands or leaves the group; the group waits for the
+                    // next plan (wave-4 review).
+                    break;
                 }
                 slots[i as usize] = Some(e);
                 rank_i += 1;
@@ -1064,7 +1130,9 @@ impl PlayDuty {
 
     /// The §21 return settle: one SettleDeparture with `transit_slot =
     /// RETURN_SLOT` per `(province, Holding)` with a `Leave` entry whose bell
-    /// resolved (W4-A frees all of that Holding's there at once).
+    /// resolved. The program frees at most three per transaction (v1.7
+    /// `RETURN_MAX`); the province is read again after each landing and the
+    /// write planned again while entries remain.
     fn returns(&mut self, t: &Tick<'_>, engine: &mut Engine) {
         for (pq, s) in &self.provinces {
             let mut holdings: BTreeSet<(i16, i16, u8)> = BTreeSet::new();
@@ -1213,7 +1281,13 @@ impl PlayDuty {
             }
             let a = t.addrs.clone();
             let key = format!("skip:{pk}:{b}:{n}");
-            let cu = (60_000 + 30_000 * recomputed.max(1)).min(abi::CU_MAX);
+            // §5.5 v1.7: 90k + 30k per recomputed bell (the kernel quiet
+            // test of a non-trivial roster at the first bell included).
+            let cu = frontier_abi::budgets::cu_gate(
+                frontier_abi::tags::Ix::SkipQuiet,
+                recomputed.max(1),
+            )
+            .min(abi::CU_MAX);
             let dest = (pq.0 as i32, pq.1 as i32);
             if engine.ensure(
                 WriteSpec {
@@ -1326,7 +1400,13 @@ impl PlayDuty {
                     }
                 }
             }
-            // Every present arrival's transit must be settled at origin.
+            // Wait only where the program would refuse the gather
+            // (`DepartureUnsettled`): the host's own live Holding still holds
+            // its transit in state 1. An absent, released or re-founded
+            // Holding, or no matching transit (settled against another
+            // Province, freed), gathers as not present (§5.11 v1.6; wave-4
+            // review: waiting for a transit that is gone stalled the
+            // province for good).
             let hk: Vec<Address> = hosts.iter().map(|x| x.2).collect();
             let hs = if hk.is_empty() {
                 vec![]
@@ -1337,15 +1417,7 @@ impl PlayDuty {
                 if mask & (1 << k) != 0 {
                     continue;
                 }
-                let ok = a
-                    .filter(|a| a.owner == t.addrs.program)
-                    .and_then(|a| Holding::decode(&a.data).ok())
-                    .is_some_and(|h| {
-                        h.transit.iter().any(|x| {
-                            x.host_id == *host && x.arrive_bell == b && matches!(x.state, 2 | 3)
-                        })
-                    });
-                if !ok {
+                if departure_unsettled(a.as_ref(), &t.addrs.program, *host, b) {
                     return Ok(()); // SettleDeparture first (lag waits)
                 }
             }
@@ -1454,16 +1526,42 @@ impl PlayDuty {
             if !matches!(st.tstate, 2 | 3) {
                 continue;
             }
-            // The destination: a valid seal's plaintext; else the revealed
-            // one; else (a bad seal nobody revealed) the origin province.
-            let dest = self.dest_of(&k, &d).unwrap_or(d.origin);
-            let Some(ds) = self.provinces.get(&dest).cloned() else {
-                continue;
+            // The destination: the one a gather stamped (v1.7: the only
+            // one the program accepts); else a valid seal's plaintext; else
+            // the revealed one; else, once the seal is judged bad (a bad
+            // seal nobody revealed), the origin province. An unopened seal
+            // waits (settling it against the origin would be refused
+            // `BadAddress` if it proves valid).
+            let judged_bad = st.opened.is_some_and(|o| !o.valid());
+            let dest = match st.gathered_at.or_else(|| self.dest_of(&k, &d)) {
+                Some(x) => x,
+                None if judged_bad => d.origin,
+                None => continue,
             };
-            if ds.rn <= d.arrive {
-                continue;
-            }
-            let region = ds.region;
+            let region = match self.provinces.get(&dest) {
+                Some(ds) => {
+                    if ds.rn <= d.arrive {
+                        continue;
+                    }
+                    ds.region
+                }
+                None => {
+                    // v1.7: a valid seal to a Province that is not open
+                    // settles as routed at its canonical (absent) address.
+                    let valid = st.opened.is_some_and(|o| o.valid())
+                        || self.owner.contains_key(&(d.host, d.arrive));
+                    if !valid {
+                        continue;
+                    }
+                    let pk = t.addrs.province(dest.0 as i32, dest.1 as i32);
+                    let got = port.accounts(&[pk], 0).await?;
+                    if present(&got[0], &t.addrs.program) {
+                        // Open but not read yet: the next province read plans it.
+                        continue;
+                    }
+                    ix::region_of(dest.0 as i32, dest.1 as i32)
+                }
+            };
             let Some(an) = self.anchor(t, port, beacon, d.arrive, region).await? else {
                 continue;
             };
@@ -1491,12 +1589,22 @@ impl PlayDuty {
                     }
                 }
             }
-            let resolver = got[4]
+            let inputs = got[4]
                 .as_ref()
                 .filter(|a| a.owner == t.addrs.program)
                 .and_then(|a| ClashInputs::decode(&a.data).ok())
-                .filter(|c| c.resolved())
-                .map_or(t.cfg.beneficiary, |c| c.resolver);
+                .filter(|c| c.resolved());
+            let resolver = inputs.as_ref().map_or(t.cfg.beneficiary, |c| c.resolver);
+            // v1.7 (I-56): the camp's winner lists its owner's Citizen.
+            let camp_citizen = inputs.as_ref().and_then(|c| {
+                (0..4u8).find_map(|i| {
+                    let r = c.arrivals[st.faction as usize * 4 + i as usize];
+                    (r.present == 1
+                        && r.host_id == d.host
+                        && ix::camp_winner(c.camp_mask, st.faction, i, r.fate))
+                    .then_some(st.owner_citizen)
+                })
+            });
             let anchor_present = present(&got[5], &t.addrs.program);
             let Ok((hp, hq, hs, _, _)) = fclient::addr::host_parts(d.host) else {
                 continue;
@@ -1520,6 +1628,7 @@ impl PlayDuty {
                 slot_beneficiary: slot_ben,
                 resolver,
                 holding_rent_payer: st.rent_payer,
+                camp_citizen,
             };
             let a = t.addrs.clone();
             engine.ensure(
@@ -1875,4 +1984,80 @@ impl PlayDuty {
 fn parse_pq(s: &str) -> Option<(i16, i16)> {
     let (p, q) = s.split_once(',')?;
     Some((p.parse().ok()?, q.parse().ok()?))
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+    use fclient::abi::layout as l;
+
+    fn holding(state: u8, gen: u8, transit: Option<(u64, u32, u8)>) -> Account {
+        let mut d = vec![0u8; fclient::abi::size::HOLDING];
+        d[..8].copy_from_slice(fclient::abi::magic::HOLDING);
+        d[l::holding::STATE] = state;
+        d[l::holding::GEN] = gen;
+        if let Some((host, arrive, st)) = transit {
+            let o = l::holding::TRANSIT;
+            d[o + l::transit::STATE] = st;
+            d[o + l::transit::HOST_ID..o + l::transit::HOST_ID + 8]
+                .copy_from_slice(&host.to_le_bytes());
+            d[o + l::transit::ARRIVE_BELL..o + l::transit::ARRIVE_BELL + 4]
+                .copy_from_slice(&arrive.to_le_bytes());
+        }
+        Account {
+            lamports: 1,
+            data: d,
+            owner: Address::new_from_array([7; 32]),
+            executable: false,
+        }
+    }
+
+    /// The gather waits only where the program answers
+    /// `DepartureUnsettled` (wave-4 review, W4-C major): a freed or
+    /// already-settled transit, a re-founded or released Holding, or none
+    /// at all, gather as not present.
+    #[test]
+    fn gather_waits_only_on_a_departed_transit() {
+        let program = Address::new_from_array([7; 32]);
+        let host = fclient::addr::host_id(3, 0, 1, 2, 5).unwrap();
+        let b = 40;
+        let w = |a: Option<&Account>| departure_unsettled(a, &program, host, b);
+        assert!(
+            w(Some(&holding(2, 2, Some((host, b, 1))))),
+            "departed: wait"
+        );
+        assert!(
+            !w(Some(&holding(2, 2, Some((host, b, 2))))),
+            "settled at origin"
+        );
+        assert!(!w(Some(&holding(2, 2, None))), "freed (settled elsewhere)");
+        assert!(!w(Some(&holding(2, 3, Some((host, b, 1))))), "re-founded");
+        assert!(!w(Some(&holding(3, 2, Some((host, b, 1))))), "released");
+        assert!(
+            !w(Some(&holding(2, 2, Some((host, b + 1, 1))))),
+            "another bell"
+        );
+        assert!(!w(None), "absent");
+    }
+
+    #[test]
+    fn reveal_refusals_are_final_but_three() {
+        for c in [
+            abi::err::SLOT_MOVED,
+            abi::err::NO_ANCHOR,
+            abi::err::TOO_EARLY,
+        ] {
+            assert!(reveal_transient(c));
+        }
+        // Path 32, ArrivalBell 31, Shielded 37 (§5.4).
+        for c in [
+            31u32,
+            32,
+            37,
+            abi::err::WINDOW_CLOSED,
+            abi::err::LATCH_CLOSED,
+        ] {
+            assert!(!reveal_transient(c), "{c}");
+        }
+    }
 }

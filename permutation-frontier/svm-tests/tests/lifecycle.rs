@@ -371,3 +371,66 @@ fn g01_loaded_limit_w4b_lifecycle() {
         &[&w.authority],
     );
 }
+
+/// v1.7 (W4-B F3, wave-4 review): a Holding and a Citizen left open when
+/// CloseSeason's final part ran still close on the 128-B tombstone.
+/// CloseHolding sends `pool_owed` to the Season's authority (position 4:
+/// the DefencePool is gone and its lamports went to the authority;
+/// anything else `BadAddress`) and the rest to the rent payer;
+/// CloseCitizen closes to its rent payer. Before v1.7 both were refused
+/// for ever (the tombstone is not a Season), locking the players' rent.
+#[test]
+fn close_holding_and_citizen_on_the_tombstone() {
+    use frontier_abi::layout::player::holding as H;
+    let (mut c, w) = ended(1);
+    let e = w.craft_estate(&mut c, "late", 0, (2, 0), 0);
+    let owed = 5_000u64;
+    c.edit(&e.holding, |d| {
+        d[H::POOL_OWED..H::POOL_OWED + 8].copy_from_slice(&owed.to_le_bytes())
+    });
+    let au = w.authority.pubkey();
+    c.set_time(w.end_ts() + 72 * 3_600);
+    for part in 0..=7u8 {
+        expect_lands(
+            send(&mut c, close_part(&w.a, au, part), &w.authority),
+            "close_part(",
+        );
+    }
+    assert_eq!(c.data(&w.a.season).len(), S::TOMBSTONE_SIZE);
+    let rent_payer = Address::new_from_array(
+        c.data(&e.holding)[H::RENT_PAYER..H::RENT_PAYER + 32]
+            .try_into()
+            .unwrap(),
+    );
+    let any = c.funded(b"w4r-tomb", 1);
+    let ch = fclient::ix::close_holding(&w.a, any.pubkey(), e.href(), rent_payer);
+    // The DefencePool's address (now absent) is not the authority.
+    assert_code(send(&mut c, ch.clone(), &any), E::BadAddress);
+    let (a0, r0, h0) = (
+        c.lamports(&au),
+        c.lamports(&rent_payer),
+        c.lamports(&e.holding),
+    );
+    let l = expect_lands(
+        send(&mut c, with_account(ch, 4, au), &any),
+        "CloseHolding on the tombstone",
+    );
+    assert!(c.is_absent(&e.holding));
+    assert_eq!(c.lamports(&au), a0 + owed, "pool_owed to the authority");
+    assert_eq!(c.lamports(&rent_payer), r0 + h0 - owed);
+    assert_eq!(records::one(&l.logs, Kind::POOL_SWEEP).u64("amount"), owed);
+    let cz = fclient::ix::close_citizen(&w.a, any.pubkey(), &e.wallet.pubkey(), rent_payer, None);
+    let cz = {
+        // the Citizen's stored rent payer
+        let d = c.data(&e.citizen);
+        let rp = frontier_abi::layout::player::citizen::RENT_PAYER;
+        let payer = Address::new_from_array(d[rp..rp + 32].try_into().unwrap());
+        if payer == rent_payer {
+            cz
+        } else {
+            fclient::ix::close_citizen(&w.a, any.pubkey(), &e.wallet.pubkey(), payer, None)
+        }
+    };
+    expect_lands(send(&mut c, cz, &any), "CloseCitizen on the tombstone");
+    assert!(c.is_absent(&e.citizen));
+}

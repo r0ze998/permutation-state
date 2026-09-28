@@ -103,7 +103,7 @@ pub struct IxInfo {
     pub name: &'static str,
     pub class: Class,
     /// CU ceiling asserted by the M1 gate (§5.5); for SkipQuiet the base
-    /// (60k + 30k per recomputed bell).
+    /// (v1.7: 90k + 30k per recomputed bell).
     pub cu_budget: u32,
     /// Largest legal transaction, bytes.
     pub tx_max: u16,
@@ -174,14 +174,14 @@ pub const INSTRUCTIONS: [IxInfo; 50] = [
     ix(0x52, "SettleDeparture", Class::D, 15_000, 400, false),
     ix(0x54, "SettleTransit", Class::D, 85_000, 1_100, false),
     ix(0x55, "SweepPoolOwed", Class::N, 8_000, 300, false),
-    ix(0x60, "GatherClash", Class::D, 40_000, 1_232, true),
+    ix(0x60, "GatherClash", Class::D, 49_000, 1_232, true),
     ix(0x61, "ResolveFromInputs", Class::D, 340_000, 460, true),
     ix(0x62, "ResolveClash", Class::Test, 1_400_000, 1_232, true),
-    ix(0x63, "SkipQuiet", Class::D, 60_000, 1_232, true),
+    ix(0x63, "SkipQuiet", Class::D, 90_000, 1_232, true),
     ix(0x64, "CloseClashInputs", Class::N, 8_000, 300, false),
     ix(0x65, "CloseArrivalDay", Class::N, 8_000, 300, false),
     ix(0x66, "CloseArrivalSlot", Class::N, 8_000, 300, false),
-    ix(0x70, "ClaimDefence", Class::D, 25_000, 1_000, false),
+    ix(0x70, "ClaimDefence", Class::D, 25_500, 1_000, false),
 ];
 
 /// The §5.5 row of `tag`.
@@ -765,7 +765,11 @@ pub mod layout {
         pub const SEAL_ROOT: usize = 48;
         pub const TIP: usize = 80;
         pub const FLAGS: usize = 88;
-        pub const END: usize = 89;
+        /// v1.7: the gathered destination (`FLAGS & FLAG_GATHERED`).
+        pub const DEST_P: usize = 89;
+        pub const DEST_Q: usize = 91;
+        pub const END: usize = 93;
+        pub const FLAG_GATHERED: u8 = 4;
     }
     /// Explore record (24 B) inside the Holding.
     pub mod explore {
@@ -893,6 +897,8 @@ pub mod layout {
         pub const Q: usize = 66;
         pub const BELL: usize = 68;
         pub const ARRIVALS_MASK: usize = 72;
+        /// `RSV_76` read as `camp_mask` (v1.6 §22, v1.7).
+        pub const CAMP_MASK: usize = 76;
         pub const POSTURE_MASK: usize = 80;
         pub const FLAGS: usize = 88;
         pub const N_PRESENT: usize = 89;

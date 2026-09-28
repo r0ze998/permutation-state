@@ -303,7 +303,7 @@ impl Engine {
     }
 
     /// Sets the CU limit of a pending write (a duty that sizes its own,
-    /// e.g. SkipQuiet's `60k + 30k` per recomputed bell, I-50); the retry
+    /// e.g. SkipQuiet's `90k + 30k` per recomputed bell, I-50, v1.7); the retry
     /// ladder continues from it.
     pub fn set_cu_limit(&mut self, key: &str, cu: u32) {
         if let Some(p) = self.pending.get_mut(key) {
@@ -382,6 +382,25 @@ impl Engine {
             });
         }
         status("failed");
+        if is_cu_exceeded(&e) && p.spec.tag == abi::tag::SKIP_QUIET {
+            // v1.7 (wave-4 review): SkipQuiet within its gate formula
+            // always finishes a quiet run (G1 rows, the kernel quiet test
+            // included); running out means the first bell is not quiet
+            // (the kernel ran a whole clash). It is `NotQuiet` for the
+            // duty (gather and resolve), not a ladder step.
+            if let Some(j) = journal {
+                let _ = j.alert(
+                    st.slot,
+                    "skip-cu-not-quiet",
+                    &format!("{key}: SkipQuiet used its gate: treated as NotQuiet"),
+                );
+            }
+            return Some(Outcome::Failed {
+                code: Some(err::NOT_QUIET),
+                err: format!("{e} (SkipQuiet over its gate: not quiet)"),
+                slot: st.slot,
+            });
+        }
         if is_cu_exceeded(&e) {
             if v.cu_limit >= p.cu_limit && p.cu_limit < abi::CU_MAX {
                 p.cu_limit = Budgets::retry_cu(p.cu_limit);
@@ -994,6 +1013,41 @@ mod tests {
         assert!(matches!(landed, Some(Outcome::Landed { versions: 3, .. })));
         assert_eq!(Budgets::retry_cu(680_000), 1_360_000);
         assert_eq!(Budgets::retry_cu(1_360_000), abi::CU_MAX);
+    }
+
+    /// v1.7 (wave-4 review): a SkipQuiet that runs out of CU within its
+    /// gate is `NotQuiet` for the duty (one version, no ladder step), so the
+    /// keeper gathers and resolves the bell instead.
+    #[tokio::test]
+    async fn skip_quiet_out_of_cu_is_not_quiet() {
+        let port = Script::default();
+        *port.answer.lock().unwrap() = Box::new(|_| {
+            Some(Status {
+                slot: 1,
+                err: Some("InstructionError(2, ComputationalBudgetExceeded)".into()),
+                code: None,
+            })
+        });
+        let mut payers = payers();
+        payers.refresh(&port, 0).await.unwrap();
+        let mut e = Engine::new(Budgets::placeholder(), EngineParams::default());
+        let j = Journal::open(std::path::Path::new(":memory:")).unwrap();
+        e.ensure(spec("skip:3,0:10:24", Class::D, abi::tag::SKIP_QUIET), 0);
+        let mut out = None;
+        let mut ladder = vec![];
+        for s in 0..4 {
+            let r = e.step(&port, &mut payers, Some(&j), s).await;
+            ladder.extend(r.ladder);
+            if let Some((_, o)) = r.outcomes.into_iter().next() {
+                out = Some(o);
+                break;
+            }
+        }
+        assert!(ladder.is_empty(), "no ladder step");
+        assert!(
+            matches!(out, Some(Outcome::Failed { code: Some(c), .. }) if c == err::NOT_QUIET),
+            "{out:?}"
+        );
     }
 
     /// A write held past its version cap and blockhash expiry ends (Failed,

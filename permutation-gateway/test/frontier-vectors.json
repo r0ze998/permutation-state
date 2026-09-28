@@ -1485,7 +1485,7 @@
       },
       {
         "class": "D",
-        "cu_budget": 40000,
+        "cu_budget": 49000,
         "name": "GatherClash",
         "tag": 96,
         "top_level": true,
@@ -1509,7 +1509,7 @@
       },
       {
         "class": "D",
-        "cu_budget": 60000,
+        "cu_budget": 90000,
         "name": "SkipQuiet",
         "tag": 99,
         "top_level": true,
@@ -1541,7 +1541,7 @@
       },
       {
         "class": "D",
-        "cu_budget": 25000,
+        "cu_budget": 25500,
         "name": "ClaimDefence",
         "tag": 112,
         "top_level": false,

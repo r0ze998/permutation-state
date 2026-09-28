@@ -1,7 +1,7 @@
 {
   "generator": "frontier-abi abi-vectors",
   "abi_version": 1,
-  "contract": "docs/frontier/m1/M1-CONTRACT.md v1.6",
+  "contract": "docs/frontier/m1/M1-CONTRACT.md v1.7",
   "content": "PS2 log records (§6): kinds, field widths, one encoded vector per kind with its chain heads",
   "prefix": "PS2",
   "version": 1,
@@ -1646,6 +1646,11 @@
             "head": "a4832dad9b7604f386133a911d1afb279946be9fdf3c71622c78681a78c7b482"
           },
           {
+            "entity": 4,
+            "who": "Citizen(OfHolding { p: 2, q: -1, site: 3 })",
+            "optional": true
+          },
+          {
             "entity": 6,
             "who": "InTx",
             "optional": true
@@ -1712,6 +1717,56 @@
             "prev_head": "f68c269b16b1790bdea38c4c5e80ed120b8563f8038a9f7632abdd190211b200",
             "seq": 6,
             "head": "64a42cba4181d07f0892f84d10e07c2b3126dada203ed9fb29a6dcf7ec737e0b"
+          },
+          {
+            "entity": 5,
+            "who": "InTx",
+            "optional": true
+          },
+          {
+            "entity": 5,
+            "who": "InTx",
+            "optional": true
+          },
+          {
+            "entity": 5,
+            "who": "InTx",
+            "optional": true
+          },
+          {
+            "entity": 5,
+            "who": "InTx",
+            "optional": true
+          },
+          {
+            "entity": 5,
+            "who": "InTx",
+            "optional": true
+          },
+          {
+            "entity": 5,
+            "who": "InTx",
+            "optional": true
+          },
+          {
+            "entity": 5,
+            "who": "InTx",
+            "optional": true
+          },
+          {
+            "entity": 5,
+            "who": "InTx",
+            "optional": true
+          },
+          {
+            "entity": 5,
+            "who": "InTx",
+            "optional": true
+          },
+          {
+            "entity": 5,
+            "who": "InTx",
+            "optional": true
           }
         ]
       }

@@ -984,6 +984,9 @@ pub fn settle_args(
         slot_beneficiary,
         resolver,
         holding_rent_payer: h.rent_payer,
+        // v1.7: the program reads the Citizen only when this host earned
+        // the camp's Works (I-56); a racing bot lists it always.
+        camp_citizen: Some(h.owner_citizen),
     })
 }
 

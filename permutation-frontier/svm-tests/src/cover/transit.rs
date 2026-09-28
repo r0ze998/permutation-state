@@ -7,6 +7,31 @@ use super::{Cover, Err, Lands, Loaded, E};
 pub const PENDING: &[(&str, &str)] = &[];
 
 pub const SETTLE_TRANSIT: &[Cover] = &[
+    // v1.7 (integ-W4 review): the camp's Works, an absent destination, the
+    // gather stamp.
+    Cover::Test(
+        "transit::g12_settle_credits_the_camp_works_to_one_winner",
+        &[
+            Err(E::BadAccount),
+            Err(E::BadAddress),
+            Lands("settle of the camp's winner"),
+        ],
+    ),
+    Cover::Test(
+        "transit::g12_valid_seal_to_an_absent_province_routes",
+        &[
+            Err(E::BadAddress),
+            Err(E::BadAccount),
+            Lands("settle to an absent Province"),
+        ],
+    ),
+    Cover::Test(
+        "transit::g12_gathered_bad_seal_settles_only_at_its_destination",
+        &[
+            Err(E::BadAddress),
+            Lands("settle at the gathered destination"),
+        ],
+    ),
     Cover::Test(
         "transit::g12_settle_stays_pays_and_frees_the_host",
         &[

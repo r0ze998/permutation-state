@@ -81,8 +81,9 @@ pub fn write_body(
     Some(n)
 }
 
-/// Largest record: DEPART's body (278 B) plus a full tail.
-pub const MAX_RECORD: usize = 640;
+/// Largest record: DEPART's body (278 B) plus a full tail (v1.7: 12
+/// links, a GATHER with its stamped Holdings).
+pub const MAX_RECORD: usize = 800;
 const _: () = assert!(MAX_RECORD >= 6 + 8 + 272 + 1 + 41 * MAX_LINKS);
 
 /// A chained account the record advances: its entity kind and its data
@@ -106,7 +107,7 @@ pub fn record(
         return Err(BAD_ACCOUNT);
     }
     let n = write_body(kind, bell, key, payload, out).ok_or(BAD_ACCOUNT)?;
-    // Stable order by entity kind (insertion sort over indices, ≤ 8).
+    // Stable order by entity kind (insertion sort over indices, ≤ 12).
     let mut order = [0usize; MAX_LINKS];
     for (i, o) in order.iter_mut().enumerate().take(chained.len()) {
         *o = i;

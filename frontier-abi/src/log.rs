@@ -33,7 +33,10 @@ pub const HEAD_LEN: usize = 6;
 /// One tail link: `entity_kind u8, seq u64, head [32]`.
 pub const LINK_LEN: usize = 41;
 /// Most chained entities one record touches (SETTLE with a displacement).
-pub const MAX_LINKS: usize = 8;
+pub const MAX_LINKS: usize = 12;
+
+/// Most Holdings one GatherClash part lists (and may stamp, v1.7).
+pub const GATHER_HOLDINGS_MAX: usize = 10;
 /// `bell` before genesis.
 pub const NO_BELL: u32 = u32::MAX;
 /// Soft ceiling on `body_without_tail` (§6); DEPART, CLASH and
@@ -713,20 +716,34 @@ pub fn chains_of(kind: Kind, key: &[u8], payload: &[u8]) -> Option<Chains> {
         }
         Kind::TRANSIT_SETTLED => {
             let (hp, hq, site) = host()?;
+            // v1.7: the owner's Citizen when the host earned the camp's
+            // Works (I-56).
+            c.push(
+                E::Citizen,
+                R::Citizen(CitizenRef::OfHolding { p: hp, q: hq, site }),
+                true,
+            );
             c.push(E::Holding, R::Holding { p: hp, q: hq, site }, false);
             c.push(E::Province, R::InTx, true);
             c.push(E::Province, R::InTx, true);
             c.push(E::ClashInputs, R::InTx, true);
         }
-        Kind::GATHER => c.push(
-            E::ClashInputs,
-            R::ClashInputs {
-                p: rd_i32(key, 0)?,
-                q: rd_i32(key, 4)?,
-                bell: crate::bytes::rd_u32(key, 8)?,
-            },
-            false,
-        ),
+        Kind::GATHER => {
+            c.push(
+                E::ClashInputs,
+                R::ClashInputs {
+                    p: rd_i32(key, 0)?,
+                    q: rd_i32(key, 4)?,
+                    bell: crate::bytes::rd_u32(key, 8)?,
+                },
+                false,
+            );
+            // v1.7 (W4-B F1): each Holding whose transit the gather
+            // stamped, in account order (≤ 10 per part).
+            for _ in 0..GATHER_HOLDINGS_MAX {
+                c.push(E::Holding, R::InTx, true);
+            }
+        }
         Kind::CLASH => {
             let (p, q, bell) = (
                 rd_i32(key, 0)?,

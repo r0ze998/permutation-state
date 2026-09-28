@@ -1485,13 +1485,34 @@ pub fn release_dormant(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
     close_holding_to(p, holding, rent_payer, dpool, &raw, bell)
 }
 
-/// Sweeps `pool_owed`, logs `CLOSE` and closes the Holding to `rent_payer`
-/// (its escrow and rent).
+/// Sweeps `pool_owed` to `dpool` (the DefencePool, or on the Closed
+/// tombstone the authority that received the pool's lamports), logs
+/// `CLOSE` and closes the Holding to `rent_payer` (its escrow and rent).
 fn close_holding_to<'a>(
     p: &Pubkey,
     holding: &AccountInfo<'a>,
     rent_payer: &AccountInfo<'a>,
     dpool: &AccountInfo<'a>,
+    raw: &[u8; 9],
+    bell: u32,
+) -> R<()> {
+    close_holding_sink(
+        p,
+        holding,
+        rent_payer,
+        dpool,
+        &Sink::DefencePool(dpool),
+        raw,
+        bell,
+    )
+}
+
+fn close_holding_sink<'a>(
+    p: &Pubkey,
+    holding: &AccountInfo<'a>,
+    rent_payer: &AccountInfo<'a>,
+    dpool: &AccountInfo<'a>,
+    sink: &Sink<'a, '_>,
     raw: &[u8; 9],
     bell: u32,
 ) -> R<()> {
@@ -1509,16 +1530,30 @@ fn close_holding_to<'a>(
             bell,
         )?;
     }
-    init::close_to(p, holding, rent_payer, &Sink::DefencePool(dpool), bell)?;
+    init::close_to(p, holding, rent_payer, sink, bell)?;
     Ok(())
 }
 
 // ------------------------------------------------------------ season-end closes
 
+/// The Season of a season-end close: `Ok(Some((id, authority)))` on the
+/// Closed tombstone (v1.7, W4-B F3: a Holding or Citizen left open when
+/// CloseSeason's final part ran still closes), else `Ok(None)` after
+/// [`season_end_close`] passed (Ended ≥ 72 h, or Aborted).
+fn end_or_tombstone(season_ai: &AccountInfo, p: &Pubkey) -> R<Option<(u64, [u8; 32])>> {
+    if season_ai.owner == p && season_ai.data_len() == S::TOMBSTONE_SIZE {
+        return Ok(Some(super::season::tombstone(season_ai, p)?));
+    }
+    Ok(None)
+}
+
 /// 0x36 CloseHolding: `[any s] [season] [holding w] [rent_payer w] [dpool
-/// w]`. Class N. Ended with `now ≥ end + 72 h`, or Aborted. `pool_owed` →
-/// DefencePool (`POOL_SWEEP`); the Holding (escrow of unsettled transits
-/// included) closes to its `rent_payer`. Log `CLOSE`.
+/// w]`. Class N. Ended with `now ≥ end + 72 h`, or Aborted, or (v1.7) the
+/// Closed tombstone. `pool_owed` → DefencePool (`POOL_SWEEP`); on the
+/// tombstone the pool is gone and position 4 is the Season's authority,
+/// which received the pool's lamports (`BadAddress` otherwise). The
+/// Holding (escrow of unsettled transits included) closes to its
+/// `rent_payer`. Log `CLOSE`.
 pub fn close_holding(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
     check_accounts(Ix::CloseHolding, a, None)?;
     aix::CloseHolding::decode(d)?;
@@ -1526,28 +1561,37 @@ pub fn close_holding(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
         return Err(FrontierError::TooManyAccounts.into());
     };
     let now = prologue::now()?;
-    let hdr = season_end_close(season_ai, p, now.ts)?;
+    let tomb = end_or_tombstone(season_ai, p)?;
+    let (sid, bell) = match tomb {
+        Some((id, _)) => (id, frontier_abi::log::NO_BELL),
+        None => {
+            let hdr = season_end_close(season_ai, p, now.ts)?;
+            (hdr.id, log_bell(&hdr, now.ts))
+        }
+    };
     let ctx = addr::ctx(&key(season_ai), &p.to_bytes());
-    let (hp, hq, site) = holding_key(p, &ctx, hdr.id, holding)?;
+    let (hp, hq, site) = holding_key(p, &ctx, sid, holding)?;
     let h_payer = {
         let hd = holding.try_borrow_data()?;
         Ro(&hd).arr::<32>(H::RENT_PAYER)?
     };
     expect_key(rent_payer, &h_payer)?;
-    present_at(
-        dpool,
-        &ctx.defence_pool(),
-        p,
-        AccountKind::DefencePool,
-        hdr.id,
-    )?;
     let raw = raw_holding(hp as i32, hq as i32, site);
-    close_holding_to(p, holding, rent_payer, dpool, &raw, log_bell(&hdr, now.ts))
+    match tomb {
+        None => {
+            present_at(dpool, &ctx.defence_pool(), p, AccountKind::DefencePool, sid)?;
+            close_holding_to(p, holding, rent_payer, dpool, &raw, bell)
+        }
+        Some((_, authority)) => {
+            expect_key(dpool, &authority)?;
+            close_holding_sink(p, holding, rent_payer, dpool, &Sink::Never, &raw, bell)
+        }
+    }
 }
 
 /// 0x37 CloseCitizen: `[any s] [season] [citizen w] [rent_payer w]
 /// [ticket_funder w]?`. Class N. Ended with `now ≥ end + 72 h`, or
-/// Aborted. The escrow of an open or exhausted ticket goes back to
+/// Aborted, or (v1.7) the Closed tombstone. The escrow of an open or exhausted ticket goes back to
 /// `ticket_funder` (listed exactly when there is escrow:
 /// `TooManyAccounts`), the rest to `rent_payer`. Log `CLOSE`.
 pub fn close_citizen(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
@@ -1559,9 +1603,15 @@ pub fn close_citizen(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
         _ => return Err(FrontierError::TooManyAccounts.into()),
     };
     let now = prologue::now()?;
-    let hdr = season_end_close(season_ai, p, now.ts)?;
+    let (sid, bell) = match end_or_tombstone(season_ai, p)? {
+        Some((id, _)) => (id, frontier_abi::log::NO_BELL),
+        None => {
+            let hdr = season_end_close(season_ai, p, now.ts)?;
+            (hdr.id, log_bell(&hdr, now.ts))
+        }
+    };
     let ctx = addr::ctx(&key(season_ai), &p.to_bytes());
-    prologue::present(citizen, p, AccountKind::Citizen, hdr.id)?;
+    prologue::present(citizen, p, AccountKind::Citizen, sid)?;
     let (tag15, c_payer, escrow, c_funder) = {
         let cd = citizen.try_borrow_data()?;
         let r = Ro(&cd);
@@ -1584,7 +1634,6 @@ pub fn close_citizen(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
         (false, None) => {}
         _ => return Err(FrontierError::TooManyAccounts.into()),
     }
-    let bell = log_bell(&hdr, now.ts);
     {
         let lamports = citizen.lamports();
         let mut cd = citizen.try_borrow_mut_data()?;

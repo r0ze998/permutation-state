@@ -977,10 +977,21 @@ pub struct SettleTransitArgs {
     pub slot_beneficiary: Address,
     pub resolver: Address,
     pub holding_rent_payer: Address,
+    /// v1.7 (I-56): the Holding's owner Citizen, when this host earns the
+    /// camp's Works (the lowest `camp_mask` position, fate Stays:
+    /// [`camp_winner`]); `None` otherwise.
+    pub camp_citizen: Option<Address>,
+}
+
+/// Whether the arrival at `(faction, i)` of resolved inputs with this
+/// `camp_mask` (ClashInputs offset 76) earns the camp's Works when its fate
+/// is Stays (v1.7: the lowest set position, one winner per camp).
+pub fn camp_winner(camp_mask: u32, faction: u8, i: u8, fate: u8) -> bool {
+    fate == 1 && camp_mask != 0 && camp_mask.trailing_zeros() == faction as u32 * 4 + i as u32
 }
 
 /// 0x54 SettleTransit: `[payer s,w] [season] [holding w] [dest province w] [inputs w] [slot w] [home province w] [anchor|archive r]
-/// [slot_beneficiary w] [resolver w] [holding_rent_payer w] [settle_beneficiary w] [system]`.
+/// [slot_beneficiary w] [resolver w] [holding_rent_payer w] [settle_beneficiary w] [system] ([citizen w])`.
 pub fn settle_transit(a: &Addresses, payer: Address, x: &SettleTransitArgs) -> Instruction {
     let (p, q) = x.dest;
     let rg = region_of(p, q);
@@ -989,7 +1000,7 @@ pub fn settle_transit(a: &Addresses, payer: Address, x: &SettleTransitArgs) -> I
     } else {
         a.archive(rg, addr::archive_part(x.arrive))
     };
-    let m = vec![
+    let mut m = vec![
         ws(payer),
         r(a.season),
         w(x.holding.address(a)),
@@ -1004,6 +1015,9 @@ pub fn settle_transit(a: &Addresses, payer: Address, x: &SettleTransitArgs) -> I
         w(x.beneficiary),
         r(addr::system_program()),
     ];
+    if let Some(c) = x.camp_citizen {
+        m.push(w(c));
+    }
     let d = Data::new(tag::SETTLE_TRANSIT)
         .u8(x.transit_slot)
         .bytes(&x.commit)
@@ -1070,7 +1084,8 @@ pub fn gather_clash(
             .iter()
             .map(|&(f, i)| r(a.arrival_slot(p, q, bell, f, i))),
     );
-    m.extend(holdings.iter().map(|&h| r(h)));
+    // v1.7: writable (the gathered transit's stamp, W4-B F1).
+    m.extend(holdings.iter().map(|&h| w(h)));
     let d = Data::new(tag::GATHER_CLASH)
         .u32(bell)
         .u8(start)
@@ -1341,6 +1356,7 @@ mod tests {
             slot_beneficiary: k,
             resolver: k,
             holding_rent_payer: k,
+            camp_citizen: None,
         };
         assert_eq!(
             settle_transit(&a, k, &st).data.len(),
@@ -1469,6 +1485,7 @@ mod tests {
             slot_beneficiary: k,
             resolver: k,
             holding_rent_payer: k,
+            camp_citizen: None,
         };
         let items: Vec<ArchiveItem> = (0..8)
             .map(|i| ArchiveItem {

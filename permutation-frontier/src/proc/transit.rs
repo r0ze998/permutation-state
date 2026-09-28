@@ -7,8 +7,10 @@
 //! Accounts `[0 payer s,w] [1 season] [2 holding w] [3 dest province w] [4
 //! inputs w] [5 slot w] [6 home province w] [7 anchor|archive r] [8
 //! slot_beneficiary w] [9 resolver w] [10 holding_rent_payer w] [11
-//! settle_beneficiary w] [12 system]`; data `transit_slot, commit, seal,
-//! beneficiary`. Checks in the order of §5.11:
+//! settle_beneficiary w] [12 system] ([13 citizen w])`; data `transit_slot,
+//! commit, seal, beneficiary`. Position 13 (v1.7) is the owner's Citizen,
+//! required when the host earns the camp's Works (below). Checks in the
+//! order of §5.11:
 //!
 //! 1. the Holding (present, canonical from its stored key) and its transit
 //!    record in state 2 or 3 (`DepartureUnsettled` for 1, `TransitState`
@@ -84,14 +86,27 @@
 //!   escrow as `reward`; `pool_owed_delta` counts routed and diverted
 //!   lamports.
 //!
-//! **Open finding (W4-B F1, notes):** for a seal judged bad with codes 1,
-//! 2 or 4 the destination cannot be read from the seal, so the program
-//! uses the settler's Province; a host revealed (by its owner, who knows
-//! the salt) to another Province and staying there escapes the `Forfeit`
-//! if its owner settles first and names a wrong Province. Nothing the
-//! program has written ties the destination to the transit (Reveal writes
-//! only the slot, GatherClash reads the Holding): the fix needs a contract
-//! decision.
+//! **v1.7 (wave-4 review):**
+//!
+//! - **W4-B F1 closed by the gather stamp.** A GatherClash that records a
+//!   transit (state 2 or 3) stamps `FLAG_GATHERED` and its `(DEST_P,
+//!   DEST_Q)` into the transit record; SettleTransit settles a stamped
+//!   transit only against that Province (`BadAddress`). A bad seal whose
+//!   owner revealed it elsewhere can no longer be settled against another
+//!   Province to escape the `Forfeit`; an unstamped transit was recorded
+//!   by no gather, so no roster holds it and any present Province may
+//!   route it.
+//! - **An absent destination** (a valid seal to a Province never opened,
+//!   or outside `r_max`): position 3 is the canonical address of the
+//!   plaintext's Province, absent; the anchor or archive names its own
+//!   region, which must be the plaintext destination's; nothing waits for
+//!   a resolve; the transit settles as routed with no resolved inputs. A
+//!   bad seal still needs a present Province (`BadAccount`).
+//! - **The camp's loot** (I-56): the arrival at the lowest position of the
+//!   ClashInputs' `camp_mask` whose fate is Stays earns `WORKS_CAMP` for
+//!   the Holding's owner Citizen (position 13, `BadAccount` when missing);
+//!   `TRANSIT_SETTLED` then chains the Citizen. One winner per camp, as the
+//!   simulator (`sim.rs` credits the first camp winner on the tile).
 
 use solana_program::{account_info::AccountInfo, pubkey::Pubkey};
 
@@ -150,6 +165,9 @@ pub struct Transit {
     pub seal_root: [u8; 32],
     pub tip: u64,
     pub flags: u8,
+    /// v1.7 (W4-B F1): the destination a GatherClash recorded it at, when
+    /// `flags & FLAG_GATHERED`.
+    pub gathered_at: Option<(i16, i16)>,
 }
 
 impl Transit {
@@ -171,6 +189,11 @@ impl Transit {
             seal_root: r.arr(o + T::SEAL_ROOT)?,
             tip: r.u64(o + T::TIP)?,
             flags: r.u8(o + T::FLAGS)?,
+            gathered_at: if r.u8(o + T::FLAGS)? & T::FLAG_GATHERED != 0 {
+                Some((r.i16(o + T::DEST_P)?, r.i16(o + T::DEST_Q)?))
+            } else {
+                None
+            },
         })
     }
 }
@@ -527,8 +550,12 @@ pub fn settle_transit(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
     check_accounts(Ix::SettleTransit, a, None)?;
     let x = aix::SettleTransit::decode(d)?;
     let now = prologue::now()?;
+    let (fixed, camp_citizen) = match a {
+        [f @ .., c] if a.len() == 14 => (f, Some(c)),
+        f => (f, None),
+    };
     let [payer, season_ai, holding, dest, inputs, slot, home, anchor, slot_ben, resolver, rent_payer, settle_ben, _system] =
-        a
+        fixed
     else {
         return Err(FrontierError::TooManyAccounts.into());
     };
@@ -573,15 +600,27 @@ pub fn settle_transit(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
     let arrive = t.arrive_bell;
 
     // 2. Timing: THE anchor (or its archive entry) of the destination's
-    // region, and the destination resolved past the arrival.
-    let (dp, dq, dest_rn) = province_at(p, &ctx, hdr.id, dest)?;
-    let dest_c = ProvinceCoord::new(dp as i32, dq as i32);
-    let region = region_of(dest_c);
-    let src: AnchorSource =
-        the_anchor_or_archive(p, &ctx, hdr.id, anchor, arrive, region, &sv.clock)?;
+    // region, and the destination resolved past the arrival. v1.7 (wave-4
+    // review): a destination Province that is absent (never opened, or
+    // outside r_max) is accepted at its canonical address for a valid seal
+    // only; the anchor then names its own region, checked against the
+    // plaintext's below, and nothing waits for a resolve (nobody could
+    // reveal or gather there: Reveal needs the Province).
+    let dest_present = prologue::presence(dest, p, AccountKind::Province, hdr.id)?;
+    let (mut dp, mut dq, dest_rn, region, src) = if dest_present {
+        let (dp, dq, rn) = province_at(p, &ctx, hdr.id, dest)?;
+        let region = region_of(ProvinceCoord::new(dp as i32, dq as i32));
+        let src: AnchorSource =
+            the_anchor_or_archive(p, &ctx, hdr.id, anchor, arrive, region, &sv.clock)?;
+        (dp, dq, Some(rn), region, src)
+    } else {
+        let (src, region) =
+            super::beacon::anchor_of_any_region(p, &ctx, hdr.id, anchor, arrive, &sv.clock)?;
+        (0, 0, None, region, src)
+    };
     let close = sv.clock.reveal_close(arrive, src.a);
     let settle_at = close.checked_add(SETTLE_AFTER_CLOSE_SECS).ok_or(OVERFLOW)?;
-    if now.ts < settle_at || dest_rn <= arrive {
+    if now.ts < settle_at || dest_rn.is_some_and(|rn| rn <= arrive) {
         return Err(FrontierError::TooEarly.into());
     }
 
@@ -594,35 +633,61 @@ pub fn settle_transit(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
     let s_aff = sys::bls_g1_decompress(&src.sig48)
         .map_err(|_| crypto(crate::error::crypto_sub::BAD_POINT))?;
     let (code, plain) = seal::judge(&s_aff, &x.seal, &x.commit, t.host_id, arrive);
-    if let Some(pl) = plain {
-        if (pl.dest_p, pl.dest_q) != (dp, dq) {
+    match (plain, dest_present) {
+        (Some(pl), true) => {
+            if (pl.dest_p, pl.dest_q) != (dp, dq) {
+                return Err(FrontierError::BadAddress.into());
+            }
+        }
+        (Some(pl), false) => {
+            (dp, dq) = (pl.dest_p, pl.dest_q);
+            expect_key(dest, &ctx.province(dp as i32, dq as i32))?;
+            if region_of(ProvinceCoord::new(dp as i32, dq as i32)) != region {
+                return Err(FrontierError::BadAddress.into());
+            }
+        }
+        // A bad seal is settled against a present Province (v1.7).
+        (None, false) => return Err(BAD_ACCOUNT),
+        (None, true) => {}
+    }
+    // v1.7 (W4-B F1): a transit a gather recorded is settled only against
+    // the Province that gathered it (a bad seal's settler cannot name
+    // another one and escape the Forfeit).
+    if let Some(at) = t.gathered_at {
+        if at != (dp, dq) {
             return Err(FrontierError::BadAddress.into());
         }
     }
+    let dest_c = ProvinceCoord::new(dp as i32, dq as i32);
 
     // 5. The beneficiary, the final set and the slot.
     expect_key(settle_ben, &x.beneficiary)?;
     expect_key(rent_payer, &holding_rent_payer)?;
     expect_key(inputs, &ctx.clash_inputs(dp as i32, dq as i32, arrive))?;
-    let (set, resolver_key) = if prologue::presence(inputs, p, AccountKind::ClashInputs, hdr.id)? {
-        let cd = inputs.try_borrow_data()?;
-        let r = Ro(&cd);
-        if r.i16(CI::P)? != dp || r.i16(CI::Q)? != dq || r.u32(CI::BELL)? != arrive {
-            return Err(BAD_ACCOUNT);
-        }
-        if r.u8(CI::FLAGS)? & CI::FLAG_RESOLVED != 0 {
-            let base = CI::position(t.faction, 0);
-            let mut set = [arrival_at(&cd, base)?; 4];
-            for (i, s) in set.iter_mut().enumerate().skip(1) {
-                *s = arrival_at(&cd, base + i)?;
+    let (set, resolver_key, camp_mask) =
+        if prologue::presence(inputs, p, AccountKind::ClashInputs, hdr.id)? {
+            let cd = inputs.try_borrow_data()?;
+            let r = Ro(&cd);
+            if r.i16(CI::P)? != dp || r.i16(CI::Q)? != dq || r.u32(CI::BELL)? != arrive {
+                return Err(BAD_ACCOUNT);
             }
-            (Some(set), r.arr::<32>(CI::RESOLVER)?)
+            if r.u8(CI::FLAGS)? & CI::FLAG_RESOLVED != 0 {
+                let base = CI::position(t.faction, 0);
+                let mut set = [arrival_at(&cd, base)?; 4];
+                for (i, s) in set.iter_mut().enumerate().skip(1) {
+                    *s = arrival_at(&cd, base + i)?;
+                }
+                (
+                    Some(set),
+                    r.arr::<32>(CI::RESOLVER)?,
+                    r.u32(super::clash::CAMP_MASK)?,
+                )
+            } else {
+                (None, [0; 32], 0)
+            }
         } else {
-            (None, [0; 32])
-        }
-    } else {
-        (None, [0; 32])
-    };
+            (None, [0; 32], 0)
+        };
     let position = set
         .as_ref()
         .and_then(|s| s.iter().position(|a| a.present && a.host_id == t.host_id));
@@ -671,6 +736,26 @@ pub fn settle_transit(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
             return Err(BAD_ACCOUNT);
         }
     }
+    // v1.7 (I-56, wave-4 review): the camp's loot. The arrival at the
+    // lowest position of `camp_mask` (one winner per camp, as the
+    // simulator) that stays earns `WORKS_CAMP` for its owner's Citizen,
+    // listed as the optional last account (`BadAccount` without it); the
+    // record then chains the Citizen.
+    let camp_works = match (outcome, position) {
+        (Outcome::Fate(AR::FATE_STAYS), Some(k)) => {
+            camp_mask != 0
+                && camp_mask.trailing_zeros() as usize == CI::position(t.faction, k as u8)
+        }
+        _ => false,
+    };
+    let camp_citizen = if camp_works {
+        let c = camp_citizen.ok_or(BAD_ACCOUNT)?;
+        expect_key(c, &owner_citizen)?;
+        prologue::present(c, p, AccountKind::Citizen, hdr.id)?;
+        Some(c)
+    } else {
+        None
+    };
 
     // Payments (out of the Holding's escrow).
     let fee = if t.flags & T::FLAG_FEE_ESCROWED != 0 {
@@ -870,6 +955,14 @@ pub fn settle_transit(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
         rec.fill(0);
     }
 
+    if let Some(c) = camp_citizen {
+        let mut cd = c.try_borrow_mut_data()?;
+        Rw(&mut cd).add_u64(
+            crate::layout::citizen::WORKS,
+            permutation_rules::frontier::camp::loot() as u64,
+        )?;
+    }
+
     // TRANSIT_SETTLED.
     let payload = Buf::<79>::new()
         .u8(outcome.code())
@@ -901,7 +994,17 @@ pub fn settle_transit(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
     } else {
         None
     };
-    let mut list: alloc::vec::Vec<Chained> = alloc::vec::Vec::with_capacity(4);
+    let mut zd = match camp_citizen {
+        Some(c) => Some(c.try_borrow_mut_data()?),
+        None => None,
+    };
+    let mut list: alloc::vec::Vec<Chained> = alloc::vec::Vec::with_capacity(5);
+    if let Some(d) = zd.as_mut() {
+        list.push(Chained {
+            entity: EntityKind::Citizen,
+            data: d,
+        });
+    }
     list.push(Chained {
         entity: EntityKind::Holding,
         data: &mut hd,
@@ -1089,6 +1192,7 @@ mod tests {
             seal_root: [0; 32],
             tip: 1,
             flags: 3,
+            gathered_at: None,
         };
         let r = arr(5, 7, 800_000, AR::FATE_RETREATED);
         assert_eq!(

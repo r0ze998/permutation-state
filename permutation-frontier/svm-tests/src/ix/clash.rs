@@ -135,11 +135,9 @@ pub fn oracle(
             false,
         ));
     }
-    m.extend(
-        holdings
-            .iter()
-            .map(|h| AccountMeta::new_readonly(*h, false)),
-    );
+    // v1.7: writable, as GatherClash's (the gather stamp, W4-B F1; the
+    // test-only oracle writes it without a record of its own).
+    m.extend(holdings.iter().map(|h| AccountMeta::new(*h, false)));
     resolve_clash_oracle(a, fee_payer, dest, bell, beneficiary, m)
 }
 

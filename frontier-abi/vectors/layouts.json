@@ -1,7 +1,7 @@
 {
   "generator": "frontier-abi abi-vectors",
   "abi_version": 1,
-  "contract": "docs/frontier/m1/M1-CONTRACT.md v1.6",
+  "contract": "docs/frontier/m1/M1-CONTRACT.md v1.7",
   "content": "account layouts (§4.3, §5.3), sub-records, SeasonParams",
   "accounts": [
     {
@@ -2609,9 +2609,21 @@
           "ty": "u8"
         },
         {
-          "name": "RSV_89",
+          "name": "DEST_P",
           "off": 89,
-          "len": 7,
+          "len": 2,
+          "ty": "i16"
+        },
+        {
+          "name": "DEST_Q",
+          "off": 91,
+          "len": 2,
+          "ty": "i16"
+        },
+        {
+          "name": "RSV_93",
+          "off": 93,
+          "len": 3,
           "ty": "rsv"
         }
       ]

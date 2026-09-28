@@ -149,6 +149,8 @@ pub struct Settle {
     pub slot_beneficiary: Address,
     pub resolver: Address,
     pub beneficiary: Address,
+    /// v1.7: the owner's Citizen (the camp's Works), position 13.
+    pub camp_citizen: Option<Address>,
 }
 
 impl World {
@@ -392,6 +394,7 @@ impl World {
                 slot_beneficiary: s.slot_beneficiary,
                 resolver: s.resolver,
                 holding_rent_payer: t.e.wallet.pubkey(),
+                camp_citizen: s.camp_citizen,
             },
         )
     }
@@ -405,6 +408,7 @@ impl World {
             slot_beneficiary: k,
             resolver: k,
             beneficiary: k,
+            camp_citizen: None,
         }
     }
 }

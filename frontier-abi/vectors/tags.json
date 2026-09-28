@@ -1,7 +1,7 @@
 {
   "generator": "frontier-abi abi-vectors",
   "abi_version": 1,
-  "contract": "docs/frontier/m1/M1-CONTRACT.md v1.6",
+  "contract": "docs/frontier/m1/M1-CONTRACT.md v1.7",
   "content": "instruction tags, classes, data layouts and account lists (§5.5–§5.12)",
   "instructions": [
     {
@@ -2733,6 +2733,18 @@
               "writable": "r"
             }
           ]
+        },
+        {
+          "min": 0,
+          "max": 1,
+          "accounts": [
+            {
+              "name": "citizen",
+              "kind": "Citizen",
+              "signer": false,
+              "writable": "w"
+            }
+          ]
         }
       ]
     },
@@ -2883,7 +2895,7 @@
               "name": "holding",
               "kind": "Holding",
               "signer": false,
-              "writable": "r"
+              "writable": "w"
             }
           ]
         }

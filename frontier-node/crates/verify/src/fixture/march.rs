@@ -1207,6 +1207,7 @@ impl St {
             slot_beneficiary: Address::new_from_array(slot_ben),
             resolver: Address::new_from_array(resolver),
             holding_rent_payer: Address::new_from_array(rent),
+            camp_citizen: None,
         };
         let ixs = [ix::settle_transit(&self.g.a, kp, &args)];
         let k = self.keeper_kp();

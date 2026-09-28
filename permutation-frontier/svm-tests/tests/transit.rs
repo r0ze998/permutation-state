@@ -1220,3 +1220,237 @@ fn g12_settle_after_the_end() {
         "sweep_pool_owed(",
     );
 }
+
+// ------------------------------------------------------------ wave-4 review (v1.7)
+
+/// The Citizen's `works`.
+fn works_of(c: &Chain, citizen: &Address) -> u64 {
+    u64_at(
+        &c.data(citizen),
+        frontier_abi::layout::player::citizen::WORKS,
+    )
+}
+
+/// v1.7 (I-56, wave-4 review): the camp's loot. The arrival at the lowest
+/// `camp_mask` position that stays earns `WORKS_CAMP` for its owner's
+/// Citizen (the optional last account: `BadAccount` without it, the wrong
+/// Citizen `BadAddress`); `TRANSIT_SETTLED` chains the Citizen. A host
+/// that is not the camp's winner may list its Citizen: nothing credited,
+/// no Citizen link.
+#[test]
+fn g12_settle_credits_the_camp_works_to_one_winner() {
+    let (mut c, w) = world();
+    let t = trip(&mut c, &w, "camp", 0, SealCase::Valid);
+    expect_lands(w.trip_reveal(&mut c, &t, 0), "Reveal");
+    let keeper = w.keeper.pubkey();
+    let k = w.craft_resolved_inputs(
+        &mut c,
+        &t,
+        &[Rec::of(&t, 0, AR::FATE_STAYS, MILLI)],
+        &keeper,
+    );
+    w.craft_stayer(&mut c, &t, MILLI);
+    w.to_settle(&mut c, &t, 0);
+    let pos = CI::position(t.faction(), 0);
+    let set_mask = |c: &mut Chain, m: u32| {
+        c.edit(&k, |d| {
+            d[CI::RSV_76..CI::RSV_76 + 4].copy_from_slice(&m.to_le_bytes())
+        })
+    };
+    let w0 = works_of(&c, &t.e.citizen);
+    let mut with_citizen = w.settle_default();
+    with_citizen.camp_citizen = Some(t.e.citizen);
+    // Not the winner (a later position took the camp): nothing credited.
+    let mut g = c.fork();
+    set_mask(&mut g, 1 << 20);
+    let l = expect_lands(
+        send(&mut g, w.settle_ix(&t, &keeper, &with_citizen), &w.keeper),
+        "settle, not the camp's winner",
+    );
+    assert_eq!(works_of(&g, &t.e.citizen), w0);
+    assert!(ts(&l).link(EntityKind::Citizen).is_none());
+    // The winner (the lowest position of two).
+    set_mask(&mut c, (1 << pos) | (1 << 20));
+    assert_code(
+        send(
+            &mut c,
+            w.settle_ix(&t, &keeper, &w.settle_default()),
+            &w.keeper,
+        ),
+        E::BadAccount,
+    );
+    let mut wrong = w.settle_default();
+    wrong.camp_citizen = Some(Address::new_unique());
+    assert_code(
+        send(&mut c, w.settle_ix(&t, &keeper, &wrong), &w.keeper),
+        E::BadAddress,
+    );
+    let zw = ChainWatch::new(&c, t.e.citizen, EntityKind::Citizen);
+    let l = expect_lands(
+        send(&mut c, w.settle_ix(&t, &keeper, &with_citizen), &w.keeper),
+        "settle of the camp's winner",
+    );
+    assert_eq!(ts(&l).u64("outcome") as u8, TO::STAYS);
+    assert_eq!(
+        works_of(&c, &t.e.citizen),
+        w0 + permutation_rules::frontier::camp::loot() as u64
+    );
+    zw.check(&c, &l.logs, 1);
+}
+
+/// v1.7 (wave-4 review, W4-B major): a valid seal whose destination
+/// Province is absent (never opened; the review's probe removes it) settles
+/// as routed with no resolved inputs at the canonical absent address,
+/// timed by the anchor of the plaintext's region (another region's anchor:
+/// `BadAddress`). Before v1.7 it was `BadAccount` for ever. A bad seal
+/// still needs a present Province.
+#[test]
+fn g12_valid_seal_to_an_absent_province_routes() {
+    let (mut c, w) = world();
+    let t = trip(&mut c, &w, "absent", 0, SealCase::Valid);
+    w.trip_anchor(&mut c, &t);
+    w.to_settle(&mut c, &t, 0);
+    let dest = dest_key(&w, &t);
+    c.remove(&dest);
+    let keeper = w.keeper.pubkey();
+    let ix = w.settle_ix(&t, &keeper, &w.settle_default());
+    // another region's anchor of the bell
+    let other = (t.region + 1) % 16;
+    expect_lands(w.post_anchor(&mut c, t.arrive(), other), "PostAnchor");
+    // past both anchors' settle time
+    let later = c.now + 3_600;
+    c.set_time(later);
+    assert_code(
+        send(
+            &mut c,
+            with_account(ix.clone(), 7, w.a.anchor(t.arrive(), other)),
+            &w.keeper,
+        ),
+        E::BadAddress,
+    );
+    let l = expect_lands(send(&mut c, ix, &w.keeper), "settle to an absent Province");
+    let r = ts(&l);
+    assert_eq!(r.u64("outcome") as u8, TO::ROUTED);
+    assert_eq!(r.u64("seal_code") as u8, seal_code::VALID);
+    assert_eq!(r.u64("pool_owed_delta"), t.tip + 10_000, "no resolver");
+    assert!(c.is_absent(&dest), "nothing written there");
+    assert_eq!(transit_state(&c, &t), T::STATE_FREE);
+    let e = entry_of(&c, &t.e.province, t.m.host_id).expect("home");
+    assert_eq!(e.troops, rout_survivors(MILLI));
+    // a bad seal against an absent Province: BadAccount
+    let (mut c, w) = world();
+    let t = trip(&mut c, &w, "absent-bad", 0, SealCase::Garbage);
+    w.trip_anchor(&mut c, &t);
+    w.to_settle(&mut c, &t, 0);
+    c.remove(&dest_key(&w, &t));
+    assert_code(
+        send(
+            &mut c,
+            w.settle_ix(&t, &w.keeper.pubkey(), &w.settle_default()),
+            &w.keeper,
+        ),
+        E::BadAccount,
+    );
+}
+
+/// v1.7 (W4-B F1): GatherClash stamps the transit it records with its
+/// destination (and chains the Holding); SettleTransit then settles it
+/// only there. A revealed bad seal that stays can no longer be settled
+/// against another Province (resolved past the arrival, its own anchor
+/// posted) to escape the `Forfeit`: `BadAddress`. Without the stamp the
+/// same transaction lands and the host keeps its place (the exploit).
+#[test]
+fn g12_gathered_bad_seal_settles_only_at_its_destination() {
+    let (mut c, w) = world();
+    let t = trip(&mut c, &w, "stamp", 0, SealCase::Garbage);
+    expect_lands(w.trip_reveal(&mut c, &t, 0), "Reveal of the garbage seal");
+    w.to_settle(&mut c, &t, 0);
+    let hw = ChainWatch::new(&c, t.e.holding, EntityKind::Holding);
+    let parts = w.gather_parts(
+        &c,
+        t.dest(),
+        t.arrive(),
+        &permutation_frontier_svm_tests::world::clash::THIRDS,
+    );
+    let mut stamped_by = None;
+    for ix in parts {
+        let l = expect_lands(send(&mut c, ix, &w.keeper), "GatherClash");
+        if records::one(&l.logs, Kind::GATHER)
+            .link(EntityKind::Holding)
+            .is_some()
+        {
+            stamped_by = Some(l);
+        }
+    }
+    let l = stamped_by.expect("the part with the Holding chains it");
+    hw.check(&c, &l.logs, 1);
+    let hd = c.data(&t.e.holding);
+    let o = H::transit(t.m.transit_slot as usize);
+    assert_ne!(hd[o + T::FLAGS] & T::FLAG_GATHERED, 0, "stamped");
+    let (dp, dq) = t.dest();
+    assert_eq!(
+        (
+            i16::from_le_bytes([hd[o + T::DEST_P], hd[o + T::DEST_P + 1]]),
+            i16::from_le_bytes([hd[o + T::DEST_Q], hd[o + T::DEST_Q + 1]])
+        ),
+        (dp as i16, dq as i16)
+    );
+    // The clash: the host stays.
+    let keeper = w.keeper.pubkey();
+    w.craft_resolved_inputs(
+        &mut c,
+        &t,
+        &[Rec::of(&t, 0, AR::FATE_STAYS, MILLI)],
+        &keeper,
+    );
+    let i = w.craft_stayer(&mut c, &t, MILLI);
+    // Another present Province, resolved past the arrival, with its own
+    // region's anchor: the owner's escape route.
+    let home = t.e.province;
+    w.set_resolved_next(&mut c, &home, t.arrive() + 1);
+    let hr = permutation_rules::frontier::geometry::region_of(
+        permutation_rules::frontier::geometry::ProvinceCoord::new(t.e.p as i32, t.e.q as i32),
+    );
+    if w.anchor_a(&c, t.arrive(), hr).is_none() {
+        expect_lands(w.post_anchor(&mut c, t.arrive(), hr), "PostAnchor (home)");
+    }
+    let (hp, hq) = (t.e.p as i32, t.e.q as i32);
+    let escape = {
+        let ix = w.settle_ix(&t, &keeper, &w.settle_default());
+        let ix = with_account(ix, 3, home);
+        let ix = with_account(ix, 4, w.a.clash_inputs(hp, hq, t.arrive()));
+        let ix = with_account(ix, 5, w.a.arrival_slot(hp, hq, t.arrive(), t.faction(), 0));
+        with_account(ix, 7, w.a.anchor(t.arrive(), hr))
+    };
+    // Past the other anchor's settle time too.
+    let later = c.now + 3_600;
+    c.set_time(later);
+    // Without the stamp (as before v1.7) the escape lands: no Forfeit.
+    let mut g = c.fork();
+    g.edit(&t.e.holding, |d| d[o + T::FLAGS] &= !T::FLAG_GATHERED);
+    let l = expect_lands(
+        send(&mut g, escape.clone(), &w.keeper),
+        "the pre-v1.7 escape",
+    );
+    assert_eq!(ts(&l).u64("outcome") as u8, TO::BAD_SEAL);
+    assert_eq!(
+        read_entry(&g.data(&dest_key(&w, &t)), i).unwrap().op,
+        EntryOp::None,
+        "the host kept its place"
+    );
+    // With the stamp: refused; the real destination settles and forfeits.
+    assert_code(send(&mut c, escape, &w.keeper), E::BadAddress);
+    let l = expect_lands(
+        send(
+            &mut c,
+            w.settle_ix(&t, &keeper, &w.settle_default()),
+            &w.keeper,
+        ),
+        "settle at the gathered destination",
+    );
+    assert_eq!(ts(&l).u64("outcome") as u8, TO::BAD_SEAL);
+    assert_eq!(
+        read_entry(&c.data(&dest_key(&w, &t)), i).unwrap().op,
+        EntryOp::Forfeit
+    );
+}

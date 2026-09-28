@@ -714,7 +714,8 @@ fn clash_dissolve_returns_troops_to_the_reserve() {
 
 /// The return settle of a host whose Holding was re-founded (another
 /// generation) or is gone: the troops are lost (`STRANDED`), the entry
-/// freed; a resident bounced home by its clash leaves as a Leave too.
+/// freed. (A resident bounced home by its clash also leaves as a Leave;
+/// that path has no test of its own yet: integ-W4 review, W5-A.)
 #[test]
 fn clash_return_settle_loses_troops_of_a_refounded_holding() {
     let (mut c, w, e, id) = estate();
@@ -1999,4 +2000,303 @@ fn zz_profile_gather() {
     for x in &l.logs {
         println!("{x}");
     }
+}
+
+// ================================================================ wave-4 review (v1.7)
+
+/// G1 (v1.7): SkipQuiet over a roster the kernel finds quiet but the
+/// trivial test does not (two Scouts of different factions sharing a hex
+/// nobody else holds: neither contests it) — the kernel quiet test runs at
+/// the first bell — within `cu_gate(SkipQuiet, 1)`, for one bell and for
+/// 24 (within one day: no camp check). Before v1.7 the gate was 60k + 30k
+/// = 90k; the review measured 109,382 CU.
+#[test]
+fn g01_skip_quiet_kernel_quiet_roster_budget() {
+    let b0 = 100u32;
+    for n in [1u8, 24] {
+        let (mut c, w) = world_on(Build::Release);
+        let mut f = quiet_world(12, 5, 21, 8, b0, false);
+        let passable: Vec<u8> = (0..61u8)
+            .filter(|&t| f.terrain.terrain[t as usize].is_passable())
+            .collect();
+        let hex = passable[12];
+        let mut changed = 0;
+        for r in f.residents.iter_mut() {
+            let first_of = |fac: u8| {
+                r.faction == fac
+                    && r.id
+                        == permutation_frontier_svm_tests::world::clash::resident_id(12, 5, fac, 0)
+            };
+            if first_of(0) || first_of(1) {
+                r.unit = UnitType::Scout;
+                r.tile = hex;
+                changed += 1;
+            }
+        }
+        assert_eq!(changed, 2);
+        assert_eq!(f.residents.len(), 48);
+        w.to_bell(&mut c, b0, 1);
+        craft_quiet(&mut c, &w, &f, b0, false);
+        ready_run(&mut c, &w, &f, b0, n as u32);
+        let ix = w.skip_ix(f.dest(), b0, n);
+        let need = c
+            .measure(std::slice::from_ref(&ix), &[&w.keeper])
+            .expect("SkipQuiet");
+        let l = expect_lands(keeper_send(&mut c, &w, ix), "SkipQuiet");
+        assert_eq!(
+            records::one(&l.logs, Kind::SKIP).u64("n"),
+            n as u64,
+            "kernel-quiet: the whole run"
+        );
+        let ceil = ceilings(Ix::SkipQuiet, 1, c.programdata_len());
+        println!("G1 SkipQuiet kernel-quiet 48 residents, {n} bells");
+        assert_within(&format!("SkipQuiet kernel-quiet n={n}"), &need, &ceil);
+    }
+}
+
+/// The SKIP digest of a run: `sha256("PSF-QUIET-v1" ‖ le32(b0) ‖ n ‖
+/// province[SITE_MIRROR .. TICKET_COHORTS])` (§6 v1.6).
+fn quiet_digest_of(pd: &[u8], b0: u32, n: u8) -> [u8; 32] {
+    permutation_frontier_svm_tests::sha256(&[
+        b"PSF-QUIET-v1",
+        &b0.to_le_bytes(),
+        &[n],
+        &pd[P::SITE_MIRROR..P::TICKET_COHORTS],
+    ])
+}
+
+/// G11 (v1.7, wave-4 review): a SkipQuiet that stops before bell b (the
+/// trivial test fails there after a change) leaves exactly what resolving
+/// its committed bells `b0 .. b0 + n − 1` leaves — the day's camp check of
+/// the stopping bell included (it is undone, and runs again with that
+/// bell) — and its `quiet_digest` is the digest of that replay. Seed 11
+/// crosses day 1 at bell 144 with a camp spawn (the review's case).
+#[test]
+fn g11_skip_stop_commits_exactly_its_bells() {
+    let b0 = 130u32;
+    let mut stopped = 0;
+    for (seed, per, churn) in [
+        (11u64, 3usize, false),
+        (13, 5, true),
+        (14, 8, true),
+        (15, 1, true),
+    ] {
+        let (mut c, w) = world_on(Build::TestBeacon);
+        let f = quiet_world(10, 3, seed, per, b0, churn);
+        w.to_bell(&mut c, b0, 1);
+        craft_quiet(&mut c, &w, &f, b0, churn);
+        ready_run(&mut c, &w, &f, b0, 24);
+        let camp0 = w.camp(&c, f.dest());
+        let mut a = c.fork();
+        let mut b = c.fork();
+        let l = expect_lands(
+            keeper_send(&mut a, &w, w.skip_ix(f.dest(), b0, 24)),
+            "SkipQuiet",
+        );
+        let r = records::one(&l.logs, Kind::SKIP);
+        let n = r.u64("n") as u8;
+        for bell in b0..b0 + n as u32 {
+            resolve_quiet_bell(&mut b, &w, &f, bell);
+        }
+        assert_eq!(w.resolved_next(&a, f.dest()), b0 + n as u32);
+        assert_eq!(
+            state_bytes(&a, &w, &f),
+            state_bytes(&b, &w, &f),
+            "seed {seed}: the skip of {n} bells equals resolving exactly them"
+        );
+        let pd = a.data(&w.a.province(f.p, f.q));
+        assert_eq!(
+            r.field("quiet_digest", true),
+            &quiet_digest_of(&pd, b0, n)[..],
+            "seed {seed}: SKIP's digest is the replay's"
+        );
+        // A CAMP record only for a committed bell's check.
+        for camp in records::of_kind(&l.logs, Kind::CAMP) {
+            assert!(
+                (camp.u64("day") as u32) * 144 < b0 + n as u32,
+                "seed {seed}: CAMP of an uncommitted bell"
+            );
+        }
+        if (n as u32) < 24 && b0 + (n as u32) == 144 {
+            // Stopped at the day's first bell: its check was undone.
+            assert_eq!(w.camp(&a, f.dest()).3, camp0.3, "seed {seed}");
+            stopped += 1;
+        }
+        println!(
+            "G11 stop seed {seed}: {n} bells committed, camp {:?}",
+            w.camp(&a, f.dest())
+        );
+    }
+    assert!(stopped >= 1, "a run stopped at the camp's bell");
+}
+
+/// v1.7 (wave-4 review): the return settle frees at most three `Leave`
+/// entries of the Holding per transaction, within SettleDeparture's G1
+/// budget; five entries take two transactions, then `AlreadyDone`.
+#[test]
+fn clash_return_settle_is_bounded() {
+    let (mut c, w, e, id) = estate();
+    let dest = dest_of(&e);
+    let (hp, hq, hs, gen, _) = fclient::addr::host_parts(id).unwrap();
+    c.edit(&e.province, |d| {
+        let tpl = read_entry(d, 0).unwrap();
+        let mut j = 1;
+        for n in 0..5u32 {
+            while read_entry(d, j).unwrap().state != EN::STATE_FREE {
+                j += 1;
+            }
+            let mut x = tpl;
+            x.id = fclient::addr::host_id(hp, hq, hs, gen, 100 + n).unwrap();
+            x.state = EN::STATE_DEPARTED;
+            x.op = EntryOp::Leave;
+            x.pend_bell = B0 - 1;
+            x.troops = 1_000_000 + n * 1_000;
+            write_entry(d, j, &x).unwrap();
+        }
+        let k = (0..P::ENTRIES_N)
+            .filter(|&i| read_entry(d, i).unwrap().state != EN::STATE_FREE)
+            .count();
+        d[P::N_ENTRIES] = k as u8;
+    });
+    let rix = cix::settle_return(&w.a, w.keeper.pubkey(), (e.p, e.q), e.href());
+    let need = c
+        .measure(std::slice::from_ref(&rix), &[&w.keeper])
+        .expect("return settle");
+    assert_within(
+        "return settle, 3 of 5 Leave entries",
+        &need,
+        &ceilings(Ix::SettleDeparture, 0, c.programdata_len()),
+    );
+    let l = expect_lands(keeper_send(&mut c, &w, rix.clone()), "return 1");
+    assert_eq!(records::of_kind(&l.logs, Kind::DEPARTURE_SETTLED).len(), 3);
+    let l = expect_lands(keeper_send(&mut c, &w, rix.clone()), "return 2");
+    assert_eq!(records::of_kind(&l.logs, Kind::DEPARTURE_SETTLED).len(), 2);
+    assert_code(keeper_send(&mut c, &w, rix), E::AlreadyDone);
+    let back: u32 = (0..5u32).map(|n| 1_000 + n).sum();
+    assert_eq!(reserve(&c, &e, 0), 50 + back);
+    assert!(w
+        .entries(&c, dest)
+        .iter()
+        .all(|(_, x)| x.op != EntryOp::Leave));
+}
+
+/// v1.7 (L10): CloseClashInputs needs a settled bit only for present
+/// records. A record the gather wrote with a host id and `present = 0` (an
+/// arrival whose Holding was re-founded before the gather) has no
+/// SettleTransit that could set its bit; the inputs close anyway once the
+/// present records are settled and the grace passed.
+#[test]
+fn clash_close_clash_inputs_needs_only_present_records() {
+    let (mut c, w) = world_on(Build::TestBeacon);
+    let f = Fill::adversarial(2, 45, 4, 6);
+    ready(&mut c, &w, &f);
+    let (fa, i, a0) = f.arrivals[0];
+    let k = fa as usize * 4 + i as usize;
+    let (hp, hq, hs, _, _) = fclient::addr::host_parts(a0.id).unwrap();
+    c.edit(&w.a.holding(hp, hq, hs), |d| {
+        d[H::GEN] = d[H::GEN].wrapping_add(1)
+    });
+    gather_and_resolve(&mut c, &w, &f);
+    let ck = w.a.clash_inputs(f.p, f.q, B);
+    let cd = c.data(&ck);
+    assert_eq!(u64_at(&cd, CI::arrival(k) + AR::HOST_ID), a0.id, "recorded");
+    assert_eq!(
+        cd[CI::arrival(k) + AR::PRESENT],
+        0,
+        "not present: re-founded"
+    );
+    let present: u32 = (0..24)
+        .filter(|&j| cd[CI::arrival(j) + AR::PRESENT] == 1)
+        .fold(0, |m, j| m | 1 << j);
+    c.edit(&ck, |d| {
+        d[CI::SETTLED_MASK..CI::SETTLED_MASK + 4].copy_from_slice(&present.to_le_bytes())
+    });
+    let grace = u32_at(&c.data(&w.a.season), S::CLASH_CLOSE_GRACE) as i64;
+    c.advance(grace * 600);
+    let ix = cix::close_clash_inputs(
+        &w.a,
+        w.keeper.pubkey(),
+        f.p as i16,
+        f.q as i16,
+        B,
+        w.keeper.pubkey(),
+    );
+    expect_lands(keeper_send(&mut c, &w, ix), "CloseClashInputs");
+    assert!(c.is_absent(&ck));
+}
+
+/// v1.7 (wave-4 review): no-arrival inputs of a bell that another keeper
+/// then skipped (never resolved) close once the Province passed the bell
+/// and the grace ran from the bell's end; before, `InputsOpen`.
+#[test]
+fn clash_close_no_arrival_inputs_after_a_skip() {
+    let (mut c, w) = world_on(Build::TestBeacon);
+    let f = quiet_world(6, 7, 31, 2, B, false);
+    craft_quiet(&mut c, &w, &f, B, false);
+    ready_run(&mut c, &w, &f, B, 1);
+    let g = w.gather_ix(&c, f.dest(), B, 0, 1);
+    expect_lands(keeper_send(&mut c, &w, g), "GatherClash (no arrivals)");
+    let ck = w.a.clash_inputs(f.p, f.q, B);
+    assert_eq!(c.data(&ck)[CI::FLAGS], CI::FLAG_NO_ARRIVALS);
+    expect_lands(
+        keeper_send(&mut c, &w, w.skip_ix(f.dest(), B, 1)),
+        "SkipQuiet of the gathered bell",
+    );
+    let ix = || {
+        cix::close_clash_inputs(
+            &w.a,
+            w.keeper.pubkey(),
+            f.p as i16,
+            f.q as i16,
+            B,
+            w.keeper.pubkey(),
+        )
+    };
+    assert_code(keeper_send(&mut c, &w, ix()), E::InputsOpen);
+    let grace = u32_at(&c.data(&w.a.season), S::CLASH_CLOSE_GRACE) as i64;
+    c.set_time(w.bell_start(B + 1) + grace * 600);
+    expect_lands(keeper_send(&mut c, &w, ix()), "CloseClashInputs");
+    assert!(c.is_absent(&ck));
+}
+
+/// v1.7 (wave-4 review): the season-end fallback of CloseClashInputs and
+/// CloseArrivalDay (as CloseArrivalSlot's case b): once the Season Ended
+/// 72 h ago, inputs never resolved and a day never resolved to its end
+/// close.
+#[test]
+fn clash_closes_after_the_season_end() {
+    let (mut c, w) = world_on(Build::TestBeacon);
+    let f = Fill::adversarial(0, 46, 8, 2);
+    ready(&mut c, &w, &f);
+    let g = w.gather_ix(&c, f.dest(), B, 0, 8);
+    expect_lands(keeper_send(&mut c, &w, g), "GatherClash (part)");
+    let ci = cix::close_clash_inputs(
+        &w.a,
+        w.keeper.pubkey(),
+        f.p as i16,
+        f.q as i16,
+        B,
+        w.keeper.pubkey(),
+    );
+    let day = day_of(B);
+    let ad = cix::close_arrival_day(
+        &w.a,
+        w.keeper.pubkey(),
+        f.p as i16,
+        f.q as i16,
+        day,
+        w.keeper.pubkey(),
+    );
+    assert_code(keeper_send(&mut c, &w, ci.clone()), E::InputsOpen);
+    assert_code(keeper_send(&mut c, &w, ad.clone()), E::TooEarly);
+    c.edit(&w.a.season, |d| d[S::STATUS] = S::STATUS_ENDED);
+    let end = w.bell_start(u32_at(&c.data(&w.a.season), S::END_BELL));
+    c.set_time(end + 72 * 3_600 - 1);
+    assert_code(keeper_send(&mut c, &w, ci.clone()), E::InputsOpen);
+    c.set_time(end + 72 * 3_600);
+    expect_lands(
+        keeper_send(&mut c, &w, ci),
+        "CloseClashInputs after the end",
+    );
+    expect_lands(keeper_send(&mut c, &w, ad), "CloseArrivalDay after the end");
 }

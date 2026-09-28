@@ -181,6 +181,10 @@ mod tests {
         assert_eq!(c.locks, 64);
         assert!(c.tx_bytes >= 1_100 && c.tx_bytes <= 1_232);
         assert_eq!(c.loaded % 32_768, 0);
-        assert_eq!(ceilings(Ix::SkipQuiet, 3, 0).cu, 150_000);
+        assert_eq!(
+            ceilings(Ix::SkipQuiet, 3, 0).cu,
+            180_000,
+            "v1.7: 90k + 30k × 3"
+        );
     }
 }

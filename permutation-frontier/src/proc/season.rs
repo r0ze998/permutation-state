@@ -755,7 +755,7 @@ pub const fn close_part_counts(part: u8) -> Option<[u8; 5]> {
 pub const CLOSE_FINAL_PART: u8 = 7;
 
 /// A Season tombstone (128 B, status Closed) at its PDA: `(id, authority)`.
-fn tombstone(season_ai: &AccountInfo, p: &Pubkey) -> R<(u64, [u8; 32])> {
+pub(crate) fn tombstone(season_ai: &AccountInfo, p: &Pubkey) -> R<(u64, [u8; 32])> {
     if season_ai.owner != p || season_ai.data_len() != S::TOMBSTONE_SIZE {
         return Err(BAD_ACCOUNT);
     }
@@ -815,7 +815,10 @@ fn close_one<'a>(
 ///
 /// Not reachable from this account list (W4-B notes, F3): RingSeeds,
 /// AnchorArchives and DefenceClaims, which §5.2 lists as closed by
-/// CloseSeason.
+/// CloseSeason (the authority's and keepers' float; v1.7 leaves them to the
+/// architect). Holdings and Citizens left open when the final part runs
+/// still close on the tombstone (v1.7: CloseHolding, CloseCitizen), so a
+/// final part run early never locks a player's rent.
 pub fn close_season(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
     let x = aix::CloseSeason::decode(d)?;
     let counts = close_part_counts(x.part).ok_or(FrontierError::BadData)?;

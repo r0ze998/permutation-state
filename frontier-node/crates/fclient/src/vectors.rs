@@ -413,6 +413,7 @@ fn shapes() -> Value {
         slot_beneficiary: keeper.pubkey(),
         resolver: keeper.pubkey(),
         holding_rent_payer: relay.pubkey(),
+        camp_citizen: None,
     };
     let fixture = beacon::FixtureDrand::load(&beacon::fixture_dir(), beacon::quicknet_info())
         .expect("fixtures");

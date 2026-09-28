@@ -85,6 +85,14 @@ pub const SKIP_QUIET: &[Cover] = &[
         ],
     ),
     Cover::Test("clash::g01_skip_quiet_budget", &[Lands("SkipQuiet")]),
+    Cover::Test(
+        "clash::g01_skip_quiet_kernel_quiet_roster_budget",
+        &[Lands("SkipQuiet")],
+    ),
+    Cover::Test(
+        "clash::g11_skip_stop_commits_exactly_its_bells",
+        &[Lands("SkipQuiet")],
+    ),
     Cover::Test("clash::g01_budget_clash_kinds", &[Loaded]),
     Cover::Pending("W5-A: NotTopLevel"),
 ];
@@ -99,6 +107,18 @@ pub const CLOSE_CLASH_INPUTS: &[Cover] = &[
             Lands("cix::close_clash_inputs("),
         ],
     ),
+    Cover::Test(
+        "clash::clash_close_clash_inputs_needs_only_present_records",
+        &[Lands("CloseClashInputs")],
+    ),
+    Cover::Test(
+        "clash::clash_close_no_arrival_inputs_after_a_skip",
+        &[Err(E::InputsOpen), Lands("CloseClashInputs")],
+    ),
+    Cover::Test(
+        "clash::clash_closes_after_the_season_end",
+        &[Err(E::InputsOpen), Lands("CloseClashInputs after the end")],
+    ),
     Cover::Test("clash::g01_budget_clash_kinds", &[Loaded]),
 ];
 
@@ -110,6 +130,10 @@ pub const CLOSE_ARRIVAL_DAY: &[Cover] = &[
             Err(E::BadAccount),
             Lands("cix::close_arrival_day("),
         ],
+    ),
+    Cover::Test(
+        "clash::clash_closes_after_the_season_end",
+        &[Err(E::TooEarly), Lands("CloseArrivalDay after the end")],
     ),
     Cover::Test("clash::g01_budget_clash_kinds", &[Loaded]),
 ];

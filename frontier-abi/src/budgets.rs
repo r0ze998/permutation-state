@@ -148,14 +148,14 @@ budgets! {
     SettleDeparture: 15_000, 0, 400;
     SettleTransit: 85_000, 0, 1_100;
     SweepPoolOwed: 8_000, 0, 300;
-    GatherClash: 40_000, 0, 1_232;
+    GatherClash: 49_000, 0, 1_232;
     ResolveFromInputs: 340_000, 0, 460;
     ResolveClash: 0, 0, 1_232;
-    SkipQuiet: 60_000, 30_000, 1_232;
+    SkipQuiet: 90_000, 30_000, 1_232;
     CloseClashInputs: 8_000, 0, 300;
     CloseArrivalDay: 8_000, 0, 300;
     CloseArrivalSlot: 8_000, 0, 300;
-    ClaimDefence: 25_000, 0, 1_000;
+    ClaimDefence: 25_500, 0, 1_000;
 }
 
 /// The row of `ix`.
@@ -396,7 +396,7 @@ mod tests {
                 assert!(tx_worst_estimate(*i) <= TX_MAX, "{}", i.name());
             }
         }
-        assert_eq!(cu_gate(Ix::SkipQuiet, 2), 120_000);
+        assert_eq!(cu_gate(Ix::SkipQuiet, 2), 150_000);
         assert_eq!(budget(Ix::Reveal).cu_budget, 26_000);
         assert_eq!(budget(Ix::ResolveFromInputs).cu_budget, 340_000);
     }

@@ -464,7 +464,6 @@ fn holding_explore_refusals() {
 /// G1 for W3-B's instructions: every ceiling asserted (v1.5 budgets:
 /// Harvest 17.5k, Train 17.5k, Explore 20k, Depart 24.5k; the wave-3
 /// review removed the print-only mode).
-
 fn within(
     c: &Chain,
     ix: frontier_abi::tags::Ix,

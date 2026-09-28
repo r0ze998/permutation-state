@@ -184,7 +184,9 @@ pub mod transit {
         SEAL_ROOT @ 48 : "[u8;32]" = 32;
         TIP @ 80 : "u64" = 8;
         FLAGS @ 88 : "u8" = 1;
-        RSV_89 @ 89 : "rsv" = 7;
+        DEST_P @ 89 : "i16" = 2;
+        DEST_Q @ 91 : "i16" = 2;
+        RSV_93 @ 93 : "rsv" = 3;
     );
     /// Free.
     pub const STATE_FREE: u8 = 0;
@@ -196,6 +198,9 @@ pub mod transit {
     pub const STATE_DESTROYED_AT_ORIGIN: u8 = 3;
     pub const FLAG_FEE_ESCROWED: u8 = 1;
     pub const FLAG_BOND_ESCROWED: u8 = 2;
+    /// v1.7 (W4-B F1): a GatherClash recorded this transit at `(DEST_P,
+    /// DEST_Q)`; SettleTransit then settles it only against that Province.
+    pub const FLAG_GATHERED: u8 = 4;
 
     /// States in which the host may not act (`HostInTransit`, I-44).
     pub const fn in_transit(state: u8) -> bool {

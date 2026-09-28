@@ -59,9 +59,10 @@
 //!   skip and a resolve of the same quiet bell leave the same Province.
 //! - **The return settle** is SettleDeparture with `transit_slot = 0xFF`
 //!   ([`RETURN_SLOT`], same accounts `[payer s] [season] [province w]
-//!   [holding w]`): every state-3 `Leave` entry of that Holding in that
-//!   Province is freed and `reserve[unit] += troops / 1,000` (whole troops,
-//!   rounded down) credited to the Holding when it is live with the host's
+//!   [holding w]`): the state-3 `Leave` entries of that Holding in that
+//!   Province are freed, at most [`RETURN_MAX`] per transaction (v1.7),
+//!   and `reserve[unit] += troops / 1,000` (whole troops, rounded down)
+//!   credited to the Holding when it is live with the host's
 //!   generation (`DEPARTURE_SETTLED` with `destroyed = 2`), else the troops
 //!   are lost (`STRANDED`). Nothing to return is `AlreadyDone`.
 //! - **Gather records:** a slot whose Holding is absent, released or
@@ -85,8 +86,10 @@
 //!   top block). A later bell that is not trivially quiet ends the
 //!   transaction, which commits the bells before it ([`SKIP_KERNEL_TESTS`]:
 //!   the CU-aware stop of I-50 as a work bound, since
-//!   `sol_remaining_compute_units` is not active on mainnet). Settles run
-//!   only from the first bell something is due ([`model::next_due`]).
+//!   `sol_remaining_compute_units` is not active on mainnet). The day's
+//!   camp check of the bell where the transaction stops is undone (v1.7),
+//!   so the committed bells leave exactly what resolving them would. Settles
+//!   run only from the first bell something is due ([`model::next_due`]).
 //! - **Digests:** CLASH's `input_digest = sha256("PSF-CLASH-INPUT-v1" ‖
 //!   le32(b) ‖ seed ‖ province[SITE_MIRROR..TICKET_COHORTS] before ‖
 //!   inputs[ARRIVALS..POSTURES])`; SKIP's `quiet_digest = sha256(
@@ -128,6 +131,12 @@ pub const RETURN_SLOT: u8 = 0xFF;
 /// DEPARTURE_SETTLED's `destroyed` byte of a return settle (troops back in
 /// the reserve).
 pub const RETURNED: u8 = 2;
+
+/// Most `Leave` entries one return settle frees (v1.7, wave-4 review: the
+/// work bound that keeps it within SettleDeparture's 15k CU; ≈ 8.7k for
+/// one entry, ≈ 3.7k per further entry). The keeper sends it again while
+/// entries remain (`AlreadyDone` once none do).
+pub const RETURN_MAX: usize = 3;
 
 /// SkipQuiet's CU-aware stop (I-50) is a work bound, not a read of the
 /// remaining units (`sol_remaining_compute_units` is not active on mainnet:
@@ -885,9 +894,9 @@ pub mod model {
                         ready_bell: if fr.engaged {
                             kc::ready_bell_after(bell)
                         } else {
-                            bell + 1
+                            bell.checked_add(1).ok_or(OVERFLOW)?
                         },
-                        from_bell: bell + 1,
+                        from_bell: bell.checked_add(1).ok_or(OVERFLOW)?,
                         pend_bell: 0,
                         op: EntryOp::None,
                     };
@@ -1502,7 +1511,10 @@ fn holding_addr(ctx: &AddrCtx, p: i32, q: i32, site: u8) -> [u8; 32] {
 // ------------------------------------------------------------ gathering
 
 /// The ClashInputs record of position `k` from its slot (and the slot's
-/// Holding): `Ok(true)` when a host is recorded (module note). Fixed-offset
+/// Holding): `Ok(true)` when a host is recorded (module note). A matching
+/// transit (state 2 or 3) is stamped
+/// with this destination (`FLAG_GATHERED`, `DEST_P`, `DEST_Q`), so
+/// SettleTransit can settle it only here (v1.7, W4-B F1). Fixed-offset
 /// reads and writes (the per-position cost bounds a gather, §13.1).
 #[allow(clippy::too_many_arguments)]
 fn gather_position(
@@ -1564,7 +1576,7 @@ fn gather_position(
     if !prologue::presence(holding, program, AccountKind::Holding, sid)? {
         return Ok(true);
     }
-    let hd = holding.try_borrow_data()?;
+    let mut hd = holding.try_borrow_mut_data()?;
     let live = matches!(
         hd.get(H::STATE).copied(),
         Some(H::STATE_PROVISIONAL | H::STATE_FINAL)
@@ -1586,9 +1598,12 @@ fn gather_position(
         {
             continue;
         }
-        match st {
+        let stamp = match st {
             T::STATE_DEPARTED => return Err(FrontierError::DepartureUnsettled.into()),
-            T::STATE_DESTROYED_AT_ORIGIN => rec[AR::FATE] = AR::FATE_DESTROYED,
+            T::STATE_DESTROYED_AT_ORIGIN => {
+                rec[AR::FATE] = AR::FATE_DESTROYED;
+                true
+            }
             _ => {
                 let troops = t32(T::TROOPS_AFTER);
                 let stamina = model::arrival_stamina(
@@ -1603,8 +1618,22 @@ fn gather_position(
                 } else {
                     rec[AR::FATE] = AR::FATE_DESTROYED;
                 }
+                true
             }
+        };
+        if !stamp {
+            return Ok(true);
         }
+        let tr = hd.get_mut(o..o + T::SIZE).ok_or(BAD_ACCOUNT)?;
+        let same = tr[T::FLAGS] & T::FLAG_GATHERED != 0
+            && tr[T::DEST_P..T::DEST_P + 2] == pp.to_le_bytes()
+            && tr[T::DEST_Q..T::DEST_Q + 2] == pq.to_le_bytes();
+        if same {
+            return Ok(true);
+        }
+        tr[T::FLAGS] |= T::FLAG_GATHERED;
+        tr[T::DEST_P..T::DEST_P + 2].copy_from_slice(&pp.to_le_bytes());
+        tr[T::DEST_Q..T::DEST_Q + 2].copy_from_slice(&pq.to_le_bytes());
         return Ok(true);
     }
     Ok(true)
@@ -1621,7 +1650,9 @@ fn range_mask(start: u8, n: u8) -> R<u32> {
 
 /// 0x60 GatherClash(bell, start, n, holdings_bitmap, beneficiary): K +
 /// `[province (dest) r] [anchor|archive r] [arrivalday r] [inputs w] [ix
-/// sysvar] [system] [slot_k r …] [holding_k r …]`, class D, top level.
+/// sysvar] [system] [slot_k r …] [holding_k w …]`, class D, top level
+/// (v1.7: the Holdings are writable; a matching transit is stamped with
+/// this destination and the GATHER record chains each stamped Holding).
 pub fn gather_clash(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
     let x = aix::GatherClash::decode(d)?;
     let range = range_mask(x.start, x.n)?;
@@ -1733,16 +1764,41 @@ pub fn gather_clash(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
         .u8(x.n)
         .u32(mask)
         .u8(no_arrivals as u8);
+    // Every present Holding the part lists (each key once, account order)
+    // is chained (v1.7: the gather may stamp its transit record; chaining
+    // every listed one, stamped or not, keeps the record's `InTx` links in
+    // the transaction's account order for any reader).
+    let mut chain: Vec<usize> = Vec::with_capacity(holdings.len());
+    for (j, h) in holdings.iter().enumerate() {
+        if chain.iter().any(|&c| holdings[c].key == h.key) {
+            continue;
+        }
+        if prologue::presence(h, p, AccountKind::Holding, sid)? {
+            chain.push(j);
+        }
+    }
     let mut cd = inputs.try_borrow_mut_data()?;
+    let mut hds = Vec::with_capacity(chain.len());
+    for &j in &chain {
+        hds.push(holdings[j].try_borrow_mut_data()?);
+    }
+    let mut list: Vec<Chained> = Vec::with_capacity(1 + hds.len());
+    list.push(Chained {
+        entity: EntityKind::ClashInputs,
+        data: &mut cd,
+    });
+    for hd in hds.iter_mut() {
+        list.push(Chained {
+            entity: EntityKind::Holding,
+            data: hd,
+        });
+    }
     events::emit(
         Kind::GATHER,
         hdr.bell(now.ts).unwrap_or(NO_BELL),
         &key12,
         payload.get()?,
-        &mut [Chained {
-            entity: EntityKind::ClashInputs,
-            data: &mut cd,
-        }],
+        &mut list,
     )
 }
 
@@ -2090,7 +2146,9 @@ pub fn skip_quiet(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
     let mut pd = province.try_borrow_mut_data()?;
     let mut due = model::next_due(&pd)?;
     for (k, anchor) in anchors.iter().enumerate() {
-        let b = x.b0 + k as u32;
+        let b =
+            x.b0.checked_add(u32::try_from(k).map_err(|_| OVERFLOW)?)
+                .ok_or(OVERFLOW)?;
         let first = k == 0;
         let camp_due = day_of(b) >= Camp::read(&pd)?.next_check_day;
         if !first && heap_used() > SKIP_HEAP_STOP {
@@ -2114,11 +2172,16 @@ pub fn skip_quiet(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
             break;
         }
         // (3) the camp's daily check lands first (the roster frozen at b
-        // includes the camp it leaves)
+        // includes the camp it leaves). It is provisional until bell b
+        // passes the quiet test: a stop at b undoes it, so the committed
+        // bells b0..b0 + n − 1 leave exactly what resolving them would
+        // (wave-4 review; the next transaction runs the check again).
         let mut changed = false;
+        let mut camp_undo: Option<Camp> = None;
         if camp_due {
             let t = model::terrain_of(&pd)?;
             if let Some((c, spawned)) = model::camp_check(&pd, &t, b)? {
+                camp_undo = Some(Camp::read(&pd)?);
                 c.write(&mut pd)?;
                 if spawned {
                     spawns.push((c, day_of(b)));
@@ -2128,6 +2191,16 @@ pub fn skip_quiet(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
             }
         }
         crate::heap::trace_checkpoint(0x6301);
+        // Stops before bell b: the camp check of b is undone.
+        let stop_at_b = |pd: &mut [u8], spawns: &mut Vec<(Camp, u32)>| -> R<()> {
+            if let Some(c) = camp_undo {
+                c.write(pd)?;
+                if changed {
+                    spawns.pop();
+                }
+            }
+            Ok(())
+        };
         // (4) quiet: the trivial test, else (first bell only) the kernel's,
         // heap scoped; recomputed after any change
         if !quiet_known {
@@ -2150,12 +2223,14 @@ pub fn skip_quiet(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
                 }
             } else {
                 // Left to the next transaction's first bell.
+                stop_at_b(&mut pd, &mut spawns)?;
                 break;
             };
             if !q {
                 if first {
                     return Err(FrontierError::NotQuiet.into());
                 }
+                stop_at_b(&mut pd, &mut spawns)?;
                 break;
             }
             quiet_known = true;
@@ -2221,10 +2296,26 @@ fn rent_to_is(d: &[u8], off: usize, recipient: &AccountInfo) -> R<()> {
     Ok(())
 }
 
+/// Whether the Season Ended at least 72 h ago (the season-end fallback of
+/// the closes: CloseArrivalSlot case (b), CloseClashInputs,
+/// CloseArrivalDay; v1.7).
+fn ended_long_ago(hdr: &SeasonHdr, now: i64) -> bool {
+    hdr.status == S::STATUS_ENDED && {
+        let end = super::map::season_end_ts(hdr);
+        now >= end.saturating_add(super::map::END_GRACE_SECS)
+    }
+}
+
 /// 0x64 CloseClashInputs(P, Q, bell): `[any s] [season] [province r]
-/// [inputs w] [rent_to w]`, class N. The inputs are resolved, every
-/// recorded host settled (`settled_mask`), and the close grace passed
-/// (`InputsOpen` otherwise).
+/// [inputs w] [rent_to w]`, class N. (a) The inputs are resolved, every
+/// **present** record settled (`settled_mask`; v1.7: a record with a host
+/// id and `present = 0` — absent, released or re-founded Holding, no
+/// matching transit, destroyed at the origin — has no SettleTransit that
+/// could set its bit), and the close grace passed; or (b) no-arrival
+/// inputs (`FLAG_NO_ARRIVALS`) whose bell the Province has passed by a
+/// skip (`resolved_next > bell`, v1.7: a gather of a bell that another
+/// keeper then skipped), after the grace; or (c) the Season Ended at
+/// least 72 h ago. `InputsOpen` otherwise.
 pub fn close_clash_inputs(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
     check_accounts(Ix::CloseClashInputs, a, None)?;
     let x = aix::CloseClashInputs::decode(d)?;
@@ -2260,6 +2351,10 @@ pub fn close_clash_inputs(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
         let sd = season_ai.try_borrow_data()?;
         Ro(&sd).u32(S::CLASH_CLOSE_GRACE)?
     };
+    let rn = {
+        let pd = province.try_borrow_data()?;
+        Ro(&pd).u32(P::RESOLVED_NEXT)?
+    };
     {
         let cd = inputs.try_borrow_data()?;
         let r = Ro(&cd);
@@ -2267,20 +2362,37 @@ pub fn close_clash_inputs(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
             return Err(BAD_ACCOUNT);
         }
         rent_to_is(&cd, CI::RENT_TO, rent_to)?;
-        if r.u8(CI::FLAGS)? & CI::FLAG_RESOLVED == 0 {
-            return Err(FrontierError::InputsOpen.into());
-        }
-        let settled = r.u32(CI::SETTLED_MASK)?;
-        for k in 0..CI::POSITIONS {
-            if r.u64(CI::arrival(k) + AR::HOST_ID)? != 0 && settled & (1 << k) == 0 {
+        if !ended_long_ago(&hdr, now.ts) {
+            let flags = r.u8(CI::FLAGS)?;
+            let grace_secs = (grace as i64).checked_mul(600).ok_or(OVERFLOW)?;
+            let since_genesis = now.ts.saturating_sub(hdr.genesis_ts);
+            if flags & CI::FLAG_RESOLVED != 0 {
+                let settled = r.u32(CI::SETTLED_MASK)?;
+                for k in 0..CI::POSITIONS {
+                    let o = CI::arrival(k);
+                    if r.u8(o + AR::PRESENT)? != 0 && settled & (1 << k) == 0 {
+                        return Err(FrontierError::InputsOpen.into());
+                    }
+                }
+                let open_until = (r.u32(CI::RESOLVED_TS)? as i64)
+                    .checked_add(grace_secs)
+                    .ok_or(OVERFLOW)?;
+                if open_until > since_genesis {
+                    return Err(FrontierError::InputsOpen.into());
+                }
+            } else if flags & CI::FLAG_NO_ARRIVALS != 0 && rn > x.bell {
+                // Skipped past after this gather: never resolved, nothing
+                // recorded. The grace runs from the bell's end.
+                let bell_end = (x.bell as i64)
+                    .checked_add(1)
+                    .and_then(|b| b.checked_mul(600))
+                    .ok_or(OVERFLOW)?;
+                if bell_end.checked_add(grace_secs).ok_or(OVERFLOW)? > since_genesis {
+                    return Err(FrontierError::InputsOpen.into());
+                }
+            } else {
                 return Err(FrontierError::InputsOpen.into());
             }
-        }
-        let open_until = (r.u32(CI::RESOLVED_TS)? as i64)
-            .checked_add((grace as i64).checked_mul(600).ok_or(OVERFLOW)?)
-            .ok_or(OVERFLOW)?;
-        if open_until > now.ts.saturating_sub(hdr.genesis_ts) {
-            return Err(FrontierError::InputsOpen.into());
         }
     }
     let bell = hdr.bell(now.ts).unwrap_or(NO_BELL);
@@ -2303,7 +2415,8 @@ pub fn close_clash_inputs(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
 
 /// 0x65 CloseArrivalDay(P, Q, day): `[any s] [season] [province r] [day
 /// w] [rent_to w]`, class N, once the province resolved every bell of the
-/// day (`TooEarly`).
+/// day, or the Season Ended at least 72 h ago (v1.7: bells at or past
+/// `end_bell` are never resolved) (`TooEarly`).
 pub fn close_arrival_day(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
     check_accounts(Ix::CloseArrivalDay, a, None)?;
     let x = aix::CloseArrivalDay::decode(d)?;
@@ -2348,7 +2461,7 @@ pub fn close_arrival_day(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
         rent_to_is(&dd, AD::RENT_TO, rent_to)?;
     }
     let need = (x.day as u64 + 1) * model::DAY_BELLS as u64;
-    if (rn as u64) < need {
+    if (rn as u64) < need && !ended_long_ago(&hdr, now.ts) {
         return Err(FrontierError::TooEarly.into());
     }
     let bell = hdr.bell(now.ts).unwrap_or(NO_BELL);
@@ -2414,10 +2527,7 @@ pub fn close_arrival_slot(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
         rent_to_is(&sd, AS::RENT_TO, rent_to)?;
         (r.u8(AS::FLAGS)?, r.u8(AS::CLAIMED)? != 0)
     };
-    let ended_long_ago = hdr.status == S::STATUS_ENDED && {
-        let end = super::map::season_end_ts(&hdr);
-        now.ts >= end.saturating_add(super::map::END_GRACE_SECS)
-    };
+    let ended_long_ago = ended_long_ago(&hdr, now.ts);
     let case_a = flags & AS::FLAG_SETTLED != 0
         && (claimed
             || match anchor {
@@ -2469,7 +2579,8 @@ pub fn close_arrival_slot(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
 /// SettleDeparture(`transit_slot = 0xFF`), the return settle (§21):
 /// `[payer s] [season] [province w] [holding w]` (the Holding that issued
 /// the hosts, canonical, possibly absent). Every state-3 `Leave` entry of
-/// that Holding in the Province is freed; its whole troops return to
+/// that Holding in the Province is freed (at most [`RETURN_MAX`] per
+/// transaction, in entry order); its whole troops return to
 /// `reserve[unit]` when the Holding is live with the host's generation,
 /// else they are lost. `AlreadyDone` when there is nothing to return.
 pub fn settle_return(p: &Pubkey, a: &[AccountInfo]) -> R<()> {
@@ -2577,6 +2688,9 @@ pub fn settle_return(p: &Pubkey, a: &[AccountInfo]) -> R<()> {
             )?;
         }
         returned += 1;
+        if returned >= RETURN_MAX {
+            break;
+        }
     }
     if returned == 0 {
         return Err(FrontierError::AlreadyDone.into());

@@ -498,6 +498,41 @@ pub(crate) fn the_anchor_or_archive(
     })
 }
 
+/// THE anchor of `bell` or its archive, for whichever region the account
+/// names (v1.7, SettleTransit of a valid seal whose destination Province
+/// is absent: the region is known only once the seal is opened, and every
+/// region's anchor of a bell carries the same round-T(bell) signature).
+/// The account must be the canonical anchor or archive of its own stored
+/// region (as [`the_anchor_or_archive`] checks). Returns the source and
+/// the region; `NoAnchor` for anything else.
+pub(crate) fn anchor_of_any_region(
+    p: &Pubkey,
+    ctx: &AddrCtx,
+    season_id: u64,
+    ai: &AccountInfo,
+    bell: u32,
+    clock: &SeasonClock,
+) -> R<(AnchorSource, u8)> {
+    let region = {
+        let d = ai.try_borrow_data()?;
+        let magic = d.get(..8);
+        if ai.owner != p {
+            None
+        } else if magic == Some(&AccountKind::BellAnchor.magic()[..]) {
+            Some(Anchor::read(&d)?.region)
+        } else if magic == Some(&AccountKind::AnchorArchive.magic()[..]) {
+            Some(archive_key(&d)?.0)
+        } else {
+            None
+        }
+    };
+    let Some(region) = region.filter(|&r| r < REGIONS) else {
+        return Err(FrontierError::NoAnchor.into());
+    };
+    let src = the_anchor_or_archive(p, ctx, season_id, ai, bell, region, clock)?;
+    Ok((src, region))
+}
+
 /// Emits `CLOSE` for a short-header account (no chain: final seq 0 and a
 /// zero head), before it closes (v1.3 §4.2).
 pub(crate) fn emit_close_short(

@@ -177,6 +177,10 @@ pub const CLOSE_HOLDING: &[Cover] = &[
             Lands("CloseHolding"),
         ],
     ),
+    Cover::Test(
+        "lifecycle::close_holding_and_citizen_on_the_tombstone",
+        &[Err(E::BadAddress), Lands("CloseHolding on the tombstone")],
+    ),
     Cover::Pending("W5-A: BadAccount forgeries, g01 budget and loaded limit"),
 ];
 
@@ -190,6 +194,10 @@ pub const CLOSE_CITIZEN: &[Cover] = &[
             Lands("CloseCitizen with escrow"),
             Lands("CloseCitizen (Aborted)"),
         ],
+    ),
+    Cover::Test(
+        "lifecycle::close_holding_and_citizen_on_the_tombstone",
+        &[Lands("CloseCitizen on the tombstone")],
     ),
     Cover::Pending("W5-A: BadAccount forgeries, g01 budget and loaded limit"),
 ];
