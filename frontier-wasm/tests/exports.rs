@@ -17,7 +17,7 @@ mod json;
 
 use borsh::BorshDeserialize;
 use frontier_wasm::api::*;
-use frontier_wasm::{call, Answer, BAD_INPUT, OK, REFUSED, UNAVAILABLE};
+use frontier_wasm::{call, Answer, BAD_INPUT, OK, REFUSED};
 use json::Json;
 use permutation_rules::frontier::clash::{self, Fighter, Garrison, Occupancy, Relations};
 use permutation_rules::frontier::geometry::{self, ProvinceCoord};
@@ -126,7 +126,10 @@ fn bad_input_is_a_frame_not_a_panic() {
         assert!(a.payload.is_ascii());
     }
     let a = call(frontier_wasm::resolve_from_inputs, &[]);
-    assert_eq!(a.status, UNAVAILABLE);
+    assert_eq!(
+        a.status, BAD_INPUT,
+        "resolve_from_inputs is implemented (W6-D)"
+    );
     // alloc/free of zero bytes round-trips.
     let p = frontier_wasm::alloc(0);
     unsafe { frontier_wasm::free(p, 0) };
@@ -907,7 +910,21 @@ fn records() -> Vec<Rec> {
             enc(&RootArgs { commit: hex(c0.get("commit").str()).try_into().expect("32"), ct_hash: ct }),
         ),
         rec("resolve_clash", "null".into(), enc(&clash_args())),
-        rec("resolve_from_inputs", "{}".into(), vec![]),
+        {
+            let c = &clash_model_cases()[0];
+            rec(
+                "resolve_from_inputs",
+                format!(
+                    "{{\"case\":\"{}\",\"province\":\"{}\",\"inputs\":\"{}\",\"bell\":{},\"seed\":\"{}\"}}",
+                    c.name,
+                    to_hex(&c.args.province),
+                    to_hex(&c.args.inputs),
+                    c.args.bell,
+                    to_hex(&c.args.seed)
+                ),
+                enc(&c.args),
+            )
+        },
         rec(
             "reachable",
             format!("{{\"origin\":{{\"q\":0,\"r\":0}},\"dest\":{{\"q\":30,\"r\":0}},\"genesis_ts\":{g},\"depart_ts\":{},\"target_bell\":16,\"unit\":0}}", g + 6_000),
@@ -971,4 +988,136 @@ fn wasm_vectors_are_fresh() {
             "no vector for {name}"
         );
     }
+}
+
+// ------------------------------------------------------------------ resolve_from_inputs (W6-D)
+
+/// Standard base64 (the vectors' account bytes), no dependency.
+fn b64(s: &str) -> Vec<u8> {
+    let val = |c: u8| -> u32 {
+        match c {
+            b'A'..=b'Z' => (c - b'A') as u32,
+            b'a'..=b'z' => (c - b'a' + 26) as u32,
+            b'0'..=b'9' => (c - b'0' + 52) as u32,
+            b'+' => 62,
+            b'/' => 63,
+            _ => panic!("base64 {c}"),
+        }
+    };
+    let bytes: Vec<u8> = s.bytes().filter(|&c| c != b'=').collect();
+    let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
+    for ch in bytes.chunks(4) {
+        let mut n = 0u32;
+        for (i, &c) in ch.iter().enumerate() {
+            n |= val(c) << (18 - 6 * i);
+        }
+        out.push((n >> 16) as u8);
+        if ch.len() > 2 {
+            out.push((n >> 8) as u8);
+        }
+        if ch.len() > 3 {
+            out.push(n as u8);
+        }
+    }
+    out
+}
+
+struct CmCase {
+    name: String,
+    args: FromInputsArgs,
+    digest: [u8; 32],
+    certain: bool,
+}
+
+/// The native clash model's cases (fclient `writes_frontier_vectors`,
+/// `permutation-gateway/test/frontier-vectors.json` `clash_model`): account
+/// bytes in, the native builder's outcome digest out.
+fn clash_model_cases() -> Vec<CmCase> {
+    let v = read_json("permutation-gateway/test/frontier-vectors.json");
+    v.get("clash_model")
+        .get("cases")
+        .arr()
+        .iter()
+        .map(|c| CmCase {
+            name: c.get("name").str().to_string(),
+            args: FromInputsArgs {
+                province: b64(c.get("province_b64").str()),
+                inputs: b64(c.get("inputs_b64").str()),
+                bell: c.get("bell").i64() as u32,
+                seed: hex(c.get("seed").str()).try_into().expect("32"),
+            },
+            digest: hex(c.get("digest").str()).try_into().expect("32"),
+            certain: matches!(c.get("certain"), Json::Bool(true)),
+        })
+        .collect()
+}
+
+#[test]
+fn resolve_from_inputs_is_the_native_clash_model() {
+    let cases = clash_model_cases();
+    assert!(cases.len() >= 4);
+    // The camp-check case is the one the page's transcription cannot model.
+    assert!(cases.iter().any(|c| !c.certain));
+    for c in &cases {
+        let out: ClashOut = ok_of(go(frontier_wasm::resolve_from_inputs, &c.args));
+        assert_eq!(
+            out.digest, c.digest,
+            "{}: the native builder's digest",
+            c.name
+        );
+        assert_eq!(
+            out.digest,
+            out.outcome.digest(),
+            "{}: the kernel's digest",
+            c.name
+        );
+        assert_eq!(out.outcome.bell, c.args.bell, "{}", c.name);
+        // The same answer as the program's model called directly.
+        let built =
+            frontier_abi::clash_model::build(&c.args.province, Some(&c.args.inputs), c.args.bell)
+                .expect("build");
+        let direct = clash::resolve_clash(&clash::frontier_ruleset(), &built.input(&c.args.seed))
+            .expect("resolve");
+        assert_eq!(direct, out.outcome, "{}", c.name);
+        // Another seed is another outcome digest (the seed is used).
+        let mut other = c.args.clone();
+        other.seed[0] ^= 1;
+        let o2: ClashOut = ok_of(go(frontier_wasm::resolve_from_inputs, &other));
+        assert_eq!(o2.digest, o2.outcome.digest());
+    }
+}
+
+#[test]
+fn resolve_from_inputs_refuses_bad_accounts_with_codes() {
+    let c = &clash_model_cases()[0];
+    // A truncated Province: BadAccount (20).
+    let mut a = c.args.clone();
+    a.province.truncate(64);
+    let r = go(frontier_wasm::resolve_from_inputs, &a);
+    assert_eq!(r.status, REFUSED);
+    assert_eq!(
+        Refusal::try_from_slice(&r.payload).unwrap(),
+        Refusal { code: 20, arg: 0 }
+    );
+    // A truncated ClashInputs: BadAccount too.
+    let mut a = c.args.clone();
+    a.inputs.truncate(10);
+    let r = go(frontier_wasm::resolve_from_inputs, &a);
+    assert_eq!(r.status, REFUSED);
+    assert_eq!(Refusal::try_from_slice(&r.payload).unwrap().code, 20);
+    // Trailing bytes after the borsh input: BAD_INPUT, not a panic.
+    let mut raw = enc(&c.args);
+    raw.push(0);
+    assert_eq!(
+        call(frontier_wasm::resolve_from_inputs, &raw).status,
+        BAD_INPUT
+    );
+    assert_eq!(
+        model_refusal(frontier_abi::clash_model::ModelError::Kernel(0x31)),
+        (22, 0x31)
+    );
+    assert_eq!(
+        model_refusal(frontier_abi::clash_model::ModelError::Overflow),
+        (21, 0)
+    );
 }

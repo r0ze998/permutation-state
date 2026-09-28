@@ -41,6 +41,18 @@ export const BUILD_ITEMS = Object.freeze([
   { item: 5, resource: 'Science', perHour: 3, cost: [0, 60, 60, 0, 0, 20, 0, 0] },
   { item: 6, resource: 'Walls', perHour: 0, cost: null },
 ].map(Object.freeze));
+/**
+ * Base production per hour by resource (catalog `BASE_PROD`) and the tier
+ * bonus in percent (catalog `tier_bonus_pct`, Hamlet … Stronghold): a
+ * holding is founded with `production = base_production(Hamlet)`, so only
+ * production above the tier's base comes from a building (W6-D: the
+ * onboarding card counted the base as "built"). Pinned against catalog.rs
+ * by web-frontier-playtest.test.mjs.
+ */
+export const BASE_PROD = Object.freeze([40, 30, 20, 15, 0, 15, 5, 0]);
+export const TIER_BONUS_PCT = Object.freeze([0, 50, 100, 175]);
+/** `catalog::base_production(tier)`, milli-units per hour (BigInt). */
+export const baseProduction = tier => BASE_PROD.map(b => (BigInt(b) * BigInt(100 + (TIER_BONUS_PCT[tier] ?? 0)) / 100n) * 1000n);
 
 // ------------------------------------------------------------------ factions and free land
 /** A faction's home wedge (the simulator's and the program's rule: wedge = faction id). */
@@ -139,8 +151,10 @@ export function ticketTimes(clock, ticketBell) {
  * `why`: 'displaced' when it had held a provisional holding (the
  * displacement ended its ticket), else 'ended' (taken or expired).
  */
-export function refileOffer(state, lastTicket, { hadHolding = false } = {}) {
-  if (!lastTicket?.length || state.stage !== 'joined') return null;
+export function refileOffer(state, lastTicket, { hadHolding = false, seen = true } = {}) {
+  // `seen` false: the ticket was filed but the herald has not shown it yet (W6-D:
+  // the onboarding run met "your ticket ended" right after filing).
+  if (!lastTicket?.length || state.stage !== 'joined' || !seen) return null;
   return { sites: lastTicket, why: hadHolding ? 'displaced' : 'ended' };
 }
 
@@ -211,7 +225,7 @@ export function actionBlocks(name, ctx) {
   const out = [];
   const resident = ['Muster', 'Dissolve', 'Garrison', 'Explore', 'Depart'].includes(name);
   if (!ctx.holding) return ['NoTicket'];
-  if (resident && ctx.holding.state !== 2) out.push('NotFinal');
+  if (resident && !isFinal(ctx.holding, ctx.province, ctx.now ?? 0, ctx.nowBell ?? 0)) out.push('NotFinal');
   if (resident && (!ctx.province || ctx.province.resolvedNext + 1 < ctx.nowBell)) out.push('NotResident');
   if (['Dissolve', 'Explore', 'Depart'].includes(name)) {
     const h = ctx.host;
@@ -232,6 +246,30 @@ export const tileNeighbours = idx => {
   const o = TILE_OFFSETS[idx];
   return o ? DIRECTIONS.map(([dq, dr]) => TILE_AT.get(`${o.q + dq},${o.r + dr}`)).filter(i => i !== undefined) : [];
 };
+
+// ------------------------------------------------------------------ lazy finality (§5.6 step 5, I-29, I-47)
+/** Bells after which a ticket cohort counts as closed whatever it holds (Province `COHORT_BELLS`). */
+export const COHORT_BELLS = 24;
+/** frontier-abi `prologue::cohort_closed`: no open record of `ticketBell` in the Province (or 24 bells passed). */
+export function cohortClosed(province, ticketBell, nowBell) {
+  if (nowBell >= ticketBell + COHORT_BELLS) return true;
+  return (province?.ticketCohorts ?? []).every(c => c.bell !== ticketBell || c.filed === 0 || c.settled >= c.filed);
+}
+/**
+ * frontier-abi `prologue::finality_due`: the provisional → final flip the
+ * program applies inside the next resident action that carries the
+ * holding's own Province (state 1, `now ≥ final_ts`, cohort closed). W6-D:
+ * the page used to wait for state 2, which no instruction writes before
+ * such an action, so Muster, Garrison, Explore and Depart stayed disabled
+ * on a holding the program would take as final.
+ */
+export function finalityDue(holding, province, now, nowBell) {
+  if (!holding || holding.state !== 1 || !province) return false;
+  if (province.p !== holding.p || province.q !== holding.q) return false;
+  return now >= Number(holding.finalTs) && cohortClosed(province, holding.ticketBell, nowBell);
+}
+/** Final for a resident action in `province`: state 2, or the lazy flip is due. */
+export const isFinal = (holding, province, now, nowBell) => holding?.state === 2 || finalityDue(holding, province, now, nowBell);
 
 /**
  * Explore targets of a Scout host: the passable tiles within one hex of its

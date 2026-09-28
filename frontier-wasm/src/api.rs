@@ -3,7 +3,7 @@
 //! kernels are `permutation_rules::frontier` unchanged, so the browser runs
 //! the same code as the program and `frontier-node`.
 
-use crate::{Answer, BAD_INPUT, REFUSED, UNAVAILABLE};
+use crate::{Answer, BAD_INPUT, REFUSED};
 use borsh::{BorshDeserialize, BorshSerialize};
 use permutation_rules::frontier::clash::{
     self, BeaconClock, ClashError, ClashInput, ClashOutcome, Fighter, Garrison, Occupancy,
@@ -582,14 +582,59 @@ pub fn resolve_clash(b: &[u8]) -> Answer {
     }
 }
 
-/// ResolveFromInputs off chain: builds the `ClashInput` from the Province
-/// and ClashInputs bytes the way the program does. The builder is the
-/// program's (W4-A, `proc/clash.rs`); until it is shared this export
-/// answers [`UNAVAILABLE`] and "verify this clash" uses [`resolve_clash`].
-pub fn resolve_from_inputs(_: &[u8]) -> Answer {
-    Answer {
-        status: UNAVAILABLE,
-        payload: b"resolve_from_inputs: the ClashInputs builder lands with W4-A".to_vec(),
+/// `resolve_from_inputs` input (contract §9.5, v1.6): the Province account
+/// bytes before the resolve, the ClashInputs account bytes (gathered, with
+/// the fate table the program wrote), the bell and THE anchor's seed; borsh
+/// `(Vec<u8>, Vec<u8>, u32, [u8; 32])`.
+#[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
+pub struct FromInputsArgs {
+    pub province: Vec<u8>,
+    pub inputs: Vec<u8>,
+    pub bell: u32,
+    pub seed: [u8; 32],
+}
+
+/// `ModelError` → `(code, arg)` of a `resolve_from_inputs` refusal: 20
+/// BadAccount, 21 Overflow, 22 Kernel (arg = the program's `Kernel`
+/// sub-code); a `ClashError` of the kernel keeps [`clash_refusal`]'s 1–12.
+pub fn model_refusal(e: frontier_abi::clash_model::ModelError) -> (u8, u32) {
+    use frontier_abi::clash_model::ModelError as M;
+    match e {
+        M::BadAccount => (20, 0),
+        M::Overflow => (21, 0),
+        M::Kernel(sub) => (22, sub as u32),
+    }
+}
+
+/// ResolveFromInputs off chain (§9.5; wave-5 amendment "one clash model"):
+/// the `ClashInput` is built from the account bytes by
+/// `frontier_abi::clash_model::build` — the program's own builder (camp
+/// check, garrisons, arrivals by ClashInputs position, occupancy) — then
+/// resolved by the kernel under `frontier_ruleset()`; the digest is
+/// `clash_model::outcome_digest`, the one the program records.
+pub fn resolve_from_inputs(b: &[u8]) -> Answer {
+    use frontier_abi::clash_model as m;
+    let a = take!(b, FromInputsArgs);
+    let built = match m::build(&a.province, Some(&a.inputs), a.bell) {
+        Ok(x) => x,
+        Err(e) => {
+            let (code, arg) = model_refusal(e);
+            return refused(code, arg);
+        }
+    };
+    let outcome = match clash::resolve_clash(&clash::frontier_ruleset(), &built.input(&a.seed)) {
+        Ok(o) => o,
+        Err(e) => {
+            let (code, arg) = clash_refusal(e);
+            return refused(code, arg);
+        }
+    };
+    match m::outcome_digest(&outcome) {
+        Ok(digest) => ok(&ClashOut { outcome, digest }),
+        Err(e) => {
+            let (code, arg) = model_refusal(e);
+            refused(code, arg)
+        }
     }
 }
 

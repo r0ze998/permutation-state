@@ -7,7 +7,9 @@
 // only costs the preference.
 export const UI_PREFIX = 'ps-fui:';
 export const TABS = Object.freeze(['map', 'holding', 'hosts', 'marches', 'more']);
-export const DEFAULTS = Object.freeze({ v: 1, fog: true, lod: 'world', tab: 'map', dismissed: [], lastTicket: null });
+// `ticketSeen`: the herald has shown the last ticket on chain (W6-D: until then a
+// Citizen still at "joined" is a ticket not yet folded, not one that ended).
+export const DEFAULTS = Object.freeze({ v: 1, fog: true, lod: 'world', tab: 'map', dismissed: [], lastTicket: null, ticketSeen: true });
 
 /** `ps-fui:<cluster>:<program>:<season>`. */
 export const uiKey = ({ cluster, programId, seasonId }) => `${UI_PREFIX}${cluster}:${programId}:${seasonId}`;
@@ -40,6 +42,7 @@ export function loadUi(storage, key) {
     dismissed: Array.isArray(v.dismissed) ? v.dismissed.filter(x => typeof x === 'string').slice(0, 64) : [],
     lastTicket: Array.isArray(v.lastTicket) && v.lastTicket.length >= 1 && v.lastTicket.length <= 3 && v.lastTicket.every(isSite)
       ? v.lastTicket.map(({ p, q, site }) => ({ p, q, site })) : null,
+    ticketSeen: typeof v.ticketSeen === 'boolean' ? v.ticketSeen : DEFAULTS.ticketSeen,
   };
 }
 

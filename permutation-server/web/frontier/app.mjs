@@ -23,7 +23,8 @@ import { L, fmtNum, mountLangToggle } from '../lang.mjs';
 import { toHex } from '../sdk/bytes.mjs';
 import { html, setHtml } from '../util.mjs';
 import { ACTIONS, FORMS, bind, startPlay } from './controller.mjs';
-import { renderTabs, renderNotice, factionChip, quotaChip } from './screens/shell.mjs';
+import { renderTabs, renderNotice, factionChip, quotaChip, mountSheet } from './screens/shell.mjs';
+import { createTerrain } from './map/terrain.mjs';
 import * as joinScreen from './screens/join.mjs';
 import * as holdingScreen from './screens/holding.mjs';
 import * as hostScreen from './screens/host.mjs';
@@ -340,6 +341,8 @@ export async function boot() {
   setRelay(cfg.relay);
   FS.chain = new ChainClock();
   mountLangToggle($('lang-box'));
+  // The phone bottom sheet (W5-E; mounted here since W6-D, R3).
+  mountSheet();
   const herald = createHerald({ base: cfg.herald });
   let map = null;
   const canvas = $('frontier-map');
@@ -353,10 +356,12 @@ export async function boot() {
   ]);
   delegate(globalThis.document);
   if (canvas) {
+    // Tile-LOD terrain from the season record's ring seeds through the rules module (W5-E R3: passed by the app).
+    const terrainOf = createTerrain({ onReady: () => map?.invalidate() });
     map = new FrontierMap(canvas, {
       source: () => {
         const own = (FS.holdings ?? []).map(h => ({ p: h.p, q: h.q }));
-        return { overviews: FS.overviews, ringsOpen: FS.record?.rings?.length ?? 1, own, known: new Set(own.map(o => `${o.p},${o.q}`)), showAll: !FS.view.fog, selected: FS.selected };
+        return { overviews: FS.overviews, ringsOpen: FS.record?.rings?.length ?? 1, own, known: new Set(own.map(o => `${o.p},${o.q}`)), showAll: !FS.view.fog, selected: FS.selected, terrainOf };
       },
       onSelect: hit => {
         FS.selected = hit;

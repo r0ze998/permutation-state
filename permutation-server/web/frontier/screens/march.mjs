@@ -52,7 +52,7 @@ export function composerMarch(FS) {
   const env = h ? FS.provinces?.get(`${h.p},${h.q}`) : null;
   const host = c.host ?? null;
   return {
-    season: FS.season, nowBell: FS.nowBell ?? 0, resolvedNext: env?.province.resolvedNext ?? null, holding: h ?? null, host,
+    season: FS.season, nowBell: FS.nowBell ?? 0, resolvedNext: env?.province.resolvedNext ?? null, province: env?.province ?? null, now: FS.chain?.now() ?? 0, holding: h ?? null, host,
     dest: c.dest ?? null, route: c.route ?? null, earliest: c.earliest ?? null, arriveBell: c.arriveBell ?? null,
     stance: c.stance ?? 0, retreat: { choice: c.retreat ?? 'never', ratio: c.ratio ?? null }, tip: c.tip ?? null,
   };

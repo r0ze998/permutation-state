@@ -140,11 +140,13 @@ test('the tip: exactly the three sponsored presets from the Season, never zero (
 });
 
 /** A final holding with one host (Spearman, 500 troops) in province (2, 0), a free transit slot. */
-function world({ state = 2, stamina = 120, ready = 0, pendOp = 0, transit = [], entryState = 1 } = {}) {
+// A provisional holding carries its final_ts (round_time(S) + 600) and its ticket bell; default: not yet due.
+function world({ state = 2, stamina = 120, ready = 0, pendOp = 0, transit = [], entryState = 1, finalTs = 4_000_000_000, ticketBell = 30, cohorts = [] } = {}) {
   const id = hostId({ p: 2, q: 0, site: 3, gen: 1, seq: 7 });
-  const holding = acct('Holding', { P: 2, Q: 0, SITE: 3, GEN: 1, TILE: 30, STATE: state, FACTION: 0,
+  const holding = acct('Holding', { P: 2, Q: 0, SITE: 3, GEN: 1, TILE: 30, STATE: state, FACTION: 0, FINAL_TS: finalTs, TICKET_BELL: ticketBell,
     TRANSIT: [0, 1, 2, 3].map(i => transit[i] ?? { STATE: 0 }) });
   const province = acct('Province', { P: 2, Q: 0, RESOLVED_NEXT: 40, SITE_COUNT: 1, SITES: Uint8Array.of(30, ...new Array(11).fill(0)),
+    TICKET_COHORTS: [0, 1, 2, 3, 4, 5, 6, 7].map(i => cohorts[i] ?? { BELL: 0, FILED: 0, SETTLED: 0 }),
     ENTRIES: [{ ID: id, FACTION: 0, UNIT: 0, TILE: 30, STATE: entryState, TROOPS: 500_000, STAMINA_VALUE: stamina, STAMINA_BELL: 40, READY_BELL: ready, PEND_OP: pendOp }] });
   return { id, holding, province, host: province.entries[0] };
 }
@@ -484,15 +486,51 @@ test('explore targets: passable, unexplored tiles next to the Scout; resident ac
   assert.ok(land.actionBlocks('Explore', { holding: world().holding, province: w.province, nowBell: 41, host: scoutless }).includes('NotScout'));
 });
 
+test('lazy finality (W6-D): a provisional holding counts as final once final_ts passed and its cohort is closed, as the program flips it', () => {
+  const T = 1_800_000_000;
+  const at = (w, now, nowBell = 41) => land.actionBlocks('Muster', { holding: w.holding, province: w.province, nowBell, now });
+  // Not yet: final_ts ahead.
+  assert.deepEqual(at(world({ state: 1, finalTs: T }), T - 1), ['NotFinal']);
+  // final_ts passed, the cohort of bell 30 still open (1 of 2 settled): not yet.
+  const open = world({ state: 1, finalTs: T, ticketBell: 30, cohorts: [{ BELL: 30, FILED: 2, SETTLED: 1 }] });
+  assert.deepEqual(at(open, T), ['NotFinal']);
+  // … unless 24 bells passed since the ticket bell (the cohort expires).
+  assert.deepEqual(at(open, T, 54), ['NotResident'], 'bell 54 = 30 + 24: closed (the province now lags, a separate block)');
+  // Settled cohort, or no record of that bell at all: the flip is due; Muster is allowed.
+  assert.deepEqual(at(world({ state: 1, finalTs: T, ticketBell: 30, cohorts: [{ BELL: 30, FILED: 2, SETTLED: 2 }] }), T), []);
+  assert.deepEqual(at(world({ state: 1, finalTs: T, ticketBell: 30, cohorts: [{ BELL: 29, FILED: 3, SETTLED: 0 }] }), T), []);
+  // The flip needs the holding's own Province (an action carrying another province does not flip it).
+  const w = world({ state: 1, finalTs: T });
+  const elsewhere = { ...w.province, p: 3 };
+  assert.deepEqual(land.actionBlocks('Muster', { holding: w.holding, province: elsewhere, nowBell: 41, now: T }), ['NotFinal']);
+  assert.equal(land.cohortClosed(w.province, 30, 41), true);
+  assert.equal(land.finalityDue(world().holding, w.province, T, 41), false, 'a final holding has nothing due');
+  assert.equal(land.isFinal(world().holding, null, 0, 0), true);
+  // The composer applies the same rule.
+  assert.ok(!march.checkMarch(good(w, { province: w.province, now: T })).includes('NotFinal'));
+  assert.ok(march.checkMarch(good(w, { province: w.province, now: T - 1 })).includes('NotFinal'));
+});
+
+test('refile offer (W6-D): not while the herald has not shown the ticket just filed', () => {
+  const last = [{ p: 3, q: 0, site: 2 }];
+  const joined = { stage: 'joined' };
+  assert.equal(land.refileOffer(joined, last, { seen: false }), null, 'filed, not yet folded: no "your ticket ended"');
+  assert.equal(land.refileOffer(joined, last, { seen: true }).why, 'ended');
+  assert.equal(land.refileOffer(joined, last).why, 'ended', 'default: seen (records from before W6-D)');
+});
+
 test('ps-fui: season-scoped preferences, defaults for anything damaged, the last ticket for a refile', () => {
   const s = memoryStorage();
   const key = fui.uiKey({ cluster: 'localnet', programId: 'P', seasonId: '1' });
   assert.equal(key, 'ps-fui:localnet:P:1');
   assert.deepEqual(fui.loadUi(s, key), { ...fui.DEFAULTS, dismissed: [] });
   fui.saveUi(s, key, { fog: false, tab: 'marches', lastTicket: [{ p: 3, q: 0, site: 2 }] });
-  assert.deepEqual(fui.loadUi(s, key), { v: 1, fog: false, lod: 'world', tab: 'marches', dismissed: [], lastTicket: [{ p: 3, q: 0, site: 2 }] });
-  s.set(key, JSON.stringify({ v: 1, fog: 'no', tab: 'evil', lod: 'x', lastTicket: [{ p: 1, q: 0, site: 99 }], dismissed: [1, 'a'] }));
-  assert.deepEqual(fui.loadUi(s, key), { v: 1, fog: true, lod: 'world', tab: 'map', dismissed: ['a'], lastTicket: null });
+  assert.deepEqual(fui.loadUi(s, key), { v: 1, fog: false, lod: 'world', tab: 'marches', dismissed: [], lastTicket: [{ p: 3, q: 0, site: 2 }], ticketSeen: true });
+  s.set(key, JSON.stringify({ v: 1, fog: 'no', tab: 'evil', lod: 'x', lastTicket: [{ p: 1, q: 0, site: 99 }], dismissed: [1, 'a'], ticketSeen: 'x' }));
+  assert.deepEqual(fui.loadUi(s, key), { v: 1, fog: true, lod: 'world', tab: 'map', dismissed: ['a'], lastTicket: null, ticketSeen: true });
+  // W6-D: a ticket filed but not yet shown by the herald is not "ended".
+  fui.saveUi(s, key, { lastTicket: [{ p: 3, q: 0, site: 2 }], ticketSeen: false });
+  assert.equal(fui.loadUi(s, key).ticketSeen, false);
   s.set(key, '{not json');
   assert.equal(fui.loadUi(s, key).fog, true);
 });

@@ -70,7 +70,6 @@ export function render(FS, { open = true } = {}) {
   const total = STEPS.length - 1;
   const body = html`<p>${cur.id === 'join' ? DO.join(FS.land?.stage ?? 'none') : DO[cur.id]()}</p>
     ${cur.wait ? html`<p class="muted">${waitText(cur.wait)}</p>` : ''}
-    ${cur.id === 'join' && (FS.land?.stage === 'joined' || FS.land?.stage === 'refugee') ? renderOverflow(FS) : ''}
     <p>${cur.id === 'welcome' ? html`<button type="button" class="btn primary" data-act="ob-seen" data-flag="welcome">${L`わかりました`}</button>` : ''}
       ${cur.id === 'report' ? renderReportGo(FS) : GO[cur.id]?.() ?? ''}
       ${cur.id !== 'done' ? html`<button type="button" class="btn small" data-act="ob-skip" data-step="${cur.id}">${L`この手順を飛ばす`}</button>` : ''}
@@ -86,7 +85,11 @@ function renderReportGo(FS) {
   return r ? html`<button type="button" class="btn primary" data-act="report-open" data-p="${r.p}" data-q="${r.q}" data-bell="${r.bell}">${L`報告を開く`}</button>` : '';
 }
 
-/** The adjacent-wedge offer when the home wedge shows no free site (§5.9). */
+/**
+ * The adjacent-wedge offer when the home wedge shows no free site (§5.9).
+ * Not in the card since W6-D (W5-E D9): the site picker under it lists the
+ * same provinces with the same line, and the card showed them twice.
+ */
 export function renderOverflow(FS) {
   const faction = FS.citizen?.faction;
   if (!Number.isInteger(faction)) return '';

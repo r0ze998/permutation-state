@@ -20,6 +20,7 @@ import { encodePath, pack, unpack, validate, STANCES, RETREAT_MAX_BPS, MAX_PATH_
 import { minTipLamports, tipPresets, tipPriorityMilli, departEscrow } from '../sdk/frontier/fees.mjs';
 import * as book from './marchbook.mjs';
 import { tileHex } from './fgeo.mjs';
+import { isFinal } from './fland.mjs';
 
 // ------------------------------------------------------------------ rules the composer pre-checks
 /**
@@ -137,7 +138,7 @@ export function earliestBell(kernel, { genesisTs, departTs, secs }) {
 export function checkMarch(m) {
   const out = [];
   const add = c => { if (!out.includes(c)) out.push(c); };
-  if (!m.holding || m.holding.state !== 2) add('NotFinal');
+  if (!m.holding || !isFinal(m.holding, m.province ?? null, m.now ?? 0, m.nowBell)) add('NotFinal');
   if (m.resolvedNext === null || m.resolvedNext === undefined || m.resolvedNext + 1 < m.nowBell) add('NotResident');
   const h = m.host;
   if (!h || h.state !== 1) add('HostBusy');

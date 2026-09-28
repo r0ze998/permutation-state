@@ -69,9 +69,19 @@ async function act(name, { v = {}, fields = {}, signer, requester = null, label,
   FS.inFlight = (FS.inFlight ?? 0) + 1;
   try {
     const accounts = typeof v === 'function' ? fp => accountsFor(name, v(fp)) : accountsFor(name, ctx(v));
-    const r = await submit({ name, accounts, fields, signer: sign, requester, citizen: requester ? io.pinned().addresses.of('Citizen', { wallet: FS.wallet.address }) : undefined, invite: v.invite });
+    const send = () => submit({ name, accounts, fields, signer: sign, requester, citizen: requester ? io.pinned().addresses.of('Citizen', { wallet: FS.wallet.address }) : undefined, invite: v.invite });
+    let r = await send();
+    let t = r.ok ? await track(r.signature) : r;
+    // W6-D: a resident action refused because the province fell a bell behind between the check and the landing:
+    // ask the keeper to catch it up, wait for the herald to show it, and send once more.
+    if (!t.ok && retryAfterCatchUp(name, t.code)) {
+      busy(() => L`州が追いつくのを待っています…`);
+      if (await catchUp()) {
+        r = await send();
+        t = r.ok ? await track(r.signature) : r;
+      }
+    }
     if (!r.ok) return failed(r);
-    const t = await track(r.signature);
     if (!t.ok) return failed(t);
     done(() => L`チェーンに記録されました`);
     await after?.(r);
@@ -82,7 +92,41 @@ async function act(name, { v = {}, fields = {}, signer, requester = null, label,
   }
 }
 
+/** Ask the keeper to catch the home province up and wait (≤ 20 s) until the herald shows it resolved through the bell before this one. */
+async function catchUp() {
+  const h = FS.holdings?.[0];
+  if (!h) return false;
+  const r = await io.nudge(h.p, h.q, FS.provinces.get(`${h.p},${h.q}`)?.province.resolvedNext ?? nowBell());
+  if (!r.ok) return false;
+  FS.autoNudgeBell = nowBell();
+  for (let i = 0; i < 10; i++) {
+    await new Promise(res => setTimeout(res, 2000));
+    await loadEnvelope(h.p, h.q);
+    const pr = FS.provinces.get(`${h.p},${h.q}`)?.province;
+    if (pr && !provinceLags(pr, nowBell())) return true;
+  }
+  return false;
+}
+
 // ------------------------------------------------------------------ pure rules of the controller (tested)
+/** Resident actions sent again once after a catch-up when the program answers NotResident (not Depart: the march has its own path). */
+export const CATCH_UP_RETRY = Object.freeze(['Muster', 'Garrison', 'Dissolve', 'Explore']);
+export const retryAfterCatchUp = (name, code) => code === 'NotResident' && CATCH_UP_RETRY.includes(name);
+/** The program's resident rule: a province lags when it is not resolved through `nowBell − 2` (`resolved_next + 1 < b`). */
+export const provinceLags = (province, nowBell) => !province || province.resolvedNext + 1 < nowBell;
+/**
+ * Whether the page asks the keeper to catch the viewer's home province up
+ * on its own (W6-D): the keeper skips quiet provinces in batches (up to 24
+ * bells), so a player's province usually lags and every resident action
+ * waited for a tap on "catch up". Once per bell, only while the page is
+ * visible and the viewer holds land there.
+ */
+export function shouldAutoNudge({ holding, province, nowBell, lastBell = null, hidden = false }) {
+  if (hidden || !holding || !(holding.state === 1 || holding.state === 2) || !province) return false;
+  if (!provinceLags(province, nowBell)) return false;
+  return lastBell !== nowBell;
+}
+
 /** Events the chronicle starts behind the head (a fresh page starts near the head, not at event 1). */
 export const CHRONICLE_WINDOW = 500;
 /** Pages of /h/events read per refresh while the answer is `full`. */
@@ -261,6 +305,7 @@ export async function refresh() {
       FS.holdings = me.holdings;
       FS.land = landState(me.citizen);
       if (before === 'provisional' && FS.land.stage === 'joined') FS.hadHolding = true;
+      if (FS.ui?.ticketSeen === false && FS.land.stage !== 'joined' && FS.land.stage !== 'none') saveUiPatch({ ticketSeen: true });
       if (me.record?.quota) FS.quota = me.record.quota;
       if (FS.session && FS.citizen) {
         const m = fsession.matchesCitizen(FS.session, FS.citizen, now());
@@ -271,6 +316,11 @@ export async function refresh() {
     }
     const h = FS.holdings?.[0];
     if (h) await loadEnvelope(h.p, h.q);
+    const home = h ? FS.provinces.get(`${h.p},${h.q}`)?.province ?? null : null;
+    if (shouldAutoNudge({ holding: h, province: home, nowBell: FS.nowBell, lastBell: FS.autoNudgeBell ?? null, hidden: !!globalThis.document?.hidden })) {
+      FS.autoNudgeBell = FS.nowBell;
+      io.nudge(h.p, h.q, home.resolvedNext).then(r => { if (r.ok) refreshSoon(4000); }).catch(() => {});
+    }
     // Hosts standing in other provinces (after a march that Stays): their
     // envelopes too, so the Hosts tab can show and command them.
     if (me.ok) for (const pq of hostProvinces(me.record, h ? { p: h.p, q: h.q } : null)) await loadEnvelope(pq.p, pq.q);
@@ -327,7 +377,7 @@ async function sendTheMarch() {
   const c = FS.compose, h = FS.holdings[0];
   const pin = io.pinned();
   const env = FS.provinces.get(`${c.origin.p},${c.origin.q}`);
-  const m = { season: FS.season, nowBell: nowBell(), resolvedNext: env?.province.resolvedNext ?? null, holding: h, host: c.host, dest: c.dest, route: c.route,
+  const m = { season: FS.season, nowBell: nowBell(), resolvedNext: env?.province.resolvedNext ?? null, province: env?.province ?? null, now: now(), holding: h, host: c.host, dest: c.dest, route: c.route,
     earliest: c.earliest, arriveBell: c.arriveBell, stance: c.stance, retreat: { choice: c.retreat, ratio: c.ratio }, tip: c.tip,
     holdingAddress: pin.addresses.of('Holding', h) };
   c.sending = true; c.step = null;
@@ -465,7 +515,8 @@ export const ACTIONS = {
   refile: () => fileTicket(FS.ui?.lastTicket ?? []),
   harvest: () => act('Harvest', { v: { holding: FS.holdings[0] } }),
   build: d => act('Build', { v: { holding: FS.holdings[0], item: num(d.item) }, fields: { item: num(d.item) } }),
-  nudge: () => { const h = FS.holdings[0], env = FS.provinces.get(`${h.p},${h.q}`); return io.nudge(h.p, h.q, env?.province.resolvedNext ?? nowBell()).then(r => (r.ok ? done(() => L`キーパーに追いつくよう頼みました`) : failed(r))); },
+  // W6-D: re-read soon after the keeper was asked (the next poll could be 30 s away, past the window the catch-up opens).
+  nudge: () => { const h = FS.holdings[0], env = FS.provinces.get(`${h.p},${h.q}`); return io.nudge(h.p, h.q, env?.province.resolvedNext ?? nowBell()).then(r => { refreshSoon(4000); return r.ok ? done(() => L`キーパーに追いつくよう頼みました`) : failed(r); }); },
   dissolve: d => { const r = hostRow(d.host); return act('Dissolve', { v: { holding: FS.holdings[0], province: r ? { p: r.p, q: r.q } : null }, fields: { host_id: BigInt(d.host) } }); },
   compose: d => {
     const r = hostRow(d.host);
@@ -527,7 +578,7 @@ function hostRow(id) {
 
 async function fileTicket(sites) {
   if (!sites.length) return undefined;
-  saveUiPatch({ lastTicket: sites });
+  saveUiPatch({ lastTicket: sites, ticketSeen: false });
   FS.hadHolding = false;
   return act('FileTicket', { v: { sites }, fields: { sites } });
 }

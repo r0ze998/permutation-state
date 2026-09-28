@@ -231,7 +231,7 @@ export function buildClashArgs({ province: pv, inputs: ci, bell, seed }) {
 
 /** The borsh input the page offers the kernel's own builder: (Province bytes, ClashInputs bytes, bell, seed). */
 export const fromInputsRequest = ({ provinceBytes, inputsBytes, bell, seed }) =>
-  new Writer().vec(Array.from(provinceBytes), (w, b) => w.u8(b)).vec(Array.from(inputsBytes), (w, b) => w.u8(b)).u32(bell).fixed(seed, 32).bytes();
+  new Writer().bytesVec(provinceBytes).bytesVec(inputsBytes).u32(bell).fixed(seed, 32).bytes();
 
 // ------------------------------------------------------------------ the seed of THE anchor
 /**
@@ -316,6 +316,13 @@ export async function verifyClash({ p, q, bell, clash, herald, kernel, clock, se
         if (own.ok && own.status === undefined) {
           try { const d = decodeClashOut(own.value); res = outcomeDigest(d.outcome) === d.digest ? { ok: true, ...d } : { ok: false, why: 'CodecMismatch' }; } catch { res = null; }
           if (res) { out.builder = 'kernel'; out.certain = true; }
+        }
+        if (res?.ok) {
+          // The page's own transcription too (W6-D): its args drive "what if", and it is kept only when it agrees with the kernel's builder.
+          const b = buildClashArgs({ province: pv, inputs: ci, bell, seed });
+          const mine = b.ok ? resolveArgs(k, b.args) : null;
+          out.pageBuilder = mine?.ok && mine.digest === res.digest ? 'agrees' : b.ok && b.certain === false ? 'uncertain' : 'differs';
+          if (out.pageBuilder === 'agrees') out.args = b.args;
         }
         if (!res) {
           const b = buildClashArgs({ province: pv, inputs: ci, bell, seed });
@@ -480,7 +487,7 @@ export function render(FS, mine = () => false, { whatIf = true } = {}) {
     <div class="row"><dt>${L`入力の要約`}</dt><dd><code>${String(rep.inputDigest ?? '—').slice(0, 16)}</code></dd></div>
     <div class="row"><dt>${L`結果の要約`}</dt><dd><code>${String(rep.outcomeDigest ?? '—').slice(0, 16)}</code></dd></div>
     <div class="row"><dt>${L`交戦`}</dt><dd>${fmtNum(v?.outcome?.engagements ?? rep.decoded?.engagements ?? 0)}</dd></div></dl>`;
-  const verdict = v ? html`<p class="notice ${v.result === 'match' ? 'ok' : v.result === 'mismatch' ? 'error' : ''}" role="status">${resultText(v)}</p>${renderSteps(v)}
+  const verdict = v ? html`<p class="notice ${v.result === 'match' ? 'ok' : v.result === 'mismatch' ? 'error' : ''}" role="status" data-verify-result="${v.result}">${resultText(v)}</p>${renderSteps(v)}
     ${v.builder === 'page' ? html`<p class="muted">${L`入力はこのページが契約の手順どおりに組み立てました。`}</p>` : ''}` : '';
   return html`<section aria-labelledby="report-title">${head}
     ${v?.outcome ? '' : html`<p class="muted">${L`確かめる前は、チェーンに書かれた到着軍勢の結末だけを表示しています。`}</p>`}
