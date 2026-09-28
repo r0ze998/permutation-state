@@ -24,6 +24,7 @@
 ### `up` and configs
 
 - **`drain_scale`** (`--drain-scale S`, TOML `drain_scale`; default `max(scale, 20)`): one bell after play, when the fleet is stopped, the chain goes to the drain's scale (event `drain-scale`, `state.play.drain_scale`), and a localnet restart re-applies the current scale. At 2× the 26-bell keeper-only drain took 2.2 h of wall time; at 20× 13 min. Runs at ≥ 20× are unchanged. The report judges latencies over play only.
+- **`eager_bots`** (`--eager-bots` / `--no-eager-bots`, TOML `eager_bots`; default on for runs shorter than one game day): the fleet gets `--day0-share 1 --eager-personas` (the in-process day's pacing, W5-B F2/R3), but only the flags `frontier-bots --help` lists (W6-C is adding them; an unknown flag would crash-loop the fleet) and not when `bots_args` sets them. With today's `frontier-bots` nothing changes; after W6-C merges, the Gate W6 latency line gets marches without new flags (F-A8). One-day and longer runs (nightly, smoke, w6-s7) are unchanged.
 - `--expect-so-sha256` was already implemented by integ-W5r (O8): the stack refuses another `.so` and V2 checks the deployed program against the pin. Exercised end to end by the archive smoke (§2) and used by `m1-run-s7.sh`.
 - Configs: `real-smoke.toml` = the smoke that ran (one game day at 100×, 100 bots, adversary, base 41600); `w6-latency.toml` `drain_scale = 20`; `w6-s7.toml` comment (archive complete; the Gate W6 line names no `--adversary`).
 - Usage text lists `--drain-scale` and `--expect-so-sha256`.
@@ -46,7 +47,7 @@ Release `.so` 874,120 B, sha256 `1b1968af…d506fc` (= Gate W5's); test-beacon `
 | `w6a-nightly-1` | `scripts/m1-nightly.sh --run-id w6a-nightly-1` (build, test key, 100 × 1 day at 100×, adversary, 41500) | **every step exit 0** (`"pass": true`): verify PASS (6,440 txs), tamper 29/29 (16 on the run: no march), load pass (p99 file 25.6 ms, ingest → WS p99 0.20 s by WS stamp, 0 errors, 0 gaps), report exit 0 |
 | `w6a-nightly-2` | same, `--no-build` | **all exit 0**: verify PASS (6,977 txs), tamper 29/29 (26 on the run), load pass (p99 24.6 ms, 0.4 s), report exit 0; 8 marches |
 | `w6a-nightly-3` | same, `--no-build` | **all exit 0**: verify PASS (6,740 txs), tamper 29/29 (25 on the run), load pass (p99 53.2 ms, 0.28 s), report exit 0; 3 marches |
-| `w6-latency` — **scale-2 latency run** | the Gate W6 line as written (`up --mode accel --beacon test-key --scale 2 --game-hours 6 --bots 300 --run-id w6-latency --base-port 41700 --chaos`; base port 41700 instead of 41000 only) | LATENCY_RESULT |
+| `w6-latency` — **scale-2 latency run** | the Gate W6 line as written (`up --mode accel --beacon test-key --scale 2 --game-hours 6 --bots 300 --run-id w6-latency --base-port 41700 --chaos`; base port 41700 instead of 41000 only) | `up` exit 0 (53 s setup; play 3 h of wall time; the drain went to 20× at slot 28,537 and took 13 min; complete at slot 30,412, 23:55 JST, ≈ 3 h 23 min in all). One chaos kill (herald, restarted after 1.2 s). **report exit 0**: criteria 1, 2, 4, 5, 8, 9 pass; **3 n.a.**: round → anchor **p99 2.0 game s** and S → first cache **p99 2.0 game s** (targets 5 s) are met, but anchor → last reveal and close → resolve have **no samples — the fleet made no march in 6 game hours** (61 joins of 300 bots, 13 Trains; F-A8); SkipQuiet ≤ 2 per province-day. Extra (not gate lines): verify PASS (2,649 txs), tamper 29/29 (15 on the run). `down` exit 0 |
 
 **Three consecutive nightlies green** (Gate W6 line 1): nightly-1, -2, -3, back to back on one evening (not three nights; the test key, the nightly config, `--run-id` only).
 
@@ -58,9 +59,9 @@ Release `.so` 874,120 B, sha256 `1b1968af…d506fc` (= Gate W5's); test-beacon `
 | w6a-nightly-1 (100×) | 2 / 2 / 2 | 2.98 / 2.98 | 2 / 2 | – | – | 53, 6 | 20, 11 |
 | w6a-nightly-2 (100×) | 2 / 2 / 2 | 2.95 / 2.95 | 2 / 2 | 0 | 6 / 6 | 40, 6 | 30, 42 |
 | w6a-nightly-3 (100×) | 2 / **3** / 5 | 2.95 / 3.95 | 2 / **3** | 0 | 6 / 7 | 43, 6 | 29, 35 |
-| w6-latency (2×) | LAT_ROW |
+| w6-latency (2×, 0.8 game s per slot) | 2 / 2 / 2 (= **2.0 game s** p99 from publication) | 2.50 / 2.50 | 2 / 2 (= 2.0 game s) | – (no march) | – (no march) | 21, 2 | 16, 2 |
 
-**Reveal CU distribution** (landed Reveals, whole-transaction units incl. ≈ 450 of ComputeBudget; for W6-E's c4 v3): w6a-real1 n 10, p50 20,222, p90 21,650, max 21,868; nightly-2 n 8, p50 18,054, max 21,186; nightly-3 n 3, p50 18,054, max 20,404; w6-latency REVEAL_LAT. Largest CU per kind in these runs, all within §5.5: PostAnchorMulti 380,718 / 400,000; PostSeed 339,691 / 345,000; PostBeacon 332,937 / 340,000; FoldOccupancy 28,887 / 30,000; SettleTransit 63,047 / 85,000; GatherClash 37,093 / 49,000; ResolveFromInputs 36,048 / 340,000; SkipQuiet 56,487 / 90,000 + 30,000 per unit.
+**Reveal CU distribution** (landed Reveals, whole-transaction units incl. ≈ 450 of ComputeBudget; for W6-E's c4 v3): w6a-real1 n 10, p50 20,222, p90 21,650, max 21,868; nightly-2 n 8, p50 18,054, max 21,186; nightly-3 n 3, p50 18,054, max 20,404; w6-latency none (no march). The distribution so far is 21 Reveals; W6-E should say it is small. Largest CU per kind in these runs, all within §5.5: PostAnchorMulti 380,718 / 400,000; PostSeed 339,691 / 345,000; PostBeacon 332,937 / 340,000; FoldOccupancy 28,887 / 30,000; SettleTransit 63,047 / 85,000; GatherClash 37,093 / 49,000; ResolveFromInputs 36,048 / 340,000; SkipQuiet 56,487 / 90,000 + 30,000 per unit.
 
 ## 3. Findings and triage (for W6-B/C/D and the triage pass)
 
@@ -70,21 +71,22 @@ Release `.so` 874,120 B, sha256 `1b1968af…d506fc` (= Gate W5's); test-beacon `
 - **F-A4 (keeper, W6-C; W5-B F4 confirmed):** idle province-days stay at ≤ 6 SkipQuiet (max 6 in every run), but **churned** province-days take up to 44 (real smoke) — SkipQuiet stops at every roster change and starts a new transaction. Criterion 3 judges idle days only; churned days are reported.
 - **F-A5 (bots, W6-C; W5-B F2 still open):** the fleet is thin: 25–66 joins of 100 bots per game day, 0–10 marches; most personas `needs-chain`/`pending` (only `forger` and `spammer` observed; the forger's 6 Reveals refused `BadAddress` in the real smoke are its expected refusals). Criterion 5 passes because nothing is violated, not because every persona was seen. `--day0-share` / `--eager-personas` (W6-C) are the fix; the stack passes them with `--bots-args`.
 - **F-A6 (stack/adversary, W6-C holds):** several holds find nothing to hold or change nothing: `slots-below` and `lag` were skipped ("nothing to hold before the deadline"), and the anchor, keeper-payers, defence-pool and relay-payers holds saw 0 writes of their keys inside the window and 0–1 in the window after (the frontier-fund hold delayed 18 writes, the ticket hold 4–6). No hold saw a write inside its window (every hold was above the keeper cap, so nobody outbid it). The ring-opening / claim-grace timing is W6-C's (O11).
-- **F-A7 (herald):** fold lag p99 10 slots in the real smoke at 100× (bell boundaries), 0 alarms; the WS-stamp ingest → WS p99 0.20–0.40 s in the nightly loads.
+- **F-A7 (herald, W6-C):** fold lag p99 10 slots in the real smoke at 100× (bell boundaries), 0 alarms; the WS-stamp ingest → WS p99 0.20–0.40 s in the nightly loads. **But after the latency run's chaos `kill -9` of the herald (bell 23.3, restarted after 1.2 s) its fold lag was 586 and 628 slots at the next two bell samples** (bells 25 and 26, several minutes of wall time behind at 2×), back to 0 at bell 27. During the w6-s7 in-run viewer window a herald kill would put ingest → WS far above 2 s for that long; the report's in-run verdict will show it.
+- **F-A8 (bots, W6-C; latency run):** 300 bots in 6 game hours made **no march** (61 joins, 13 Trains, 8 Builds), so criterion 3's anchor → last reveal and close → resolve could not be measured at 2×, and the Gate W6 pass condition "the latency run meets criterion 3's game-second targets" is met only on the two lines that have samples. Fix: W6-C's `--day0-share` / `--eager-personas`; the stack now passes them automatically below one game day (`eager_bots`). The integrator's Gate W6 latency run after the W6-C merge should show REVEAL and CLASH records; if it does not, the bots need a march within the first game hours (a persona or `--bots-args`).
 
-**What the triage pass must check on w6-s7** (in addition to the report's decided criteria): criterion 3 in slots at 20× (F-A3 — the most likely miss; the report shows both readings); idle vs churned SkipQuiet (F-A4); `tamper` 29/29 with T10 on the run (needs F-A1 merged); the in-run viewer verdict (`load/in-run.verdict.json`, criterion 6); ClashInputs "blocked" list (criterion 1); keeper spend from the settle races (F-A2); persona coverage (F-A5); hold effects (F-A6); the verifier's wall time on the 7-day input (E6, printed in the report).
+**What the triage pass must check on w6-s7** (in addition to the report's decided criteria): criterion 3 in slots at 20× (F-A3 — the most likely miss; the report shows both readings); idle vs churned SkipQuiet (F-A4); `tamper` 29/29 with T10 on the run (needs F-A1 merged); the in-run viewer verdict (`load/in-run.verdict.json`, criterion 6); ClashInputs "blocked" list (criterion 1); keeper spend from the settle races (F-A2); persona coverage (F-A5); hold effects (F-A6); the verifier's wall time on the 7-day input (E6, printed in the report); the herald's fold lag after each chaos kill of the herald against the in-run viewer window (F-A7); whether the one-day-and-longer fleet marches at all at 1,000 bots (F-A5; `eager_bots` is off for a 7-day run, pass `--eager-bots` to change that). Start command (main session, from the integration worktree after the W6 merge): `scripts/m1-run-s7.sh` (add `--adversary` for the §13.4 hold schedule; `--dry-run` first prints the exact commands).
 
 ## 4. Gate items run on this branch
 
 | # | Command | Result |
 |---|---|---|
-| 1 | `(cd frontier-node && cargo fmt --all -- --check)` | FMT |
-| 2 | `(cd frontier-node && cargo clippy --locked --workspace --all-targets -- -D warnings)` | CLIPPY |
-| 3 | `(cd frontier-node && cargo test --locked --release --workspace)` | TESTS |
+| 1 | `(cd frontier-node && cargo fmt --all -- --check)` exit 0
+| 2 | `(cd frontier-node && cargo clippy --locked --workspace --all-targets -- -D warnings)` exit 0
+| 3 | `(cd frontier-node && cargo test --locked --release --workspace)` exit 0: 336 passed, 0 failed, 10 ignored (stack 38 after the last commit)
 | 4 | `(cd frontier-node && cargo test --locked --release -p verify -- --include-ignored tamper_)` | exit 0 (56 + 5 + 8 green) |
 | 5 | `scripts/m1-nightly.sh` (Gate W6 line 1) × 3 consecutive (`--run-id w6a-nightly-{1,2,3}`, the first with the build) | exit 0, 0, 0 |
-| 6 | `$S up --mode accel --beacon test-key --scale 2 --game-hours 6 --bots 300 --run-id w6-latency --base-port 41700 --chaos` | LAT_UP |
-| 7 | `$S report --run-id w6-latency && $S down --run-id w6-latency` | LAT_REPORT |
+| 6 | `$S up --mode accel --beacon test-key --scale 2 --game-hours 6 --bots 300 --run-id w6-latency --base-port 41700 --chaos` exit 0 (§2)
+| 7 | `$S report --run-id w6-latency && $S down --run-id w6-latency` exit 0, exit 0 (criterion 3 n.a.: two of four lines unmeasured, F-A8)
 | 8 | (not a gate line) real-round smoke `w6a-real1`: up, verify, tamper, report, down | exit 0 each (tamper after F-A1) |
 | — | Gate W6 w6-s7 line (+ verify/tamper/report) | **not run** (wave note: the main session runs `scripts/m1-run-s7.sh`) |
 
@@ -97,7 +99,8 @@ Not run by this unit (not its files): the svm tests, `mutate.sh`, `itest g14_`, 
 3. **`m1-run-s7.sh` adds `--expect-so-sha256`** to the Gate W6 line (the release build's record; the run is otherwise the line as written) and leaves the services up for triage unless `--down`. The Gate W6 line has **no `--adversary`**; `configs/w6-s7.toml` and the exit run (§13.4, `m1-exit.toml`) do — pass `--adversary` to the script to include the hold schedule.
 4. **Ports:** the latency run used base 41700 (the Gate line says 41000) because other W6 units' stacks were on 41300 and could be on 41000; the stack's ports are all offsets of the base, nothing else changes.
 5. **Nightlies back to back:** three consecutive green runs on one evening, not three nights.
-6. **Cross-ownership:** the T10 fix in `crates/verify` (F-A1) and `--run-id` in `scripts/m1-nightly.sh` (W5-B's file).
+6. **`eager_bots` on by default below one game day** (§1): only the flags the fleet lists are passed, so it is a no-op until W6-C's flags exist.
+7. **Cross-ownership:** the T10 fix in `crates/verify` (F-A1) and `--run-id` in `scripts/m1-nightly.sh` (W5-B's file).
 
 ## 6. Dependency requests
 
