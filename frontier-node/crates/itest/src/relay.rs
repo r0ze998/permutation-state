@@ -22,6 +22,11 @@
 //!   Δlamports ≤ fee + the kind's allowance) → send;
 //! - `POST /f/reveal`: forwarded to the keeper's loopback `/v1/reveal` with
 //!   its bearer token, the answer passed through;
+//! - the replay cache (W5-C, as the gateway's `ReplayCache`): the same
+//!   authority signature (or, for a settle shape, the same message) again
+//!   is `409 Duplicate`, claimed before the simulation and released when
+//!   the relay refuses (W4-F finding 5: the chain's duplicate refusal came
+//!   back as `RelayRejected`);
 //! - `POST /f/nudge`: likewise to the keeper's `/v1/nudge` (integ-W4
 //!   review);
 //! - `GET /f/quota?citizen=`: `{left, resetsAt, lamportsLeft}`.
@@ -29,7 +34,7 @@
 //! Not emulated (the gateway's own tests cover them): per-IP limits (bots
 //! are loopback clients, exempt), the per-route token buckets (`/f/nudge`
 //! 10 burst, 1/s), invites (the in-process season has no join gate), the
-//! replay cache, the operator routes, the v1.3 exact account-key and
+//! operator routes, the v1.3 exact account-key and
 //! writability check, the lamports-per-day quota and the quota's burst
 //! carry-over.
 
@@ -84,6 +89,8 @@ pub struct RelayState {
     rng: Mutex<u64>,
     /// (bucket, game day) → sponsored transactions.
     quota: Mutex<BTreeMap<(String, i64), u32>>,
+    /// Replay keys of transactions claimed or sent.
+    seen: Mutex<std::collections::HashSet<Vec<u8>>>,
     pub stats: Mutex<RelayStats>,
 }
 
@@ -112,6 +119,7 @@ impl RelayState {
                     ^ u64::from_le_bytes(master[..8].try_into().unwrap_or([0; 8])),
             ),
             quota: Mutex::new(BTreeMap::new()),
+            seen: Mutex::new(std::collections::HashSet::new()),
             stats: Mutex::new(RelayStats::default()),
         }
     }
@@ -367,7 +375,7 @@ async fn sponsored(st: St, path: &'static str, b: Value) -> Response {
         st.count(path, None, "BadBody");
         return refuse(StatusCode::BAD_REQUEST, "BadBody", "tx");
     };
-    let mut t = match fclient::tx::from_wire(&wire) {
+    let t = match fclient::tx::from_wire(&wire) {
         Ok(t) => t,
         Err(e) => {
             st.count(path, None, "InvalidTransaction");
@@ -386,6 +394,46 @@ async fn sponsored(st: St, path: &'static str, b: Value) -> Response {
             return *r;
         }
     };
+    // The replay key: the authority's signature, else (a settle shape) the
+    // message (the gateway's `sig:` / `msg:` keys).
+    let replay = match t.signatures.get(1) {
+        Some(sig) => sig.as_ref().to_vec(),
+        None => {
+            use sha2::Digest;
+            sha2::Sha256::digest(t.message_data()).to_vec()
+        }
+    };
+    if !st
+        .seen
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .insert(replay.clone())
+    {
+        st.count(path, Some(tg), "Duplicate");
+        return refuse(
+            StatusCode::CONFLICT,
+            "Duplicate",
+            "this exact transaction was relayed already; sign a new one",
+        );
+    }
+    let r = sponsor_checked(st.clone(), path, t, tg, bucket).await;
+    if r.status() != StatusCode::OK {
+        st.seen
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&replay);
+    }
+    r
+}
+
+/// [`sponsored`] after the shape check and the replay claim.
+async fn sponsor_checked(
+    st: St,
+    path: &'static str,
+    mut t: Transaction,
+    tg: u8,
+    bucket: String,
+) -> Response {
     if st.used(&bucket) >= QUOTA_PER_DAY {
         st.count(path, Some(tg), "QuotaExceeded");
         let (_, resets) = st.day();

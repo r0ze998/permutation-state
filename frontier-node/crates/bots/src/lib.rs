@@ -22,6 +22,7 @@
 //! ports.
 
 pub mod bot;
+pub mod control;
 pub mod fleet;
 pub mod journal;
 pub mod ports;

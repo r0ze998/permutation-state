@@ -480,7 +480,7 @@ pub async fn run(cfg: DayCfg) -> Result<DayOut, String> {
                     let wallets: Vec<(AgentSpec, String)> = fleet
                         .bots
                         .iter()
-                        .filter(|b| b.spec.index < 8 || b.spec.persona.is_some())
+                        .filter(|b| b.spec.index < 32 || b.spec.persona.is_some())
                         .map(|b| (b.spec, b.wallet.pubkey().to_string()))
                         .collect();
                     let rings = frontier_bots::bot::Shared::season(&fleet.shared)

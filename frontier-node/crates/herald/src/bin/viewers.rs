@@ -4,10 +4,13 @@
 //! ```text
 //! frontier-viewers --herald 127.0.0.1:41040 [--viewers 4000] [--ws 1000]
 //!     [--seconds 600] [--think-ms 5000] [--rings 0,1,2] [--provinces 2,0;1,1]
-//!     [--bells 144] [--seed 1] [--stats 127.0.0.1:41075]
+//!     [--bells 144] [--seed 1] [--stats 127.0.0.1:41075] [--gate]
 //! ```
-//! Prints the report as JSON; with `--stats` it also serves the running
-//! counters at `GET /stats`.
+//! Prints the report as JSON (with `errorRate`, the WS `ingest_p99_ms`
+//! and `targetsMet` / `targetMisses`: §13.4 criterion 6); with `--stats`
+//! it also serves the running counters at `GET /stats`. With `--gate` the
+//! exit code is 1 when a criterion-6 target is missed (the stack's `load`
+//! step, Gate W5).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -22,6 +25,10 @@ fn args() -> Result<HashMap<String, String>, String> {
         let k = a
             .strip_prefix("--")
             .ok_or(format!("unexpected argument {a}"))?;
+        if k == "gate" {
+            m.insert(k.to_string(), "1".into());
+            continue;
+        }
         m.insert(
             k.to_string(),
             it.next().ok_or(format!("--{k} needs a value"))?,
@@ -97,6 +104,13 @@ async fn main_inner() -> Result<(), String> {
     }
     let rep = viewers::run(cfg, stats).await;
     println!("{}", serde_json::to_string_pretty(&rep).unwrap_or_default());
+    if a.contains_key("gate") && rep["targetsMet"] != true {
+        eprintln!(
+            "frontier-viewers: criterion 6 missed: {}",
+            rep["targetMisses"]
+        );
+        std::process::exit(1);
+    }
     Ok(())
 }
 

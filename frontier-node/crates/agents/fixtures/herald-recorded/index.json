@@ -68,6 +68,62 @@
       "wallet": "HPCWtV7V6E1whkinkUhB5CGoMhUT5638cbcKGoJydS9g"
     },
     {
+      "arch": "idle",
+      "faction": 5,
+      "index": 8,
+      "joinBell": 70,
+      "persona": null,
+      "wallet": "FvM5syeanigxJiGYECuWfKWifdn4Ceivr3TG4o54gdCx"
+    },
+    {
+      "arch": "idle",
+      "faction": 3,
+      "index": 9,
+      "joinBell": 70,
+      "persona": null,
+      "wallet": "BYwcn6kqGPKmHUJzoQ8qhEGyfqNoKQ2gBg2vJVJBtJ7b"
+    },
+    {
+      "arch": "idle",
+      "faction": 2,
+      "index": 10,
+      "joinBell": 126,
+      "persona": null,
+      "wallet": "Ew3aeNgLDeXbsByjiovB6sUVvqf8V4qY1ab2QC139vZx"
+    },
+    {
+      "arch": "idle",
+      "faction": 3,
+      "index": 11,
+      "joinBell": 123,
+      "persona": null,
+      "wallet": "3UPkn2FygDsNn7qV8jcNQtusJvtEJdgMBEM2FyUPHD6H"
+    },
+    {
+      "arch": "idle",
+      "faction": 4,
+      "index": 12,
+      "joinBell": 136,
+      "persona": null,
+      "wallet": "Qh22hhA2h1kkUtbFLGyKDJVN9Q33ZqAztVZxkH4AiNv"
+    },
+    {
+      "arch": "idle",
+      "faction": 1,
+      "index": 13,
+      "joinBell": 26,
+      "persona": null,
+      "wallet": "FVufo9E9NeqJBRLS4Mfvi1ZKhkCsyo9r8tDu1K4jxsRn"
+    },
+    {
+      "arch": "casual",
+      "faction": 5,
+      "index": 14,
+      "joinBell": 51,
+      "persona": null,
+      "wallet": "EQW3xA3eXhpRkFHUPAcgan1h56vMA4QGCUQbu3S14ZqV"
+    },
+    {
       "arch": "casual",
       "faction": 4,
       "index": 15,
@@ -85,11 +141,123 @@
     },
     {
       "arch": "casual",
+      "faction": 0,
+      "index": 17,
+      "joinBell": 86,
+      "persona": null,
+      "wallet": "2MwY7t9RwqBWWzc7aCtm78Xv9KxJ5KaW4Bs2zaqtgaUY"
+    },
+    {
+      "arch": "casual",
+      "faction": 0,
+      "index": 18,
+      "joinBell": 49,
+      "persona": null,
+      "wallet": "B3AeLrHeFbsmyYG9F75YVzXACAShuFdot5ZXZ8Sgui3P"
+    },
+    {
+      "arch": "casual",
+      "faction": 2,
+      "index": 19,
+      "joinBell": 133,
+      "persona": null,
+      "wallet": "6FNMqVNvwipHAwMP7sGKSbrjAQyiR6qtk5jD82e2hFiP"
+    },
+    {
+      "arch": "casual",
+      "faction": 2,
+      "index": 20,
+      "joinBell": 118,
+      "persona": null,
+      "wallet": "7vaqKTazAH2jgrgURo8ZSScGs5KJ9Cb3fMCCM6wVVWfM"
+    },
+    {
+      "arch": "casual",
       "faction": 5,
       "index": 21,
       "joinBell": 9,
       "persona": "double_arrival",
       "wallet": "7wiqWPNBfAgiEBGBTXR8x3MLLEhcZqRzQvK1CEc3HGtE"
+    },
+    {
+      "arch": "casual",
+      "faction": 4,
+      "index": 22,
+      "joinBell": 24,
+      "persona": null,
+      "wallet": "62QYy5CPYpnoCBW14hzS9DKumBr6YtMo6TMWitXw9E4S"
+    },
+    {
+      "arch": "casual",
+      "faction": 1,
+      "index": 23,
+      "joinBell": 134,
+      "persona": null,
+      "wallet": "7kFzT9Ed9GS1R9BFArHRXf6Zzn7GnscRhCHhDGAf1rzN"
+    },
+    {
+      "arch": "casual",
+      "faction": 1,
+      "index": 24,
+      "joinBell": 70,
+      "persona": null,
+      "wallet": "D6ieiFqz4gHwqvZ6ouoFwBGENp6Ka3YHDgiin2GUWZBr"
+    },
+    {
+      "arch": "casual",
+      "faction": 5,
+      "index": 25,
+      "joinBell": 135,
+      "persona": null,
+      "wallet": "AJNS6v8j88r2CMU6TG44R7SXAx4rUvTVWL9NnrKto7nz"
+    },
+    {
+      "arch": "casual",
+      "faction": 3,
+      "index": 26,
+      "joinBell": 75,
+      "persona": null,
+      "wallet": "Es41DFc5dkQD9FMBKpEUqWWinCYUbE7YkZkoywNRbun5"
+    },
+    {
+      "arch": "casual",
+      "faction": 0,
+      "index": 27,
+      "joinBell": 92,
+      "persona": null,
+      "wallet": "SnYWd4zFUdEDn9gV3UxcsNQ6MBpCSzcsrq7Ng2Jwt7y"
+    },
+    {
+      "arch": "casual",
+      "faction": 0,
+      "index": 28,
+      "joinBell": 46,
+      "persona": null,
+      "wallet": "DEsoF3qsscrexroe7bxXB55dQe4SBRj56RkyRv6qWDyh"
+    },
+    {
+      "arch": "casual",
+      "faction": 2,
+      "index": 29,
+      "joinBell": 133,
+      "persona": null,
+      "wallet": "CnzyiZ7ztu6LBa1kGmmDM3k13zrra1dLQaVJuzFgB6Qk"
+    },
+    {
+      "arch": "casual",
+      "faction": 2,
+      "index": 30,
+      "joinBell": 17,
+      "persona": null,
+      "wallet": "5TG1UQAqFJMLVhcLv6da6SKVcRoD14BenkFsLStvhquC"
+    },
+    {
+      "arch": "casual",
+      "faction": 4,
+      "index": 31,
+      "joinBell": 119,
+      "persona": null,
+      "wallet": "FVvFtN3Cc37T3X9qFbJLFbYcGAQML29a9Leuix4ZE8Cm"
     },
     {
       "arch": "casual",

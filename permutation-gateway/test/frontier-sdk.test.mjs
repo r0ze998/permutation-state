@@ -305,6 +305,30 @@ test('shapes: the builder reproduces fclient\'s instructions (accounts, flags, d
   }
 });
 
+test('shapes: SettleTransit with its optional 14th account (the camp winner\'s Citizen, v1.7 §23) is a settle shape; a 15th or a read-only one is refused', () => {
+  const st = vectorTx('settle_transit');
+  const c = SH.classify(st.tx, { programId: PROGRAM });
+  assert.ok(c.ok, c.problem);
+  const { tag, name, ...fields } = c.data;
+  const campCitizen = Keypair.generate().publicKey.toBase58();
+  const txOf = ixs => parseTransaction(wireTransaction(compileMessage({ feePayer: c.feePayer, recentBlockhash: st.tx.recentBlockhash, instructions: ixs })));
+  const ixs = SH.shapeIxs(PROGRAM, 'SettleTransit', { ...c.accounts, citizen: campCitizen }, fields);
+  assert.equal(ixs[3].keys.length, 14);
+  assert.deepEqual(ixs[3].keys[13], { pubkey: campCitizen, isSigner: false, isWritable: true });
+  const r = SH.classify(txOf(ixs), { programId: PROGRAM });
+  assert.ok(r.ok, r.problem);
+  assert.equal(r.kind, 'settle');
+  assert.equal(r.accounts.citizen, campCitizen);
+  // Read-only: the program writes the Works into it.
+  const ro = ixs.map((x, i) => (i === 3 ? { ...x, keys: x.keys.map((k, j) => (j === 13 ? { ...k, isWritable: false } : k)) } : x));
+  assert.equal(SH.classify(txOf(ro), { programId: PROGRAM }).ok, false);
+  // A 15th account: no such shape.
+  const more = ixs.map((x, i) => (i === 3 ? { ...x, keys: [...x.keys, { pubkey: Keypair.generate().publicKey.toBase58(), isSigner: false, isWritable: false }] } : x));
+  const m = SH.classify(txOf(more), { programId: PROGRAM });
+  assert.equal(m.ok, false);
+  assert.match(m.problem, /does not take 15 accounts/);
+});
+
 test('shapes: the allowlist refuses what the relay must not sponsor', () => {
   const programId = PROGRAM;
   const relay = Keypair.generate().publicKey.toBase58();

@@ -1,5 +1,7 @@
 //! `itest`: the Frontier's in-process integration tests (M1 contract §3.5,
-//! §11 W4-F, §12 Gate W4, I-57).
+//! §11 W4-F, §12 Gate W4, I-57; **G14** of Gate W5, W5-C:
+//! `tests/g14.rs`, 100 bots × 2 game days through the program with the
+//! native kernel re-run every bell, verifier PASS, a tampered log FAIL).
 //!
 //! **`inproc_day`** (`tests/inproc_day.rs`): 100 bots, the keeper and the
 //! herald fold over `ChainPort::InProcess` (LiteSVM + virtual time at 20×)
@@ -20,6 +22,8 @@
 //! | [`standin`] | **stub mode only**: the resolution stand-in for the first run before W4-A/W4-C merge |
 //! | [`day`] | the orchestrated run: one loop moves time; keeper tick per slot, herald ingest and due bots every few slots |
 //! | [`checks`] | the chain's facts after the run and the named pass conditions |
+//! | [`gate`] | the named conditions of a run, shared by `inproc_day` and G14 |
+//! | [`native`] | G14's native kernel at every bell: each CLASH re-run, each SKIP replayed bell by bell (W5-C) |
 //!
 //! **Two modes.** The gate runs the strict mode (no stand-in; a stub of an
 //! unmerged unit answering `NotImplemented` fails the run). `ITEST_STUBS=1`
@@ -30,6 +34,8 @@
 pub mod checks;
 pub mod day;
 pub mod direct;
+pub mod gate;
+pub mod native;
 pub mod program;
 pub mod relay;
 pub mod standin;

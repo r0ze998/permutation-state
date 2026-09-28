@@ -19,6 +19,18 @@
 //! (truncate), so a re-used name never keeps an earlier attempt's frames
 //! (integ-W2 review of W2-F). A segment shorter than its manifest entry is
 //! corruption and refuses to open.
+//!
+//! **Group commit (W5-C).** With [`Archive::commit_every`] = 0 (the
+//! default) every [`Archive::append`] is durable when it returns: the
+//! batch's frames are synced once, then the manifest. With an interval
+//! (the herald: 1 s) an append writes its frames and updates the manifest
+//! in memory only, and the syncs and the manifest land at most once per
+//! interval ([`Archive::commit`]; the herald also commits before each fold
+//! checkpoint). The crash rule is unchanged: the durable manifest names
+//! only synced frames and holds the cursor before the rest, so a crash
+//! loses at most one interval of records, which the source re-delivers.
+//! (The first smoke run: one `F_FULLFSYNC` per record — macOS's
+//! `sync_data` — held the herald's ingest minutes behind a busy chain.)
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
@@ -222,6 +234,13 @@ fn io_err(m: impl std::fmt::Display) -> io::Error {
 pub struct Archive {
     pub dir: PathBuf,
     pub manifest: Manifest,
+    /// Group-commit interval (module note); `ZERO`: every append commits.
+    pub commit_every: std::time::Duration,
+    last_commit: std::time::Instant,
+    /// The open segment's handle while it holds frames not synced yet.
+    unsynced: Option<File>,
+    /// The in-memory manifest differs from the durable one.
+    dirty: bool,
 }
 
 impl Archive {
@@ -275,6 +294,10 @@ impl Archive {
         let a = Archive {
             dir: dir.into(),
             manifest,
+            commit_every: std::time::Duration::ZERO,
+            last_commit: std::time::Instant::now(),
+            unsynced: None,
+            dirty: false,
         };
         a.write_manifest()?;
         Ok(a)
@@ -304,6 +327,9 @@ impl Archive {
 
     /// Appends `recs` in order (renumbering them with the archive's
     /// sequence), then records `cursor`; returns the renumbered records.
+    /// Durable on return when a commit is due (module note: group commit);
+    /// the frames of one segment are written through one handle and synced
+    /// once, before the segment is sealed or a manifest names them.
     pub fn append(&mut self, recs: &[TxRecord], cursor: Value) -> io::Result<Vec<TxRecord>> {
         let mut out = Vec::with_capacity(recs.len());
         for r in recs {
@@ -320,6 +346,11 @@ impl Archive {
                 }
             };
             if roll {
+                // The frames written so far reach the disk before the
+                // segment is hashed and sealed.
+                if let Some(f) = self.unsynced.take() {
+                    f.sync_data()?;
+                }
                 self.seal_open()?;
                 let n = self.manifest.segments.len() + 1;
                 self.manifest.segments.push(SegmentMeta {
@@ -336,10 +367,13 @@ impl Archive {
                 File::create(self.dir.join(&s.name))?.sync_all()?;
             }
             let s = self.manifest.segments.last_mut().expect("open segment");
-            let p = self.dir.join(&s.name);
-            let mut f = OpenOptions::new().create(true).append(true).open(&p)?;
-            f.write_all(&fr)?;
-            f.sync_data()?;
+            if self.unsynced.is_none() {
+                let p = self.dir.join(&s.name);
+                self.unsynced = Some(OpenOptions::new().create(true).append(true).open(&p)?);
+            }
+            if let Some(f) = self.unsynced.as_mut() {
+                f.write_all(&fr)?;
+            }
             s.bytes += fr.len() as u64;
             s.records += 1;
             s.last_seq = r.seq;
@@ -347,8 +381,30 @@ impl Archive {
             out.push(r);
         }
         self.manifest.cursor = cursor;
-        self.write_manifest()?;
+        self.dirty = true;
+        if self.last_commit.elapsed() >= self.commit_every {
+            self.commit()?;
+        }
         Ok(out)
+    }
+
+    /// Makes every append so far durable: the open segment's frames are
+    /// synced, then the manifest (with the cursor) replaces the old one.
+    pub fn commit(&mut self) -> io::Result<()> {
+        if let Some(f) = self.unsynced.take() {
+            f.sync_data()?;
+        }
+        if self.dirty {
+            self.write_manifest()?;
+            self.dirty = false;
+        }
+        self.last_commit = std::time::Instant::now();
+        Ok(())
+    }
+
+    /// Appends not yet durable (group commit pending).
+    pub fn uncommitted(&self) -> bool {
+        self.dirty
     }
 
     /// Seals the open segment (records its sha256).
@@ -523,6 +579,42 @@ mod tests {
         let b = Archive::open(&d, 600).unwrap();
         assert_eq!(b.manifest, a.manifest);
         assert_eq!(b.cursor(), &json!({"after": 9}));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// Group commit (W5-C): appends inside the interval are readable at
+    /// once but not durable; a crash (no commit) reopens at the last
+    /// committed manifest and cursor, dropping the uncommitted frames and
+    /// rolled segments, and a commit makes everything durable.
+    #[test]
+    fn group_commit_is_durable_only_at_commits() {
+        let d = tmp("group");
+        let mut a = Archive::open(&d, 600).unwrap();
+        a.commit_every = std::time::Duration::from_secs(3_600);
+        let recs: Vec<TxRecord> = (1..=12).map(rec).collect();
+        a.append(&recs[..3], json!({"after": 3})).unwrap();
+        a.commit().unwrap();
+        assert!(!a.uncommitted());
+        a.append(&recs[3..9], json!({"after": 9})).unwrap();
+        assert!(a.uncommitted());
+        assert_eq!(
+            a.read_after(0).unwrap().len(),
+            9,
+            "readable before the commit"
+        );
+        // Crash: dropped without a commit.
+        drop(a);
+        let mut b = Archive::open(&d, 600).unwrap();
+        assert_eq!(b.last_seq(), 3);
+        assert_eq!(b.cursor(), &json!({"after": 3}));
+        assert_eq!(b.verify(), Ok(3));
+        b.commit_every = std::time::Duration::from_secs(3_600);
+        b.append(&recs[3..12], json!({"after": 12})).unwrap();
+        b.commit().unwrap();
+        drop(b);
+        let c = Archive::open(&d, 600).unwrap();
+        assert_eq!(c.verify(), Ok(12));
+        assert_eq!(c.cursor(), &json!({"after": 12}));
         let _ = fs::remove_dir_all(&d);
     }
 

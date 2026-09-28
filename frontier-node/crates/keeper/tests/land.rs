@@ -274,6 +274,17 @@ async fn holding_history(w: &World) -> BTreeMap<Address, (Vec<i64>, Option<i64>)
 
 /// A started keeper with the land roles over a fresh world, genesis rings
 /// open and the season Running (`None`: the program has no land).
+/// The land keeper of these tests (its master seed fixed: a restarted
+/// keeper draws from the same payer pools).
+fn land_keeper(w: &World) -> K {
+    let mut cfg = keeper_config(w);
+    cfg.roles = ["beacon", "rings", "archive", "fold", "tickets"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    Keeper::new(cfg, w.ip.clone(), w.drand.clone(), &[0x33; 32], None).unwrap()
+}
+
 async fn started() -> Option<Run> {
     let w = world_with(|p| {
         p.dormant_after_secs = 1_800;
@@ -292,12 +303,7 @@ async fn started() -> Option<Run> {
             Err(e) => panic!("InitShards: {e:?}"),
         }
     }
-    let mut cfg = keeper_config(&w);
-    cfg.roles = ["beacon", "rings", "archive", "fold", "tickets"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-    let k = Keeper::new(cfg, w.ip.clone(), w.drand.clone(), &[0x33; 32], None).unwrap();
+    let k = land_keeper(&w);
     fund(&w, &k.payers);
     let relay = Keypair::new_from_array([0xEE; 32]);
     w.airdrop(&relay.pubkey(), 200_000_000_000);
@@ -1075,4 +1081,85 @@ async fn land_season() {
         run.w.slot(),
         t0.elapsed().as_secs_f64()
     );
+}
+
+/// K11 (W5-C): a keeper restarted in the middle of a ticket cohort — after
+/// its first settlement landed, with the rest of the cohort open —
+/// rebuilds its land index from the chain alone and settles the rest, and
+/// every site ends with the owner an uninterrupted keeper gives it (the
+/// same scenario in a second world, no crash), with no displacement.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_restart_mid_cohort_rebuilds_and_settles_the_rest() {
+    async fn cohort(crash: bool) -> Option<(BTreeMap<SiteKey, Address>, usize, u64)> {
+        let mut run = started().await?;
+        println!("program: {}", run.w.which.label());
+        let w0 = wedge_sites(&run.w, 0);
+        let (x, y, z, v) = (w0[0], w0[1], w0[2], w0[3]);
+        let kps: Vec<Keypair> = (170..176u8).map(wallet).collect();
+        let prefs: Vec<Vec<SiteKey>> = vec![
+            vec![x, y],
+            vec![x, z],
+            vec![y, x],
+            vec![z, v],
+            vec![v, y],
+            vec![x, v],
+        ];
+        for kp in &kps {
+            run.join(kp, 0).await;
+        }
+        let bell = run.next_bell().await;
+        for (kp, p) in kps.iter().zip(&prefs) {
+            run.file(kp, p).await;
+        }
+        assert_eq!(bell_of(&run.w), bell, "one cohort");
+        let cits: Vec<Address> = kps
+            .iter()
+            .map(|k| run.w.addrs.citizen(&k.pubkey()))
+            .collect();
+        let open = |w: &World, cits: &[Address]| {
+            cits.iter()
+                .filter(|c| {
+                    let a = w.ip.lock().account(c).unwrap();
+                    Citizen::decode(&a.data).unwrap().ticket_bell != land::NO_TICKET
+                })
+                .count()
+        };
+        let mut restarted_with_open = 0;
+        if crash {
+            run.until(2_000, "the first settlement", |_, k| {
+                !k.tickets.settled.is_empty()
+            })
+            .await;
+            // Crash: the keeper and its memory are gone; a new one starts
+            // from the chain (no journal in these tests).
+            restarted_with_open = open(&run.w, &cits);
+            run.k = land_keeper(&run.w);
+            run.k.start().await.unwrap();
+        }
+        let all = cits.clone();
+        run.until(3_000, "cohort settled", move |w, _| open(w, &all) == 0)
+            .await;
+        run.tick().await;
+        let mut owners = BTreeMap::new();
+        for s in [x, y, z, v] {
+            if let Some(h) = holding(&run.w, s) {
+                owners.insert(s, h.owner_citizen);
+            }
+        }
+        Some((owners, restarted_with_open, run.k.tickets.displacing))
+    }
+    let Some((plain, _, d0)) = cohort(false).await else {
+        println!("land: NotImplemented by this program; not applicable");
+        return;
+    };
+    let (crashed, open_at_restart, d1) = cohort(true).await.expect("the same program");
+    println!(
+        "restart: {open_at_restart} tickets open at the restart; owners {plain:?} vs {crashed:?}"
+    );
+    assert!(open_at_restart > 0, "the restart fell inside the cohort");
+    assert_eq!(
+        crashed, plain,
+        "the restarted keeper settles as an uninterrupted one"
+    );
+    assert_eq!((d0, d1), (0, 0), "no displacement in an honest cohort");
 }
