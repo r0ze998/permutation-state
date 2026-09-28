@@ -846,8 +846,20 @@ impl Chain {
                 loaded_limit,
             });
         }
+        let kinds = self.frontier_kinds(&t.message);
+        let locks = t.message.account_keys.len();
         let r = self.svm.send_transaction(t);
         self.svm.expire_blockhash();
+        if let Ok(m) = &r {
+            self.log_cu(
+                &kinds,
+                m.compute_units_consumed,
+                tx_bytes,
+                locks,
+                loaded,
+                &m.logs,
+            );
+        }
         match r {
             Ok(m) => Ok(Landed {
                 signature: m.signature,
@@ -879,6 +891,51 @@ impl Chain {
                     loaded_limit,
                 })
             }
+        }
+    }
+
+    /// The Frontier instruction kinds of `msg`, in order.
+    fn frontier_kinds(&self, msg: &Message) -> Vec<Ix> {
+        msg.instructions
+            .iter()
+            .filter(|i| msg.account_keys.get(i.program_id_index as usize) == Some(&self.program))
+            .filter_map(|i| i.data.first().and_then(|t| Ix::from_tag(*t)))
+            .collect()
+    }
+
+    /// W5-A (budgets regenerated from G1, §5.5): with `PSF_CU_LOG=<file>`,
+    /// every landed transaction with exactly one Frontier instruction
+    /// appends `build kind cu tx_bytes locks loaded heap` to the file (the
+    /// suite's measured maxima feed `frontier_abi::budgets`; the heap peak
+    /// only on the trace build, `-` otherwise).
+    fn log_cu(
+        &self,
+        kinds: &[Ix],
+        cu: u64,
+        tx_bytes: usize,
+        locks: usize,
+        loaded: u64,
+        logs: &[String],
+    ) {
+        let Ok(path) = std::env::var("PSF_CU_LOG") else {
+            return;
+        };
+        let [kind] = kinds else {
+            return;
+        };
+        let heap = crate::budget::heap_peak(logs).map_or("-".to_string(), |h| h.to_string());
+        let line = format!(
+            "{:?} {} {cu} {tx_bytes} {locks} {loaded} {heap}\n",
+            self.build,
+            kind.name()
+        );
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let _ = f.write_all(line.as_bytes());
         }
     }
 
