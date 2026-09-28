@@ -196,13 +196,20 @@ async fn g14_two_game_days() {
             vec!["no CLASH".into()],
         )),
     }
-    let t01 = tamper::t01(&inp);
-    let r = verify_core::verify(&t01.input);
-    tampers.push((
-        "T1 drop a DEPART",
-        r.verdict == Verdict::Fail && (r.fails_with(CHAIN_GAP) || r.fails_with(HEAD_MISMATCH)),
-        fail_codes(&r),
-    ));
+    // W5-D: tamper builders return `Made = Result<Case, String>` (a run
+    // may lack what a class needs); a T1 that cannot be built fails G14.
+    match tamper::t01(&inp) {
+        Ok(t01) => {
+            let r = verify_core::verify(&t01.input);
+            tampers.push((
+                "T1 drop a DEPART",
+                r.verdict == Verdict::Fail
+                    && (r.fails_with(CHAIN_GAP) || r.fails_with(HEAD_MISMATCH)),
+                fail_codes(&r),
+            ));
+        }
+        Err(e) => tampers.push(("T1 drop a DEPART", false, vec![format!("not built: {e}")])),
+    }
     conds.push((
         "tampered-log-fails",
         if tampers.iter().all(|(_, ok, _)| *ok) {
