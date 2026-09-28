@@ -1262,6 +1262,7 @@ dependencies = [
  "base64 0.22.1",
  "bincode",
  "blstrs",
+ "frontier-abi",
  "group",
  "hex",
  "permutation-rules",
