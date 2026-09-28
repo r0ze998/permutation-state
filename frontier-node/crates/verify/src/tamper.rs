@@ -48,6 +48,28 @@ pub struct Case {
     pub input: Input,
 }
 
+/// A tamper case, or why the run has nothing it could tamper with.
+pub type Made = Result<Case, String>;
+
+/// `Option`/`Result` → `Result<_, String>` with the selection's name (a
+/// run that lacks what a class needs is reported, not a panic: W5-D, the
+/// classes run on any stack run).
+pub trait Need<T> {
+    fn need(self, what: &str) -> Result<T, String>;
+}
+
+impl<T> Need<T> for Option<T> {
+    fn need(self, what: &str) -> Result<T, String> {
+        self.ok_or_else(|| format!("the run has no {what}"))
+    }
+}
+
+impl<T, E: std::fmt::Debug> Need<T> for Result<T, E> {
+    fn need(self, what: &str) -> Result<T, String> {
+        self.map_err(|e| format!("{what}: {e:?}"))
+    }
+}
+
 // ------------------------------------------------------------ helpers
 
 /// PS2 bodies of a transaction (the program's frame).
@@ -106,6 +128,14 @@ pub fn find(inp: &Input, kind: Kind) -> Vec<(usize, usize)> {
         }
     }
     v
+}
+
+/// The `n`-th of `v`, or its last (a shorter run than the fixture).
+pub fn pick(v: &[(usize, usize)], n: usize, what: &str) -> Result<(usize, usize), String> {
+    v.get(n)
+        .or(v.last())
+        .copied()
+        .ok_or_else(|| format!("the run has no {what}"))
 }
 
 /// Edits the payload of record `(t, i)` (`f` gets the payload bytes).
@@ -277,35 +307,35 @@ fn rec_at(w: &World, t: usize, i: usize) -> usize {
 // ------------------------------------------------------------ the classes
 
 /// T1: drop the Depart of the march still in flight at the end.
-pub fn t01(march: &Input) -> Case {
+pub fn t01(march: &Input) -> Made {
     let mut inp = march.clone();
-    let (t, _) = *find(&inp, Kind::DEPART).last().expect("a DEPART");
+    let (t, _) = *find(&inp, Kind::DEPART).last().need("a DEPART")?;
     inp.txs.remove(t);
-    Case {
+    Ok(Case {
         class: "T1",
         what: "drop a Depart",
         feature: Some("mutate-v1"),
         codes: &[CHAIN_GAP, HEAD_MISMATCH],
         input: inp,
-    }
+    })
 }
 
 /// T2: flip a byte of a Reveal's plaintext (the stance).
-pub fn t02(march: &Input) -> Case {
+pub fn t02(march: &Input) -> Made {
     let mut inp = march.clone();
-    let (t, _) = find(&inp, Kind::REVEAL)[1];
+    let (t, _) = pick(&find(&inp, Kind::REVEAL), 1, "REVEAL record")?;
     edit_ix(&mut inp, t, Ix::Reveal, |d| d[1 + 2 + 20] ^= 1);
-    Case {
+    Ok(Case {
         class: "T2",
         what: "flip a Reveal plaintext byte",
         feature: Some("mutate-v5"),
         codes: &[REVEAL_COMMIT_MISMATCH],
         input: inp,
-    }
+    })
 }
 
 /// T3: shift an anchor's A (an anchor no ticket, explore or clash reads).
-pub fn t03(land: &Input) -> Case {
+pub fn t03(land: &Input) -> Made {
     let mut inp = land.clone();
     let (w, _) = world(&inp);
     let used: Vec<u32> = w.of(Kind::SETTLE).map(|r| r.pu32("ticket_bell")).collect();
@@ -316,25 +346,25 @@ pub fn t03(land: &Input) -> Case {
             let r = &w.recs[rec_at(&w, *t, *i)];
             !used.contains(&r.ku32("bell"))
         })
-        .expect("an unused anchor");
+        .need("an unused anchor")?;
     let (o, _) = field(Kind::ANCHOR, "a");
     edit_payload(&mut inp, t, i, |p| {
         let a = le(&p[o..o + 8]) as i64 + 7;
         p[o..o + 8].copy_from_slice(&a.to_le_bytes());
     });
-    Case {
+    Ok(Case {
         class: "T3",
         what: "shift an anchor's A",
         feature: Some("mutate-v3"),
         codes: &[SEED_ROUND_RULE],
         input: inp,
-    }
+    })
 }
 
 /// T4: inject a second anchor for a (bell, region).
-pub fn t04(land: &Input) -> Case {
+pub fn t04(land: &Input) -> Made {
     let mut inp = land.clone();
-    let (t, i) = find(&inp, Kind::ANCHOR)[3];
+    let (t, i) = pick(&find(&inp, Kind::ANCHOR), 3, "ANCHOR record")?;
     let mut bs = bodies(&inp, t);
     let dup = bs[i].clone();
     bs.push(dup.clone());
@@ -343,19 +373,19 @@ pub fn t04(land: &Input) -> Case {
         .logs
         .iter()
         .rposition(|l| l.ends_with(" success"))
-        .expect("frame");
+        .need("frame")?;
     inp.txs[t].logs.insert(pos, log_line(&dup));
-    Case {
+    Ok(Case {
         class: "T4",
         what: "inject a second anchor",
         feature: Some("mutate-v3"),
         codes: &[DUPLICATE_ANCHOR],
         input: inp,
-    }
+    })
 }
 
 /// T5: swap a cache signature for another round's.
-pub fn t05(land: &Input) -> Case {
+pub fn t05(land: &Input) -> Made {
     let mut inp = land.clone();
     let seeds = find(&inp, Kind::SEED);
     let anchors = find(&inp, Kind::ANCHOR);
@@ -373,25 +403,25 @@ pub fn t05(land: &Input) -> Case {
         };
         other.copy_from_slice(&ix.data[o..o + 48]);
     }
-    let (ts, _) = seeds[seeds.len() / 2];
+    let (ts, _) = pick(&seeds, seeds.len() / 2, "SEED record")?;
     edit_ix(&mut inp, ts, Ix::PostSeed, |d| {
         d[1 + 1 + 4 + 1 + 8..1 + 1 + 4 + 1 + 8 + 48].copy_from_slice(&other)
     });
-    Case {
+    Ok(Case {
         class: "T5",
         what: "swap a cache signature",
         feature: Some("mutate-v3"),
         codes: &[SEED_ROUND_RULE, BEACON_SIG_INVALID],
         input: inp,
-    }
+    })
 }
 
 /// T6: `set_account` on a Province after its last resolve (the final bytes
 /// differ from the last transaction's write).
-pub fn t06(march: &Input) -> Case {
+pub fn t06(march: &Input) -> Made {
     let mut inp = march.clone();
     let (w, f) = world(&inp);
-    let (t, i) = *find(&inp, Kind::CLASH).last().expect("a CLASH");
+    let (t, i) = *find(&inp, Kind::CLASH).last().need("a CLASH")?;
     let r = &w.recs[rec_at(&w, t, i)];
     let pk = f.ctx.province(r.pq().0, r.pq().1);
     if let Some(Some(a)) = inp.finals.get_mut(&pk) {
@@ -400,19 +430,19 @@ pub fn t06(march: &Input) -> Case {
         let v = le(&a.data[o..o + 4]) as u32 + 50_000;
         a.data[o..o + 4].copy_from_slice(&v.to_le_bytes());
     }
-    Case {
+    Ok(Case {
         class: "T6",
         what: "set_account on a Province after a resolve",
         feature: Some("mutate-v1"),
         codes: &[HEAD_MISMATCH, CLASH_REPLAY_MISMATCH],
         input: inp,
-    }
+    })
 }
 
 /// T6b: a rogue write between two resolves of one province; the program
 /// resolves the second from the rogue state (its CLASH re-chained): the
 /// replay from the chain's last write disagrees.
-pub fn t06b(march: &Input) -> Case {
+pub fn t06b(march: &Input) -> Made {
     let mut inp = march.clone();
     let (w, f) = world(&inp);
     // A province with two CLASH records.
@@ -441,25 +471,25 @@ pub fn t06b(march: &Input) -> Case {
                 .and_then(resident)
                 .is_some()
         })
-        .expect("two clashes in one province, a resident before the second");
+        .need("two clashes in one province, a resident before the second")?;
     let r2 = &w.recs[rec_at(&w, t2, i2)];
     let b2 = r2.ku32("bell");
     let pk = f.ctx.province(pq.0, pq.1);
-    let mut before = w.state_before(&pk, t2).expect("state").to_vec();
+    let mut before = w.state_before(&pk, t2).need("state")?.to_vec();
     // The rogue write: the first roster entry loses troops.
-    let e = resident(&before).expect("a resident");
+    let e = resident(&before).need("a resident")?;
     let o = frontier_abi::layout::province::province::entry(e)
         + frontier_abi::layout::province::entry::TROOPS;
     let v2 = le(&before[o..o + 4]) as u32 / 2;
     before[o..o + 4].copy_from_slice(&v2.to_le_bytes());
     let ci = w
         .state_before(&f.ctx.clash_inputs(pq.0, pq.1, b2), t2)
-        .expect("inputs");
-    let seed = f.bell_seed(b2, Facts::region(pq.0, pq.1)).expect("seed");
+        .need("inputs")?;
+    let seed = f.bell_seed(b2, Facts::region(pq.0, pq.1)).need("seed")?;
     let built = ContractBuilder
         .build(&before, ci, b2, &seed)
-        .expect("build");
-    let out = built.resolve().expect("resolve");
+        .need("build")?;
+    let out = built.resolve().need("resolve")?;
     let fates = packed_fates(&built, &out);
     let (od, _) = field(Kind::CLASH, "outcome_digest");
     let (oe, _) = field(Kind::CLASH, "engagements");
@@ -470,18 +500,18 @@ pub fn t06b(march: &Input) -> Case {
         p[of..of + 9].copy_from_slice(&fates);
     });
     rechain(&mut inp);
-    Case {
+    Ok(Case {
         class: "T6b",
         what: "a rogue Province write between two resolves",
         feature: Some("mutate-v7"),
         codes: &[CLASH_REPLAY_MISMATCH],
         input: inp,
-    }
+    })
 }
 
 /// T7: a valid seal's settlement logged as a bad seal (consistently: the
 /// bad-seal outcome and payments).
-pub fn t07(march: &Input) -> Case {
+pub fn t07(march: &Input) -> Made {
     let mut inp = march.clone();
     let (w, f) = world(&inp);
     let (t, i) = *find(&inp, Kind::TRANSIT_SETTLED)
@@ -490,18 +520,18 @@ pub fn t07(march: &Input) -> Case {
             let r = &w.recs[rec_at(&w, *t, *i)];
             r.pu8("seal_code") == 0 && r.pu8("outcome") == transit_outcome::STAYS
         })
-        .expect("a valid settlement");
+        .need("a valid settlement")?;
     let r = &w.recs[rec_at(&w, t, i)];
     let host = r.ku64("host_id");
     let tip = f
         .depart_of(&w, host, rec_at(&w, t, i), None)
         .map(|d| w.recs[d].pu64("tip"))
         .unwrap_or(0);
-    let p = f.params.expect("params");
+    let p = f.params.need("params")?;
     let settler: [u8; 32] = w.txs[t]
         .ix(Ix::SettleTransit.tag())
         .and_then(|x| x.key(11))
-        .expect("settler");
+        .need("settler")?;
     // A careful forger keeps `pool_owed_delta` = the pool's pairs + the
     // transaction's DIVERTs (V13 since the integ-W4 review).
     let diverted: u64 = w.txs[t]
@@ -530,13 +560,13 @@ pub fn t07(march: &Input) -> Case {
         diverted,
     );
     rechain(&mut inp);
-    Case {
+    Ok(Case {
         class: "T7",
         what: "a valid seal marked bad at settlement",
         feature: Some("mutate-v5"),
         codes: &[VERDICT_DISAGREES_WITH_TLOCK],
         input: inp,
-    }
+    })
 }
 
 /// Writes a TRANSIT_SETTLED's outcome, code, troops and payments.
@@ -579,26 +609,26 @@ fn forge_transit(
 }
 
 /// T8: change which slot a displacement hit.
-pub fn t08(march: &Input) -> Case {
+pub fn t08(march: &Input) -> Made {
     let mut inp = march.clone();
     let (w, _) = world(&inp);
     let (t, i) = *find(&inp, Kind::REVEAL)
         .iter()
         .find(|(t, i)| w.recs[rec_at(&w, *t, *i)].pu8("displace") == 1)
-        .expect("a displacement");
-    let (oi, _) = plog::field(Kind::REVEAL, "i", false).expect("i");
+        .need("a displacement")?;
+    let (oi, _) = plog::field(Kind::REVEAL, "i", false).need("i")?;
     edit_key(&mut inp, t, i, |k| k[oi] = (k[oi] + 1) % 4);
-    Case {
+    Ok(Case {
         class: "T8",
         what: "change which slot a displacement hit",
         feature: Some("mutate-v6"),
         codes: &[QUOTA_SET_MISMATCH],
         input: inp,
-    }
+    })
 }
 
 /// T9: alter a departure mass (of an arrival that stayed; re-chained).
-pub fn t09(march: &Input) -> Case {
+pub fn t09(march: &Input) -> Made {
     let mut inp = march.clone();
     let (w, f) = world(&inp);
     let stayed: Vec<u64> = w
@@ -612,51 +642,51 @@ pub fn t09(march: &Input) -> Case {
             let r = &w.recs[rec_at(&w, *t, *i)];
             stayed.contains(&r.ku64("host_id")) && f.departs[&r.ku64("host_id")].len() == 1
         })
-        .expect("a departure that stayed");
+        .need("a departure that stayed")?;
     let (o, _) = field(Kind::DEPART, "dep_mass");
     edit_payload(&mut inp, t, i, |p| {
         let v = le(&p[o..o + 4]) as u32 + 1_000;
         p[o..o + 4].copy_from_slice(&v.to_le_bytes());
     });
     rechain(&mut inp);
-    Case {
+    Ok(Case {
         class: "T9",
         what: "alter a departure mass",
         feature: Some("mutate-v6"),
         codes: &[TRANSIT_MASS_MISMATCH],
         input: inp,
-    }
+    })
 }
 
 /// T10: the wrong drand key.
-pub fn t10(land: &Input) -> Case {
+pub fn t10(land: &Input) -> Made {
     let mut inp = land.clone();
     inp.cfg.quicknet_pk =
-        crate::input::hex_arr(fclient::beacon::QUICKNET_PK).expect("quicknet key");
-    Case {
+        crate::input::hex_arr(fclient::beacon::QUICKNET_PK).need("quicknet key")?;
+    Ok(Case {
         class: "T10",
         what: "wrong quicknet key",
         feature: Some("mutate-v3"),
         codes: &[BEACON_SIG_INVALID],
         input: inp,
-    }
+    })
 }
 
 /// T11: the wrong ruleset hash.
-pub fn t11(land: &Input) -> Case {
+pub fn t11(land: &Input) -> Made {
     let mut inp = land.clone();
     inp.cfg.ruleset_hash[0] ^= 0xFF;
-    Case {
+    Ok(Case {
         class: "T11",
         what: "wrong ruleset hash",
         feature: Some("mutate-v2"),
         codes: &[RULESET_MISMATCH],
         input: inp,
-    }
+    })
 }
 
 /// T12: truncate the last game day (the final states stay the chain's).
-pub fn t12(march: &Input) -> Case {
+pub fn t12(march: &Input) -> Made {
     let mut inp = march.clone();
     let (w, f) = world(&inp);
     let last_day = w
@@ -667,13 +697,13 @@ pub fn t12(march: &Input) -> Case {
         .unwrap_or(0);
     let start = f.genesis_ts + last_day as i64 * 144 * 600;
     inp.txs.retain(|t| t.block_time < start);
-    Case {
+    Ok(Case {
         class: "T12",
         what: "truncate the last game day",
         feature: Some("mutate-v1"),
         codes: &[HEAD_MISMATCH, CHAIN_GAP],
         input: inp,
-    }
+    })
 }
 
 fn beacon_day(f: &Facts, t: i64) -> Option<u32> {
@@ -681,7 +711,7 @@ fn beacon_day(f: &Facts, t: i64) -> Option<u32> {
 }
 
 /// T13: move a Reveal past `A + W`.
-pub fn t13(march: &Input) -> Case {
+pub fn t13(march: &Input) -> Made {
     let mut inp = march.clone();
     let (w, f) = world(&inp);
     // A Reveal that landed after its bell's THE anchor (an owner's in-bell
@@ -696,35 +726,35 @@ pub fn t13(march: &Input) -> Case {
             (w.recs[a.rec].tx < t).then_some((t, a, r.ku32("arrive")))
         })
         .nth(1)
-        .expect("a Reveal after its anchor");
+        .need("a Reveal after its anchor")?;
     inp.txs[t].block_time = f.close(arrive, a.a) + 5;
-    Case {
+    Ok(Case {
         class: "T13",
         what: "move a Reveal past A + W",
         feature: Some("mutate-v4"),
         codes: &[REVEAL_AFTER_CLOSE],
         input: inp,
-    }
+    })
 }
 
 /// T14: duplicate a transaction.
-pub fn t14(land: &Input) -> Case {
+pub fn t14(land: &Input) -> Made {
     let mut inp = land.clone();
-    let (t, _) = find(&inp, Kind::FOLD)[2];
+    let (t, _) = pick(&find(&inp, Kind::FOLD), 2, "FOLD record")?;
     let dup = inp.txs[t].clone();
     inp.txs.insert(t + 1, dup);
-    Case {
+    Ok(Case {
         class: "T14",
         what: "duplicate a transaction",
         feature: Some("mutate-v1"),
         codes: &[DUPLICATE_EVENT],
         input: inp,
-    }
+    })
 }
 
 /// T15: origin values from a later bell — a gathered arrival's troops are
 /// not its departure's; the forger recomputes the CLASH and the transit.
-pub fn t15(march: &Input) -> Case {
+pub fn t15(march: &Input) -> Made {
     let mut inp = march.clone();
     let (w, f) = world(&inp);
     // A clash with no later clash of its province, and an arrival that
@@ -757,14 +787,14 @@ pub fn t15(march: &Input) -> Case {
             Some((t, i, pq, b, a.host_id, pos))
         })
         .next()
-        .expect("a clash to forge");
+        .need("a clash to forge")?;
     let ck = f.ctx.clash_inputs(pq.0, pq.1, b);
     let o = CI::arrival(pos) + AR::TROOPS;
     // The gathered troops, as the forger logs them.
     let gather_tx = (0..t)
         .rev()
         .find(|&x| w.txs[x].post.contains_key(&ck))
-        .expect("gather");
+        .need("gather")?;
     edit_account_from(&mut inp, &ck, gather_tx, |d| {
         let v = le(&d[o..o + 4]) as u32 - 1_000;
         d[o..o + 4].copy_from_slice(&v.to_le_bytes());
@@ -773,13 +803,13 @@ pub fn t15(march: &Input) -> Case {
     let pk = f2.ctx.province(pq.0, pq.1);
     let built = ContractBuilder
         .build(
-            w2.state_before(&pk, t).expect("province"),
-            w2.state_before(&ck, t).expect("inputs"),
+            w2.state_before(&pk, t).need("province")?,
+            w2.state_before(&ck, t).need("inputs")?,
             b,
-            &f2.bell_seed(b, Facts::region(pq.0, pq.1)).expect("seed"),
+            &f2.bell_seed(b, Facts::region(pq.0, pq.1)).need("seed")?,
         )
-        .expect("build");
-    let out = built.resolve().expect("resolve");
+        .need("build")?;
+    let out = built.resolve().need("resolve")?;
     let fates = packed_fates(&built, &out);
     let troops_after = out.fighter(host).map(|x| x.troops).unwrap_or(0);
     let (od, _) = field(Kind::CLASH, "outcome_digest");
@@ -787,10 +817,10 @@ pub fn t15(march: &Input) -> Case {
     let (of, _) = field(Kind::CLASH, "fates");
     let (oi, _) = field(Kind::CLASH, "input_digest");
     let in_digest = crate::clash_input::input_digest(
-        w2.state_before(&pk, t).expect("province"),
-        w2.state_before(&ck, t).expect("inputs"),
+        w2.state_before(&pk, t).need("province")?,
+        w2.state_before(&ck, t).need("inputs")?,
         b,
-        &f2.bell_seed(b, Facts::region(pq.0, pq.1)).expect("seed"),
+        &f2.bell_seed(b, Facts::region(pq.0, pq.1)).need("seed")?,
     );
     edit_payload(&mut inp, t, i, |p| {
         p[od..od + 32].copy_from_slice(&out.digest());
@@ -809,7 +839,7 @@ pub fn t15(march: &Input) -> Case {
         use frontier_abi::entry::{find_entry, read_entry, write_entry};
         let post = w2.txs[t]
             .post_data(&pk)
-            .expect("the Province written")
+            .need("the Province written")?
             .to_vec();
         let fixes: Vec<(u64, u32, u32)> = out
             .fighters
@@ -856,41 +886,41 @@ pub fn t15(march: &Input) -> Case {
     let (tt, ti) = *find(&inp, Kind::TRANSIT_SETTLED)
         .iter()
         .find(|(x, y)| w.recs[rec_at(&w, *x, *y)].ku64("host_id") == host)
-        .expect("settlement");
+        .need("settlement")?;
     let (ot, _) = field(Kind::TRANSIT_SETTLED, "troops");
     edit_payload(&mut inp, tt, ti, |p| {
         p[ot..ot + 4].copy_from_slice(&troops_after.to_le_bytes())
     });
     rechain(&mut inp);
-    Case {
+    Ok(Case {
         class: "T15",
         what: "origin values from a later bell",
         feature: Some("mutate-v8"),
         codes: &[ORIGIN_VALUE_MISMATCH],
         input: inp,
-    }
+    })
 }
 
 /// T16: the wrong genesis round (another round's signature and seed, as a
 /// forged program would accept them; re-chained).
-pub fn t16(land: &Input) -> Case {
+pub fn t16(land: &Input) -> Made {
     let mut inp = land.clone();
     let (w, _) = world(&inp);
-    let (ta, _) = find(&inp, Kind::ANCHOR)[0];
+    let (ta, _) = pick(&find(&inp, Kind::ANCHOR), 0, "ANCHOR record")?;
     let ix = w.txs[ta]
         .ix(Ix::PostAnchor.tag())
         .or_else(|| w.txs[ta].ix(Ix::PostAnchorMulti.tag()))
-        .expect("anchor ix");
+        .need("anchor ix")?;
     let (ro, so) = if ix.tag() == Some(Ix::PostAnchor.tag()) {
         (6, 14)
     } else {
         (5, 13)
     };
     let round = le(&ix.data[ro..ro + 8]);
-    let sig: [u8; 48] = ix.data[so..so + 48].try_into().expect("48");
+    let sig: [u8; 48] = ix.data[so..so + 48].try_into().need("48")?;
     let hints = ix.data[so + 48..so + 48 + frontier_abi::ix::HINTS_LEN].to_vec();
-    let seed = crate::checks::v3_random::seed_of48(round, &sig).expect("seed");
-    let (t, i) = find(&inp, Kind::GENESIS_SEED)[0];
+    let seed = crate::checks::v3_random::seed_of48(round, &sig).need("seed")?;
+    let (t, i) = pick(&find(&inp, Kind::GENESIS_SEED), 0, "GENESIS_SEED record")?;
     edit_ix(&mut inp, t, Ix::ConsumeGenesisSeed, |d| {
         d[1..9].copy_from_slice(&round.to_le_bytes());
         d[9..57].copy_from_slice(&sig);
@@ -903,18 +933,18 @@ pub fn t16(land: &Input) -> Case {
         p[os..os + 32].copy_from_slice(&seed);
     });
     rechain(&mut inp);
-    Case {
+    Ok(Case {
         class: "T16",
         what: "wrong genesis round",
         feature: Some("mutate-v3"),
         codes: &[GENESIS_SEED_RULE],
         input: inp,
-    }
+    })
 }
 
 /// T17: a SkipQuiet over a bell with an ArrivalSlot (a run extended over
 /// the next bell, which had a revealed arrival; re-chained).
-pub fn t17(march: &Input) -> Case {
+pub fn t17(march: &Input) -> Made {
     let mut inp = march.clone();
     let (w, _) = world(&inp);
     let reveals: Vec<(i32, i32, u32)> = w
@@ -929,27 +959,27 @@ pub fn t17(march: &Input) -> Case {
             reveals.contains(&(r.pq().0, r.pq().1, end))
                 && reveals.iter().any(|x| *x == (r.pq().0, r.pq().1, end))
         })
-        .expect("a skip just before an arrival bell");
+        .need("a skip just before an arrival bell")?;
     let (on, _) = field(Kind::SKIP, "n");
     edit_payload(&mut inp, t, i, |p| p[on] += 1);
     rechain(&mut inp);
-    Case {
+    Ok(Case {
         class: "T17",
         what: "a SkipQuiet over a bell with an ArrivalSlot",
         feature: Some("mutate-v7"),
         codes: &[SKIP_NOT_QUIET, SKIP_OVER_ARRIVAL],
         input: inp,
-    }
+    })
 }
 
 /// T18: a tampered SETTLE score (the Holding written with it; re-chained).
-pub fn t18(land: &Input) -> Case {
+pub fn t18(land: &Input) -> Made {
     let mut inp = land.clone();
     let (w, f) = world(&inp);
     let (t, i) = *find(&inp, Kind::SETTLE)
         .iter()
         .find(|(t, i)| w.recs[rec_at(&w, *t, *i)].pu8("outcome") == plog::settle_outcome::FRESH)
-        .expect("a fresh settlement");
+        .need("a fresh settlement")?;
     let r = &w.recs[rec_at(&w, t, i)];
     let (p, q, s) = r.pqs();
     let hk = f.ctx.holding(p, q, s);
@@ -962,53 +992,57 @@ pub fn t18(land: &Input) -> Case {
         d[H::TICKET_SCORE..H::TICKET_SCORE + 8].copy_from_slice(&new.to_le_bytes())
     });
     rechain(&mut inp);
-    Case {
+    Ok(Case {
         class: "T18",
         what: "a tampered SETTLE score",
         feature: Some("mutate-v11"),
         codes: &[TICKET_SCORE_MISMATCH],
         input: inp,
-    }
+    })
 }
 
 /// T19: a tampered terrain digest (re-chained).
-pub fn t19(land: &Input) -> Case {
+pub fn t19(land: &Input) -> Made {
     let mut inp = land.clone();
-    let (t, i) = find(&inp, Kind::PROVINCE_OPEN)[5];
+    let (t, i) = pick(&find(&inp, Kind::PROVINCE_OPEN), 5, "PROVINCE_OPEN record")?;
     let (o, _) = field(Kind::PROVINCE_OPEN, "terrain_digest");
     edit_payload(&mut inp, t, i, |p| p[o] ^= 1);
     rechain(&mut inp);
-    Case {
+    Ok(Case {
         class: "T19",
         what: "a tampered terrain digest",
         feature: Some("mutate-v11"),
         codes: &[TERRAIN_MISMATCH],
         input: inp,
-    }
+    })
 }
 
 /// T20: a ClaimDefence amount above the formula.
-pub fn t20(march: &Input) -> Case {
+pub fn t20(march: &Input) -> Made {
     let mut inp = march.clone();
-    let (t, i) = find(&inp, Kind::DEFENCE_CLAIM)[0];
+    let (t, i) = pick(&find(&inp, Kind::DEFENCE_CLAIM), 0, "DEFENCE_CLAIM record")?;
     let (o, _) = field(Kind::DEFENCE_CLAIM, "amount");
     edit_payload(&mut inp, t, i, |p| {
         let v = le(&p[o..o + 8]) + 1_000;
         p[o..o + 8].copy_from_slice(&v.to_le_bytes());
     });
-    Case {
+    Ok(Case {
         class: "T20",
         what: "a ClaimDefence amount above the formula",
         feature: Some("mutate-v13"),
         codes: &[DEFENCE_REFUND_MISMATCH],
         input: inp,
-    }
+    })
 }
 
 /// T21: a tampered explore find (re-chained).
-pub fn t21(march: &Input) -> Case {
+pub fn t21(march: &Input) -> Made {
     let mut inp = march.clone();
-    let (t, i) = find(&inp, Kind::EXPLORE_RESULT)[0];
+    let (t, i) = pick(
+        &find(&inp, Kind::EXPLORE_RESULT),
+        0,
+        "EXPLORE_RESULT record",
+    )?;
     let (o, _) = field(Kind::EXPLORE_RESULT, "works_per_tile");
     let (ow, _) = field(Kind::EXPLORE_RESULT, "works");
     edit_payload(&mut inp, t, i, |p| {
@@ -1018,18 +1052,18 @@ pub fn t21(march: &Input) -> Case {
         p[ow..ow + 4].copy_from_slice(&tw.to_le_bytes());
     });
     rechain(&mut inp);
-    Case {
+    Ok(Case {
         class: "T21",
         what: "a tampered explore find",
         feature: Some("mutate-v12"),
         codes: &[EXPLORE_ROLL_MISMATCH],
         input: inp,
-    }
+    })
 }
 
 /// T22: a bad-seal transit logged as surviving (its clash fate, a zero
 /// code, the fate's troops and payments; re-chained).
-pub fn t22(march: &Input) -> Case {
+pub fn t22(march: &Input) -> Made {
     let mut inp = march.clone();
     let (w, f) = world(&inp);
     let (t, i, host, pq, b) = find(&inp, Kind::TRANSIT_SETTLED)
@@ -1054,34 +1088,42 @@ pub fn t22(march: &Input) -> Case {
                 .then_some((t, i, host, pq, b))
         })
         .next()
-        .expect("a revealed bad seal");
+        .need("a revealed bad seal")?;
     let ci = fclient::decode::ClashInputs::decode(
         w.state_before(&f.ctx.clash_inputs(pq.0, pq.1, b), t)
-            .expect("inputs"),
+            .need("inputs")?,
     )
-    .expect("decode");
+    .need("decode")?;
     let a = ci
         .arrivals
         .iter()
         .find(|a| a.present == 1 && a.host_id == host)
-        .expect("arrival");
+        .need("arrival")?;
     let troops = match a.fate {
         transit_outcome::STAYS | transit_outcome::WITHDREW => a.troops_after,
         transit_outcome::DESTROYED => 0,
         _ => a.troops,
     };
-    let ix = w.txs[t].ix(Ix::SettleTransit.tag()).expect("ix");
+    let ix = w.txs[t].ix(Ix::SettleTransit.tag()).need("ix")?;
     let pre = |k: usize| -> [u8; 8] {
         ix.key(k)
             .map(|x| x[..8].try_into().unwrap_or([0; 8]))
             .unwrap_or([0; 8])
     };
-    let p = f.params.expect("params");
+    let p = f.params.need("params")?;
     let tip = f
         .depart_of(&w, host, rec_at(&w, t, i), None)
         .map(|d| w.recs[d].pu64("tip"))
         .unwrap_or(0);
     let resolver: [u8; 8] = ci.resolver.to_bytes()[..8].try_into().unwrap_or([0; 8]);
+    // `pool_owed_delta` = the pool's pairs + the transaction's DIVERTs (V13).
+    let diverted: u64 = w.txs[t]
+        .recs
+        .iter()
+        .map(|&n| &w.recs[n])
+        .filter(|x| x.kind == Kind::DIVERT)
+        .map(|x| x.pu64("amount"))
+        .sum();
     forge_transit(
         &mut inp,
         t,
@@ -1095,16 +1137,16 @@ pub fn t22(march: &Input) -> Case {
             (p.seal_bond, pre(10)),
             (0, [0; 8]),
         ],
-        0,
+        diverted,
     );
     rechain(&mut inp);
-    Case {
+    Ok(Case {
         class: "T22",
         what: "a bad-seal transit logged as surviving",
         feature: Some("mutate-v5"),
         codes: &[BAD_SEAL_SURVIVED],
         input: inp,
-    }
+    })
 }
 
 /// T1b (integ-W4 review, W4-D major): drop an **unchained** transaction —
@@ -1112,11 +1154,11 @@ pub fn t22(march: &Input) -> Case {
 /// anchor and cache accounts in the finals. Nothing chains them, so before
 /// the review V1 passed it; now an account no transaction explains is a
 /// gap.
-pub fn t01b(land: &Input) -> Case {
+pub fn t01b(land: &Input) -> Made {
     let mut inp = land.clone();
     let (w, _) = world(&inp);
     let anchors = find(&inp, Kind::ANCHOR);
-    let (ta, ia) = *anchors.last().expect("an ANCHOR");
+    let (ta, ia) = *anchors.last().need("an ANCHOR")?;
     let bell = w.recs[rec_at(&w, ta, ia)].ku32("bell");
     let mut drop: Vec<usize> = vec![ta];
     for (t, i) in find(&inp, Kind::SEED) {
@@ -1129,13 +1171,13 @@ pub fn t01b(land: &Input) -> Case {
     for t in drop.into_iter().rev() {
         inp.txs.remove(t);
     }
-    Case {
+    Ok(Case {
         class: "T1b",
         what: "drop an unchained transaction (an anchor and its seeds)",
         feature: Some("mutate-v1"),
         codes: &[CHAIN_GAP],
         input: inp,
-    }
+    })
 }
 
 /// T23 (integ-W4 review, W4-D major): a resolve's **write-back** forged —
@@ -1143,13 +1185,13 @@ pub fn t01b(land: &Input) -> Case {
 /// post-state (and every later state of it, and the final). The digests,
 /// fates and chains are untouched (account bytes are not chained), so only
 /// V7's write-back replay sees it.
-pub fn t23(march: &Input) -> Case {
+pub fn t23(march: &Input) -> Made {
     let mut inp = march.clone();
     let (w, f) = world(&inp);
-    let (t, i) = *find(&inp, Kind::CLASH).last().expect("a CLASH");
+    let (t, i) = *find(&inp, Kind::CLASH).last().need("a CLASH")?;
     let r = &w.recs[rec_at(&w, t, i)];
     let pk = f.ctx.province(r.pq().0, r.pq().1);
-    let post = w.txs[t].post_data(&pk).expect("the Province's post-state");
+    let post = w.txs[t].post_data(&pk).need("the Province's post-state")?;
     // A resident that stays put (no later departure: V8 would read it).
     let later: std::collections::BTreeSet<u64> = w
         .recs
@@ -1162,76 +1204,643 @@ pub fn t23(march: &Input) -> Case {
             frontier_abi::entry::read_entry(post, k)
                 .is_ok_and(|x| x.state == 1 && !later.contains(&x.id))
         })
-        .expect("a resident after the clash");
+        .need("a resident after the clash")?;
     let o = frontier_abi::layout::province::province::entry(e)
         + frontier_abi::layout::province::entry::TROOPS;
     edit_account_from(&mut inp, &pk, t, |d| {
         let v = le(&d[o..o + 4]) as u32 + 25_000;
         d[o..o + 4].copy_from_slice(&v.to_le_bytes());
     });
-    Case {
+    Ok(Case {
         class: "T23",
         what: "a resolve's write-back forged in its own transaction",
         feature: Some("mutate-v7"),
         codes: &[CLASH_REPLAY_MISMATCH],
         input: inp,
-    }
+    })
 }
 
 /// V9 (no §8.5 class; the check of its check): an account at a
 /// non-canonical address — an anchor whose stored region is not the one
 /// its address derives (its post-state and final state agree, so only V9
 /// sees it).
-pub fn v9a(land: &Input) -> Case {
+pub fn v9a(land: &Input) -> Made {
     use frontier_abi::layout::beacon::bell_anchor as BA;
     let mut inp = land.clone();
     let (w, f) = world(&inp);
     let a = w.recs[rec_at(
         &w,
-        find(&inp, Kind::ANCHOR)[2].0,
-        find(&inp, Kind::ANCHOR)[2].1,
+        pick(&find(&inp, Kind::ANCHOR), 2, "ANCHOR record")?.0,
+        pick(&find(&inp, Kind::ANCHOR), 2, "ANCHOR record")?.1,
     )]
     .clone();
     let k = f.ctx.bell_anchor(a.ku32("bell"), a.ku8("region"));
     edit_account_from(&mut inp, &k, 0, |d| d[BA::REGION] ^= 1);
-    Case {
+    Ok(Case {
         class: "V9a",
         what: "an account at a non-canonical address",
         feature: Some("mutate-v9"),
         codes: &[NON_CANONICAL_ADDRESS],
         input: inp,
+    })
+}
+
+// ------------------------------------------------------------ run fallbacks (W5-D)
+
+/// T8 on a run without a displacement: the slot `i` a **filling** Reveal
+/// logged is changed (the kernel's `admit_arrival` names another slot).
+pub fn t08_fill(run: &Input) -> Made {
+    let mut inp = run.clone();
+    let (w, _) = world(&inp);
+    let (t, i) = *find(&inp, Kind::REVEAL)
+        .iter()
+        .find(|(t, i)| w.recs[rec_at(&w, *t, *i)].pu8("displace") == 0)
+        .need("filling Reveal")?;
+    let (oi, _) = plog::field(Kind::REVEAL, "i", false).need("REVEAL.i")?;
+    edit_key(&mut inp, t, i, |k| k[oi] = (k[oi] + 1) % 4);
+    Ok(Case {
+        class: "T8",
+        what: "change which slot a Reveal filled (no displacement in the run)",
+        feature: Some("mutate-v6"),
+        codes: &[QUOTA_SET_MISMATCH],
+        input: inp,
+    })
+}
+
+/// T13 on a run whose Reveals all landed before THE anchor of their bell
+/// (the program's in-bell reveals, integ-W4): one Reveal is **moved** to
+/// after the anchor with a Clock past `A + W` — to just before the first
+/// transaction at or after the close, provided nothing in between touches
+/// an account the Reveal wrote (so only V4 can tell).
+pub fn t13_moved(run: &Input) -> Made {
+    let mut inp = run.clone();
+    let (w, f) = world(&inp);
+    let mut pick_ = None;
+    for (t, i) in find(&inp, Kind::REVEAL).into_iter().rev() {
+        let r = &w.recs[rec_at(&w, t, i)];
+        let (p, q) = r.pq();
+        let arrive = r.ku32("arrive");
+        let Some(a) = f.anchor(arrive, Facts::region(p, q)) else {
+            continue;
+        };
+        let ta = w.recs[a.rec].tx;
+        if ta <= t {
+            continue;
+        }
+        let close = f.close(arrive, a.a);
+        let Some(j) = (ta + 1..w.txs.len()).find(|&j| w.txs[j].time >= close) else {
+            continue;
+        };
+        let wrote: Vec<Key> = w.txs[t]
+            .keys
+            .iter()
+            .filter(|(_, wr)| *wr)
+            .map(|(k, _)| *k)
+            .filter(|k| inp.cfg.program.to_bytes() != *k)
+            .skip(1) // the fee payer
+            .collect();
+        let touched = (t + 1..j).any(|x| w.txs[x].keys.iter().any(|(k, _)| wrote.contains(k)));
+        if !touched {
+            pick_ = Some((t, j));
+            break;
+        }
+    }
+    let (t, j) = pick_.need("Reveal that can be moved past its close unseen")?;
+    let mut tx = inp.txs.remove(t);
+    let at = j - 1; // indices after `t` shifted down by one
+    tx.block_time = inp.txs[at].block_time;
+    tx.slot = inp.txs[at].slot;
+    inp.txs.insert(at, tx);
+    Ok(Case {
+        class: "T13",
+        what: "move a Reveal past A + W (moved after its anchor)",
+        feature: Some("mutate-v4"),
+        codes: &[REVEAL_AFTER_CLOSE],
+        input: inp,
+    })
+}
+
+/// T20 on a run without a defence claim: a ClaimDefence transaction is
+/// **injected** at the end — a keeper's claim of no eligible slot with an
+/// amount above the formula's (0). DEFENCE_CLAIM is not chained, so only
+/// V13 can tell.
+pub fn t20_injected(run: &Input) -> Made {
+    use fclient::{Keypair, Signer};
+    let mut inp = run.clone();
+    let (_, f) = world(&inp);
+    let last = inp.txs.last().need("transaction")?.clone();
+    let bell = permutation_rules::frontier::beacon::bell_at(f.genesis_ts, last.block_time)
+        .need("bell of the run's end")?;
+    let day = bell / 144;
+    let keeper = Keypair::new_from_array([0x20; 32]);
+    let a = fclient::addr::Addresses::new(inp.cfg.program, inp.cfg.season_id);
+    let ix = fclient::ix::claim_defence(&a, keeper.pubkey(), day, &[]);
+    let t = fclient::tx::build(
+        &[ix],
+        &fclient::tx::TxBudget {
+            cu_limit: 30_000,
+            cu_price: 0,
+            loaded_limit: 1 << 20,
+            heap: None,
+        },
+        &[&keeper],
+        &fclient::Hash::new_from_array([0x20; 32]),
+    )
+    .need("claim transaction")?;
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&keeper.pubkey().to_bytes());
+    let mut payload = day.to_le_bytes().to_vec();
+    payload.push(0);
+    payload.extend_from_slice(&50_000u64.to_le_bytes());
+    payload.push(0);
+    let mut body = vec![0u8; 512];
+    let n = plog::write_body(Kind::DEFENCE_CLAIM, bell, &key, &payload, &mut body)
+        .need("DEFENCE_CLAIM body")?;
+    let m = plog::write_tail(&[], &mut body, n).need("DEFENCE_CLAIM tail")?;
+    body.truncate(m);
+    inp.txs.push(TxRecord {
+        seq: last.seq + 1,
+        slot: last.slot + 1,
+        signature: fclient::tx::signature(&t),
+        block_time: last.block_time + 1,
+        tx: fclient::tx::wire(&t),
+        logs: fclient::log::in_frame(&inp.cfg.program, [log_line(&body)]),
+        err: None,
+        code: None,
+        units: 0,
+        fee: fclient::tx::fee_lamports(&t.message),
+        post: vec![],
+    });
+    Ok(Case {
+        class: "T20",
+        what: "a ClaimDefence amount above the formula (a claim injected)",
+        feature: Some("mutate-v13"),
+        codes: &[DEFENCE_REFUND_MISMATCH],
+        input: inp,
+    })
+}
+
+/// T14 on a run without FOLD records: any landed program transaction
+/// listed twice.
+pub fn t14_any(run: &Input) -> Made {
+    let mut inp = run.clone();
+    let t = (0..inp.txs.len())
+        .find(|&t| inp.txs[t].err.is_none() && !bodies(&inp, t).is_empty())
+        .need("landed program transaction")?;
+    let dup = inp.txs[t].clone();
+    inp.txs.insert(t + 1, dup);
+    Ok(Case {
+        class: "T14",
+        what: "duplicate a transaction",
+        feature: Some("mutate-v1"),
+        codes: &[DUPLICATE_EVENT],
+        input: inp,
+    })
+}
+
+// ------------------------------------------------------------ checks of the new V7 parts (W5-D)
+
+/// T23b: a SkipQuiet's **write-back** forged — +25,000 milli-troops to a
+/// resident in the Province the skip wrote (and every later state of it),
+/// the skip's and every later skip's quiet digest recomputed over the
+/// forged bytes, re-chained. Only V7's bell-by-bell skip replay sees it.
+pub fn t23b(run: &Input) -> Made {
+    let mut inp = run.clone();
+    let (w, f) = world(&inp);
+    let clashes: Vec<((i32, i32), usize)> = w.of(Kind::CLASH).map(|r| (r.pq(), r.tx)).collect();
+    let departs: Vec<(u64, usize)> = w
+        .of(Kind::DEPART)
+        .map(|r| (r.ku64("host_id"), r.tx))
+        .collect();
+    let mut chosen = None;
+    for (t, i) in find(&inp, Kind::SKIP).into_iter().rev() {
+        let r = &w.recs[rec_at(&w, t, i)];
+        let pq = r.pq();
+        if clashes.iter().any(|(x, ct)| *x == pq && *ct > t) {
+            continue;
+        }
+        let pk = f.ctx.province(pq.0, pq.1);
+        let Some(post) = w.txs[t].post_data(&pk) else {
+            continue;
+        };
+        let e = (0..frontier_abi::layout::province::province::ENTRIES_N).find(|&k| {
+            frontier_abi::entry::read_entry(post, k)
+                .is_ok_and(|x| x.state == 1 && !departs.iter().any(|(h, dt)| *h == x.id && *dt > t))
+        });
+        if let Some(e) = e {
+            chosen = Some((t, pq, e));
+            break;
+        }
+    }
+    let (t, pq, e) = chosen.need("SKIP of a province with a resident and no later clash")?;
+    let pk = f.ctx.province(pq.0, pq.1);
+    let o = frontier_abi::layout::province::province::entry(e)
+        + frontier_abi::layout::province::entry::TROOPS;
+    edit_account_from(&mut inp, &pk, t, |d| {
+        let v = le(&d[o..o + 4]) as u32 + 25_000;
+        d[o..o + 4].copy_from_slice(&v.to_le_bytes());
+    });
+    let (w2, _) = world(&inp);
+    let (oq, _) = field(Kind::SKIP, "quiet_digest");
+    for (t3, i3) in find(&inp, Kind::SKIP) {
+        if t3 < t {
+            continue;
+        }
+        let r3 = &w2.recs[rec_at(&w2, t3, i3)];
+        if r3.pq() != pq {
+            continue;
+        }
+        let Some(after) = w2.txs[t3].post_data(&pk) else {
+            continue;
+        };
+        let qd = crate::clash_input::quiet_digest(after, r3.pu32("b0"), r3.pu8("n"));
+        edit_payload(&mut inp, t3, i3, |p| p[oq..oq + 32].copy_from_slice(&qd));
+    }
+    rechain(&mut inp);
+    Ok(Case {
+        class: "T23b",
+        what: "a SkipQuiet's write-back forged (quiet digests recomputed)",
+        feature: Some("mutate-v7"),
+        codes: &[CLASH_REPLAY_MISMATCH],
+        input: inp,
+    })
+}
+
+/// H1: a Harvest's **Holding** forged — +1 food (1,000 milli) in the
+/// store the transaction wrote (and every later state of the Holding),
+/// every later HARVEST digest of it recomputed, re-chained. Only V7's
+/// holding replay sees it.
+pub fn h1(run: &Input) -> Made {
+    let mut inp = run.clone();
+    let (w, f) = world(&inp);
+    let (t, i) = *find(&inp, Kind::HARVEST)
+        .iter()
+        .rev()
+        .find(|(t, i)| {
+            let (p, q, s) = w.recs[rec_at(&w, *t, *i)].pqs();
+            w.txs[*t].post_data(&f.ctx.holding(p, q, s)).is_some()
+        })
+        .need("HARVEST with a post-state")?;
+    let (p, q, s) = w.recs[rec_at(&w, t, i)].pqs();
+    let hk = f.ctx.holding(p, q, s);
+    let o = H::store(0) + frontier_abi::layout::player::accrual::VALUE;
+    edit_account_from(&mut inp, &hk, t, |d| {
+        let v = le(&d[o..o + 8]) as i64 + 1_000;
+        d[o..o + 8].copy_from_slice(&v.to_le_bytes());
+    });
+    let (w2, _) = world(&inp);
+    let (od, _) = field(Kind::HARVEST, "stores_digest");
+    for (t3, i3) in find(&inp, Kind::HARVEST) {
+        if t3 < t {
+            continue;
+        }
+        let r3 = &w2.recs[rec_at(&w2, t3, i3)];
+        if r3.pqs() != (p, q, s) {
+            continue;
+        }
+        let Some(after) = w2.txs[t3].post_data(&hk) else {
+            continue;
+        };
+        let Ok(dg) = crate::holding::stores_digest(after) else {
+            continue;
+        };
+        edit_payload(&mut inp, t3, i3, |pl| pl[od..od + 32].copy_from_slice(&dg));
+    }
+    rechain(&mut inp);
+    Ok(Case {
+        class: "H1",
+        what: "a Harvest's Holding forged (stores digest recomputed)",
+        feature: Some("mutate-v7"),
+        codes: &[HOLDING_REPLAY_MISMATCH],
+        input: inp,
+    })
+}
+
+// ------------------------------------------------------------ the suite over one run (W5-D)
+
+/// A class builder.
+pub type Builder = fn(&Input) -> Made;
+
+/// One class of the suite: its builders, tried in order (the fixture's
+/// selection first, then the run fallbacks), and whether §8.5 requires it.
+pub struct Class {
+    pub class: &'static str,
+    pub required: bool,
+    pub tries: Vec<(&'static str, Builder)>,
+}
+
+/// T1–T22 (§8.5, required) and the extra checks of the checks (T1b, T6b,
+/// T23, T23b, H1, V9a) over **one** run — a stack run, a nightly, a
+/// recorded fixture.
+pub fn classes() -> Vec<Class> {
+    fn c(class: &'static str, required: bool, tries: Vec<(&'static str, Builder)>) -> Class {
+        Class {
+            class,
+            required,
+            tries,
+        }
+    }
+    vec![
+        c("T1", true, vec![("drop the last Depart", t01)]),
+        c("T2", true, vec![("flip a Reveal plaintext byte", t02)]),
+        c("T3", true, vec![("shift an unused anchor's A", t03)]),
+        c("T4", true, vec![("inject a second anchor", t04)]),
+        c("T5", true, vec![("swap a cache signature", t05)]),
+        c("T6", true, vec![("set_account on a Province", t06)]),
+        c("T7", true, vec![("valid seal settled as bad", t07)]),
+        c(
+            "T8",
+            true,
+            vec![
+                ("displacement slot", t08),
+                ("fill slot (no displacement)", t08_fill),
+            ],
+        ),
+        c("T9", true, vec![("departure mass", t09)]),
+        c("T10", true, vec![("wrong drand key", t10)]),
+        c("T11", true, vec![("wrong ruleset hash", t11)]),
+        c("T12", true, vec![("truncate the last game day", t12)]),
+        c(
+            "T13",
+            true,
+            vec![
+                ("Reveal Clock past A + W", t13),
+                ("Reveal moved past A + W", t13_moved),
+            ],
+        ),
+        c(
+            "T14",
+            true,
+            vec![
+                ("duplicate a FOLD", t14),
+                ("duplicate any transaction", t14_any),
+            ],
+        ),
+        c("T15", true, vec![("origin values", t15)]),
+        c("T16", true, vec![("wrong genesis round", t16)]),
+        c("T17", true, vec![("skip over an arrival", t17)]),
+        c("T18", true, vec![("SETTLE score", t18)]),
+        c("T19", true, vec![("terrain digest", t19)]),
+        c(
+            "T20",
+            true,
+            vec![("claim amount", t20), ("claim injected", t20_injected)],
+        ),
+        c("T21", true, vec![("explore find", t21)]),
+        c("T22", true, vec![("bad seal logged as surviving", t22)]),
+        c("T1b", false, vec![("drop an unchained transaction", t01b)]),
+        c("T6b", false, vec![("rogue write between resolves", t06b)]),
+        c("T23", false, vec![("forged clash write-back", t23)]),
+        c("T23b", false, vec![("forged skip write-back", t23b)]),
+        c("H1", false, vec![("forged Harvest", h1)]),
+        c("V9a", false, vec![("non-canonical address", v9a)]),
+    ]
+}
+
+/// What happened to one class on the run.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Status {
+    /// The tampered run FAILS with one of the class's codes.
+    Detected,
+    /// The tampered run does not FAIL with one of its codes.
+    Missed,
+    /// No builder could tamper with this run (the reasons are listed).
+    NotApplicable,
+}
+
+#[derive(Clone, Debug)]
+pub struct Outcome {
+    pub class: &'static str,
+    pub required: bool,
+    pub variant: &'static str,
+    pub what: String,
+    pub feature: Option<&'static str>,
+    pub expected: Vec<&'static str>,
+    pub status: Status,
+    pub verdict: Option<crate::Verdict>,
+    /// The FAIL codes of the tampered run.
+    pub fail_codes: Vec<String>,
+    pub detail: String,
+}
+
+/// The suite's result over one run.
+#[derive(Clone, Debug)]
+pub struct SuiteReport {
+    pub base: crate::Verdict,
+    pub base_fail_codes: Vec<String>,
+    pub outcomes: Vec<Outcome>,
+}
+
+impl SuiteReport {
+    /// Every required class detected on a base run that PASSES.
+    pub fn all_detected(&self) -> bool {
+        self.base == crate::Verdict::Pass
+            && self
+                .outcomes
+                .iter()
+                .filter(|o| o.required)
+                .all(|o| o.status == Status::Detected)
+    }
+    /// Exit code: 0 every required class detected, 1 a required class
+    /// missed, 2 the base run does not PASS or a required class could not
+    /// be built.
+    pub fn exit_code(&self) -> i32 {
+        let req = self.outcomes.iter().filter(|o| o.required);
+        if self.base != crate::Verdict::Pass {
+            return crate::EXIT_UNVERIFIABLE;
+        }
+        if req.clone().any(|o| o.status == Status::Missed) {
+            return crate::EXIT_FAIL;
+        }
+        if req.clone().any(|o| o.status == Status::NotApplicable) {
+            return crate::EXIT_UNVERIFIABLE;
+        }
+        crate::EXIT_PASS
+    }
+    pub fn json(&self) -> serde_json::Value {
+        use serde_json::json;
+        json!({
+            "base": self.base.name(),
+            "base_fail_codes": self.base_fail_codes,
+            "all_required_detected": self.all_detected(),
+            "classes": self.outcomes.iter().map(|o| json!({
+                "class": o.class,
+                "required": o.required,
+                "variant": o.variant,
+                "what": o.what,
+                "feature": o.feature,
+                "expected": o.expected,
+                "status": match o.status { Status::Detected => "detected", Status::Missed => "missed", Status::NotApplicable => "not-applicable" },
+                "verdict": o.verdict.map(|v| v.name()),
+                "fail_codes": o.fail_codes,
+                "detail": o.detail,
+            })).collect::<Vec<_>>(),
+        })
+    }
+    pub fn markdown(&self) -> String {
+        let mut s = format!(
+            "# Tamper suite\n\nBase run: **{}**{}. Required classes detected: **{}**.\n\n| class | variant | expected | status | FAIL codes |\n|---|---|---|---|---|\n",
+            self.base.name(),
+            if self.base_fail_codes.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", self.base_fail_codes.join(", "))
+            },
+            if self.all_detected() { "yes" } else { "no" }
+        );
+        for o in &self.outcomes {
+            s.push_str(&format!(
+                "| {}{} | {} | {} | {} | {} |\n",
+                o.class,
+                if o.required { "" } else { " (extra)" },
+                o.variant,
+                o.expected.join("/"),
+                match o.status {
+                    Status::Detected => "detected".to_string(),
+                    Status::Missed => format!("**missed** ({})", o.detail),
+                    Status::NotApplicable => format!("**not applicable** ({})", o.detail),
+                },
+                o.fail_codes.join(", ")
+            ));
+        }
+        s
+    }
+}
+
+fn fail_codes(r: &crate::Report) -> Vec<String> {
+    let mut v: Vec<String> = r
+        .findings
+        .iter()
+        .filter(|f| f.fail())
+        .map(|f| f.code.clone())
+        .collect();
+    v.sort();
+    v.dedup();
+    v
+}
+
+/// Builds and judges one class (a builder that panics counts as not
+/// applicable, with its message).
+pub fn judge_class(c: &Class, run: &Input) -> Outcome {
+    let mut why = vec![];
+    for (variant, b) in &c.tries {
+        let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| b(run)));
+        let case = match made {
+            Ok(Ok(x)) => x,
+            Ok(Err(e)) => {
+                why.push(format!("{variant}: {e}"));
+                continue;
+            }
+            Err(p) => {
+                let m = p
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string()))
+                    .unwrap_or_default();
+                why.push(format!("{variant}: builder panicked: {m}"));
+                continue;
+            }
+        };
+        let r = crate::verify(&case.input);
+        let hit = case.codes.iter().any(|x| r.fails_with(x));
+        return Outcome {
+            class: c.class,
+            required: c.required,
+            variant,
+            what: case.what.to_string(),
+            feature: case.feature,
+            expected: case.codes.to_vec(),
+            status: if r.verdict == crate::Verdict::Fail && hit {
+                Status::Detected
+            } else {
+                Status::Missed
+            },
+            verdict: Some(r.verdict),
+            fail_codes: fail_codes(&r),
+            detail: if hit {
+                String::new()
+            } else {
+                format!("verdict {}", r.verdict.name())
+            },
+        };
+    }
+    Outcome {
+        class: c.class,
+        required: c.required,
+        variant: "",
+        what: String::new(),
+        feature: None,
+        expected: vec![],
+        status: Status::NotApplicable,
+        verdict: None,
+        fail_codes: vec![],
+        detail: why.join("; "),
+    }
+}
+
+/// The whole suite over one run, `jobs` classes at a time (each class
+/// verifies its own tampered copy of the run).
+pub fn run_suite(run: &Input, jobs: usize) -> SuiteReport {
+    let base = crate::verify(run);
+    let cs = classes();
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let out: std::sync::Mutex<Vec<(usize, Outcome)>> = Default::default();
+    std::thread::scope(|sc| {
+        for _ in 0..jobs.max(1) {
+            sc.spawn(|| loop {
+                let k = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let Some(c) = cs.get(k) else { break };
+                let o = judge_class(c, run);
+                if let Ok(mut v) = out.lock() {
+                    v.push((k, o));
+                }
+            });
+        }
+    });
+    let mut v = out.into_inner().unwrap_or_default();
+    v.sort_by_key(|(k, _)| *k);
+    SuiteReport {
+        base: base.verdict,
+        base_fail_codes: fail_codes(&base),
+        outcomes: v.into_iter().map(|(_, o)| o).collect(),
     }
 }
 
 /// Every class over the recorded fixtures (`program`: the march season
 /// recorded from the merged program, integ-W4 review).
 pub fn all(land: &Input, march: &Input, program: &Input) -> Vec<Case> {
-    vec![
-        t01(march),
-        t01b(land),
-        t02(march),
-        t03(land),
-        t04(land),
-        t05(land),
-        t06(march),
-        t06b(program),
-        t23(program),
-        t07(march),
-        t08(march),
-        t09(march),
-        t10(land),
-        t11(land),
-        t12(march),
-        t13(march),
-        t14(land),
-        t15(march),
-        t16(land),
-        t17(march),
-        t18(land),
-        t19(land),
-        t20(march),
-        t21(march),
-        t22(march),
-        v9a(land),
-    ]
+    let tries: Vec<(&Input, Builder)> = vec![
+        (march, t01),
+        (land, t01b),
+        (march, t02),
+        (land, t03),
+        (land, t04),
+        (land, t05),
+        (march, t06),
+        (program, t06b),
+        (program, t23),
+        (program, t23b),
+        (program, h1),
+        (march, t07),
+        (march, t08),
+        (march, t09),
+        (land, t10),
+        (land, t11),
+        (march, t12),
+        (march, t13),
+        (land, t14),
+        (march, t15),
+        (land, t16),
+        (march, t17),
+        (land, t18),
+        (land, t19),
+        (march, t20),
+        (march, t21),
+        (march, t22),
+        (land, v9a),
+    ];
+    tries
+        .into_iter()
+        .map(|(i, b)| b(i).unwrap_or_else(|e| panic!("a fixture class: {e}")))
+        .collect()
 }

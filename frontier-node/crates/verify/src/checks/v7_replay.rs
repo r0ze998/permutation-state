@@ -10,10 +10,11 @@
 //!   from its opening; the Province and ClashInputs the resolve wrote must
 //!   be the outcome's write-back ([`writeback`], integ-W4 review).
 //! - **Quiet skips:** no bell of a SKIP run has a REVEAL (an ArrivalSlot)
-//!   before it (`SkipOverArrival`), and the Province before the run is
-//!   quiet by `clash::is_quiet` (checked once per run when no entry has a
-//!   pending change; a run whose roster changes inside it is checked at
-//!   its first bell only).
+//!   before it (`SkipOverArrival`); the run is replayed bell by bell
+//!   ([`crate::skip`], W5-D): the day's camp check, the kernel's
+//!   `clash::is_quiet` at **every** bell (`SkipNotQuiet` names the first
+//!   that is not), the bell's settle; the Province the skip wrote must be
+//!   the replay's (`ClashReplayMismatch`), and the quiet digest is over it.
 //! - **Transits:** each TRANSIT_SETTLED outcome follows §5.11 D5 from the
 //!   logged seal code and the destination's gathered-and-resolved inputs:
 //!   a bad seal code → bad-seal; the host in the records → its fate (and a
@@ -22,8 +23,10 @@
 //!   (`admit_arrival` refuses it) else `routed`; no resolved inputs →
 //!   `routed`.
 //! - **Holdings:** each holding a SETTLE founds is written with the SETTLE's
-//!   owner, generation, score, cohort and `final_ts` (the lazy accrual
-//!   replay of Harvest/Build/Train is deferred to W5, W4-D notes).
+//!   owner, generation, score, cohort and `final_ts`; every Harvest, Build
+//!   and Train is replayed through the kernel's lazy holding functions
+//!   ([`crate::holding`], W5-D) and the Holding written, the record and a
+//!   walls item must be the replay's (`HoldingReplayMismatch`).
 //!
 //! Codes: `ClashReplayMismatch`, `SkipNotQuiet`, `SkipOverArrival`,
 //! `TransitOutcomeMismatch`, `HoldingReplayMismatch`.
@@ -31,6 +34,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use frontier_abi::layout::clash::clash_inputs as CI;
+use frontier_abi::layout::header as HD;
 use frontier_abi::layout::player::holding as H;
 use frontier_abi::layout::province::province as PV;
 use frontier_abi::log::{self as plog, settle_outcome, transit_outcome, Kind};
@@ -429,23 +433,45 @@ fn clashes_and_skips(cx: &mut Ctx) {
                         );
                     }
                 }
-                match builder.build(pv, &[], b0, &[0; 32]).and_then(|x| x.quiet()) {
-                    Ok(true) => {}
-                    Ok(false) => cx.fail(
+                // Every bell of the run replayed (W5-D; the integ-W4
+                // review's "SKIP quiet at every bell"): the kernel's
+                // `is_quiet` at each bell after its camp check, the bell's
+                // settle, and the Province written = the replay's.
+                match crate::skip::replay(pv, b0, k) {
+                    Ok(pd) => {
+                        if let Some(after) = w.txs[r.tx].post_data(&f.ctx.province(p, q)) {
+                            let mask = |x: &[u8]| {
+                                let mut v = x.to_vec();
+                                if v.len() >= HD::H_SIZE {
+                                    v[HD::EVENT_SEQ..HD::EVENT_HEAD + 32].fill(0);
+                                }
+                                v
+                            };
+                            let (ma, mp) = (mask(after), mask(&pd));
+                            if ma != mp {
+                                let at = ma
+                                    .iter()
+                                    .zip(mp.iter())
+                                    .position(|(a, b)| a != b)
+                                    .unwrap_or(ma.len().min(mp.len()));
+                                cx.fail(
+                                    V,
+                                    CLASH_REPLAY_MISMATCH,
+                                    what,
+                                    b0,
+                                    Some(r.tx),
+                                    format!("skip write-back: the Province written differs from the bell-by-bell replay (first at byte {at})"),
+                                );
+                            }
+                        }
+                    }
+                    Err((b, why)) => cx.fail(
                         V,
                         SKIP_NOT_QUIET,
                         what,
-                        b0,
+                        b,
                         Some(r.tx),
-                        "the province is not quiet at the run's first bell",
-                    ),
-                    Err(e) => cx.fail(
-                        V,
-                        SKIP_NOT_QUIET,
-                        what,
-                        b0,
-                        Some(r.tx),
-                        format!("the province does not build: {e}"),
+                        format!("bell {b} of the run is not quiet: {why}"),
                     ),
                 }
             }
@@ -599,6 +625,240 @@ fn transits(cx: &mut Ctx) {
 }
 
 fn holdings(cx: &mut Ctx) {
+    founded(cx);
+    owner_actions(cx);
+}
+
+/// Every Harvest, Build and Train replayed from the Holding the last
+/// transaction before it left ([`crate::holding`], W5-D): the Holding the
+/// transaction wrote (every byte but the event chain's header fields), the
+/// record's payload (HARVEST's stores digest, BUILD's item, cost digest
+/// and completion, TRAIN's unit, count and time) and a walls Build's item
+/// in the site mirror must be the replay's. A transaction in which another
+/// program instruction also writes the Holding is not replayed (counted in
+/// the detail of no finding; none in M1's clients).
+fn owner_actions(cx: &mut Ctx) {
+    use crate::holding::{self as hr, Action};
+    use frontier_abi::ix as aix;
+    use frontier_abi::layout::header as HD;
+    use frontier_abi::layout::province::site as SM;
+    use frontier_abi::tags::Ix;
+    let w = cx.w;
+    let f = cx.f;
+    let tags = [Ix::Harvest.tag(), Ix::Build.tag(), Ix::Train.tag()];
+    for (t, tx) in w.txs.iter().enumerate() {
+        if !tx.ok {
+            continue;
+        }
+        let recs: Vec<usize> = tx
+            .recs
+            .iter()
+            .copied()
+            .filter(|&n| matches!(w.recs[n].kind, Kind::HARVEST | Kind::BUILD | Kind::TRAIN))
+            .collect();
+        if recs.is_empty() {
+            continue;
+        }
+        let ixs: Vec<&crate::world::Ix> = tx
+            .ixs
+            .iter()
+            .filter(|i| i.tag().is_some_and(|x| tags.contains(&x)))
+            .collect();
+        let first = &w.recs[recs[0]];
+        let what0 = {
+            let (p, q, s) = first.pqs();
+            format!("holding ({p}, {q}, {s})")
+        };
+        if !w.has_post {
+            cx.missing(
+                V,
+                what0,
+                first.bell,
+                Some(t),
+                "no post-states: the Holding cannot be replayed",
+            );
+            continue;
+        }
+        if ixs.len() != recs.len() {
+            cx.fail(
+                V,
+                HOLDING_REPLAY_MISMATCH,
+                what0,
+                first.bell,
+                Some(t),
+                format!(
+                    "{} owner-action records for {} Harvest/Build/Train instructions",
+                    recs.len(),
+                    ixs.len()
+                ),
+            );
+            continue;
+        }
+        let mut hstate: BTreeMap<[u8; 32], Vec<u8>> = BTreeMap::new();
+        let mut pstate: BTreeMap<[u8; 32], (Vec<u8>, usize)> = BTreeMap::new();
+        let mut skip: std::collections::BTreeSet<[u8; 32]> = Default::default();
+        let mut bad: Vec<(usize, String)> = vec![];
+        for (&n, ix) in recs.iter().zip(&ixs) {
+            let r = &w.recs[n];
+            let (p, q, site) = r.pqs();
+            let hk = f.ctx.holding(p, q, site);
+            if ix.key(4) != Some(hk) {
+                bad.push((
+                    n,
+                    "the record names another Holding than its instruction".into(),
+                ));
+                continue;
+            }
+            // Another program instruction of the transaction writes it.
+            if tx.ixs.iter().any(|i| {
+                !i.tag().is_some_and(|x| tags.contains(&x))
+                    && i.accounts.iter().any(|(k, wr)| *wr && *k == hk)
+            }) {
+                skip.insert(hk);
+                continue;
+            }
+            let action = match ix.tag() {
+                Some(x) if x == Ix::Harvest.tag() => Some(Action::Harvest),
+                Some(x) if x == Ix::Build.tag() => aix::Build::decode(&ix.data)
+                    .ok()
+                    .map(|b| Action::Build { item: b.item }),
+                Some(x) if x == Ix::Train.tag() => {
+                    aix::Train::decode(&ix.data).ok().map(|b| Action::Train {
+                        unit: b.unit,
+                        n: b.n,
+                    })
+                }
+                _ => None,
+            };
+            let Some(action) = action else {
+                bad.push((n, "the instruction data does not decode".into()));
+                continue;
+            };
+            let want_kind = match action {
+                Action::Harvest => Kind::HARVEST,
+                Action::Build { .. } => Kind::BUILD,
+                Action::Train { .. } => Kind::TRAIN,
+            };
+            if r.kind != want_kind {
+                bad.push((n, format!("{} logged for a {:?}", r.kind.name(), action)));
+                continue;
+            }
+            let before = match hstate.get(&hk) {
+                Some(d) => d.clone(),
+                None => match w.state_before(&hk, t) {
+                    Some(d) => d.to_vec(),
+                    None => {
+                        cx.missing(
+                            V,
+                            format!("holding ({p}, {q}, {site})"),
+                            r.bell,
+                            Some(t),
+                            "no state of the Holding before its owner action",
+                        );
+                        skip.insert(hk);
+                        continue;
+                    }
+                },
+            };
+            match hr::replay(&before, &action, tx.time, f.genesis_ts) {
+                Ok(x) => {
+                    if x.payload[..] != r.payload[..] {
+                        bad.push((
+                            n,
+                            format!(
+                                "{} payload {}, the replay logs {}",
+                                r.kind.name(),
+                                hex::encode(&r.payload),
+                                hex::encode(&x.payload)
+                            ),
+                        ));
+                    }
+                    if let Some(item) = x.wall_item {
+                        let pk = f.ctx.province(p, q);
+                        let cur = match pstate.get(&pk) {
+                            Some((d, _)) => Some(d.clone()),
+                            None => w.state_before(&pk, t).map(|d| d.to_vec()),
+                        };
+                        match cur.and_then(|d| hr::wall_item(&d, site as usize, item)) {
+                            Some(d) => {
+                                pstate.insert(pk, (d, site as usize));
+                            }
+                            None => bad.push((
+                                n,
+                                "a walls Build the site mirror cannot take (both items busy or no Province)"
+                                    .into(),
+                            )),
+                        }
+                    }
+                    hstate.insert(hk, x.holding);
+                }
+                Err(e) => bad.push((n, format!("the kernel refuses the replay: {e}"))),
+            }
+        }
+        for (hk, d) in &hstate {
+            if skip.contains(hk) {
+                continue;
+            }
+            let Some(post) = tx.post_data(hk) else {
+                bad.push((recs[0], "the Holding has no post-state".into()));
+                continue;
+            };
+            let mask = |x: &[u8]| {
+                let mut v = x.to_vec();
+                if v.len() >= HD::H_SIZE {
+                    v[HD::EVENT_SEQ..HD::EVENT_HEAD + 32].fill(0);
+                }
+                v
+            };
+            let (mp, md) = (mask(post), mask(d));
+            if mp != md {
+                let diff = mp
+                    .iter()
+                    .zip(md.iter())
+                    .position(|(a, b)| a != b)
+                    .unwrap_or(mp.len().min(md.len()));
+                let n = recs
+                    .iter()
+                    .copied()
+                    .find(|&n| {
+                        let (p, q, s) = w.recs[n].pqs();
+                        f.ctx.holding(p, q, s) == *hk
+                    })
+                    .unwrap_or(recs[0]);
+                bad.push((
+                    n,
+                    format!("the Holding written differs from the replay (first at byte {diff})"),
+                ));
+            }
+        }
+        for (pk, (d, site)) in &pstate {
+            let o = frontier_abi::layout::province::province::site(*site);
+            let got = tx.post_data(pk).and_then(|x| x.get(o..o + SM::SIZE));
+            if got != d.get(o..o + SM::SIZE) {
+                bad.push((
+                    recs[0],
+                    "the walls item in the site mirror differs from the replay".into(),
+                ));
+            }
+        }
+        for (n, detail) in bad {
+            let r = &w.recs[n];
+            let (p, q, s) = r.pqs();
+            cx.fail(
+                V,
+                HOLDING_REPLAY_MISMATCH,
+                format!("holding ({p}, {q}, {s})"),
+                r.bell,
+                Some(t),
+                detail,
+            );
+        }
+    }
+}
+
+/// Each Holding a SETTLE founds is written with the SETTLE's owner,
+/// generation, score, cohort and `final_ts`.
+fn founded(cx: &mut Ctx) {
     let w = cx.w;
     let f = cx.f;
     for r in w.of(Kind::SETTLE) {

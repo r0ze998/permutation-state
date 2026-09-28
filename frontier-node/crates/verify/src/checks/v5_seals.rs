@@ -14,6 +14,11 @@
 //!   codes 1 and 3 are not separable off chain, integ-W4 review);
 //! - **a bad seal whose transit settled with another outcome is a FAIL**.
 //!
+//! A seal the verifier cannot open — no transaction carried a verified
+//! signature of `T(arrive)` — is `MissingData` wherever a verdict needs it:
+//! a Reveal, a settlement, an unsettled march whose arrival bell ended a
+//! bell before the archive does (W5-D, the integ-W4 review).
+//!
 //! Warnings (liveness, E5 gates them): a valid seal never revealed
 //! (`ValidSealUnrevealed`, with the signatures of failed Reveal attempts),
 //! a bad seal still unsettled at the end (`BadSealUnsettled`).
@@ -121,6 +126,17 @@ pub fn run(cx: &mut Ctx) {
                     continue;
                 }
                 let j = *judged.entry(d).or_insert_with(|| judge(cx, dr));
+                if j.is_none() {
+                    // W5-D (integ-W4 review): a seal that cannot be opened
+                    // is not a seal that was checked.
+                    cx.missing(
+                        V,
+                        what.clone(),
+                        b,
+                        Some(r.tx),
+                        "no verified signature of T(arrive): the revealed plaintext cannot be compared with the opened seal",
+                    );
+                }
                 if let Some(Judged {
                     code: 0,
                     plain: Some(p),
@@ -251,13 +267,29 @@ pub fn run(cx: &mut Ctx) {
         }
     }
     // Bad seals never settled (liveness; E5 criterion 1).
+    let last_time = w.txs.iter().map(|t| t.time).max().unwrap_or(0);
     let all: Vec<usize> = f.departs.values().flatten().copied().collect();
     for d in all {
         if settled.contains(&d) {
             continue;
         }
         let dr = &w.recs[d];
-        if let Some(Judged { code, .. }) = judge(cx, dr) {
+        let j = judge(cx, dr);
+        // W5-D: a march whose arrival bell ended a whole bell before the
+        // archive does, and whose T(arrive) no transaction carried, cannot
+        // be judged (a bad seal could hide there).
+        let arrive = dr.pu32("arrive_bell");
+        let ended = permutation_rules::frontier::beacon::bell_end(f.genesis_ts, arrive);
+        if j.is_none() && f.genesis_ts > 0 && ended + 600 <= last_time {
+            cx.missing(
+                V,
+                format!("host {}", dr.ku64("host_id")),
+                arrive,
+                Some(dr.tx),
+                "an unsettled march with no verified signature of T(arrive) in the archive",
+            );
+        }
+        if let Some(Judged { code, .. }) = j {
             if code > 0 {
                 cx.warn(
                     V,

@@ -2,16 +2,24 @@
 //! `report.json` and `report.md`. Exit 0 PASS, 1 FAIL, 2 cannot verify.
 //!
 //! ```text
-//! frontier-verify --fixture FILE [options]
-//! frontier-verify --program ID --season N --archive DIR (--finals FILE | --rpc URL) [options]
-//! frontier-verify --program ID --season N --rpc URL [--localnet] [options]
+//! frontier-verify [tamper] --fixture FILE [options]
+//! frontier-verify [tamper] --program ID --season N --archive DIR (--finals FILE | --rpc URL) [options]
+//! frontier-verify [tamper] --program ID --season N --rpc URL [--localnet] [options]
 //!
 //! options: --test-key | --quicknet-pk HEX   the pinned drand key (default: quicknet)
 //!          --ruleset HEX                    expected ruleset hash (default: this build's)
 //!          --program-hash HEX               expected .so sha256 (V2)
 //!          --out DIR                        report directory (default: verify-report)
-//!          --json                           print report.json instead of report.md
+//!          --json                           print the JSON report instead of the Markdown
+//!          --save FILE                      also write the input read as a fixture (.gz: gzip)
+//!          --jobs N                         tamper: classes judged at a time (default: cores, ≤ 8)
 //! ```
+//!
+//! `tamper` (W5-D) runs T1–T22 and the extra checks of the checks over the
+//! run instead ([`verify_core::tamper::run_suite`]) and writes `tamper.json`
+//! and `tamper.md`: exit 0 every required class FAILS with its code, 1 a
+//! class was missed, 2 the run itself does not PASS or a class could not
+//! be built on it.
 //!
 //! A fixture file carries its own configuration; the options override it
 //! (the tamper classes T10 and T11 are a wrong key and a wrong ruleset).
@@ -27,8 +35,12 @@ fn usage(msg: &str) -> ! {
         include_str!("main.rs")
             .lines()
             .skip(4)
-            .take(12)
-            .map(|l| l.trim_start_matches("//! "))
+            .take(11)
+            .map(|l| {
+                l.strip_prefix("//! ")
+                    .or_else(|| l.strip_prefix("//!"))
+                    .unwrap_or(l)
+            })
             .collect::<Vec<_>>()
             .join("\n")
     );
@@ -36,7 +48,16 @@ fn usage(msg: &str) -> ! {
 }
 
 fn main() {
-    let mut a = std::env::args().skip(1);
+    let mut a = std::env::args().skip(1).peekable();
+    let tamper = a.peek().is_some_and(|x| x == "tamper");
+    if tamper {
+        a.next();
+    }
+    let mut save: Option<PathBuf> = None;
+    let mut jobs: usize = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(8);
     let mut fixture: Option<PathBuf> = None;
     let mut archive: Option<PathBuf> = None;
     let mut finals: Option<PathBuf> = None;
@@ -68,6 +89,8 @@ fn main() {
             "--program-hash" => program_hash = Some(hex_arr(&val()).unwrap_or_else(|e| usage(&e))),
             "--out" => out = val().into(),
             "--json" => json = true,
+            "--save" => save = Some(val().into()),
+            "--jobs" => jobs = val().parse().unwrap_or_else(|_| usage("bad --jobs")),
             "-h" | "--help" => usage("help"),
             other => usage(&format!("unknown argument {other}")),
         }
@@ -170,6 +193,40 @@ fn main() {
     }
     if program_hash.is_some() {
         inp.cfg.program_hash = program_hash;
+    }
+    if let Some(p) = &save {
+        if let Err(e) = inp.save(p) {
+            eprintln!(
+                "frontier-verify: cannot save the input to {}: {e}",
+                p.display()
+            );
+            std::process::exit(verify_core::EXIT_UNVERIFIABLE);
+        }
+        eprintln!(
+            "frontier-verify: saved the input ({} transactions) to {}",
+            inp.txs.len(),
+            p.display()
+        );
+    }
+    if tamper {
+        let rep = verify_core::tamper::run_suite(&inp, jobs);
+        let j = serde_json::to_string_pretty(&rep.json()).unwrap_or_default();
+        if let Err(e) = std::fs::create_dir_all(&out)
+            .and_then(|_| std::fs::write(out.join("tamper.json"), &j))
+            .and_then(|_| std::fs::write(out.join("tamper.md"), rep.markdown()))
+        {
+            eprintln!(
+                "frontier-verify: cannot write the tamper report to {}: {e}",
+                out.display()
+            );
+            std::process::exit(verify_core::EXIT_UNVERIFIABLE);
+        }
+        if json {
+            println!("{j}");
+        } else {
+            print!("{}", rep.markdown());
+        }
+        std::process::exit(rep.exit_code());
     }
     let r = verify_core::verify(&inp);
     if let Err(e) = std::fs::create_dir_all(&out)
