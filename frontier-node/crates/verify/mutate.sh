@@ -20,6 +20,17 @@ profile="${MUTATE_PROFILE:---release}"
 checks="${MUTATE_CHECKS:-v1 v2 v3 v4 v5 v6 v7 v8 v9 v11 v12 v13}"
 log="$(mktemp -t verify-mutate.XXXXXX)"
 failed=""
+# `cargo test --features mutate-vN` also builds (and uplifts) the
+# frontier-verify binary with that check disabled: relink the default one
+# however this script ends (wave-5 review). A mutated binary refuses to
+# run anyway (exit 2) unless FRONTIER_VERIFY_ALLOW_MUTATED=1.
+relink() {
+  # shellcheck disable=SC2086
+  cargo build --locked $profile -p verify >/dev/null 2>&1 \
+    && echo "mutate: frontier-verify relinked without any mutate feature" \
+    || echo "mutate: WARNING: could not relink the default frontier-verify"
+}
+trap relink EXIT
 for c in $checks; do
   echo "== mutate-$c"
   # shellcheck disable=SC2086

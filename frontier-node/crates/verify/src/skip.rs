@@ -21,6 +21,16 @@
 //! The Province the transaction wrote must be the replay's (every byte but
 //! the event chain's header fields), and SKIP's `quiet_digest` is taken
 //! over it (v1.6 §22).
+//!
+//! **Independence (wave-5 review):** the settle and finish steps above are
+//! this file's own transcription, and `is_quiet` is the kernel's; the camp
+//! check (`camp_at`) and the terrain (`terrain_of`) go through
+//! `fclient::clash_model`, which since integ-W5 `8871e2a` (W4-A D8) is the
+//! program's own `frontier_abi::clash_model` — not an independent copy.
+//!
+//! Every function here refuses a Province shorter than the layout
+//! (`Err`), so a truncated post-state in an archive fails closed instead of
+//! panicking.
 
 use frontier_abi::entry::{find_entry, read_entry, write_entry, Entry, EntryOp};
 use frontier_abi::layout::province::{camp as CP, entry as E, province as PV, site as SM};
@@ -53,6 +63,13 @@ fn wr(d: &mut [u8], o: usize, b: &[u8]) -> Result<(), String> {
 /// The day's camp check of bell `b` written into the Province (the
 /// program's `camp_check` + `Camp::write`); `Some(spawned)` when it ran.
 pub fn camp_check(pd: &mut [u8], b: u32) -> Result<Option<bool>, String> {
+    if pd.len() < PV::SIZE {
+        return Err(format!(
+            "province: {} B, the layout has {}",
+            pd.len(),
+            PV::SIZE
+        ));
+    }
     let pv = fclient::decode::Province::decode(pd).map_err(|e| format!("province: {e:?}"))?;
     let terrain = fclient::clash_model::terrain_of(&pv)?;
     let c = fclient::clash_model::camp_at(&pv, pd, &terrain, b)?;
@@ -73,6 +90,13 @@ pub fn camp_check(pd: &mut [u8], b: u32) -> Result<Option<bool>, String> {
 
 /// The first bell whose settle changes something (`u32::MAX`: none).
 pub fn next_due(pd: &[u8]) -> Result<u32, String> {
+    if pd.len() < PV::SIZE {
+        return Err(format!(
+            "province: {} B, the layout has {}",
+            pd.len(),
+            PV::SIZE
+        ));
+    }
     let mut due = u32::MAX;
     for i in 0..PV::ENTRIES_N {
         let o = PV::entry(i);
@@ -172,6 +196,13 @@ fn settle_kernel(pd: &mut [u8], i: usize, rn: u32) -> Result<(), String> {
 
 /// Settles the pending changes of bell `b`; `true` when anything changed.
 pub fn settle_bell(pd: &mut [u8], b: u32) -> Result<bool, String> {
+    if pd.len() < PV::SIZE {
+        return Err(format!(
+            "province: {} B, the layout has {}",
+            pd.len(),
+            PV::SIZE
+        ));
+    }
     let rn = b.checked_add(1).ok_or("bell overflow")?;
     let mut changed = false;
     for i in 0..PV::ENTRIES_N {
@@ -243,6 +274,13 @@ pub fn settle_bell(pd: &mut [u8], b: u32) -> Result<bool, String> {
 /// Closes bell `b`: `resolved_next = b + 1`; a change bumps
 /// `roster_epoch` and recounts `n_entries`.
 pub fn finish_bell(pd: &mut [u8], b: u32, changed: bool) -> Result<(), String> {
+    if pd.len() < PV::SIZE {
+        return Err(format!(
+            "province: {} B, the layout has {}",
+            pd.len(),
+            PV::SIZE
+        ));
+    }
     wr(pd, PV::RESOLVED_NEXT, &(b + 1).to_le_bytes())?;
     if changed {
         let e = rd32(pd, PV::ROSTER_EPOCH)?.wrapping_add(1);

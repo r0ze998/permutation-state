@@ -219,6 +219,7 @@ fn cli_exit_codes() {
     let out = std::env::temp_dir().join(format!("verify-cli-{}", std::process::id()));
     let run = |args: &[&str]| {
         std::process::Command::new(bin)
+            .env(verify_core::ALLOW_MUTATED_ENV, "1")
             .args(args)
             .arg("--out")
             .arg(&out)

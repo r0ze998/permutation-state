@@ -421,3 +421,73 @@ pub fn wall_item(province: &[u8], site: usize, item: (u32, u32)) -> Option<Vec<u
     }
     None
 }
+
+// ------------------------------------------------------------ continuity (wave-5 review)
+
+/// The Holding bytes the owner's lazy accrual owns: `order`, `tier`,
+/// `flags`; `founded_ts`, `founded_day`; `last_owner_action` through
+/// `food_shortfall` (shield, stores, production, upkeep, queue, walls).
+/// Only SettleTicket's founding and the owner touches (Harvest, Build,
+/// Train, Explore, Muster, Dissolve, Garrison, Depart) write them; every
+/// other Holding write must leave them byte-identical.
+pub const ACCRUAL_RANGES: [(usize, usize); 3] = [
+    (H::ORDER, H::TICKET_BELL),
+    (H::FOUNDED_TS, H::HOST_SEQ),
+    (H::LAST_OWNER_ACTION, H::RESERVE),
+];
+
+/// The accrual bytes of a Holding account (`None` if too short).
+pub fn accrual_bytes(d: &[u8]) -> Option<Vec<u8>> {
+    let mut v = vec![];
+    for (a, b) in ACCRUAL_RANGES {
+        v.extend_from_slice(d.get(a..b)?);
+    }
+    Some(v)
+}
+
+/// First differing offset (in account bytes) of the accrual ranges.
+pub fn accrual_diff(a: &[u8], b: &[u8]) -> Option<usize> {
+    for (x, y) in ACCRUAL_RANGES {
+        for o in x..y {
+            if a.get(o) != b.get(o) {
+                return Some(o);
+            }
+        }
+    }
+    None
+}
+
+/// The Holding an owner touch at `now` leaves (no payment, no queue item):
+/// what Explore, Muster, Dissolve, Garrison and Depart write into the
+/// accrual (the program's `load_touched` + `write_holding`).
+pub fn touched(before: &[u8], now: i64) -> Result<Vec<u8>, String> {
+    let mut h = read(before)?;
+    touch(&mut h, now)?;
+    let mut d = before.to_vec();
+    write(&mut d, &h, now)?;
+    Ok(d)
+}
+
+/// The accrual SettleTicket writes into a founded Holding at `now` (day
+/// `day`): a Hamlet founded as first holding (`order` 1) with the Hamlet's
+/// base production, no food upkeep and the starter kit credited — an
+/// independent transcription of the program's `founded_holding`
+/// (`proc/citizen.rs`). The rest of `post` is kept.
+pub fn founded(post: &[u8], now: i64, day: u32) -> Result<Vec<u8>, String> {
+    let mut h = KHolding::found(now, day, 1);
+    h.production = catalog::base_production(Tier::Hamlet);
+    h.set_upkeep(now, Resource::Food, 0)
+        .map_err(|e| format!("set_upkeep: {e:?}"))?;
+    for (r, amount) in catalog::starter_kit().iter().enumerate() {
+        if *amount > 0 {
+            h.credit(now, Resource::ALL[r], *amount)
+                .map_err(|e| format!("credit: {e:?}"))?;
+        }
+    }
+    let mut d = post.to_vec();
+    for (a, b) in ACCRUAL_RANGES {
+        d.get_mut(a..b).ok_or("holding: short")?.fill(0);
+    }
+    write(&mut d, &h, now)?;
+    Ok(d)
+}

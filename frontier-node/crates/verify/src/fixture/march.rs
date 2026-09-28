@@ -763,6 +763,7 @@ impl St {
             .expect("room");
         write_entry(self.g.d(&pk), i, &e).expect("entry");
         let seq = self.cits[c].seq;
+        self.g.touch_holding(&hk);
         self.g.put(&hk, H::HOST_SEQ, &seq.to_le_bytes());
         let mut pl = vec![UNIT];
         pl.extend(troops.to_le_bytes());
@@ -851,6 +852,7 @@ impl St {
             })
             .expect("transit slot");
         let off = H::TRANSIT + ts as usize * T::SIZE;
+        self.g.touch_holding(&hk);
         {
             let g = &mut self.g;
             g.d(&hk)[off + T::STATE] = T::STATE_DEPARTED;
@@ -1720,6 +1722,7 @@ pub fn march() -> crate::Input {
             g.put(&hk, H::TICKET_BELL, &tb.to_le_bytes());
             g.put(&hk, H::RENT_PAYER, &relay.to_bytes());
             g.put(&hk, H::FINAL_TS, &final_ts.to_le_bytes());
+            g.found_holding(&hk);
             let o = PV::site(site as usize);
             g.d(&pk)[o + SM::STATE] = SM::STATE_HOLDING;
             g.d(&pk)[o + SM::FACTION] = s.cits[c].faction;
@@ -1842,6 +1845,7 @@ pub fn march() -> crate::Input {
     let eb = s.g.bell();
     {
         let g = &mut s.g;
+        g.touch_holding(&hk4);
         let e = H::EXPLORE;
         g.put(&hk4, e + X::BELL, &eb.to_le_bytes());
         g.put(&hk4, e + X::P, &i16b(cp));

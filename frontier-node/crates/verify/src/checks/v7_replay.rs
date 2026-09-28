@@ -419,6 +419,32 @@ fn clashes_and_skips(cx: &mut Ctx) {
                     );
                     continue;
                 };
+                if pv.len() != PV::SIZE {
+                    cx.fail(
+                        V,
+                        CLASH_REPLAY_MISMATCH,
+                        what,
+                        b0,
+                        Some(r.tx),
+                        format!(
+                            "the Province before the skip is {} B, the layout has {}",
+                            pv.len(),
+                            PV::SIZE
+                        ),
+                    );
+                    continue;
+                }
+                // Wave-5 review: with post-states, a SKIP whose Province
+                // has none cannot be checked (fail closed, not open).
+                if w.has_post && w.txs[r.tx].post_data(&f.ctx.province(p, q)).is_none() {
+                    cx.missing(
+                        V,
+                        what.clone(),
+                        b0,
+                        Some(r.tx),
+                        "no post-state of the Province the skip wrote",
+                    );
+                }
                 // v1.6 §22: SKIP's quiet digest over the Province it left.
                 if let Some(after) = w.txs[r.tx].post_data(&f.ctx.province(p, q)) {
                     if crate::clash_input::quiet_digest(after, b0, k as u8) != r.p32("quiet_digest")
@@ -627,6 +653,118 @@ fn transits(cx: &mut Ctx) {
 fn holdings(cx: &mut Ctx) {
     founded(cx);
     owner_actions(cx);
+    continuity(cx);
+}
+
+/// `(transaction, (P, Q, site), bell, detail)` of a continuity failure.
+type ContinuityFinding = (usize, (i32, i32, u8), u32, String);
+
+/// Holding continuity (wave-5 review of W5-D): every Holding write that is
+/// not a replayed owner action (Harvest, Build, Train: [`owner_actions`])
+/// must leave the lazy-accrual bytes ([`crate::holding::ACCRUAL_RANGES`])
+/// exactly as the rules allow — a founding SETTLE writes the founded
+/// Hamlet ([`crate::holding::founded`]); an owner touch (Explore, Muster,
+/// Dissolve, Garrison, Depart) writes the touch at its Clock
+/// ([`crate::holding::touched`]); every other write (SettleExplore,
+/// SettleTransit, SettleDeparture, GatherClash, SweepPoolOwed, …) leaves
+/// them byte-identical. With the owner actions replayed from the previous
+/// post-state, the Holding is carried forward from its founding through
+/// every write (`HoldingReplayMismatch`).
+fn continuity(cx: &mut Ctx) {
+    use crate::holding as hr;
+    use frontier_abi::tags::Ix;
+    let w = cx.w;
+    let f = cx.f;
+    if !w.has_post {
+        return;
+    }
+    let owner = [Ix::Harvest.tag(), Ix::Build.tag(), Ix::Train.tag()];
+    let touch = [
+        Ix::Explore.tag(),
+        Ix::Muster.tag(),
+        Ix::Dissolve.tag(),
+        Ix::Garrison.tag(),
+        Ix::Depart.tag(),
+    ];
+    let mut bad: Vec<ContinuityFinding> = vec![];
+    for (t, tx) in w.txs.iter().enumerate() {
+        if !tx.ok {
+            continue;
+        }
+        for (k, a) in &tx.post {
+            let Some(a) = a else { continue };
+            let post = &a.data;
+            if post.len() != H::SIZE || post[..8] != H::MAGIC {
+                continue;
+            }
+            let writes = |tags: &[u8]| {
+                tx.ixs
+                    .iter()
+                    .any(|i| i.tag().is_some_and(|x| tags.contains(&x)) && i.writes(k))
+            };
+            if writes(&owner) {
+                continue;
+            }
+            let pqs = (
+                le(&post[H::P..H::P + 2]) as u16 as i16 as i32,
+                le(&post[H::Q..H::Q + 2]) as u16 as i16 as i32,
+                post[H::SITE],
+            );
+            let bell = frontier_abi::prologue::bell_at(f.genesis_ts, tx.time).unwrap_or(0);
+            let founding = tx.recs.iter().any(|&n| {
+                let r = &w.recs[n];
+                r.kind == Kind::SETTLE
+                    && r.pqs() == pqs
+                    && matches!(
+                        r.pu8("outcome"),
+                        settle_outcome::FRESH | settle_outcome::DISPLACE
+                    )
+            });
+            let (what, want) = if founding {
+                (
+                    "the founding SETTLE",
+                    hr::founded(post, tx.time, frontier_abi::addr::day_of(bell)),
+                )
+            } else {
+                let Some(before) = w.state_before(k, t) else {
+                    continue;
+                };
+                if before.len() != H::SIZE || before[..8] != H::MAGIC {
+                    continue;
+                }
+                if writes(&touch) {
+                    ("an owner touch", hr::touched(before, tx.time))
+                } else {
+                    ("a write that is not an owner action", Ok(before.to_vec()))
+                }
+            };
+            match want {
+                Ok(d) => {
+                    if let Some(o) = hr::accrual_diff(post, &d) {
+                        bad.push((
+                            t,
+                            pqs,
+                            bell,
+                            format!(
+                                "{what} left the Holding's accrual state other than the rules do (first at byte {o})"
+                            ),
+                        ));
+                    }
+                }
+                Err(e) => bad.push((t, pqs, bell, format!("{what}: the kernel refuses: {e}"))),
+            }
+        }
+    }
+    for (t, (p, q, s), bell, detail) in bad {
+        cx.fail(
+            V,
+            HOLDING_REPLAY_MISMATCH,
+            format!("holding ({p}, {q}, {s})"),
+            bell,
+            Some(t),
+            detail,
+        );
+    }
 }
 
 /// Every Harvest, Build and Train replayed from the Holding the last
@@ -635,8 +773,9 @@ fn holdings(cx: &mut Ctx) {
 /// record's payload (HARVEST's stores digest, BUILD's item, cost digest
 /// and completion, TRAIN's unit, count and time) and a walls Build's item
 /// in the site mirror must be the replay's. A transaction in which another
-/// program instruction also writes the Holding is not replayed (counted in
-/// the detail of no finding; none in M1's clients).
+/// program instruction also *writes* the Holding (a declared writable
+/// position, not a read) is not replayed and reported `MissingData` (none
+/// in M1's clients; wave-5 review: no silent skip).
 fn owner_actions(cx: &mut Ctx) {
     use crate::holding::{self as hr, Action};
     use frontier_abi::ix as aix;
@@ -697,6 +836,7 @@ fn owner_actions(cx: &mut Ctx) {
         let mut hstate: BTreeMap<[u8; 32], Vec<u8>> = BTreeMap::new();
         let mut pstate: BTreeMap<[u8; 32], (Vec<u8>, usize)> = BTreeMap::new();
         let mut skip: std::collections::BTreeSet<[u8; 32]> = Default::default();
+        let mut not_replayed: Vec<(usize, (i32, i32, u8))> = vec![];
         let mut bad: Vec<(usize, String)> = vec![];
         for (&n, ix) in recs.iter().zip(&ixs) {
             let r = &w.recs[n];
@@ -709,12 +849,15 @@ fn owner_actions(cx: &mut Ctx) {
                 ));
                 continue;
             }
-            // Another program instruction of the transaction writes it.
-            if tx.ixs.iter().any(|i| {
-                !i.tag().is_some_and(|x| tags.contains(&x))
-                    && i.accounts.iter().any(|(k, wr)| *wr && *k == hk)
-            }) {
+            // Another program instruction of the transaction writes it
+            // (declared writable there, not only listed: wave-5 review).
+            if tx
+                .ixs
+                .iter()
+                .any(|i| !i.tag().is_some_and(|x| tags.contains(&x)) && i.writes(&hk))
+            {
                 skip.insert(hk);
+                not_replayed.push((n, (p, q, site)));
                 continue;
             }
             let action = match ix.tag() {
@@ -840,6 +983,15 @@ fn owner_actions(cx: &mut Ctx) {
                     "the walls item in the site mirror differs from the replay".into(),
                 ));
             }
+        }
+        for (n, (p, q, s)) in not_replayed {
+            cx.missing(
+                V,
+                format!("holding ({p}, {q}, {s})"),
+                w.recs[n].bell,
+                Some(t),
+                "another instruction of the transaction also writes the Holding: the owner action is not replayed",
+            );
         }
         for (n, detail) in bad {
             let r = &w.recs[n];

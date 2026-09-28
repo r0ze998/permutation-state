@@ -42,11 +42,17 @@ pub fn json(r: &Report) -> Value {
         },
         "checks_run": r.checks_run,
         "provenance": r.provenance,
+        "mutated_build": crate::mutated(),
     })
 }
 
 pub fn markdown(r: &Report) -> String {
     let mut s = String::new();
+    if let Some(m) = crate::mutated() {
+        s.push_str(&format!(
+            "> **MUTATED BUILD ({m}): a check is disabled; this is not a verification.**\n\n"
+        ));
+    }
     s.push_str(&format!(
         "# Frontier verifier report: **{}**\n\n",
         r.verdict.name()

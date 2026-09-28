@@ -60,7 +60,12 @@ pub trait Need<T> {
 
 impl<T> Need<T> for Option<T> {
     fn need(self, what: &str) -> Result<T, String> {
-        self.ok_or_else(|| format!("the run has no {what}"))
+        // "the run has no Reveal …", never "no a Reveal …" (wave-5 review).
+        let w = what
+            .strip_prefix("a ")
+            .or_else(|| what.strip_prefix("an "))
+            .unwrap_or(what);
+        self.ok_or_else(|| format!("the run has no {w}"))
     }
 }
 
@@ -1320,6 +1325,125 @@ pub fn t13_moved(run: &Input) -> Made {
     })
 }
 
+/// T13's last resort (wave-5 review): on a run where every Reveal's later
+/// transactions touch what it wrote (the shared ArrivalDay of a busy
+/// bell), one Reveal with an anchor is moved to just before the first
+/// transaction at or after its close, with that Clock, whatever lies in
+/// between. The forgery is not consistent (other checks may see the move
+/// too), so it is judged by its code only: `RevealAfterClose` must be
+/// among the FAIL codes, and with V4 disabled (`mutate-v4`) that code must
+/// be gone (the codes-only rule of T10 on the program recording).
+pub fn t13_forced(run: &Input) -> Made {
+    let mut inp = run.clone();
+    let (w, f) = world(&inp);
+    let mut pick_ = None;
+    for (t, i) in find(&inp, Kind::REVEAL).into_iter().rev() {
+        let r = &w.recs[rec_at(&w, t, i)];
+        let (p, q) = r.pq();
+        let arrive = r.ku32("arrive");
+        let Some(a) = f.anchor(arrive, Facts::region(p, q)) else {
+            continue;
+        };
+        let ta = w.recs[a.rec].tx;
+        let close = f.close(arrive, a.a);
+        let from = ta.max(t) + 1;
+        if let Some(j) = (from..w.txs.len()).find(|&j| w.txs[j].time >= close) {
+            pick_ = Some((t, j));
+            break;
+        }
+    }
+    let (t, j) = pick_.need("Reveal with an anchor and a transaction after its close")?;
+    let mut tx = inp.txs.remove(t);
+    let at = j - 1;
+    tx.block_time = inp.txs[at].block_time;
+    tx.slot = inp.txs[at].slot;
+    inp.txs.insert(at, tx);
+    Ok(Case {
+        class: "T13",
+        what: "move a Reveal past A + W (forced; judged by code only)",
+        feature: Some("mutate-v4"),
+        codes: &[REVEAL_AFTER_CLOSE],
+        input: inp,
+    })
+}
+
+/// H1b (wave-5 review): the Holding forged at a transaction that is **not**
+/// an owner action — +1 food (1,000 milli) in the store from a write by
+/// SettleExplore, SettleTransit, SettleDeparture, a founding SETTLE or any
+/// other non-owner instruction onward (every later state of the Holding),
+/// every later HARVEST digest recomputed, re-chained. The owner-action
+/// replays start from the forged state and agree; only the continuity
+/// check of V7 sees it.
+pub fn h1b(run: &Input) -> Made {
+    let mut inp = run.clone();
+    let (w, f) = world(&inp);
+    let owner = [Ix::Harvest.tag(), Ix::Build.tag(), Ix::Train.tag()];
+    let harvests: Vec<(usize, (i32, i32, u8))> =
+        w.of(Kind::HARVEST).map(|r| (r.tx, r.pqs())).collect();
+    let mut chosen = None;
+    'outer: for (t, tx) in w.txs.iter().enumerate() {
+        if !tx.ok {
+            continue;
+        }
+        for (k, a) in &tx.post {
+            let Some(a) = a else { continue };
+            if a.data.len() != H::SIZE || a.data[..8] != H::MAGIC {
+                continue;
+            }
+            if tx
+                .ixs
+                .iter()
+                .any(|i| i.tag().is_some_and(|x| owner.contains(&x)) && i.writes(k))
+            {
+                continue;
+            }
+            let pqs = (
+                le(&a.data[H::P..H::P + 2]) as u16 as i16 as i32,
+                le(&a.data[H::Q..H::Q + 2]) as u16 as i16 as i32,
+                a.data[H::SITE],
+            );
+            // A later Harvest of it, so the forger's digests matter.
+            if harvests.iter().any(|(ht, x)| *ht > t && *x == pqs) {
+                chosen = Some((t, *k, pqs));
+                break 'outer;
+            }
+        }
+    }
+    let (t, hk, (p, q, s)) = chosen.need("non-owner Holding write followed by a Harvest")?;
+    let o = H::store(0) + frontier_abi::layout::player::accrual::VALUE;
+    edit_account_from(&mut inp, &hk, t, |d| {
+        let v = le(&d[o..o + 8]) as i64 + 1_000;
+        d[o..o + 8].copy_from_slice(&v.to_le_bytes());
+    });
+    let (w2, _) = world(&inp);
+    let (od, _) = field(Kind::HARVEST, "stores_digest");
+    for (t3, i3) in find(&inp, Kind::HARVEST) {
+        if t3 < t {
+            continue;
+        }
+        let r3 = &w2.recs[rec_at(&w2, t3, i3)];
+        if r3.pqs() != (p, q, s) {
+            continue;
+        }
+        let Some(after) = w2.txs[t3].post_data(&hk) else {
+            continue;
+        };
+        let Ok(dg) = crate::holding::stores_digest(after) else {
+            continue;
+        };
+        edit_payload(&mut inp, t3, i3, |pl| pl[od..od + 32].copy_from_slice(&dg));
+    }
+    let _ = f;
+    rechain(&mut inp);
+    Ok(Case {
+        class: "H1b",
+        what: "the Holding forged at a non-owner write (later digests recomputed)",
+        feature: Some("mutate-v7"),
+        codes: &[HOLDING_REPLAY_MISMATCH],
+        input: inp,
+    })
+}
+
 /// T20 on a run without a defence claim: a ClaimDefence transaction is
 /// **injected** at the end — a keeper's claim of no eligible slot with an
 /// amount above the formula's (0). DEFENCE_CLAIM is not chained, so only
@@ -1566,6 +1690,7 @@ pub fn classes() -> Vec<Class> {
             vec![
                 ("Reveal Clock past A + W", t13),
                 ("Reveal moved past A + W", t13_moved),
+                ("Reveal forced past A + W", t13_forced),
             ],
         ),
         c(
@@ -1593,6 +1718,11 @@ pub fn classes() -> Vec<Class> {
         c("T23", false, vec![("forged clash write-back", t23)]),
         c("T23b", false, vec![("forged skip write-back", t23b)]),
         c("H1", false, vec![("forged Harvest", h1)]),
+        c(
+            "H1b",
+            false,
+            vec![("Holding forged at a non-owner write", h1b)],
+        ),
         c("V9a", false, vec![("non-canonical address", v9a)]),
     ]
 }
@@ -1606,12 +1736,18 @@ pub enum Status {
     Missed,
     /// No builder could tamper with this run (the reasons are listed).
     NotApplicable,
+    /// A builder or the verifier panicked on this run (wave-5 review: a
+    /// bug, never folded into "not applicable"; counts as a failure).
+    Panicked,
 }
 
 #[derive(Clone, Debug)]
 pub struct Outcome {
     pub class: &'static str,
     pub required: bool,
+    /// Where the class was judged: `run`, or `fixture <name>` when the run
+    /// could not express it ([`run_suite_with_fixtures`]).
+    pub on: String,
     pub variant: &'static str,
     pub what: String,
     pub feature: Option<&'static str>,
@@ -1632,6 +1768,15 @@ pub struct SuiteReport {
 }
 
 impl SuiteReport {
+    /// Classes judged on the run itself.
+    pub fn on_run(&self) -> usize {
+        self.outcomes.iter().filter(|o| o.on == "run").count()
+    }
+    /// Classes judged on a committed fixture because the run could not
+    /// express them (labelled; `--strict` refuses any).
+    pub fn fallbacks(&self) -> Vec<&Outcome> {
+        self.outcomes.iter().filter(|o| o.on != "run").collect()
+    }
     /// Every required class detected on a base run that PASSES.
     pub fn all_detected(&self) -> bool {
         self.base == crate::Verdict::Pass
@@ -1649,7 +1794,20 @@ impl SuiteReport {
         if self.base != crate::Verdict::Pass {
             return crate::EXIT_UNVERIFIABLE;
         }
-        if req.clone().any(|o| o.status == Status::Missed) {
+        if req
+            .clone()
+            .any(|o| matches!(o.status, Status::Missed | Status::Panicked))
+        {
+            return crate::EXIT_FAIL;
+        }
+        // Wave-5 review: an extra class (T1b, T6b, T23, T23b, H1, H1b, V9a:
+        // the only checks of some checks) missed or panicking also fails;
+        // one the run cannot express does not.
+        if self
+            .outcomes
+            .iter()
+            .any(|o| !o.required && matches!(o.status, Status::Missed | Status::Panicked))
+        {
             return crate::EXIT_FAIL;
         }
         if req.clone().any(|o| o.status == Status::NotApplicable) {
@@ -1657,20 +1815,32 @@ impl SuiteReport {
         }
         crate::EXIT_PASS
     }
+    /// [`Self::exit_code`], but a class judged on a fixture instead of the
+    /// run makes it 2 (`--strict`: the run itself must express every
+    /// class).
+    pub fn exit_code_strict(&self) -> i32 {
+        match self.exit_code() {
+            crate::EXIT_PASS if !self.fallbacks().is_empty() => crate::EXIT_UNVERIFIABLE,
+            x => x,
+        }
+    }
     pub fn json(&self) -> serde_json::Value {
         use serde_json::json;
         json!({
             "base": self.base.name(),
             "base_fail_codes": self.base_fail_codes,
             "all_required_detected": self.all_detected(),
+            "on_run": self.on_run(),
+            "on_fixture": self.fallbacks().len(),
             "classes": self.outcomes.iter().map(|o| json!({
                 "class": o.class,
                 "required": o.required,
+                "on": o.on,
                 "variant": o.variant,
                 "what": o.what,
                 "feature": o.feature,
                 "expected": o.expected,
-                "status": match o.status { Status::Detected => "detected", Status::Missed => "missed", Status::NotApplicable => "not-applicable" },
+                "status": match o.status { Status::Detected => "detected", Status::Missed => "missed", Status::NotApplicable => "not-applicable", Status::Panicked => "panicked" },
                 "verdict": o.verdict.map(|v| v.name()),
                 "fail_codes": o.fail_codes,
                 "detail": o.detail,
@@ -1679,7 +1849,7 @@ impl SuiteReport {
     }
     pub fn markdown(&self) -> String {
         let mut s = format!(
-            "# Tamper suite\n\nBase run: **{}**{}. Required classes detected: **{}**.\n\n| class | variant | expected | status | FAIL codes |\n|---|---|---|---|---|\n",
+            "# Tamper suite\n\nBase run: **{}**{}. Required classes detected: **{}**.\n\n| class | on | variant | expected | status | FAIL codes |\n|---|---|---|---|---|---|\n",
             self.base.name(),
             if self.base_fail_codes.is_empty() {
                 String::new()
@@ -1690,19 +1860,26 @@ impl SuiteReport {
         );
         for o in &self.outcomes {
             s.push_str(&format!(
-                "| {}{} | {} | {} | {} | {} |\n",
+                "| {}{} | {} | {} | {} | {} | {} |\n",
                 o.class,
                 if o.required { "" } else { " (extra)" },
+                o.on,
                 o.variant,
                 o.expected.join("/"),
                 match o.status {
                     Status::Detected => "detected".to_string(),
                     Status::Missed => format!("**missed** ({})", o.detail),
                     Status::NotApplicable => format!("**not applicable** ({})", o.detail),
+                    Status::Panicked => format!("**PANICKED** ({})", o.detail),
                 },
                 o.fail_codes.join(", ")
             ));
         }
+        s.push_str(&format!(
+            "\n{} classes judged on the run, {} on a committed fixture (the run could not express them).\n",
+            self.on_run(),
+            self.fallbacks().len()
+        ));
         s
     }
 }
@@ -1719,10 +1896,32 @@ fn fail_codes(r: &crate::Report) -> Vec<String> {
     v
 }
 
-/// Builds and judges one class (a builder that panics counts as not
-/// applicable, with its message).
+fn panic_message(p: &(dyn std::any::Any + Send)) -> String {
+    p.downcast_ref::<String>()
+        .cloned()
+        .or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_default()
+}
+
+/// Builds and judges one class. A builder that returns `Err` (the run has
+/// nothing it could tamper with) moves on to the next builder; a builder
+/// or a verification that **panics** is [`Status::Panicked`] (wave-5
+/// review: a bug on this run's shape, never "not applicable").
 pub fn judge_class(c: &Class, run: &Input) -> Outcome {
     let mut why = vec![];
+    let blank = |status: Status, detail: String| Outcome {
+        class: c.class,
+        required: c.required,
+        on: "run".into(),
+        variant: "",
+        what: String::new(),
+        feature: None,
+        expected: vec![],
+        status,
+        verdict: None,
+        fail_codes: vec![],
+        detail,
+    };
     for (variant, b) in &c.tries {
         let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| b(run)));
         let case = match made {
@@ -1732,20 +1931,40 @@ pub fn judge_class(c: &Class, run: &Input) -> Outcome {
                 continue;
             }
             Err(p) => {
-                let m = p
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string()))
-                    .unwrap_or_default();
-                why.push(format!("{variant}: builder panicked: {m}"));
-                continue;
+                return Outcome {
+                    variant,
+                    ..blank(
+                        Status::Panicked,
+                        format!("builder panicked: {}", panic_message(&*p)),
+                    )
+                };
             }
         };
-        let r = crate::verify(&case.input);
+        let r = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::verify(&case.input)
+        })) {
+            Ok(r) => r,
+            Err(p) => {
+                return Outcome {
+                    variant,
+                    what: case.what.to_string(),
+                    feature: case.feature,
+                    expected: case.codes.to_vec(),
+                    ..blank(
+                        Status::Panicked,
+                        format!(
+                            "the verifier panicked on the tampered run: {}",
+                            panic_message(&*p)
+                        ),
+                    )
+                };
+            }
+        };
         let hit = case.codes.iter().any(|x| r.fails_with(x));
         return Outcome {
             class: c.class,
             required: c.required,
+            on: "run".into(),
             variant,
             what: case.what.to_string(),
             feature: case.feature,
@@ -1764,18 +1983,7 @@ pub fn judge_class(c: &Class, run: &Input) -> Outcome {
             },
         };
     }
-    Outcome {
-        class: c.class,
-        required: c.required,
-        variant: "",
-        what: String::new(),
-        feature: None,
-        expected: vec![],
-        status: Status::NotApplicable,
-        verdict: None,
-        fail_codes: vec![],
-        detail: why.join("; "),
-    }
+    blank(Status::NotApplicable, why.join("; "))
 }
 
 /// The whole suite over one run, `jobs` classes at a time (each class
@@ -1806,6 +2014,70 @@ pub fn run_suite(run: &Input, jobs: usize) -> SuiteReport {
     }
 }
 
+/// The suite over `run`, and — for each class the run cannot express
+/// (not applicable there) — the same class on the first committed fixture
+/// that can, labelled `fixture <name>` (wave-5 review: the stack's and the
+/// CLI's fallback, one implementation). A class that panics is never
+/// moved to a fixture.
+pub fn run_suite_with_fixtures(
+    run: &Input,
+    fixtures: &[(&str, Input)],
+    jobs: usize,
+) -> SuiteReport {
+    let mut rep = run_suite(run, jobs);
+    let cs = classes();
+    for o in rep.outcomes.iter_mut() {
+        if o.status != Status::NotApplicable {
+            continue;
+        }
+        let Some(c) = cs.iter().find(|c| c.class == o.class) else {
+            continue;
+        };
+        for (name, fx) in fixtures {
+            let mut o2 = judge_class(c, fx);
+            if o2.status == Status::NotApplicable {
+                continue;
+            }
+            o2.on = format!("fixture {name}");
+            let why = std::mem::take(&mut o2.detail);
+            o2.detail = format!(
+                "not applicable on the run ({}); judged on the {name} fixture{}",
+                o.detail,
+                if why.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {why}")
+                }
+            );
+            *o = o2;
+            break;
+        }
+    }
+    rep
+}
+
+/// The committed fixtures a fallback may use, from `dir`
+/// (`frontier-node/fixtures/verify`): the synthetic march season, the
+/// program's march recordings and the land recording, in that order.
+pub fn committed_fixtures(dir: &std::path::Path) -> Result<Vec<(&'static str, Input)>, String> {
+    let mut v = vec![];
+    for (name, file) in [
+        ("march-synth", "march-synth.json"),
+        ("march-program", "march-program.json.gz"),
+        ("march-program-dc1281c3", "march-program-dc1281c3.json.gz"),
+        ("land-program", "land-program.json"),
+    ] {
+        let p = dir.join(file);
+        if p.exists() {
+            v.push((name, Input::load(&p)?));
+        }
+    }
+    if v.is_empty() {
+        return Err(format!("no committed fixture in {}", dir.display()));
+    }
+    Ok(v)
+}
+
 /// Every class over the recorded fixtures (`program`: the march season
 /// recorded from the merged program, integ-W4 review).
 pub fn all(land: &Input, march: &Input, program: &Input) -> Vec<Case> {
@@ -1821,6 +2093,7 @@ pub fn all(land: &Input, march: &Input, program: &Input) -> Vec<Case> {
         (program, t23),
         (program, t23b),
         (program, h1),
+        (program, h1b),
         (march, t07),
         (march, t08),
         (march, t09),

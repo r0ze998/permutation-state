@@ -47,6 +47,34 @@ use serde_json::Value;
 
 pub use input::{Config, Input};
 
+/// The `mutate-*` feature this build was compiled with, if any (wave-5
+/// review of W5-D): such a build has a check disabled and is **not a
+/// verifier**. Its report says so, and `frontier-verify` refuses to run
+/// (exit 2) unless [`ALLOW_MUTATED_ENV`] is `1` (the checks of the checks
+/// set it).
+pub fn mutated() -> Option<&'static str> {
+    macro_rules! m {
+        ($($f:literal),*) => {{ $( if cfg!(feature = $f) { return Some($f); } )* None }};
+    }
+    m!(
+        "mutate-v1",
+        "mutate-v2",
+        "mutate-v3",
+        "mutate-v4",
+        "mutate-v5",
+        "mutate-v6",
+        "mutate-v7",
+        "mutate-v8",
+        "mutate-v9",
+        "mutate-v11",
+        "mutate-v12",
+        "mutate-v13"
+    )
+}
+
+/// Set to `1` to let a `mutate-*` build of `frontier-verify` run.
+pub const ALLOW_MUTATED_ENV: &str = "FRONTIER_VERIFY_ALLOW_MUTATED";
+
 /// Exit codes: 0 PASS, 1 FAIL, 2 cannot verify.
 pub const EXIT_PASS: i32 = 0;
 pub const EXIT_FAIL: i32 = 1;

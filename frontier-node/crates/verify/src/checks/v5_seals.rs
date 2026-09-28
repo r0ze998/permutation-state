@@ -70,6 +70,7 @@ pub fn run(cx: &mut Ctx) {
     let mut judged: HashMap<usize, Option<Judged>> = HashMap::new();
     let mut revealed: HashSet<usize> = HashSet::new();
     let mut settled: HashSet<usize> = HashSet::new();
+    let last_time = w.txs.iter().map(|t| t.time).max().unwrap_or(0);
     for (n, r) in w.recs.iter().enumerate() {
         match r.kind {
             Kind::DEPART => {
@@ -126,7 +127,22 @@ pub fn run(cx: &mut Ctx) {
                     continue;
                 }
                 let j = *judged.entry(d).or_insert_with(|| judge(cx, dr));
-                if j.is_none() {
+                // Wave-5 review: the same end-of-archive grace as the
+                // unsettled-march path — T(arrive) is signed only once the
+                // arrival bell's round is out, so a run cut inside that
+                // grace is honest, not unverifiable.
+                let arrive_end = permutation_rules::frontier::beacon::bell_end(f.genesis_ts, b);
+                let in_grace = f.genesis_ts > 0 && arrive_end + 600 > last_time;
+                if j.is_none() && in_grace {
+                    cx.warn(
+                        V,
+                        MISSING_DATA,
+                        what.clone(),
+                        b,
+                        Some(r.tx),
+                        "T(arrive) not yet in the archive (the run ends inside the arrival bell's grace): the plaintext is not compared",
+                    );
+                } else if j.is_none() {
                     // W5-D (integ-W4 review): a seal that cannot be opened
                     // is not a seal that was checked.
                     cx.missing(
@@ -267,7 +283,6 @@ pub fn run(cx: &mut Ctx) {
         }
     }
     // Bad seals never settled (liveness; E5 criterion 1).
-    let last_time = w.txs.iter().map(|t| t.time).max().unwrap_or(0);
     let all: Vec<usize> = f.departs.values().flatten().copied().collect();
     for d in all {
         if settled.contains(&d) {

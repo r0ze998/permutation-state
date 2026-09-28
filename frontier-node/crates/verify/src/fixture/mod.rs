@@ -314,6 +314,26 @@ impl Gen {
         self.txs.len() - 1
     }
 
+    /// The owner touch on Holding `hk` at the Clock of the next transaction
+    /// (`record` moves the Clock one second): what Muster, Depart, Explore
+    /// … write into the accrual (wave-5 review: the verifier's continuity
+    /// check holds the fixture to it).
+    pub fn touch_holding(&mut self, hk: &Key) {
+        let t = crate::holding::touched(self.get(hk), self.time + 1).expect("owner touch");
+        self.d(hk).copy_from_slice(&t);
+    }
+
+    /// The founded Hamlet SettleTicket writes, at the Clock of the next
+    /// transaction.
+    pub fn found_holding(&mut self, hk: &Key) {
+        let now = self.time + 1;
+        let day = frontier_abi::addr::day_of(
+            beacon::bell_at(self.genesis_ts, now).unwrap_or(plog::NO_BELL),
+        );
+        let t = crate::holding::founded(self.get(hk), now, day).expect("founding");
+        self.d(hk).copy_from_slice(&t);
+    }
+
     /// A landed transaction with its records.
     pub fn send(
         &mut self,

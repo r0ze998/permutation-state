@@ -34,6 +34,33 @@ impl Ix {
     pub fn key(&self, i: usize) -> Option<Key> {
         self.accounts.get(i).map(|a| a.0)
     }
+    /// Whether this instruction may write `k`: a position holding `k` that
+    /// the instruction declares writable (`frontier_abi::prologue`, `W` or
+    /// `Either`) and the message marks writable. Falls back to the message
+    /// flag alone when the positions cannot be resolved (wave-5 review:
+    /// a read-only reference is not a write).
+    pub fn writes(&self, k: &Key) -> bool {
+        use frontier_abi::prologue::{counts_from_len, resolve, Spec, Wr};
+        let msg = |i: usize| self.accounts.get(i).is_some_and(|(x, w)| x == k && *w);
+        let Some(ix) = self.tag().and_then(frontier_abi::tags::Ix::from_tag) else {
+            return (0..self.accounts.len()).any(msg);
+        };
+        let mut counts = [0u8; 16];
+        let mut specs = [Spec {
+            name: "",
+            acc: frontier_abi::prologue::Acc::Any,
+            signer: false,
+            wr: Wr::R,
+        }; 96];
+        let resolved = counts_from_len(ix, self.accounts.len(), &mut counts)
+            .and_then(|g| resolve(ix, &counts[..g], &mut specs));
+        match resolved {
+            Some(n) if n == self.accounts.len() => {
+                (0..n).any(|i| msg(i) && !matches!(specs[i].wr, Wr::R))
+            }
+            _ => (0..self.accounts.len()).any(msg),
+        }
+    }
 }
 
 /// A decoded record, owned.

@@ -44,6 +44,14 @@ pub fn march_program() -> Input {
     fixture("march-program.json.gz")
 }
 
+/// A second, independent program recording (wave-5 review of W5-D): the
+/// `inproc_day` W5-D recorded from the wave-base test-beacon `.so`
+/// (`dc1281c3…`), kept when the fixtures were regenerated at the integ
+/// head. The suite must build and detect every class on it too.
+pub fn march_program_dc1281c3() -> Input {
+    fixture("march-program-dc1281c3.json.gz")
+}
+
 #[derive(Clone)]
 pub struct Gated {
     pub key: Arc<TestKey>,

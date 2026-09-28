@@ -13,6 +13,9 @@
 //!          --json                           print the JSON report instead of the Markdown
 //!          --save FILE                      also write the input read as a fixture (.gz: gzip)
 //!          --jobs N                         tamper: classes judged at a time (default: cores, ≤ 8)
+//!          --fallback-fixtures DIR          tamper: judge a class the run cannot express on the
+//!                                           committed fixtures in DIR instead (labelled)
+//!          --strict                         tamper: any such fallback exits 2
 //! ```
 //!
 //! `tamper` (W5-D) runs T1–T22 and the extra checks of the checks over the
@@ -35,7 +38,7 @@ fn usage(msg: &str) -> ! {
         include_str!("main.rs")
             .lines()
             .skip(4)
-            .take(11)
+            .take(14)
             .map(|l| {
                 l.strip_prefix("//! ")
                     .or_else(|| l.strip_prefix("//!"))
@@ -48,6 +51,18 @@ fn usage(msg: &str) -> ! {
 }
 
 fn main() {
+    // A `mutate-*` build has a check disabled (the checks of the checks):
+    // it never passes for the verifier (wave-5 review of W5-D).
+    if let Some(m) = verify_core::mutated() {
+        eprintln!("frontier-verify: MUTATED BUILD ({m}): a check is disabled; this binary is not a verifier");
+        if std::env::var(verify_core::ALLOW_MUTATED_ENV).as_deref() != Ok("1") {
+            eprintln!(
+                "frontier-verify: refusing to run (rebuild without --features {m}, or set {}=1 for the checks of the checks)",
+                verify_core::ALLOW_MUTATED_ENV
+            );
+            std::process::exit(verify_core::EXIT_UNVERIFIABLE);
+        }
+    }
     let mut a = std::env::args().skip(1).peekable();
     let tamper = a.peek().is_some_and(|x| x == "tamper");
     if tamper {
@@ -70,6 +85,8 @@ fn main() {
     let mut program_hash: Option<[u8; 32]> = None;
     let mut out = PathBuf::from("verify-report");
     let mut json = false;
+    let mut fallback: Option<PathBuf> = None;
+    let mut strict = false;
     while let Some(x) = a.next() {
         let mut val = || {
             a.next()
@@ -91,6 +108,8 @@ fn main() {
             "--json" => json = true,
             "--save" => save = Some(val().into()),
             "--jobs" => jobs = val().parse().unwrap_or_else(|_| usage("bad --jobs")),
+            "--fallback-fixtures" => fallback = Some(val().into()),
+            "--strict" => strict = true,
             "-h" | "--help" => usage("help"),
             other => usage(&format!("unknown argument {other}")),
         }
@@ -209,7 +228,13 @@ fn main() {
         );
     }
     if tamper {
-        let rep = verify_core::tamper::run_suite(&inp, jobs);
+        let rep = match &fallback {
+            Some(dir) => {
+                let fx = verify_core::tamper::committed_fixtures(dir).unwrap_or_else(|e| usage(&e));
+                verify_core::tamper::run_suite_with_fixtures(&inp, &fx, jobs)
+            }
+            None => verify_core::tamper::run_suite(&inp, jobs),
+        };
         let j = serde_json::to_string_pretty(&rep.json()).unwrap_or_default();
         if let Err(e) = std::fs::create_dir_all(&out)
             .and_then(|_| std::fs::write(out.join("tamper.json"), &j))
@@ -226,7 +251,11 @@ fn main() {
         } else {
             print!("{}", rep.markdown());
         }
-        std::process::exit(rep.exit_code());
+        std::process::exit(if strict {
+            rep.exit_code_strict()
+        } else {
+            rep.exit_code()
+        });
     }
     let r = verify_core::verify(&inp);
     if let Err(e) = std::fs::create_dir_all(&out)

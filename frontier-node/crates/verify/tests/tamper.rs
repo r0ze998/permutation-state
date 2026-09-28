@@ -212,15 +212,33 @@ tamper_test!(
     march_program
 );
 tamper_test!(tamper_program_h1_forged_harvest, h1, march_program);
+// Wave-5 review: the Holding forged at a write that is not an owner
+// action (the replays start from the forged state and agree; only the
+// continuity check sees it).
+tamper_test!(
+    tamper_program_h1b_forged_at_a_non_owner_write,
+    h1b,
+    march_program
+);
+// Wave-5 review: T13's last resort (any Reveal with an anchor, moved past
+// its close whatever lies between): codes only.
+tamper_codes_only!(
+    tamper_program_t13_forced_past_the_close,
+    t13_forced,
+    march_program
+);
 tamper_test!(
     tamper_program_t08_fill_slot_changed,
     t08_fill,
     march_program
 );
+// The integ-head recording has no Reveal that moves unseen (its later
+// transactions touch the shared ArrivalDay): the moved variant runs on the
+// second recording, the forced one on the first (wave-5 review).
 tamper_test!(
     tamper_program_t13_reveal_moved_past_close,
     t13_moved,
-    march_program
+    march_program_dc1281c3
 );
 tamper_test!(
     tamper_program_t14_duplicate_any_transaction,
@@ -281,17 +299,35 @@ fn tamper_suite_on_the_program_recording() {
             .unwrap_or_else(|e| panic!("VERIFY_RUN: {e}")),
         _ => march_program(),
     };
+    suite_on(&run);
+}
+
+/// The same suite on a second, independent recording (wave-5 review of
+/// W5-D: "all 22 detected" must not be a property of one recording).
+#[test]
+fn tamper_suite_on_a_second_recording() {
+    suite_on(&march_program_dc1281c3());
+}
+
+fn suite_on(run: &verify_core::Input) {
     let jobs = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4)
         .min(8);
-    let rep = tamper::run_suite(&run, jobs);
+    let rep = tamper::run_suite(run, jobs);
     println!("{}", rep.markdown());
     assert_eq!(rep.base, Verdict::Pass, "the base run must PASS");
     for o in &rep.outcomes {
         assert_ne!(
             o.status,
             tamper::Status::NotApplicable,
+            "{}: {}",
+            o.class,
+            o.detail
+        );
+        assert_ne!(
+            o.status,
+            tamper::Status::Panicked,
             "{}: {}",
             o.class,
             o.detail

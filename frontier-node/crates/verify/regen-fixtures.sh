@@ -48,7 +48,7 @@ PSF_FRONTIER_SO="$so" ITEST_NO_BUILD=1 VERIFY_DUMP="$fx/march-program.json.gz" \
   --include-ignored inproc_day --exact --nocapture 2>&1 | grep -E "^inproc_day|^  (PASS|FAIL)|test result"
 
 cargo build --locked --release -p verify
-v=target/release/frontier-verify
+v="${CARGO_TARGET_DIR:-$PWD/target}/release/frontier-verify"
 if [ -n "${NIGHTLY_ARGS:-}" ]; then
   echo "== nightly.json.gz ($NIGHTLY_ARGS)"
   tmp="$(mktemp -d)"

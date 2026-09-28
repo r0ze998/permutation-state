@@ -160,10 +160,56 @@ fn unopenable_seal_is_missing_data() {
         inp.txs[t].tx = fclient::tx::wire(&tx);
     }
     let rep = verify_core::verify(&inp);
+    // The corrupted signatures are also V3's (BeaconSigInvalid): FAIL.
+    assert_eq!(rep.verdict, verify_core::Verdict::Fail, "{}", show(&rep));
+    assert!(rep.fails_with(codes::BEACON_SIG_INVALID));
+    // V5's Reveal path (not the unsettled-march one) names this host and
+    // is fail-closed (Unverifiable severity).
+    let arrive = r.ku32("arrive");
+    let want = format!("host {host} bell {arrive}");
     assert!(
-        rep.findings
-            .iter()
-            .any(|x| x.check == "V5" && x.code == codes::MISSING_DATA),
+        rep.findings.iter().any(|x| x.check == "V5"
+            && x.code == codes::MISSING_DATA
+            && x.severity == verify_core::Severity::Unverifiable
+            && x.entity == want
+            && x.detail.contains("revealed plaintext cannot be compared")),
+        "{}",
+        show(&rep)
+    );
+}
+
+/// Wave-5 review: a Reveal whose arrival bell (plus its 600-s grace) runs
+/// past the end of the archive is not unverifiable — T(arrive) is simply
+/// not signed yet. The run is cut right after the last Reveal: V5 warns
+/// (`MissingData`, Warn severity) and raises no Unverifiable finding for it.
+#[test]
+fn reveal_in_the_archive_grace_is_a_warning() {
+    use frontier_abi::log::Kind;
+    let mut inp = march_program();
+    let w = verify_core::world::World::parse(
+        &inp.cfg.program,
+        &inp.txs,
+        inp.finals.clone(),
+        inp.final_slot,
+    );
+    let r = w.of(Kind::REVEAL).last().expect("a REVEAL").clone();
+    let want = format!("host {} bell {}", r.pu64("host_id"), r.ku32("arrive"));
+    inp.txs.truncate(r.tx + 1);
+    let rep = verify_core::verify(&inp);
+    let v5: Vec<_> = rep
+        .findings
+        .iter()
+        .filter(|x| x.check == "V5" && x.entity == want)
+        .collect();
+    assert!(
+        v5.iter()
+            .any(|x| x.code == codes::MISSING_DATA && x.severity == verify_core::Severity::Warn),
+        "{}",
+        show(&rep)
+    );
+    assert!(
+        !v5.iter()
+            .any(|x| x.severity == verify_core::Severity::Unverifiable),
         "{}",
         show(&rep)
     );
