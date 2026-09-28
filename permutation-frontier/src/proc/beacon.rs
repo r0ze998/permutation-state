@@ -722,7 +722,10 @@ pub fn archive_anchors(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
 /// present (absent: `AlreadyDone`, a repeat); the archive `aa‖(region,
 /// part(bell))` holds the bell (archived bit, else `TooEarly`); `rent_to ==
 /// cache.rent_to` (`BadAddress`). Log `CLOSE`; the rent returns to the
-/// fee payer that posted the cache (I-49).
+/// fee payer that posted the cache (I-49). W6-B (W5-A O4): on the Closed
+/// tombstone the archive (canonical address only; CloseSeason part 9 may
+/// have closed it) is not read and the cache closes at once — no reader
+/// of a cache runs after the final part.
 pub fn close_seed_cache(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
     check_accounts(Ix::CloseSeedCache, a, None)?;
     let x = aix::CloseSeedCache::decode(d)?;
@@ -730,19 +733,14 @@ pub fn close_seed_cache(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
     let [_any, season_ai, cache, archive, rent_to] = a else {
         return Err(FrontierError::TooManyAccounts.into());
     };
-    let hdr = prologue::season(
-        season_ai,
-        p,
-        Some(&crate::RULESET_HASH),
-        &ARCHIVE_STATUS,
-        now.ts,
-    )?;
+    let live = super::clash::float_season_with(season_ai, p, &ARCHIVE_STATUS, now.ts)?;
     if x.region >= REGIONS {
         return Err(FrontierError::BadData.into());
     }
+    let sid = live.id();
     let ctx = addr::ctx(&key(season_ai), &p.to_bytes());
     expect_key(cache, &ctx.seed_cache(x.bell, x.region, x.nonce))?;
-    if !prologue::presence(cache, p, AccountKind::SeedCache, hdr.id)? {
+    if !prologue::presence(cache, p, AccountKind::SeedCache, sid)? {
         return Err(FrontierError::AlreadyDone.into());
     }
     let ca_rent_to = {
@@ -758,18 +756,20 @@ pub fn close_seed_cache(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
     };
     let part = archive_part_of(x.bell);
     expect_key(archive, &ctx.anchor_archive(x.region, part))?;
-    let archived = prologue::presence(archive, p, AccountKind::AnchorArchive, hdr.id)? && {
-        let ad = archive.try_borrow_data()?;
-        if archive_key(&ad)? != (x.region, part) {
-            return Err(BAD_ACCOUNT);
-        }
-        archive_archived(&ad, x.bell)?
-    };
+    let tomb = matches!(live, super::clash::FloatSeason::Tomb(_));
+    let archived = tomb
+        || prologue::presence(archive, p, AccountKind::AnchorArchive, sid)? && {
+            let ad = archive.try_borrow_data()?;
+            if archive_key(&ad)? != (x.region, part) {
+                return Err(BAD_ACCOUNT);
+            }
+            archive_archived(&ad, x.bell)?
+        };
     if !archived {
         return Err(FrontierError::TooEarly.into());
     }
     expect_key(rent_to, &ca_rent_to)?;
-    let bell = hdr.bell(now.ts).unwrap_or(NO_BELL);
+    let bell = live.log_bell(now.ts);
     emit_close_short(
         AccountKind::SeedCache,
         &cache_raw(x.bell, x.region, x.nonce),

@@ -161,7 +161,7 @@ budgets! {
     PostSeed: 345_000, 0, 800, 339_178;
     PostBeacon: 340_000, 0, 760, 332_479;
     ArchiveAnchors: 60_000, 0, 1_232, 45_441;
-    CloseSeedCache: 6_000, 0, 300, 5_590;
+    CloseSeedCache: 6_000, 0, 300, 5_642;
     OpenRing: 30_000, 0, 600, 15_210;
     ConsumeRingSeed: 345_000, 0, 760, 332_701;
     OpenProvince: 220_000, 0, 400, 148_459;
@@ -193,9 +193,9 @@ budgets! {
     ResolveFromInputs: 290_000, 0, 460, 271_673;
     ResolveClash: 0, 0, 1_232, 0;
     SkipQuiet: 90_000, 30_000, 1_232, 0;
-    CloseClashInputs: 8_000, 0, 300, 7_064;
-    CloseArrivalDay: 8_000, 0, 300, 5_622;
-    CloseArrivalSlot: 8_000, 0, 300, 6_120;
+    CloseClashInputs: 8_000, 0, 300, 7_187;
+    CloseArrivalDay: 8_000, 0, 300, 5_637;
+    CloseArrivalSlot: 8_000, 0, 300, 6_155;
     ClaimDefence: 25_500, 0, 1_000, 24_111;
 }
 

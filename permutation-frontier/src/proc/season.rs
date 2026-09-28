@@ -803,6 +803,21 @@ pub(crate) fn tombstone(season_ai: &AccountInfo, p: &Pubkey) -> R<(u64, [u8; 32]
     Ok((id, r.arr(S::AUTHORITY)?))
 }
 
+/// The keeper-float closes' Season (W6-B, W5-A O4; CloseSeedCache,
+/// CloseClashInputs, CloseArrivalDay, CloseArrivalSlot): `Some(id)` on the
+/// Closed tombstone (checked as [`tombstone`] does), `None` for any other
+/// account, which the caller checks with its own status rule. On the
+/// tombstone nothing can read those accounts any more (every reader needs
+/// Running or Ended), so they close at once: without this a cache, slot,
+/// day or inputs left open when CloseSeason's final part ran kept its rent
+/// for good.
+pub(crate) fn float_tombstone(season_ai: &AccountInfo, p: &Pubkey) -> R<Option<u64>> {
+    if season_ai.owner == p && season_ai.data_len() == S::TOMBSTONE_SIZE {
+        return Ok(Some(tombstone(season_ai, p)?.0));
+    }
+    Ok(None)
+}
+
 /// Closes a present program account to the authority, logging `CLOSE`
 /// first (chained accounts with their final head, short ones with none).
 #[allow(clippy::too_many_arguments)]
