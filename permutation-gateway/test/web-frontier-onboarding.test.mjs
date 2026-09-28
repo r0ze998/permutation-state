@@ -32,6 +32,9 @@ const citizen = (v = {}) => decode('Citizen', encodeAccount('Citizen', { faction
 const holding = (v = {}) => decode('Holding', encodeAccount('Holding', { p: 2, q: 0, site: 3, gen: 0, tile: 14, state: 2, faction: 2, order: 1, ...v }));
 const facts = (c, h = null, marches = []) => ({ citizen: c, stage: landState(c).stage, holding: h, scoutHost: false, marches });
 const statuses = st => Object.fromEntries(st.steps.map(s => [s.id, s.status]));
+// catalog `base_production(Hamlet)` and one Lumber camp more (+10 wood/h), milli-units.
+const BASE = [40_000, 30_000, 20_000, 15_000, 0, 15_000, 5_000, 0];
+const BUILT = BASE.map((x, i) => (i === 1 ? x + 10_000 : x));
 const HELD = { flags: 1 | 4, holdingsN: 1, holding: [{ p: 2, q: 0, site: 3, gen: 0 }] };
 
 test('the steps follow the chain: join, site, build, scout, march; the seen flags only for welcome, practice and report', () => {
@@ -56,8 +59,10 @@ test('the steps follow the chain: join, site, build, scout, march; the seen flag
   const built = holding({ queue: [{ doneAt: 1_800_000_900, kind: 0 }, null, null, null] });
   st = ob.onboardingState(facts(citizen(HELD), built));
   assert.equal(st.current, 'scout');
-  // Or production from a finished building.
-  assert.equal(ob.hasBuilt(holding({ production: [0, 12, 0, 0, 0, 0, 0, 0] })), true);
+  // Or production above the tier's base from a finished building (a founded Hamlet already has the base: W6-D).
+  assert.equal(ob.hasBuilt(holding({ production: BASE })), false, 'the base production of a fresh Hamlet is not a building');
+  assert.equal(ob.hasBuilt(holding({ production: BUILT })), true);
+  assert.equal(ob.hasBuilt(holding({ tier: 1, production: BUILT })), false, 'a Town\'s base is higher');
   assert.equal(ob.hasBuilt(holding()), false);
   // Scouts trained is not yet the step: the exploration is (pending in the Holding, then counted in the Citizen).
   assert.equal(ob.hasScouts(holding({ reserve: [0, 0, 0, 0, 0, 0, 120, 0] })), true);
@@ -109,7 +114,7 @@ test('skip, dismiss and restore: a skipped step moves the card on; a later chain
   let st = ob.onboardingState(facts(c, h), flags);
   assert.equal(statuses(st).build, 'skipped');
   assert.equal(st.current, 'scout');
-  st = ob.onboardingState(facts(c, holding({ production: [1, 0, 0, 0, 0, 0, 0, 0] })), flags);
+  st = ob.onboardingState(facts(c, holding({ production: BUILT })), flags);
   assert.equal(statuses(st).build, 'done', 'a fact wins over a skip');
   for (const id of ['scout', 'practice', 'march', 'report']) flags = ob.withFlag(flags, ob.FLAG.skip(id));
   st = ob.onboardingState(facts(c, h), flags);
@@ -138,12 +143,14 @@ test('the adjacent-wedge offer (§5.9): only when the home wedge shows no free s
   // Not full: no offer.
   const open = new Map([[2, withFree(ring(2), [2])]]);
   assert.deepEqual(ob.overflowProvinces(open, 2, 3), { full: false, ring: null, provinces: [] });
-  // The card shows the offer as pick-province buttons (the site picker then reads the Province itself).
+  // renderOverflow gives the offer as pick-province buttons (the site picker then reads the Province itself).
   const store = { citizen: citizen(), land: { stage: 'joined' }, overviews, record: { rings: [0, 1, 2, 3].map(d => ({ d })) }, ui: { dismissed: [ob.FLAG.welcome] } };
-  const m = String(card.render(store));
-  assert.match(m, /data-act="pick-province"/);
+  assert.match(String(card.renderOverflow(store)), /data-act="pick-province"/);
   setLang('en');
-  assert.match(text(card.render(store)), /adjacent wedges(&#39;|')? outermost ring \(Ring 3\)/);
+  assert.match(text(card.renderOverflow(store)), /adjacent wedges(&#39;|')? outermost ring \(Ring 3\)/);
+  // W6-D (W5-E D9): the card itself no longer repeats the list the site picker under it shows.
+  assert.doesNotMatch(String(card.render(store)), /data-act="pick-province"/);
+  setLang('ja');
 });
 
 test('the card in both languages: open on the map tab, one line elsewhere, nothing when dismissed', () => {
@@ -161,7 +168,7 @@ test('the card in both languages: open on the map tab, one line elsewhere, nothi
   // The ticket wait shows the time and the 11–21 min range; the report wait the pipeline state.
   const tk = { citizen: citizen({ ticketBell: 40 }), land: { stage: 'ticket' }, clock: CLOCK, ui: { dismissed: [] } };
   assert.match(text(card.render(tk)), /約11〜21分/);
-  const done = { citizen: citizen({ ...HELD, explores: 1, arrivals: 1 }), land: { stage: 'final' }, holdings: [holding({ production: [1, 0, 0, 0, 0, 0, 0, 0] })], provinces: new Map(),
+  const done = { citizen: citizen({ ...HELD, explores: 1, arrivals: 1 }), land: { stage: 'final' }, holdings: [holding({ production: BUILT })], provinces: new Map(),
     marches: [{ facts: { pipeline: 'resolved' }, dest: { p: 3, q: 0 }, entry: { arriveBell: 50 } }], ui: { dismissed: [ob.FLAG.practice] } };
   assert.match(String(card.render(done)), /data-act="report-open" data-p="3" data-q="0" data-bell="50"/);
   setLang('en');

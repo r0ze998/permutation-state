@@ -313,6 +313,23 @@ test('the §5.11 builder = the native clash_model on the same account bytes (cam
   }
 });
 
+test('frontier.wasm resolve_from_inputs = the native clash model on every vector, the camp-check case included (W6-D)', async t => {
+  const k = await realKernel(t);
+  if (!k) return;
+  for (const c of CM.cases) {
+    const req = rep.fromInputsRequest({ provinceBytes: Buffer.from(c.province_b64, 'base64'), inputsBytes: Buffer.from(c.inputs_b64, 'base64'), bell: c.bell, seed: hex(c.seed) });
+    const r = k.call('resolve_from_inputs', req);
+    assert.ok(r.ok && r.status === undefined, `${c.name}: ${js(r)}`);
+    const d = rep.decodeClashOut(r.value);
+    assert.equal(d.digest, c.digest, `${c.name}: the kernel builder's digest = the native one (certain ${c.certain})`);
+    assert.equal(rep.outcomeDigest(d.outcome), d.digest, `${c.name}: the page re-hashes the same outcome`);
+  }
+  // A truncated Province is a refusal with the model's code (20 BadAccount), not a trap.
+  const c = CM.cases[0];
+  const bad = k.call('resolve_from_inputs', rep.fromInputsRequest({ provinceBytes: Buffer.from(c.province_b64, 'base64').subarray(0, 64), inputsBytes: Buffer.from(c.inputs_b64, 'base64'), bell: c.bell, seed: hex(c.seed) }));
+  assert.equal(bad.ok, false);
+});
+
 // ------------------------------------------------------------------ the seed of THE anchor
 const A = bellEnd(CLOCK.genesisTs, BELL) + 2;
 const S = seedRound(CLOCK.drand, A + CLOCK.window(BELL), CLOCK.margin);
@@ -374,7 +391,9 @@ test('verify in this browser: every step passes on a faithful record; the Provin
   assert.equal(v.result, 'match', js(v.steps));
   assert.deepEqual(Object.values(v.steps).map(s => s.ok), [true, true, true, true, true, true]);
   assert.equal(v.steps.digest.detail, 'province');
-  assert.equal(v.builder, 'page', 'resolve_from_inputs answers UNAVAILABLE in this build: the §5.11 transcription');
+  assert.equal(v.builder, 'kernel', 'frontier-wasm resolve_from_inputs (the program\'s clash model) builds the input (W6-D)');
+  assert.equal(v.pageBuilder, 'agrees', 'the page\'s §5.11 transcription gives the same digest');
+  assert.ok(v.args, 'the page\'s args are kept for "what if"');
   assert.equal(v.digest, w.res.digest);
   assert.deepEqual(h.calls, [['bell', BELL, regionOf(P, Q)], ['province', P, Q, BELL]]);
   // Without the Province envelope of the bell, the CLASH log's digest (as the herald reports it) is the reference.

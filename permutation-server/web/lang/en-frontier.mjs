@@ -204,6 +204,7 @@ export default {
   "ウォレットをつなぐ": "Connect a wallet",
   "キーパーにつながっていません。キーパーは鐘のビーコンの後で開封します": "No keeper is linked. Keepers reveal after the bell's beacon.",
   "キーパーに追いつくよう頼みました": "Asked the keepers to catch up.",
+  "州が追いつくのを待っています…": "Waiting for the province to catch up…",
   "ゲーム内の鍵": "In-game key",
   "ゲーム内の鍵がありません。鍵を作ってください": "No in-game key. Create one.",
   "ゲーム内の鍵を作って参加する": "Create an in-game key and join",

@@ -51,6 +51,8 @@ export class Writer {
   i64(v) { return this.put(8, d => d.setBigInt64(0, big(v), true)); }
   fixed(v, n) { this.parts.push(asBytes(v, n)); return this; }
   vec(items, fn) { this.u32(items.length); for (const it of items) fn(this, it); return this; }
+  /** A borsh `Vec<u8>`: u32 length, then the bytes. */
+  bytesVec(b) { this.u32(b.length); this.parts.push(Uint8Array.from(b)); return this; }
   bytes() { const n = this.parts.reduce((a, p) => a + p.length, 0), out = new Uint8Array(n); let o = 0; for (const p of this.parts) { out.set(p, o); o += p.length; } return out; }
 }
 
@@ -105,7 +107,9 @@ export const ENCODE = Object.freeze({
   seal_root: a => new Writer().fixed(a.commit, 32).fixed(a.ct_hash, 32).bytes(),
   ct_hash: a => asBytes(a.seal, 165),
   resolve_clash: a => asBytes(a),
-  resolve_from_inputs: a => asBytes(a ?? []),
+  // `(province Vec<u8>, inputs Vec<u8>, bell u32, seed [32])`: `{province, inputs, bell, seed}` (hex or bytes), or the encoded bytes.
+  resolve_from_inputs: a => (a instanceof Uint8Array || Array.isArray(a) ? Uint8Array.from(a)
+    : new Writer().bytesVec(asBytes(a.province)).bytesVec(asBytes(a.inputs)).u32(a.bell).fixed(a.seed, 32).bytes()),
   reachable: a => { const w = new Writer(); hex(w, a.origin); hex(w, a.dest); return w.i64(a.genesis_ts).i64(a.depart_ts).u32(a.target_bell).u8(unitIndex(a.unit)).bytes(); },
   accrual_at: a => new Writer().i64(a.accrual.value).i64(a.accrual.rate).i64(a.accrual.cap).i64(a.accrual.t0).i64(a.accrual.frac).i64(a.t).bytes(),
 });

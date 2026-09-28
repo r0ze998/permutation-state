@@ -22,7 +22,8 @@ const file = name => readFileSync(new URL(name, DIR));
 
 test('the fixtures are fresh (node test/fixtures/frontier/make-fixtures.mjs)', () => {
   const want = F.fixtures();
-  const have = readdirSync(DIR).filter(n => n !== 'make-fixtures.mjs').sort();
+  // `recorded/` holds the files recorded from a local season (W6-D; web-frontier-recorded.test.mjs checks them).
+  const have = readdirSync(DIR).filter(n => n !== 'make-fixtures.mjs' && n !== 'recorded').sort();
   assert.deepEqual(have, [...want.keys()].sort());
   for (const [name, data] of want) assert.ok(file(name).equals(data), `${name} is stale`);
 });

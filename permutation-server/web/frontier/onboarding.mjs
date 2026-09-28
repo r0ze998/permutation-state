@@ -13,7 +13,7 @@
 // Also here: the adjacent-wedge ticket offer (contract §5.9 FileTicket: when
 // the own wedge has no open site left, the program accepts sites in the
 // adjacent wedges' outermost open ring; integ-W3 deferred item K11).
-import { SCOUT, CITIZEN, freeByWedge, homeWedge, ticketTimes } from './fland.mjs';
+import { SCOUT, CITIZEN, freeByWedge, homeWedge, ticketTimes, baseProduction } from './fland.mjs';
 import { ringOf, wedgeOf, provinceIndex } from './fgeo.mjs';
 
 /** The steps, in order (design §7.11 table: 1–8). */
@@ -42,8 +42,17 @@ export function factsOf(FS) {
   return { citizen: FS.citizen ?? null, stage: FS.land?.stage ?? (FS.citizen ? 'joined' : 'none'), holding, scoutHost, marches: FS.marches ?? [] };
 }
 
-/** A Holding has queued or finished a building (its queue holds an item, or it produces something). */
-export const hasBuilt = h => !!h && ((h.queue ?? []).some(x => Number(x.doneAt) > 0) || (h.production ?? []).some(x => BigInt(x) > 0n));
+/**
+ * A Holding has queued or finished a building: its queue holds an item, or
+ * it produces more than its tier's base (a founded Hamlet already produces
+ * the base: W6-D found the step ticked before any build).
+ */
+export function hasBuilt(h) {
+  if (!h) return false;
+  if ((h.queue ?? []).some(x => Number(x.doneAt) > 0)) return true;
+  const base = baseProduction(Number(h.tier ?? 0));
+  return (h.production ?? []).some((x, r) => BigInt(x) > (base[r] ?? 0n));
+}
 /** A Holding has Scouts trained or mustered. */
 export const hasScouts = (h, scoutHost = false) => scoutHost || (!!h && Number(h.reserve?.[SCOUT] ?? 0) > 0);
 /** An exploration was sent (the Citizen counts it; a pending one sits in the Holding). */

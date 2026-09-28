@@ -73,7 +73,7 @@ export function sitePicker(FS) {
 
 function renderSites(FS) {
   const v = sitePicker(FS);
-  const offer = refileOffer(FS.land ?? { stage: 'none' }, FS.ui?.lastTicket, { hadHolding: FS.hadHolding });
+  const offer = refileOffer(FS.land ?? { stage: 'none' }, FS.ui?.lastTicket, { hadHolding: FS.hadHolding, seen: FS.ui?.ticketSeen !== false });
   const isChosen = s => v.chosen.findIndex(c => c.p === s.p && c.q === s.q && c.site === s.site);
   return html`<section aria-labelledby="join-sites"><h3 id="join-sites">${L`入植地を選ぶ`}</h3>
     ${offer ? html`<div class="callout">${offer.why === 'displaced' ? L`仮の拠点は同じ鐘のより高い順位の希望に押し出され、入植希望は終わりました。` : L`入植希望は区画を得られずに終わりました。`}

@@ -26,7 +26,7 @@ export function holdingModel(FS) {
   if (!h) return null;
   const now = FS.chain?.now() ?? 0;
   const env = FS.provinces?.get(`${h.p},${h.q}`);
-  const ctx = { holding: h, citizen: FS.citizen, province: env?.province ?? null, nowBell: FS.nowBell ?? 0 };
+  const ctx = { holding: h, citizen: FS.citizen, province: env?.province ?? null, nowBell: FS.nowBell ?? 0, now };
   return {
     holding: h,
     stores: storesAt(h, now, RESOURCE_ORDER),
@@ -60,18 +60,18 @@ export function render(FS) {
     ${blockedLine(m.blocks.Build)}
     <h4>${L`訓練（すぐに終わります）`}</h4>
     <form class="inline" data-form="train"><label>${L`兵種`}<select name="unit">${units.map(x => html`<option value="${x.i}">${UNITS[x.u]}</option>`)}</select></label>
-      <label>${L`人数`}<input name="n" type="number" min="1" step="100" value="100" inputmode="numeric"></label>
+      <label>${L`人数`}<input name="n" type="number" min="1" step="1" value="100" inputmode="numeric"></label>
       <button type="submit" class="btn" ${raw(m.blocks.Train.length ? 'disabled' : '')}>${L`訓練する`}</button></form>
     <h4>${L`控えの兵`}</h4>
     ${f.reserve.length ? html`<ul class="list">${f.reserve.map(r => html`<li>${UNITS[UNIT_ORDER[r.unit]]} ${fmtNum(r.troops)}</li>`)}</ul>` : html`<p class="muted">${L`控えの兵はいません`}</p>`}
     <h4>${L`軍勢を編成する`}</h4>
     <form class="inline" data-form="muster"><label>${L`兵種`}<select name="unit">${f.reserve.filter(r => r.unit !== SETTLER).map(r => html`<option value="${r.unit}">${UNITS[UNIT_ORDER[r.unit]]}</option>`)}</select></label>
-      <label>${L`兵数（100〜30,000）`}<input name="troops" type="number" min="100" max="30000" step="100" value="100" inputmode="numeric"></label>
+      <label>${L`兵数（100〜30,000）`}<input name="troops" type="number" min="100" max="30000" step="1" value="100" inputmode="numeric"></label>
       <button type="submit" class="btn" ${raw(m.blocks.Muster.length || !f.reserve.length ? 'disabled' : '')}>${L`編成する`}</button></form>
     <p class="muted">${L`新しい軍勢は次の鐘から顔ぶれに加わります。`}</p>
     ${blockedLine(m.blocks.Muster)}
     <h4>${L`守備隊`}</h4>
-    <form class="inline" data-form="garrison"><label>${L`増員（控えの兵から）`}<input name="delta" type="number" min="1" step="100" value="100" inputmode="numeric"></label>
+    <form class="inline" data-form="garrison"><label>${L`増員（控えの兵から）`}<input name="delta" type="number" min="1" step="1" value="100" inputmode="numeric"></label>
       <button type="submit" class="btn" ${raw(m.blocks.Garrison.length ? 'disabled' : '')}>${L`守備隊を増やす`}</button></form>
     <p class="muted">${L`M1 の守備隊は増やすだけです（引き上げは次の段階で）。`}</p>
     ${blockedLine(m.blocks.Garrison)}

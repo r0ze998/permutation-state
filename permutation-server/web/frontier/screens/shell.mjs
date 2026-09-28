@@ -9,9 +9,8 @@
 // (tap cycles, a drag up or down moves one step), collapsed to peek by
 // Escape (focus returns to the handle), opened to half when a tab is
 // chosen, and sized to the visual viewport so the on-screen keyboard
-// never hides a field. The sheet mounts itself on the Frontier pages
-// (every page imports this module); on desktop the handle is hidden and
-// the panel is the right column.
+// never hides a field. `boot` (app.mjs) mounts it on every Frontier page;
+// on desktop the handle is hidden and the panel is the right column.
 import { html, raw } from '../../util.mjs';
 import { L, Lh, fmtNum, lang, onLangChange } from '../../lang.mjs';
 import { factionName, failureText } from '../fi18n.mjs';
@@ -154,5 +153,4 @@ export function mountSheet(doc = globalThis.document, win = globalThis.window) {
   return { set, state: () => panel.dataset.sheet };
 }
 
-// The Frontier pages load their modules as ES modules (deferred): the DOM is parsed when this runs.
-if (globalThis.document && !globalThis.process?.versions?.node) mountSheet();
+// app.mjs `boot` mounts the sheet (W6-D, W5-E R3); it no longer mounts itself on import.

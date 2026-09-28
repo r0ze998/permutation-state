@@ -259,7 +259,7 @@ export function render(st, { kernelError = null, closable = false } = {}) {
     <form data-form="practice-run">
       ${controls.has('stance') ? html`<label class="field">${L`あなたの構え`}<select name="stance" data-bind="pr-stance">${STANCES.map((s, i) => html`<option value="${i}" ${raw(i === st.stance ? 'selected' : '')}>${STANCE_TEXT[s]}</option>`)}</select></label>` : ''}
       ${controls.has('retreat') ? html`<label class="field">${L`撤退比`}<select name="retreat" data-bind="pr-retreat">${RETREAT_CHOICES.filter(c => c.id !== 'custom').map(c => html`<option value="${c.id}" ${raw(c.id === st.retreat ? 'selected' : '')}>${RETREAT_TEXT[c.id]()}</option>`)}</select></label>` : ''}
-      ${controls.has('troops') ? html`<label class="field">${st.scenario === 'defend' ? L`守備隊の兵数` : L`あなたの兵数`}<input name="troops" type="number" inputmode="numeric" min="100" max="30000" step="50" value="${st.troops}" data-bind="pr-troops"></label>` : ''}
+      ${controls.has('troops') ? html`<label class="field">${st.scenario === 'defend' ? L`守備隊の兵数` : L`あなたの兵数`}<input name="troops" type="number" inputmode="numeric" min="100" max="30000" step="1" value="${st.troops}" data-bind="pr-troops"></label>` : ''}
       <p><button type="submit" class="btn primary">${L`衝突を試す`}</button> <button type="button" class="btn" data-act="practice-reroll" ${raw(r?.ok ? '' : 'disabled')}>${L`乱数を引き直す`}</button></p>
     </form>
     ${kernelError ? html`<p class="notice error" role="alert">${L`ルールのモジュール（frontier.wasm）を読み込めないため練習できません（${kernelError}）`}</p>` : ''}

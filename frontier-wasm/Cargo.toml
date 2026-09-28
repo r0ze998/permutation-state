@@ -20,6 +20,9 @@ crate-type = ["cdylib", "rlib"]
 # Dependency sections are owned by the integrator (contract I-55).
 [dependencies]
 permutation-rules = { path = "../permutation-rules", default-features = false }
+# The program's clash model (`clash_model::build`) for resolve_from_inputs
+# (W6-D; no_std, depends only on permutation-rules).
+frontier-abi = { path = "../frontier-abi" }
 borsh = { version = "=1.6.1", default-features = false, features = ["derive"] }
 
 [profile.release]

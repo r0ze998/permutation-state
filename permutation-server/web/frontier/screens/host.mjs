@@ -30,9 +30,9 @@ export function render(FS) {
   const rows = hostRows(FS);
   if (!rows.length) return html`<p>${L`軍勢はいません。拠点で兵を訓練し、軍勢を編成してください。`}</p>`;
   return html`<section aria-labelledby="hosts-title"><h3 id="hosts-title">${L`軍勢`}</h3><ul class="list hosts">${rows.map(r => {
-    const blocks = actionBlocks('Depart', { holding: FS.holdings[0], province: r.province, nowBell: FS.nowBell ?? 0, host: r });
+    const blocks = actionBlocks('Depart', { holding: FS.holdings[0], province: r.province, nowBell: FS.nowBell ?? 0, now: FS.chain?.now() ?? 0, host: r });
     const cool = (FS.nowBell ?? 0) < r.readyBell;
-    return html`<li class="host${r.inTransit ? ' locked' : ''}">
+    return html`<li class="host${r.inTransit ? ' locked' : ''}" data-unit="${r.unit}">
       <strong>${UNITS[UNIT_ORDER[r.unit]]} ${fmtNum(r.troops)}</strong>
       <span>${L`州 ${r.p},${r.q} · ${STATE_TEXT[r.state]?.() ?? ''}`}</span>
       <span>${L`体力 ${r.stamina}/${RULES.STAMINA_CAP}`}${cool ? L`（第${fmtNum(r.readyBell)}鐘まで休息）` : ''}</span>
@@ -40,8 +40,8 @@ export function render(FS) {
       ${r.inTransit ? html`<p class="locked-note" role="note">${lockedText()}</p>` : ''}
       <div class="actions">
         <button type="button" class="btn" data-act="compose" data-host="${String(r.id)}" ${raw(blocks.length || r.stamina < DEPART_STAMINA ? 'disabled' : '')}>${L`進軍させる`}</button>
-        ${r.unit === SCOUT ? html`<button type="button" class="btn" data-act="explore-open" data-host="${String(r.id)}" ${raw(actionBlocks('Explore', { holding: FS.holdings[0], province: r.province, nowBell: FS.nowBell ?? 0, host: r }).length ? 'disabled' : '')}>${L`探索`}</button>` : ''}
-        <button type="button" class="btn" data-act="dissolve" data-host="${String(r.id)}" ${raw(actionBlocks('Dissolve', { holding: FS.holdings[0], province: r.province, nowBell: FS.nowBell ?? 0, host: r }).length ? 'disabled' : '')}>${L`解散`}</button>
+        ${r.unit === SCOUT ? html`<button type="button" class="btn" data-act="explore-open" data-host="${String(r.id)}" ${raw(actionBlocks('Explore', { holding: FS.holdings[0], province: r.province, nowBell: FS.nowBell ?? 0, now: FS.chain?.now() ?? 0, host: r }).length ? 'disabled' : '')}>${L`探索`}</button>` : ''}
+        <button type="button" class="btn" data-act="dissolve" data-host="${String(r.id)}" ${raw(actionBlocks('Dissolve', { holding: FS.holdings[0], province: r.province, nowBell: FS.nowBell ?? 0, now: FS.chain?.now() ?? 0, host: r }).length ? 'disabled' : '')}>${L`解散`}</button>
       </div>
       ${blocks.length ? html`<p class="blocked">${blocks.map(errorText).join(' / ')}</p>` : ''}
     </li>`;
