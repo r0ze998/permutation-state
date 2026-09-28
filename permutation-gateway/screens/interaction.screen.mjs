@@ -53,6 +53,58 @@ test('the bottom sheet: the handle cycles its heights, Escape collapses it and r
   assert.equal(await page.evaluate(() => document.activeElement?.hasAttribute('data-sheet-handle')), true, 'focus returns to the handle');
 });
 
+/** A real touch drag on the handle (CDP touch events: pointerdown/up, no click), `dy` px in 8 steps. */
+async function touchDrag(page, dy) {
+  const box = await page.locator('[data-sheet-handle]').boundingBox();
+  const x = box.x + box.width / 2, y = box.y + box.height / 2;
+  const cdp = await page.context().newCDPSession(page);
+  const at = yy => [{ x, y: yy, id: 1, radiusX: 2, radiusY: 2, force: 1 }];
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: at(y) });
+  for (let i = 1; i <= 8; i++) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: at(y + (dy * i) / 8) });
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await cdp.detach();
+}
+
+test('a touch drag moves the sheet one step and the next single tap still works (wave-5 review)', { timeout: 60_000 }, async t => {
+  const page = await open(t);
+  const handle = page.locator('[data-sheet-handle]');
+  await handle.waitFor();
+  assert.equal(await sheet(page), 'half');
+  await touchDrag(page, -80);
+  assert.equal(await sheet(page), 'full', 'dragging up expands one step');
+  // Past the drag's own click window, one genuine tap changes the state.
+  await page.waitForTimeout(450);
+  await handle.tap();
+  assert.equal(await sheet(page), 'peek', 'the first tap after a drag is not swallowed');
+  await touchDrag(page, -80);
+  assert.equal(await sheet(page), 'half');
+  await touchDrag(page, 80);
+  assert.equal(await sheet(page), 'peek', 'dragging down collapses one step');
+});
+
+test('a mouse drag that ends off the handle still moves the sheet (pointer capture)', { timeout: 60_000 }, async t => {
+  const page = await open(t, { width: 700, height: 900 });
+  const handle = page.locator('[data-sheet-handle]');
+  await handle.waitFor();
+  const box = await handle.boundingBox();
+  const x = box.x + box.width / 2, y = box.y + box.height / 2;
+  assert.equal(await sheet(page), 'half');
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x + 120, y - 160, { steps: 8 });
+  await page.mouse.up();
+  assert.equal(await sheet(page), 'full', 'released far from the 44-px handle');
+});
+
+test('on a phone the relay quota is read in "More" (the chip is hidden below 760 px; wave-5 review D5)', { timeout: 60_000 }, async t => {
+  const page = await open(t);
+  assert.equal(await page.locator('#quota-chip').isVisible(), false, 'the chip waits');
+  await page.locator('#tabs [data-tab="more"]').click();
+  const line = page.locator('#panel-body [data-quota-line]');
+  await line.waitFor();
+  assert.match(await line.textContent(), /中継 残り \d+ 回/);
+});
+
 test('the sheet is a phone thing: on desktop the handle is hidden and Escape leaves the panel alone', { timeout: 60_000 }, async t => {
   const page = await open(t, { width: 1440, height: 900 });
   assert.equal(await page.locator('[data-sheet-handle]').isVisible(), false);

@@ -3,12 +3,14 @@
 // ticket bell) with the pipeline state of each in its region — open,
 // awaiting the beacon (no countdown before THE anchor exists), revealing
 // until A + W, awaiting the seed, resolving, resolved — and the local
-// clock's offset when it is more than 2 s off the chain's.
+// clock's offset when it is more than 2 s off the chain's. The relay quota
+// line too: on phones the quota chip is hidden and "More" (this sheet) is
+// where it is read (wave-5 review of W5-E, D5).
 import { html } from '../../util.mjs';
 import { L, fmtNum } from '../../lang.mjs';
 import { PIPELINE_TEXT } from '../fi18n.mjs';
 import { pipeline, countdown } from '../clock.mjs';
-import { timeHtml } from './shell.mjs';
+import { timeHtml, quotaChip } from './shell.mjs';
 
 /**
  * The sheet's rows: `items = [{bell, region, why, facts: {anchor, archive,
@@ -31,7 +33,8 @@ export function render(FS) {
   return html`<section aria-labelledby="bell-title"><h3 id="bell-title">${L`鐘の進み具合`}</h3>
     ${current !== null && now >= FS.clock.genesisTs ? html`<p>${L`いまは第${fmtNum(current)}鐘`}</p>` : ''}
     ${Math.abs(offset) > 2 ? html`<p class="muted">${L`この端末の時計はチェーンより ${Math.round(offset)} 秒ずれています`}</p>` : ''}
-    <ul class="list bells">${rows.map(r => html`<li><strong>${L`第${fmtNum(r.bell)}鐘`}</strong>${WHY[r.why] ? html` · ${WHY[r.why]()}` : ''} · ${L`地域 ${r.region}`}
+    ${quotaChip(FS.quota) ? html`<p class="quota-line" data-quota-line>${quotaChip(FS.quota)}</p>` : ''}
+    <ul class="list bells">${rows.map(r => html`<li><strong>${L`第${fmtNum(r.bell)}鐘`}</strong>${WHY[r.why] ? html` · ${WHY[r.why]()}` : ''}${Number.isInteger(r.region) ? html` · ${L`地域 ${r.region}`}` : ''}
       <p>${PIPELINE_TEXT[r.state]}</p>
       ${r.until !== null && r.until !== undefined ? html`<p class="muted">${countdown(r.until - now)} · ${timeHtml(r.until)}</p>` : ''}
       ${r.archived ? html`<p class="muted">${L`記録庫から読んでいます`}</p>` : ''}</li>`)}</ul>

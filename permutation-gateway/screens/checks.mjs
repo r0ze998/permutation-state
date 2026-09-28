@@ -11,6 +11,11 @@
 //                   Japanese glyph except inside an element marked
 //                   lang="ja" (the language toggle's "日本語") or
 //                   data-name (proper names, user text)
+//   placeholders()  no rendered "null", "undefined" or "NaN" (or an empty
+//                   " · · " separator) in the visible text or accessible
+//                   names (wave-5 review: "region null" shipped in the
+//                   bell sheet with 72 shots and 0 findings)
+//   doubled()       English only: no doubled word ("in in", "the the")
 //   axe             axe-core, violations of impact serious or critical
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -91,6 +96,59 @@ export function japanese() {
       const v = el.getAttribute(a);
       if (v && JP.test(v)) out.push({ where: `${el.tagName.toLowerCase()}[${a}]`, text: v.slice(0, 60) });
     }
+  }
+  return out;
+}
+
+/** Evaluated in the page: placeholder text a template leaked, as `[{where, text}]`. */
+export function placeholders() {
+  const BAD = /(^|[^A-Za-z0-9_])(null|undefined|NaN)([^A-Za-z0-9_]|$)|·\s*·/;
+  const shown = el => {
+    for (let e = el; e && e !== document.documentElement; e = e.parentElement) {
+      const s = getComputedStyle(e);
+      if (s.display === 'none' || s.visibility === 'hidden' || e.hidden) return false;
+    }
+    return true;
+  };
+  const out = [];
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    const el = n.parentElement;
+    if (!el || ['SCRIPT', 'STYLE', 'NOSCRIPT'].includes(el.tagName) || el.closest('[data-name]') || !shown(el)) continue;
+    if (BAD.test(n.data)) out.push({ where: el.tagName.toLowerCase() + (el.id ? `#${el.id}` : ''), text: n.data.trim().slice(0, 80) });
+  }
+  // A leaf's text split over nodes: judge each element's own full text too.
+  for (const el of document.querySelectorAll('li, p, dd, dt, h1, h2, h3, button, span, strong')) {
+    if (el.closest('[data-name]') || !shown(el) || el.children.length > 4) continue;
+    const t = el.textContent ?? '';
+    if (BAD.test(t) && !out.some(o => t.includes(o.text))) out.push({ where: el.tagName.toLowerCase(), text: t.trim().slice(0, 80) });
+  }
+  for (const el of document.querySelectorAll('[aria-label], [title], [alt], [placeholder]')) {
+    if (!shown(el)) continue;
+    for (const a of ['aria-label', 'title', 'alt', 'placeholder']) {
+      const v = el.getAttribute(a);
+      if (v && BAD.test(v)) out.push({ where: `${el.tagName.toLowerCase()}[${a}]`, text: v.slice(0, 80) });
+    }
+  }
+  return out;
+}
+
+/** Evaluated in the page (English): a word written twice in a row, as `[{where, text}]`. */
+export function doubled() {
+  const DUP = /\b([A-Za-z]{2,})\s+\1\b/i;
+  const out = [];
+  for (const el of document.querySelectorAll('li, p, dd, dt, .row, h1, h2, h3, button, label')) {
+    if (el.closest('[data-name]') || el.children.length > 6) continue;
+    const s = getComputedStyle(el);
+    if (s.display === 'none' || s.visibility === 'hidden') continue;
+    // The element's own text, without the options of a select it holds
+    // (a label's "Arrival bell" and its option "Bell 44" are not a phrase).
+    let t = '';
+    const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, { acceptNode: n => (n.parentElement?.closest('select, option, datalist') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT) });
+    for (let n = w.nextNode(); n; n = w.nextNode()) t += ` ${n.data}`;
+    t = t.replace(/\s+/g, ' ');
+    const m = DUP.exec(t);
+    if (m) out.push({ where: el.tagName.toLowerCase(), text: t.trim().slice(0, 80) });
   }
   return out;
 }

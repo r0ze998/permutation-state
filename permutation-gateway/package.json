@@ -4,7 +4,7 @@
   "type": "module",
   "description": "PERMUTATION STATE chain gateway: crank, x402 entry, session-key relay, local test USDC",
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs screens/logic.screen.mjs"
   },
   "dependencies": {
     "@magicblock-labs/ephemeral-rollups-sdk": "0.17.2",

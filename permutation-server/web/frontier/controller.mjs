@@ -175,7 +175,10 @@ async function refreshMarches(holding) {
   const key = bookKey();
   if (!key) return;
   let entries = book.loadBook(book.browserStorage, key);
-  const transits = holding ? holding.transit.map((t, slot) => ({ slot, state: t.state, hostId: t.hostId, arriveBell: t.arriveBell, sealRoot: Buffer2hex(t.sealRoot) })) : [];
+  // Wave-5 review: a gathered transit carries its destination (FLAG_GATHERED,
+  // v1.7), so a card with no local entry still names its region.
+  const transits = holding ? holding.transit.map((t, slot) => ({ slot, state: t.state, hostId: t.hostId, arriveBell: t.arriveBell, sealRoot: Buffer2hex(t.sealRoot),
+    dest: (t.flags & 4) ? { p: t.destP, q: t.destQ } : null })) : [];
   const marches = [];
   const revealed = [];
   const b = nowBell();
@@ -203,7 +206,8 @@ async function refreshMarches(holding) {
   for (const t of transits.filter(x => x.state >= 1 && x.state <= 3)) {
     if (marches.some(m => m.transit && m.transit.slot === t.slot)) continue;
     if (entries.some(e => e.transitSlot === t.slot && e.host === String(t.hostId) && e.state !== 'settled')) continue;
-    marches.push({ entry: null, transit: t, facts: { nowBell: b, pipeline: null, slotPresent: false, settleReady: false }, record: null, slot: null, env: null, dest: null, region: null });
+    marches.push({ entry: null, transit: t, facts: { nowBell: b, pipeline: null, slotPresent: false, settleReady: false }, record: null, slot: null, env: null,
+      dest: t.dest, region: t.dest ? regionOf(t.dest.p, t.dest.q) : null });
   }
   entries = book.reconcile(entries, { transits, revealedHosts: revealed, complete: !!holding });
   book.saveBook(book.browserStorage, key, entries);

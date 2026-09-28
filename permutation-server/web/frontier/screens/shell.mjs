@@ -83,6 +83,8 @@ export function dragSheet(s, dy) {
 }
 /** The handle's accessible name for a height. */
 export const sheetLabel = s => (s === 'full' ? L`パネルを小さくする` : L`パネルを広げる`);
+/** How long after a drag a click on the handle is the drag's own (ms). */
+export const SUPPRESS_MS = 400;
 /** Phones only: the sheet exists below the desktop breakpoint (frontier.css). */
 export const PHONE_MAX = 759;
 
@@ -108,16 +110,28 @@ export function mountSheet(doc = globalThis.document, win = globalThis.window) {
   };
   set('half');
   onLangChange(() => set(panel.dataset.sheet));
+  // Wave-5 review: a touch drag produces no click, so a drag must not wait
+  // for one to clear its state (the next genuine tap was swallowed). The
+  // drag ignores only a click that follows it within SUPPRESS_MS; pointer
+  // capture keeps a mouse drag that ends off the 44-px handle.
   let drag = null;
-  handle.addEventListener('pointerdown', e => { drag = { y: e.clientY }; });
-  handle.addEventListener('pointerup', e => {
+  let suppressUntil = 0;
+  const now = () => (win?.performance?.now?.() ?? Date.now());
+  handle.addEventListener('pointerdown', e => {
+    drag = { y: e.clientY, id: e.pointerId };
+    try { handle.setPointerCapture?.(e.pointerId); } catch { /* not capturable (synthetic) */ }
+  });
+  const end = e => {
     const d = drag;
     drag = null;
-    const to = d ? dragSheet(panel.dataset.sheet, e.clientY - d.y) : null;
-    if (to) { set(to); handle.dataset.dragged = '1'; }
-  });
+    try { if (d && handle.hasPointerCapture?.(d.id)) handle.releasePointerCapture(d.id); } catch { /* released */ }
+    const to = d && e.type === 'pointerup' ? dragSheet(panel.dataset.sheet, e.clientY - d.y) : null;
+    if (to) { set(to); suppressUntil = now() + SUPPRESS_MS; }
+  };
+  handle.addEventListener('pointerup', end);
+  handle.addEventListener('pointercancel', end);
   handle.addEventListener('click', () => {
-    if (handle.dataset.dragged) { delete handle.dataset.dragged; return; }
+    if (now() < suppressUntil) { suppressUntil = 0; return; }
     set(nextSheet(panel.dataset.sheet));
   });
   panel.addEventListener('keydown', e => {

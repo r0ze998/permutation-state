@@ -5,7 +5,12 @@
 // (additive exports), so both maps share one projection and palette.
 // Accessibility (web design §10, W5-E): colour is never the only signal —
 // each faction also has a sigil (a shape) drawn on its provinces and sites;
-// cell strokes keep 3:1 against the land; fog veils never cover text.
+// province boundaries are a two-tone stroke — a paper halo under an ink
+// line — so one of the two keeps ≥ 3:1 against any fill it touches (wave-5
+// review: ink at 55 % gave 1.8–2.9:1 on faction fills and most terrain;
+// even opaque ink gives 2.8:1 on the purple faction). `logic.screen.mjs`
+// computes the contrast of BOUNDARY_INK and BOUNDARY_HALO against every
+// fill, veiled or not, instead of stating it. Fog veils never cover text.
 import { COLORS, FLATTEN, RADIUS, SQRT3, hexPoints, polygon, project, shade } from '../../map.mjs';
 import { provinceCentre, tileHex, PROVINCE_TILES } from '../fgeo.mjs';
 import { FACTION_COLORS } from '../fi18n.mjs';
@@ -50,8 +55,20 @@ export function fogLevel({ ringOpen, showAll = false, known = false, sightDistan
   return known ? 'known' : 'distant';
 }
 
-const NEUTRAL_FILL = '#8a8f86';
-const EMPTY_FILL = '#cfc9b4';
+export const NEUTRAL_FILL = '#8a8f86';
+export const EMPTY_FILL = '#cfc9b4';
+/** The fill of a province nobody has opened. */
+export const UNOPENED_FILL = '#e9e5d8';
+/** The two tones of a province boundary (see the file note). */
+export const BOUNDARY_INK = '#1b2e28';
+export const BOUNDARY_HALO = '#f4efe0';
+
+/** A province boundary: the halo, then the ink over it (widths in screen px). */
+export function boundary(ctx, pts, { scale = 1, selected = false } = {}) {
+  const ink = selected ? 4 : 1.25;
+  polygon(ctx, pts, null, BOUNDARY_HALO, (ink + 2) / scale);
+  polygon(ctx, pts, null, BOUNDARY_INK, ink / scale);
+}
 /** The fill of a province at world LOD: its majority owner's colour, else neutral land. */
 export function provinceFill(rec) {
   if (!rec) return EMPTY_FILL;
@@ -86,10 +103,11 @@ export function paintSigil(ctx, { x, y, r, faction, scale = 1 }) {
 /** A province at world or province LOD: its cell, owner fill and sigil, fog, and a clash marker. */
 export function paintProvince(ctx, { p, q, rec, fog = 'distant', selected = false, scale = 1 }) {
   const pts = provinceCorners(p, q, 2 / scale);
-  // Strokes: ink at 55% on land keeps ≥ 3:1 (web design §10); the selection is ink, thicker.
-  polygon(ctx, pts, fog === 'unopened' ? '#e9e5d8' : provinceFill(rec), selected ? '#1b2e28' : 'rgba(27,46,40,.55)', selected ? 4 / scale : 1 / scale);
+  // Fill, fog veil, then the two-tone boundary on top (web design §10).
+  polygon(ctx, pts, fog === 'unopened' ? UNOPENED_FILL : provinceFill(rec), null);
   const a = FOG[fog] ?? 0;
   if (a > 0 && fog !== 'unopened') polygon(ctx, pts, `rgba(233,229,216,${a})`, null);
+  boundary(ctx, pts, { scale, selected });
   if (fog === 'unopened') return;
   const c = provincePixel(p, q);
   const owner = rec ? majorityOwner(rec) : null;
@@ -107,7 +125,7 @@ export function paintVeil(ctx, { p, q, fog, scale = 1, selected = false }) {
   const pts = provinceCorners(p, q, 2 / scale);
   const a = FOG[fog] ?? 0;
   if (a > 0 && fog !== 'unopened') polygon(ctx, pts, `rgba(233,229,216,${a})`, null);
-  polygon(ctx, pts, null, selected ? '#1b2e28' : 'rgba(27,46,40,.55)', (selected ? 4 : 1.5) / scale);
+  boundary(ctx, pts, { scale, selected });
 }
 
 /**

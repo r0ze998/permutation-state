@@ -9,7 +9,9 @@ import * as shell from '../../permutation-server/web/frontier/screens/shell.mjs'
 import * as join from '../../permutation-server/web/frontier/screens/join.mjs';
 import { createTerrain, TERRAIN_CACHE } from '../../permutation-server/web/frontier/map/terrain.mjs';
 import { FrontierMap, MAP_TOOLS, TILE_FOGS, coveredBelow, LOD_EDGES } from '../../permutation-server/web/frontier/map/fmap.mjs';
-import { SIGILS, paintSigil, paintVeil, FOG } from '../../permutation-server/web/frontier/map/layers.mjs';
+import { SIGILS, paintSigil, paintVeil, FOG, BOUNDARY_INK, BOUNDARY_HALO, NEUTRAL_FILL, EMPTY_FILL, UNOPENED_FILL } from '../../permutation-server/web/frontier/map/layers.mjs';
+import { FACTION_COLORS } from '../../permutation-server/web/frontier/fi18n.mjs';
+import { COLORS } from '../../permutation-server/web/map.mjs';
 import { ringProvinces, wedgeOf } from '../../permutation-server/web/frontier/fgeo.mjs';
 import { homeWedge } from '../../permutation-server/web/frontier/fland.mjs';
 
@@ -139,4 +141,29 @@ test('the site picker: the home wedge first; a full home wedge offers the adjace
     assert.equal(p.ring, 3);
     assert.notEqual(wedgeOf(p.p, p.q), homeWedge(0));
   }
+});
+
+// WCAG 2.x relative luminance and contrast of #rrggbb colours.
+const rgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16) / 255);
+const lum = c => { const [r, g, b] = c.map(v => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+const contrast = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m); return (x + 0.05) / (y + 0.05); };
+const over = (top, alpha, under) => top.map((t, i) => t * alpha + under[i] * (1 - alpha));
+
+test('province boundaries keep ≥ 3:1 against every fill they touch (web design §10, WCAG 1.4.11; wave-5 review)', () => {
+  const fills = [...FACTION_COLORS, NEUTRAL_FILL, EMPTY_FILL, UNOPENED_FILL, ...Object.values(COLORS).map(p => p[0])];
+  const veil = rgb('#e9e5d8');
+  const ink = rgb(BOUNDARY_INK), halo = rgb(BOUNDARY_HALO);
+  const worst = [];
+  for (const f of fills) {
+    for (const a of [0, FOG.known, FOG.distant]) {
+      const bg = over(veil, a, rgb(f));
+      const best = Math.max(contrast(ink, bg), contrast(halo, bg));
+      worst.push(best);
+      assert.ok(best >= 3, `${f} under a ${a} veil: ink ${contrast(ink, bg).toFixed(2)}, halo ${contrast(halo, bg).toFixed(2)}`);
+    }
+  }
+  // The old single stroke (ink at 55 %) did not: the purple faction at 1.8:1.
+  const old = over(ink, 0.55, rgb('#7a5fb0'));
+  assert.ok(contrast(old, rgb('#7a5fb0')) < 3);
+  assert.ok(Math.min(...worst) >= 3);
 });

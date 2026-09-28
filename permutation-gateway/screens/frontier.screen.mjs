@@ -9,7 +9,9 @@
 // overflow; banner, main, navigation and the bell chip visible; interactive
 // elements ≥ 44 × 44 px at phone widths (≥ 24 on desktop); axe-core with
 // no serious or critical violation; in English, no Japanese glyph outside
-// lang="ja" / data-name. Screenshots go to artifacts/ (not committed) with
+// lang="ja" / data-name; no "null", "undefined", "NaN" or empty separator
+// in the text or names; in English, no doubled word (wave-5 review).
+// Screenshots go to artifacts/ (not committed) with
 // summary.json; pixel comparison is not a gate (advisory, none yet).
 //
 //   cd permutation-gateway/screens && npm ci && node --test *.screen.mjs
@@ -22,7 +24,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 import { startServer } from './server.mjs';
 import { SCENES, VIEWPORTS } from './scenes.mjs';
-import { layout, japanese, axe } from './checks.mjs';
+import { layout, japanese, placeholders, doubled, axe } from './checks.mjs';
 import { storageFor, LATEST_UNIX } from './world.mjs';
 
 const ARTIFACTS = fileURLToPath(new URL('./artifacts/', import.meta.url));
@@ -65,9 +67,13 @@ async function shot(page, { scene, vp, lang, problems }) {
   for (const v of violations) problems.push(`${where}: axe ${v.impact} ${v.id} (${v.help}): ${v.nodes.join(' | ')}`);
   const jp = lang === 'en' ? await page.evaluate(japanese) : [];
   for (const j of jp) problems.push(`${where}: Japanese in English at ${j.where}: "${j.text}"`);
+  const ph = await page.evaluate(placeholders);
+  for (const x of ph) problems.push(`${where}: placeholder text at ${x.where}: "${x.text}"`);
+  const dup = lang === 'en' ? await page.evaluate(doubled) : [];
+  for (const x of dup) problems.push(`${where}: doubled word at ${x.where}: "${x.text}"`);
   const file = `${scene.id}-${lang}-${vp.width}x${vp.height}.png`;
   await page.screenshot({ path: `${ARTIFACTS}${file}` });
-  summary.push({ scene: scene.id, lang, viewport: vp.id, file, small: lay.small.length, axe: violations.map(v => v.id), japanese: jp.length, overflow: lay.overflow.scrollWidth > lay.overflow.innerWidth, clipped: lay.clipped.length });
+  summary.push({ scene: scene.id, lang, viewport: vp.id, file, small: lay.small.length, axe: violations.map(v => v.id), japanese: jp.length, placeholders: ph.length, doubled: dup.length, overflow: lay.overflow.scrollWidth > lay.overflow.innerWidth, clipped: lay.clipped.length });
 }
 
 for (const vp of viewports) {

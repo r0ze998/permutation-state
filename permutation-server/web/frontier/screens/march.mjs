@@ -25,6 +25,17 @@ const STEP_TEXT = { sealing: () => L`封をしています`, saved: () => L`こ�
 const STANCE_NOTE = { Hold: () => L`相性の効果なし`, Assault: () => L`側撃に強い`, Flank: () => L`迎撃に強い`, Brace: () => L`突撃に強い` };
 
 /** The composer's choices as the markup offers them (the tests read these). */
+
+/** The route line with singular and plural forms (wave-5 review: "1 provinces"). */
+export function routeLine(route) {
+  const n = route.hexes;
+  const p = route.provinces.length;
+  const m = Math.ceil(route.secs / 60);
+  if (n === 1 && p === 1) return L`1 マス · 1 州 · 約 ${m} 分`;
+  if (p === 1) return L`${n} マス · 1 州 · 約 ${m} 分`;
+  return L`${n} マス · ${p} 州 · 約 ${m} 分`;
+}
+
 export function composerChoices(FS) {
   const season = FS.season;
   return {
@@ -69,7 +80,7 @@ export function render(FS) {
         <label>${L`マス`}<input name="tile" type="number" min="0" max="60" inputmode="numeric" value="${c.dest?.tile ?? ''}"></label><button type="submit" class="btn">${L`決める`}</button></form>
     </fieldset>
     <fieldset><legend>${L`2. 道のりと到着`}</legend>
-      ${c.route ? html`<p>${L`${c.route.hexes} マス · ${c.route.provinces.length} 州 · 約 ${Math.ceil(c.route.secs / 60)} 分`}</p>` : html`<p class="muted">${c.routeError ? clientText(c.routeError) : L`行き先を決めると道のりを探します`}</p>`}
+      ${c.route ? html`<p>${routeLine(c.route)}</p>` : html`<p class="muted">${c.routeError ? clientText(c.routeError) : L`行き先を決めると道のりを探します`}</p>`}
       <label>${L`到着の鐘`}<select data-bind="arriveBell">${bells.map(b => html`<option value="${b}" ${raw(b === m.arriveBell ? 'selected' : '')}>${L`第${fmtNum(b)}鐘`}</option>`)}</select></label>
       <p class="muted">${L`出発から早くても2鐘あと、遅くとも72鐘あと。出発には体力 ${DEPART_STAMINA} を使います。`}</p>
     </fieldset>
