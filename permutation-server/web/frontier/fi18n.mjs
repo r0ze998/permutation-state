@@ -29,12 +29,13 @@ export const UNITS = lazyTable({
 
 /** Stances (plaintext order 0–3). Disarray is a posture state (M3), named for reports. */
 export const STANCES = lazyTable({
-  Hold: () => L`待機`, Assault: () => L`突撃`, Flank: () => L`側撃`, Brace: () => L`迎撃`, Disarray: () => L`混乱`,
+  // 待機の構え, not v9's bare 待機 ("Idle"): the stance reads "Hold" (W3-F D9, W5-E copy review).
+  Hold: () => L`待機の構え`, Assault: () => L`突撃`, Flank: () => L`側撃`, Brace: () => L`迎撃`, Disarray: () => L`混乱`,
 });
 
 /** Clash fates. */
 export const FATES = lazyTable({
-  Stays: () => L`戦場に残った`, Withdrew: () => L`隣の味方の地へ退いた`, Bounced: () => L`押し戻された（損失なし）`,
+  Stays: () => L`戦場に残った`, Withdrew: () => L`隣の味方の地へ退いた`, Bounced: () => L`本拠へ押し戻された`,
   Retreated: () => L`撤退比で引き返した（損失なし）`, Destroyed: () => L`壊滅した`, Routed: () => L`敗走した`,
 });
 
@@ -268,7 +269,7 @@ export const HOLDING_STATES = lazyTable({
 });
 /** TRANSIT_SETTLED outcomes (flog.TRANSIT_OUTCOMES). */
 export const TRANSIT_OUTCOME_TEXT = lazyTable({
-  Stays: () => L`戦場に残った`, Withdrew: () => L`隣の味方の地へ退いた`, Bounced: () => L`押し戻された（損失なし）`, Retreated: () => L`撤退比で引き返した（損失なし）`,
+  Stays: () => L`戦場に残った`, Withdrew: () => L`隣の味方の地へ退いた`, Bounced: () => L`本拠へ押し戻された`, Retreated: () => L`撤退比で引き返した（損失なし）`,
   Destroyed: () => L`壊滅した`, BouncedUnranked: () => L`到着枠に入れず押し戻された（損失なし）`, Routed: () => L`敗走した（兵・体力・チップの半分を失った）`,
   BadSeal: () => L`封が不正だったため失われた`,
 });

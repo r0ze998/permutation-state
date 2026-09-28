@@ -77,8 +77,10 @@ test('tables and every program error code have Japanese and English text', () =>
   assert.equal(fi18n.factionName(6), 'Neutral');
   assert.equal(fi18n.RESOURCE_ORDER.map(r => fi18n.RESOURCES[r]).join(','), 'Food,Wood,Stone,Ore,Horses,Gold,Science,Influence');
   for (const code of ['network', 'SealAuditFailed', 'NotQuicknet', 'TestBeaconOffLocalnet', 'Kernel']) assert.doesNotMatch(fi18n.clientText(code), JP, code);
+  assert.equal(fi18n.STANCES.Hold, 'Hold', 'the stance, not v9\'s "Idle" (W3-F D9)');
+  assert.equal(fi18n.FATES.Bounced, 'Bounced home', 'no "(no loss)": a host that lost the field fought first (W4-E D10)');
   setLang('ja');
-  assert.equal(fi18n.STANCES.Hold, '待機');
+  assert.equal(fi18n.STANCES.Hold, '待機の構え');
 });
 
 test('the pages: landmarks, the bell chip, an accessible map, a module script and no inline code', () => {
