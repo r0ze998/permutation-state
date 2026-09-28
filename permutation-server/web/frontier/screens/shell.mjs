@@ -3,8 +3,17 @@
 // panel each tab shows, and the shared bits the screens use (lamports,
 // times, the action notice). Renderers are pure: they read the store and
 // return markup; app.mjs puts it in the page and routes `data-act` clicks.
+//
+// W5-E (web design §7.1, §10): on phones (< 760 px) the panel is a bottom
+// sheet with three heights — peek, half, full — changed by its handle
+// (tap cycles, a drag up or down moves one step), collapsed to peek by
+// Escape (focus returns to the handle), opened to half when a tab is
+// chosen, and sized to the visual viewport so the on-screen keyboard
+// never hides a field. The sheet mounts itself on the Frontier pages
+// (every page imports this module); on desktop the handle is hidden and
+// the panel is the right column.
 import { html, raw } from '../../util.mjs';
-import { L, Lh, fmtNum, lang } from '../../lang.mjs';
+import { L, Lh, fmtNum, lang, onLangChange } from '../../lang.mjs';
 import { factionName, failureText } from '../fi18n.mjs';
 import { countdown } from '../clock.mjs';
 
@@ -61,3 +70,75 @@ export const row = (dt, dd) => html`<div class="row"><dt>${dt}</dt><dd>${dd}</dd
 
 /** The "as of" line every panel carries (web design §4.2). */
 export const asOf = (slot, age) => (slot === null || slot === undefined ? '' : Lh`<p class="as-of">スロット ${fmtNum(slot)} 時点（${Math.round(age ?? 0)} 秒前）</p>`);
+
+// ------------------------------------------------------------------ the bottom sheet (phones)
+export const SHEET_STATES = Object.freeze(['peek', 'half', 'full']);
+/** The next height when the handle is tapped: peek → half → full → peek. */
+export const nextSheet = s => SHEET_STATES[(SHEET_STATES.indexOf(s) + 1) % SHEET_STATES.length] ?? 'half';
+/** One step up (-1) or down (+1) after a drag of `dy` px (a drag under 24 px is a tap). */
+export function dragSheet(s, dy) {
+  if (Math.abs(dy) < 24) return null;
+  const i = Math.max(0, SHEET_STATES.indexOf(s));
+  return SHEET_STATES[Math.min(SHEET_STATES.length - 1, Math.max(0, i + (dy < 0 ? 1 : -1)))];
+}
+/** The handle's accessible name for a height. */
+export const sheetLabel = s => (s === 'full' ? L`パネルを小さくする` : L`パネルを広げる`);
+/** Phones only: the sheet exists below the desktop breakpoint (frontier.css). */
+export const PHONE_MAX = 759;
+
+/**
+ * Mount the sheet on `#panel` (idempotent): the handle first in the panel,
+ * `data-sheet` on the panel, the keyboard, drag and tab rules, and the
+ * visual-viewport height in `--vvh`. Returns `{set, state}` or null.
+ */
+export function mountSheet(doc = globalThis.document, win = globalThis.window) {
+  const panel = doc?.getElementById?.('panel');
+  if (!panel || panel.querySelector('[data-sheet-handle]')) return null;
+  const phone = () => !win?.matchMedia || win.matchMedia(`(max-width: ${PHONE_MAX}px)`).matches;
+  const handle = doc.createElement('button');
+  handle.type = 'button';
+  handle.className = 'sheet-handle';
+  handle.dataset.sheetHandle = '';
+  handle.setAttribute('aria-controls', 'panel-body');
+  panel.prepend(handle);
+  const set = s => {
+    panel.dataset.sheet = s;
+    handle.setAttribute('aria-expanded', s === 'peek' ? 'false' : 'true');
+    handle.setAttribute('aria-label', sheetLabel(s));
+  };
+  set('half');
+  onLangChange(() => set(panel.dataset.sheet));
+  let drag = null;
+  handle.addEventListener('pointerdown', e => { drag = { y: e.clientY }; });
+  handle.addEventListener('pointerup', e => {
+    const d = drag;
+    drag = null;
+    const to = d ? dragSheet(panel.dataset.sheet, e.clientY - d.y) : null;
+    if (to) { set(to); handle.dataset.dragged = '1'; }
+  });
+  handle.addEventListener('click', () => {
+    if (handle.dataset.dragged) { delete handle.dataset.dragged; return; }
+    set(nextSheet(panel.dataset.sheet));
+  });
+  panel.addEventListener('keydown', e => {
+    if (e.key !== 'Escape' || !phone() || panel.dataset.sheet === 'peek') return;
+    // A field that handles Escape itself (an open select) keeps it.
+    if (e.defaultPrevented) return;
+    set('peek');
+    handle.focus();
+  });
+  // Choosing a tab (or opening a report) brings the sheet up to half.
+  doc.addEventListener('click', e => {
+    if (panel.dataset.sheet === 'peek' && e.target?.closest?.('[data-act="tab"], [data-act="report-open"], [data-act="practice-open"]')) set('half');
+  });
+  const vv = win?.visualViewport;
+  if (vv) {
+    const fit = () => doc.documentElement.style.setProperty('--vvh', `${Math.round(vv.height)}px`);
+    vv.addEventListener('resize', fit);
+    fit();
+  }
+  return { set, state: () => panel.dataset.sheet };
+}
+
+// The Frontier pages load their modules as ES modules (deferred): the DOM is parsed when this runs.
+if (globalThis.document && !globalThis.process?.versions?.node) mountSheet();

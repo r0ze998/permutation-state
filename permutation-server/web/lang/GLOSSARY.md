@@ -310,7 +310,7 @@ unit on the map is 軍勢, a host), so the merged dictionary stays consistent.
 | キーパー | keeper | |
 | チップ | tip | |
 | 撤退比 | retreat ratio | "never" = 0 |
-| 構え：待機・突撃・側撃・迎撃・混乱 | stance: Hold, Assault, Flank, Brace, Disarray | |
+| 構え：待機の構え（待機）・突撃・側撃・迎撃・混乱 | stance: Hold, Assault, Flank, Brace, Disarray | the Frontier writes Hold as 待機の構え: v9's bare 待機 is "Idle" |
 | 探索 / 斥候 | Explore / Scout | |
 | 蛮族の野営地 | barbarian camp | |
 | 保護 | Shield | |
@@ -318,7 +318,8 @@ unit on the map is 軍勢, a host), so the merged dictionary stays consistent.
 | 入植希望 | site ticket | |
 | 休眠 | dormant | |
 | 敗走 | routed | the 50% loss of an unrevealed march |
-| 押し戻された | bounced (no loss) | quota or room; ArrivalSlot displacement |
+| 本拠へ押し戻された | bounced home | no room, or lost the field with nowhere to fall back; troops lost in the fight stay lost, so no "(no loss)" |
+| 到着枠に入れず押し戻された | bounced without an arrival slot (no loss) | the four largest of a faction take the slots (`BouncedUnranked`) |
 | ビーコン / ビーコン待ち | beacon / awaiting beacon | the drand round anchored on chain |
 | シード / シード待ち | seed / awaiting seed | the bell's random seed |
 | 決着 / 決着処理中 | resolved / resolving | |
@@ -326,6 +327,25 @@ unit on the map is 軍勢, a host), so the merged dictionary stays consistent.
 | 練習モード | practice mode | |
 | 観戦 | spectate | as v9 |
 | 中立 | Neutral | faction 6: camps, Free Cities |
+| 区画 | site | one of a province's 12 holding sites |
+| マス | tile | one of a province's 61 hexes |
+| 預け金 | escrow | the refundable Holding-rent escrow of a site ticket |
+| 中継 | relay | pays the fee of sponsored transactions; "relay" in the quota chip |
+| ゲーム内の鍵 | in-game key | the session key; never "session" in the UI |
+| 仮の拠点 / 確定 | provisional holding / final | cohort finality (I-47) |
+| 控えの兵 | reserve | trained troops not yet in a host |
+| 解散 | Dissolve | |
+| 到着の鐘 | arrival bell | |
+| 到着枠 | arrival slot | |
+| 衝突 / 衝突の報告 | clash / clash report | |
+| 結末 | fate | a fighter's result in a clash report |
+| このブラウザで確かめる | Verify in this browser | |
+| もしも | what if | practice on a verified report |
+| 精算 / 精算する | settled / settle | SettleTransit, SettleExplore |
+| 年代記 | chronicle | |
+| ガイド | guide | the onboarding card |
+| 地図の操作 | map controls | the zoom and "my holding" buttons |
+| 勢力の印 | sigil | the shape beside each faction colour: circle, triangle, square, diamond, cross, hexagon (neutral: ring) |
 
 ## Never translate
 

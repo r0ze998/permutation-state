@@ -22,6 +22,24 @@ import { verify } from '../session.mjs';
 import * as io from './fchainio.mjs';
 import { joinShardOf } from './faddr.mjs';
 
+/**
+ * ClashInputs' `camp_mask` (v1.7, I-56): u32 LE at offset 76 of the raw
+ * account bytes. The ABI table the page decodes still calls it RSV_76, so
+ * it is read from the bytes (the herald's /h/clash `inputs_b64`).
+ */
+export const CAMP_MASK_OFFSET = 76;
+export function campMaskOf(bytes) {
+  const b = bytes instanceof Uint8Array ? bytes : null;
+  if (!b || b.length < CAMP_MASK_OFFSET + 4) return 0;
+  return (b[76] | (b[77] << 8) | (b[78] << 16) | (b[79] << 24)) >>> 0;
+}
+/**
+ * fclient::ix::camp_winner: the arrival at (faction, i) earns the camp's
+ * Works when its fate is Stays (1) and its position `faction·4 + i` is the
+ * lowest set bit of `camp_mask` (one winner per camp).
+ */
+export const campWinner = (mask, faction, i, fate) => fate === 1 && mask !== 0 && 31 - Math.clz32(mask & -mask) === faction * 4 + i;
+
 /** The shapes this page sends and who signs them. */
 export const SIGNED_BY = Object.freeze({
   Join: 'wallet', SetSession: 'wallet',
@@ -76,9 +94,11 @@ export function accountsFor(name, v) {
       return { season: A.season, holding: holding(), citizen, seedcache_or_archive: v.settle.seed, anchor_or_archive: v.settle.anchor };
     case 'SettleTransit': {
       const s = v.settle;
+      // v1.7 (I-56): the camp's winner names its owner's Citizen as the optional 14th account.
       return { season: A.season, holding: holding(), dest_province: A.of('Province', s.dest), inputs: A.of('ClashInputs', { ...s.dest, bell: s.arriveBell }),
         slot: A.of('ArrivalSlot', { ...s.dest, bell: s.arriveBell, faction: s.faction, i: s.slotIndex ?? 0 }), home_province: A.of('Province', v.holding),
-        anchor_or_archive: s.anchor, slot_beneficiary: s.slotBeneficiary, resolver: s.resolver, holding_rent_payer: s.rentPayer, settle_beneficiary: s.beneficiary };
+        anchor_or_archive: s.anchor, slot_beneficiary: s.slotBeneficiary, resolver: s.resolver, holding_rent_payer: s.rentPayer, settle_beneficiary: s.beneficiary,
+        ...(s.campCitizen ? { citizen: s.campCitizen } : {}) };
     }
     default:
       throw new Error(`fplay: ${name} is not a shape this page sends`);

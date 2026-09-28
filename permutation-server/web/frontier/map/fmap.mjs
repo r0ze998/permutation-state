@@ -6,9 +6,28 @@
 // kernel when the caller has it; every other level works without it. The
 // pure parts (LOD, projection, culling, picking) are exported and tested
 // (web-frontier-map.test.mjs); the class only wires them to a canvas.
+//
+// W5-E (web design §10): zoom in, zoom out and "my holding" buttons stay
+// visible at every width (a group after the canvas, 44-px targets, names in
+// the current language); the canvas carries `data-lod` and, at tile LOD,
+// `data-terrain` (ready | pending) for the smoke tests; the terrain comes
+// from the rules module lazily (terrain.mjs) when the caller gives none;
+// only provinces the viewer knows or sees are drawn as tiles, with the fog
+// veil over them; H goes to the viewer's first holding.
 import { inverseHex } from '../../map.mjs';
+import { L, onLangChange } from '../../lang.mjs';
 import { locate, ringOf, ringProvinces, hexDistance } from '../fgeo.mjs';
-import { fogLevel, paintProvince, paintTiles, provincePixel, PROVINCE_CIRCUMRADIUS } from './layers.mjs';
+import { fogLevel, paintProvince, paintTiles, paintVeil, provincePixel, PROVINCE_CIRCUMRADIUS } from './layers.mjs';
+import { createTerrain } from './terrain.mjs';
+
+/** Fog levels drawn as tiles at tile LOD (a distant province stays a muted cell). */
+export const TILE_FOGS = Object.freeze(['sight', 'known', 'clear']);
+/** The map buttons: `[{id, glyph, label()}]` (glyphs are ASCII or symbols, never text to translate). */
+export const MAP_TOOLS = Object.freeze([
+  { id: 'in', glyph: '+', label: () => L`地図を拡大` },
+  { id: 'out', glyph: '\u2212', label: () => L`地図を縮小` },
+  { id: 'home', glyph: '\u2302', label: () => L`自分の拠点へ移動` },
+]);
 
 /** Zoom thresholds (screen px per world px) with hysteresis between levels. */
 export const LOD_EDGES = Object.freeze({ provinceIn: 0.14, provinceOut: 0.12, tileIn: 0.5, tileOut: 0.45 });
@@ -61,6 +80,15 @@ export function zoomAround(view, size, factor, sx, sy) {
 /** The distance in provinces from (p, q) to the nearest of `anchors` (the viewer's holdings and hosts). */
 export const sightDistance = (p, q, anchors) => anchors.reduce((m, a) => Math.min(m, hexDistance(p, q, a.p, a.q)), Infinity);
 
+/** Height (CSS px) of the canvas covered from below by the page's bottom sheet (`#panel` laid over the map), else 0. */
+export function coveredBelow(canvas) {
+  const panel = canvas.ownerDocument?.getElementById?.('panel');
+  const view = canvas.ownerDocument?.defaultView;
+  if (!panel || !view || view.getComputedStyle(panel).position !== 'absolute' || !canvas.getBoundingClientRect) return 0;
+  const c = canvas.getBoundingClientRect(), p = panel.getBoundingClientRect();
+  return Math.max(0, Math.min(c.bottom, p.bottom) - Math.max(c.top, p.top));
+}
+
 export class FrontierMap {
   /**
    * `canvas`; `source()` → {overviews: Map ring→overview, ringsOpen,
@@ -77,7 +105,10 @@ export class FrontierMap {
     this.dirty = true;
     this.drag = null;
     this.pointers = new Map();
+    this.terrainOf = createTerrain({ onReady: () => this.invalidate() });
+    this.mark();
     this.bind();
+    this.mountTools();
     this.frame = () => { if (this.dirty) this.draw(); this.raf = globalThis.requestAnimationFrame?.(this.frame); };
     this.raf = globalThis.requestAnimationFrame?.(this.frame);
   }
@@ -89,11 +120,79 @@ export class FrontierMap {
     this.view = { ...this.view, ...v };
     this.lod = lodFor(this.view.zoom, this.lod);
     this.dirty = true;
+    this.mark();
     this.onView(this.view, this.lod);
+  }
+
+  /** The canvas's `data-lod` (and `data-terrain` once drawn at tile LOD). */
+  mark(terrain) {
+    const d = this.canvas.dataset;
+    if (!d) return;
+    if (d.lod !== this.lod) d.lod = this.lod;
+    const t = this.lod === 'tile' ? terrain ?? d.terrain ?? 'pending' : 'none';
+    if (d.terrain !== t) d.terrain = t;
   }
 
   /** Centre on a province (and zoom to its LOD). */
   focus(p, q, zoom = 0.2) { const c = provincePixel(p, q); this.setView({ x: c.x, y: c.y, zoom }); }
+
+  /** The viewer's first holding at province LOD, or the Concord zoomed out. */
+  home() {
+    const own = this.source()?.own?.[0];
+    if (own) this.focus(own.p, own.q, 0.2);
+    else this.setView({ x: 0, y: 0, zoom: 0.06 });
+  }
+
+  /**
+   * The first view: the open rings fill the smaller side of the canvas
+   * (world LOD at most), centred on the Concord. Once; the viewer's pan and
+   * zoom are never overridden.
+   */
+  fit(src, size) {
+    this.fitted = true;
+    if (this.view.x !== 0 || this.view.y !== 0 || this.view.zoom !== 0.06) return;
+    const rings = Math.max(1, src?.ringsOpen ?? 1);
+    const edge = provincePixel(rings, 0);
+    const radius = Math.hypot(edge.x, edge.y) + PROVINCE_CIRCUMRADIUS;
+    // On a phone the bottom sheet covers the lower part of the canvas: fit the part above it.
+    const covered = coveredBelow(this.canvas);
+    const free = Math.max(size.height * 0.4, size.height - covered);
+    const zoom = Math.max(ZOOM_MIN, Math.min(LOD_EDGES.provinceOut * 0.95, (0.9 * Math.min(size.width, free)) / (2 * radius)));
+    this.setView({ x: 0, y: (size.height - free) / 2 / zoom, zoom });
+  }
+
+  /** Zoom around the canvas centre by `factor`. */
+  zoomBy(factor) { const s = this.size(); this.setView(zoomAround(this.view, s, factor, s.width / 2, s.height / 2)); }
+
+  /** The map buttons after the canvas (a DOM page only). */
+  mountTools() {
+    const c = this.canvas, doc = c.ownerDocument;
+    if (!doc || !c.parentElement || c.parentElement.querySelector?.('.map-tools')) return;
+    const box = doc.createElement('div');
+    box.className = 'map-tools';
+    box.setAttribute('role', 'group');
+    const buttons = MAP_TOOLS.map(t => {
+      const b = doc.createElement('button');
+      b.type = 'button';
+      b.className = 'map-btn';
+      b.dataset.map = t.id;
+      const g = doc.createElement('span');
+      g.setAttribute('aria-hidden', 'true');
+      g.textContent = t.glyph;
+      b.append(g);
+      b.addEventListener('click', () => (t.id === 'in' ? this.zoomBy(1.25) : t.id === 'out' ? this.zoomBy(0.8) : this.home()));
+      box.append(b);
+      return [b, t];
+    });
+    const label = () => {
+      box.setAttribute('aria-label', L`地図の操作`);
+      for (const [b, t] of buttons) { const x = t.label(); b.setAttribute('aria-label', x); b.title = x; }
+    };
+    label();
+    this.unlang = onLangChange(label);
+    c.after(box);
+    this.tools = box;
+  }
 
   bind() {
     const c = this.canvas;
@@ -131,9 +230,9 @@ export class FrontierMap {
       const k = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
       if (k) { e.preventDefault(); this.setView({ x: this.view.x + k[0], y: this.view.y + k[1] }); return; }
       const s = this.size();
-      if (e.key === '+' || e.key === '=') this.setView(zoomAround(this.view, s, 1.25, s.width / 2, s.height / 2));
-      else if (e.key === '-') this.setView(zoomAround(this.view, s, 0.8, s.width / 2, s.height / 2));
-      else if (e.key === 'h' || e.key === 'H') this.setView({ x: 0, y: 0, zoom: 0.06 });
+      if (e.key === '+' || e.key === '=') this.zoomBy(1.25);
+      else if (e.key === '-') this.zoomBy(0.8);
+      else if (e.key === 'h' || e.key === 'H') this.home();
       else if (e.key === 'Enter') this.onSelect(pick(this.view, s, s.width / 2, s.height / 2));
     });
   }
@@ -149,21 +248,33 @@ export class FrontierMap {
     ctx.fillStyle = '#e9e5d8';
     ctx.fillRect(0, 0, width, height);
     const src = this.source();
+    if (!this.fitted && width > 0 && height > 0) this.fit(src, { width, height });
     const z = this.view.zoom;
     ctx.setTransform(dpr * z, 0, 0, dpr * z, dpr * (width / 2 - this.view.x * z), dpr * (height / 2 - this.view.y * z));
     const maxRing = Math.max(0, (src.ringsOpen ?? 1) - 1) + 1;
     const recs = new Map();
     for (const ov of src.overviews?.values?.() ?? []) for (const r of ov.provinces) recs.set(`${r.p},${r.q}`, r);
+    const terrainOf = src.terrainOf ?? this.terrainOf;
+    let wanted = 0, drawn = 0;
     for (const pr of visibleProvinces(this.view, { width, height }, maxRing)) {
       const key = `${pr.p},${pr.q}`;
       const fog = fogLevel({ ringOpen: ringOf(pr.p, pr.q) < (src.ringsOpen ?? 1), showAll: src.showAll, known: src.known?.has(key), sightDistance: sightDistance(pr.p, pr.q, src.own ?? []) });
-      paintProvince(ctx, { ...pr, rec: recs.get(key), fog, selected: src.selected && src.selected.p === pr.p && src.selected.q === pr.q, scale: z });
-      if (this.lod === 'tile' && fog !== 'unopened') {
-        const t = src.terrainOf?.(pr.p, pr.q);
-        if (t) paintTiles(ctx, { ...pr, ...t });
+      const selected = !!src.selected && src.selected.p === pr.p && src.selected.q === pr.q;
+      const rec = recs.get(key);
+      if (this.lod === 'tile' && TILE_FOGS.includes(fog)) {
+        wanted++;
+        const t = terrainOf?.(pr.p, pr.q);
+        if (t) {
+          paintTiles(ctx, { ...pr, ...t, rec, selectedTile: selected ? src.selected.idx : null });
+          paintVeil(ctx, { ...pr, fog, scale: z, selected });
+          drawn++;
+          continue;
+        }
       }
+      paintProvince(ctx, { ...pr, rec, fog, selected, scale: z });
     }
+    this.mark(wanted > 0 && drawn === wanted ? 'ready' : 'pending');
   }
 
-  destroy() { if (this.raf) globalThis.cancelAnimationFrame?.(this.raf); }
+  destroy() { if (this.raf) globalThis.cancelAnimationFrame?.(this.raf); this.unlang?.(); this.tools?.remove(); }
 }
