@@ -159,29 +159,82 @@ pub fn failures(txs: &[TxRecord], program: &Address) -> Value {
     json!(m)
 }
 
-pub struct Latency {
-    pub json: Value,
+/// The chain's slot → Clock map, from the landing slots and Clock times of
+/// the run's transactions (landed and failed). Between two observed slots
+/// the Clock moves `slot_secs` per slot (I-54).
+pub struct SlotClock {
+    pts: Vec<(u64, i64)>,
+    slot_secs: f64,
 }
 
-/// Keeper latencies in slots at `scale` (I-54: a slot is 0.4 × scale game
-/// seconds), from the records: round → anchor, S → first cache, anchor →
-/// last valid reveal, close → resolve (CLASH), plus SKIP per province-day.
+impl SlotClock {
+    pub fn new<'a>(txs: impl IntoIterator<Item = &'a TxRecord>, slot_secs: f64) -> SlotClock {
+        let mut pts: Vec<(u64, i64)> = txs.into_iter().map(|t| (t.slot, t.block_time)).collect();
+        pts.sort_unstable();
+        pts.dedup_by_key(|p| p.0);
+        SlotClock { pts, slot_secs }
+    }
+
+    /// The first slot whose Clock is at or after `t`: between the last
+    /// observed slot before `t` and the first observed slot at or after it,
+    /// counted back from the latter at `slot_secs` per slot. `None` when no
+    /// observed slot reaches `t`.
+    pub fn first_slot_at(&self, t: f64) -> Option<u64> {
+        let i = self.pts.partition_point(|p| (p.1 as f64) < t);
+        let &(sb, tb) = self.pts.get(i)?;
+        let floor = if i > 0 { self.pts[i - 1].0 + 1 } else { 0 };
+        let back = ((tb as f64 - t) / self.slot_secs).floor().max(0.0) as u64;
+        Some(sb.saturating_sub(back).max(floor).min(sb))
+    }
+}
+
+/// Keeper latencies (§13.4 criterion 3) from the records.
+///
+/// **Reference points (W5-B F5, pinned by W6-A):** a round is *public* at
+/// `round_time(r) + drand delay` (the replay's publication, which the
+/// program's drand gate also waits for). Round → anchor and S → first
+/// cache are reported two ways:
+/// - `*_slots`: **whole slots from the first slot whose Clock shows the
+///   round public to the landing slot** (`landing − first_slot_at(public)`).
+///   A keeper that sees the round in that slot and lands in the next one
+///   scores 1. This is the figure criterion 3's slot targets (p99 ≤ 2) are
+///   judged on at 20×: it charges the keeper, not the Clock's 8-game-second
+///   step (from the publication instant a landing is ≥ 1 slot plus the
+///   fraction of a slot until the Clock reaches the round, F5).
+/// - `*_game_secs`: game seconds from the publication instant to the
+///   landing slot's Clock; the scale-2 run's game-second targets (≤ 5 s)
+///   are judged on these. `*_from_publication_slots` is the same in slots.
+///
+/// Anchor → last valid reveal and close → resolve run from chain times
+/// (THE anchor's `A`, `close = A + W`), so their slots are exact.
 pub fn latencies(
     recs: &[Rec],
-    scale: f64,
+    clock: &SlotClock,
     drand: &fclient::clock::Drand,
     delay_s: f64,
     reveal_window: u32,
 ) -> Value {
-    let slot_secs = 0.4 * scale;
+    let slot_secs = clock.slot_secs;
     let to_slots = |secs: f64| (secs / slot_secs).max(0.0);
     let mut region_of: HashMap<(i32, i32), u8> = HashMap::new();
     let mut anchor_a: HashMap<(u32, u8), i64> = HashMap::new();
-    let (mut round_anchor, mut s_cache, mut reveal_last, mut close_resolve) =
-        (vec![], vec![], vec![], vec![]);
-    let mut first_cache: HashMap<(u32, u8), f64> = HashMap::new();
+    let (mut ra_slots, mut ra_secs, mut ra_pub) = (vec![], vec![], vec![]);
+    let (mut reveal_last, mut close_resolve) = (vec![], vec![]);
+    // (bell, region) → the first cache's (slots, game secs).
+    let mut first_cache: HashMap<(u32, u8), (u64, f64)> = HashMap::new();
     let mut last_reveal: HashMap<(i32, i32, u32), i64> = HashMap::new();
-    let mut skips: HashMap<(i32, i32, u32), u64> = HashMap::new();
+    let mut unmapped = 0usize;
+    let mut public_lag = |round: u64, x: &Rec| -> Option<(f64, f64, f64)> {
+        let public = drand.round_time(round) as f64 + delay_s;
+        let secs = (x.time as f64 - public).max(0.0);
+        match clock.first_slot_at(public) {
+            Some(s0) => Some((x.slot.saturating_sub(s0) as f64, secs, to_slots(secs))),
+            None => {
+                unmapped += 1;
+                None
+            }
+        }
+    };
     for x in recs {
         let kp = &x.r.key_payload;
         match Kind::from_u8(x.r.kind) {
@@ -196,16 +249,23 @@ pub fn latencies(
                 let round = le_u64(kp, field(Kind::ANCHOR, "round").unwrap_or(5));
                 let a = le_i64(kp, field(Kind::ANCHOR, "a").unwrap_or(13));
                 anchor_a.entry((bell, region)).or_insert(a);
-                let public = drand.round_time(round) as f64 + delay_s;
-                round_anchor.push(to_slots(x.time as f64 - public));
+                if let Some((s, secs, ps)) = public_lag(round, x) {
+                    ra_slots.push(s);
+                    ra_secs.push(secs);
+                    ra_pub.push(ps);
+                }
             }
             Some(Kind::SEED) => {
                 let (bell, region) = (le_u32(kp, 0), kp[4]);
                 let round = le_u64(kp, field(Kind::SEED, "round").unwrap_or(6));
-                let public = drand.round_time(round) as f64 + delay_s;
-                let l = to_slots(x.time as f64 - public);
-                let e = first_cache.entry((bell, region)).or_insert(l);
-                *e = e.min(l);
+                if let Some((s, secs, _)) = public_lag(round, x) {
+                    let e = first_cache
+                        .entry((bell, region))
+                        .or_insert((s as u64, secs));
+                    if secs < e.1 {
+                        *e = (s as u64, secs);
+                    }
+                }
             }
             Some(Kind::REVEAL) => {
                 let (p, q, arrive) = (le_i32(kp, 0), le_i32(kp, 4), le_u32(kp, 8));
@@ -222,15 +282,11 @@ pub fn latencies(
                     close_resolve.push(to_slots((x.time - close) as f64));
                 }
             }
-            Some(Kind::SKIP) => {
-                let (p, q) = (le_i32(kp, 0), le_i32(kp, 4));
-                let b0 = le_u32(kp, 8);
-                *skips.entry((p, q, b0 / 144)).or_default() += 1;
-            }
             _ => {}
         }
     }
-    s_cache.extend(first_cache.values().copied());
+    let sc_slots: Vec<f64> = first_cache.values().map(|v| v.0 as f64).collect();
+    let sc_secs: Vec<f64> = first_cache.values().map(|v| v.1).collect();
     for ((p, q, arrive), t) in &last_reveal {
         if let Some(a) = region_of
             .get(&(*p, *q))
@@ -239,19 +295,171 @@ pub fn latencies(
             reveal_last.push(to_slots((t - a) as f64));
         }
     }
-    let skip_counts: Vec<f64> = skips.values().map(|n| *n as f64).collect();
-    let over6 = skip_counts.iter().filter(|n| **n > 6.0).count();
+    let secs = |v: &[f64]| -> Vec<f64> { v.iter().map(|x| x * slot_secs).collect() };
     json!({
         "slot_game_secs": slot_secs,
-        "round_to_anchor_slots": stats(&round_anchor),
-        "s_to_first_cache_slots": stats(&s_cache),
+        "round_to_anchor_slots": stats(&ra_slots),
+        "round_to_anchor_game_secs": stats(&ra_secs),
+        "round_to_anchor_from_publication_slots": stats(&ra_pub),
+        "s_to_first_cache_slots": stats(&sc_slots),
+        "s_to_first_cache_game_secs": stats(&sc_secs),
         "anchor_to_last_reveal_slots": stats(&reveal_last),
+        "anchor_to_last_reveal_game_secs": stats(&secs(&reveal_last)),
         "close_to_resolve_slots": stats(&close_resolve),
-        "skip_txs_per_province_day": stats(&skip_counts),
-        "province_days_over_6_skips": over6,
+        "close_to_resolve_game_secs": stats(&secs(&close_resolve)),
+        "rounds_without_a_mapped_slot": unmapped,
         "targets_slots_p99": {"round_to_anchor": 2, "s_to_first_cache": 2, "anchor_to_last_reveal": 4, "close_to_resolve": 8, "skips_per_idle_day": 6},
-        "note": "times are game seconds of the landing slot; round publication = round_time + drand delay; close = THE anchor's A + W. The slot targets are criterion 3's for the 20x run; at other scales a slot is another length of game time",
+        "targets_game_secs_p99": {"round_to_anchor": 5, "s_to_first_cache": 5, "anchor_to_last_reveal": 30, "close_to_resolve": 60},
+        "definition": "round -> anchor and S -> first cache in *_slots: landing slot minus the first slot whose Clock is at or after round_time + drand delay (publication), judged at 20x; *_game_secs: game seconds from publication to the landing slot's Clock, judged at 2x. Anchor -> last valid reveal from THE anchor's A; close -> resolve from A + W (W5-B F5, pinned by W6-A)",
     })
+}
+
+/// Catch-up cost (§13.4 criterion 3, I-50): SkipQuiet transactions (SKIP
+/// records) per province-day, split into **idle** province-days (the
+/// Province's `roster_epoch` did not move) and **churned** ones.
+///
+/// The epoch is read from the transactions' post-states (localnet feeds
+/// carry them): a change written by a SkipQuiet counts for the day of the
+/// first bell it commits (`b0`), any other for the day of its landing bell.
+/// A province-day without post-states for its Province is not judged
+/// (`unknown`).
+pub fn catch_up(txs: &[TxRecord], program: &Address, genesis_ts: i64, bell_secs: i64) -> Value {
+    use std::collections::BTreeSet;
+    let mut epoch: HashMap<(i32, i32), u32> = HashMap::new();
+    let mut churned: BTreeSet<(i32, i32, u32)> = BTreeSet::new();
+    let mut skips: BTreeMap<(i32, i32, u32), u64> = BTreeMap::new();
+    let mut with_post = 0usize;
+    let mut order: Vec<&TxRecord> = txs.iter().filter(|t| t.err.is_none()).collect();
+    order.sort_by_key(|t| t.seq);
+    for t in order {
+        let mut skip_day: HashMap<(i32, i32), u32> = HashMap::new();
+        for b in fclient::log::bodies_from_logs(&t.logs, program).unwrap_or_default() {
+            let Ok(r) = Record::decode_with(&b, &lens) else {
+                continue;
+            };
+            if r.kind == Kind::SKIP as u8 {
+                let kp = &r.key_payload;
+                let (p, q, b0) = (le_i32(kp, 0), le_i32(kp, 4), le_u32(kp, 8));
+                *skips.entry((p, q, b0 / 144)).or_default() += 1;
+                skip_day.insert((p, q), b0 / 144);
+            }
+        }
+        let landing_day = ((t.block_time - genesis_ts).max(0) / bell_secs.max(1) / 144) as u32;
+        for (_, a) in &t.post {
+            let Some(a) = a else { continue };
+            if a.data.len() != fclient::abi::size::PROVINCE {
+                continue;
+            }
+            let Ok(pv) = Province::decode(&a.data) else {
+                continue;
+            };
+            with_post += 1;
+            let k = (pv.p as i32, pv.q as i32);
+            let prev = epoch.insert(k, pv.roster_epoch);
+            if prev.is_some_and(|e| e != pv.roster_epoch) {
+                let d = skip_day.get(&k).copied().unwrap_or(landing_day);
+                churned.insert((k.0, k.1, d));
+            }
+        }
+    }
+    let seen: BTreeSet<(i32, i32)> = epoch.keys().copied().collect();
+    let (mut idle, mut churn, mut unknown) = (vec![], vec![], 0usize);
+    let mut idle_over: Vec<String> = vec![];
+    let mut churn_over: Vec<String> = vec![];
+    for ((p, q, d), n) in &skips {
+        if !seen.contains(&(*p, *q)) {
+            unknown += 1;
+        } else if churned.contains(&(*p, *q, *d)) {
+            churn.push(*n as f64);
+            if *n > 6 {
+                churn_over.push(format!("({p},{q}) day {d}: {n}"));
+            }
+        } else {
+            idle.push(*n as f64);
+            if *n > 6 {
+                idle_over.push(format!("({p},{q}) day {d}: {n}"));
+            }
+        }
+    }
+    let all: Vec<f64> = skips.values().map(|n| *n as f64).collect();
+    json!({
+        "skip_txs_per_province_day": stats(&all),
+        "skip_txs_per_idle_province_day": stats(&idle),
+        "skip_txs_per_churned_province_day": stats(&churn),
+        "idle_province_days_over_6": idle_over,
+        "churned_province_days_over_6": churn_over,
+        "province_days_not_judged": unknown,
+        "province_post_states": with_post,
+        "definition": "idle = the Province's roster_epoch unchanged over the day (post-states); a SkipQuiet's change counts for its b0's day",
+    })
+}
+
+/// ClashInputs closability (§13.4 criterion 1: "every ClashInputs closable
+/// after grace"), from the final accounts. Each open ClashInputs is
+/// `closable` (resolved with every present record settled, or no-arrival
+/// inputs whose bell the Province skipped past: CloseClashInputs lands once
+/// `clash_close_grace` has run), `pending` (not yet resolved and the
+/// Province still owes the bell; within `close + 2` bells of the run's last
+/// bell), or **blocked** (resolved with a present record never settled; a
+/// bell the Province passed without resolving or skipping it as
+/// no-arrival; or pending past `close + 2` bells).
+pub fn clash_inputs_check(
+    inp: &verify_core::input::Input,
+    ps: &[Province],
+    recs: &[Rec],
+    last_bell: u32,
+) -> Value {
+    let rn: HashMap<(i16, i16), u32> = ps.iter().map(|p| ((p.p, p.q), p.resolved_next)).collect();
+    let (mut closable, mut pending) = (0usize, 0usize);
+    let mut blocked: Vec<String> = vec![];
+    let mut open = 0usize;
+    for a in inp.finals.values().flatten() {
+        if a.data.len() != fclient::abi::size::CLASH_INPUTS {
+            continue;
+        }
+        let Ok(ci) = fclient::decode::ClashInputs::decode(&a.data) else {
+            continue;
+        };
+        open += 1;
+        let passed = rn.get(&(ci.p, ci.q)).is_some_and(|r| *r > ci.bell);
+        let tag = format!("({},{}) bell {}", ci.p, ci.q, ci.bell);
+        if ci.resolved() {
+            let unsettled: Vec<usize> = (0..24)
+                .filter(|&k| ci.arrivals[k].present != 0 && ci.settled_mask & (1 << k) == 0)
+                .collect();
+            if unsettled.is_empty() {
+                closable += 1;
+            } else if ci.bell + 3 <= last_bell {
+                blocked.push(format!(
+                    "{tag}: present records {unsettled:?} never settled"
+                ));
+            } else {
+                pending += 1;
+            }
+        } else if ci.flags & 1 != 0 && passed {
+            closable += 1;
+        } else if passed {
+            blocked.push(format!(
+                "{tag}: the Province passed the bell without resolving these inputs"
+            ));
+        } else if ci.bell + 3 <= last_bell {
+            blocked.push(format!(
+                "{tag}: not resolved {} bells after its bell",
+                last_bell - ci.bell
+            ));
+        } else {
+            pending += 1;
+        }
+    }
+    let closed = recs
+        .iter()
+        .filter(|x| {
+            x.r.kind == Kind::CLOSE as u8
+                && x.r.key_payload.first()
+                    == Some(&(frontier_abi::layout::AccountKind::ClashInputs as u8))
+        })
+        .count();
+    json!({"closed": closed, "open": open, "closable_after_grace": closable, "pending": pending, "blocked": blocked})
 }
 
 /// Records by kind, transit outcomes and seal codes, and the unsettled
@@ -535,12 +743,31 @@ pub fn decide(facts: &Value) -> Vec<Value> {
             bad.push(format!("{n} {what}"));
         }
     }
-    v.push(if !bad.is_empty() {
-        verdict("1", "fail", bad.join("; "))
-    } else if play_bells < end_bell {
-        verdict("1", "pass", "the run stops before end_bell (EndSeason not expected): no stuck province-bell, every due transit settled exactly once; ClashInputs closability is judged by the exit run")
+    // ClashInputs closability (W6-A; was "judged by the exit run").
+    let ci = &facts["clash_inputs"];
+    let ci_note = if ci.is_null() {
+        "ClashInputs closability not read".to_string()
     } else {
-        verdict("1", "pass", "EndSeason landed; no stuck province-bell; every due transit settled exactly once")
+        let blocked = len(&ci["blocked"]);
+        if blocked > 0 {
+            bad.push(format!(
+                "{blocked} ClashInputs not closable after grace: {}",
+                ci["blocked"]
+            ));
+        }
+        format!(
+            "ClashInputs: {} closed, {} closable after grace, {} pending, {blocked} blocked",
+            f(&ci["closed"]),
+            f(&ci["closable_after_grace"]),
+            f(&ci["pending"])
+        )
+    };
+    v.push(if !bad.is_empty() {
+        verdict("1", "fail", format!("{}; {ci_note}", bad.join("; ")))
+    } else if play_bells < end_bell {
+        verdict("1", "pass", format!("the run stops before end_bell (EndSeason not expected): no stuck province-bell, every due transit settled exactly once; {ci_note}"))
+    } else {
+        verdict("1", "pass", format!("EndSeason landed; no stuck province-bell; every due transit settled exactly once; {ci_note}"))
     });
     // 2 — CU within the budgets.
     let over = len(&facts["over_budget"]);
@@ -562,38 +789,65 @@ pub fn decide(facts: &Value) -> Vec<Value> {
             "every kind within its §5.5 budget (Reveal distribution reported)",
         )
     });
-    // 3 — keeper latencies: slots at 20x, game seconds at 2x.
+    // 3 — keeper latencies: slots at 20x, game seconds at 2x (W5-B F5:
+    // the reference points are pinned in [`latencies`]); catch-up per idle
+    // province-day at 20x (churned days reported).
     let scale = facts["scale"].as_f64().unwrap_or(0.0);
     let lat = &facts["latency"];
-    let slot_secs = lat["slot_game_secs"].as_f64().unwrap_or(0.4 * scale);
+    let cu = &facts["catch_up"];
     let p99 = |k: &str| lat[k]["p99"].as_f64();
-    let checks = [
-        ("round_to_anchor_slots", 2.0, 5.0),
-        ("s_to_first_cache_slots", 2.0, 5.0),
-        ("anchor_to_last_reveal_slots", 4.0, 30.0),
-        ("close_to_resolve_slots", 8.0, 60.0),
-    ];
     let slots_mode = (scale - 20.0).abs() < 1e-9;
     let secs_mode = (scale - 2.0).abs() < 1e-9;
-    if !slots_mode && !secs_mode {
-        v.push(verdict("3", "n.a.", format!("criterion 3's targets are defined at 20x (slots) and 2x (game seconds); this run is {scale}x (figures reported)")));
+    let skip_note = if cu.is_null() {
+        "catch-up not read".to_string()
     } else {
+        format!(
+            "SkipQuiet per idle province-day p99 {} max {} ({} idle days over 6), per churned day p99 {} max {} (reported)",
+            f(&cu["skip_txs_per_idle_province_day"]["p99"]),
+            f(&cu["skip_txs_per_idle_province_day"]["max"]),
+            len(&cu["idle_province_days_over_6"]),
+            f(&cu["skip_txs_per_churned_province_day"]["p99"]),
+            f(&cu["skip_txs_per_churned_province_day"]["max"])
+        )
+    };
+    if !slots_mode && !secs_mode {
+        v.push(verdict("3", "n.a.", format!("criterion 3's targets are defined at 20x (slots) and 2x (game seconds); this run is {scale}x (figures reported); {skip_note}")));
+    } else {
+        let checks: [(&str, f64, &str); 4] = if slots_mode {
+            [
+                ("round_to_anchor_slots", 2.0, "slots"),
+                ("s_to_first_cache_slots", 2.0, "slots"),
+                ("anchor_to_last_reveal_slots", 4.0, "slots"),
+                ("close_to_resolve_slots", 8.0, "slots"),
+            ]
+        } else {
+            [
+                ("round_to_anchor_game_secs", 5.0, "s"),
+                ("s_to_first_cache_game_secs", 5.0, "s"),
+                ("anchor_to_last_reveal_game_secs", 30.0, "s"),
+                ("close_to_resolve_game_secs", 60.0, "s"),
+            ]
+        };
         let mut miss = vec![];
         let mut none = vec![];
-        for (k, slots, secs) in checks {
+        let mut seen = vec![];
+        for (k, target, unit) in checks {
             match p99(k) {
                 None => none.push(k),
-                Some(x) if slots_mode && x > slots => {
-                    miss.push(format!("{k} p99 {x:.2} > {slots} slots"))
-                }
-                Some(x) if secs_mode && x * slot_secs > secs => {
-                    miss.push(format!("{k} p99 {:.1} s > {secs} s", x * slot_secs))
-                }
-                _ => {}
+                Some(x) if x > target => miss.push(format!("{k} p99 {x:.2} > {target} {unit}")),
+                Some(x) => seen.push(format!("{k} p99 {x:.2} ≤ {target} {unit}")),
             }
         }
-        let over6 = lat["province_days_over_6_skips"].as_u64().unwrap_or(0);
-        let skip_note = format!("{over6} province-days over 6 SkipQuiet (idle and churned not told apart: reported, not decided)");
+        if slots_mode {
+            if cu.is_null() {
+                none.push("catch_up");
+            } else if len(&cu["idle_province_days_over_6"]) > 0 {
+                miss.push(format!(
+                    "idle province-days over 6 SkipQuiet: {}",
+                    cu["idle_province_days_over_6"]
+                ));
+            }
+        }
         v.push(if !miss.is_empty() {
             verdict("3", "fail", format!("{}; {skip_note}", miss.join("; ")))
         } else if !none.is_empty() {
@@ -603,11 +857,7 @@ pub fn decide(facts: &Value) -> Vec<Value> {
                 format!("no samples for {}; {skip_note}", none.join(", ")),
             )
         } else {
-            verdict(
-                "3",
-                "pass",
-                format!("every p99 within its target; {skip_note}"),
-            )
+            verdict("3", "pass", format!("{}; {skip_note}", seen.join("; ")))
         });
     }
     // 4 — liveness.
@@ -791,16 +1041,25 @@ pub async fn report(rd: &RunDir) -> i32 {
     };
     let recs = records(&inp.txs, &program);
     let (cu, reveal) = cu_table(&inp.txs, &program);
+    // A drain at another scale (W6-A) is left out of the latencies: they
+    // are judged over play, at the run's scale.
+    let cut = st["play"]["drain_scale"]["from_game"]
+        .as_i64()
+        .unwrap_or(i64::MAX);
+    let play_recs: Vec<Rec> = recs.iter().filter(|x| x.time < cut).cloned().collect();
+    let clock = SlotClock::new(inp.txs.iter().filter(|t| t.block_time < cut), 0.4 * scale);
     let lat = latencies(
-        &recs,
-        scale,
+        &play_recs,
+        &clock,
         &drand,
         delay_s,
         frontier_abi::presets::M1_LOCAL_7D.reveal_window,
     );
+    let catch = catch_up(&inp.txs, &program, genesis, bell_secs);
     let out = outcomes(&recs, last_bell);
     let ps = final_provinces(&inp);
     let pc = province_checks(&ps, play_bells, last_bell);
+    let cis = clash_inputs_check(&inp, &ps, &recs, last_bell);
     let ka = keeper_summary(
         &read_jsonl(&rd.path("metrics/keeper-a.jsonl")),
         0,
@@ -845,9 +1104,11 @@ pub async fn report(rd: &RunDir) -> i32 {
         "1_complete": {"reaches_end_bell": play_bells >= end_bell, "end_season": ev["end_season"],
             "stuck_province_bells": pc["stuck_province_bells"].as_array().map_or(0, |a| a.len()),
             "unsettled_due_transits": out["unsettled_due"].as_array().map_or(0, |a| a.len()),
+            "clash_inputs": cis,
             "note": if play_bells < end_bell { "the run stops before end_bell: EndSeason not expected" } else { "" }},
         "2_cu": {"over_budget": over, "reveal": stats(&reveal)},
         "3_latency_slots": lat,
+        "3_catch_up": catch,
         "4_liveness": {"keeper_a_min_effective_n": ka["min_reveal_effective_n_in_play"], "effective_n_ok": ka["effective_n_ok"]},
         "5_personas": {"violated": pers["violated"]},
         "6_herald": {"loads": loads.iter().map(|l| l["verdict"].clone()).collect::<Vec<_>>(), "alarms": herald["alarms_total"]},
@@ -866,6 +1127,7 @@ pub async fn report(rd: &RunDir) -> i32 {
         "stuck_province_bells": pc["stuck_province_bells"], "cohorts_open_past_24_bells": pc["cohorts_open_past_24_bells"],
         "unsettled_due": out["unsettled_due"], "settled_more_than_once": out["settled_more_than_once"],
         "settles_without_depart": out["settles_without_depart"], "over_budget": over, "latency": lat,
+        "catch_up": catch, "clash_inputs": cis,
         "valid_unrevealed": verify_report["liveness"]["valid_unrevealed"], "above_cap_holds": above_cap,
         "personas": pers["personas"], "violated": pers["violated"],
         "keeper_a": ka, "keeper_b": if st["config"]["keeper_b"] == false { Value::Null } else { kb.clone() },
@@ -881,7 +1143,7 @@ pub async fn report(rd: &RunDir) -> i32 {
         "cu": cu, "reveal_cu": stats(&reveal), "failures": failures(&inp.txs, &program),
         "outcomes": out, "provinces": pc, "keepers": {"a": ka, "b": kb}, "herald": herald,
         "events": ev, "bots": {"personas": pers, "errors": bots["errors"], "bots": bots["bots"]},
-        "verify": verify, "tamper": {"ok": tamper["ok"], "total": tamper["total"], "on_run": tamper["on_run"]},
+        "verify": verify, "tamper": {"ok": tamper["ok"], "total": tamper["total"], "on_run": tamper["on_run"], "secs": tamper["secs"]},
         "loads": loads, "criteria": criteria, "hold_effects": holds,
     });
     let md = markdown(&rep);
@@ -933,8 +1195,11 @@ pub fn markdown(r: &Value) -> String {
     }
     m.push_str("\n## Verdicts\n\n");
     m.push_str(&format!(
-        "- verify: **{}** (fail codes {})\n- tamper: {}/{} classes FAIL with their codes ({} built from the run)\n",
-        f(&r["verify"]["verdict"]), f(&r["verify"]["fail_codes"]), f(&r["tamper"]["ok"]), f(&r["tamper"]["total"]), f(&r["tamper"]["on_run"])
+        "- verify: **{}** (fail codes {}; {} txs, read {} s, verify {} s — E6 wall time)\n- tamper: {}/{} classes FAIL with their codes ({} built from the run; {} s)\n- `.so` pin: expected sha256 {} ({})\n",
+        f(&r["verify"]["verdict"]), f(&r["verify"]["fail_codes"]), f(&r["verify"]["txs"]), f(&r["verify"]["read_secs"]),
+        f(&r["verify"]["verify_secs"]), f(&r["tamper"]["ok"]), f(&r["tamper"]["total"]), f(&r["tamper"]["on_run"]),
+        f(&r["tamper"]["secs"]), f(&r["config"]["expect_so_sha256"]),
+        if r["config"]["expect_so_sha256"].is_string() { "the release build record; V2 checks the deployed program against it" } else { "none: V2 checks the deployed file's own hash, not exit-grade" }
     ));
     for l in r["loads"].as_array().cloned().unwrap_or_default() {
         let v = &l["verdict"];
@@ -979,25 +1244,92 @@ pub fn markdown(r: &Value) -> String {
     ));
     let l = &r["criteria"]["3_latency_slots"];
     m.push_str(&format!(
-        "\n## Keeper latencies (slots of {} game s)\n\n| measure | n | p50 | p99 | max | target p99 |\n|---|---|---|---|---|---|\n",
+        "\n## Keeper latencies (a slot is {} game s)\n\nRound → anchor and S → first cache in slots count from the first slot whose Clock shows the round public (round time + drand delay) to the landing slot; in game seconds from the publication instant (W5-B F5, pinned by W6-A). Criterion 3: the slot targets at 20×, the game-second targets at 2×.\n\n| measure | n | p50 | p99 | max | target p99 (20×) | game s p50 | game s p99 | target p99 (2×) |\n|---|---|---|---|---|---|---|---|---|\n",
         f(&l["slot_game_secs"])
     ));
-    for (k, t) in [
-        ("round_to_anchor_slots", "2"),
-        ("s_to_first_cache_slots", "2"),
-        ("anchor_to_last_reveal_slots", "4"),
-        ("close_to_resolve_slots", "8"),
-        ("skip_txs_per_province_day", "6 (idle)"),
+    for (k, t, ks, ts) in [
+        (
+            "round_to_anchor_slots",
+            "2",
+            "round_to_anchor_game_secs",
+            "5 s",
+        ),
+        (
+            "s_to_first_cache_slots",
+            "2",
+            "s_to_first_cache_game_secs",
+            "5 s",
+        ),
+        (
+            "anchor_to_last_reveal_slots",
+            "4",
+            "anchor_to_last_reveal_game_secs",
+            "30 s",
+        ),
+        (
+            "close_to_resolve_slots",
+            "8",
+            "close_to_resolve_game_secs",
+            "60 s",
+        ),
     ] {
         let s = &l[k];
+        let g = &l[ks];
         m.push_str(&format!(
-            "| {k} | {} | {} | {} | {} | {t} |\n",
+            "| {k} | {} | {} | {} | {} | {t} | {} | {} | {ts} |\n",
             f(&s["n"]),
             f(&s["p50"]),
             f(&s["p99"]),
-            f(&s["max"])
+            f(&s["max"]),
+            f(&g["p50"]),
+            f(&g["p99"])
         ));
     }
+    let rp = &l["round_to_anchor_from_publication_slots"];
+    m.push_str(&format!(
+        "\nRound → anchor from the publication instant, in slots: p50 {}, p99 {}, max {}.\n",
+        f(&rp["p50"]),
+        f(&rp["p99"]),
+        f(&rp["max"])
+    ));
+    let c = &r["criteria"]["3_catch_up"];
+    m.push_str("\n### Catch-up (SkipQuiet transactions per province-day)\n\n| province-days | n | p50 | p99 | max | over 6 |\n|---|---|---|---|---|---|\n");
+    for (name, k, over) in [
+        (
+            "idle (roster unchanged)",
+            "skip_txs_per_idle_province_day",
+            "idle_province_days_over_6",
+        ),
+        (
+            "churned",
+            "skip_txs_per_churned_province_day",
+            "churned_province_days_over_6",
+        ),
+        ("all", "skip_txs_per_province_day", ""),
+    ] {
+        let s = &c[k];
+        m.push_str(&format!(
+            "| {name} | {} | {} | {} | {} | {} |\n",
+            f(&s["n"]),
+            f(&s["p50"]),
+            f(&s["p99"]),
+            f(&s["max"]),
+            if over.is_empty() {
+                "–".to_string()
+            } else {
+                c[over].as_array().map_or(0, |a| a.len()).to_string()
+            }
+        ));
+    }
+    let ci = &r["criteria"]["1_complete"]["clash_inputs"];
+    m.push_str(&format!(
+        "\n**ClashInputs:** {} closed, {} open: {} closable after grace, {} pending, {} blocked.\n",
+        f(&ci["closed"]),
+        f(&ci["open"]),
+        f(&ci["closable_after_grace"]),
+        f(&ci["pending"]),
+        ci["blocked"].as_array().map_or(0, |a| a.len())
+    ));
     let o = &r["outcomes"];
     m.push_str(&format!(
         "\n## Play\n\n- records: {}\n- transits: {}\n- departs {} (due {}), unsettled due: {}\n- bad-seal codes: {}\n- failed transactions: {}\n",
@@ -1097,11 +1429,17 @@ mod tests {
             genesis: frontier_abi::presets::M1_LOCAL_7D.drand_genesis,
             period: 3,
         };
-        let lat = latencies(&recs, 20.0, &drand, 1.0, 600);
+        let clock = SlotClock::new(&inp.txs, 8.0);
+        let lat = latencies(&recs, &clock, &drand, 1.0, 600);
         assert!(
             lat["round_to_anchor_slots"]["n"].as_u64().unwrap() > 0,
             "{lat}"
         );
+        assert_eq!(
+            lat["round_to_anchor_slots"]["n"], lat["round_to_anchor_game_secs"]["n"],
+            "{lat}"
+        );
+        assert_eq!(lat["rounds_without_a_mapped_slot"], 0, "{lat}");
         assert!(
             lat["close_to_resolve_slots"]["n"].as_u64().unwrap() > 0,
             "{lat}"
@@ -1123,7 +1461,12 @@ mod tests {
             "stuck_province_bells": [], "cohorts_open_past_24_bells": [], "unsettled_due": [],
             "settled_more_than_once": [], "settles_without_depart": [], "over_budget": [],
             "latency": {"slot_game_secs": 8.0, "round_to_anchor_slots": {"p99": 1.5}, "s_to_first_cache_slots": {"p99": 2.0},
-                "anchor_to_last_reveal_slots": {"p99": 3.0}, "close_to_resolve_slots": {"p99": 6.0}, "province_days_over_6_skips": 0},
+                "anchor_to_last_reveal_slots": {"p99": 3.0}, "close_to_resolve_slots": {"p99": 6.0},
+                "round_to_anchor_game_secs": {"p99": 12.0}, "s_to_first_cache_game_secs": {"p99": 16.0},
+                "anchor_to_last_reveal_game_secs": {"p99": 24.0}, "close_to_resolve_game_secs": {"p99": 48.0}},
+            "catch_up": {"idle_province_days_over_6": [], "churned_province_days_over_6": ["(1,1) day 0: 9"],
+                "skip_txs_per_idle_province_day": {"p99": 4.0, "max": 4.0}, "skip_txs_per_churned_province_day": {"p99": 9.0, "max": 9.0}},
+            "clash_inputs": {"closed": 0, "open": 3, "closable_after_grace": 2, "pending": 1, "blocked": []},
             "valid_unrevealed": [{"host_id": "1", "arrive_bell": 50}],
             "above_cap_holds": [{"bell": 49, "game_secs": 600.0}],
             "personas": [{"persona": "min_tip", "verdict": "observed"}], "violated": [],
@@ -1161,6 +1504,28 @@ mod tests {
             "a post-play load is not criterion-6 evidence"
         );
         assert_eq!(criteria_exit(&d), 1);
+        // At 20x an idle province-day over 6 SkipQuiet fails criterion 3;
+        // a churned one is reported only.
+        let mut f = good_facts();
+        f["catch_up"]["idle_province_days_over_6"] = json!(["(2,2) day 1: 7"]);
+        let d = decide(&f);
+        assert_eq!(d[2]["status"], "fail", "{d:?}");
+        // At 2x the game-second targets are judged, not the slot ones.
+        let mut f = good_facts();
+        f["scale"] = json!(2.0);
+        f["latency"]["slot_game_secs"] = json!(0.8);
+        let d = decide(&f);
+        assert_eq!(d[2]["status"], "fail", "12 s and 16 s are over 5 s: {d:?}");
+        f["latency"]["round_to_anchor_game_secs"]["p99"] = json!(2.4);
+        f["latency"]["s_to_first_cache_game_secs"]["p99"] = json!(4.0);
+        f["catch_up"]["idle_province_days_over_6"] = json!(["(2,2) day 1: 7"]);
+        let d = decide(&f);
+        assert_eq!(d[2]["status"], "pass", "catch-up is a 20x target: {d:?}");
+        // A blocked ClashInputs fails criterion 1.
+        let mut f = good_facts();
+        f["clash_inputs"]["blocked"] = json!(["(1,1) bell 9: present records [0] never settled"]);
+        let d = decide(&f);
+        assert_eq!(d[0]["status"], "fail", "{d:?}");
         // Other scales: criterion 3 is not decided.
         let mut f = good_facts();
         f["scale"] = json!(100.0);
@@ -1220,6 +1585,88 @@ mod tests {
             1,
             "{out}"
         );
+    }
+
+    /// W5-B F5: the slot reference is the first slot whose Clock reaches
+    /// the publication instant.
+    #[test]
+    fn slot_clock_finds_the_first_slot_at_a_time() {
+        let tx = |slot: u64, t: i64| TxRecord {
+            seq: slot,
+            slot,
+            signature: Default::default(),
+            block_time: t,
+            tx: vec![],
+            logs: vec![],
+            err: None,
+            code: None,
+            units: 0,
+            fee: 0,
+            post: vec![],
+        };
+        // 8 game s per slot (20x); slots 10 and 14 observed.
+        let c = SlotClock::new(&[tx(14, 1_032), tx(10, 1_000)], 8.0);
+        // (the same from any iterator of records)
+        assert_eq!(c.first_slot_at(1_000.0), Some(10));
+        assert_eq!(c.first_slot_at(1_001.0), Some(11), "Clock 1,008 at slot 11");
+        assert_eq!(c.first_slot_at(1_008.0), Some(11));
+        assert_eq!(c.first_slot_at(1_009.0), Some(12));
+        assert_eq!(c.first_slot_at(1_032.0), Some(14));
+        assert_eq!(
+            c.first_slot_at(990.0),
+            Some(9),
+            "counted back before the first point"
+        );
+        assert_eq!(c.first_slot_at(1_033.0), None);
+        // A pause (the Clock stopped while the chain was down) never puts
+        // the answer at or before an observed earlier slot.
+        let c = SlotClock::new(&[tx(10, 1_000), tx(11, 1_100)], 8.0);
+        assert_eq!(c.first_slot_at(1_050.0), Some(11));
+    }
+
+    #[test]
+    fn catch_up_and_clash_inputs_on_the_program_recording() {
+        let inp = program_fixture();
+        let program = inp.cfg.program;
+        let genesis = inp
+            .txs
+            .iter()
+            .filter(|t| t.err.is_none())
+            .flat_map(|t| fclient::log::bodies_from_logs(&t.logs, &program).unwrap_or_default())
+            .filter_map(|b| Record::decode_with(&b, &lens).ok())
+            .find(|r| r.kind == Kind::SEASON_CREATED as u8)
+            .map(|r| {
+                le_i64(
+                    &r.key_payload,
+                    field(Kind::SEASON_CREATED, "genesis_ts").unwrap(),
+                )
+            })
+            .expect("SEASON_CREATED");
+        let c = catch_up(&inp.txs, &program, genesis, 600);
+        assert!(c["province_post_states"].as_u64().unwrap() > 0, "{c}");
+        let all = c["skip_txs_per_province_day"]["n"].as_u64().unwrap();
+        let idle = c["skip_txs_per_idle_province_day"]["n"].as_u64().unwrap();
+        let churned = c["skip_txs_per_churned_province_day"]["n"]
+            .as_u64()
+            .unwrap();
+        assert!(all > 0, "{c}");
+        assert_eq!(
+            idle + churned + c["province_days_not_judged"].as_u64().unwrap(),
+            all,
+            "{c}"
+        );
+        let recs = records(&inp.txs, &program);
+        let ps = final_provinces(&inp);
+        let ci = clash_inputs_check(&inp, &ps, &recs, 170);
+        assert!(ci["open"].as_u64().unwrap() > 0, "{ci}");
+        assert_eq!(
+            ci["open"].as_u64().unwrap(),
+            ci["closable_after_grace"].as_u64().unwrap()
+                + ci["pending"].as_u64().unwrap()
+                + ci["blocked"].as_array().unwrap().len() as u64,
+            "{ci}"
+        );
+        assert_eq!(ci["blocked"], json!([]), "an honest recording: {ci}");
     }
 
     #[test]

@@ -1,19 +1,27 @@
-# A short real-round smoke (W5 wave note 2): the release .so against the
-# quicknet archive's rounds at G0 = 1788998400, 3 game hours at 100x,
-# 20 bots, on the nightly ports. PENDING-OWNER until the archive has its
-# manifest.json.
+# The real-round smoke (W6-A; W5 wave note 2, DECISIONS O11): the release
+# .so against the quicknet archive's rounds at G0 = 1788998400 (O-M1-12
+# item 3, fetched 2026-09-28: 246,001 rounds 32,065,012..=32,311,012), one
+# game day at 100x, 100 bots with the adversary schedule, on ports
+# 41600-41699 (the nightly keeps 41500).
+#
+#   frontier-stack up --config frontier-node/configs/real-smoke.toml \
+#     --expect-so-sha256 <file_sha256 of scripts/build-frontier.sh>
+#   (then verify, tamper, report, down with --run-id real-smoke)
 run_id = "real-smoke"
 mode = "accel"
 beacon = "archive"
 scale = 100
 preseason_scale = 2000
-game_hours = 3
+days = 1
 drain_bells = 26
-bots = 20
+bots = 100
 bot_seed = 3
 season_id = 7
-base_port = 41500
+base_port = 41600
 g0 = 1788998400
 
 [paths]
 archive = "../../data/drand-archive-quicknet-g0-1788998400"
+
+[adversary]
+enabled = true

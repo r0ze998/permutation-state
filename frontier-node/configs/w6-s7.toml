@@ -3,8 +3,11 @@
 # item 3; G0 = 1788998400 = 2026-09-10T00:00:00Z, rounds
 # 32,065,012..=32,311,012), the release .so, 20x (7 game days in 8.4 h),
 # chaos, the adversary schedule and 5,000 viewers for one game day.
-# Until the archive has its manifest.json, `up` answers PENDING-OWNER
-# (exit 3) and the rehearsal is w6-s7-rehearsal.toml.
+# The archive is complete (manifest.json, 2026-09-28); an unfinished one
+# answers PENDING (exit 4). The Gate W6 line itself names no --config (and
+# no --adversary): scripts/m1-run-s7.sh runs that line with the release
+# build's --expect-so-sha256; this file is the same run with the adversary
+# schedule on.
 run_id = "w6-s7"
 mode = "accel"
 beacon = "archive"

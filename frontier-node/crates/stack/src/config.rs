@@ -134,6 +134,11 @@ pub struct StackConfig {
     pub scale: f64,
     /// The pre-season scale: AnnounceSeason's 24-h lead in ≈ 43 s (I-54).
     pub preseason_scale: f64,
+    /// The scale of the keeper-only drain after play (W6-A). `None`: the
+    /// run's scale, but at least 20× (the exit run's scale), so a scale-2
+    /// latency run does not spend 2.2 h of wall time on its 26-bell drain.
+    /// Latencies are judged over play only.
+    pub drain_scale: Option<f64>,
     /// Play length in game days (fractional allowed), unless `game_hours`.
     pub days: f64,
     pub game_hours: Option<f64>,
@@ -210,6 +215,7 @@ impl Default for StackConfig {
             beacon: Beacon::TestKey,
             scale: 100.0,
             preseason_scale: 2_000.0,
+            drain_scale: None,
             days: 1.0,
             game_hours: None,
             drain_bells: 26,
@@ -325,6 +331,9 @@ impl StackConfig {
         }
         if let Some(v) = f!("preseason_scale") {
             c.preseason_scale = pos(v, "preseason_scale")?;
+        }
+        if let Some(v) = f!("drain_scale") {
+            c.drain_scale = Some(pos(v, "drain_scale")?);
         }
         if let Some(v) = f!("days") {
             c.days = pos(v, "days")?;
@@ -508,6 +517,9 @@ impl StackConfig {
         if !(self.preseason_scale > 0.0 && self.preseason_scale <= 100_000.0) {
             return Err("preseason_scale in (0, 100000]".into());
         }
+        if !(self.drain_scale() > 0.0 && self.drain_scale() <= 100_000.0) {
+            return Err("drain_scale in (0, 100000]".into());
+        }
         if let Some(t) = self
             .chaos_targets
             .iter()
@@ -554,6 +566,12 @@ impl StackConfig {
     }
 
     /// Play length in game seconds.
+    /// The drain's scale: `drain_scale`, else the run's scale but at
+    /// least 20×.
+    pub fn drain_scale(&self) -> f64 {
+        self.drain_scale.unwrap_or(self.scale.max(20.0))
+    }
+
     pub fn play_secs(&self) -> i64 {
         match self.game_hours {
             Some(h) => (h * 3_600.0).round() as i64,
@@ -578,6 +596,7 @@ impl StackConfig {
             "beacon": self.beacon.name(),
             "scale": self.scale,
             "preseason_scale": self.preseason_scale,
+            "drain_scale": self.drain_scale(),
             "days": self.days,
             "game_hours": self.game_hours,
             "drain_bells": self.drain_bells,
@@ -644,6 +663,7 @@ pub fn apply_flags(c: &mut StackConfig, flags: &[(String, Option<String>)]) -> R
             "beacon" => c.beacon = parse_beacon(&need(k, v)?)?,
             "scale" => c.scale = pos(num(k, v)?, "--scale")?,
             "preseason-scale" => c.preseason_scale = pos(num(k, v)?, "--preseason-scale")?,
+            "drain-scale" => c.drain_scale = Some(pos(num(k, v)?, "--drain-scale")?),
             "days" => {
                 c.days = pos(num(k, v)?, "--days")?;
                 c.game_hours = None;
@@ -784,6 +804,26 @@ mod tests {
         assert_eq!(c.play_secs(), 21_600);
         assert!(!c.chaos);
         assert_eq!(c.ports().unwrap().herald, 41_041);
+    }
+
+    /// W6-A: the drain of a slow run goes at 20x unless set; faster runs
+    /// drain at their own scale.
+    #[test]
+    fn drain_scale_defaults() {
+        let mut c = StackConfig::default();
+        assert_eq!(c.drain_scale(), 100.0);
+        c.scale = 2.0;
+        assert_eq!(c.drain_scale(), 20.0);
+        c.scale = 20.0;
+        assert_eq!(c.drain_scale(), 20.0);
+        let f = split_flags(&["--drain-scale".into(), "50".into()]).unwrap();
+        apply_flags(&mut c, &f).unwrap();
+        assert_eq!(c.drain_scale(), 50.0);
+        let t = StackConfig::from_toml("scale = 2\ndrain_scale = 2\n").unwrap();
+        assert_eq!(t.drain_scale(), 2.0);
+        assert!(split_flags(&["--drain-scale".into(), "0".into()])
+            .and_then(|f| apply_flags(&mut StackConfig::default(), &f))
+            .is_err());
     }
 
     #[test]

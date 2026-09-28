@@ -966,6 +966,10 @@ async fn supervise(
 ) -> Result<(), String> {
     let scale = st.cfg.scale;
     let wall_per_game = 1.0 / scale;
+    // The chain's scale now: the run's through play, the drain's after it
+    // (W6-A: a scale-2 run drains at 20x).
+    let mut cur_scale = scale;
+    let mut drain_scale_failures = 0u32;
     // Chaos plan over the play window.
     let targets: Vec<String> = chaos::TARGETS
         .iter()
@@ -1096,7 +1100,7 @@ async fn supervise(
                 if n == "localnet" {
                     // The recovered header's scale may be the pre-season's.
                     if st.chain.wait_healthy(Duration::from_secs(60)).await.is_ok() {
-                        let _ = st.chain.set_scale(scale).await;
+                        let _ = st.chain.set_scale(cur_scale).await;
                     }
                 }
                 st.save("running");
@@ -1318,6 +1322,33 @@ async fn supervise(
                         json!({"why": "play is over", "play_end": play_end}),
                     );
                     st.save("running");
+                }
+            }
+        }
+        // The drain runs at the drain's scale once the fleet is done (one
+        // bell after play; latencies are judged over play only).
+        let drain_scale = st.cfg.drain_scale();
+        if now >= play_end + bell_secs
+            && (drain_scale - cur_scale).abs() > 1e-9
+            && drain_scale_failures < 5
+        {
+            match st.chain.set_scale(drain_scale).await {
+                Ok(()) => {
+                    cur_scale = drain_scale;
+                    st.state["play"]["drain_scale"] =
+                        json!({"scale": drain_scale, "from_slot": last.slot, "from_game": now});
+                    st.run.event(
+                        Some(now),
+                        "drain-scale",
+                        json!({"scale": drain_scale, "slot": last.slot}),
+                    );
+                    log_line(&format!("drain at {drain_scale}x from slot {}", last.slot));
+                    st.save("running");
+                }
+                Err(e) => {
+                    drain_scale_failures += 1;
+                    st.run
+                        .event(Some(now), "drain-scale-failed", json!({"error": e}));
                 }
             }
         }
