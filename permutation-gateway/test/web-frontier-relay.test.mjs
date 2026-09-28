@@ -255,6 +255,39 @@ test('settle shapes carry no authority signature and are charged to the requeste
   assert.equal(ix.keys[4].pubkey, A.clashInputs(-2, 7, 44));
   assert.equal(ix.keys[11].pubkey, r.feePayer, 'settle_beneficiary = the data\'s beneficiary = the fee payer');
   assert.equal(await left(), before - 2);
+  // v1.7 (I-56, integ-W4 hand-over to W5-E): the camp's winner names its owner's Citizen as the 14th account; the relay takes it.
+  const c = await fplay.submit({ name: 'SettleTransit', signer: null, requester: session, citizen,
+    accounts: fp => fplay.accountsFor('SettleTransit', v({ holding: HOLD, settle: { dest: { p: -2, q: 7 }, arriveBell: 44, faction: 0, slotIndex: 1, anchor: A.bellAnchor(44, 5),
+      slotBeneficiary: fp, resolver: fp, rentPayer: fp, beneficiary: fp, campCitizen: citizen } })),
+    fields: fp => ({ transit_slot: 1, commit: u8(32, 4), seal: u8(165, 5), beneficiary: new PublicKey(fp).toBytes() }) });
+  assert.equal(c.ok, true, `${c.code} ${c.error}`);
+  const cix = R.chain.sent.at(-1).instructions.at(-1);
+  assert.equal(cix.keys.length, 14);
+  assert.deepEqual([cix.keys[13].pubkey, cix.keys[13].isWritable, cix.keys[13].isSigner], [citizen, true, false]);
+});
+
+test('the camp winner (fclient camp_winner) and camp_mask read from the raw ClashInputs bytes', async () => {
+  assert.equal(fplay.campWinner(0b1000, 0, 3, 1), true, 'faction 0, slot 3 is bit 3');
+  assert.equal(fplay.campWinner(0b1000 | (1 << 9), 2, 1, 1), false, 'only the lowest set bit wins');
+  assert.equal(fplay.campWinner(1 << 9, 2, 1, 1), true, 'faction 2, slot 1 is bit 9');
+  assert.equal(fplay.campWinner(1 << 9, 2, 1, 2), false, 'only a host that Stays');
+  assert.equal(fplay.campWinner(0, 0, 0, 1), false, 'no camp');
+  assert.equal(fplay.campWinner(1 << 23, 5, 3, 1), true, 'the last position');
+  const raw = new Uint8Array(1280);
+  new DataView(raw.buffer).setUint32(fplay.CAMP_MASK_OFFSET, (1 << 9) | (1 << 12), true);
+  assert.equal(fplay.campMaskOf(raw), (1 << 9) | (1 << 12));
+  assert.equal(fplay.campMaskOf(new Uint8Array(10)), 0);
+  const { campCitizenOf } = await import('../../permutation-server/web/frontier/controller.mjs');
+  const owner = new Uint8Array(32).fill(9);
+  const arrivals = Array.from({ length: 24 }, () => ({ present: 0, hostId: 0n, fate: 0 }));
+  arrivals[2 * 4 + 1] = { present: 1, hostId: 77n, fate: 1 };
+  const m = { env: { inputs: { arrivals } }, dest: { p: 3, q: -1 }, transit: { arriveBell: 50 } };
+  const heraldClient = { clash: async (p, q, b) => ({ ok: p === 3 && q === -1 && b === 50, report: { inputs_b64: Buffer.from(raw).toString('base64') } }) };
+  const got = await campCitizenOf(m, 77n, { heraldClient, holding: { ownerCitizen: owner }, faction: 2 });
+  assert.equal(got, new PublicKey(owner).toBase58(), 'the Holding\'s owner Citizen');
+  assert.equal(await campCitizenOf(m, 78n, { heraldClient, holding: { ownerCitizen: owner }, faction: 2 }), null, 'another host');
+  arrivals[2 * 4 + 1].fate = 3;
+  assert.equal(await campCitizenOf(m, 77n, { heraldClient, holding: { ownerCitizen: owner }, faction: 2 }), null, 'not Stays');
 });
 
 // ------------------------------------------------------------------ reveals, tampering, errors

@@ -10,7 +10,7 @@ import { FS, invalidate } from './fstate.mjs';
 import * as io from './fchainio.mjs';
 import * as fsession from './fsession.mjs';
 import * as book from './marchbook.mjs';
-import { submit, track, accountsFor } from './fplay.mjs';
+import { submit, track, accountsFor, campMaskOf, campWinner } from './fplay.mjs';
 import { sendMarch, planRoute, earliestBell, arrivalWindow, tipOptions, incomingWarnings, DEPART_MARGIN_SECS } from './fmarch.mjs';
 import { landState, hostsIn } from './fland.mjs';
 import { toggleTile } from './screens/explore.mjs';
@@ -364,6 +364,24 @@ async function settleExplore() {
   return act('SettleExplore', { v: ctx({ holding: h, settle }), signer: null, requester: FS.session });
 }
 
+/**
+ * The Citizen a SettleTransit must name when this host won the camp (v1.7,
+ * I-56; the keeper's rule, fclient camp_winner): the host's arrival record
+ * in the resolved ClashInputs Stays at the lowest `camp_mask` position. The
+ * mask comes from the raw bytes of the herald's clash report; the fate from
+ * the arrival bell's own envelope. The Holding's owner Citizen, or null.
+ */
+export async function campCitizenOf(m, hostId, { heraldClient = herald, holding = FS.holdings?.[0], faction = FS.citizen?.faction } = {}) {
+  const ci = m.env?.inputs;
+  if (!ci || !m.dest || !m.transit || !holding || !Number.isInteger(faction)) return null;
+  const k = [0, 1, 2, 3].find(i => { const r = ci.arrivals?.[faction * 4 + i]; return r?.present === 1 && String(r.hostId) === String(hostId); });
+  if (k === undefined || ci.arrivals[faction * 4 + k].fate !== 1) return null;
+  const rep = await heraldClient.clash(m.dest.p, m.dest.q, m.transit.arriveBell);
+  const raw = rep?.ok && rep.report?.inputs_b64 ? fromBase64(rep.report.inputs_b64) : null;
+  if (!raw || !campWinner(campMaskOf(raw), faction, k, ci.arrivals[faction * 4 + k].fate)) return null;
+  return toBase58(holding.ownerCitizen);
+}
+
 async function settleTransit(hostId) {
   const m = (FS.marches ?? []).find(x => String(x.entry?.host) === String(hostId));
   const h = FS.holdings[0];
@@ -377,9 +395,10 @@ async function settleTransit(hostId) {
   const inputs = m.env?.inputs ?? null;
   const archive = m.record?.archived;
   const anchor = archive ? A.of('AnchorArchive', { region: m.region, part: archivePartOf(m.transit.arriveBell) }) : A.of('BellAnchor', { bell: m.transit.arriveBell, region: m.region });
+  const campCitizen = await campCitizenOf(m, hostId);
   const v = fp => ctx({ holding: { p: h.p, q: h.q, site: h.site }, settle: {
     dest: m.dest, arriveBell: m.transit.arriveBell, faction: FS.citizen.faction, slotIndex: slotAcc?.i ?? 0, anchor,
-    slotBeneficiary: slotAcc ? toBase58(slotAcc.beneficiary) : fp, resolver: inputs ? toBase58(inputs.resolver) : fp, rentPayer: toBase58(h.rentPayer), beneficiary: fp } });
+    slotBeneficiary: slotAcc ? toBase58(slotAcc.beneficiary) : fp, resolver: inputs ? toBase58(inputs.resolver) : fp, rentPayer: toBase58(h.rentPayer), beneficiary: fp, campCitizen } });
   return act('SettleTransit', { v, fields: fp => ({ transit_slot: m.entry.transitSlot, commit, seal, beneficiary: fromBase58(fp) }), signer: null, requester: FS.session });
 }
 
