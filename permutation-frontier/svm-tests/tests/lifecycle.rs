@@ -626,43 +626,57 @@ fn g13_close_season_float_on_an_aborted_season() {
     assert_eq!(records::of_kind(&l.logs, Kind::CLOSE).len(), 1);
 }
 
-/// G1 of the float parts: the largest pair list a legacy transaction fits
-/// (10 pairs: 30 accounts with the fixed ten) for each part, within
-/// CloseSeason's 60k CU and 1,232 B. Archives are 6,144 B each, so part 9
-/// needs a loaded-data limit above `L(CloseSeason)` (whose worst set is the
-/// 48 JoinShards): the client adds 6,272 B per archive pair (measured here
-/// with the ladder profile and a limit that covers the set); at
-/// `L(CloseSeason)` two archive pairs fit.
+/// G1 of the float parts at their maximal account lists (v1.8 wave-5
+/// review): parts 8 and 10 at `CLOSE_FLOAT_PAIRS_MAX` = 10 pairs and part 9
+/// at `CLOSE_ARCHIVE_PAIRS_MAX` = 2, each pair with its own recipient (the
+/// most bytes), sent with the client profile — the budgets table's CU
+/// limit and `L(CloseSeason)` — and asserted against CloseSeason's gate
+/// (60k CU, 1,232 B, locks, `L`); one pair more is `TooManyAccounts`. The
+/// part-9 cap is the most archive pairs whose loaded data stays within the
+/// worst set `L(CloseSeason)` is computed from (checked here against the
+/// unrounded need, so it holds at any programdata length).
 #[test]
 fn g01_budget_close_season_float_parts() {
+    use frontier_abi::budgets::{self as ab, close_float_pairs_max};
     use frontier_abi::layout::beacon::defence_claim as DCL;
     use frontier_abi::layout::world::ring_seed as RS;
-    use permutation_frontier_svm_tests::chain::{loaded_limit, Profile, PAGE};
     let (mut c, w) = ended(1);
     let au = w.authority.pubkey();
     c.set_time(w.end_ts() + 72 * 3_600);
     expect_lands(send(&mut c, close_part(&w.a, au, 7), &w.authority), "final");
-    let payer = c.funded(b"w5a-ring-payer", 1);
-    let rings: Vec<(Address, Address)> = (1u16..=10)
+    assert_eq!(close_float_pairs_max(8), 10);
+    assert_eq!(close_float_pairs_max(9), 2);
+    assert_eq!(close_float_pairs_max(10), 10);
+    let rings: Vec<(Address, Address)> = (1u16..=11)
         .map(|d| {
+            let payer = c
+                .funded(format!("w5a-ring-payer-{d}").as_bytes(), 1)
+                .pubkey();
             let k = w.a.ring_seed(d);
             craft_short(
                 &mut c,
                 k,
                 RS::MAGIC,
                 RS::SIZE,
-                &[
-                    (RS::D, &d.to_le_bytes()),
-                    (RS::PAYER, payer.pubkey().as_ref()),
-                ],
+                &[(RS::D, &d.to_le_bytes()), (RS::PAYER, payer.as_ref())],
             );
-            (k, payer.pubkey())
+            (k, payer)
         })
         .collect();
-    let archives: Vec<(Address, Address)> = (0u8..10)
-        .map(|r| (w.craft_archive(&mut c, r, 3, &[216]), w.keeper.pubkey()))
+    let archives: Vec<(Address, Address)> = (0u8..3)
+        .map(|r| {
+            let to = c
+                .funded(format!("w5a-archive-to-{r}").as_bytes(), 1)
+                .pubkey();
+            let k = w.craft_archive(&mut c, r, 3, &[216]);
+            c.edit(&k, |d| {
+                let o = frontier_abi::layout::beacon::anchor_archive::RENT_TO;
+                d[o..o + 32].copy_from_slice(to.as_ref())
+            });
+            (k, to)
+        })
         .collect();
-    let claims: Vec<(Address, Address)> = (0u32..10)
+    let claims: Vec<(Address, Address)> = (0u32..11)
         .map(|day| {
             let b = c
                 .funded(format!("w5a-claimer-{day}").as_bytes(), 1)
@@ -682,36 +696,44 @@ fn g01_budget_close_season_float_parts() {
         })
         .collect();
     let pd = c.programdata_len();
-    let l_kind = loaded_limit(Ix::CloseSeason, pd);
+    let l_kind = permutation_frontier_svm_tests::chain::loaded_limit(Ix::CloseSeason, pd);
     for (part, pairs) in [(8u8, &rings), (9, &archives), (10, &claims)] {
-        let ix = close_float(&w.a, au, part, pairs);
-        let p = Profile::ladder(Ix::CloseSeason, pd).with_loaded(l_kind + 20 * 4 * PAGE);
+        let n = close_float_pairs_max(part);
+        // One pair more is refused before any work.
+        assert_code(
+            send(
+                &mut c,
+                close_float(&w.a, au, part, &pairs[..n + 1]),
+                &w.authority,
+            ),
+            E::TooManyAccounts,
+        );
+        let ix = close_float(&w.a, au, part, &pairs[..n]);
+        let label = format!("CloseSeason part {part}, {n} pairs (the cap)");
         let need = c
-            .measure_with(&p, std::slice::from_ref(&ix), &[&w.authority])
-            .unwrap_or_else(|f| panic!("part {part}: {f:?}"));
-        let mut ceil = ceilings(Ix::CloseSeason, 0, pd);
-        ceil.loaded = p.loaded_limit.expect("set");
-        assert_within(&format!("CloseSeason part {part}, 10 pairs"), &need, &ceil);
-        if part == 9 {
-            assert!(
-                need.loaded > l_kind as u64,
-                "10 archives exceed L(CloseSeason)"
-            );
-            let two = close_float(&w.a, au, 9, &archives[..2]);
-            let t = c.transaction(
-                &Profile::ladder(Ix::CloseSeason, pd),
-                &[two],
-                &[&w.authority],
-            );
-            assert!(
-                c.loaded_size(&t.message) <= l_kind as u64,
-                "two archive pairs fit L(CloseSeason)"
-            );
-        } else {
-            assert!(
-                need.loaded <= l_kind as u64,
-                "part {part} fits L(CloseSeason)"
-            );
-        }
+            .measure(std::slice::from_ref(&ix), &[&w.authority])
+            .unwrap_or_else(|f| panic!("{label}: {f:?}"));
+        assert_within(&label, &need, &ceilings(Ix::CloseSeason, 0, pd));
+        assert!(
+            need.cu <= ab::budget(Ix::CloseSeason).cu_limit as u64,
+            "{label}: within the table's CU limit"
+        );
+        // The unrounded worst-set need `L(CloseSeason)` is computed from.
+        assert!(
+            need.loaded <= ab::loaded_need(Ix::CloseSeason, pd),
+            "{label}: loaded {} B > the worst set's {} B",
+            need.loaded,
+            ab::loaded_need(Ix::CloseSeason, pd)
+        );
+        assert!(need.loaded <= l_kind as u64);
+        // Sent with the client profile (table CU limit, L(kind)): lands.
+        let mut f = c.fork();
+        let l = expect_lands(
+            f.send_client(std::slice::from_ref(&ix), &[&w.authority]),
+            &label,
+        );
+        assert_eq!(records::of_kind(&l.logs, Kind::CLOSE).len(), n, "{label}");
+        assert!(pairs[..n].iter().all(|(k, _)| f.is_absent(k)));
     }
+    // Why 10 and 2: `frontier_abi::budgets::tests::close_float_caps`.
 }

@@ -1975,7 +1975,7 @@
       },
       {
         "class": "D",
-        "cu_budget": 15000,
+        "cu_budget": 48000,
         "name": "SettleDeparture",
         "tag": 82,
         "top_level": false,

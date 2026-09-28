@@ -62,6 +62,32 @@ pub const fn max_len_for(so_len: u32) -> u32 {
     (x.div_ceil(4_096) * 4_096) as u32
 }
 
+/// Most `[target w] [recipient w]` pairs in one CloseSeason float part
+/// (v1.8 wave-5 review, G1 at the maximal account list, §13.1): parts 8
+/// (RingSeeds) and 10 (DefenceClaims) take at most 10 — part 10 with ten
+/// distinct beneficiaries is 1,177 B and an eleventh pair passes 1,232 B,
+/// and at 10 pairs every float part stays within CloseSeason's measured
+/// maximum (part 10, 35,169 CU); at 24 pairs parts 9 and 10 passed the
+/// 60k gate. Part 9 (AnchorArchives, 6,144 B each) takes at most
+/// [`CLOSE_ARCHIVE_PAIRS_MAX`], the most whose loaded data fits
+/// `L(CloseSeason)` at any programdata length (the worst set's 48
+/// JoinShards and 16 BeaconLogs load 18,432 B beyond the fixed accounts; an
+/// archive pair loads 6,272 B).
+pub const CLOSE_FLOAT_PAIRS_MAX: usize = 10;
+/// Most AnchorArchive pairs in one CloseSeason part 9 (see
+/// [`CLOSE_FLOAT_PAIRS_MAX`]).
+pub const CLOSE_ARCHIVE_PAIRS_MAX: usize = 2;
+
+/// Most pairs CloseSeason float part `part` accepts (0 for parts 0–7,
+/// which carry no pairs).
+pub const fn close_float_pairs_max(part: u8) -> usize {
+    match part {
+        8 | 10 => CLOSE_FLOAT_PAIRS_MAX,
+        9 => CLOSE_ARCHIVE_PAIRS_MAX,
+        _ => 0,
+    }
+}
+
 /// One row of the budgets table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Budget {
@@ -97,8 +123,14 @@ macro_rules! budgets {
 
 /// The CU limit to request (§5.5, I-50): the G1 measured maximum + 5 %,
 /// rounded up to 500 (W5-A, from the release and test-beacon `.so` over
-/// the svm suite's worst fills, `PSF_CU_LOG`); SkipQuiet: the budget at 24
-/// recomputed bells; ResolveClash: the ladder maximum; capped at 1.4M.
+/// the svm suite's worst fills, `PSF_CU_LOG`; regenerate with
+/// `permutation-frontier/svm-tests/cu-table.py --write`); SkipQuiet: the
+/// budget at 24 recomputed bells; ResolveClash: the ladder maximum; capped
+/// at 1.4M. **v1.8 §10.2 (wave-5 review, DECISIONS N12):** the first
+/// attempt keeps its 5 % headroom even where that passes the gate, by at
+/// most 5 % of the gate (rounded to 500): the gate bounds what an
+/// instruction *uses* (G1: the measured maximum never above it), the limit
+/// is what a client *requests*.
 const fn limit_of(cu: u32, per: u32, measured: u32) -> u32 {
     let l = if cu == 0 {
         CU_LADDER_MAX
@@ -121,7 +153,7 @@ budgets! {
     InitShards: 45_000, 0, 600, 39_314;
     ConsumeGenesisSeed: 345_000, 0, 760, 329_426;
     EndSeason: 10_000, 0, 300, 3_298;
-    CloseSeason: 60_000, 0, 1_232, 37_423;
+    CloseSeason: 60_000, 0, 1_232, 37_456;
     AbortSeason: 20_000, 0, 300, 4_567;
     SetWindowSchedule: 5_000, 0, 200, 3_610;
     PostAnchor: 345_000, 0, 800, 339_142;
@@ -154,11 +186,11 @@ budgets! {
     DisbandStranded: 12_000, 0, 300, 5_439;
     Depart: 24_500, 0, 800, 23_167;
     Reveal: 26_000, 0, 1_100, 25_155;
-    SettleDeparture: 15_000, 0, 400, 10_552;
+    SettleDeparture: 48_000, 0, 400, 43_083;
     SettleTransit: 85_000, 0, 1_100, 63_281;
     SweepPoolOwed: 8_000, 0, 300, 5_066;
-    GatherClash: 49_000, 0, 1_232, 46_347;
-    ResolveFromInputs: 340_000, 0, 460, 329_863;
+    GatherClash: 49_000, 0, 1_232, 46_551;
+    ResolveFromInputs: 340_000, 0, 460, 327_609;
     ResolveClash: 0, 0, 1_232, 0;
     SkipQuiet: 90_000, 30_000, 1_232, 0;
     CloseClashInputs: 8_000, 0, 300, 7_064;
@@ -410,7 +442,8 @@ mod tests {
         assert_eq!(budget(Ix::ResolveFromInputs).cu_budget, 340_000);
         // W5-A: limits are the G1 maxima + 5 %, rounded up to 500.
         assert_eq!(budget(Ix::Reveal).cu_limit, 26_500);
-        assert_eq!(budget(Ix::ResolveFromInputs).cu_limit, 346_500);
+        assert_eq!(budget(Ix::ResolveFromInputs).cu_limit, 344_000);
+        assert_eq!(budget(Ix::SettleDeparture).cu_limit, 45_500);
         assert_eq!(budget(Ix::SkipQuiet).cu_limit, 90_000 + 24 * 30_000);
         assert_eq!(budget(Ix::ResolveClash).cu_limit, CU_LADDER_MAX);
         for (ix, m) in MEASURED {
@@ -431,8 +464,40 @@ mod tests {
                     "{}: +5 %, rounded to 500",
                     ix.name()
                 );
+                // v1.8 §10.2: never more than 5 % of the gate above it.
+                let over = (b.cu_budget as u64 * 105).div_ceil(100 * 500) * 500;
+                assert!(
+                    b.cu_limit as u64 <= over,
+                    "{}: limit {} > the gate + 5 % ({over})",
+                    ix.name(),
+                    b.cu_limit
+                );
             }
         }
+    }
+
+    /// v1.8 wave-5 review: the CloseSeason float caps. At the cap every
+    /// part's pairs load no more than the worst set's repeat groups (48
+    /// JoinShards, 16 BeaconLogs) that `L(CloseSeason)` is computed from,
+    /// and one more archive pair would; part 10 at the cap (distinct
+    /// beneficiaries) fits a legacy transaction and one more pair does not.
+    #[test]
+    fn close_float_caps() {
+        use crate::layout::beacon::{anchor_archive as AA, defence_claim as DC};
+        use crate::layout::world::{beacon_log as BL, join_shard as JS, ring_seed as RS};
+        let o = ACCOUNT_OVERHEAD as usize;
+        let groups = 48 * (JS::SIZE + o) + 16 * (BL::SIZE + o);
+        let pair = |size: usize| size + o + o; // target + a distinct recipient wallet
+        assert!(CLOSE_ARCHIVE_PAIRS_MAX * pair(AA::SIZE) <= groups);
+        assert!((CLOSE_ARCHIVE_PAIRS_MAX + 1) * pair(AA::SIZE) > groups);
+        assert!(CLOSE_FLOAT_PAIRS_MAX * pair(RS::SIZE) <= groups);
+        assert!(CLOSE_FLOAT_PAIRS_MAX * pair(DC::SIZE) <= groups);
+        let data = ix::CloseSeason::LEN as u32;
+        let tx = |pairs: u32| tx_size_estimate(1, 10 + 2 * pairs, data);
+        assert!(tx(CLOSE_FLOAT_PAIRS_MAX as u32) <= TX_MAX);
+        assert!(tx(CLOSE_FLOAT_PAIRS_MAX as u32 + 1) > TX_MAX);
+        assert_eq!(close_float_pairs_max(7), 0);
+        assert_eq!(close_float_pairs_max(11), 0);
     }
 
     #[test]

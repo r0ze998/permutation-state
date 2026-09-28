@@ -2273,6 +2273,21 @@ mod tests {
                 let mut got: Vec<usize> = (0..n).collect();
                 sort_by_key3(&mut got, |&i| (0, keys[i].1, 0));
                 assert_eq!(got, want, "lo only: n {n} m {m}");
+                // All three words at once (wave-5 review): random triples,
+                // many ties at small moduli.
+                let trip: Vec<Key3> = (0..n)
+                    .map(|i| {
+                        x ^= x << 13;
+                        x ^= x >> 7;
+                        x ^= x << 17;
+                        (keys[i].0, x % m, keys[i].1 ^ ((x >> 7) % m))
+                    })
+                    .collect();
+                let mut want: Vec<usize> = (0..n).collect();
+                want.sort_by_key(|&i| trip[i]);
+                let mut got: Vec<usize> = (0..n).collect();
+                sort_by_key3(&mut got, |&i| trip[i]);
+                assert_eq!(got, want, "three words: n {n} m {m}");
             }
         }
     }

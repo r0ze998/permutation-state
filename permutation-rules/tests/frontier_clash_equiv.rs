@@ -634,3 +634,58 @@ fn phase_a_equals_the_reference_on_ties_and_edges() {
         "the tie-break path was barely reached: {contested_without_fight}"
     );
 }
+
+/// Golden digests of `resolve_clash` **with the M1 rules** (the lab fills
+/// as they are: scouts, more than four residents per faction), recorded
+/// with the kernel at `31f1aa1` — the wave-5 base, before W5-A replaced
+/// the sorts of the helpers `resolve_clash` and `resolve_clash_ref` share
+/// (validate, fair_share, share_hex, build_units, first_admission,
+/// `RelationsLog::at`) with `sort_by_key3` (wave-5 review of W5-A). The
+/// reference-vs-optimised tests above cannot see a wrong key encoding in a
+/// shared helper; these digests can. `EMPTY`: `Occupancy::EMPTY`;
+/// `ROOM`: the random storage room of
+/// `phase_a_equals_the_reference_with_occupancy` (same RNG and draws).
+const M1_31F1AA1_EMPTY: &str = "679c2abe671c503ff4cd1abd891f72b421533119081e46a3b28572eae39b163b";
+const M1_31F1AA1_ROOM: &str = "de82d5204aeaf891eec3e1c60c3bee96c97d838190ca7700538573d81d8de98b";
+
+#[test]
+fn m1_rules_keep_the_31f1aa1_digests() {
+    let rules = frontier_ruleset();
+    let (mut empty, mut room) = ([0u8; 32], [0u8; 32]);
+    let mut rng = Rng(0x5EED_0CC0_u64 | 1);
+    let mut n = 0u32;
+    lab_cases(|c| {
+        fold(
+            &mut empty,
+            &resolve_clash(&rules, &input(c, &c.sc, Occupancy::EMPTY)),
+        );
+        let mut sc = c.sc.clone();
+        let keep = rng.below(49) as usize;
+        sc.residents.truncate(keep);
+        let r = sc.residents.len();
+        let mut occ = Occupancy::EMPTY;
+        let mut left = 48 - r;
+        for f in 0..6usize {
+            let m = (rng.below(4) as usize).min(left);
+            occ.pending[f] = m as u8;
+            left -= m;
+        }
+        let m: usize = occ.pending.iter().map(|&x| x as usize).sum();
+        let d = rng.below((56 - r - m) as u64 + 1) as usize;
+        occ.storage_free = (56 - r - m - d) as u8;
+        fold(&mut room, &resolve_clash(&rules, &input(c, &sc, occ)));
+        n += 1;
+    });
+    assert_eq!(n, 4_320);
+    println!("M1 rules: EMPTY {} ROOM {}", hex(&empty), hex(&room));
+    assert_eq!(
+        hex(&empty),
+        M1_31F1AA1_EMPTY,
+        "M1-rule outcomes moved against 31f1aa1 (EMPTY)"
+    );
+    assert_eq!(
+        hex(&room),
+        M1_31F1AA1_ROOM,
+        "M1-rule outcomes moved against 31f1aa1 (room)"
+    );
+}

@@ -753,12 +753,17 @@ pub const fn close_part_counts(part: u8) -> Option<[u8; 5]> {
 
 /// The group counts of a CloseSeason with `n` accounts: parts 0–7 as
 /// [`close_part_counts`]; the float parts 8–10 carry `pairs` of `[target
-/// w] [recipient w]` in the repeat group (1 to [`CLOSE_PAIRS_MAX`] pairs).
+/// w] [recipient w]` in the repeat group (1 to
+/// `frontier_abi::budgets::close_float_pairs_max(part)` pairs: 10 for parts
+/// 8 and 10, 2 for part 9; v1.8 wave-5 review).
 pub const fn close_counts(part: u8, n: usize) -> Option<[u8; 5]> {
     match part {
         CLOSE_RING_SEEDS..=CLOSE_CLAIMS => {
             let fixed = 10;
-            if n <= fixed || (n - fixed) % 2 != 0 || (n - fixed) / 2 > CLOSE_PAIRS_MAX {
+            if n <= fixed
+                || (n - fixed) % 2 != 0
+                || (n - fixed) / 2 > frontier_abi::budgets::close_float_pairs_max(part)
+            {
                 return None;
             }
             Some([1, 6, 1, (n - fixed) as u8, 0])
@@ -775,9 +780,11 @@ pub const CLOSE_FINAL_PART: u8 = 7;
 pub const CLOSE_RING_SEEDS: u8 = 8;
 pub const CLOSE_ARCHIVES: u8 = 9;
 pub const CLOSE_CLAIMS: u8 = 10;
-/// Most `[target] [recipient]` pairs per float part (the repeat group holds
-/// 48 accounts; a legacy transaction fits about 10 pairs).
+/// The repeat group's capacity in `[target] [recipient]` pairs (48
+/// accounts); each float part accepts fewer
+/// (`frontier_abi::budgets::close_float_pairs_max`).
 pub const CLOSE_PAIRS_MAX: usize = 24;
+const _: () = assert!(frontier_abi::budgets::CLOSE_FLOAT_PAIRS_MAX <= CLOSE_PAIRS_MAX);
 
 /// A Season tombstone (128 B, status Closed) at its PDA: `(id, authority)`.
 pub(crate) fn tombstone(season_ai: &AccountInfo, p: &Pubkey) -> R<(u64, [u8; 32])> {

@@ -866,6 +866,19 @@ impl Chain {
                 loaded,
                 &m.logs,
             );
+            // Heap gate (§13.1, wave-5 review): every landed transaction of
+            // a trace build (the only builds that report a heap peak) stays
+            // within 28 KiB, whatever test sent it. `trace-sweep.sh` runs
+            // the whole suite on the trace builds, so every kind the suite
+            // lands is gated at every fill the suite builds.
+            if let Some(h) = crate::budget::heap_peak(&m.logs) {
+                assert!(
+                    h <= budgets::HEAP_GATE,
+                    "heap gate: {:?} landed with a heap peak of {h} B > {} B",
+                    kinds,
+                    budgets::HEAP_GATE
+                );
+            }
         }
         match r {
             Ok(m) => Ok(Landed {

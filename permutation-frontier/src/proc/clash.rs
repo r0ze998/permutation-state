@@ -100,7 +100,7 @@ use alloc::vec::Vec;
 use solana_program::{account_info::AccountInfo, pubkey::Pubkey};
 
 use frontier_abi::addr::{archive_part_of, clash_inputs_seed, day_of, split_host_id, AddrCtx};
-use frontier_abi::entry::{read_entry, write_entry, Entry, EntryOp};
+use frontier_abi::entry::{read_entry, write_entry, Entry};
 use frontier_abi::ix as aix;
 use frontier_abi::layout::AccountKind;
 use frontier_abi::log::{close_key, pack_fates, EntityKind, Kind, NO_BELL};
@@ -1501,28 +1501,66 @@ pub fn settle_return(p: &Pubkey, a: &[AccountInfo]) -> R<()> {
     };
     let bell_log = hdr.bell(now.ts).unwrap_or(NO_BELL);
     let hkey = key(holding);
-    let mut returned = 0usize;
-    for i in 0..P::ENTRIES_N {
-        let e = {
-            let pd = province.try_borrow_data()?;
-            let st = Ro(&pd).u8(P::entry(i) + crate::layout::entry::STATE)?;
-            if st != crate::layout::entry::STATE_DEPARTED {
+    // Selection (wave-5 review, G1): one read-only pass over the raw entry
+    // bytes (state, pending op, host id) picks the first RETURN_MAX Leave
+    // entries of this Holding in entry order; only those are decoded. A
+    // host id's issuing Holding is its (province index, site) bits, so a
+    // live Holding matches by comparing them; with the Holding absent the
+    // owner is matched by address, derived once per run of one foreign
+    // (P, Q, site) and never again once this Holding's own bits are known.
+    use permutation_rules::frontier::addr::{HOST_GEN_SHIFT, HOST_SITE_SHIFT};
+    let mut picked = [(0usize, 0u8); RETURN_MAX];
+    let mut n_picked = 0usize;
+    {
+        use crate::layout::entry as EL;
+        let pd = province.try_borrow_data()?;
+        let r = Ro(&pd);
+        let mut own = match hpqs {
+            Some((hp, hq, site)) => Some(
+                frontier_abi::addr::host_id(hp, hq, site, 0, 0).ok_or(BAD_ACCOUNT)?
+                    >> HOST_SITE_SHIFT,
+            ),
+            None => None,
+        };
+        let mut foreign: Option<u64> = None;
+        for i in 0..P::ENTRIES_N {
+            let o = P::entry(i);
+            if r.u8(o + EL::STATE)? != EL::STATE_DEPARTED || r.u8(o + EL::PEND_OP)? != EL::OP_LEAVE
+            {
                 continue;
             }
+            let id = r.u64(o + EL::ID)?;
+            let home = id >> HOST_SITE_SHIFT;
+            let mine = match own {
+                Some(h) => h == home,
+                None if foreign == Some(home) => false,
+                None => {
+                    let t = split_host_id(id).ok_or(BAD_ACCOUNT)?;
+                    if ctx.holding(t.province.p, t.province.q, t.site) == hkey {
+                        own = Some(home);
+                        true
+                    } else {
+                        foreign = Some(home);
+                        false
+                    }
+                }
+            };
+            if mine {
+                picked[n_picked] = (i, (id >> HOST_GEN_SHIFT) as u8);
+                n_picked += 1;
+                if n_picked == RETURN_MAX {
+                    break;
+                }
+            }
+        }
+    }
+    let mut returned = 0usize;
+    for &(i, gen) in &picked[..n_picked] {
+        let e = {
+            let pd = province.try_borrow_data()?;
             read_entry(&pd, i).map_err(|_| BAD_ACCOUNT)?
         };
-        if e.op != EntryOp::Leave {
-            continue;
-        }
-        let parts = split_host_id(e.id).ok_or(BAD_ACCOUNT)?;
-        let mine = match hpqs {
-            Some(k) => k == (parts.province.p, parts.province.q, parts.site),
-            None => ctx.holding(parts.province.p, parts.province.q, parts.site) == hkey,
-        };
-        if !mine {
-            continue;
-        }
-        let credit = live == Some(parts.gen);
+        let credit = live == Some(gen);
         {
             let mut pd = province.try_borrow_mut_data()?;
             write_entry(&mut pd, i, &Entry::FREE).map_err(|_| BAD_ACCOUNT)?;
@@ -1592,6 +1630,7 @@ mod tests {
     use super::*;
     use crate::layout::{camp as CP, entry as E, site as SM};
     use frontier_abi::addr::{holding_key_of_host, host_id};
+    use frontier_abi::entry::EntryOp;
     use permutation_rules::frontier::clash::{is_quiet, resolve_clash, Occupancy};
     use permutation_rules::frontier::host::Host;
     use permutation_rules::units::UnitType;

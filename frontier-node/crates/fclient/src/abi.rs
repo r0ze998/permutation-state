@@ -171,7 +171,7 @@ pub const INSTRUCTIONS: [IxInfo; 50] = [
     ix(0x48, "DisbandStranded", Class::N, 12_000, 300, false),
     ix(0x50, "Depart", Class::P, 24_500, 800, false),
     ix(0x51, "Reveal", Class::W, 26_000, 1_100, true),
-    ix(0x52, "SettleDeparture", Class::D, 15_000, 400, false),
+    ix(0x52, "SettleDeparture", Class::D, 48_000, 400, false),
     ix(0x54, "SettleTransit", Class::D, 85_000, 1_100, false),
     ix(0x55, "SweepPoolOwed", Class::N, 8_000, 300, false),
     ix(0x60, "GatherClash", Class::D, 49_000, 1_232, true),

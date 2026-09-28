@@ -132,9 +132,13 @@ impl Chain {
 #[track_caller]
 pub fn assert_within(label: &str, need: &Need, c: &Ceilings) {
     println!("{label}: {need}");
-    assert!(need.cu <= c.cu as u64, "{label}: {} CU > {}", need.cu, c.cu);
     if let Some(h) = need.heap {
+        // A trace build (the only one reporting heap): its markers add CU,
+        // so only the heap is gated here (`trace-sweep.sh`); the plain
+        // builds gate the CU.
         assert!(h <= c.heap, "{label}: heap {h} B > {} B", c.heap);
+    } else {
+        assert!(need.cu <= c.cu as u64, "{label}: {} CU > {}", need.cu, c.cu);
     }
     assert!(
         need.tx_bytes as u32 <= c.tx_bytes,

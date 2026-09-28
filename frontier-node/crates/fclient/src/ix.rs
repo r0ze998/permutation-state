@@ -220,22 +220,46 @@ pub fn close_season(
 /// CloseSeason's float parts (v1.8, W5-A; W5-A R5): part 8 RingSeeds →
 /// stored `payer`, 9 AnchorArchives → `rent_to`, 10 DefenceClaims →
 /// `beneficiary`. The ten fixed accounts of every part, then each
-/// `(target, recipient)` pair in the repeat group (1–24 pairs; parts 9 and
-/// 10 only on the Closed tombstone or an Aborted season). Each archive pair
-/// adds 6,272 B to the loaded-data need of `L(CloseSeason)` beyond two
-/// (W5-A §1.1). Same accounts as the svm builder `ix::season::close_float`.
+/// `(target, recipient)` pair in the repeat group (parts 9 and 10 only on
+/// the Closed tombstone or an Aborted season). v1.9 (wave-5 review): at
+/// most `frontier_abi::budgets::close_float_pairs_max(part)` pairs — 10 for
+/// parts 8 and 10, 2 for part 9 — so every part fits the budgets table's CU
+/// limit, a legacy transaction and `L(CloseSeason)`; more is
+/// `TooManyAccounts` on chain. Split longer lists with
+/// [`close_season_float_all`]. Same accounts as the svm builder
+/// `ix::season::close_float`.
 pub fn close_season_float(
     a: &Addresses,
     authority: Address,
     part: u8,
     pairs: &[(Address, Address)],
 ) -> Instruction {
+    debug_assert!(
+        pairs.len() <= frontier_abi::budgets::close_float_pairs_max(part),
+        "CloseSeason part {part}: {} pairs over the cap",
+        pairs.len()
+    );
     let mut ix = close_season(a, authority, part, &[], &[]);
     for &(t, r) in pairs {
         ix.accounts.push(w(t));
         ix.accounts.push(w(r));
     }
     ix
+}
+
+/// Every float-part instruction for `pairs`, each at most the part's cap
+/// (v1.9, wave-5 review).
+pub fn close_season_float_all(
+    a: &Addresses,
+    authority: Address,
+    part: u8,
+    pairs: &[(Address, Address)],
+) -> Vec<Instruction> {
+    let cap = frontier_abi::budgets::close_float_pairs_max(part).max(1);
+    pairs
+        .chunks(cap)
+        .map(|c| close_season_float(a, authority, part, c))
+        .collect()
 }
 
 /// 0x07 SetWindowSchedule: `[authority s] [season w]`.
@@ -1324,8 +1348,8 @@ mod tests {
                 )
             })
             .collect();
-        let base = close_season(&a, k, 9, &[], &[]);
-        let ix = close_season_float(&a, k, 9, &pairs);
+        let base = close_season(&a, k, 10, &[], &[]);
+        let ix = close_season_float(&a, k, 10, &pairs);
         assert_eq!(base.accounts.len(), 10);
         assert_eq!(ix.accounts.len(), 10 + 2 * pairs.len());
         assert_eq!(ix.accounts[..10], base.accounts[..]);
@@ -1334,7 +1358,26 @@ mod tests {
             assert_eq!((mt.pubkey, mt.is_writable, mt.is_signer), (*t, true, false));
             assert_eq!((mr.pubkey, mr.is_writable, mr.is_signer), (*r, true, false));
         }
-        assert_eq!(ix.data, vec![tag::CLOSE_SEASON, 9]);
+        assert_eq!(ix.data, vec![tag::CLOSE_SEASON, 10]);
+        // v1.9: split at the part's cap (2 archive pairs, 10 otherwise).
+        let many: Vec<(Address, Address)> = (0..23u8)
+            .map(|i| (Address::new_from_array([40 + i; 32]), k))
+            .collect();
+        let arch = close_season_float_all(&a, k, 9, &many[..5]);
+        assert_eq!(
+            arch.iter()
+                .map(|i| (i.accounts.len() - 10) / 2)
+                .collect::<Vec<_>>(),
+            vec![2, 2, 1]
+        );
+        let claims = close_season_float_all(&a, k, 10, &many);
+        assert_eq!(
+            claims
+                .iter()
+                .map(|i| (i.accounts.len() - 10) / 2)
+                .collect::<Vec<_>>(),
+            vec![10, 10, 3]
+        );
     }
 
     fn addrs() -> Addresses {

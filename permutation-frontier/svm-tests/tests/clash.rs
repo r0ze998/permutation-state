@@ -1076,7 +1076,11 @@ fn clash_camp_respawns_daily_and_is_taken_by_arrivals() {
     );
     assert_eq!(w.camp(&c, f.dest()).1, CP::STATE_NONE, "cleared");
     let cd = c.data(&w.a.clash_inputs(f.p, f.q, b));
-    assert_eq!(u32_at(&cd, CI::CAMP_MASK), 1 << 16, "camp_mask: position 16");
+    assert_eq!(
+        u32_at(&cd, CI::CAMP_MASK),
+        1 << 16,
+        "camp_mask: position 16"
+    );
     let camps = records::of_kind(&l.logs, Kind::CAMP);
     assert_eq!(camps.last().unwrap().u64("troops"), 0, "the clear");
     let _ = spawned;
@@ -2178,6 +2182,81 @@ fn clash_return_settle_is_bounded() {
         .entries(&c, dest)
         .iter()
         .all(|(_, x)| x.op != EntryOp::Leave));
+}
+
+/// G1 (§13.1, wave-5 review): SettleDeparture's return settle at its worst
+/// fill — a full 48-entry Province whose first 45 entries are `Leave`
+/// entries of 45 *other* Holdings (each one read, split and matched) and
+/// whose last three are the settled Holding's, so the transaction frees
+/// [`RETURN_MAX`] = 3 entries after scanning all 48. Both Holding cases:
+/// live (3 credits, each a chained record on the Holding and the Province)
+/// and absent (the owner is matched by address: one derivation per foreign
+/// entry; 3 `STRANDED`). Measured on the release and test-beacon `.so`,
+/// asserted against the §5.5 gate (CU, tx bytes, locks, `L(kind)`), and
+/// sent once more with the budgets table's CU limit (the client profile),
+/// which must land.
+#[test]
+fn g01_budget_settle_return_worst() {
+    for build in [Build::Release, Build::TestBeacon] {
+        for live in [true, false] {
+            let mut c = Chain::new(build);
+            let w = World::running(&mut c, 1);
+            w.to_bell(&mut c, B0, 5);
+            let e = w.craft_estate(&mut c, "a", 0, (2, 0), 0);
+            let id = w.craft_host(&mut c, &e, &e.province, 0, 0, 0, 1_200, e.tile);
+            w.set_reserve(&mut c, &e, 0, 50);
+            let (hp, hq, hs, gen, _) = fclient::addr::host_parts(id).unwrap();
+            c.edit(&e.province, |d| {
+                let tpl = read_entry(d, 0).unwrap();
+                for j in 0..P::ENTRIES_N {
+                    let mut x = tpl;
+                    x.state = EN::STATE_DEPARTED;
+                    x.op = EntryOp::Leave;
+                    x.pend_bell = B0 - 1;
+                    x.troops = 1_000_000 + j as u32 * 1_000;
+                    x.id = if j < P::ENTRIES_N - 3 {
+                        // a foreign Holding per entry: distinct (P, site)
+                        let k = j as i32;
+                        fclient::addr::host_id(hp + 1 + k / 12, hq, (k % 12) as u8, gen, 7).unwrap()
+                    } else {
+                        fclient::addr::host_id(hp, hq, hs, gen, 100 + j as u32).unwrap()
+                    };
+                    write_entry(d, j, &x).unwrap();
+                }
+                d[P::N_ENTRIES] = P::ENTRIES_N as u8;
+            });
+            if !live {
+                c.remove(&e.holding);
+            }
+            let rix = cix::settle_return(&w.a, w.keeper.pubkey(), (e.p, e.q), e.href());
+            let label = format!(
+                "return settle worst ({build:?}, Holding {}): 3 of 48 Leave entries, the last three",
+                if live { "live" } else { "absent" }
+            );
+            let need = c
+                .measure(std::slice::from_ref(&rix), &[&w.keeper])
+                .expect("return settle");
+            assert_within(
+                &label,
+                &need,
+                &ceilings(Ix::SettleDeparture, 0, c.programdata_len()),
+            );
+            let l = expect_lands(
+                c.send_client(std::slice::from_ref(&rix), &[&w.keeper]),
+                "return settle at the table's CU limit",
+            );
+            let kind = if live {
+                Kind::DEPARTURE_SETTLED
+            } else {
+                Kind::STRANDED
+            };
+            assert_eq!(records::of_kind(&l.logs, kind).len(), 3, "{label}");
+            let left = (0..P::ENTRIES_N)
+                .filter(|&i| read_entry(&c.data(&e.province), i).unwrap().state != EN::STATE_FREE)
+                .count();
+            assert_eq!(left, P::ENTRIES_N - 3, "{label}: the last three freed");
+        }
+    }
 }
 
 /// v1.7 (L10): CloseClashInputs needs a settled bit only for present
