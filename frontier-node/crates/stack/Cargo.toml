@@ -1,11 +1,15 @@
 [package]
 name = "stack"
-description = "Frontier local stack orchestrator (skeleton in W1; W5 builds it)"
+description = "Frontier local stack orchestrator: check-ports, up (Mode A), verify, tamper, load, report, down (M1 contract §8.7, §10.3, §12, §13.4)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
+
+[lib]
+name = "frontier_stack"
+path = "src/lib.rs"
 
 [[bin]]
 name = "frontier-stack"

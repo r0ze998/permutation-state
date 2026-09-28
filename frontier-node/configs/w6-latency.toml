@@ -1,0 +1,25 @@
+# The scale-2 latency run (M1 contract §12 Gate W6, §13.4 criterion 3's
+# game-second targets: round -> anchor <= 5 s, S -> cache <= 5 s, anchor ->
+# last reveal <= 30 s, close -> resolve <= 60 s, all p99): 6 game hours
+# (3 h of wall time), 300 bots, chaos on.
+#
+#   frontier-stack up --config frontier-node/configs/w6-latency.toml
+run_id = "w6-latency"
+mode = "accel"
+beacon = "test-key"
+scale = 2
+preseason_scale = 2000
+game_hours = 6
+drain_bells = 26
+bots = 300
+bot_seed = 2
+season_id = 7
+base_port = 41000
+g0 = 1785542400
+
+[chaos]
+enabled = true
+seed = 2
+
+[adversary]
+enabled = false

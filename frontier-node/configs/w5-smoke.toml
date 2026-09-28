@@ -1,0 +1,43 @@
+# Gate W5 smoke (M1 contract §12): test key, 100 bots x 1 game day at 100x,
+# ports 41000-41099. The gate passes the same values as flags; this file is
+# what `check-ports --config` reads.
+#
+#   frontier-stack check-ports --config frontier-node/configs/w5-smoke.toml
+#   frontier-stack up --mode accel --beacon test-key --scale 100 --days 1 --bots 100 \
+#       --run-id w5-smoke --base-port 41000
+run_id = "w5-smoke"
+mode = "accel"
+beacon = "test-key"
+scale = 100
+preseason_scale = 2000        # AnnounceSeason's 24-h lead in ~43 s (I-54)
+days = 1
+drain_bells = 26              # one 24-bell SkipQuiet batch and its close
+bots = 100
+bot_seed = 1
+season_id = 7
+base_port = 41000
+g0 = 1785542400               # 2026-08-01T00:00:00Z (test key: any past date)
+
+[ports]                       # offsets from base_port (§10.3)
+localnet = 10
+localnet_ws = 11
+drand = 20
+relay_operator = 30
+relay_public = 33
+herald = 40
+keeper_a = 50
+keeper_b = 51
+bots = 70
+viewers = 75
+
+[paths]                       # relative to the repository root
+so_test_key = "permutation-frontier/target/deploy-test-beacon/permutation_frontier.so"
+so_release = "permutation-frontier/target/deploy/permutation_frontier.so"
+web = "permutation-server/web"
+relay = "permutation-gateway/src/frontier/server.mjs"
+
+[chaos]
+enabled = false
+
+[adversary]
+enabled = false

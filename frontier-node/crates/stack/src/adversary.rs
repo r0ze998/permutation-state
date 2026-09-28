@@ -1,0 +1,295 @@
+//! The adversary schedule (M1 contract §13.4, §8.8; offchain design §11.4):
+//! `frontier_hold` scripts in the SP-FEE drill shapes, spread over the play
+//! window. Each hold's keys are chosen from the chain at the moment it
+//! starts (the busiest Province, the next bell's slots, …), and every hold
+//! is written to `events.jsonl` with its keys, price and window, so the
+//! report can list the windows where a liveness finding is expected
+//! (criterion 4: `ValidSealUnrevealed` only where the hold was above the
+//! keeper cap).
+//!
+//! | kind | keys | price (milli) | length | expected |
+//! |---|---|---|---|---|
+//! | `slots-below` | one province-bell's ArrivalSlots + ArrivalDay | 1,500 (< P_def 2.0) | through the close | reveals land (keepers escalate past it) |
+//! | `slots-above` | the same, another bell | 3,000 (> P_def) | through the close | reveals wait; late ones routed and flagged |
+//! | `anchor` | one region's next BellAnchor | 1,000 (> P_delay 0.5) | ⅓ bell | the window stays open longer (delay only) |
+//! | `keeper-payers` | 20 of keeper A's reveal payers | 3,000 | 1 bell | the keeper draws other payers (effective N ≥ 150 − 20) |
+//! | `lag` | an origin Province + its region's next anchor | 1,000 | 2 bells | the destination's result is unchanged (G7 in play) |
+//! | `ticket` | a Province with an open ticket cohort | 1,000 | 2 bells | finality waits for the cohort; the higher score still wins |
+//! | `frontier-fund` | Frontier + one ProvinceFund | 1,000 | 1 bell | ring openings and folds wait (delay) |
+//! | `defence-pool` | the DefencePool | 1,000 | 3 bells (half the claim grace) | claims and sweeps wait; none lost inside the grace |
+//! | `relay-payers` | 20 of the relay pool's payers | 3,000 | 1 bell | the relay draws other payers |
+
+use fclient::addr::Addresses;
+use fclient::decode::Province;
+use fclient::Address;
+use serde_json::{json, Value};
+
+pub const KINDS: &[&str] = &[
+    "slots-below",
+    "slots-above",
+    "anchor",
+    "keeper-payers",
+    "lag",
+    "ticket",
+    "frontier-fund",
+    "defence-pool",
+    "relay-payers",
+];
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Planned {
+    pub kind: &'static str,
+    /// Game time the hold starts.
+    pub at: i64,
+    pub priority_milli: u64,
+    /// Length in game seconds (converted to slots at the run's scale).
+    pub game_secs: i64,
+    /// Skipped if nothing to hold by then (the ticket hold waits for an
+    /// open cohort over the whole play window; the others an hour).
+    pub deadline: i64,
+}
+
+/// One planned hold per kind, spread evenly over `[start, end)` (the
+/// first after an hour of play, so there are residents and marches).
+pub fn plan(start: i64, end: i64) -> Vec<Planned> {
+    let span = (end - start - 3_600).max(0);
+    let n = KINDS.len() as i64;
+    KINDS
+        .iter()
+        .enumerate()
+        .map(|(i, k)| {
+            let (prio, secs) = match *k {
+                "slots-below" => (1_500, 1_500),
+                "slots-above" => (3_000, 1_500),
+                "anchor" => (1_000, 200),
+                "keeper-payers" => (3_000, 600),
+                "lag" => (1_000, 1_200),
+                "ticket" => (1_000, 1_200),
+                "frontier-fund" => (1_000, 600),
+                "defence-pool" => (1_000, 1_800),
+                _ => (3_000, 600),
+            };
+            // Tickets are filed as bots join, early in play: the ticket hold
+            // is armed from the first bell and fires at the first open
+            // cohort it sees.
+            let at = if *k == "ticket" {
+                start + 600
+            } else {
+                start + 3_600 + span * i as i64 / n
+            };
+            let deadline = if *k == "ticket" { end } else { at + 3_600 };
+            Planned {
+                kind: k,
+                at,
+                priority_milli: prio,
+                game_secs: secs,
+                deadline,
+            }
+        })
+        .collect()
+}
+
+/// Slots for `game_secs` at `scale` (a slot is 0.4 × scale game seconds).
+pub fn slots_for(game_secs: i64, scale: f64) -> u64 {
+    ((game_secs as f64 / (0.4 * scale)).ceil() as u64).max(1)
+}
+
+/// Residents in a Province (entries in state 1, resident).
+pub fn residents(p: &Province) -> usize {
+    p.entries.iter().filter(|e| e.state == 1).count()
+}
+
+/// The province with the most residents (ties: most entries, then order).
+pub fn busiest(ps: &[Province]) -> Option<&Province> {
+    ps.iter()
+        .max_by_key(|p| (residents(p), p.n_entries, -(p.p as i32), -(p.q as i32)))
+}
+
+/// A province with an open ticket cohort (filed > settled), most open first.
+pub fn open_cohort(ps: &[Province]) -> Option<&Province> {
+    ps.iter()
+        .filter(|p| p.cohorts.iter().any(|c| c.filed > c.settled))
+        .max_by_key(|p| {
+            p.cohorts
+                .iter()
+                .map(|c| c.filed.saturating_sub(c.settled) as u32)
+                .sum::<u32>()
+        })
+}
+
+/// A province-bell's ArrivalSlots (every faction × `transit_slots`) and its
+/// ArrivalDay.
+pub fn slot_keys(a: &Addresses, p: &Province, bell: u32, transit_slots: u8) -> Vec<Address> {
+    let (pp, qq) = (p.p as i32, p.q as i32);
+    let mut v = vec![];
+    for f in 0..fclient::abi::FACTIONS {
+        for i in 0..transit_slots {
+            v.push(a.arrival_slot(pp, qq, bell, f, i));
+        }
+    }
+    v.push(a.arrival_day(pp, qq, bell / 144));
+    v.truncate(64);
+    v
+}
+
+/// What the hold of `kind` locks, from the chain's state now. `None` when
+/// the state has nothing to hold (e.g. no open cohort yet).
+#[allow(clippy::too_many_arguments)]
+pub fn keys_for(
+    kind: &str,
+    a: &Addresses,
+    ps: &[Province],
+    bell_now: u32,
+    transit_slots: u8,
+    keeper_reveal_payers: &[Address],
+    relay_payers: &[Address],
+) -> Option<(Vec<Address>, Value)> {
+    let next = bell_now + 1;
+    match kind {
+        "slots-below" | "slots-above" => {
+            let p = busiest(ps)?;
+            Some((
+                slot_keys(a, p, next, transit_slots),
+                json!({"province": [p.p, p.q], "bell": next}),
+            ))
+        }
+        "anchor" => {
+            let p = busiest(ps)?;
+            Some((
+                vec![a.anchor(next, p.region)],
+                json!({"bell": next, "region": p.region}),
+            ))
+        }
+        "keeper-payers" => (!keeper_reveal_payers.is_empty()).then(|| {
+            (
+                keeper_reveal_payers.iter().take(20).copied().collect(),
+                json!({"payers": keeper_reveal_payers.len().min(20)}),
+            )
+        }),
+        "lag" => {
+            let p = busiest(ps)?;
+            Some((
+                vec![a.province(p.p as i32, p.q as i32), a.anchor(next, p.region)],
+                json!({"province": [p.p, p.q], "region": p.region, "bell": next}),
+            ))
+        }
+        "ticket" => {
+            let p = open_cohort(ps)?;
+            let open: Vec<Value> = p
+                .cohorts
+                .iter()
+                .filter(|c| c.filed > c.settled)
+                .map(|c| json!({"bell": c.bell, "filed": c.filed, "settled": c.settled}))
+                .collect();
+            Some((
+                vec![a.province(p.p as i32, p.q as i32)],
+                json!({"province": [p.p, p.q], "cohorts": open}),
+            ))
+        }
+        "frontier-fund" => {
+            let w = ps
+                .iter()
+                .max_by_key(|p| p.opened_bell)
+                .map_or(0, |p| p.wedge);
+            Some((vec![a.frontier(), a.province_fund(w)], json!({"wedge": w})))
+        }
+        "defence-pool" => Some((vec![a.defence_pool()], json!({}))),
+        "relay-payers" => (!relay_payers.is_empty()).then(|| {
+            (
+                relay_payers.iter().take(20).copied().collect(),
+                json!({"payers": relay_payers.len().min(20)}),
+            )
+        }),
+        _ => None,
+    }
+}
+
+/// Whether a hold of this kind at this price is above the keeper's cap for
+/// the writes it blocks (so its liveness findings are expected).
+pub fn above_cap(kind: &str, priority_milli: u64) -> bool {
+    let cap = match kind {
+        "slots-below" | "slots-above" | "keeper-payers" | "relay-payers" => {
+            fclient::payers::P_DEF_MILLI
+        }
+        _ => fclient::payers::P_DELAY_MILLI,
+    };
+    priority_milli > cap
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_plan_covers_every_kind_inside_the_window() {
+        let p = plan(1_000, 1_000 + 86_400);
+        assert_eq!(p.len(), KINDS.len());
+        for (x, k) in p.iter().zip(KINDS) {
+            assert_eq!(x.kind, *k);
+            assert!(x.at >= 1_000 + 600 && x.at < 1_000 + 86_400);
+            assert!(x.deadline > x.at);
+        }
+        let t = p.iter().find(|x| x.kind == "ticket").unwrap();
+        assert_eq!(
+            (t.at, t.deadline),
+            (1_600, 1_000 + 86_400),
+            "armed over the whole play"
+        );
+        let others: Vec<_> = p.iter().filter(|x| x.kind != "ticket").collect();
+        assert!(others.windows(2).all(|w| w[0].at < w[1].at));
+        assert!(!above_cap("slots-below", 1_500), "below the W cap 2.0");
+        assert!(above_cap("slots-above", 3_000));
+        assert!(above_cap("anchor", 1_000), "above the D cap 0.5");
+    }
+
+    #[test]
+    fn slot_counts() {
+        assert_eq!(slots_for(600, 100.0), 15);
+        assert_eq!(slots_for(600, 20.0), 75);
+        assert_eq!(slots_for(1, 100.0), 1);
+    }
+
+    #[test]
+    fn slot_keys_are_distinct_and_within_the_lock_limit() {
+        let a = Addresses::new(Address::new_from_array([7; 32]), 7);
+        let p = empty_province(2, -1);
+        let k = slot_keys(&a, &p, 30, 4);
+        assert_eq!(k.len(), 25);
+        let s: std::collections::BTreeSet<_> = k.iter().collect();
+        assert_eq!(s.len(), 25);
+        assert_eq!(k[0], a.arrival_slot(2, -1, 30, 0, 0));
+        assert_eq!(k[24], a.arrival_day(2, -1, 0));
+    }
+
+    fn empty_province(p: i16, q: i16) -> Province {
+        // A decoded all-zero Province with the right magic/size.
+        let mut d = vec![0u8; fclient::abi::size::PROVINCE];
+        d[..8].copy_from_slice(fclient::abi::magic::PROVINCE);
+        let mut pr = Province::decode(&d).expect("zero province decodes");
+        pr.p = p;
+        pr.q = q;
+        pr
+    }
+
+    #[test]
+    fn picks() {
+        let mut a = empty_province(0, 0);
+        let mut b = empty_province(1, 0);
+        a.entries[0].state = 1;
+        b.entries[0].state = 1;
+        b.entries[1].state = 1;
+        let ps = vec![a.clone(), b.clone()];
+        assert_eq!(busiest(&ps).map(|p| (p.p, p.q)), Some((1, 0)));
+        assert!(open_cohort(&ps).is_none());
+        a.cohorts[0].filed = 2;
+        a.cohorts[0].settled = 1;
+        let ps = vec![a, b];
+        assert_eq!(open_cohort(&ps).map(|p| (p.p, p.q)), Some((0, 0)));
+        let ad = Addresses::new(Address::new_from_array([7; 32]), 7);
+        let (k, _) = keys_for("ticket", &ad, &ps, 10, 4, &[], &[]).unwrap();
+        assert_eq!(k, vec![ad.province(0, 0)]);
+        assert!(keys_for("keeper-payers", &ad, &ps, 10, 4, &[], &[]).is_none());
+        let (k, _) = keys_for("defence-pool", &ad, &ps, 10, 4, &[], &[]).unwrap();
+        assert_eq!(k, vec![ad.defence_pool()]);
+    }
+}

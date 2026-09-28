@@ -1,0 +1,34 @@
+# The M1 exit season (M1 contract §13.4 E5, Gate W7): real rounds, the
+# release .so, 20x, 7 days, 1,000 bots, chaos, the adversary schedule,
+# 5,000 viewers for 24 game hours.
+#
+#   frontier-stack up --config frontier-node/configs/m1-exit.toml
+#   (= up --mode accel --beacon archive --scale 20 --days 7 --bots 1000 --run-id m1-exit
+#      --base-port 41000 --chaos --viewers 5000 --viewer-window-hours 24)
+run_id = "m1-exit"
+mode = "accel"
+beacon = "archive"
+scale = 20
+preseason_scale = 2000
+days = 7
+drain_bells = 26
+bots = 1000
+bot_seed = 11
+season_id = 7
+base_port = 41000
+g0 = 1788998400
+
+[paths]
+archive = "../../data/drand-archive-quicknet-g0-1788998400"
+
+[chaos]
+enabled = true
+seed = 11
+
+[adversary]
+enabled = true
+
+[viewers]
+count = 5000
+start_hours = 24
+window_hours = 24

@@ -1,0 +1,36 @@
+# The first 7-day, 1,000-bot Mode A run (M1 contract §12 Gate W6, §13.4):
+# real historical quicknet rounds from the contiguous archive (O-M1-12
+# item 3; G0 = 1788998400 = 2026-09-10T00:00:00Z, rounds
+# 32,065,012..=32,311,012), the release .so, 20x (7 game days in 8.4 h),
+# chaos, the adversary schedule and 5,000 viewers for one game day.
+# Until the archive has its manifest.json, `up` answers PENDING-OWNER
+# (exit 3) and the rehearsal is w6-s7-rehearsal.toml.
+run_id = "w6-s7"
+mode = "accel"
+beacon = "archive"
+scale = 20
+preseason_scale = 2000
+days = 7
+drain_bells = 26
+bots = 1000
+bot_seed = 7
+season_id = 7
+base_port = 41000
+g0 = 1788998400
+
+[paths]
+# From a worktree under .claude/worktrees/ (the archive lives outside the
+# repository and is never committed); override with --archive DIR.
+archive = "../../data/drand-archive-quicknet-g0-1788998400"
+
+[chaos]
+enabled = true
+seed = 7
+
+[adversary]
+enabled = true
+
+[viewers]
+count = 5000
+start_hours = 24              # day 1 (every bot has joined by then)
+window_hours = 24
