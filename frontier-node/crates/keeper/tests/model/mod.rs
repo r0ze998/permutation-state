@@ -130,7 +130,22 @@ fn log_ps2(ic: &InvokeContext, body: &[u8]) {
     solana_program_runtime::stable_log::program_data(&ic.get_log_collector(), &[b"PS2", body]);
 }
 
+/// Compute units the three ComputeBudget instructions of every keeper
+/// transaction spend before the program runs (3 x 150).
+const COMPUTE_BUDGET_IXS_CU: u64 = 450;
+
+thread_local! {
+    /// The CU limit (§5.5 budgets table) of the instruction being modelled.
+    static CU_CAP: std::cell::Cell<u64> = const { std::cell::Cell::new(u64::MAX) };
+}
+
+/// Charges `n` units, but never more than the instruction's budgeted limit
+/// minus the ComputeBudget instructions' 450 (v1.8: the limits are G1's
+/// maxima + 5 %, W5-A; the program measured at or below them, so a model
+/// that charged more would make the keeper climb its CU ladder where the
+/// program does not - W5-A R4).
 fn consume(ic: &InvokeContext, n: u64) -> R<()> {
+    let n = n.min(CU_CAP.with(|c| c.get()));
     ic.compute_meter
         .consume_checked(n)
         .map_err(|_| InstructionError::ComputationalBudgetExceeded)
@@ -357,9 +372,16 @@ fn seed_str(kind: fclient::addr::SeedKind, raw: &[u8]) -> Vec<u8> {
 
 // ------------------------------------------------------------------ dispatch
 
+static BUDGETS: OnceLock<fclient::budgets::Budgets> = OnceLock::new();
+
 fn process(ic: &mut InvokeContext) -> R<()> {
     let data = ix_data(ic)?;
     let tag = *data.first().ok_or(e(BAD_DATA))?;
+    let cap = BUDGETS
+        .get_or_init(fclient::budgets::Budgets::canonical)
+        .get(tag)
+        .cu_limit as u64;
+    CU_CAP.with(|c| c.set(cap.saturating_sub(COMPUTE_BUDGET_IXS_CU)));
     let mut c = Cursor(&data, 1);
     match tag {
         0x08 => announce(ic, &mut c),
