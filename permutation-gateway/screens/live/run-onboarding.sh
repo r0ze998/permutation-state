@@ -52,7 +52,7 @@ cd "$ROOT" || exit 2
 SO_ARGS=()
 [ -n "${SO:-}" ] && SO_ARGS=(--so "$SO")
 "$S" up --mode accel --beacon test-key --scale "$SCALE" --days 1 --bots 20 --run-id "$RUN_ID" \
-  --base-port "$BASE" "${SO_ARGS[@]}" > "$LOGDIR/stack-up.log" 2>&1 &
+  --base-port "$BASE" ${SO_ARGS[@]+"${SO_ARGS[@]}"} > "$LOGDIR/stack-up.log" 2>&1 &
 UP_PID=$!
 cleanup() {
   "$S" down --run-id "$RUN_ID" >> "$LOGDIR/stack-up.log" 2>&1
