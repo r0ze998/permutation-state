@@ -217,6 +217,27 @@ pub fn close_season(
     build(a, m, Data::new(tag::CLOSE_SEASON).u8(part))
 }
 
+/// CloseSeason's float parts (v1.8, W5-A; W5-A R5): part 8 RingSeeds →
+/// stored `payer`, 9 AnchorArchives → `rent_to`, 10 DefenceClaims →
+/// `beneficiary`. The ten fixed accounts of every part, then each
+/// `(target, recipient)` pair in the repeat group (1–24 pairs; parts 9 and
+/// 10 only on the Closed tombstone or an Aborted season). Each archive pair
+/// adds 6,272 B to the loaded-data need of `L(CloseSeason)` beyond two
+/// (W5-A §1.1). Same accounts as the svm builder `ix::season::close_float`.
+pub fn close_season_float(
+    a: &Addresses,
+    authority: Address,
+    part: u8,
+    pairs: &[(Address, Address)],
+) -> Instruction {
+    let mut ix = close_season(a, authority, part, &[], &[]);
+    for &(t, r) in pairs {
+        ix.accounts.push(w(t));
+        ix.accounts.push(w(r));
+    }
+    ix
+}
+
 /// 0x07 SetWindowSchedule: `[authority s] [season w]`.
 pub fn set_window_schedule(
     a: &Addresses,
@@ -1288,6 +1309,33 @@ pub fn claim_defence(a: &Addresses, keeper: Address, day: u32, slots: &[ClaimSlo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// W5-A R5: the float close appends `[target w] [recipient w]` pairs to
+    /// the ten fixed accounts of CloseSeason (the svm builder's shape).
+    #[test]
+    fn close_season_float_appends_writable_pairs() {
+        let a = Addresses::new(Address::new_from_array([1; 32]), 7);
+        let k = Address::new_from_array([2; 32]);
+        let pairs: Vec<(Address, Address)> = (0..3u8)
+            .map(|i| {
+                (
+                    Address::new_from_array([10 + i; 32]),
+                    Address::new_from_array([20 + i; 32]),
+                )
+            })
+            .collect();
+        let base = close_season(&a, k, 9, &[], &[]);
+        let ix = close_season_float(&a, k, 9, &pairs);
+        assert_eq!(base.accounts.len(), 10);
+        assert_eq!(ix.accounts.len(), 10 + 2 * pairs.len());
+        assert_eq!(ix.accounts[..10], base.accounts[..]);
+        for (n, (t, r)) in pairs.iter().enumerate() {
+            let (mt, mr) = (&ix.accounts[10 + 2 * n], &ix.accounts[11 + 2 * n]);
+            assert_eq!((mt.pubkey, mt.is_writable, mt.is_signer), (*t, true, false));
+            assert_eq!((mr.pubkey, mr.is_writable, mr.is_signer), (*r, true, false));
+        }
+        assert_eq!(ix.data, vec![tag::CLOSE_SEASON, 9]);
+    }
 
     fn addrs() -> Addresses {
         Addresses::new(Address::new_from_array([7; 32]), 1)
