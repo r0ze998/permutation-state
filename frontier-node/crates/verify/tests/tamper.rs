@@ -238,7 +238,7 @@ tamper_test!(
 tamper_test!(
     tamper_program_t13_reveal_moved_past_close,
     t13_moved,
-    march_program_dc1281c3
+    march_program_w6base
 );
 tamper_test!(
     tamper_program_t14_duplicate_any_transaction,
@@ -306,7 +306,7 @@ fn tamper_suite_on_the_program_recording() {
 /// W5-D: "all 22 detected" must not be a property of one recording).
 #[test]
 fn tamper_suite_on_a_second_recording() {
-    suite_on(&march_program_dc1281c3());
+    suite_on(&march_program_w6base());
 }
 
 fn suite_on(run: &verify_core::Input) {

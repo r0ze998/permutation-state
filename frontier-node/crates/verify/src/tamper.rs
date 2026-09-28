@@ -2072,7 +2072,7 @@ pub fn committed_fixtures(dir: &std::path::Path) -> Result<Vec<(&'static str, In
     for (name, file) in [
         ("march-synth", "march-synth.json"),
         ("march-program", "march-program.json.gz"),
-        ("march-program-dc1281c3", "march-program-dc1281c3.json.gz"),
+        ("march-program-w6base", "march-program-w6base.json.gz"),
         ("land-program", "land-program.json"),
     ] {
         let p = dir.join(file);

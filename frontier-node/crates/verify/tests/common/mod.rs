@@ -44,12 +44,19 @@ pub fn march_program() -> Input {
     fixture("march-program.json.gz")
 }
 
-/// A second, independent program recording (wave-5 review of W5-D): the
-/// `inproc_day` W5-D recorded from the wave-base test-beacon `.so`
-/// (`dc1281c3…`), kept when the fixtures were regenerated at the integ
-/// head. The suite must build and detect every class on it too.
-pub fn march_program_dc1281c3() -> Input {
-    fixture("march-program-dc1281c3.json.gz")
+/// A second, independent program recording (wave-5 review of W5-D): a
+/// strict `inproc_day` recorded by integ-W6 on the Phase B test-beacon
+/// `.so` (`797675b4…`) with the wave-6 base's node tree (keeper, bots and
+/// herald as of `0514b06`, run in the W6-B worktree) and 120 bots
+/// (`ITEST_BOTS=120`), so its keeper cadence, fleet and bells differ from
+/// `march-program.json.gz`'s; of the Phase B recordings tried it is the
+/// one with a Reveal that moves past its close unseen (T13's consistent
+/// variant, `tamper_program_t13_reveal_moved_past_close`). It replaces
+/// W5-D's `march-program-dc1281c3.json.gz`, which Phase B made a
+/// non-replayable (pre-CLASH_VERSION 3) season. The suite must build and
+/// detect every class on it too.
+pub fn march_program_w6base() -> Input {
+    fixture("march-program-w6base.json.gz")
 }
 
 #[derive(Clone)]
