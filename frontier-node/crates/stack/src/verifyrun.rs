@@ -31,7 +31,8 @@ use verify_core::Verdict;
 
 use crate::run::RunDir;
 
-type Builder = fn(&Input) -> Case;
+/// A class builder (W5-D: `Err` when the run lacks what the class edits).
+type Builder = fn(&Input) -> tamper::Made;
 
 /// Every tamper class and which recorded fixture its builder uses when
 /// the run cannot express it (`land` or `march`, the committed ones).
@@ -257,14 +258,14 @@ pub fn run_classes(run: &Input, repo: &Path) -> Vec<Judged> {
     let mut out = vec![];
     for (class, build, fx) in CLASSES {
         match quiet(|| build(run)) {
-            Ok(case) => {
+            Ok(Ok(case)) => {
                 let j = judge_case(class, "run", case);
                 out.push(j);
             }
-            Err(_) => {
+            Ok(Err(_)) | Err(_) => {
                 let mut j = match fixture(repo, fx).map(|inp| quiet(|| build(&inp))) {
-                    Ok(Ok(case)) => judge_case(class, "fixture", case),
-                    Ok(Err(_)) | Err(_) => Judged {
+                    Ok(Ok(Ok(case))) => judge_case(class, "fixture", case),
+                    Ok(Ok(Err(_))) | Ok(Err(_)) | Err(_) => Judged {
                         class,
                         on: "none",
                         what: String::new(),
