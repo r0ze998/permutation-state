@@ -69,12 +69,12 @@ fn tampered_clash(inp: &Input) -> Option<Input> {
 
 /// The native re-run, the verifier and the tampers over a kept recording
 /// (`G14_DUMP` from an earlier `g14_two_game_days`): re-checks a run
-/// without replaying it (not a gate line: named without the `g14_` prefix
+/// without replaying it (not a gate line: named without the substring `g14_`
 /// so Gate W5's `--include-ignored g14_` does not select it without a
 /// recording, integ-W5).
 #[test]
 #[ignore = "needs G14_DUMP=<recording>"]
-fn recheck_a_g14_recording() {
+fn recheck_a_kept_recording() {
     let dump = std::env::var("G14_DUMP").expect("G14_DUMP");
     let inp = Input::load(std::path::Path::new(&dump)).expect("the recording");
     let nat = itest::native::rerun(&inp.txs, &inp.cfg.program);
