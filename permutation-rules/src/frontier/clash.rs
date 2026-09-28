@@ -48,7 +48,8 @@
 //!    attacks from range only). What a combatant deals in each of its
 //!    engagements is divided by its number of engagements on the hex, then
 //!    scaled by the stance table (`stance`). The variance dice of every
-//!    engagement are drawn from the bell seed.
+//!    engagement are drawn from the bell seed, both from one hash per
+//!    engagement (Phase B, `CLASH_VERSION` 3).
 //! 4. **All damage applies at once.** Hosts below 0.5 troops are destroyed.
 //! 5. **One side holds the field;** hosts hostile to it withdraw to an
 //!    adjacent friendly hex of the province, or bounce home. Units with no
@@ -88,7 +89,27 @@
 
 /// Version of this kernel, bound into `RULESET_HASH` (`super::KERNEL_VERSIONS`):
 /// bump it whenever an honest outcome changes. v2: M1 W1-A CL-10 (one-pass cap recount, civilians never contest), I-43 storage room, Phase A body (digest-identical to the reference).
-pub const CLASH_VERSION: u16 = 2;
+/// v3: M1 W6-B **Phase B** (I-14, O-M1-04; contract v1.8 §24): both variance
+/// dice of an engagement come from one hash ([`engagement_variances`]), so
+/// every clash outcome with an engagement moves.
+pub const CLASH_VERSION: u16 = 3;
+
+/// The variance dice of one engagement (Phase B, I-14; `CLASH_VERSION` 3):
+/// one `h = sha256(cs ‖ 3 ‖ "eng" ‖ id)` (the preimage of
+/// `rng::rand(cs, "eng", id)`), `id` = attacker key ‖ defender key; the
+/// attacker's die is `variance_min_bps + LE64(h[8..16]) mod variance_span`,
+/// the defender's the same over `h[16..24]`. Phase A drew three hashes (the
+/// engagement id, then `combat::variance` per side).
+#[inline]
+fn engagement_variances(rules: &Ruleset, cs: &Seed, id: &[u8; 18]) -> (Bps, Bps) {
+    let h = sha256(&[cs, &[3u8], b"eng", id]);
+    let die = |b: &[u8]| {
+        let mut w = [0u8; 8];
+        w.copy_from_slice(b);
+        rules.variance_min_bps + (u64::from_le_bytes(w) % rules.variance_span as u64) as Bps
+    };
+    (die(&h[8..16]), die(&h[16..24]))
+}
 
 #[cfg(any(
     test,
@@ -104,7 +125,7 @@ use super::host::{
 };
 use super::stance::{damage_bps, Posture, Stance};
 use super::terrain::ProvinceTerrain;
-use crate::combat::{resolve_engagement, variance, Combatant, Situation};
+use crate::combat::{resolve_engagement, Combatant, Situation};
 use crate::fixed::{Bps, MilliTroops, BPS_ONE};
 use crate::hash::{sha256, Digest32};
 #[cfg(any(
@@ -114,7 +135,7 @@ use crate::hash::{sha256, Digest32};
 ))]
 use crate::hex::Hex;
 use crate::params::{Preset, Ruleset};
-use crate::rng::{rand, rand_id, tie_key, Seed};
+use crate::rng::{rand_id, tie_key, Seed};
 use crate::units::UnitType;
 #[cfg(any(
     test,
@@ -1353,9 +1374,7 @@ pub fn resolve_clash_ref(rules: &Ruleset, inp: &ClashInput) -> Result<ClashOutco
                     let mut id = [0u8; 18];
                     id[..9].copy_from_slice(&a.key());
                     id[9..].copy_from_slice(&d.key());
-                    let eid = rand(&cs, b"eng", &id) as u32;
-                    let va = variance(rules, &cs, eid, 0);
-                    let vd = variance(rules, &cs, eid, 1);
+                    let (va, vd) = engagement_variances(rules, &cs, &id);
                     let (to_def, to_att) =
                         resolve_engagement(rules, a.combatant(), d.combatant(), sit, va, vd);
                     let x_def = scale(to_def, a, d, count(ai), half);
@@ -1804,9 +1823,7 @@ pub fn resolve_clash(rules: &Ruleset, inp: &ClashInput) -> Result<ClashOutcome, 
                     let mut id = [0u8; 18];
                     id[..9].copy_from_slice(&a.key());
                     id[9..].copy_from_slice(&d.key());
-                    let eid = rand(&cs, b"eng", &id) as u32;
-                    let va = variance(rules, &cs, eid, 0);
-                    let vd = variance(rules, &cs, eid, 1);
+                    let (va, vd) = engagement_variances(rules, &cs, &id);
                     let (to_def, to_att) =
                         resolve_engagement(rules, a.combatant(), d.combatant(), sit, va, vd);
                     let x_def = scale(to_def, a, d, cnt[ax], half);

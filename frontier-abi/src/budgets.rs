@@ -190,7 +190,7 @@ budgets! {
     SettleTransit: 85_000, 0, 1_100, 63_281;
     SweepPoolOwed: 8_000, 0, 300, 5_066;
     GatherClash: 49_000, 0, 1_232, 46_551;
-    ResolveFromInputs: 340_000, 0, 460, 327_609;
+    ResolveFromInputs: 290_000, 0, 460, 271_673;
     ResolveClash: 0, 0, 1_232, 0;
     SkipQuiet: 90_000, 30_000, 1_232, 0;
     CloseClashInputs: 8_000, 0, 300, 7_064;
@@ -439,10 +439,12 @@ mod tests {
         }
         assert_eq!(cu_gate(Ix::SkipQuiet, 2), 150_000);
         assert_eq!(budget(Ix::Reveal).cu_budget, 26_000);
-        assert_eq!(budget(Ix::ResolveFromInputs).cu_budget, 340_000);
+        // W6-B: Phase B (I-14, `CLASH_VERSION` 3) moves the RFI gate
+        // 340,000 → 290,000 (§5.5); G1 maximum 271,673 on the Phase B .so.
+        assert_eq!(budget(Ix::ResolveFromInputs).cu_budget, 290_000);
         // W5-A: limits are the G1 maxima + 5 %, rounded up to 500.
         assert_eq!(budget(Ix::Reveal).cu_limit, 26_500);
-        assert_eq!(budget(Ix::ResolveFromInputs).cu_limit, 344_000);
+        assert_eq!(budget(Ix::ResolveFromInputs).cu_limit, 285_500);
         assert_eq!(budget(Ix::SettleDeparture).cu_limit, 45_500);
         assert_eq!(budget(Ix::SkipQuiet).cu_limit, 90_000 + 24 * 30_000);
         assert_eq!(budget(Ix::ResolveClash).cu_limit, CU_LADDER_MAX);

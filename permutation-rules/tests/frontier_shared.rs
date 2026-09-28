@@ -1288,10 +1288,11 @@ fn ruleset_hash_binds_versions_and_catalog() {
     assert_eq!(modules + 1, names.len(), "one entry per module + frontier");
     // Golden value: a change to any bound constant or table changes it on
     // purpose (update here, in frontier-abi and in the notes). Moved from
-    // 3c374846… (W1-C, nine versions) when every kernel was bound.
+    // 3c374846… (W1-C, nine versions) when every kernel was bound; from
+    // 1ac11f85… to this value by Phase B (W6-B, `CLASH_VERSION` 3).
     assert_eq!(
         hex(&ruleset_hash()),
-        "1ac11f85fde3b898ebcd8c246964d9be2a29b4144a7a7ddfa81006999a6dd03f",
+        "72c6b5835ded6418ed98b0c00b2ae45ce4c4b082d9614447dbce2c9d2e654bd9",
         "ruleset hash changed"
     );
 }

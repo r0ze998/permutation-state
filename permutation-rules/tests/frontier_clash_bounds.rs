@@ -525,9 +525,16 @@ fn faction_ids_are_limited() {
     assert!(!r.hostile(0, 5) && !r.hostile(5, 0));
 }
 
-/// Golden digest of 300 honest clashes, recorded with the kernel at
-/// `d95fa25` (before CL-01, CL-10, I-43 and Phase A).
-const D95FA25_HONEST_300: &str = "c2c75bd7f21633451cf0e5a59943568f2c8af635964b925e6ee4268611b554ba";
+/// Golden digest of 300 honest clashes on the **Phase B** kernel
+/// (`CLASH_VERSION` 3, W6-B). Phase B changes only the variance stream
+/// (one hash per engagement); the same digest came out of W5-A's
+/// independent Phase B lab tree (`m1/lab/phaseB-gate/tree-b`, the kernel
+/// before the shared sort). Until Phase B the value was the one recorded
+/// with the kernel at `d95fa25` (before CL-01, CL-10, I-43 and Phase A),
+/// `c2c75bd7f21633451cf0e5a59943568f2c8af635964b925e6ee4268611b554ba`,
+/// which this test held through wave 5: the bounds, CL-10, I-43 and
+/// Phase A left every honest outcome of this set unchanged.
+const PHASE_B_HONEST_300: &str = "4fe17f5e2f47f94a308b47cf0f71d0feecf30fa1c784f8da4c74f2e573567409";
 
 #[test]
 fn clash_bounds_do_not_change_honest_outcomes() {
@@ -546,8 +553,8 @@ fn clash_bounds_do_not_change_honest_outcomes() {
     assert!(arrived > 1_000);
     assert_eq!(
         hex(&acc),
-        D95FA25_HONEST_300,
-        "honest outcomes moved against d95fa25"
+        PHASE_B_HONEST_300,
+        "honest outcomes moved against the Phase B recording"
     );
 }
 

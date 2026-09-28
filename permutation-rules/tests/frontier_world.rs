@@ -2274,10 +2274,7 @@ fn every_site_and_gate_is_connected_across_the_map() {
 /// defender retaliates at ×0.5 (`MELEE_VS_RANGED_RETALIATION`).
 #[test]
 fn engagements_keep_the_v9_retaliation_rules() {
-    use permutation_rules::combat::{
-        damage, modifier, resolve_engagement, variance, Combatant, Situation,
-    };
-    use permutation_rules::rng::rand;
+    use permutation_rules::combat::{damage, modifier, resolve_engagement, Combatant, Situation};
     use permutation_rules::units::stats;
     let rules = frontier_ruleset();
     let t = flat();
@@ -2292,8 +2289,15 @@ fn engagements_keep_the_v9_retaliation_rules() {
         let mut id = [0u8; 18];
         id[..9].copy_from_slice(&a);
         id[9..].copy_from_slice(&d);
-        let eid = rand(&cs, b"eng", &id) as u32;
-        (variance(&rules, &cs, eid, 0), variance(&rules, &cs, eid, 1))
+        // Phase B (CLASH_VERSION 3, I-14): one hash per engagement,
+        // `sha256(cs ‖ 3 ‖ "eng" ‖ id)`; the attacker's die from bytes
+        // 8..16, the defender's from 16..24 (LE, mod the variance span).
+        let h = sha256(&[&cs, &[3u8], b"eng", &id]);
+        let die = |b: &[u8]| {
+            rules.variance_min_bps
+                + (u64::from_le_bytes(b.try_into().unwrap()) % rules.variance_span as u64) as u32
+        };
+        (die(&h[8..16]), die(&h[16..24]))
     };
     // A Knight host against a garrison of 2,000 without walls.
     let bell = 3;
@@ -2334,8 +2338,11 @@ fn engagements_keep_the_v9_retaliation_rules() {
     );
     let without = damage(&rules, 2_000_000, 10, 20_000_000, strength, &[], vd);
     assert_eq!(to_att, with);
+    // Halved up to the two floors of `damage`: `x / 2` (odd x loses 0.5)
+    // and the variance scaling (≤ 1.1), so `without − 2 × with ≤ 3`. The
+    // Phase A dice happened to land within 1 (W6-B: Phase B's give 2).
     assert!(
-        to_att * 2 <= without + 1 && without <= to_att * 2 + 1,
+        to_att * 2 <= without + 1 && without <= to_att * 2 + 3,
         "{to_att} vs {without}"
     );
     // A resident Archer attacked by a Spearman arrival retaliates at ×0.5.
