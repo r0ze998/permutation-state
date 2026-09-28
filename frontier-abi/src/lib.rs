@@ -19,6 +19,7 @@
 //! | [`presets`] | §5.7 | `SeasonParams` layout, validation, `M1_LOCAL_7D`, `M1_PLAYTEST` |
 //! | [`prologue`] | §5.6–§5.12 | account-list tables and the common checks as pure functions |
 //! | [`entry`] | §5.3 (Province entry), §4.1 (host id) | Province entry ↔ kernel `Host` codec |
+//! | [`clash_model`] | §5.11 | the clash of one province-bell over account bytes (the program's model; W4-A D8) |
 //!
 //! The vector writer (`src/bin/abi-vectors.rs`) turns these tables into
 //! `frontier-abi/vectors/*.json`; `--check` fails when a checked-in vector
@@ -27,12 +28,14 @@
 #![no_std]
 #![deny(unsafe_code)]
 
+extern crate alloc;
 #[cfg(test)]
 extern crate std;
 
 pub mod addr;
 pub mod budgets;
 pub mod bytes;
+pub mod clash_model;
 pub mod entry;
 pub mod error;
 pub mod ix;

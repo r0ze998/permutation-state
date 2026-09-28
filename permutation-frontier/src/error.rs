@@ -61,6 +61,20 @@ impl From<Error> for ProgramError {
     }
 }
 
+/// The clash model's refusals (`frontier_abi::clash_model`, W4-A D8) as
+/// program codes; a kernel refusal logs its sub-code here, as [`kernel`]
+/// does.
+impl From<frontier_abi::clash_model::ModelError> for Error {
+    fn from(e: frontier_abi::clash_model::ModelError) -> Self {
+        use frontier_abi::clash_model::ModelError as M;
+        match e {
+            M::BadAccount => BAD_ACCOUNT,
+            M::Overflow => OVERFLOW,
+            M::Kernel(sub) => kernel(sub),
+        }
+    }
+}
+
 impl Error {
     /// The Frontier code, if this is one.
     pub fn code(&self) -> Option<u32> {
