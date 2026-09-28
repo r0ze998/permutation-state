@@ -76,7 +76,9 @@ if step up "$S" up --config "$CONFIG" --run-id "$RUN_ID" $EXTRA; then
   step verify "$S" verify --run-id "$RUN_ID"
   step tamper "$S" tamper --run-id "$RUN_ID"
   step load "$S" load --run-id "$RUN_ID" --viewers 5000 --game-hours 1
-  step report "$S" report --run-id "$RUN_ID" >/dev/null
+  # The report decides the §13.4 criteria it can (exit 1 when one fails;
+  # wave-5 review: it used to exit 0 whatever it found).
+  step report "$S" report --run-id "$RUN_ID"
 fi
 trap - EXIT
 cleanup

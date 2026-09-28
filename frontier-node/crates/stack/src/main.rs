@@ -15,8 +15,9 @@
 //! ```
 //! Every subcommand but `check-ports` also takes `--runs-dir DIR` (default
 //! `frontier-node/.local/frontier`). Exit codes: 0 pass, 1 fail, 2 bad
-//! arguments or cannot run, 3 PENDING-OWNER (an unapproved install or
-//! download: Mode R, or real rounds before the archive exists).
+//! arguments or cannot run, 3 PENDING-OWNER (an unapproved install: Mode
+//! R, Agave >= 4.0), 4 PENDING (the approved round archive is still being
+//! fetched: `--beacon archive` before its `manifest.json`).
 
 use frontier_stack::config::{self, StackConfig};
 use frontier_stack::run::{self, RunDir};

@@ -97,23 +97,89 @@ pub fn quantile(v: &[f64], q: f64) -> Option<f64> {
     Some(s[i])
 }
 
-/// The verdict on one load report plus the lag samples (seconds).
+/// The verdict on one load report plus the fold-lag samples (seconds).
+///
+/// Wave-5 review of W5-B:
+/// - **ingest → WS** is the WS messages' own stamp (`t`, the herald's
+///   ingest time; `ws.ingest_p99_upper_ms`, the histogram bucket's upper
+///   bound) when the generator timed any; the fold lag is the fallback
+///   and is labelled as such;
+/// - the file p99 is the bucket's upper bound when reported;
+/// - **WS gaps** (a sequence number skipped) must be 0;
+/// - **notFound** (404) are requests for a per-bell file of a bell in which
+///   that province or overview did not change: §8.4 writes per-bell files
+///   only for such bells, so a 404 there is the contract's answer, counted
+///   and reported, not an error.
 pub fn judge(rep: &Value, lag_secs: &[f64]) -> Value {
     let req = rep["requests"].as_f64().unwrap_or(0.0);
     let errs = rep["errors"].as_f64().unwrap_or(0.0) + rep["ws"]["errors"].as_f64().unwrap_or(0.0);
     let rate = if req > 0.0 { errs / req } else { 1.0 };
-    let p99 = rep["p99_ms"].as_f64().unwrap_or(f64::INFINITY);
-    let ingest = quantile(lag_secs, 0.99);
+    let p99 = rep["p99_upper_ms"]
+        .as_f64()
+        .or_else(|| rep["p99_ms"].as_f64())
+        .unwrap_or(f64::INFINITY);
+    let timed = rep["ws"]["timed"].as_f64().unwrap_or(0.0);
+    let ws_p99 = rep["ws"]["ingest_p99_upper_ms"]
+        .as_f64()
+        .or_else(|| rep["ws"]["ingest_p99_ms"].as_f64())
+        .map(|ms| ms / 1_000.0);
+    let fold = quantile(lag_secs, 0.99);
+    let (ingest, how) = if timed > 0.0 {
+        (ws_p99, "ws-stamp")
+    } else {
+        (fold, "fold-lag")
+    };
+    let gaps = rep["ws"]["gaps"].as_u64().unwrap_or(0);
+    let not_found = rep["notFound"].as_u64().unwrap_or(0);
     let ok_file = p99 <= P99_FILE_MS;
     let ok_err = req > 0.0 && rate < ERROR_RATE;
     let ok_ingest = ingest.is_some_and(|x| x <= INGEST_P99_S);
+    let ok_gaps = gaps == 0;
+    let mut misses = vec![];
+    if !ok_file {
+        misses.push(format!("file p99 {p99} ms > {P99_FILE_MS} ms"));
+    }
+    if !ok_err {
+        misses.push(format!("error rate {rate} (requests {req})"));
+    }
+    if !ok_ingest {
+        misses.push(format!(
+            "ingest -> WS p99 {ingest:?} s ({how}) > {INGEST_P99_S} s"
+        ));
+    }
+    if !ok_gaps {
+        misses.push(format!("{gaps} WS gaps"));
+    }
     json!({
         "p99_file_ms": p99, "p99_file_target_ms": P99_FILE_MS, "p99_file_ok": ok_file,
         "requests": req, "errors": errs, "error_rate": rate, "error_rate_target": ERROR_RATE, "error_rate_ok": ok_err,
-        "ingest_lag_p99_s": ingest, "ingest_lag_samples": lag_secs.len(), "ingest_target_s": INGEST_P99_S, "ingest_ok": ok_ingest,
-        "ingest_note": "herald fold lag (newest program tx slot - last folded slot) x 0.4 s, sampled each second; WS fan-out after the fold not included",
-        "pass": ok_file && ok_err && ok_ingest,
+        "ingest_p99_s": ingest, "ingest_measure": how, "ingest_target_s": INGEST_P99_S, "ingest_ok": ok_ingest,
+        "ingest_lag_p99_s": fold, "ingest_lag_samples": lag_secs.len(),
+        "ws_timed": timed, "ws_gaps": gaps, "ws_gaps_ok": ok_gaps,
+        "not_found": not_found,
+        "not_found_note": "404 for a per-bell file of a bell without a change: the contract's answer (§8.4), not an error",
+        "ingest_note": "ws-stamp: the WS message's ingest stamp t to its receipt; fold-lag (fallback): newest program tx slot - last folded slot, x 0.4 s, sampled each second",
+        "summary": format!("p99 file {p99:.1} ms, ingest->WS p99 {} s ({how}), error rate {rate:.5}, gaps {gaps}, 404 {not_found}", ingest.map_or("-".into(), |x| format!("{x:.2}"))),
+        "misses": misses,
+        "pass": ok_file && ok_err && ok_ingest && ok_gaps,
     })
+}
+
+/// One fold-lag sample (seconds): the program's newest transaction slot
+/// minus the herald's last folded slot, × 0.4 s.
+pub async fn fold_lag(
+    chain: &crate::chain::Chain,
+    program: &fclient::Address,
+    herald: u16,
+) -> Option<f64> {
+    let url = format!("http://127.0.0.1:{herald}/h/status");
+    let newest = chain.latest_program_slot(program).await.ok()??;
+    let r = tokio::time::timeout(Duration::from_secs(3), fclient::http::get(&url))
+        .await
+        .ok()?
+        .ok()?;
+    let v: Value = serde_json::from_slice(&r.body).ok()?;
+    Some(newest.saturating_sub(v["lastSlot"].as_u64()?) as f64 * 0.4)
 }
 
 /// `load --run-id R --viewers N --game-hours H`.
@@ -153,7 +219,8 @@ pub async fn load(rd: &RunDir, viewers: usize, game_hours: f64) -> i32 {
         }
     }
     let genesis = st["play"]["genesis_ts"].as_i64().unwrap_or(now);
-    let bell = ((now - genesis).max(0) / 600) as u32;
+    let bell_secs = st["season"]["bell_secs"].as_i64().unwrap_or(600).max(1);
+    let bell = ((now - genesis).max(0) / bell_secs) as u32;
     let wall = game_hours * 3_600.0 / scale;
     let bin = match crate::run::bin_dir() {
         Ok(b) => b.join("frontier-viewers"),
@@ -186,20 +253,12 @@ pub async fn load(rd: &RunDir, viewers: usize, game_hours: f64) -> i32 {
     let _ = rd.save_state(&stv);
     let t0 = Instant::now();
     let mut lags = vec![];
-    let url = format!("http://127.0.0.1:{herald}/h/status");
     let code = loop {
         if let Ok(Some(s)) = child.try_wait() {
             break s.code();
         }
-        if let (Ok(Some(newest)), Ok(Ok(r))) = (
-            chain.latest_program_slot(&program).await,
-            tokio::time::timeout(Duration::from_secs(3), fclient::http::get(&url)).await,
-        ) {
-            if let Ok(v) = serde_json::from_slice::<Value>(&r.body) {
-                if let Some(ls) = v["lastSlot"].as_u64() {
-                    lags.push(newest.saturating_sub(ls) as f64 * 0.4);
-                }
-            }
+        if let Some(l) = fold_lag(&chain, &program, herald).await {
+            lags.push(l);
         }
         if t0.elapsed() > Duration::from_secs_f64(wall + 300.0) {
             let _ = child.kill();
@@ -215,7 +274,18 @@ pub async fn load(rd: &RunDir, viewers: usize, game_hours: f64) -> i32 {
         let _ = chain.pause().await;
     }
     let verdict = judge(&rep, &lags);
-    let out = json!({"tag": tag, "chain_resumed_for_load": resumed, "viewers": viewers, "game_hours": game_hours, "wall_secs": wall, "scale": scale,
+    // Wave-5 review: a load after `up` completed runs against a chain whose
+    // play and drain are over (bots stopped): it says nothing about
+    // criterion 6 under play. The in-run window (`up --viewers`) is the
+    // criterion-6 evidence.
+    let window = if st["phase"] == "complete" || resumed {
+        "post-play"
+    } else {
+        "live"
+    };
+    let out = json!({"tag": tag, "window": window, "criterion6_evidence": false,
+        "note": "a `load` is reported, not criterion-6 evidence (that is the in-run window of `up --viewers`)",
+        "chain_resumed_for_load": resumed, "viewers": viewers, "game_hours": game_hours, "wall_secs": wall, "scale": scale,
         "exit": code, "generator": rep, "verdict": verdict});
     let _ = crate::run::write_atomic(
         &rd.path(&format!("load/{tag}.verdict.json")),
@@ -259,5 +329,23 @@ mod tests {
             "no lag samples is not a pass"
         );
         assert_eq!(judge(&Value::Null, &[0.4])["pass"], false);
+        // Wave-5 review: the WS stamp wins over the fold lag when timed,
+        // gaps fail, 404 are counted but not errors, upper bounds judge.
+        let ws = json!({"requests": 100_000, "errors": 0, "notFound": 567, "p99_ms": 245.8, "p99_upper_ms": 253.9,
+            "ws": {"errors": 0, "timed": 1000, "gaps": 0, "ingest_p99_ms": 900.0, "ingest_p99_upper_ms": 950.0}});
+        let v = judge(&ws, &[5.0]);
+        assert_eq!(v["ingest_measure"], "ws-stamp");
+        assert_eq!(v["p99_file_ok"], false, "the upper bound 253.9 > 250");
+        assert_eq!(v["not_found"], 567);
+        assert_eq!(v["error_rate"], 0.0);
+        let mut ok = ws.clone();
+        ok["p99_upper_ms"] = json!(20.0);
+        assert_eq!(
+            judge(&ok, &[5.0])["pass"],
+            true,
+            "the fold lag is not used when WS is timed"
+        );
+        ok["ws"]["gaps"] = json!(2);
+        assert_eq!(judge(&ok, &[0.1])["pass"], false, "gaps fail");
     }
 }

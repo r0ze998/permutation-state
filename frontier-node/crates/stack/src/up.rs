@@ -40,8 +40,12 @@ use crate::procs::{Proc, Spec};
 use crate::run::{self, RunDir};
 use crate::setup;
 
-/// Exit code for an item blocked on an owner decision (O-M1-12).
+/// Exit code for an item blocked on an owner decision (O-M1-12; Mode R,
+/// Agave >= 4.0 not approved).
 pub const EXIT_PENDING_OWNER: i32 = 3;
+/// Exit code while the approved round archive is still being fetched
+/// (O-M1-12 item 3 is approved: this is PENDING, not PENDING-OWNER).
+pub const EXIT_PENDING_FETCH: i32 = 4;
 
 pub const SOL: u64 = 1_000_000_000;
 /// Each reveal payer at start: above the default floor (≈ 0.215 SOL from
@@ -60,6 +64,8 @@ pub fn program_id(run_id: &str) -> Address {
 pub enum Refusal {
     /// Needs an owner decision (exit 3, `PENDING-OWNER`).
     PendingOwner(String),
+    /// Waits for the approved archive fetch (exit 4, `PENDING`).
+    PendingFetch(String),
     Bad(String),
 }
 
@@ -82,11 +88,43 @@ pub fn check_so(bytes: &[u8], beacon: Beacon) -> Result<(), String> {
     }
 }
 
+/// The round range of a packed archive: `(first, last)` rounds and the
+/// time of the first (`genesis_time + (first − 1) × period`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ArchiveRange {
+    pub first: u64,
+    pub last: u64,
+    pub first_time: i64,
+    pub last_time: i64,
+}
+
 /// The archive directory must hold a finished archive (`manifest.json`);
-/// a directory the prefetch is still filling is PENDING, not an error.
-pub fn check_archive(dir: &Path) -> Result<(), Refusal> {
+/// a directory the prefetch is still filling is PENDING (the fetch is
+/// approved, O-M1-12 item 3; exit 4), not PENDING-OWNER. A finished archive
+/// is read (wave-5 review of W5-B): its first round's time must be the
+/// run's G0 (the clock origin the archive was fetched for), and its last
+/// round must reach `until` (the pre-season lead, play, drain and an hour),
+/// else the run is refused (exit 2) before anything starts.
+pub fn check_archive(dir: &Path, g0: i64, until: i64) -> Result<ArchiveRange, Refusal> {
     if dir.join("manifest.json").is_file() {
-        return Ok(());
+        let range = archive_range(dir).map_err(Refusal::Bad)?;
+        if range.first_time != g0 {
+            return Err(Refusal::Bad(format!(
+                "{}: the archive starts at round {} (time {}), not at the run's G0 {g0}",
+                dir.display(),
+                range.first,
+                range.first_time
+            )));
+        }
+        if range.last_time < until {
+            return Err(Refusal::Bad(format!(
+                "{}: the archive ends at round {} (time {}), before the run needs ({until})",
+                dir.display(),
+                range.last,
+                range.last_time
+            )));
+        }
+        return Ok(range);
     }
     if dir.is_dir() {
         let partial = std::fs::read_dir(dir)
@@ -100,15 +138,52 @@ pub fn check_archive(dir: &Path) -> Result<(), Refusal> {
         } else {
             "no manifest.json"
         };
-        return Err(Refusal::PendingOwner(format!(
-            "real rounds (O-M1-12 item 3): {}: {why}",
+        return Err(Refusal::PendingFetch(format!(
+            "real rounds (O-M1-12 item 3, approved): {}: {why}",
             dir.display()
         )));
     }
-    Err(Refusal::PendingOwner(format!(
-        "real rounds (O-M1-12 item 3): {} does not exist",
+    Err(Refusal::PendingFetch(format!(
+        "real rounds (O-M1-12 item 3, approved): {} does not exist",
         dir.display()
     )))
+}
+
+/// The rounds a packed archive holds, from its `manifest.json` and
+/// `info.json` (drand-replay's layout; the segments are checked by
+/// drand-replay itself when it loads them).
+pub fn archive_range(dir: &Path) -> Result<ArchiveRange, String> {
+    let read = |n: &str| -> Result<Value, String> {
+        let t = std::fs::read_to_string(dir.join(n)).map_err(|e| format!("{n}: {e}"))?;
+        serde_json::from_str(&t).map_err(|e| format!("{n}: {e}"))
+    };
+    let m = read("manifest.json")?;
+    let info = read("info.json")?;
+    let genesis = info["genesis_time"]
+        .as_i64()
+        .ok_or("info.json: genesis_time")?;
+    let period = info["period"].as_i64().ok_or("info.json: period")?;
+    let mut first = u64::MAX;
+    let mut last = 0u64;
+    for s in m["segments"].as_array().ok_or("manifest.json: segments")? {
+        let f = s["first"].as_u64().ok_or("manifest.json: first")?;
+        let c = s["count"].as_u64().ok_or("manifest.json: count")?;
+        if c == 0 {
+            continue;
+        }
+        first = first.min(f);
+        last = last.max(f + c - 1);
+    }
+    if first == u64::MAX {
+        return Err("manifest.json: no rounds".into());
+    }
+    let t = |r: u64| genesis + (r as i64 - 1) * period;
+    Ok(ArchiveRange {
+        first,
+        last,
+        first_time: t(first),
+        last_time: t(last),
+    })
 }
 
 pub struct Keys {
@@ -265,7 +340,9 @@ impl Stack {
         }
         if cfg.beacon == Beacon::Archive {
             let dir = run::resolve(&repo, cfg.archive_dir.as_deref().unwrap_or(Path::new("")));
-            check_archive(&dir)?;
+            let until =
+                cfg.g0 + setup::LEAD_SECS + cfg.play_secs() + cfg.drain_bells as i64 * 600 + 3_600;
+            check_archive(&dir, cfg.g0, until)?;
         }
         let so = run::resolve(&repo, cfg.so_path());
         let bytes = std::fs::read(&so).map_err(|e| {
@@ -330,6 +407,14 @@ impl Stack {
         let addrs = Addresses::new(program, cfg.season_id);
         let chain = Chain::new(&ports.rpc(), program);
         let so_sha256 = hex::encode(Sha256::digest(&bytes));
+        if let Some(want) = &cfg.expect_so_sha256 {
+            if *want != so_sha256 {
+                return Err(Refusal::Bad(format!(
+                    "{}: sha256 {so_sha256}, not the pinned release build {want} (--expect-so-sha256)",
+                    so.display()
+                )));
+            }
+        }
         Ok(Stack {
             repo,
             run: rd,
@@ -541,6 +626,10 @@ impl Stack {
             self.run.path("bots").display().to_string(),
             s("--report"),
             self.run.path("bots/report.json").display().to_string(),
+            // The control / metrics listener on the port the config
+            // reserves for it (wave-5 review: it was checked, never given).
+            s("--control"),
+            format!("127.0.0.1:{}", p.bots),
         ];
         // Pass-through flags (`bots_args`), e.g. the join share and persona
         // pacing flags the in-process day uses once `frontier-bots` has them.
@@ -686,6 +775,10 @@ pub async fn up(cfg: StackConfig) -> i32 {
             println!("PENDING-OWNER: {m}");
             return EXIT_PENDING_OWNER;
         }
+        Err(Refusal::PendingFetch(m)) => {
+            println!("PENDING (fetch in progress): {m}");
+            return EXIT_PENDING_FETCH;
+        }
         Err(Refusal::Bad(m)) => {
             log_line(&m);
             return 2;
@@ -700,6 +793,7 @@ pub async fn up(cfg: StackConfig) -> i32 {
         "season_id": st.cfg.season_id,
         "authority": st.keys.authority.pubkey().to_string(),
         "so": {"path": st.so.display().to_string(), "sha256": st.so_sha256, "len": st.so_len,
+               "expected_sha256": st.cfg.expect_so_sha256, "pin": if st.cfg.expect_so_sha256.is_some() { "release build record" } else { "the deployed file's own hash (not exit-grade)" },
                "max_len": fclient::fees::deploy_max_len(st.so_len as u64)},
         "beacon": st.cfg.beacon.name(),
         "g0": st.cfg.g0,
@@ -921,9 +1015,17 @@ async fn supervise(
         .collect();
     let mut last = chain::Status::default();
     let mut last_sample_bell: i64 = -1;
+    let mut last_probe: Option<u32> = None;
+    let mut last_due = 0usize;
     let mut end_season_sent = false;
+    let mut end_season_task: Option<tokio::task::JoinHandle<Value>> = None;
     let mut viewers: Option<std::process::Child> = None;
     let mut viewers_started = false;
+    // Wave-5 review: the in-run viewer window is judged — the fold lag is
+    // sampled once a second while it runs, as `load` does.
+    let mut inrun_lags: Vec<f64> = vec![];
+    let mut inrun_judged = false;
+    let mut last_lag = Instant::now();
     let mut crashes = 0u32;
     let mut chain_down_since: Option<Instant> = None;
     loop {
@@ -1042,9 +1144,17 @@ async fn supervise(
             }
         }
         // Adversary holds.
-        if !holds.is_empty() {
-            let bell_now = ((now - genesis_ts).max(0) / bell_secs) as u32;
+        let probe_bell = ((now - genesis_ts).max(0) / bell_secs) as u32;
+        let due_holds = holds.iter().filter(|h| !h.done && now >= h.plan.at).count();
+        // Wave-5 review: a hold waiting for its situation probes the
+        // Provinces once a bell (a new hold coming due probes at once), not
+        // every 400 ms against the chain whose latencies are measured.
+        if due_holds > 0 && (last_probe != Some(probe_bell) || due_holds > last_due) {
+            last_probe = Some(probe_bell);
+            last_due = due_holds;
+            let bell_now = probe_bell;
             let mut provinces: Option<Vec<fclient::decode::Province>> = None;
+            let mut pending: Option<adversary::Pending> = None;
             let mut transit_slots = 4u8;
             for h in holds.iter_mut().filter(|h| !h.done && now >= h.plan.at) {
                 if provinces.is_none() {
@@ -1059,21 +1169,45 @@ async fn supervise(
                     }
                 }
                 let ps = provinces.as_deref().unwrap_or(&[]);
-                match adversary::keys_for(
+                if pending.is_none() {
+                    // Provinces with arrivals due today (their ArrivalDay).
+                    let day = bell_now / 144;
+                    let keys: Vec<Address> = ps
+                        .iter()
+                        .map(|p| st.addrs.arrival_day(p.p as i32, p.q as i32, day))
+                        .collect();
+                    let there = st.chain.accounts(&keys).await.unwrap_or_default();
+                    pending = Some(adversary::Pending {
+                        arrivals_today: ps
+                            .iter()
+                            .zip(there.iter())
+                            .filter(|(_, a)| a.as_ref().is_some_and(|a| a.owner == st.program))
+                            .map(|(p, _)| (p.p, p.q))
+                            .collect(),
+                        require: true,
+                    });
+                }
+                match adversary::keys_for_pending(
                     h.plan.kind,
                     &st.addrs,
                     ps,
+                    pending.as_ref().expect("pending"),
                     bell_now,
                     transit_slots,
                     &keeper_reveal,
                     &relay_payers,
                 ) {
                     Some((keys, detail)) => {
-                        let slots = adversary::slots_for(h.plan.game_secs, scale);
+                        // The ticket hold lasts through its cohort's bells.
+                        let game_secs = match detail["until_bell"].as_i64() {
+                            Some(u) => (genesis_ts + u * bell_secs - now).max(bell_secs),
+                            None => h.plan.game_secs,
+                        };
+                        let slots = adversary::slots_for(game_secs, scale);
                         let r = st.chain.hold(&keys, h.plan.priority_milli, slots).await;
                         st.run.event(Some(now), "hold", json!({
                             "kind": h.plan.kind, "priority_milli": h.plan.priority_milli, "slots": slots,
-                            "game_secs": h.plan.game_secs, "bell": bell_now, "keys": keys.len(),
+                            "game_secs": game_secs, "bell": bell_now, "keys": keys.len(),
                             "above_keeper_cap": adversary::above_cap(h.plan.kind, h.plan.priority_milli),
                             "detail": detail, "result": r.as_ref().ok(), "error": r.as_ref().err(),
                         }));
@@ -1122,11 +1256,21 @@ async fn supervise(
                 Err(e) => st.run.event(Some(now), "viewers-failed", json!(e)),
             }
         }
+        if viewers.is_some() && last_lag.elapsed() >= Duration::from_secs(1) {
+            last_lag = Instant::now();
+            if let Some(l) = crate::load::fold_lag(&st.chain, &st.program, st.ports.herald).await {
+                inrun_lags.push(l);
+            }
+        }
         if let Some(c) = viewers.as_mut() {
             if let Ok(Some(s)) = c.try_wait() {
                 st.run
                     .event(Some(now), "viewers-done", json!({"exit": s.code()}));
                 viewers = None;
+                if !inrun_judged {
+                    inrun_judged = true;
+                    judge_in_run(st, &inrun_lags, now, s.code());
+                }
             }
         }
         // EndSeason once the last bell is over.
@@ -1135,21 +1279,29 @@ async fn supervise(
                 .as_i64()
                 .unwrap_or(i64::MAX / 2);
             if now >= genesis_ts + end_bell * bell_secs {
+                // Wave-5 review: retried until it lands or the program
+                // answers AlreadyDone (bounded), from a task, so a slow or
+                // killed chain does not stall the supervisor's loop.
                 end_season_sent = true;
-                let payer = &st.keys.authority;
-                let r = st
-                    .chain
-                    .send_op(
-                        &[fclient::ix::end_season(&st.addrs, payer.pubkey())],
-                        &[payer],
-                        Duration::from_secs(60),
-                    )
-                    .await;
-                st.run.event(
-                    Some(now),
-                    "end-season",
-                    json!({"ok": r.is_ok(), "error": r.err()}),
-                );
+                let url = st.chain.url.clone();
+                let program = st.program;
+                let addrs = st.addrs.clone();
+                let seed = run::secret(&st.run.path("keys/operator.seed"));
+                end_season_task = Some(tokio::spawn(async move {
+                    let Ok(seed) = seed else {
+                        return json!({"ok": false, "error": "no operator key", "attempts": 0});
+                    };
+                    end_season_until_done(&url, program, &addrs, &Keypair::new_from_array(seed))
+                        .await
+                }));
+            }
+        }
+        if end_season_task.as_ref().is_some_and(|t| t.is_finished()) {
+            if let Some(t) = end_season_task.take() {
+                let r = t
+                    .await
+                    .unwrap_or_else(|e| json!({"ok": false, "error": e.to_string()}));
+                st.run.event(Some(now), "end-season", r);
             }
         }
         // Play is over: the fleet stops (it counts its own end from the
@@ -1181,7 +1333,16 @@ async fn supervise(
                 }
             }
             if let Some(mut c) = viewers.take() {
-                let _ = c.wait();
+                let code = c.wait().ok().and_then(|s| s.code());
+                if !inrun_judged {
+                    judge_in_run(st, &inrun_lags, now, code);
+                }
+            }
+            if let Some(t) = end_season_task.take() {
+                let r = t
+                    .await
+                    .unwrap_or_else(|e| json!({"ok": false, "error": e.to_string()}));
+                st.run.event(Some(now), "end-season", r);
             }
             if st.cfg.pause_at_end {
                 st.chain.pause().await?;
@@ -1200,6 +1361,64 @@ async fn supervise(
             return Ok(());
         }
     }
+}
+
+/// EndSeason, retried (every 5 s, at most 12 attempts of 30 s) until it
+/// lands or the program answers `AlreadyDone` (the season already Ended).
+async fn end_season_until_done(
+    url: &str,
+    program: Address,
+    addrs: &fclient::addr::Addresses,
+    payer: &Keypair,
+) -> Value {
+    let chain = chain::Chain::new(url, program);
+    let done = format!(
+        "code Some({})",
+        frontier_abi::error::FrontierError::AlreadyDone.code()
+    );
+    let mut errors = vec![];
+    for attempt in 1..=12u32 {
+        match chain
+            .send_op(
+                &[fclient::ix::end_season(addrs, payer.pubkey())],
+                &[payer],
+                Duration::from_secs(30),
+            )
+            .await
+        {
+            Ok(()) => return json!({"ok": true, "attempts": attempt, "errors": errors}),
+            Err(e) if e.contains(&done) => {
+                return json!({"ok": true, "already_done": true, "attempts": attempt, "errors": errors})
+            }
+            Err(e) => {
+                errors.push(e.lines().next().unwrap_or("").to_string());
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
+        }
+    }
+    json!({"ok": false, "attempts": 12, "errors": errors})
+}
+
+/// The in-run viewer window's verdict (§13.4 criterion 6): the generator's
+/// `load/in-run.json` judged with the fold lag sampled meanwhile, written
+/// to `load/in-run.verdict.json` (the report's criterion-6 evidence).
+fn judge_in_run(st: &Stack, lags: &[f64], now: i64, exit: Option<i32>) {
+    let rep: Value = std::fs::read_to_string(st.run.path("load/in-run.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or(Value::Null);
+    let verdict = crate::load::judge(&rep, lags);
+    let out = json!({"tag": "in-run", "window": "in-run", "criterion6_evidence": true,
+        "viewers": st.cfg.viewers, "game_hours": st.cfg.viewer_window_hours, "scale": st.cfg.scale,
+        "exit": exit, "generator": rep, "verdict": verdict});
+    let _ = run::write_atomic(
+        &st.run.path("load/in-run.verdict.json"),
+        serde_json::to_string_pretty(&out)
+            .unwrap_or_default()
+            .as_bytes(),
+    );
+    st.run
+        .event(Some(now), "viewers-verdict", out["verdict"].clone());
 }
 
 async fn sample(st: &Stack, s: chain::Status, bell: i64) {
@@ -1352,15 +1571,40 @@ mod tests {
     #[test]
     fn archive_states() {
         let d = std::env::temp_dir().join(format!("psf-arch-{}", run::wall_ms()));
-        assert!(matches!(check_archive(&d), Err(Refusal::PendingOwner(_))));
+        assert!(matches!(
+            check_archive(&d, 0, 0),
+            Err(Refusal::PendingFetch(_))
+        ));
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(d.join("partial-1-2.bin"), b"x").unwrap();
-        match check_archive(&d) {
-            Err(Refusal::PendingOwner(m)) => assert!(m.contains("still being fetched"), "{m}"),
+        match check_archive(&d, 0, 0) {
+            Err(Refusal::PendingFetch(m)) => assert!(m.contains("still being fetched"), "{m}"),
             _ => panic!(),
         }
-        std::fs::write(d.join("manifest.json"), b"{}").unwrap();
-        assert!(check_archive(&d).is_ok());
+        // A finished archive (quicknet: genesis 1692803367, period 3) of the
+        // main session's plan: rounds 32065012..=32311012 start at G0.
+        std::fs::write(
+            d.join("info.json"),
+            r#"{"genesis_time": 1692803367, "period": 3}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            d.join("manifest.json"),
+            r#"{"segments": [{"file": "r.bin", "first": 32065012, "count": 246001}]}"#,
+        )
+        .unwrap();
+        let g0 = 1_788_998_400;
+        let r = check_archive(&d, g0, g0 + 7 * 86_400).expect("covers 7 days");
+        assert_eq!(r.first_time, g0);
+        assert_eq!(r.last, 32_311_012);
+        assert!(matches!(
+            check_archive(&d, g0 + 600, g0 + 86_400),
+            Err(Refusal::Bad(m)) if m.contains("not at the run's G0")
+        ));
+        assert!(matches!(
+            check_archive(&d, g0, g0 + 9 * 86_400),
+            Err(Refusal::Bad(m)) if m.contains("before the run needs")
+        ));
         let _ = std::fs::remove_dir_all(&d);
     }
 

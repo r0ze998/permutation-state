@@ -41,8 +41,11 @@ pub fn pins(st: &Value) -> Result<([u8; 96], Option<[u8; 32]>), String> {
         Some("archive") => input::hex_arr::<96>(fclient::beacon::QUICKNET_PK)?,
         other => return Err(format!("state: beacon {other:?}")),
     };
-    let so = st["so"]["sha256"]
+    // The release build's recorded hash when the run pinned one (an
+    // independent trust root for V2); else the deployed file's own.
+    let so = st["so"]["expected_sha256"]
         .as_str()
+        .or_else(|| st["so"]["sha256"].as_str())
         .map(input::hex_arr::<32>)
         .transpose()?;
     Ok((pk, so))
@@ -140,6 +143,12 @@ pub async fn verify(rd: &RunDir) -> i32 {
         }
     };
     let read_secs = t0.elapsed().as_secs_f64();
+    // Wave-5 review: a chain that was running is running again.
+    if let Ok(s) = &was {
+        if !s.paused {
+            let _ = chain.resume().await;
+        }
+    }
     if let Err(e) = inp.save(&input_path(rd)) {
         eprintln!("frontier-stack: {e}");
         return verify_core::EXIT_UNVERIFIABLE;

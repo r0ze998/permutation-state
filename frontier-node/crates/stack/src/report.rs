@@ -20,7 +20,7 @@
 //! restarts and crashes, adversary holds, and the verify, tamper and load
 //! verdicts.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 
 use fclient::decode::Province;
 use fclient::log::Record;
@@ -75,6 +75,7 @@ pub fn tag_of(t: &TxRecord, program: &Address) -> Option<u8> {
 }
 
 /// A decoded record with the landing time and slot of its transaction.
+#[derive(Clone)]
 pub struct Rec {
     pub r: Record,
     pub slot: u64,
@@ -257,9 +258,13 @@ pub fn latencies(
 /// transits due by `last_bell`.
 pub fn outcomes(recs: &[Rec], last_bell: u32) -> Value {
     let mut kinds: BTreeMap<&str, u64> = BTreeMap::new();
-    let mut settled: BTreeSet<u64> = BTreeSet::new();
     let mut transit: BTreeMap<String, u64> = BTreeMap::new();
-    let mut departs: Vec<(u64, u32)> = vec![];
+    // Per host, its departs in order with how often each was settled
+    // (wave-5 review: settlement counted per (host, depart), exactly once;
+    // a host that departs again after a Stays is two transits).
+    let mut departs: BTreeMap<u64, Vec<(u32, u32)>> = BTreeMap::new();
+    let mut n_departs = 0usize;
+    let mut orphan_settles: Vec<String> = vec![];
     let mut bad_seal_codes: BTreeMap<u8, u64> = BTreeMap::new();
     for x in recs {
         let k = Kind::from_u8(x.r.kind);
@@ -269,12 +274,25 @@ pub fn outcomes(recs: &[Rec], last_bell: u32) -> Value {
             Some(Kind::DEPART) => {
                 let host = le_u64(kp, 0);
                 let arrive = le_u32(kp, field(Kind::DEPART, "arrive_bell").unwrap_or(21));
-                departs.push((host, arrive));
+                departs.entry(host).or_default().push((arrive, 0));
+                n_departs += 1;
             }
             Some(Kind::TRANSIT_SETTLED) => {
                 let host = le_u64(kp, 0);
                 let (o, c) = (kp[8], kp[9]);
-                settled.insert(host);
+                // The earliest depart of the host not yet settled; else the
+                // last one again (a second settlement of one transit).
+                match departs.get_mut(&host) {
+                    Some(v) => match v.iter_mut().find(|d| d.1 == 0) {
+                        Some(d) => d.1 += 1,
+                        None => {
+                            if let Some(d) = v.last_mut() {
+                                d.1 += 1;
+                            }
+                        }
+                    },
+                    None => orphan_settles.push(format!("{host:#x}")),
+                }
                 *transit.entry(format!("outcome {o} seal {c}")).or_default() += 1;
                 if o == frontier_abi::log::transit_outcome::BAD_SEAL {
                     *bad_seal_codes.entry(c).or_default() += 1;
@@ -283,14 +301,25 @@ pub fn outcomes(recs: &[Rec], last_bell: u32) -> Value {
             _ => {}
         }
     }
-    let due: Vec<&(u64, u32)> = departs.iter().filter(|(_, a)| a + 3 <= last_bell).collect();
-    let unsettled: Vec<String> = due
-        .iter()
-        .filter(|(h, _)| !settled.contains(h))
-        .map(|(h, a)| format!("{h:#x}@{a}"))
-        .collect();
+    let mut due = 0usize;
+    let mut unsettled: Vec<String> = vec![];
+    let mut settled_twice: Vec<String> = vec![];
+    for (h, v) in &departs {
+        for (a, n) in v {
+            if *n > 1 {
+                settled_twice.push(format!("{h:#x}@{a} x{n}"));
+            }
+            if a + 3 <= last_bell {
+                due += 1;
+                if *n == 0 {
+                    unsettled.push(format!("{h:#x}@{a}"));
+                }
+            }
+        }
+    }
     json!({"records": kinds, "transits": transit, "bad_seal_codes": bad_seal_codes,
-           "departs": departs.len(), "departs_due": due.len(), "unsettled_due": unsettled})
+           "departs": n_departs, "departs_due": due, "unsettled_due": unsettled,
+           "settled_more_than_once": settled_twice, "settles_without_depart": orphan_settles})
 }
 
 /// Final Provinces in the verifier input.
@@ -345,21 +374,32 @@ fn read_json(p: &std::path::Path) -> Value {
 /// Keeper samples: min reveal effective N during play (after the first two
 /// bells, when payer care has filled the pool), last status summary.
 pub fn keeper_summary(samples: &[Value], play_from: i64, play_to: i64) -> Value {
+    // Every bell of play, the first two included (wave-5 review: I-49 says
+    // every bell; those below 150 are listed).
     let during: Vec<&Value> = samples
         .iter()
         .filter(|s| {
             s["bell"]
                 .as_i64()
-                .is_some_and(|b| b >= 2 && b >= play_from && b < play_to)
+                .is_some_and(|b| b >= play_from && b < play_to)
         })
         .collect();
     let min_n = during
         .iter()
         .filter_map(|s| s["status"]["pools"]["reveal"]["effective_n"].as_u64())
         .min();
+    let low_bells: Vec<i64> = during
+        .iter()
+        .filter(|s| {
+            s["status"]["pools"]["reveal"]["effective_n"]
+                .as_u64()
+                .is_some_and(|n| n < 150)
+        })
+        .filter_map(|s| s["bell"].as_i64())
+        .collect();
     let last = samples.last().map(|s| &s["status"]);
     json!({"samples": samples.len(), "min_reveal_effective_n_in_play": min_n,
-        "effective_n_ok": min_n.is_some_and(|n| n >= 150),
+        "effective_n_ok": min_n.is_some_and(|n| n >= 150), "bells_below_150": low_bells,
         "last": last.map(|l| json!({"bell": l["bell"], "alerts": l["alerts"], "spend_by_day": l["spend_by_day"],
             "pools": l["pools"], "anchor_latency_slots_p99": l["duties"]["anchor_latency_slots_p99"],
             "seed_latency_slots_p99": l["duties"]["seed_latency_slots_p99"], "provinces_opened": l["duties"]["provinces_opened"],
@@ -409,6 +449,303 @@ pub fn personas(bots: &Value) -> Value {
     json!({"personas": list, "violated": violated})
 }
 
+/// Each hold's effect (wave-5 review of W5-B): from the hold's result
+/// (its keys and slot window) and the run's transactions, how many landed
+/// transactions wrote a held key inside the window (keepers or players
+/// outbidding it), how many wrote one in the bell after it (the work it
+/// delayed), and the first such landing after the window.
+pub fn hold_effects(txs: &[TxRecord], events: &[Value]) -> Vec<Value> {
+    let mut out = vec![];
+    for e in events.iter().filter(|e| e["event"] == "hold") {
+        let d = &e["detail"];
+        let r = &d["result"];
+        let (Some(from), Some(until)) = (r["fromSlot"].as_u64(), r["untilSlot"].as_u64()) else {
+            out.push(
+                json!({"kind": d["kind"], "effect": "no hold result (the hold did not start)"}),
+            );
+            continue;
+        };
+        let keys: BTreeMap<String, ()> = r["keys"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|k| k.as_str().map(|k| (k.to_string(), ())))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let span = until.saturating_sub(from) + 1;
+        let (mut inside, mut after, mut first_after) = (0u64, 0u64, None::<u64>);
+        for t in txs.iter().filter(|t| t.err.is_none()) {
+            if t.slot < from || t.slot > until + span {
+                continue;
+            }
+            let Ok(tx) = fclient::tx::from_wire(&t.tx) else {
+                continue;
+            };
+            let m = &tx.message;
+            let hit = (0..m.account_keys.len()).any(|i| {
+                fclient::tx::is_writable_index(m, i)
+                    && keys.contains_key(&m.account_keys[i].to_string())
+            });
+            if !hit {
+                continue;
+            }
+            if t.slot <= until {
+                inside += 1;
+            } else {
+                after += 1;
+                first_after = Some(first_after.map_or(t.slot, |x| x.min(t.slot)));
+            }
+        }
+        out.push(json!({"kind": d["kind"], "priority_milli": d["priority_milli"], "above_keeper_cap": d["above_keeper_cap"],
+            "from_slot": from, "until_slot": until, "keys": keys.len(),
+            "writes_inside": inside, "writes_in_the_window_after": after, "first_write_after": first_after,
+            "detail": d["detail"]}));
+    }
+    out
+}
+
+/// One §13.4 criterion decided on this run.
+fn verdict(id: &str, status: &str, why: impl Into<String>) -> Value {
+    json!({"criterion": id, "status": status, "why": why.into()})
+}
+
+/// The §13.4 criteria this run can decide (wave-5 review of W5-B): each
+/// `pass`, `fail` or `n.a.` with the reason. `facts` carries the pieces
+/// [`report`] gathers (see there); a missing piece makes its criterion
+/// `n.a.`, never a pass.
+pub fn decide(facts: &Value) -> Vec<Value> {
+    let mut v = vec![];
+    let len = |x: &Value| x.as_array().map_or(0, |a| a.len());
+    // 1 — the season completes; transits settle exactly once; no stuck bells.
+    let play_bells = facts["play_bells"].as_u64().unwrap_or(0);
+    let end_bell = facts["end_bell"].as_u64().unwrap_or(u64::MAX);
+    let mut bad = vec![];
+    if play_bells >= end_bell && facts["end_season"]["ok"] != true {
+        bad.push("EndSeason did not land".to_string());
+    }
+    for (k, what) in [
+        ("stuck_province_bells", "province-bells stuck"),
+        ("unsettled_due", "transits due and unsettled"),
+        ("settled_more_than_once", "transits settled more than once"),
+        ("settles_without_depart", "settlements without a DEPART"),
+    ] {
+        let n = len(&facts[k]);
+        if n > 0 {
+            bad.push(format!("{n} {what}"));
+        }
+    }
+    v.push(if !bad.is_empty() {
+        verdict("1", "fail", bad.join("; "))
+    } else if play_bells < end_bell {
+        verdict("1", "pass", "the run stops before end_bell (EndSeason not expected): no stuck province-bell, every due transit settled exactly once; ClashInputs closability is judged by the exit run")
+    } else {
+        verdict("1", "pass", "EndSeason landed; no stuck province-bell; every due transit settled exactly once")
+    });
+    // 2 — CU within the budgets.
+    let over = len(&facts["over_budget"]);
+    v.push(if facts["over_budget"].is_null() {
+        verdict("2", "n.a.", "no CU table")
+    } else if over > 0 {
+        verdict(
+            "2",
+            "fail",
+            format!(
+                "{over} kinds above their §5.5 budget: {}",
+                facts["over_budget"]
+            ),
+        )
+    } else {
+        verdict(
+            "2",
+            "pass",
+            "every kind within its §5.5 budget (Reveal distribution reported)",
+        )
+    });
+    // 3 — keeper latencies: slots at 20x, game seconds at 2x.
+    let scale = facts["scale"].as_f64().unwrap_or(0.0);
+    let lat = &facts["latency"];
+    let slot_secs = lat["slot_game_secs"].as_f64().unwrap_or(0.4 * scale);
+    let p99 = |k: &str| lat[k]["p99"].as_f64();
+    let checks = [
+        ("round_to_anchor_slots", 2.0, 5.0),
+        ("s_to_first_cache_slots", 2.0, 5.0),
+        ("anchor_to_last_reveal_slots", 4.0, 30.0),
+        ("close_to_resolve_slots", 8.0, 60.0),
+    ];
+    let slots_mode = (scale - 20.0).abs() < 1e-9;
+    let secs_mode = (scale - 2.0).abs() < 1e-9;
+    if !slots_mode && !secs_mode {
+        v.push(verdict("3", "n.a.", format!("criterion 3's targets are defined at 20x (slots) and 2x (game seconds); this run is {scale}x (figures reported)")));
+    } else {
+        let mut miss = vec![];
+        let mut none = vec![];
+        for (k, slots, secs) in checks {
+            match p99(k) {
+                None => none.push(k),
+                Some(x) if slots_mode && x > slots => {
+                    miss.push(format!("{k} p99 {x:.2} > {slots} slots"))
+                }
+                Some(x) if secs_mode && x * slot_secs > secs => {
+                    miss.push(format!("{k} p99 {:.1} s > {secs} s", x * slot_secs))
+                }
+                _ => {}
+            }
+        }
+        let over6 = lat["province_days_over_6_skips"].as_u64().unwrap_or(0);
+        let skip_note = format!("{over6} province-days over 6 SkipQuiet (idle and churned not told apart: reported, not decided)");
+        v.push(if !miss.is_empty() {
+            verdict("3", "fail", format!("{}; {skip_note}", miss.join("; ")))
+        } else if !none.is_empty() {
+            verdict(
+                "3",
+                "n.a.",
+                format!("no samples for {}; {skip_note}", none.join(", ")),
+            )
+        } else {
+            verdict(
+                "3",
+                "pass",
+                format!("every p99 within its target; {skip_note}"),
+            )
+        });
+    }
+    // 4 — liveness.
+    let mut bad = vec![];
+    let mut notes = vec![];
+    let windows: Vec<(u64, u64)> = facts["above_cap_holds"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|h| {
+                    let b = h["bell"].as_u64()?;
+                    let bells = (h["game_secs"].as_f64().unwrap_or(0.0) / 600.0).ceil() as u64 + 1;
+                    Some((b, b + bells))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    match facts["valid_unrevealed"].as_array() {
+        None => notes.push("no verify report: ValidSealUnrevealed not read".to_string()),
+        Some(list) => {
+            let outside: Vec<&Value> = list
+                .iter()
+                .filter(|x| {
+                    let b = x["arrive_bell"].as_u64().unwrap_or(0);
+                    !windows.iter().any(|(lo, hi)| b >= *lo && b <= *hi)
+                })
+                .collect();
+            if !outside.is_empty() {
+                bad.push(format!(
+                    "{} valid seals unrevealed outside the above-cap hold windows",
+                    outside.len()
+                ));
+            }
+            notes.push(format!(
+                "{} unrevealed inside {} above-cap hold windows (expected)",
+                list.len() - outside.len(),
+                windows.len()
+            ));
+        }
+    }
+    let persona = |name: &str| {
+        facts["personas"]
+            .as_array()
+            .and_then(|a| a.iter().find(|p| p["persona"] == name))
+            .map(|p| p["verdict"].as_str().unwrap_or("").to_string())
+    };
+    match persona("min_tip").as_deref() {
+        Some("violated") => bad.push("min_tip persona not fully revealed".into()),
+        None => notes.push("no min_tip verdict".into()),
+        _ => {}
+    }
+    for (w, k) in [("A", "keeper_a"), ("B", "keeper_b")] {
+        let s = &facts[k];
+        if s.is_null() {
+            continue;
+        }
+        let low = len(&s["bells_below_150"]);
+        if s["min_reveal_effective_n_in_play"].is_null() {
+            notes.push(format!("keeper {w}: no status samples"));
+        } else if low > 0 {
+            bad.push(format!(
+                "keeper {w}: reveal pool effective N below 150 in {low} bells ({})",
+                s["bells_below_150"]
+            ));
+        }
+    }
+    v.push(if !bad.is_empty() {
+        verdict(
+            "4",
+            "fail",
+            format!("{}; {}", bad.join("; "), notes.join("; ")),
+        )
+    } else if facts["valid_unrevealed"].is_null() {
+        verdict("4", "n.a.", notes.join("; "))
+    } else {
+        verdict("4", "pass", notes.join("; "))
+    });
+    // 5 — personas.
+    let violated = len(&facts["violated"]);
+    v.push(if facts["personas"].is_null() {
+        verdict("5", "n.a.", "no bots report")
+    } else if violated > 0 {
+        verdict("5", "fail", format!("violated: {}", facts["violated"]))
+    } else {
+        verdict("5", "pass", "no persona violated")
+    });
+    // 6 — the herald under the in-run viewer window.
+    let inrun = facts["loads"]
+        .as_array()
+        .and_then(|a| a.iter().find(|l| l["window"] == "in-run"));
+    v.push(match inrun {
+        None => verdict("6", "n.a.", "no in-run viewer window in this run (a post-play `load` is reported, not criterion-6 evidence)"),
+        Some(l) if l["verdict"]["pass"] == true => verdict("6", "pass", format!("in-run window: {}", l["verdict"]["summary"])),
+        Some(l) => verdict("6", "fail", format!("in-run window: {}", l["verdict"]["misses"])),
+    });
+    v.push(verdict("7", "n.a.", "reported, not gating (§13.4)"));
+    // 8 — bad seals.
+    let mut bad = vec![];
+    if facts["bad_seal_survived"] == true {
+        bad.push("BadSealSurvived".to_string());
+    }
+    for p in ["garbage_seal", "bad_plaintext", "settle_racer"] {
+        if persona(p).as_deref() == Some("violated") {
+            bad.push(format!("{p} violated"));
+        }
+    }
+    v.push(if facts["verify_verdict"].is_null() {
+        verdict("8", "n.a.", "no verify report")
+    } else if bad.is_empty() {
+        verdict(
+            "8",
+            "pass",
+            "no bad seal survived; the bad-seal personas held",
+        )
+    } else {
+        verdict("8", "fail", bad.join("; "))
+    });
+    // 9 — tickets.
+    let old = len(&facts["cohorts_open_past_24_bells"]);
+    v.push(if old > 0 {
+        verdict("9", "fail", format!("{old} cohorts open past 24 bells"))
+    } else if persona("ticket_holder").as_deref() == Some("violated") {
+        verdict("9", "fail", "ticket_holder kept a site it did not win")
+    } else {
+        verdict("9", "pass", "every cohort closed within 24 bells")
+    });
+    v
+}
+
+/// Exit code of a criteria list: 1 when any decided criterion fails.
+pub fn criteria_exit(v: &[Value]) -> i32 {
+    if v.iter().any(|c| c["status"] == "fail") {
+        1
+    } else {
+        0
+    }
+}
+
 /// `report --run-id R`.
 pub async fn report(rd: &RunDir) -> i32 {
     let st = match rd.load_state() {
@@ -445,7 +782,8 @@ pub async fn report(rd: &RunDir) -> i32 {
         .map(|t| t.block_time)
         .max()
         .unwrap_or(genesis);
-    let last_bell = ((last_time - genesis).max(0) / 600) as u32;
+    let bell_secs = st["season"]["bell_secs"].as_i64().unwrap_or(600).max(1);
+    let last_bell = ((last_time - genesis).max(0) / bell_secs) as u32;
     let delay_s = st["config"]["drand_delay_ms"].as_f64().unwrap_or(1_000.0) / 1_000.0;
     let drand = fclient::clock::Drand {
         genesis: frontier_abi::presets::M1_LOCAL_7D.drand_genesis,
@@ -516,15 +854,35 @@ pub async fn report(rd: &RunDir) -> i32 {
         "8_bad_seals": {"bad_seal_codes": out["bad_seal_codes"], "BadSealSurvived": bad_seal_survived},
         "9_tickets": {"cohorts_open_past_24_bells": pc["cohorts_open_past_24_bells"]},
     });
+    let verify_report = read_json(&rd.path("verify/report.json"));
+    let above_cap: Vec<Value> = rd
+        .events()
+        .iter()
+        .filter(|e| e["event"] == "hold" && e["detail"]["above_keeper_cap"] == true)
+        .map(|e| e["detail"].clone())
+        .collect();
+    let facts = json!({
+        "play_bells": play_bells, "end_bell": end_bell, "scale": scale, "end_season": ev["end_season"],
+        "stuck_province_bells": pc["stuck_province_bells"], "cohorts_open_past_24_bells": pc["cohorts_open_past_24_bells"],
+        "unsettled_due": out["unsettled_due"], "settled_more_than_once": out["settled_more_than_once"],
+        "settles_without_depart": out["settles_without_depart"], "over_budget": over, "latency": lat,
+        "valid_unrevealed": verify_report["liveness"]["valid_unrevealed"], "above_cap_holds": above_cap,
+        "personas": pers["personas"], "violated": pers["violated"],
+        "keeper_a": ka, "keeper_b": if st["config"]["keeper_b"] == false { Value::Null } else { kb.clone() },
+        "loads": loads, "bad_seal_survived": bad_seal_survived, "verify_verdict": verify["verdict"],
+    });
+    let decided = decide(&facts);
+    let holds = hold_effects(&inp.txs, &rd.events());
     let rep = json!({
         "format": "frontier-stack-report-v1",
+        "decided": decided,
         "run_id": st["run_id"], "phase": st["phase"], "config": st["config"], "so": st["so"], "program": st["program"],
         "season": st["season"], "play": st["play"], "source": source, "txs": inp.txs.len(), "last_bell": last_bell,
         "cu": cu, "reveal_cu": stats(&reveal), "failures": failures(&inp.txs, &program),
         "outcomes": out, "provinces": pc, "keepers": {"a": ka, "b": kb}, "herald": herald,
         "events": ev, "bots": {"personas": pers, "errors": bots["errors"], "bots": bots["bots"]},
         "verify": verify, "tamper": {"ok": tamper["ok"], "total": tamper["total"], "on_run": tamper["on_run"]},
-        "loads": loads, "criteria": criteria,
+        "loads": loads, "criteria": criteria, "hold_effects": holds,
     });
     let md = markdown(&rep);
     let _ = crate::run::write_atomic(
@@ -535,7 +893,7 @@ pub async fn report(rd: &RunDir) -> i32 {
     );
     let _ = crate::run::write_atomic(&rd.path("report.md"), md.as_bytes());
     print!("{md}");
-    0
+    criteria_exit(&decided)
 }
 
 fn f(v: &Value) -> String {
@@ -564,7 +922,16 @@ pub fn markdown(r: &Value) -> String {
         f(&r["play"]["play_bells"]), f(&r["play"]["drain_bells"]), f(&r["program"]), f(&r["so"]["sha256"]),
         f(&r["so"]["len"]), f(&r["source"]), f(&r["txs"]), f(&r["last_bell"])
     );
-    m.push_str("## Verdicts\n\n");
+    m.push_str("## §13.4 criteria decided\n\n| criterion | status | why |\n|---|---|---|\n");
+    for c in r["decided"].as_array().cloned().unwrap_or_default() {
+        m.push_str(&format!(
+            "| {} | **{}** | {} |\n",
+            f(&c["criterion"]),
+            f(&c["status"]),
+            f(&c["why"]).replace('|', "\\|")
+        ));
+    }
+    m.push_str("\n## Verdicts\n\n");
     m.push_str(&format!(
         "- verify: **{}** (fail codes {})\n- tamper: {}/{} classes FAIL with their codes ({} built from the run)\n",
         f(&r["verify"]["verdict"]), f(&r["verify"]["fail_codes"]), f(&r["tamper"]["ok"]), f(&r["tamper"]["total"]), f(&r["tamper"]["on_run"])
@@ -673,6 +1040,20 @@ pub fn markdown(r: &Value) -> String {
             f(&d["above_keeper_cap"])
         ));
     }
+    m.push_str("\n### Hold effects (held keys written inside the window / in as long again after it)\n\n| kind | above cap | slots | keys | inside | after | first after |\n|---|---|---|---|---|---|---|\n");
+    for h in r["hold_effects"].as_array().cloned().unwrap_or_default() {
+        m.push_str(&format!(
+            "| {} | {} | {}–{} | {} | {} | {} | {} |\n",
+            f(&h["kind"]),
+            f(&h["above_keeper_cap"]),
+            f(&h["from_slot"]),
+            f(&h["until_slot"]),
+            f(&h["keys"]),
+            f(&h["writes_inside"]),
+            f(&h["writes_in_the_window_after"]),
+            f(&h["first_write_after"])
+        ));
+    }
     m.push_str(&format!(
         "\n## §13.4 criteria (what this run decides)\n\n```json\n{}\n```\n",
         serde_json::to_string_pretty(&r["criteria"]).unwrap_or_default()
@@ -736,6 +1117,111 @@ mod tests {
         assert!(fl.is_object());
     }
 
+    fn good_facts() -> Value {
+        json!({
+            "play_bells": 144, "end_bell": 1008, "scale": 20.0, "end_season": null,
+            "stuck_province_bells": [], "cohorts_open_past_24_bells": [], "unsettled_due": [],
+            "settled_more_than_once": [], "settles_without_depart": [], "over_budget": [],
+            "latency": {"slot_game_secs": 8.0, "round_to_anchor_slots": {"p99": 1.5}, "s_to_first_cache_slots": {"p99": 2.0},
+                "anchor_to_last_reveal_slots": {"p99": 3.0}, "close_to_resolve_slots": {"p99": 6.0}, "province_days_over_6_skips": 0},
+            "valid_unrevealed": [{"host_id": "1", "arrive_bell": 50}],
+            "above_cap_holds": [{"bell": 49, "game_secs": 600.0}],
+            "personas": [{"persona": "min_tip", "verdict": "observed"}], "violated": [],
+            "keeper_a": {"min_reveal_effective_n_in_play": 150, "bells_below_150": []}, "keeper_b": null,
+            "loads": [{"window": "in-run", "verdict": {"pass": true, "summary": "ok"}}],
+            "bad_seal_survived": false, "verify_verdict": "PASS",
+        })
+    }
+
+    /// Wave-5 review of W5-B: the report decides the criteria and fails.
+    #[test]
+    fn the_report_decides_the_criteria() {
+        let d = decide(&good_facts());
+        let st = |id: &str| d.iter().find(|c| c["criterion"] == id).unwrap()["status"].clone();
+        assert_eq!(st("1"), "pass");
+        assert_eq!(st("3"), "pass");
+        assert_eq!(st("4"), "pass", "{d:?}");
+        assert_eq!(st("6"), "pass");
+        assert_eq!(st("7"), "n.a.");
+        assert_eq!(criteria_exit(&d), 0);
+        let mut f = good_facts();
+        f["latency"]["close_to_resolve_slots"]["p99"] = json!(9.0);
+        f["valid_unrevealed"] = json!([{"host_id": "1", "arrive_bell": 90}]);
+        f["settled_more_than_once"] = json!(["0x1@12 x2"]);
+        f["keeper_a"]["bells_below_150"] = json!([0, 1]);
+        f["loads"] = json!([{"window": "post-play", "verdict": {"pass": true}}]);
+        let d = decide(&f);
+        let st = |id: &str| d.iter().find(|c| c["criterion"] == id).unwrap()["status"].clone();
+        assert_eq!(st("1"), "fail");
+        assert_eq!(st("3"), "fail");
+        assert_eq!(st("4"), "fail");
+        assert_eq!(
+            st("6"),
+            "n.a.",
+            "a post-play load is not criterion-6 evidence"
+        );
+        assert_eq!(criteria_exit(&d), 1);
+        // Other scales: criterion 3 is not decided.
+        let mut f = good_facts();
+        f["scale"] = json!(100.0);
+        let d = decide(&f);
+        assert_eq!(
+            d.iter().find(|c| c["criterion"] == "3").unwrap()["status"],
+            "n.a."
+        );
+        // The season's end: EndSeason must land.
+        let mut f = good_facts();
+        f["play_bells"] = json!(1008);
+        f["end_season"] = json!({"ok": false});
+        assert_eq!(decide(&f)[0]["status"], "fail");
+    }
+
+    #[test]
+    fn hold_effects_count_writes_of_held_keys() {
+        let inp = program_fixture();
+        let t = inp
+            .txs
+            .iter()
+            .find(|t| t.err.is_none())
+            .expect("a landed tx");
+        let tx = fclient::tx::from_wire(&t.tx).unwrap();
+        let m = &tx.message;
+        let k = (0..m.account_keys.len())
+            .find(|&i| fclient::tx::is_writable_index(m, i))
+            .map(|i| m.account_keys[i].to_string())
+            .unwrap();
+        let ev = vec![
+            json!({"event": "hold", "detail": {"kind": "lag", "result": {"keys": [k], "fromSlot": t.slot, "untilSlot": t.slot}}}),
+            json!({"event": "hold", "detail": {"kind": "anchor", "result": null}}),
+        ];
+        let h = hold_effects(&inp.txs, &ev);
+        assert_eq!(h.len(), 2);
+        assert!(h[0]["writes_inside"].as_u64().unwrap() >= 1, "{h:?}");
+        assert!(h[1]["effect"].as_str().unwrap().contains("did not start"));
+    }
+
+    #[test]
+    fn settlement_is_counted_per_depart() {
+        let inp = program_fixture();
+        let mut recs = records(&inp.txs, &inp.cfg.program);
+        let out = outcomes(&recs, 144);
+        assert_eq!(out["settled_more_than_once"], json!([]), "{out}");
+        assert_eq!(out["settles_without_depart"], json!([]), "{out}");
+        // A second settlement of a transit is caught.
+        let i = recs
+            .iter()
+            .position(|x| x.r.kind == Kind::TRANSIT_SETTLED as u8)
+            .expect("a settle");
+        let dup = recs[i].clone();
+        recs.push(dup);
+        let out = outcomes(&recs, 144);
+        assert_eq!(
+            out["settled_more_than_once"].as_array().unwrap().len(),
+            1,
+            "{out}"
+        );
+    }
+
     #[test]
     fn summaries() {
         let ks = vec![
@@ -744,7 +1230,9 @@ mod tests {
             json!({"bell": 4, "status": {"pools": {"reveal": {"effective_n": 149}}}}),
         ];
         let k = keeper_summary(&ks, 0, 144);
-        assert_eq!(k["min_reveal_effective_n_in_play"], 149);
+        // Every bell counts (I-49), the first ones too (wave-5 review).
+        assert_eq!(k["min_reveal_effective_n_in_play"], 3);
+        assert_eq!(k["bells_below_150"], json!([0, 4]));
         assert_eq!(k["effective_n_ok"], false);
         let ev = vec![
             json!({"event": "chaos-kill", "detail": {}}),

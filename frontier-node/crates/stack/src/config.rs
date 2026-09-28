@@ -156,6 +156,11 @@ pub struct StackConfig {
     pub so_release: PathBuf,
     /// Overrides the mode's default `.so`.
     pub so: Option<PathBuf>,
+    /// The release build's recorded sha256 (`scripts/build-frontier.sh`'s
+    /// `file_sha256`): the run refuses a `.so` with another hash, and V2
+    /// checks against this independent pin instead of the deployed file's
+    /// own hash (wave-5 review of W5-B). Required for an exit-grade run.
+    pub expect_so_sha256: Option<String>,
     pub archive_dir: Option<PathBuf>,
     pub drand_delay_ms: i64,
     pub web_dir: PathBuf,
@@ -220,6 +225,7 @@ impl Default for StackConfig {
                 .into(),
             so_release: "permutation-frontier/target/deploy/permutation_frontier.so".into(),
             so: None,
+            expect_so_sha256: None,
             archive_dir: None,
             drand_delay_ms: 1_000,
             web_dir: "permutation-server/web".into(),
@@ -382,6 +388,9 @@ impl StackConfig {
         }
         if let Some(v) = s!("paths.archive") {
             c.archive_dir = (!v.is_empty()).then(|| v.into());
+        }
+        if let Some(v) = s!("paths.so_sha256") {
+            c.expect_so_sha256 = (!v.is_empty()).then(|| v.to_ascii_lowercase());
         }
         if let Some(v) = s!("paths.web") {
             c.web_dir = v.into();
@@ -580,6 +589,7 @@ impl StackConfig {
             "base_port": self.base_port,
             "g0": self.g0,
             "so": self.so_path().display().to_string(),
+            "expect_so_sha256": self.expect_so_sha256,
             "archive": self.archive_dir.as_ref().map(|p| p.display().to_string()),
             "drand_delay_ms": self.drand_delay_ms,
             "keeper_b": self.keeper_b,
@@ -618,6 +628,15 @@ pub fn apply_flags(c: &mut StackConfig, flags: &[(String, Option<String>)]) -> R
             .parse::<f64>()
             .map_err(|_| format!("--{k}: not a number"))
     };
+    // Counts, seeds and ids: whole and not negative (wave-5 review: `as`
+    // turned --bots -5 into 0).
+    let count = |k: &str, v: &Option<String>| -> Result<u64, String> {
+        let x = num(k, v)?;
+        if x < 0.0 || x.fract() != 0.0 || x > u64::MAX as f64 {
+            return Err(format!("--{k}: a whole number ≥ 0"));
+        }
+        Ok(x as u64)
+    };
     for (k, v) in flags {
         match k.as_str() {
             "run-id" => c.run_id = need(k, v)?,
@@ -630,12 +649,15 @@ pub fn apply_flags(c: &mut StackConfig, flags: &[(String, Option<String>)]) -> R
                 c.game_hours = None;
             }
             "game-hours" => c.game_hours = Some(pos(num(k, v)?, "--game-hours")?),
-            "drain-bells" => c.drain_bells = num(k, v)? as u32,
-            "bots" => c.bots = num(k, v)? as usize,
-            "seed" => c.bot_seed = num(k, v)? as u64,
+            "drain-bells" => {
+                c.drain_bells =
+                    u32::try_from(count(k, v)?).map_err(|_| "--drain-bells too large")?
+            }
+            "bots" => c.bots = count(k, v)? as usize,
+            "seed" => c.bot_seed = count(k, v)?,
             "personas" => c.personas = need(k, v)?,
             "bots-args" => c.bots_args = need(k, v)?.split_whitespace().map(String::from).collect(),
-            "season" => c.season_id = num(k, v)? as u64,
+            "season" => c.season_id = count(k, v)?,
             "base-port" => {
                 let p = num(k, v)?;
                 if !(0.0..=65_535.0).contains(&p) {
@@ -643,12 +665,19 @@ pub fn apply_flags(c: &mut StackConfig, flags: &[(String, Option<String>)]) -> R
                 }
                 c.base_port = p as u16;
             }
-            "g0" => c.g0 = num(k, v)? as i64,
+            "g0" => c.g0 = count(k, v)? as i64,
             "so" => c.so = Some(need(k, v)?.into()),
+            "expect-so-sha256" => {
+                let h = need(k, v)?.to_ascii_lowercase();
+                if h.len() != 64 || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    return Err("--expect-so-sha256: 64 hex digits".into());
+                }
+                c.expect_so_sha256 = Some(h);
+            }
             "archive" => c.archive_dir = Some(need(k, v)?.into()),
             "chaos" => c.chaos = true,
             "no-chaos" => c.chaos = false,
-            "chaos-seed" => c.chaos_seed = num(k, v)? as u64,
+            "chaos-seed" => c.chaos_seed = count(k, v)?,
             "chaos-targets" => {
                 c.chaos_targets = need(k, v)?
                     .split(',')

@@ -1,11 +1,20 @@
 //! The adversary schedule (M1 contract §13.4, §8.8; offchain design §11.4):
 //! `frontier_hold` scripts in the SP-FEE drill shapes, spread over the play
-//! window. Each hold's keys are chosen from the chain at the moment it
-//! starts (the busiest Province, the next bell's slots, …), and every hold
-//! is written to `events.jsonl` with its keys, price and window, so the
-//! report can list the windows where a liveness finding is expected
-//! (criterion 4: `ValidSealUnrevealed` only where the hold was above the
-//! keeper cap).
+//! window. Each hold's keys are chosen from the chain's **pending work** at
+//! the moment it starts (wave-5 review of W5-B: a hold that locks nothing
+//! anyone wants exercises nothing): the slot holds take a Province that
+//! has arrivals today (its ArrivalDay exists), the lag hold the origin of a
+//! march in flight (a departed entry awaiting its settle), the ticket hold
+//! a Province with an open cohort and lasts until that cohort's 24 bells
+//! are over; a kind with nothing pending waits (retried every bell) until
+//! its deadline. Every hold is written to `events.jsonl` with its keys,
+//! price and slot window, and the report counts, per hold, the program
+//! transactions that wrote a held key inside the window and when the
+//! first one landed after it (the hold's effect), and lists the windows
+//! where a liveness finding is expected (criterion 4: `ValidSealUnrevealed`
+//! only where the hold was above the keeper cap). The `frontier-fund` and
+//! `defence-pool` holds still fire at a planned time, not at a ring opening
+//! or inside a claim grace (open, W6-C).
 //!
 //! | kind | keys | price (milli) | length | expected |
 //! |---|---|---|---|---|
@@ -144,13 +153,64 @@ pub fn keys_for(
     keeper_reveal_payers: &[Address],
     relay_payers: &[Address],
 ) -> Option<(Vec<Address>, Value)> {
+    keys_for_pending(
+        kind,
+        a,
+        ps,
+        &Pending::default(),
+        bell_now,
+        transit_slots,
+        keeper_reveal_payers,
+        relay_payers,
+    )
+}
+
+/// The chain's pending work a hold is aimed at.
+#[derive(Clone, Debug, Default)]
+pub struct Pending {
+    /// Provinces with an ArrivalDay for today (arrivals are due there).
+    pub arrivals_today: Vec<(i16, i16)>,
+    /// Whether the slot holds need arrivals (false only in unit tests of
+    /// the key shapes).
+    pub require: bool,
+}
+
+/// The origin of a march in flight: the Province with the most departed
+/// entries awaiting their settle (state 3).
+pub fn march_origin(ps: &[Province]) -> Option<&Province> {
+    ps.iter()
+        .filter(|p| p.entries.iter().any(|e| e.state == 3))
+        .max_by_key(|p| p.entries.iter().filter(|e| e.state == 3).count())
+}
+
+/// [`keys_for`] against the chain's pending work.
+#[allow(clippy::too_many_arguments)]
+pub fn keys_for_pending(
+    kind: &str,
+    a: &Addresses,
+    ps: &[Province],
+    pending: &Pending,
+    bell_now: u32,
+    transit_slots: u8,
+    keeper_reveal_payers: &[Address],
+    relay_payers: &[Address],
+) -> Option<(Vec<Address>, Value)> {
     let next = bell_now + 1;
     match kind {
         "slots-below" | "slots-above" => {
-            let p = busiest(ps)?;
+            let p = if pending.require {
+                let with: Vec<Province> = ps
+                    .iter()
+                    .filter(|p| pending.arrivals_today.contains(&(p.p, p.q)))
+                    .cloned()
+                    .collect();
+                busiest(&with).cloned()?
+            } else {
+                busiest(ps)?.clone()
+            };
             Some((
-                slot_keys(a, p, next, transit_slots),
-                json!({"province": [p.p, p.q], "bell": next}),
+                slot_keys(a, &p, next, transit_slots),
+                json!({"province": [p.p, p.q], "bell": next, "why": "arrivals are due there today"}),
             ))
         }
         "anchor" => {
@@ -167,10 +227,15 @@ pub fn keys_for(
             )
         }),
         "lag" => {
-            let p = busiest(ps)?;
+            let p = if pending.require {
+                march_origin(ps)?
+            } else {
+                march_origin(ps).or_else(|| busiest(ps))?
+            };
             Some((
                 vec![a.province(p.p as i32, p.q as i32), a.anchor(next, p.region)],
-                json!({"province": [p.p, p.q], "region": p.region, "bell": next}),
+                json!({"province": [p.p, p.q], "region": p.region, "bell": next,
+                    "why": "the origin of a march in flight (departed entries await their settle)"}),
             ))
         }
         "ticket" => {
@@ -181,9 +246,17 @@ pub fn keys_for(
                 .filter(|c| c.filed > c.settled)
                 .map(|c| json!({"bell": c.bell, "filed": c.filed, "settled": c.settled}))
                 .collect();
+            // Through the cohort's last bell (24 bells after it opened).
+            let until = p
+                .cohorts
+                .iter()
+                .filter(|c| c.filed > c.settled)
+                .map(|c| c.bell + 24)
+                .max()
+                .unwrap_or(next);
             Some((
                 vec![a.province(p.p as i32, p.q as i32)],
-                json!({"province": [p.p, p.q], "cohorts": open}),
+                json!({"province": [p.p, p.q], "cohorts": open, "until_bell": until}),
             ))
         }
         "frontier-fund" => {
@@ -291,5 +364,31 @@ mod tests {
         assert!(keys_for("keeper-payers", &ad, &ps, 10, 4, &[], &[]).is_none());
         let (k, _) = keys_for("defence-pool", &ad, &ps, 10, 4, &[], &[]).unwrap();
         assert_eq!(k, vec![ad.defence_pool()]);
+        // Wave-5 review: holds aim at pending work.
+        let need = Pending {
+            arrivals_today: vec![],
+            require: true,
+        };
+        assert!(
+            keys_for_pending("slots-above", &ad, &ps, &need, 10, 4, &[], &[]).is_none(),
+            "no arrivals due: the slot hold waits"
+        );
+        let due = Pending {
+            arrivals_today: vec![(0, 0)],
+            require: true,
+        };
+        let (_, d) = keys_for_pending("slots-above", &ad, &ps, &due, 10, 4, &[], &[]).unwrap();
+        assert_eq!(
+            d["province"],
+            json!([0, 0]),
+            "the province with arrivals, not the busiest"
+        );
+        assert!(keys_for_pending("lag", &ad, &ps, &need, 10, 4, &[], &[]).is_none());
+        let mut ps2 = ps.clone();
+        ps2[1].entries[3].state = 3;
+        let (k, _) = keys_for_pending("lag", &ad, &ps2, &need, 10, 4, &[], &[]).unwrap();
+        assert_eq!(k[0], ad.province(1, 0), "the origin of the march in flight");
+        let (_, d) = keys_for("ticket", &ad, &ps2, 10, 4, &[], &[]).unwrap();
+        assert_eq!(d["until_bell"], 24, "through the cohort's 24 bells");
     }
 }
