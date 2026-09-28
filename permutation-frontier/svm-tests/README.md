@@ -33,6 +33,7 @@ below and runs `cargo test --locked` with its arguments.
 | `PSF_PROGRAM_ID` | the id to deploy at (default: a fixed test key) |
 | `RELEASE_CHECK=1` | G13: no `Pending` coverage, every program code asserted |
 | `PSF_SKIP_BUILD=1` | do not build (use the variables or the default paths) |
+| `PSF_CU_LOG=<file>` | append `build kind cu tx_bytes locks loaded heap` for every landed single-Frontier-instruction transaction (W5-A: the budgets table's `MEASURED` column is the maximum per kind over a full `--release` run; run it once more with `PSF_SO`/`PSF_SO_TEST_BEACON` pointing at trace builds for the heap column) |
 
 Test names start with their gate (`g01_…` … `g14_…`).
 
