@@ -9,6 +9,7 @@ import { html, raw } from '../../util.mjs';
 import { L, Lh, fmtNum } from '../../lang.mjs';
 import { factionName, DOCTRINE_NAMES, HOLDING_STATES } from '../fi18n.mjs';
 import { freeByWedge, candidateProvinces, freeSitesOf, ticketTimes, refileOffer, homeWedge } from '../fland.mjs';
+import { overflowProvinces } from '../onboarding.mjs';
 import { lamports, swatch, timeHtml } from './shell.mjs';
 
 const FACTIONS = [0, 1, 2, 3, 4, 5];
@@ -48,14 +49,26 @@ function renderSessionFix(FS) {
     <button type="button" class="btn primary" data-act="session">${L`鍵を作り直す`}</button></section>`;
 }
 
-/** The site picker's rows: candidate provinces, the free sites of the opened one, the chosen sites in order. */
+/**
+ * The site picker's rows: candidate provinces, the free sites of the opened
+ * one, the chosen sites in order. When the home wedge shows no free site,
+ * the candidates are the adjacent wedges' provinces in the outermost open
+ * ring (§5.9; W4-E D8 folded in here), and `overflow` says so
+ * (`{ring}`; null otherwise). The program decides on its own counters.
+ */
 export function sitePicker(FS) {
   const faction = FS.citizen?.faction;
-  const provinces = candidateProvinces(FS.overviews ?? new Map(), faction);
+  const overviews = FS.overviews ?? new Map();
+  let provinces = candidateProvinces(overviews, faction);
+  let overflow = null;
+  if (!provinces.length && Number.isInteger(faction)) {
+    const o = overflowProvinces(overviews, faction, FS.record?.rings?.length ?? 1);
+    if (o.full) { overflow = { ring: o.ring }; provinces = o.provinces.map(({ p, q, ring, free }) => ({ p, q, ring, free })); }
+  }
   const env = FS.joinDraft?.envelope;
   const free = env ? freeSitesOf(env.province) : [];
   const chosen = FS.joinDraft?.sites ?? [];
-  return { provinces, free, chosen, escrow: FS.land?.escrowNeeded ?? 0n };
+  return { provinces, overflow, free, chosen, escrow: FS.land?.escrowNeeded ?? 0n };
 }
 
 function renderSites(FS) {
@@ -66,7 +79,8 @@ function renderSites(FS) {
     ${offer ? html`<div class="callout">${offer.why === 'displaced' ? L`仮の拠点は同じ鐘のより高い順位の希望に押し出され、入植希望は終わりました。` : L`入植希望は区画を得られずに終わりました。`}
       <button type="button" class="btn primary" data-act="refile">${L`同じ区画でもう一度出す`}</button></div>` : ''}
     <p>${L`本拠の扇区の第2輪より外で、空いている区画を3つまで順に選びます。同じ鐘に出された希望は、その鐘の乱数でまとめて決まります（早い者勝ちではありません）。`}</p>
-    <ul class="list">${v.provinces.slice(0, 24).map(pr => html`<li><button type="button" class="btn" data-act="pick-province" data-p="${pr.p}" data-q="${pr.q}">${L`州 ${pr.p},${pr.q}（第${pr.ring}輪、空き 約 ${pr.free}）`}</button></li>`)}</ul>
+    ${v.overflow ? html`<p class="warn">${v.provinces.length ? L`本拠の扇区に空き区画がありません。この場合は隣の扇区のいちばん外の輪（第${v.overflow.ring}輪）の区画に入植希望を出せます（最後はチェーンが判断します）。` : L`本拠の扇区に空き区画がなく、隣の扇区のいちばん外の輪にも空きが見つかりません。新しい輪がひらくのを待ってください。`}</p>` : ''}
+    <ul class="list">${v.provinces.slice(0, 24).map(pr => html`<li><button type="button" class="btn" data-act="pick-province" data-p="${pr.p}" data-q="${pr.q}">${L`州 ${pr.p},${pr.q}（第${pr.ring}輪、空き 約 ${fmtNum(pr.free)}）`}</button></li>`)}</ul>
     ${FS.joinDraft?.envelope ? html`<h4>${L`州 ${FS.joinDraft.envelope.province.p},${FS.joinDraft.envelope.province.q} の空き区画`}</h4>
       <ul class="list">${v.free.map(s => { const i = isChosen(s); return html`<li><button type="button" class="btn" data-act="toggle-site" data-p="${s.p}" data-q="${s.q}" data-site="${s.site}" aria-pressed="${i >= 0 ? 'true' : 'false'}">${siteText(s)}${i >= 0 ? html` <strong>${L`第${i + 1}希望`}</strong>` : ''}</button></li>`; })}</ul>` : ''}
     ${v.chosen.length ? html`<ol class="chosen">${v.chosen.map(s => html`<li>${siteText(s)}</li>`)}</ol>` : ''}

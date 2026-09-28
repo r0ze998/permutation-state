@@ -19,7 +19,7 @@ export function sheetRows(clock, now, items) {
   return items.map(it => ({ bell: it.bell, region: it.region, why: it.why, ...pipeline(clock, it.bell, { now, ...(it.facts ?? {}) }) }));
 }
 
-const WHY = { current: () => L`いまの鐘`, arrival: () => L`あなたの到着`, ticket: () => L`入植希望`, explore: () => L`探索` };
+const WHY = { current: () => L`いまの鐘`, arrival: () => L`あなたの到着`, ticket: () => L`入植希望`, explore: () => L`探索`, clash: () => L`衝突` };
 
 export function render(FS) {
   if (!FS.clock || !FS.chain) return html`<p class="muted">${L`読み込み中…`}</p>`;
@@ -31,7 +31,7 @@ export function render(FS) {
   return html`<section aria-labelledby="bell-title"><h3 id="bell-title">${L`鐘の進み具合`}</h3>
     ${current !== null && now >= FS.clock.genesisTs ? html`<p>${L`いまは第${fmtNum(current)}鐘`}</p>` : ''}
     ${Math.abs(offset) > 2 ? html`<p class="muted">${L`この端末の時計はチェーンより ${Math.round(offset)} 秒ずれています`}</p>` : ''}
-    <ul class="list bells">${rows.map(r => html`<li><strong>${L`第${fmtNum(r.bell)}鐘`}</strong> · ${WHY[r.why]?.() ?? ''} · ${L`地域 ${r.region}`}
+    <ul class="list bells">${rows.map(r => html`<li><strong>${L`第${fmtNum(r.bell)}鐘`}</strong>${WHY[r.why] ? html` · ${WHY[r.why]()}` : ''} · ${L`地域 ${r.region}`}
       <p>${PIPELINE_TEXT[r.state]}</p>
       ${r.until !== null && r.until !== undefined ? html`<p class="muted">${countdown(r.until - now)} · ${timeHtml(r.until)}</p>` : ''}
       ${r.archived ? html`<p class="muted">${L`記録庫から読んでいます`}</p>` : ''}</li>`)}</ul>

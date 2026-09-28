@@ -14,7 +14,6 @@ export default {
   '地図': 'Map',
   '練習': 'Practice',
   '練習モード': 'Practice mode',
-  '練習はこのブラウザの中だけで動き、何も送らず、何も得ません。': 'Practice runs only in this browser: nothing is sent and nothing is earned.',
   'ウォレットなしで地図と鐘の進み具合を見られます。': 'Watch the map and the bells without a wallet.',
   '州 {0},{1} を選びました': 'Province {0},{1} selected',
   '鐘 —': 'Bell —',
@@ -452,4 +451,12 @@ export default {
   "鍵の文面を作れませんでした": "The key text could not be made.",
   "いまは第{0}鐘": "Now: Bell {0}",
   "進軍させる": "March",
+  // ---- W5-E: map controls and the bottom sheet
+  '地図の操作': 'Map controls',
+  '地図を拡大': 'Zoom in',
+  '地図を縮小': 'Zoom out',
+  '自分の拠点へ移動': 'Go to my holding',
+  'パネルを広げる': 'Expand the panel',
+  'パネルを小さくする': 'Shrink the panel',
+  '衝突': 'Clash',
 };

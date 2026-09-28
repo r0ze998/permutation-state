@@ -626,3 +626,45 @@ test('completeness (b): no Japanese outside L`…`, data-i18n, i18n.mjs tables a
   for (const { file, stray: s, at } of scanned()) if (file !== 'i18n.mjs') for (const x of s) stray.push(at(x.line));
   assert.equal(stray.length, 0, report('unmarked Japanese', stray));
 });
+
+// ================================================================== the Frontier dictionaries (W5-E)
+test('completeness (c): every entry of en-frontier*.mjs is a key some page file uses (no stale English)', () => {
+  const used = new Set();
+  for (const { keys } of webFiles().map(file => {
+    const src = readFileSync(join(WEB, file), 'utf8');
+    return file.endsWith('.html') ? scanHtml(src) : scanJs(src);
+  })) for (const k of keys) used.add(k.key);
+  const stale = [];
+  for (const group of ['frontier', 'frontier-play']) for (const key of Object.keys(EN_GROUPS[group])) if (!used.has(key)) stale.push(`lang/en-${group}.mjs ${JSON.stringify(key)}`);
+  assert.equal(stale.length, 0, `entries no page file uses (${stale.length}):\n  ${stale.join('\n  ')}`);
+});
+
+/** The Frontier section of GLOSSARY.md as rows `{ja: [terms], en: [terms]}` (parenthesised parts and "N"/"d" forms dropped). */
+function glossaryRows() {
+  const text = readFileSync(join(WEB, 'lang', 'GLOSSARY.md'), 'utf8');
+  const section = text.slice(text.indexOf('## The Frontier'), text.indexOf('\n## ', text.indexOf('## The Frontier') + 5));
+  const split = (s, re) => s.replace(/[（(][^）)]*[）)]/g, '').split(re).map(x => x.replace(/`/g, '').trim()).filter(Boolean);
+  return section.split('\n').filter(l => /^\| [^-|]/.test(l) && !l.startsWith('| Japanese')).map(l => {
+    const [, ja, en] = l.split('|').map(x => x.trim());
+    return { line: l, ja: split(ja, /\s*\/\s*|：|、|・/), en: split(en, /\s*[/:,]\s*/).map(x => x.toLowerCase()) };
+  });
+}
+/** A word's stem for the glossary check: a tab or title may be plural or a gerund ("Hosts", "Spectating"). */
+const stem = w => w.toLowerCase().replace(/\.$/, '').split(' ').map(x => x.replace(/(ing|es|s|e)$/, '')).join(' ');
+
+test('the glossary\'s Frontier terms are the English the dictionaries give them', () => {
+  const rows = glossaryRows();
+  assert.ok(rows.length >= 40, `${rows.length} Frontier rows in GLOSSARY.md`);
+  const wrong = [];
+  let checked = 0;
+  for (const r of rows) {
+    for (const ja of r.ja) {
+      const en = EN[ja];
+      if (typeof en !== 'string') continue;
+      checked++;
+      if (!r.en.some(x => stem(x) === stem(en))) wrong.push(`${ja} → "${en}" (glossary: ${r.en.join(' / ')})`);
+    }
+  }
+  assert.ok(checked >= 20, `${checked} glossary terms are dictionary keys`);
+  assert.deepEqual(wrong, [], 'dictionary English differs from the glossary');
+});

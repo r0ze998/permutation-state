@@ -20,6 +20,8 @@ id.json
 # JavaScript
 node_modules/
 npm-debug.log*
+# Screenshot smoke output (permutation-gateway/screens, W5-E): artefacts stay out of git
+permutation-gateway/screens/artifacts/
 
 # Rust / Solana
 target/
