@@ -1,0 +1,36 @@
+{
+  "S": 30961280,
+  "anchor": {
+    "A": 1785686544,
+    "address": "BRbnypdKVMMh7wGCW5LuskGpdFyYXofJVS1wQaq7yDWt",
+    "bytes_b64": "UFNGMUFOQ0gHAAAAAAAAAF0AAAAMAgAAn23YAQAAAAAQam9qAAAAADwcAAAAAAAAjaNMwu9H38SYkReTKwZZKUM0zsHbZt37l6BtPH1OIfs4OWp4ItB0YFWE4SHXPJ8pwRE1ah3JTr04GSNd6UBeF2l7P9i7+Qo+87I1Ubn3W6iXcQEAAAAAAIAaBgAAAAAA",
+    "key": "an:93,12",
+    "present": true,
+    "round": 30961055,
+    "slot": 7228
+  },
+  "archive": null,
+  "archived": false,
+  "bell": 93,
+  "caches": [
+    {
+      "A": 1785686544,
+      "address": "CnwBXGb18L9JqRUGbzS4ZqDffXfe85dK5ZF9ovUK3Pbz",
+      "key": "sd:93,12,214",
+      "nonce": 214,
+      "present": true,
+      "round": 30961280,
+      "seed": "02f16bf18082c60b38aaf796f2d6d7c1ddcbb6d5cb4b977730c938b67698dfd0"
+    }
+  ],
+  "final": false,
+  "region": 12,
+  "resolved": [
+    [
+      -1,
+      3
+    ]
+  ],
+  "tombstoned": false,
+  "v": 1
+}

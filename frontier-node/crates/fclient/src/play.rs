@@ -78,6 +78,29 @@ pub fn open_march(
 /// lower slot key, then the lower host id): the order the keeper sends a
 /// group's Reveals in, so the first four to land are the final four and
 /// no Reveal displaces another.
+/// Resident actions at bell `b` need the province resolved through `b − 2`
+/// (§5.1): `resolved_next + 1 ≥ b`, the program's rule
+/// (`frontier_abi::prologue::resident_ok`; pinned by a test).
+pub fn resident_ok(resolved_next: u32, b: u32) -> bool {
+    resolved_next as u64 + 1 >= b as u64
+}
+
+#[cfg(test)]
+mod resident_tests {
+    #[test]
+    fn resident_ok_is_the_programs() {
+        for rn in [0u32, 1, 7, 8, 9, 143, 144, u32::MAX] {
+            for b in [0u32, 1, 8, 9, 10, 145, u32::MAX] {
+                assert_eq!(
+                    super::resident_ok(rn, b),
+                    frontier_abi::prologue::resident_ok(rn, b),
+                    "{rn} {b}"
+                );
+            }
+        }
+    }
+}
+
 pub fn rank(p: i32, q: i32, bell: u32, e: &SlotEntry) -> (Reverse<u32>, u64, u64) {
     (
         Reverse(e.troops),

@@ -22,12 +22,16 @@
 //!   Δlamports ≤ fee + the kind's allowance) → send;
 //! - `POST /f/reveal`: forwarded to the keeper's loopback `/v1/reveal` with
 //!   its bearer token, the answer passed through;
+//! - `POST /f/nudge`: likewise to the keeper's `/v1/nudge` (integ-W4
+//!   review);
 //! - `GET /f/quota?citizen=`: `{left, resetsAt, lamportsLeft}`.
 //!
 //! Not emulated (the gateway's own tests cover them): per-IP limits (bots
-//! are loopback clients, exempt), invites (the in-process season has no
-//! join gate), the replay cache, the operator routes and the v1.3 exact
-//! account-key and writability check.
+//! are loopback clients, exempt), the per-route token buckets (`/f/nudge`
+//! 10 burst, 1/s), invites (the in-process season has no join gate), the
+//! replay cache, the operator routes, the v1.3 exact account-key and
+//! writability check, the lamports-per-day quota and the quota's burst
+//! carry-over.
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -519,11 +523,52 @@ async fn post_reveal(State(st): State<St>, Json(b): Json<Value>) -> Response {
     }
 }
 
+/// `POST /f/nudge {province: [P, Q], bell}` → the keeper's `/v1/nudge`
+/// (§8.3; integ-W4 review, W4-F: the stand-in had no nudge route).
+async fn post_nudge(State(st): State<St>, Json(b): Json<Value>) -> Response {
+    let ok_body = b["province"]
+        .as_array()
+        .is_some_and(|a| a.len() == 2 && a.iter().all(|x| x.as_i64().is_some()))
+        && b["bell"].as_u64().is_some();
+    if !ok_body {
+        st.count("/f/nudge", None, "BadRequest");
+        return refuse(StatusCode::BAD_REQUEST, "BadRequest", "province, bell");
+    }
+    let link = st.keeper.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    let Some(k) = link else {
+        st.count("/f/nudge", None, "NoKeeper");
+        return refuse(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "KeeperUnavailable",
+            "no keeper",
+        );
+    };
+    match post_bearer(k.addr, "/v1/nudge", &k.token, &b).await {
+        Ok((status, v)) => {
+            st.count(
+                "/f/nudge",
+                None,
+                if status < 300 { "accepted" } else { "refused" },
+            );
+            (
+                StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY),
+                Json(v),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            st.count("/f/nudge", None, "KeeperUnavailable");
+            refuse(StatusCode::BAD_GATEWAY, "KeeperUnavailable", e)
+        }
+    }
+}
+
 pub fn router(st: St) -> Router {
     Router::new()
         .route("/f/relay", get(relay_info).post(post_relay))
         .route("/f/join", post(post_join))
         .route("/f/reveal", post(post_reveal))
+        .route("/f/nudge", post(post_nudge))
         .route("/f/quota", get(quota))
         .fallback(|| async { refuse(StatusCode::NOT_FOUND, "NotFound", "") })
         .with_state(st)

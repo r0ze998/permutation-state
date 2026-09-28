@@ -1,5 +1,5 @@
 {
-  "recordedBell": 144,
+  "recordedBell": 96,
   "seed": 7591,
   "source": "itest::inproc_day (FRONTIER_RECORD_FIXTURES=1), the herald of the in-process day",
   "wallets": [

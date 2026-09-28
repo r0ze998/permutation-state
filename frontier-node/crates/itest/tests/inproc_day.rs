@@ -25,6 +25,11 @@
 use itest::checks::Cond;
 use itest::day::{self, DayCfg, DayOut};
 
+/// The largest share of resident actions (per action) the relay may refuse
+/// `NotResident` in the gate day (a herald view a bell old, a nudge still
+/// in flight).
+const NOT_RESIDENT_MAX_PCT: u64 = 25;
+
 fn env_num(k: &str, d: u64) -> u64 {
     std::env::var(k)
         .ok()
@@ -122,11 +127,22 @@ fn conditions(o: &DayOut) -> Vec<(&'static str, Cond)> {
     ));
     let unsettled = f.unsettled_departs();
     let stuck_t = f.stuck_transits();
-    let settle_ok = unsettled.is_empty() && stuck_t.is_empty() && departs > 0;
+    // One TRANSIT_SETTLED per DEPART, paired in feed order (integ-W4
+    // review): no settlement without its departure.
+    let settle_ok =
+        unsettled.is_empty() && stuck_t.is_empty() && departs > 0 && f.orphan_settles.is_empty();
     v.push((
         "transits-settled-or-routed",
         if settle_ok {
-            Cond::Pass(format!("{departs} departs, {} settled", f.settled.len()))
+            Cond::Pass(format!(
+                "{departs} departs ({} hosts), {} settled one to one",
+                f.departs
+                    .iter()
+                    .map(|d| d.host_id)
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len(),
+                f.settled.len()
+            ))
         } else if stubs {
             Cond::Pending(format!(
                 "{departs} departs, {} settled, {} unsettled, {} stuck in state 1-3 (SettleTransit W4-B, keeper W4-C)",
@@ -136,10 +152,11 @@ fn conditions(o: &DayOut) -> Vec<(&'static str, Cond)> {
             ))
         } else {
             Cond::Fail(format!(
-                "{departs} departs, {} settled, unsettled {:?}, stuck {:?}",
+                "{departs} departs, {} settled, unsettled {:?}, stuck {:?}, orphan settlements {:?}",
                 f.settled.len(),
                 &unsettled[..unsettled.len().min(8)],
-                &stuck_t[..stuck_t.len().min(8)]
+                &stuck_t[..stuck_t.len().min(8)],
+                f.orphan_settles
             ))
         },
     ));
@@ -179,7 +196,7 @@ fn conditions(o: &DayOut) -> Vec<(&'static str, Cond)> {
         .collect();
     let unrevealed: Vec<&(u64, u32)> = min_tip
         .iter()
-        .filter(|(h, _)| !f.revealed.contains_key(h))
+        .filter(|(h, a)| !f.revealed.contains_key(&(*h, *a)))
         .collect();
     v.push((
         "min-tip-revealed-by-keepers",
@@ -199,10 +216,22 @@ fn conditions(o: &DayOut) -> Vec<(&'static str, Cond)> {
         },
     ));
     let violated = o.violated();
+    // Only the personas the bots can judge locally have a verdict; the
+    // `needs-chain` ones are listed, not checked (integ-W4 review, W4-F:
+    // the condition read as if every persona were judged).
+    let unjudged: Vec<&str> = o
+        .persona_verdicts()
+        .iter()
+        .filter(|(_, v)| **v == "needs-chain")
+        .map(|(p, _)| *p)
+        .collect();
     v.push((
-        "personas",
+        "locally-checkable-personas",
         if violated.is_empty() {
-            Cond::Pass(format!("{:?}", o.persona_verdicts()))
+            Cond::Pass(format!(
+                "{:?}; not judged here (need the chain): {unjudged:?}",
+                o.persona_verdicts()
+            ))
         } else {
             Cond::Fail(format!(
                 "violated: {violated:?}; {:?}",
@@ -210,20 +239,34 @@ fn conditions(o: &DayOut) -> Vec<(&'static str, Cond)> {
             ))
         },
     ));
-    let bad_alerts: Vec<String> = o
-        .keeper_alerts
-        .iter()
-        .filter(|(k, _)| matches!(k.as_str(), "dead" | "retry-ladder" | "write-expired"))
-        .map(|(k, n)| format!("{k} ×{n}"))
-        .collect();
     v.push((
         "keeper-writes",
-        if bad_alerts.is_empty() {
-            Cond::Pass(format!("alerts {:?}", o.keeper_alerts))
+        itest::checks::keeper_writes_cond(
+            &o.keeper_alerts,
+            &o.keeper_alert_samples,
+            &o.keeper_writes,
+        ),
+    ));
+    // Resident liveness (integ-W4 review, W4-F): resident actions the relay
+    // refused `NotResident` against the ones it sent.
+    let ratio = itest::checks::not_resident_ratio(&o.relay.by);
+    let over: Vec<&(String, u64, u64)> = ratio
+        .iter()
+        .filter(|(_, refused, sent)| refused * 100 > (refused + sent) * NOT_RESIDENT_MAX_PCT)
+        .collect();
+    v.push((
+        "resident-liveness",
+        if over.is_empty() {
+            Cond::Pass(format!(
+                "NotResident / (sent + NotResident) ≤ {NOT_RESIDENT_MAX_PCT}% per action: {ratio:?}; nudges {:?}",
+                o.bots.nudges
+            ))
+        } else if stubs {
+            Cond::Pending(format!("{ratio:?}"))
         } else {
             Cond::Fail(format!(
-                "{bad_alerts:?}; samples {:?}",
-                o.keeper_alert_samples
+                "over {NOT_RESIDENT_MAX_PCT}%: {over:?}; nudges {:?}",
+                o.bots.nudges
             ))
         },
     ));
@@ -281,11 +324,25 @@ async fn inproc_day() {
     cfg.stubs = stubs;
     cfg.bots = env_num("ITEST_BOTS", 100) as usize;
     cfg.play_bells = env_num("ITEST_BELLS", 144) as u32;
+    // The gate is 100 bots over one game day (integ-W4 review, W4-F: the
+    // environment could shrink it silently).
+    let small = cfg.bots < 100 || cfg.play_bells < 144;
+    let allow_small = std::env::var("ITEST_ALLOW_SMALL").is_ok_and(|v| v == "1");
+    assert!(
+        !small || allow_small,
+        "ITEST_BOTS ≥ 100 and ITEST_BELLS ≥ 144 for the gate (ITEST_ALLOW_SMALL=1 for a smaller, non-gate run)"
+    );
     if std::env::var("FRONTIER_RECORD_FIXTURES").is_ok_and(|v| v == "1") {
+        // The recorded herald must come from the strict day (integ-W4
+        // review: the stub world's provinces never move).
+        assert!(!stubs, "FRONTIER_RECORD_FIXTURES=1 needs the strict run");
         cfg.record = Some(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../agents/fixtures/herald-recorded"),
         );
+    }
+    if let Ok(p) = std::env::var("VERIFY_DUMP") {
+        cfg.verify_dump = Some(p.into());
     }
     let out = day::run(cfg).await.expect("the run");
     let summary = out.summary();
@@ -296,8 +353,13 @@ async fn inproc_day() {
     }
     let conds = conditions(&out);
     println!(
-        "\ninproc_day ({} mode, {} bots, {} bells, {} slots, {:.0} s wall, program {}):",
+        "\ninproc_day ({} mode{}, {} bots, {} bells, {} slots, {:.0} s wall, program {}):",
         if stubs { "STUB" } else { "strict" },
+        if small {
+            ", SMALL (not a gate run)"
+        } else {
+            ""
+        },
         out.cfg.bots,
         out.cfg.play_bells,
         out.slots,
@@ -315,4 +377,11 @@ async fn inproc_day() {
         .collect();
     let _ = std::fs::remove_dir_all(&dir);
     assert!(fails.is_empty(), "failed: {fails:?}");
+    // A stub run is the brief's first run, never a gate pass (integ-W4
+    // review, W4-F: ITEST_STUBS=1 left in the environment made every
+    // missing-unit condition PENDING and the test exit 0).
+    assert!(
+        !stubs,
+        "ITEST_STUBS=1: a stub run is not a gate run (conditions above)"
+    );
 }

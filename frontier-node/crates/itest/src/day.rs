@@ -61,8 +61,18 @@ pub struct DayCfg {
     /// Every bot joins on day 0 (a one-day run otherwise leaves 40% idle).
     pub all_join_day0: bool,
     /// Record the herald's answers into this directory (the agents'
-    /// recorded fixtures) at the end of play.
+    /// recorded fixtures) at `record_bell`.
     pub record: Option<PathBuf>,
+    /// The bell the recording is taken at (integ-W4 review, W4-F: two
+    /// thirds into play, while the bots still hold hosts and march; at the
+    /// end of play the recorded wallets' hosts were all spent and the
+    /// fixtures drove no march).
+    pub record_bell: u32,
+    /// Write the whole run as a verifier fixture (`verify_core::Input`:
+    /// the program's feed with the program accounts' post-states and the
+    /// final states) to this file (`.gz`: compressed). Integ-W4 review, W4-D
+    /// R5: the march season recorded from the program.
+    pub verify_dump: Option<PathBuf>,
 }
 
 impl DayCfg {
@@ -85,6 +95,8 @@ impl DayCfg {
             bot_concurrency: 32,
             all_join_day0: true,
             record: None,
+            record_bell: 96,
+            verify_dump: None,
         }
     }
 }
@@ -172,9 +184,9 @@ impl DayOut {
                         "persona": p.name(),
                         "host": h.to_string(),
                         "arrive": a,
-                        "revealed": self.facts.revealed.get(h).copied().unwrap_or(0),
-                        "settled": self.facts.settled.get(h).map(|(o, c)| json!({"outcome": o, "sealCode": c})),
-                        "stockCode": self.facts.departs.iter().find(|d| d.host_id == *h).map(|d| d.stock_code),
+                        "revealed": self.facts.revealed.get(&(*h, *a)).copied().unwrap_or(0),
+                        "settled": self.facts.settled.get(&(*h, *a)).map(|(o, c)| json!({"outcome": o, "sealCode": c})),
+                        "stockCode": self.facts.departs.iter().find(|d| d.host_id == *h && d.arrive == *a).map(|d| d.stock_code),
                     })
                 })
                 .collect::<Vec<_>>(),
@@ -302,6 +314,62 @@ async fn record(
     );
 }
 
+/// The run as a verifier fixture (the recorder of `verify`'s tests, over
+/// the itest world).
+async fn verify_dump(w: &World, path: &Path, cfg: &DayCfg) -> Result<(), String> {
+    use fclient::ports::{ChainPort, Cursor, TxRecord};
+    let mut txs: Vec<TxRecord> = vec![];
+    let mut cur = Cursor(0);
+    loop {
+        let page = w.ip.feed(cur).await.map_err(|e| format!("{e:?}"))?;
+        let Some(last) = page.last() else { break };
+        cur = Cursor(last.seq);
+        txs.extend(page);
+    }
+    let mut owned = std::collections::BTreeSet::new();
+    for t in txs.iter_mut() {
+        t.post
+            .retain(|(_, a)| a.as_ref().is_some_and(|a| a.owner == w.program));
+        for (k, _) in &t.post {
+            owned.insert(*k);
+        }
+    }
+    let so = std::fs::read(&w.so.path).map_err(|e| e.to_string())?;
+    let so_hash = permutation_rules::hash::sha256(&[&so]);
+    let inp = {
+        let c = w.ip.lock();
+        let finals = owned
+            .into_iter()
+            .map(|k| {
+                (
+                    k.to_bytes(),
+                    c.account(&k)
+                        .filter(|a| a.lamports > 0 || !a.data.is_empty()),
+                )
+            })
+            .collect();
+        verify_core::input::Input {
+            cfg: verify_core::input::Config {
+                program: w.program,
+                season_id: SEASON_ID,
+                quicknet_pk: w.drand.key.pk96,
+                ruleset_hash: frontier_abi::presets::RULESET_HASH,
+                program_hash: Some(so_hash),
+            },
+            txs,
+            finals,
+            final_slot: c.slot(),
+            program_hashes: vec![(0, so_hash)],
+            provenance: format!(
+                "itest::inproc_day (VERIFY_DUMP): the test-beacon program (sha256 {}) over localnet in process at 20x, the keeper with every role, the herald, the relay stand-in and {} bots over {} bells + {} drain bells",
+                w.so.sha256, cfg.bots, cfg.play_bells, cfg.drain_bells
+            ),
+            scenarios: vec![],
+        }
+    };
+    inp.save(path)
+}
+
 /// Runs one in-process day.
 pub async fn run(cfg: DayCfg) -> Result<DayOut, String> {
     let t0 = Instant::now();
@@ -405,7 +473,8 @@ pub async fn run(cfg: DayCfg) -> Result<DayOut, String> {
                 bot_runs += r as u64;
                 bot_actions += a as u64;
             }
-            if now >= end_play && !recorded {
+            let record_at = genesis_ts + cfg.record_bell.min(cfg.play_bells) as i64 * 600;
+            if now >= record_at && !recorded {
                 recorded = true;
                 if let Some(out) = &cfg.record {
                     let wallets: Vec<(AgentSpec, String)> = fleet
@@ -430,6 +499,9 @@ pub async fn run(cfg: DayCfg) -> Result<DayOut, String> {
 
     let end_bell = cfg.play_bells;
     let facts = Facts::collect(&w, end_bell).await;
+    if let Some(path) = &cfg.verify_dump {
+        verify_dump(&w, path, &cfg).await?;
+    }
     let bots = fleet.shared.report.lock().map_err(|_| "report")?.clone();
     let persona_marches: Vec<(Persona, u64, u32)> = fleet
         .bots

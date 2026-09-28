@@ -77,6 +77,8 @@ pub struct Report {
     pub errors: BTreeMap<String, u64>,
     pub steps: u64,
     pub bots: u64,
+    /// `/f/nudge` requests by result (`sent`, `failed`; integ-W4 review).
+    pub nudges: BTreeMap<&'static str, u64>,
 }
 
 fn refused_as(o: &Outcome, codes: &[&str]) -> bool {
@@ -208,6 +210,7 @@ impl Report {
             "groups": by_group,
             "personas": personas,
             "errors": self.errors,
+            "nudges": self.nudges,
         })
     }
 }

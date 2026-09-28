@@ -256,7 +256,15 @@ pub struct Bot {
     citizen: Option<Address>,
     /// Sponsored transactions spent since the herald's last quota figure.
     spent: u32,
+    /// This step held a resident action back and nudged its province
+    /// (integ-W4 review): the session is tried again shortly (`Pace`).
+    pub nudged: bool,
+    /// Session retries after a nudge (at most [`NUDGE_RETRIES`]).
+    pub nudge_retries: u8,
 }
+
+/// Session retries after a nudge before the bot gives the session up.
+pub const NUDGE_RETRIES: u8 = 3;
 
 /// The kinds of ways an action went.
 fn outcome(
@@ -291,6 +299,8 @@ impl Bot {
             funded: false,
             citizen: None,
             spent: 0,
+            nudged: false,
+            nudge_retries: 0,
         }
     }
 
@@ -428,6 +438,7 @@ impl Bot {
         sh: &Shared<H, R, D>,
         session: bool,
     ) -> usize {
+        self.nudged = false;
         let obs = match self.observe(sh).await {
             Ok(o) => o,
             Err(e) => {
@@ -926,6 +937,16 @@ impl Bot {
                 }
                 1
             }
+            Intent::Nudge { province } => {
+                self.nudged = true;
+                let body = serde_json::json!({"province": [province.0, province.1], "bell": bell});
+                let r = sh.relay.post("/f/nudge", &body).await;
+                let mut rep = sh.report.lock().expect("report");
+                *rep.nudges
+                    .entry(if r.is_ok() { "sent" } else { "failed" })
+                    .or_default() += 1;
+                1
+            }
             Intent::Spam { h, n } => {
                 let mut sent = 0;
                 for _ in 0..n {
@@ -1128,7 +1149,8 @@ fn sponsored_kind(it: &Intent) -> bool {
         Intent::Reveal { .. }
         | Intent::Prefund { .. }
         | Intent::SettleOwnTicket { .. }
-        | Intent::Hold { .. } => false,
+        | Intent::Hold { .. }
+        | Intent::Nudge { .. } => false,
         _ => true,
     }
 }

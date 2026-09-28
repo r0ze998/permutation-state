@@ -233,6 +233,14 @@ impl Pace {
     /// onboarding or a march is open; else the next session.
     fn after(&mut self, bot: &Bot, t: &Times, now: i64, ran: Option<bool>, eager: bool) -> i64 {
         let bell = ((now - t.genesis).max(0) / t.bell_secs) as u32;
+        // A session that held a resident action back and nudged its
+        // province runs again 45–75 s later, when the keeper has usually
+        // skipped it through b − 2 (integ-W4 review, W4-F), at most
+        // `NUDGE_RETRIES` times.
+        if ran == Some(true) && bot.nudged && bot.nudge_retries < crate::bot::NUDGE_RETRIES {
+            self.wake = now + 45 + self.jitter.below(31) as i64;
+            return self.wake;
+        }
         if let Some(session) = ran {
             self.last_duty_bell = Some(bell);
             if session {
@@ -321,11 +329,16 @@ where
                 break;
             }
             while let Some(r) = set.join_next().await {
-                let (b, session, n) = r.expect("bot task");
+                let (mut b, session, n) = r.expect("bot task");
                 sent += n;
                 if let Some(p) = self.pace.get_mut(&b.spec.index) {
                     p.after(&b, &t, now, Some(session), eager);
                 }
+                b.nudge_retries = if session && b.nudged {
+                    b.nudge_retries.saturating_add(1)
+                } else {
+                    0
+                };
                 rest.push(b);
             }
         }
@@ -372,6 +385,11 @@ async fn run_bot<H: HeraldPort, R: RelayPort, D: DirectPort>(
             bot.step(&sh, session).await;
         }
         let wake = pace.after(&bot, &t, now, ran, eager).min(until);
+        bot.nudge_retries = if ran == Some(true) && bot.nudged {
+            bot.nudge_retries.saturating_add(1)
+        } else {
+            0
+        };
         let d = sh.clock.wall_until(wake);
         tokio::time::sleep(d.max(std::time::Duration::from_millis(50))).await;
     }

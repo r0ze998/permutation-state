@@ -188,6 +188,14 @@ pub enum Intent {
         h: HoldingRef,
         n: u32,
     },
+    /// `POST /f/nudge {province, bell}` (the web's nudge, §8.3): the
+    /// province is not resolved through `b − 2`, so a resident action would
+    /// be refused `NotResident`; the keeper is asked to catch it up instead
+    /// (integ-W4 review, W4-F: the bots never nudged and ≈ 90% of resident
+    /// actions were refused while the keeper batched idle provinces).
+    Nudge {
+        province: (i16, i16),
+    },
 }
 
 impl Intent {
@@ -209,6 +217,7 @@ impl Intent {
             Intent::SettleOwnTicket { .. } => "settle_own_ticket",
             Intent::Hold { .. } => "hold",
             Intent::Spam { .. } => "spam",
+            Intent::Nudge { .. } => "nudge",
         }
     }
 }
@@ -706,7 +715,45 @@ pub fn decide(obs: &Observation, cx: &Ctx) -> Vec<Intent> {
     if budget > 2 {
         military(obs, cx, &prof, finals[0], faction, &mut rng, &mut out);
     }
+    residency_gate(obs, &mut out);
     out
+}
+
+/// The province a resident action acts in (its host's, or the holding's
+/// for a Muster), for the residency gate.
+fn resident_province(it: &Intent) -> Option<(i16, i16)> {
+    match it {
+        Intent::Muster { h, .. } => Some((h.p, h.q)),
+        Intent::Explore { at, .. } => Some(*at),
+        Intent::Depart(d) => Some(d.host_at),
+        _ => None,
+    }
+}
+
+/// Resident actions (Muster, Explore, Depart) need their province resolved
+/// through `b − 2` (§5.1, `frontier_abi::prologue::resident_ok`): one whose
+/// province (as the herald shows it) is behind is replaced by one nudge of
+/// that province (integ-W4 review, W4-F).
+pub fn residency_gate(obs: &Observation, out: &mut Vec<Intent>) {
+    let bell = obs.bell();
+    let mut nudges: Vec<(i16, i16)> = vec![];
+    out.retain(|it| {
+        let Some(pq) = resident_province(it) else {
+            return true;
+        };
+        let ok = obs
+            .province(pq.0, pq.1)
+            .is_none_or(|pv| fclient::play::resident_ok(pv.resolved_next, bell));
+        if !ok && !nudges.contains(&pq) {
+            nudges.push(pq);
+        }
+        ok
+    });
+    out.extend(
+        nudges
+            .into_iter()
+            .map(|province| Intent::Nudge { province }),
+    );
 }
 
 /// Whether `h` is final **by rule** (I-29, I-47, §5.6 step 5): stored

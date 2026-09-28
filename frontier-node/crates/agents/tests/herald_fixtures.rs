@@ -717,9 +717,10 @@ fn the_build_queue_counts_the_tiers_slots() {
 }
 
 /// The **recorded** herald fixtures (`fixtures/herald-recorded`, one
-/// producer: `FRONTIER_RECORD_FIXTURES=1 ITEST_STUBS=1 cargo test --release
-/// -p itest --test inproc_day -- --include-ignored`): the answers the real
-/// herald gave at the end of the first in-process day (W3-E notes §2: the
+/// producer: `FRONTIER_RECORD_FIXTURES=1 cargo test --release -p itest
+/// --test inproc_day -- --include-ignored`, the strict run): the answers the
+/// real herald gave two thirds into the in-process day (`DayCfg::
+/// record_bell`, while the bots still hold hosts) (W3-E notes §2: the
 /// synthetic set is re-recorded from a real herald, and the readers must
 /// accept both). Every file parses with the same readers; the anchors
 /// verify under the season's (test) key at `tlock_round(bell)`; every
@@ -780,21 +781,45 @@ fn the_recorded_herald_parses_and_drives_the_policies() {
             );
             bells.insert((v.bell, v.region), v);
         } else if rel.starts_with("h/me/") {
-            let m = MeView::from_json(&json(&b)).unwrap_or_else(|e| panic!("{rel}: {e:?}"));
-            assert!(m.citizen.is_some(), "{rel}: joined");
+            MeView::from_json(&json(&b)).unwrap_or_else(|e| panic!("{rel}: {e:?}"));
             mes += 1;
         }
     }
     assert!(!overviews.is_empty() && !provinces.is_empty() && !bells.is_empty());
     let wallets = idx["wallets"].as_array().expect("wallets");
     assert_eq!(mes, wallets.len(), "one me file per recorded wallet");
+    let recorded_bell = idx["recordedBell"].as_u64().expect("recordedBell") as u32;
     let mut decided = 0;
     let mut marches = 0;
+    // An idle province may sit up to a keeper skip batch behind the
+    // recording's bell; a bot then nudges instead of acting (the residency
+    // gate, integ-W4 review). The marches are checked as the bots plan them
+    // once their provinces are caught up (as after the nudge).
+    let now_bell = season.bell_at(season.latest_unix);
+    let caught_up: BTreeMap<_, _> = provinces
+        .iter()
+        .map(|(k, v)| {
+            let mut v = v.clone();
+            v.province.resolved_next = v.province.resolved_next.max(now_bell.saturating_sub(1));
+            (*k, v)
+        })
+        .collect();
     for w in wallets {
         let index = w["index"].as_u64().unwrap() as u32;
         let wallet = keys::wallet(seed, index).pubkey();
         assert_eq!(w["wallet"].as_str().unwrap(), wallet.to_string());
         let me = MeView::from_json(&json(&rd(&dir.join(format!("h/me/{wallet}.json"))))).unwrap();
+        // The recording is taken mid-play: a wallet whose join bell has
+        // not come yet (or came within the last few bells) may still be
+        // outside; every other one has joined.
+        let join_bell = w["joinBell"].as_u64().unwrap() as u32;
+        if me.citizen.is_none() {
+            assert!(
+                join_bell + 6 >= recorded_bell,
+                "{wallet}: not joined at bell {recorded_bell} (join bell {join_bell})"
+            );
+            continue;
+        }
         let arch = frontier_agents::ARCHS
             .iter()
             .copied()
@@ -812,7 +837,7 @@ fn the_recorded_herald_parses_and_drives_the_policies() {
             now: season.latest_unix,
             season: season.clone(),
             me,
-            provinces: provinces.clone(),
+            provinces: caught_up.clone(),
             province_bells: BTreeMap::new(),
             overviews: overviews.clone(),
             bells: bells.clone(),
@@ -833,6 +858,17 @@ fn the_recorded_herald_parses_and_drives_the_policies() {
         bells.len(),
         overviews.len()
     );
+    // Integ-W4 review (W4-F): a recording of the strict day, not of the
+    // stub world (whose provinces never moved: every latest file was the
+    // OpenProvince bytes), and one that drives marches.
+    assert!(marches > 0, "the recorded herald drives at least one march");
+    for (pq, v) in &provinces {
+        assert!(
+            v.province.resolved_next + 30 >= recorded_bell,
+            "{pq:?}: resolved through {} at the recording's bell {recorded_bell}",
+            v.province.resolved_next
+        );
+    }
 }
 
 /// Every province opens with a barbarian camp, so on day 0 a camp-free

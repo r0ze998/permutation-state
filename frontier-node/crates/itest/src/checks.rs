@@ -86,10 +86,19 @@ pub struct Facts {
     pub not_implemented: BTreeSet<String>,
     pub records: BTreeMap<String, u64>,
     pub departs: Vec<Departed>,
-    /// host → (outcome, seal code) of its TRANSIT_SETTLED.
-    pub settled: BTreeMap<u64, (u8, u8)>,
-    /// host → landed REVEAL records of its arrival.
-    pub revealed: BTreeMap<u64, u32>,
+    /// `(host, arrival bell)` → (outcome, seal code) of its
+    /// TRANSIT_SETTLED. A host departs again after its settlement (it may
+    /// not act in transit, I-44), so a TRANSIT_SETTLED belongs to the
+    /// host's latest DEPART in feed order that is not settled yet
+    /// (integ-W4 review, W4-F: keyed by host alone, a second march was
+    /// judged by the first one's settlement).
+    pub settled: BTreeMap<(u64, u32), (u8, u8)>,
+    /// `(host, arrival bell)` → landed REVEAL records (the REVEAL key
+    /// carries the arrival bell).
+    pub revealed: BTreeMap<(u64, u32), u32>,
+    /// TRANSIT_SETTLED records with no unsettled DEPART of their host
+    /// before them (must be none).
+    pub orphan_settles: Vec<u64>,
     pub provinces: Vec<(i16, i16, u32)>,
     /// Transits still in state 1–3 in some Holding: (host, arrive, state).
     pub open_transits: Vec<(u64, u32, u8)>,
@@ -114,7 +123,12 @@ impl Facts {
         let feed = localnet::InProcess::from_chain(w.ip.chain.clone(), Some(w.program));
         let mut after = 0;
         loop {
-            let got = feed.feed(Cursor(after)).await.unwrap_or_default();
+            // A feed error fails the run (integ-W4 review, W4-F: swallowed,
+            // a truncated feed dropped late DEPARTs and erred toward PASS).
+            let got = feed
+                .feed(Cursor(after))
+                .await
+                .unwrap_or_else(|e| panic!("the chain feed after {after}: {e:?}"));
             let Some(last) = got.last() else { break };
             after = last.seq;
             for t in &got {
@@ -165,7 +179,8 @@ impl Facts {
                         }
                         Kind::REVEAL => {
                             let host_id = le_u64(field(&r, k, "host_id", true));
-                            *f.revealed.entry(host_id).or_default() += 1;
+                            let arrive = le_u64(field(&r, k, "arrive", false)) as u32;
+                            *f.revealed.entry((host_id, arrive)).or_default() += 1;
                         }
                         Kind::TRANSIT_SETTLED => {
                             let host_id = le_u64(field(&r, k, "host_id", false));
@@ -174,7 +189,7 @@ impl Facts {
                                 .first()
                                 .copied()
                                 .unwrap_or(0);
-                            f.settled.insert(host_id, (o, c));
+                            f.settle(host_id, o, c);
                         }
                         _ => {}
                     }
@@ -200,6 +215,28 @@ impl Facts {
         f
     }
 
+    /// Pairs a TRANSIT_SETTLED of `host` with the host's latest DEPART not
+    /// settled yet (feed order).
+    pub fn settle(&mut self, host: u64, outcome: u8, code: u8) {
+        let d = self
+            .departs
+            .iter()
+            .rev()
+            .find(|d| d.host_id == host && !self.settled.contains_key(&(host, d.arrive)))
+            .map(|d| d.arrive);
+        match d {
+            Some(arrive) => {
+                self.settled.insert((host, arrive), (outcome, code));
+            }
+            None => self.orphan_settles.push(host),
+        }
+    }
+
+    /// The settlement of a departure.
+    pub fn settlement(&self, d: &Departed) -> Option<(u8, u8)> {
+        self.settled.get(&(d.host_id, d.arrive)).copied()
+    }
+
     /// Province-bells not resolved through `end_bell − 1`.
     pub fn stuck_province_bells(&self) -> u64 {
         self.provinces
@@ -223,7 +260,7 @@ impl Facts {
     pub fn unsettled_departs(&self) -> Vec<u64> {
         self.departs
             .iter()
-            .filter(|d| self.due(d.arrive) && !self.settled.contains_key(&d.host_id))
+            .filter(|d| self.due(d.arrive) && self.settlement(d).is_none())
             .map(|d| d.host_id)
             .collect()
     }
@@ -233,8 +270,8 @@ impl Facts {
         self.departs
             .iter()
             .filter_map(|d| {
-                let (_, c) = self.settled.get(&d.host_id)?;
-                (*c != d.stock_code).then_some((d.host_id, *c, d.stock_code))
+                let (_, c) = self.settlement(d)?;
+                (c != d.stock_code).then_some((d.host_id, c, d.stock_code))
             })
             .collect()
     }
@@ -246,9 +283,8 @@ impl Facts {
             .iter()
             .filter(|d| d.stock_code > 0)
             .filter(|d| {
-                self.settled
-                    .get(&d.host_id)
-                    .is_some_and(|(o, _)| *o != transit_outcome::BAD_SEAL)
+                self.settlement(d)
+                    .is_some_and(|(o, _)| o != transit_outcome::BAD_SEAL)
             })
             .map(|d| d.host_id)
             .collect()
@@ -271,10 +307,7 @@ impl Facts {
             .iter()
             .filter(|d| d.stock_code > 0 && self.due(d.arrive))
             .collect();
-        let settled = due
-            .iter()
-            .filter(|d| self.settled.contains_key(&d.host_id))
-            .count();
+        let settled = due.iter().filter(|d| self.settlement(d).is_some()).count();
         (due.len(), settled)
     }
 
@@ -302,8 +335,9 @@ impl Facts {
             "departs": self.departs.len(),
             "badSeals": self.bad_seals(),
             "badSealsDueSettled": self.bad_seals_due(),
-            "revealedHosts": self.revealed.len(),
+            "revealedMarches": self.revealed.len(),
             "transitSettled": self.settled.len(),
+            "orphanSettles": self.orphan_settles.len(),
             "provinces": self.provinces.len(),
             "provincesByResolvedNext": resolved,
             "endBell": self.end_bell,
@@ -315,6 +349,55 @@ impl Facts {
             "badSealsSurvived": self.bad_seals_survived().len(),
         })
     }
+}
+
+/// Keeper alert kinds that fail the gate (integ-W4 review, W4-F): a write
+/// given up (`dead`), refused with a code no duty expects (`failed`, which
+/// is also how an expired write ends), and the CU/heap retry ladder (a
+/// write over its budget).
+pub const BAD_KEEPER_ALERTS: [&str; 4] = ["dead", "failed", "retry-ladder", "write-expired"];
+
+/// The keeper-writes condition: no alert of a bad kind, no write dead.
+/// `writes`: kind → (writes, landed, failed, dead).
+pub fn keeper_writes_cond(
+    alerts: &BTreeMap<String, u64>,
+    samples: &[String],
+    writes: &BTreeMap<String, (u64, u64, u64, u64)>,
+) -> Cond {
+    let mut bad: Vec<String> = alerts
+        .iter()
+        .filter(|(k, _)| BAD_KEEPER_ALERTS.contains(&k.as_str()))
+        .map(|(k, n)| format!("{k} ×{n}"))
+        .collect();
+    for (k, (_, _, _, dead)) in writes {
+        if *dead > 0 {
+            bad.push(format!("{k}: {dead} dead"));
+        }
+    }
+    if bad.is_empty() {
+        Cond::Pass(format!("alerts {alerts:?}"))
+    } else {
+        Cond::Fail(format!("{bad:?}; samples {samples:?}"))
+    }
+}
+
+/// Resident actions (Muster, Explore, Depart) the relay refused
+/// `NotResident` against the ones it sent: `(action, refused, sent)`. The
+/// bots gate them on the province's `resolved_next` and nudge a province
+/// that is behind (integ-W4 review, W4-F).
+pub fn not_resident_ratio(by: &BTreeMap<(String, String, String), u64>) -> Vec<(String, u64, u64)> {
+    ["Muster", "Explore", "Depart"]
+        .iter()
+        .map(|ix| {
+            let n = |res: &str| {
+                by.iter()
+                    .filter(|((_, i, r), _)| i == ix && r == res)
+                    .map(|(_, n)| *n)
+                    .sum::<u64>()
+            };
+            (ix.to_string(), n("NotResident"), n("sent"))
+        })
+        .collect()
 }
 
 /// A named pass condition: pass, fail, or pending (a stub of a unit not
@@ -376,4 +459,59 @@ pub async fn program_stubs(w: &World) -> Vec<String> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dep(host: u64, arrive: u32, stock_code: u8) -> Departed {
+        Departed {
+            host_id: host,
+            arrive,
+            commit: [0; 32],
+            seal: [0; 165],
+            stock_code,
+        }
+    }
+
+    /// Integ-W4 review (W4-F): a host that departs twice, only its first
+    /// march settled — the second is unsettled (keyed by host alone it was
+    /// judged by the first one's settlement).
+    #[test]
+    fn a_second_march_of_a_host_is_judged_on_its_own() {
+        let mut f = Facts {
+            now_bell: 100,
+            ..Default::default()
+        };
+        f.departs.push(dep(7, 10, 0));
+        f.settle(7, transit_outcome::STAYS, 0);
+        f.departs.push(dep(7, 30, 2));
+        assert_eq!(f.unsettled_departs(), vec![7], "the second march");
+        let (due, settled) = f.bad_seals_due();
+        assert_eq!((due, settled), (1, 0));
+        // Its own settlement, with another code than the stock one.
+        f.settle(7, transit_outcome::BAD_SEAL, 4);
+        assert!(f.unsettled_departs().is_empty());
+        assert_eq!(f.seal_disagreements(), vec![(7, 4, 2)]);
+        assert!(f.bad_seals_survived().is_empty());
+        // A settlement with nothing to pair.
+        f.settle(9, transit_outcome::STAYS, 0);
+        assert_eq!(f.orphan_settles, vec![9]);
+    }
+
+    #[test]
+    fn keeper_writes_fail_on_expiry_failure_and_dead() {
+        let w: BTreeMap<String, (u64, u64, u64, u64)> =
+            [("reveal".to_string(), (10, 9, 1, 0))].into();
+        let ok: BTreeMap<String, u64> = [("reveal-pool-low".to_string(), 4)].into();
+        assert!(!keeper_writes_cond(&ok, &[], &w).is_fail());
+        for bad in ["failed", "write-expired", "dead", "retry-ladder"] {
+            let a: BTreeMap<String, u64> = [(bad.to_string(), 1)].into();
+            assert!(keeper_writes_cond(&a, &[], &w).is_fail(), "{bad}");
+        }
+        let dead: BTreeMap<String, (u64, u64, u64, u64)> =
+            [("gather".to_string(), (3, 2, 0, 1))].into();
+        assert!(keeper_writes_cond(&ok, &[], &dead).is_fail());
+    }
 }
