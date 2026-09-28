@@ -1,0 +1,29 @@
+# Reveal CU measured in play and in the svm suite (W6-E) [measured]
+
+## 1. Stack runs (test-key or archive; `frontier-stack`, localnet LiteSVM with the deployed .so)
+
+- `nightly-20260928` (m1-W5-B/frontier-node/.local/frontier/nightly-20260928): beacon test-key, scale 100.0, bots 100, days 1.0, game_hours None, .so 1032688 B sha256 dc1281c36065..., last bell 179
+  - Reveal program CU: n 5, min 18,632, p50 19,826, p90 20,985, p99 20,985, max 20,985, mean 20,011
+  - whole-tx units: n 5, min 19,082, p50 20,276, p90 21,435, p99 21,435, max 21,435, mean 20,461; requested limit [26000], loaded limit [1343488]; write locks [3]
+  - first of the province-bell (ArrivalDay written): n 5, min 18,632, p50 19,826, p90 20,985, p99 20,985, max 20,985, mean 20,011; later: n 0
+  - path steps: n 5, min 3, p50 8, p90 9, p99 9, max 9, mean 7; path provinces beyond the destination: n 5, min 0, p50 1, p90 1, p99 1, max 1, mean 1
+  - reveals per arrival bell (bells with ≥ 1 reveal): n 5, min 1, p50 1, p90 1, p99 1, max 1, mean 1; bells with reveals 5
+- `w5-smoke` (m1-integ/frontier-node/.local/frontier/w5-smoke): beacon test-key, scale 100.0, bots 100, days 1.0, game_hours None, .so 874624 B sha256 094dc2d69a35..., last bell 169
+  - Reveal program CU: n 3, min 17,399, p50 17,402, p90 19,752, p99 19,752, max 19,752, mean 18,184
+  - whole-tx units: n 3, min 17,849, p50 17,852, p90 20,202, p99 20,202, max 20,202, mean 18,634; requested limit [26500], loaded limit [1146880]; write locks [3]
+  - first of the province-bell (ArrivalDay written): n 3, min 17,399, p50 17,402, p90 19,752, p99 19,752, max 19,752, mean 18,184; later: n 0
+  - path steps: n 3, min 4, p50 4, p90 4, p99 4, max 4, mean 4; path provinces beyond the destination: n 3, min 0, p50 0, p90 0, p99 0, max 0, mean 0
+  - reveals per arrival bell (bells with ≥ 1 reveal): n 3, min 1, p50 1, p90 1, p99 1, max 1, mean 1; bells with reveals 3
+- `w6a-real1` (m1-W6-A/frontier-node/.local/frontier/w6a-real1): beacon archive, scale 100.0, bots 100, days 1.0, game_hours None, .so 874120 B sha256 1b1968af5bed..., last bell 169
+  - Reveal program CU: n 10, min 18,540, p50 19,911, p90 21,418, p99 21,418, max 21,418, mean 19,992
+  - whole-tx units: n 10, min 18,990, p50 20,361, p90 21,868, p99 21,868, max 21,868, mean 20,442; requested limit [26500], loaded limit [1146880]; write locks [3]
+  - first of the province-bell (ArrivalDay written): n 10, min 18,540, p50 19,911, p90 21,418, p99 21,418, max 21,418, mean 19,992; later: n 0
+  - path steps: n 10, min 2, p50 7, p90 15, p99 15, max 15, mean 7; path provinces beyond the destination: n 10, min 0, p50 1, p90 1, p99 1, max 1, mean 1
+  - reveals per arrival bell (bells with ≥ 1 reveal): n 10, min 1, p50 1, p90 1, p99 1, max 1, mean 1; bells with reveals 10
+
+**All runs pooled:** n 18, min 17,399, p50 19,772, p90 21,200, p99 21,418, max 21,418, mean 19,696
+
+## 2. svm suite (`PSF_CU_LOG`, landed single-instruction Reveal transactions; Release and TestBeacon builds)
+
+- `cu.log` Release: whole-tx units n 10, min 20,350, p50 24,300, p90 25,155, p99 25,155, max 25,155, mean 23,681 (the units include the harness ComputeBudget instructions, 150 each, usually two)
+- `cu.log` TestBeacon: whole-tx units n 116, min 14,716, p50 19,694, p90 20,643, p99 20,873, max 22,922, mean 18,871 (the units include the harness ComputeBudget instructions, 150 each, usually two)
