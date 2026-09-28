@@ -2031,6 +2031,7 @@ dependencies = [
 name = "keeper"
 version = "0.1.0"
 dependencies = [
+ "agents",
  "axum",
  "base64 0.22.1",
  "fclient",

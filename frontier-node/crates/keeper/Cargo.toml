@@ -35,5 +35,8 @@ serde_json.workspace = true
 
 [dev-dependencies]
 localnet.workspace = true
+# integ-W4 review (W4-C): the play scenario plans its marches with the bots'
+# kernel path planner (a workspace crate; no new external crate).
+agents = { path = "../agents" }
 findex = { path = "../findex" }
 solana-program-runtime.workspace = true

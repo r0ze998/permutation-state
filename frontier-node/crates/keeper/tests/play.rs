@@ -12,9 +12,17 @@
 //! | `duplicate_keepers_race` | three keepers on one chain | identical outcomes; duplicate versions bounded |
 //! | `reveals_stop_at_close_under_hold` | the slots of a group held above the keeper's cap through the close | no Reveal lands at or after `A + W`; the arrivals settle routed; liveness findings recorded |
 //! | `claim_after_late_reveal` | the slots held below the cap for a few slots | the Reveal lands late (≥ `lateness_slots`), ClaimDefence pays the formula's refund, the slot is kept for the grace and closed after |
+//! | `reveal_group_survives_an_unrevealable_top` (program only) | the top-ranked march's Reveal refused (`Path`) | the next four revealed and settled by their fates; the refused one routed; no `SlotMoved` storm |
 //!
 //! The program is the native model (`tests/model/play.rs`) unless
 //! `PSF_FRONTIER_SO` names a test-beacon `.so` (W4-A/W4-B's program).
+//! **Wave-4 review:** the marches follow the kernel's cheapest path over
+//! the chain's terrain and one arrival bell every march can name, and the
+//! expectations are the clash's recorded fates, so every test runs on the
+//! program as well; Gate W4 runs them both ways (contract v1.7 §12). G7
+//! compares the destination's result (inputs, CLASH, settlements) and
+//! asserts that the hold moved the departures past the close. Every Reveal
+//! version journalled was sent before `A + W − 2 slots`.
 
 mod common;
 mod model;
@@ -164,8 +172,10 @@ fn hex_of(p: i32, q: i32, tile: u8) -> Hex {
     Hex::new(c.q + o.q, c.r + o.r)
 }
 
-/// A greedy hex walk from `(origin, tile)` to `(dest, tile)`.
-fn path(origin: (i32, i32, u8), dest: (i32, i32, u8)) -> Vec<u8> {
+/// A greedy hex walk from `(origin, tile)` to `(dest, tile)`: the native
+/// model's provinces carry no terrain (its Reveal walks no path), so the
+/// scenario falls back to it there.
+fn greedy_path(origin: (i32, i32, u8), dest: (i32, i32, u8)) -> Vec<u8> {
     let mut h = hex_of(origin.0, origin.1, origin.2);
     let goal = hex_of(dest.0, dest.1, dest.2);
     let mut dirs = vec![];
@@ -222,6 +232,10 @@ struct Opts {
     hold_slots: Option<(u64, u64)>,
     /// `--peace-start` of the keepers (W writes start at this × p_tip).
     peace_start: Option<f64>,
+    /// The 900-troop march (the faction-0 group's top rank) names a
+    /// destination tile its path does not end on: a valid seal whose Reveal
+    /// the program refuses (`Path`).
+    unrevealable_top: bool,
 }
 
 struct Run {
@@ -232,6 +246,8 @@ struct Run {
     dest: (i16, i16),
     arrive: u32,
     digest: [u8; 32],
+    /// The TRANSIT_SETTLED and DEPARTURE_SETTLED records only (G7).
+    transit_digest: [u8; 32],
     /// `(host, outcome, code)`.
     settled: BTreeMap<u64, (u8, u8)>,
     dup_versions: u64,
@@ -241,6 +257,8 @@ struct Run {
     reserve_at_dissolve: u32,
     /// The destination's gathered arrival records and CLASH digest.
     dest_inputs: Vec<u8>,
+    /// The destination's ClashInputs as the resolve left them (fates).
+    dest_resolved: Vec<u8>,
     dest_clash: [u8; 32],
     dest_anchor_a: i64,
     tag_dups: TagDups,
@@ -520,14 +538,87 @@ async fn scenario(o: Opts) -> Option<Run> {
         }
     }
     let b0 = sc.bell_at(w.now()).unwrap();
-    let arrive = b0 + 2;
+    // Real marches (wave-4 review, W4-C): every path is the kernel's
+    // cheapest walk over the chain's own terrain (the bots' planner,
+    // `agents::path::plan`) to a passable non-site tile of the destination,
+    // and one arrival bell every march can name (the latest earliest
+    // arrival, `travel::earliest_arrival_bell` with the doctrine's travel
+    // time). A fixed `b0 + 2` and greedy straight walks were refused by the
+    // program (`ArrivalBell`, `Path`); the native model skips both checks.
+    let provs: BTreeMap<(i16, i16), Province> = {
+        let c = w.ip.lock();
+        let mut m = BTreeMap::new();
+        for p in -3i32..=3 {
+            for q in -3i32..=3 {
+                if (p.abs() + q.abs() + (p + q).abs()) / 2 > 3 {
+                    continue;
+                }
+                if let Some(pv) = c
+                    .account(&w.addrs.province(p, q))
+                    .and_then(|a| Province::decode(&a.data).ok())
+                {
+                    m.insert((p as i16, q as i16), pv);
+                }
+            }
+        }
+        m
+    };
+    let refs: BTreeMap<(i16, i16), &Province> = provs.iter().map(|(k, v)| (*k, v)).collect();
+    let dest_pv = &provs[&dest];
+    let dest_sites: Vec<u8> = dest_pv.sites[..dest_pv.site_count as usize].to_vec();
+    let depart_ts = w.now() + 60;
+    let mut used_tiles: BTreeSet<u8> = BTreeSet::new();
+    let mut routes: BTreeMap<u64, (u8, Vec<u8>)> = BTreeMap::new();
+    let mut arrive = b0 + 2;
+    for &(pi, host, _, kind, tile) in &hosts {
+        if kind.is_none() {
+            continue;
+        }
+        let p = &players[pi];
+        let route = (0..61u8)
+            .map(|off| (tile + off) % 61)
+            .filter(|t| *t != 30 && !dest_sites.contains(t) && !used_tiles.contains(t))
+            .find_map(|t| {
+                frontier_agents::path::plan(
+                    &refs,
+                    (p.home.0 as i32, p.home.1 as i32),
+                    30,
+                    (dest.0 as i32, dest.1 as i32),
+                    t,
+                    0,
+                )
+                .map(|path| (t, path))
+            });
+        let (tile, dirs) = match route {
+            Some((t, path)) => {
+                let doctrine =
+                    permutation_rules::frontier::doctrine::of_faction(p.faction).unwrap();
+                let secs = doctrine.travel_secs(path.secs as u64) as u32;
+                let earliest =
+                    frontier_agents::path::earliest_arrival(sc.genesis_ts, depart_ts, secs);
+                arrive = arrive.max(earliest);
+                (t, path.dirs)
+            }
+            // The native model: no terrain; its Reveal checks no path.
+            None if matches!(w.which, Program::Model) => (
+                tile,
+                greedy_path(
+                    (p.home.0 as i32, p.home.1 as i32, 30),
+                    (dest.0 as i32, dest.1 as i32, tile),
+                ),
+            ),
+            None => panic!("no path to the destination for host {host}"),
+        };
+        used_tiles.insert(tile);
+        routes.insert(host, (tile, dirs));
+    }
     let round = sc.tlock_round(arrive);
     let pk96 = w.drand.key.pk96;
     let mut marches: Vec<March> = vec![];
     let mut dissolved = (0usize, 0u64);
     let mut reserve_at_dissolve = 0u32;
     let mut slot_of: BTreeMap<usize, u8> = BTreeMap::new();
-    for &(pi, host, troops, kind, tile) in &hosts {
+    for &(pi, host, troops, kind, _) in &hosts {
         let p = &players[pi];
         let Some(kind) = kind else {
             if pi == 10 {
@@ -545,10 +636,7 @@ async fn scenario(o: Opts) -> Option<Run> {
             }
             continue;
         };
-        let dirs = path(
-            (p.home.0 as i32, p.home.1 as i32, 30),
-            (dest.0 as i32, dest.1 as i32, tile),
-        );
+        let (tile, dirs) = routes[&host].clone();
         let mut plain = Plain {
             version: 1,
             host_id: host,
@@ -564,6 +652,10 @@ async fn scenario(o: Opts) -> Option<Run> {
         };
         if kind == MarchKind::BadPlain {
             plain.stance = 9;
+        }
+        if o.unrevealable_top && troops == 900 {
+            // Another of the scenario's tiles: the walk ends elsewhere.
+            plain.dest_tile = routes.values().map(|r| r.0).find(|&t| t != tile).unwrap();
         }
         let pt = seal::pack(&plain);
         let (seal_b, commit, salt, ct) = if kind == MarchKind::Garbage {
@@ -650,6 +742,9 @@ async fn scenario(o: Opts) -> Option<Run> {
     };
     let mut owner_pushed = false;
     let mut held_slots = false;
+    // The destination's resolved ClashInputs (fates), captured before the
+    // close after `clash_close_grace`.
+    let mut dest_resolved: Vec<u8> = vec![];
     let end_by = sc.genesis_ts + (arrive as i64 + 14) * 600;
     loop {
         let b = sc.bell_at(w.now()).unwrap();
@@ -682,6 +777,16 @@ async fn scenario(o: Opts) -> Option<Run> {
                 w.which.label()
             );
             return None;
+        }
+        if dest_resolved.is_empty() {
+            if let Some(a) =
+                w.ip.lock()
+                    .account(&w.addrs.clash_inputs(dest.0 as i32, dest.1 as i32, arrive))
+            {
+                if ClashInputs::decode(&a.data).is_ok_and(|c| c.resolved()) {
+                    dest_resolved = a.data.clone();
+                }
+            }
         }
         let done = ks[0].play.index.departs.len() == marches.len()
             && ks[0].play.index.settled.len() == marches.len();
@@ -741,7 +846,8 @@ async fn scenario(o: Opts) -> Option<Run> {
         step_all!();
     }
     // Outcomes from the chain feed.
-    let (digest, settled, dup, dest_clash, tag_dups) = outcomes(&w, &players);
+    let mut transit_digest = [0u8; 32];
+    let (digest, settled, dup, dest_clash, tag_dups) = outcomes(&w, &players, &mut transit_digest);
     let ci =
         w.ip.lock()
             .account(&w.addrs.clash_inputs(dest.0 as i32, dest.1 as i32, arrive));
@@ -757,6 +863,7 @@ async fn scenario(o: Opts) -> Option<Run> {
         dest,
         arrive,
         digest,
+        transit_digest,
         settled,
         dup_versions: dup,
         crashes,
@@ -764,6 +871,7 @@ async fn scenario(o: Opts) -> Option<Run> {
         dissolved,
         reserve_at_dissolve,
         dest_inputs,
+        dest_resolved,
         dest_clash,
         dest_anchor_a,
         tag_dups,
@@ -797,6 +905,7 @@ type TagDups = BTreeMap<u8, (u64, u64)>;
 fn outcomes(
     w: &World,
     players: &[Pl],
+    transit_digest: &mut [u8; 32],
 ) -> ([u8; 32], BTreeMap<u64, (u8, u8)>, u64, [u8; 32], TagDups) {
     let c = w.ip.lock();
     let mut recs: BTreeSet<Vec<u8>> = BTreeSet::new();
@@ -914,10 +1023,18 @@ fn outcomes(
         }
     }
     let mut h = Sha256::new();
+    let mut ht = Sha256::new();
     for r in &recs {
         h.update((r.len() as u32).to_le_bytes());
         h.update(r);
+        // The transits' own records (TRANSIT_SETTLED, DEPARTURE_SETTLED):
+        // what G7 compares besides the destination's clash.
+        if matches!(r[0], 32 | 34) {
+            ht.update((r.len() as u32).to_le_bytes());
+            ht.update(r);
+        }
     }
+    *transit_digest = ht.finalize().into();
     let dup = objects.values().map(|x| x.1).sum();
     if std::env::var("W4C_DUMP").is_ok() || std::env::var("W4C_DUPS").is_ok() {
         eprintln!("DUPS {dup_tags:?}");
@@ -928,6 +1045,55 @@ fn outcomes(
         }
     }
     (h.finalize().into(), settled, dup, dest_clash, tags)
+}
+
+/// The first slot whose Clock is at or after `ts`.
+fn slot_at_time(w: &World, from: u64, ts: i64) -> u64 {
+    let c = w.ip.lock();
+    let mut s = from;
+    while c.block_time(s).is_some_and(|t| t < ts) {
+        s += 1;
+    }
+    s
+}
+
+/// §8.2 (wave-4 review, W4-C): every Reveal version keeper 0 journalled was
+/// sent before `A + W − ε` (ε = 2 slots) of its bell's THE anchor.
+fn assert_sent_before_close(r: &Run) {
+    let w = &r.w;
+    let k = &r.keepers[0];
+    let Some(j) = k.journal.as_ref() else {
+        return;
+    };
+    let sc = fclient::clock::SeasonClock::from_season(&w.season());
+    let mut n = 0;
+    for key in j.object_keys_with_prefix("reveal:").unwrap() {
+        let mut it = key.trim_start_matches("reveal:").split(':');
+        let (Some(h), Some(b)) = (it.next(), it.next()) else {
+            continue;
+        };
+        let (h, b): (u64, u32) = (h.parse().unwrap(), b.parse().unwrap());
+        let Some(d) = k.play.index.departs.get(&(h, b)) else {
+            continue;
+        };
+        let m = r.marches.iter().find(|m| m.host == h).expect("march");
+        let p = seal::unpack(&m.plain);
+        let rg = ix::region_of(p.dest_p as i32, p.dest_q as i32);
+        let Some(an) = k.play.anchors.get(&(d.arrive, rg)) else {
+            continue;
+        };
+        let close = sc.reveal_close(d.arrive, an.a);
+        let close_slot = slot_at_time(w, an.slot.unwrap_or(0), close);
+        for a in j.attempts_of(&key).unwrap() {
+            n += 1;
+            assert!(
+                a.sent_slot + keeper_core::play::REVEAL_EPSILON_SLOTS as u64 <= close_slot,
+                "{key}: a version sent at slot {} (close at slot {close_slot})",
+                a.sent_slot
+            );
+        }
+    }
+    assert!(n > 0, "Reveal versions journalled");
 }
 
 fn judge_code(w: &World, m: &March, seal_b: &[u8; 165], commit: &[u8; 32], arrive: u32) -> u8 {
@@ -948,24 +1114,38 @@ async fn play_bell_pipeline() {
     println!("program: {}", w.which.label());
     let by_host: BTreeMap<u64, &March> = r.marches.iter().map(|m| (m.host, m)).collect();
     let host_of = |troops: u32| r.marches.iter().find(|m| m.troops == troops).unwrap().host;
-    // Every transit settled, with the expected branch.
+    // Every transit settled, with the expected branch. The final set's
+    // fates are the clash's own (the program's CLASH, or the native
+    // model's), read from the resolved ClashInputs: the settlement must
+    // follow them (wave-4 review: the scenario no longer pins the model's
+    // outcomes, so it runs on the program too).
     assert_eq!(r.settled.len(), r.marches.len(), "{:?}", r.settled);
-    let expect: Vec<(u32, u8)> = vec![
-        (900, to::STAYS),
-        (800, to::STAYS),
-        (700, to::STAYS),
-        (600, to::STAYS),
-        (500, to::BOUNCED_UNRANKED),
+    let ci = ClashInputs::decode(&r.dest_resolved).expect("the destination's resolved inputs");
+    let fate_of = |host: u64| {
+        ci.arrivals
+            .iter()
+            .find(|a| a.present == 1 && a.host_id == host)
+            .map(|a| a.fate)
+    };
+    for troops in [900u32, 800, 700, 600, 300, 250] {
+        let h = host_of(troops);
+        let fate = fate_of(h).unwrap_or_else(|| panic!("host of {troops} troops in its final set"));
+        assert!((1..=5).contains(&fate));
+        assert_eq!(
+            r.settled[&h].0, fate,
+            "host of {troops} troops settles by its clash fate: {:?}",
+            r.settled[&h]
+        );
+    }
+    for (troops, want) in [
+        (500u32, to::BOUNCED_UNRANKED),
         (400, to::BOUNCED_UNRANKED),
-        (300, to::DESTROYED),
         (350, to::BAD_SEAL),
         (450, to::BAD_SEAL),
-        (250, to::DESTROYED),
-    ];
-    for (troops, want) in &expect {
-        let h = host_of(*troops);
+    ] {
+        let h = host_of(troops);
         assert_eq!(
-            r.settled[&h].0, *want,
+            r.settled[&h].0, want,
             "host of {troops} troops: {:?}",
             r.settled[&h]
         );
@@ -1014,13 +1194,16 @@ async fn play_bell_pipeline() {
     // The garbage seal was revealed by its owner (valid commitment) and
     // destroyed at settlement anyway.
     assert!(idx.reveals.iter().any(|x| x.host == host_of(350)));
-    // No Reveal landed at or after A + W.
+    // No Reveal landed at or after A + W, and none was **sent** at or
+    // after A + W − 2 slots (§8.2; the program refuses a late Reveal
+    // anyway, so only the send can break the rule).
     for x in &idx.reveals {
         let rg = ix::region_of(x.dest.0 as i32, x.dest.1 as i32);
         let a = k.play.anchors[&(x.arrive, rg)].a;
         let t = w.ip.lock().block_time(x.slot).unwrap();
         assert!(t < sc.reveal_close(x.arrive, a), "Reveal after close");
     }
+    assert_sent_before_close(&r);
     // T(b) anchor → last keeper Reveal of the bell (E5 criterion 3: ≤ 4
     // slots at p99; one bell here).
     let r_d = ix::region_of(r.dest.0 as i32, r.dest.1 as i32);
@@ -1117,6 +1300,114 @@ async fn play_bell_pipeline() {
     let _ = ClashInputs::decode;
 }
 
+/// `(slot of the last DEPARTURE_SETTLED of the held origin's hosts, slot
+/// of the destination's CLASH, first slot at or after the destination's
+/// reveal close)`, from the chain feed.
+fn lag_times(r: &Run) -> (u64, u64, u64) {
+    let w = &r.w;
+    let origin_hosts: BTreeSet<u64> = r
+        .marches
+        .iter()
+        .filter(|m| r.players[m.pl].home == r.players[0].home)
+        .map(|m| m.host)
+        .collect();
+    let (mut dep, mut clash, mut first) = (0u64, 0u64, u64::MAX);
+    for tx in w.ip.lock().feed(0, usize::MAX, Some(&w.program)) {
+        if tx.err.is_some() {
+            continue;
+        }
+        first = first.min(tx.slot);
+        let Ok(bodies) = fclient::log::bodies_from_logs(&tx.logs, &w.program) else {
+            continue;
+        };
+        for b in bodies {
+            let Ok(rec) = plog::decode(&b) else { continue };
+            match rec.kind {
+                Kind::DEPARTURE_SETTLED => {
+                    let h = u64::from_le_bytes(rec.key[..8].try_into().unwrap());
+                    if origin_hosts.contains(&h) {
+                        dep = dep.max(tx.slot);
+                    }
+                }
+                Kind::CLASH => {
+                    let p = i32::from_le_bytes(rec.key[0..4].try_into().unwrap());
+                    let q = i32::from_le_bytes(rec.key[4..8].try_into().unwrap());
+                    let bell = u32::from_le_bytes(rec.key[8..12].try_into().unwrap());
+                    if (p, q, bell) == (r.dest.0 as i32, r.dest.1 as i32, r.arrive) {
+                        clash = tx.slot;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let sc = fclient::clock::SeasonClock::from_season(&w.season());
+    let close = sc.reveal_close(r.arrive, r.dest_anchor_a);
+    (dep, clash, slot_at_time(w, first, close))
+}
+
+/// Wave-4 review (W4-C blocker), on the program: the group's top-ranked
+/// march has a valid seal but a path its Reveal refuses (`Path`). It leaves
+/// the group; the next four (800, 700, 600 and now 500) are revealed at
+/// their indices and settle by their clash fates; the refused march settles
+/// routed (it would have been admitted). Before the fix every lower-ranked
+/// member aimed one index off and was refused after its `SlotMoved`
+/// retries. Not applicable on the native model (its Reveal walks no path).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reveal_group_survives_an_unrevealable_top() {
+    if matches!(Program::from_env(), Program::Model) {
+        println!("native model: Reveal walks no path; not applicable");
+        return;
+    }
+    let Some(r) = scenario(Opts {
+        unrevealable_top: true,
+        ..Default::default()
+    })
+    .await
+    else {
+        return;
+    };
+    let k = &r.keepers[0];
+    let host_of = |troops: u32| r.marches.iter().find(|m| m.troops == troops).unwrap().host;
+    let idx = &k.play.index;
+    let by_host: BTreeMap<u64, &March> = r.marches.iter().map(|m| (m.host, m)).collect();
+    let mut f0: Vec<u32> = idx
+        .reveals
+        .iter()
+        .filter(|x| x.dest == r.dest && x.arrive == r.arrive && x.faction == 0)
+        .map(|x| by_host[&x.host].troops)
+        .collect();
+    f0.sort_unstable();
+    assert_eq!(
+        f0,
+        vec![500, 600, 700, 800],
+        "the four below the refused top"
+    );
+    let ci = ClashInputs::decode(&r.dest_resolved).expect("resolved inputs");
+    for troops in [800u32, 700, 600, 500] {
+        let h = host_of(troops);
+        let fate = ci
+            .arrivals
+            .iter()
+            .find(|a| a.present == 1 && a.host_id == h)
+            .map(|a| a.fate)
+            .unwrap_or_else(|| panic!("{troops} in the final set"));
+        assert_eq!(r.settled[&h].0, fate, "host of {troops} troops");
+    }
+    assert_eq!(r.settled[&host_of(900)].0, to::ROUTED);
+    assert_eq!(r.settled[&host_of(400)].0, to::BOUNCED_UNRANKED);
+    assert!(
+        k.play.stats.slot_moved <= 1,
+        "no SlotMoved storm: {}",
+        k.play.status()
+    );
+    println!(
+        "unrevealable top: revealed {f0:?}; stats {}; findings {:?}",
+        k.play.status(),
+        k.play.findings
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn lag_gate_in_process() {
     let Some(a) = scenario(Opts::default()).await else {
@@ -1131,14 +1422,49 @@ async fn lag_gate_in_process() {
     // The held origin delayed its SettleDepartures past the destination's
     // close; the destination waited and resolved from the same values.
     assert_eq!(a.dest_anchor_a, b.dest_anchor_a, "same THE anchor time");
+    // The hold took effect (wave-4 review, W4-C): the held origin's
+    // departures settled after the destination's reveal close (unheld:
+    // before it), and the destination's resolve waited for them.
+    let (dep_a, clash_a, close_a) = lag_times(&a);
+    let (dep_b, clash_b, close_b) = lag_times(&b);
+    assert!(
+        dep_a < close_a,
+        "unheld: SettleDeparture at {dep_a} before the close at {close_a}"
+    );
+    assert!(
+        dep_b >= close_b,
+        "held: SettleDeparture at {dep_b} not after the close at {close_b}"
+    );
+    assert!(
+        clash_b > dep_b,
+        "held: the destination resolved after the held departures"
+    );
+    let lat_a = clash_a.saturating_sub(close_a);
+    let lat_b = clash_b.saturating_sub(close_b);
+    assert!(
+        lat_b > lat_a + 20,
+        "close → resolve {lat_a} unheld vs {lat_b} held slots"
+    );
+    // G7 (§13.3): the destination's result is byte-identical — its
+    // gathered and resolved inputs, its CLASH, and every transit's
+    // settlement. (Later bells may differ by design: a bad seal's Forfeit
+    // is issued at the settlement's bell, which the hold moves; the native
+    // model compared every outcome, the program cannot.)
     assert_eq!(a.dest_clash, b.dest_clash, "destination outcome digest");
     assert_ne!(a.dest_clash, [0u8; 32]);
-    assert_eq!(a.digest, b.digest, "every outcome");
+    let recs =
+        |r: &Run| r.dest_resolved[l::clash_inputs::ARRIVALS..l::clash_inputs::POSTURES].to_vec();
+    assert_eq!(recs(&a), recs(&b), "destination arrival records and fates");
+    assert_eq!(a.transit_digest, b.transit_digest, "every settlement");
+    assert_eq!(a.settled, b.settled);
+    println!(
+        "lag gate: close → resolve {lat_a} slots unheld, {lat_b} held (landed, from the feed)"
+    );
     let res_a = &a.keepers[0].play.stats.resolve_latency;
     let res_b = &b.keepers[0].play.stats.resolve_latency;
     println!(
-        "lag gate: outcome digests equal ({}), destination CLASH {} ; resolve latency slots unheld {:?} held {:?}; wall {:?} + {:?}",
-        hex::encode(a.digest),
+        "lag gate: settlement digests equal ({}), destination CLASH {} ; resolve latency slots unheld {:?} held {:?}; wall {:?} + {:?}",
+        hex::encode(a.transit_digest),
         hex::encode(a.dest_clash),
         res_a.iter().max(),
         res_b.iter().max(),
@@ -1273,6 +1599,8 @@ async fn reveals_stop_at_close_under_hold() {
             "held group revealed"
         );
     }
+    // The held group's versions were sent up to, never past, A + W − ε.
+    assert_sent_before_close(&r);
     // The held group's valid arrivals settle routed (no final set).
     for m in r
         .marches

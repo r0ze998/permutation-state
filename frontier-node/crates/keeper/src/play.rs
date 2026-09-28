@@ -3,7 +3,7 @@
 //! | duty (role) | trigger | write | class |
 //! |---|---|---|---|
 //! | Decrypt (`reveal`) | round T(arrive) published | — (the seal opened off chain, the plaintext and salt journalled) | — |
-//! | Reveal (`reveal`) | an opened seal, or owner material from `/v1/reveal` (from the bell start) | Reveal per arrival, grouped by `(P, Q, arrive, faction)`, **one in flight per group, in the kernel's rank order** (so the first four to land are the final four), at the slot index `admit_arrival` gives; `SlotMoved` → re-read and retry (≤ 4); arrivals outside the group's final set or refused by the quota go to the settle queue; **never at or after `A + W − 2 slots`**; not once the latch is closed | **W** |
+//! | Reveal (`reveal`) | an opened seal, or owner material from `/v1/reveal` (from the bell start) | Reveal per arrival, grouped by `(P, Q, arrive, faction)`: **the group's final set sent in one slot**, each at the index it takes when the ones ranked above it land first, with a 1-milli bid bonus by rank (W4-C D1; v1.6 §22); `SlotMoved` → re-read and retry (≤ 4); a member the program refuses for good (`Path`, `ArrivalBell`, `Shielded`, …) leaves the group, and a member not sent (backoff) holds the ones ranked below it (wave-4 review); arrivals outside the group's final set or refused by the quota go to the settle queue; **never at or after `A + W − 2 slots`**; not once the latch is closed | **W** |
 //! | SettleDeparture (`settle-departure`) | the origin resolved past `depart_bell` | SettleDeparture | D |
 //! | Gather (`gather`) | window closed, the ArrivalDay bit set, every present arrival's transit in state ≥ 2 | GatherClash parts (a clear bit after a `NotQuiet` skip: one part) | D |
 //! | Resolve (`resolve`) | all positions gathered, `resolved_next == b`, the seed of THE anchor | ResolveFromInputs | D |
@@ -68,8 +68,11 @@ pub struct OwnerMat {
 pub struct TransitState {
     pub opened: Option<Opened>,
     pub owner: Option<OwnerMat>,
-    /// Decided not to reveal (outside its group's final set, or refused).
+    /// Refused for good (the program's answer, the quota): never revealed.
     pub refused: bool,
+    /// Outside its group's final set when last planned (counted once;
+    /// planned again while the group changes).
+    pub outranked: bool,
     /// The window passed with the arrival unrevealed (liveness finding).
     pub missed: bool,
     pub slot_moved: u8,
@@ -145,6 +148,9 @@ pub struct PlayStats {
 
 #[derive(Default)]
 pub struct PlayDuty {
+    /// Resolve writes in flight: key → the slot estimate of their bell's
+    /// close (`resolve_latency` is taken when the resolve lands).
+    resolve_close: BTreeMap<String, u64>,
     pub index: PlayIndex,
     pub transits: BTreeMap<(u64, u32), TransitState>,
     pub provinces: BTreeMap<(i16, i16), ProvState>,
@@ -300,7 +306,13 @@ impl PlayDuty {
             }
             ("sdep", Outcome::Landed { .. }) => self.stats.departures_settled += 1,
             ("gather", Outcome::Landed { .. }) => self.stats.gathers += 1,
-            ("resolve", Outcome::Landed { .. }) => self.stats.resolves += 1,
+            ("resolve", Outcome::Landed { slot, .. }) => {
+                self.stats.resolves += 1;
+                // Close → resolve, measured at the landing (wave-4 review).
+                if let Some(c) = self.resolve_close.remove(key) {
+                    self.stats.resolve_latency.push(slot.saturating_sub(c));
+                }
+            }
             ("skip", Outcome::Landed { .. }) => self.stats.skips += 1,
             ("skip", Outcome::Failed { code, .. }) if *code == Some(abi::err::NOT_QUIET) => {
                 // key skip:P,Q:b0:n
@@ -845,14 +857,17 @@ impl PlayDuty {
                 .push(*k);
         }
         for ((dp, dq, arrive, faction), members) in groups {
+            // THE anchor first, even for a group in flight: `guard_reveals`
+            // cancels by it (a keeper whose only role is `reveal` otherwise
+            // never learns A while its versions escalate; wave-4 review).
+            let region = ix::region_of(dp as i32, dq as i32);
+            let anchor = self.anchor(t, port, beacon, arrive, region).await?;
             if members
                 .iter()
                 .any(|k| engine.is_pending(&format!("reveal:{}", rkey(*k))))
             {
                 continue;
             }
-            let region = ix::region_of(dp as i32, dq as i32);
-            let anchor = self.anchor(t, port, beacon, arrive, region).await?;
             let close = anchor.map(|a| t.clock.reveal_close(arrive, a.a));
             let eps = (REVEAL_EPSILON_SLOTS as f64 * self.slot_secs.max(0.4)).ceil() as i64;
             if let Some(c) = close {
@@ -861,11 +876,15 @@ impl PlayDuty {
                         if let Some(st) = self.transits.get_mut(k) {
                             if !st.missed {
                                 st.missed = true;
-                                self.stats.reveals_missed += 1;
-                                self.findings.push((
-                                    t.slot,
-                                    format!("ValidSealUnrevealed host {} arrive {arrive}", k.0),
-                                ));
+                                // An outranked member was never meant to
+                                // be revealed: not a liveness finding.
+                                if !st.outranked {
+                                    self.stats.reveals_missed += 1;
+                                    self.findings.push((
+                                        t.slot,
+                                        format!("ValidSealUnrevealed host {} arrive {arrive}", k.0),
+                                    ));
+                                }
                             }
                         }
                         if let Some(m) = self.owner.get(&(k.0, arrive)) {
@@ -936,13 +955,21 @@ impl PlayDuty {
                     continue;
                 }
                 if !play::in_final_set(dp as i32, dq as i32, arrive, &all, &e) {
+                    // Outranked as the group stands now: not revealed this
+                    // plan, but not refused for good either — a member
+                    // ranked above may still leave the group (a program
+                    // refusal), and then this one belongs to the final set
+                    // (wave-4 review).
                     if let Some(st) = self.transits.get_mut(&k) {
-                        if !st.refused {
-                            st.refused = true;
+                        if !st.outranked {
+                            st.outranked = true;
                             self.stats.reveals_refused += 1;
                         }
                     }
                     continue;
+                }
+                if let Some(st) = self.transits.get_mut(&k) {
+                    st.outranked = false;
                 }
                 let tgt = play::target(dp as i32, dq as i32, arrive, &slots, e);
                 let Some(i) = tgt.index() else {
@@ -1485,9 +1512,8 @@ impl PlayDuty {
             t.slot,
         ) {
             let close_slot = self.slot_at(t, close);
-            self.stats
-                .resolve_latency
-                .push(t.slot.saturating_sub(close_slot));
+            self.resolve_close
+                .insert(format!("resolve:{pk}:{b}"), close_slot);
         }
         Ok(())
     }
