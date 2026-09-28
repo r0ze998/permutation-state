@@ -181,6 +181,10 @@ pub const SETTLE_DEPARTURE: &[Cover] = &[
         &[Lands("cix::settle_return("), Err(E::AlreadyDone)],
     ),
     Cover::Test(
+        "clash::clash_bounced_resident_leaves_and_returns",
+        &[Lands("ResolveFromInputs"), Err(E::AlreadyDone)],
+    ),
+    Cover::Test(
         "clash::clash_return_settle_is_bounded",
         &[Lands("return 1"), Err(E::AlreadyDone)],
     ),
