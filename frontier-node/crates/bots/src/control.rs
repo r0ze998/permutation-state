@@ -10,6 +10,11 @@
 //!
 //! The port must be 41000–41999 and not reserved (or 0 in tests); only
 //! `127.0.0.1` is accepted as the host.
+//!
+//! Wave-5 review of W5-C: a request with an `Origin` header (any browser
+//! page) or whose `Host` is not `127.0.0.1:<port>` (DNS rebinding) is
+//! refused `403`; reads time out after [`READ_TIMEOUT`]; a failed
+//! `accept` backs off instead of spinning.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -17,6 +22,26 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+
+/// How long one connection may take to send its request.
+pub const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Whether a request head (lower-cased) may be served on `port`: no
+/// `Origin` header, and `Host` exactly `127.0.0.1:<port>`.
+pub fn acceptable(head: &str, port: u16) -> bool {
+    let mut host = None;
+    for l in head.lines().skip(1) {
+        let Some((k, v)) = l.split_once(':') else {
+            continue;
+        };
+        match k.trim() {
+            "origin" => return false,
+            "host" => host = Some(v.trim().to_string()),
+            _ => {}
+        }
+    }
+    host.as_deref() == Some(format!("127.0.0.1:{port}").as_str())
+}
 
 /// Ports M1 never binds (§10.3).
 pub const RESERVED_PORTS: [u16; 11] = [
@@ -49,10 +74,16 @@ pub async fn serve(
     }
     let l = TcpListener::bind(addr).await?;
     let local = l.local_addr()?;
+    let port = local.port();
     tokio::spawn(async move {
         loop {
-            let Ok((mut s, _)) = l.accept().await else {
-                continue;
+            let (mut s, _) = match l.accept().await {
+                Ok(x) => x,
+                Err(_) => {
+                    // EMFILE and the like: back off, never spin.
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    continue;
+                }
             };
             let report = report.clone();
             let stop = stop.clone();
@@ -60,9 +91,9 @@ pub async fn serve(
                 let mut buf = vec![0u8; 4096];
                 let mut n = 0;
                 while n < buf.len() {
-                    match s.read(&mut buf[n..]).await {
-                        Ok(0) | Err(_) => break,
-                        Ok(k) => n += k,
+                    match tokio::time::timeout(READ_TIMEOUT, s.read(&mut buf[n..])).await {
+                        Ok(Ok(0)) | Ok(Err(_)) | Err(_) => break,
+                        Ok(Ok(k)) => n += k,
                     }
                     if buf[..n].windows(4).any(|w| w == b"\r\n\r\n") {
                         break;
@@ -79,16 +110,19 @@ pub async fn serve(
                         .unwrap_or(0)
                         .min(buf.len() - end - 4);
                     while n < end + 4 + len {
-                        match s.read(&mut buf[n..]).await {
-                            Ok(0) | Err(_) => break,
-                            Ok(k) => n += k,
+                        match tokio::time::timeout(READ_TIMEOUT, s.read(&mut buf[n..])).await {
+                            Ok(Ok(0)) | Ok(Err(_)) | Err(_) => break,
+                            Ok(Ok(k)) => n += k,
                         }
                     }
                 }
                 let head = String::from_utf8_lossy(&buf[..n]);
+                let end = head.find("\r\n\r\n").unwrap_or(head.len());
+                let ok = acceptable(&head[..end].to_ascii_lowercase(), port);
                 let mut line = head.lines().next().unwrap_or("").split(' ');
                 let (method, path) = (line.next().unwrap_or(""), line.next().unwrap_or(""));
                 let (status, body) = match (method, path) {
+                    _ if !ok => ("403 Forbidden", json!({"code": "Forbidden"})),
                     ("GET", "/metrics") => ("200 OK", report()),
                     ("GET", "/health") => ("200 OK", json!({"ok": true})),
                     ("POST", "/stop") => {
@@ -160,6 +194,43 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(s.status, 200);
+        assert!(stop.load(Ordering::Relaxed));
+    }
+
+    /// Wave-5 review: a browser page's no-cors POST (it carries `Origin`)
+    /// and a rebound host name cannot stop the fleet or read the metrics.
+    #[tokio::test]
+    async fn browsers_and_rebound_hosts_are_refused() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let a = serve("127.0.0.1:0", Arc::new(|| json!({"bots": 3})), stop.clone())
+            .await
+            .unwrap();
+        let raw = |req: String| async move {
+            let mut s = tokio::net::TcpStream::connect(a).await.unwrap();
+            s.write_all(req.as_bytes()).await.unwrap();
+            let mut out = String::new();
+            s.read_to_string(&mut out).await.unwrap();
+            out
+        };
+        let p = a.port();
+        let from_page = raw(format!(
+            "POST /stop HTTP/1.1\r\nHost: 127.0.0.1:{p}\r\nOrigin: http://evil.example\r\nContent-Type: text/plain\r\nContent-Length: 0\r\n\r\n"
+        ))
+        .await;
+        assert!(from_page.starts_with("HTTP/1.1 403"), "{from_page}");
+        let rebound = raw(format!(
+            "GET /metrics HTTP/1.1\r\nHost: evil.example:{p}\r\n\r\n"
+        ))
+        .await;
+        assert!(rebound.starts_with("HTTP/1.1 403"), "{rebound}");
+        let no_host = raw("POST /stop HTTP/1.1\r\nContent-Length: 0\r\n\r\n".into()).await;
+        assert!(no_host.starts_with("HTTP/1.1 403"), "{no_host}");
+        assert!(!stop.load(Ordering::Relaxed), "nothing stopped the fleet");
+        let ok = raw(format!(
+            "POST /stop HTTP/1.1\r\nHost: 127.0.0.1:{p}\r\nContent-Length: 0\r\n\r\n"
+        ))
+        .await;
+        assert!(ok.starts_with("HTTP/1.1 200"), "{ok}");
         assert!(stop.load(Ordering::Relaxed));
     }
 }

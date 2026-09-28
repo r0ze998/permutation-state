@@ -468,3 +468,66 @@ fn the_dormant_flag_follows_the_last_owner_action() {
     );
     assert!(!with(DORMANT_AFTER - 1), "one second short");
 }
+
+fn dump(ix: &findex::index::Index) -> Vec<String> {
+    ix.dump_rows().unwrap()
+}
+
+/// Wave-5 review of W5-C: a crash inside the archive's group commit leaves
+/// the SQLite index ahead of the durable archive. The restart rolls the
+/// index back to the archive (no rebuild from seq 0): every table is then
+/// exactly what indexing the durable records alone gives, and after the
+/// source re-delivers the tail, exactly what one uninterrupted ingest
+/// gives (event numbering included).
+#[tokio::test]
+async fn a_crash_inside_a_group_commit_rolls_the_index_back_not_from_zero() {
+    let txs = fixture::mini_season(BELLS);
+    let open = |d: &std::path::Path| {
+        findex::Findex::open(d, fixture::program(), Some(fixture::SEASON_ID), 64 * 1024).unwrap()
+    };
+    let data = tmp("truncate");
+    let mut src = VecSource::new(txs.clone(), 13);
+    let durable = {
+        let mut fx = open(&data);
+        // The herald's group commit (1 s there; never due here).
+        fx.archive.commit_every = std::time::Duration::from_secs(3_600);
+        for _ in 0..3 {
+            fx.ingest(&mut src).await.unwrap();
+        }
+        fx.commit().unwrap();
+        let durable = fx.archive.last_seq();
+        for _ in 0..4 {
+            fx.ingest(&mut src).await.unwrap();
+        }
+        assert!(
+            fx.index.last_seq().unwrap() > durable,
+            "the index ran ahead"
+        );
+        durable
+        // Crash: the last four batches were never committed.
+    };
+    let mut fx = open(&data);
+    assert_eq!(fx.archive.last_seq(), durable);
+    assert_eq!(fx.index.rebuilds, 0, "no rebuild from seq 0");
+    assert_eq!(fx.index.truncations, 1, "rolled back to the archive");
+    assert_eq!(fx.index.last_seq().unwrap(), durable);
+    // The same tables as indexing the durable records alone.
+    let refd = tmp("truncate-ref");
+    let mut r = open(&refd);
+    let mut rs = VecSource::new(txs[..durable as usize].to_vec(), 1_000);
+    while !r.ingest(&mut rs).await.unwrap().is_empty() {}
+    r.commit().unwrap();
+    assert_eq!(dump(&fx.index), dump(&r.index));
+    // The source re-delivers the tail; the result is one clean ingest's.
+    let mut src = VecSource::new(txs.clone(), 13);
+    fx.resume(&mut src);
+    while !fx.ingest(&mut src).await.unwrap().is_empty() {}
+    let mut rs = VecSource::new(txs.clone(), 1_000);
+    r.resume(&mut rs);
+    while !r.ingest(&mut rs).await.unwrap().is_empty() {}
+    assert_eq!(fx.index.last_seq().unwrap(), txs.len() as u64);
+    assert_eq!(dump(&fx.index), dump(&r.index));
+    assert_eq!(fx.index.rebuilds, 0);
+    let _ = std::fs::remove_dir_all(&data);
+    let _ = std::fs::remove_dir_all(&refd);
+}

@@ -165,7 +165,7 @@ pub enum Scope {
 
 /// One WS message before numbering: `{seq, kind, key, slot, head, t,
 /// bytes_b64}` (§8.4).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct Diff {
     /// `acct` (an account's new bytes; empty = closed), `bell` (a per-bell
     /// file was written: `key` is its `/h/…` path, no bytes) or `event` (a
@@ -185,6 +185,23 @@ pub struct Diff {
     /// each diff 1,000 times).
     pub wire: std::sync::OnceLock<String>,
 }
+
+/// Content equality (wave-5 review of W5-C): the serialisation cache
+/// `wire` is not content — a diff that was sent (cache filled) equals the
+/// same diff unsent. `t_ms` is content (the ingest stamp).
+impl PartialEq for Diff {
+    fn eq(&self, o: &Diff) -> bool {
+        self.kind == o.kind
+            && self.key == o.key
+            && self.slot == o.slot
+            && self.head == o.head
+            && self.bytes == o.bytes
+            && self.scope == o.scope
+            && self.t_ms == o.t_ms
+    }
+}
+
+impl Eq for Diff {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ProvMeta {

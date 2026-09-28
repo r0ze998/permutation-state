@@ -93,6 +93,25 @@ impl Histogram {
         }
         Self::value(self.buckets.len() - 1) / 1_000.0
     }
+    /// The `q`-quantile's bucket **upper** bound in milliseconds: never
+    /// below the true quantile (≤ 6.25 % high). Targets are judged on it
+    /// (wave-5 review of W5-C: the lower bound let a p99 up to 6.25 %
+    /// above a target pass).
+    pub fn quantile_upper_ms(&self, q: f64) -> f64 {
+        let n = self.count();
+        if n == 0 {
+            return 0.0;
+        }
+        let want = ((n as f64) * q).ceil().max(1.0) as u64;
+        let mut acc = 0;
+        for (i, b) in self.buckets.iter().enumerate() {
+            acc += b.load(Ordering::Relaxed);
+            if acc >= want {
+                return Self::value(i + 1) / 1_000.0;
+            }
+        }
+        f64::INFINITY
+    }
 }
 
 #[derive(Default)]
@@ -136,7 +155,9 @@ pub fn targets(rep: &Value) -> Vec<String> {
     if !above(f(&["requests"]), 0.0) {
         miss.push("no request was answered".to_string());
     }
-    let p99 = f(&["p99_ms"]);
+    // The bucket upper bound when the report has it (never low).
+    let or = |a: f64, b: f64| if a.is_finite() { a } else { b };
+    let p99 = or(f(&["p99_upper_ms"]), f(&["p99_ms"]));
     if !at_most(p99, TARGET_FILE_P99_MS) {
         miss.push(format!("file p99 {p99} ms > {TARGET_FILE_P99_MS} ms"));
     }
@@ -148,7 +169,10 @@ pub fn targets(rep: &Value) -> Vec<String> {
         if !above(f(&["ws", "timed"]), 0.0) {
             miss.push("no WS message carried an ingest stamp".to_string());
         }
-        let w = f(&["ws", "ingest_p99_ms"]);
+        let w = or(
+            f(&["ws", "ingest_p99_upper_ms"]),
+            f(&["ws", "ingest_p99_ms"]),
+        );
         if !at_most(w, TARGET_WS_P99_MS) {
             miss.push(format!("ingest → WS p99 {w} ms > {TARGET_WS_P99_MS} ms"));
         }
@@ -177,6 +201,7 @@ impl Stats {
             "notFound": self.not_found.load(Ordering::SeqCst),
             "p50_ms": self.hist.quantile_ms(0.50),
             "p99_ms": self.hist.quantile_ms(0.99),
+            "p99_upper_ms": self.hist.quantile_upper_ms(0.99),
             "max_ms": self.max_us.load(Ordering::SeqCst) as f64 / 1_000.0,
             "rps": n as f64 / elapsed.as_secs_f64().max(1e-9),
             "elapsed_s": elapsed.as_secs_f64(),
@@ -188,6 +213,7 @@ impl Stats {
                 "timed": self.ws_lat.count(),
                 "ingest_p50_ms": self.ws_lat.quantile_ms(0.50),
                 "ingest_p99_ms": self.ws_lat.quantile_ms(0.99),
+                "ingest_p99_upper_ms": self.ws_lat.quantile_upper_ms(0.99),
                 "ingest_max_ms": self.ws_lat_max_us.load(Ordering::SeqCst) as f64 / 1_000.0,
             },
         })
@@ -451,6 +477,25 @@ mod tests {
         let p99 = h.quantile_ms(0.99);
         assert!((46.0..=50.0).contains(&p50), "{p50}");
         assert!((92.0..=99.0).contains(&p99), "{p99}");
+        assert!(h.quantile_upper_ms(0.99) >= 99.0);
         assert_eq!(h.count(), 100);
+    }
+
+    /// Wave-5 review: a true p99 of 252 ms sits in the bucket [245.8,
+    /// 254.0) ms; its lower bound passed the 250-ms target, the upper
+    /// bound the targets now use does not.
+    #[test]
+    fn targets_use_the_bucket_upper_bound() {
+        let h = Histogram::default();
+        for _ in 0..100 {
+            h.record(Duration::from_millis(252));
+        }
+        assert!(h.quantile_ms(0.99) <= TARGET_FILE_P99_MS);
+        assert!(h.quantile_upper_ms(0.99) > TARGET_FILE_P99_MS);
+        let rep = json!({"requests": 100, "p99_ms": h.quantile_ms(0.99),
+            "p99_upper_ms": h.quantile_upper_ms(0.99), "errorRate": 0.0, "wsViewers": 0});
+        let miss = targets(&rep);
+        assert_eq!(miss.len(), 1, "{miss:?}");
+        assert!(miss[0].starts_with("file p99"));
     }
 }

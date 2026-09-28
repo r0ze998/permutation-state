@@ -75,9 +75,13 @@ impl Findex {
         let mut index = Index::open(&dir.join("index.sqlite"), program, ctx).map_err(st)?;
         let mut behind = index.last_seq().map_err(st)?;
         if behind > archive.last_seq() {
-            // The index is ahead of the archive (restored from elsewhere): rebuild.
-            index.rebuild_from(&[]).map_err(st)?;
-            behind = 0;
+            // The index is ahead of the durable archive: a crash inside the
+            // archive's group commit (the index commits at once, the
+            // archive about once a second). Roll the index back to the
+            // archive instead of rebuilding the season (wave-5 review of
+            // W5-C); the source then re-delivers the lost tail.
+            index.truncate_to(archive.last_seq()).map_err(st)?;
+            behind = archive.last_seq();
         }
         if behind < archive.last_seq() {
             // Catch up in batches (a season's archive does not fit in memory).

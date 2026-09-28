@@ -591,6 +591,31 @@ impl Client {
 mod tests {
     use super::*;
 
+    /// Wave-5 review of W5-C: sending a diff fills its serialisation cache;
+    /// it still equals the same diff unsent (fold-determinism tests compare
+    /// diffs).
+    #[test]
+    fn a_sent_diff_equals_the_unsent_one() {
+        let d = Diff {
+            kind: "acct",
+            key: "k".into(),
+            slot: 7,
+            head: Some([1; 32]),
+            bytes: vec![1, 2, 3],
+            scope: crate::fold::Scope::Province(1, -1),
+            t_ms: 5,
+            wire: Default::default(),
+        };
+        let unsent = d.clone();
+        let _ = message(1, &d);
+        assert!(d.wire.get().is_some());
+        assert!(unsent.wire.get().is_none());
+        assert_eq!(d, unsent);
+        let mut other = unsent.clone();
+        other.bytes.push(4);
+        assert_ne!(d, other);
+    }
+
     #[test]
     fn sha1_and_the_rfc_6455_example() {
         assert_eq!(

@@ -37,6 +37,10 @@ pub struct Index {
     /// Program and season, for addresses the logs imply.
     pub ctx: Option<AddrCtx>,
     pub program: Address,
+    /// Full rebuilds since open (wave-5 review: a restart must not need one).
+    pub rebuilds: u32,
+    /// Roll-backs to the durable archive since open ([`Index::truncate_to`]).
+    pub truncations: u32,
 }
 
 /// One decoded PS2 record as stored.
@@ -110,7 +114,13 @@ impl Index {
                 params![SCHEMA],
             ))?;
         }
-        Ok(Index { conn, ctx, program })
+        Ok(Index {
+            conn,
+            ctx,
+            program,
+            rebuilds: 0,
+            truncations: 0,
+        })
     }
 
     /// The archive sequence indexed through.
@@ -143,8 +153,82 @@ impl Index {
         Ok(n)
     }
 
+    /// Rolls the index back to archive sequence `cut` (wave-5 review of
+    /// W5-C): every row a transaction after `cut` added is removed, the
+    /// latest entity head and account state are taken back to the last
+    /// ones at or before `cut`, and `last_seq` becomes `cut`. `event` is an
+    /// `INTEGER PRIMARY KEY` table, so the numbering continues from the cut
+    /// exactly as the first time. Used when the index is ahead of the
+    /// durable archive (a crash inside the archive's group commit): the
+    /// cost is the lost tail, not the whole season.
+    pub fn truncate_to(&mut self, cut: u64) -> Result<(), String> {
+        let c = cut as i64;
+        let t = sql(self.conn.transaction())?;
+        sql(t.execute_batch(&format!(
+            "DELETE FROM tx WHERE seq > {c};
+             DELETE FROM record WHERE seq > {c};
+             DELETE FROM event WHERE seq > {c};
+             DELETE FROM link WHERE seq > {c};
+             DELETE FROM snapshot WHERE seq > {c};
+             UPDATE entity SET
+                 eseq = (SELECT l.eseq FROM link l WHERE l.address = entity.address ORDER BY l.eseq DESC LIMIT 1),
+                 head = (SELECT l.head FROM link l WHERE l.address = entity.address ORDER BY l.eseq DESC LIMIT 1),
+                 tx_seq = (SELECT l.seq FROM link l WHERE l.address = entity.address ORDER BY l.eseq DESC LIMIT 1)
+               WHERE tx_seq > {c} AND EXISTS (SELECT 1 FROM link l WHERE l.address = entity.address);
+             DELETE FROM entity WHERE tx_seq > {c};
+             UPDATE account SET
+                 seq = (SELECT s.seq FROM snapshot s WHERE s.address = account.address ORDER BY s.seq DESC LIMIT 1),
+                 slot = (SELECT s.slot FROM snapshot s WHERE s.address = account.address ORDER BY s.seq DESC LIMIT 1),
+                 present = (SELECT s.owner IS NOT NULL FROM snapshot s WHERE s.address = account.address ORDER BY s.seq DESC LIMIT 1),
+                 kind = (SELECT s.kind FROM snapshot s WHERE s.address = account.address AND s.kind IS NOT NULL ORDER BY s.seq DESC LIMIT 1)
+               WHERE seq > {c} AND EXISTS (SELECT 1 FROM snapshot s WHERE s.address = account.address);
+             DELETE FROM account WHERE seq > {c};"
+        )))?;
+        sql(t.execute(
+            "INSERT INTO meta(k, v) VALUES('last_seq', ?1) ON CONFLICT(k) DO UPDATE SET v = ?1",
+            params![c],
+        ))?;
+        sql(t.commit())?;
+        self.truncations += 1;
+        Ok(())
+    }
+
+    /// Every row of every table in key order, one string per row (tests
+    /// and diagnostics: two indexes of the same records dump the same).
+    pub fn dump_rows(&self) -> Result<Vec<String>, String> {
+        let mut out = vec![];
+        for (t, order) in [
+            ("meta", "k"),
+            ("tx", "seq"),
+            ("record", "seq, idx"),
+            ("event", "ev"),
+            ("link", "seq, idx, n"),
+            ("entity", "address"),
+            ("snapshot", "address, seq"),
+            ("account", "address"),
+        ] {
+            let mut st = sql(self
+                .conn
+                .prepare(&format!("SELECT * FROM {t} ORDER BY {order}")))?;
+            let n = st.column_count();
+            let rows = sql(st.query_map([], |r| {
+                let mut s = format!("{t}:");
+                for i in 0..n {
+                    let v: rusqlite::types::Value = r.get(i)?;
+                    s.push_str(&format!("{v:?}|"));
+                }
+                Ok(s)
+            }))?;
+            for x in rows {
+                out.push(sql(x)?);
+            }
+        }
+        Ok(out)
+    }
+
     /// Drops every row and indexes `recs` again.
     pub fn rebuild_from(&mut self, recs: &[TxRecord]) -> Result<usize, String> {
+        self.rebuilds += 1;
         sql(self.conn.execute_batch(
             "DELETE FROM meta; DELETE FROM tx; DELETE FROM record; DELETE FROM link;
              DELETE FROM entity; DELETE FROM snapshot; DELETE FROM account; DELETE FROM event;",
