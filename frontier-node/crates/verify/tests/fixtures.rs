@@ -78,6 +78,11 @@ fn march_program_passes() {
         (Kind::TRANSIT_SETTLED, 40),
         (Kind::EXPLORE_RESULT, 10),
         (Kind::CAMP, 1),
+        // W5-D: V7 replays every owner action through the kernel's lazy
+        // holding functions and every skipped bell.
+        (Kind::HARVEST, 100),
+        (Kind::BUILD, 50),
+        (Kind::TRAIN, 50),
     ] {
         assert!(
             k.get(&(kind as u8)).copied().unwrap_or(0) >= min,

@@ -17,7 +17,7 @@
 //! | [`checks::v4_windows`] | V4 reveal window and latch |
 //! | [`checks::v5_seals`] | V5 seals opened with the stock `tlock` crate; verdicts |
 //! | [`checks::v6_quotas`] | V6 arrival quotas, departure masses |
-//! | [`checks::v7_replay`] | V7 clashes, quiet skips, transit outcomes, holdings |
+//! | [`checks::v7_replay`] | V7 clashes, quiet skips (every bell, [`skip`]), transit outcomes, holdings (owner actions replayed, [`holding`]) |
 //! | [`checks::v8_lag`] | V8 origin values (lag witness) |
 //! | [`checks::v9_addresses`] | V9 canonical addresses, pre-funded inits |
 //! | [`checks::v11_land`] | V11 tickets, cohorts, terrain, camps |
@@ -27,15 +27,19 @@
 //!
 //! Cargo features `mutate-v<n>` disable one check each (the checks of the
 //! checks: the tamper of that check must then PASS; `mutate.sh`).
-//! [`fixture`] builds the synthetic march season; [`tamper`] holds T1–T22.
+//! [`fixture`] builds the synthetic march season; [`tamper`] holds T1–T22,
+//! the extra checks of the checks and the suite over any one run
+//! ([`tamper::run_suite`], `frontier-verify tamper`, W5-D).
 
 pub mod checks;
 pub mod clash_input;
 pub mod codes;
 pub mod facts;
 pub mod fixture;
+pub mod holding;
 pub mod input;
 pub mod report;
+pub mod skip;
 pub mod tamper;
 pub mod world;
 

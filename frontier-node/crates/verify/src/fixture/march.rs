@@ -422,6 +422,23 @@ impl St {
             }
             d[PV::LAST_DIGEST..PV::LAST_DIGEST + 32].copy_from_slice(&out.digest());
         }
+        // A skipped bell: the program's `settle_bell` from the first bell
+        // something is due, and `finish_bell` (W5-D: V7 now replays every
+        // skipped bell and compares the Province written).
+        if o.is_none() {
+            let due = crate::skip::next_due(&d).expect("due");
+            let mut changed = spawned.is_some();
+            if b >= due {
+                changed |= crate::skip::settle_bell(&mut d, b).expect("settle");
+            }
+            crate::skip::finish_bell(&mut d, b, changed).expect("finish");
+            *self.g.d(&pk) = d;
+            self.next.insert(pq, b + 1);
+            if let Some(sp) = spawned {
+                self.pending_camps.push((pq, sp));
+            }
+            return;
+        }
         // Pending changes of bell b settle (the program's `settle_bell`).
         for i in 0..PV::ENTRIES_N {
             let Ok(mut e) = read_entry(&d, i) else {

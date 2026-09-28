@@ -5,8 +5,15 @@
 # that the tamper classes of the disabled check now PASS and every other
 # class still FAILS with its code. Exit 0 only if every build does.
 #
+# The suite over one run (`tamper_suite_on_the_program_recording`, W5-D)
+# runs in every build too: exactly the classes of the disabled check are
+# missed on the program's recording (or on VERIFY_RUN, a stack or nightly
+# run saved with `frontier-verify … --save FILE`).
+#
 #   crates/verify/mutate.sh              (from anywhere)
 #   MUTATE_PROFILE=--release (default) | MUTATE_PROFILE=" "   (debug)
+#   MUTATE_CHECKS="v5 v7"                (a subset)
+#   VERIFY_RUN=run.json.gz               (the suite over that run)
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 profile="${MUTATE_PROFILE:---release}"
