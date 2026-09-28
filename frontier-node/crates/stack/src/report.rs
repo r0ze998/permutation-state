@@ -1204,9 +1204,9 @@ pub fn markdown(r: &Value) -> String {
     for l in r["loads"].as_array().cloned().unwrap_or_default() {
         let v = &l["verdict"];
         m.push_str(&format!(
-            "- load {} ({} viewers, {} game h): p99 file {} ms, error rate {}, ingest lag p99 {} s → **{}**\n",
-            f(&l["tag"]), f(&l["viewers"]), f(&l["game_hours"]), f(&v["p99_file_ms"]), f(&v["error_rate"]),
-            f(&v["ingest_lag_p99_s"]), if v["pass"] == true { "pass" } else { "fail" }
+            "- load {} ({}, {} viewers, {} game h): p99 file {} ms, error rate {}, ingest → WS p99 {} s ({}; fold lag p99 {} s) → **{}**\n",
+            f(&l["tag"]), f(&l["window"]), f(&l["viewers"]), f(&l["game_hours"]), f(&v["p99_file_ms"]), f(&v["error_rate"]),
+            f(&v["ingest_p99_s"]), f(&v["ingest_measure"]), f(&v["ingest_lag_p99_s"]), if v["pass"] == true { "pass" } else { "fail" }
         ));
     }
     m.push_str("\n## CU per instruction kind (whole-transaction units)\n\n| kind | landed | failed | p50 | p99 | max | budget | over | max bytes |\n|---|---|---|---|---|---|---|---|---|\n");

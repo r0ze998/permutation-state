@@ -217,6 +217,34 @@ impl Keys {
 
 /// Keeper roles: A runs every duty (the operator's keeper), B the public
 /// profile (§10.3 "reveal, prove, settle"; proving is settlement, I-44).
+/// The pacing flags of `eager_bots` that the given `frontier-bots` lists in
+/// its usage (`--help`); empty when it has neither (an unknown flag would
+/// crash-loop the fleet).
+pub fn eager_bot_flags(bots: &Path) -> Vec<(&'static str, Option<&'static str>)> {
+    let usage = std::process::Command::new(bots)
+        .arg("--help")
+        .output()
+        .map(|o| {
+            let mut t = String::from_utf8_lossy(&o.stdout).into_owned();
+            t.push_str(&String::from_utf8_lossy(&o.stderr));
+            t
+        })
+        .unwrap_or_default();
+    eager_flags_in(&usage)
+}
+
+/// The pacing flags a usage text offers.
+pub fn eager_flags_in(usage: &str) -> Vec<(&'static str, Option<&'static str>)> {
+    [("--day0-share", Some("1")), ("--eager-personas", None)]
+        .into_iter()
+        .filter(|(f, _)| {
+            usage
+                .split(|c: char| c.is_whitespace() || c == '[' || c == ']')
+                .any(|w| w == *f)
+        })
+        .collect()
+}
+
 pub fn keeper_roles(which: char) -> Vec<&'static str> {
     match which {
         'a' => keeper_core_roles(),
@@ -631,8 +659,19 @@ impl Stack {
             s("--control"),
             format!("127.0.0.1:{}", p.bots),
         ];
-        // Pass-through flags (`bots_args`), e.g. the join share and persona
-        // pacing flags the in-process day uses once `frontier-bots` has them.
+        // The in-process day's pacing (W6-A, `eager_bots`), only when this
+        // `frontier-bots` has the flags and `bots_args` does not set them.
+        if self.cfg.eager_bots() {
+            for (flag, value) in eager_bot_flags(&self.bin.join("frontier-bots")) {
+                if !self.cfg.bots_args.iter().any(|a| a == flag) {
+                    args.push(s(flag));
+                    if let Some(v) = value {
+                        args.push(s(v));
+                    }
+                }
+            }
+        }
+        // Pass-through flags (`bots_args`).
         args.extend(self.cfg.bots_args.iter().cloned());
         Spec {
             name: s("bots"),
@@ -1637,6 +1676,25 @@ mod tests {
             Err(Refusal::Bad(m)) if m.contains("before the run needs")
         ));
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// W6-A: the fleet gets the pacing flags only when it lists them.
+    #[test]
+    fn eager_flags_follow_the_usage() {
+        let old = "usage: frontier-bots --herald URL --relay URL [--rpc URL] [--game-hours H] [--scale S] [--control 127.0.0.1:PORT]";
+        assert!(eager_flags_in(old).is_empty());
+        let new = "usage: frontier-bots --herald URL [--control 127.0.0.1:PORT] [--day0-share F] [--eager-personas]";
+        assert_eq!(
+            eager_flags_in(new),
+            vec![("--day0-share", Some("1")), ("--eager-personas", None)]
+        );
+        assert!(eager_flags_in("[--day0-shared X] [--eager-personas-x]").is_empty());
+        // The binary of this build answers without hanging.
+        let bots = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/release/frontier-bots");
+        if bots.exists() {
+            let _ = eager_bot_flags(&bots);
+        }
     }
 
     #[test]

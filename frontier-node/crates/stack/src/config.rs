@@ -151,6 +151,12 @@ pub struct StackConfig {
     pub personas: String,
     /// Extra `frontier-bots` flags, passed through as given.
     pub bots_args: Vec<String>,
+    /// Pass `--day0-share 1 --eager-personas` to `frontier-bots` when it
+    /// supports them (W6-A; the in-process day's pacing, W5-B F2). `None`:
+    /// on for runs shorter than one game day (the 6-game-hour latency run
+    /// otherwise saw 43 of 300 bots join and no march in 3.5 game hours),
+    /// off otherwise.
+    pub eager_bots: Option<bool>,
     pub season_id: u64,
     pub base_port: u16,
     pub offsets: Offsets,
@@ -223,6 +229,7 @@ impl Default for StackConfig {
             bot_seed: 1,
             personas: "default".into(),
             bots_args: vec![],
+            eager_bots: None,
             season_id: 7,
             base_port: 41_000,
             offsets: Offsets::default(),
@@ -359,6 +366,9 @@ impl StackConfig {
         }
         if let Some(v) = s!("bots_args") {
             c.bots_args = v.split_whitespace().map(String::from).collect();
+        }
+        if let Some(v) = b!("eager_bots") {
+            c.eager_bots = Some(v);
         }
         if let Some(v) = i!("season_id") {
             c.season_id = v as u64;
@@ -566,6 +576,11 @@ impl StackConfig {
     }
 
     /// Play length in game seconds.
+    /// Whether the fleet is asked for the in-process day's pacing.
+    pub fn eager_bots(&self) -> bool {
+        self.eager_bots.unwrap_or(self.play_secs() < 86_400)
+    }
+
     /// The drain's scale: `drain_scale`, else the run's scale but at
     /// least 20×.
     pub fn drain_scale(&self) -> f64 {
@@ -604,6 +619,7 @@ impl StackConfig {
             "bot_seed": self.bot_seed,
             "personas": self.personas,
             "bots_args": self.bots_args,
+            "eager_bots": self.eager_bots(),
             "season_id": self.season_id,
             "base_port": self.base_port,
             "g0": self.g0,
@@ -715,6 +731,8 @@ pub fn apply_flags(c: &mut StackConfig, flags: &[(String, Option<String>)]) -> R
             }
             "viewer-start-hours" => c.viewer_start_hours = num(k, v)?.max(0.0),
             "keep-running" => c.pause_at_end = false,
+            "eager-bots" => c.eager_bots = Some(true),
+            "no-eager-bots" => c.eager_bots = Some(false),
             "no-keeper-b" => c.keeper_b = false,
             "runs-dir" => c.runs_dir = Some(need(k, v)?.into()),
             other => return Err(format!("unknown flag --{other}")),
@@ -732,6 +750,8 @@ pub const SWITCHES: &[&str] = &[
     "no-adversary",
     "keep-running",
     "no-keeper-b",
+    "eager-bots",
+    "no-eager-bots",
     "json",
     "strict",
     "force",
@@ -804,6 +824,20 @@ mod tests {
         assert_eq!(c.play_secs(), 21_600);
         assert!(!c.chaos);
         assert_eq!(c.ports().unwrap().herald, 41_041);
+    }
+
+    /// W6-A: eager bots by default only below one game day.
+    #[test]
+    fn eager_bots_defaults() {
+        let mut c = StackConfig::default();
+        assert!(!c.eager_bots(), "a one-day run keeps the fleet's pacing");
+        c.game_hours = Some(6.0);
+        assert!(c.eager_bots());
+        let f = split_flags(&["--no-eager-bots".into()]).unwrap();
+        apply_flags(&mut c, &f).unwrap();
+        assert!(!c.eager_bots());
+        let t = StackConfig::from_toml("days = 7\neager_bots = true\n").unwrap();
+        assert!(t.eager_bots());
     }
 
     /// W6-A: the drain of a slow run goes at 20x unless set; faster runs
