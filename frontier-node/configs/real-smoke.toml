@@ -1,0 +1,19 @@
+# A short real-round smoke (W5 wave note 2): the release .so against the
+# quicknet archive's rounds at G0 = 1788998400, 3 game hours at 100x,
+# 20 bots, on the nightly ports. PENDING-OWNER until the archive has its
+# manifest.json.
+run_id = "real-smoke"
+mode = "accel"
+beacon = "archive"
+scale = 100
+preseason_scale = 2000
+game_hours = 3
+drain_bells = 26
+bots = 20
+bot_seed = 3
+season_id = 7
+base_port = 41500
+g0 = 1788998400
+
+[paths]
+archive = "../../data/drand-archive-quicknet-g0-1788998400"

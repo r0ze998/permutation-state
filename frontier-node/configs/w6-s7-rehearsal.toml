@@ -1,0 +1,27 @@
+# The test-key rehearsal of w6-s7 (M1 contract §12 Gate W6: "otherwise a
+# test-key rehearsal marked not exit-grade"): same shape, test-beacon .so,
+# drand-replay --test-key.
+run_id = "w6-s7-rehearsal"
+mode = "accel"
+beacon = "test-key"
+scale = 20
+preseason_scale = 2000
+days = 7
+drain_bells = 26
+bots = 1000
+bot_seed = 7
+season_id = 7
+base_port = 41000
+g0 = 1785542400
+
+[chaos]
+enabled = true
+seed = 7
+
+[adversary]
+enabled = true
+
+[viewers]
+count = 5000
+start_hours = 24
+window_hours = 24

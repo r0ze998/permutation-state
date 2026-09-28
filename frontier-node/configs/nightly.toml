@@ -1,0 +1,22 @@
+# The nightly smoke (M1 contract §11 W5-B, §12 Gate W6: three consecutive
+# nights green): test key, 100 bots x 1 game day at 100x, the second stack
+# instance on ports 41500-41599 (§10.3 "base + 500"), with the adversary
+# schedule (every frontier_hold shape once). scripts/m1-nightly.sh runs it.
+run_id = "nightly"
+mode = "accel"
+beacon = "test-key"
+scale = 100
+preseason_scale = 2000
+days = 1
+drain_bells = 26
+bots = 100
+bot_seed = 1
+season_id = 7
+base_port = 41500
+g0 = 1785542400
+
+[chaos]
+enabled = false
+
+[adversary]
+enabled = true

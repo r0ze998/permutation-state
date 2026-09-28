@@ -1,78 +1,170 @@
-//! `frontier-stack` (M1 contract §10.3, §12).
-//!
-//! **W1 skeleton.** Wave 5 builds `up/verify/tamper/load/report/down`. What
-//! exists now is the port rule every gate uses, as `check-ports`:
+//! `frontier-stack` (M1 contract §8.7, §10.3, §12, §13.4).
 //!
 //! ```text
-//! frontier-stack check-ports --ports 41010,41020,41030
+//! frontier-stack check-ports (--config FILE [--base-port P] | --ports P1,P2,...)
+//! frontier-stack up [--config FILE] [--mode accel|realtime] [--beacon test-key|archive]
+//!                   [--scale S] [--days D | --game-hours H] [--bots N] [--run-id ID]
+//!                   [--base-port P] [--chaos] [--adversary] [--viewers N]
+//!                   [--viewer-window-hours H] [--archive DIR] [--g0 UNIX] [--so PATH]
+//!                   [--seed N] [--keep-running] ...
+//! frontier-stack verify --run-id ID
+//! frontier-stack tamper --run-id ID [--strict]
+//! frontier-stack load   --run-id ID [--viewers 5000] [--game-hours 1]
+//! frontier-stack report --run-id ID
+//! frontier-stack down   --run-id ID
 //! ```
-//! A port fails if it is reserved (4185, 4190, 4191, 4194, 18899, 17799,
-//! 28899, 27799, 26699, 5185, 5191), outside 41000–41999, or already has a
-//! listener on any address (`fclient::ports::port_in_use`, the §10.3 `lsof`
-//! rule; a probe bind of 127.0.0.1 alone missed wildcard and IPv6
-//! listeners). It never requires the reserved ports to be idle (I-26).
-//! `--config <file>` (the stack TOML) arrives with W5.
+//! Every subcommand but `check-ports` also takes `--runs-dir DIR` (default
+//! `frontier-node/.local/frontier`). Exit codes: 0 pass, 1 fail, 2 bad
+//! arguments or cannot run, 3 PENDING-OWNER (an unapproved install or
+//! download: Mode R, or real rounds before the archive exists).
 
-pub const RESERVED: [u16; 11] = [
-    4185, 4190, 4191, 4194, 18899, 17799, 28899, 27799, 26699, 5185, 5191,
-];
+use frontier_stack::config::{self, StackConfig};
+use frontier_stack::run::{self, RunDir};
+use frontier_stack::{load, ports, report, up, verifyrun};
 
-fn check(p: u16) -> Result<(), String> {
-    if RESERVED.contains(&p) {
-        return Err(format!("M1 port {p} is reserved: fix the config"));
+fn usage() -> ! {
+    eprintln!(
+        "{}",
+        include_str!("main.rs")
+            .lines()
+            .skip(3)
+            .take(13)
+            .map(|l| l.trim_start_matches("//! "))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    std::process::exit(2)
+}
+
+fn die(m: impl std::fmt::Display) -> ! {
+    eprintln!("frontier-stack: {m}");
+    std::process::exit(2)
+}
+
+fn get<'a>(f: &'a [(String, Option<String>)], k: &str) -> Option<&'a str> {
+    f.iter()
+        .rev()
+        .find(|(x, _)| x == k)
+        .and_then(|(_, v)| v.as_deref())
+}
+
+fn has(f: &[(String, Option<String>)], k: &str) -> bool {
+    f.iter().any(|(x, _)| x == k)
+}
+
+/// The run directory of `--run-id` (and `--runs-dir`).
+fn run_dir(f: &[(String, Option<String>)]) -> RunDir {
+    let id = get(f, "run-id").unwrap_or_else(|| die("--run-id is required"));
+    let repo = run::repo_root().unwrap_or_else(|e| die(e));
+    let runs = get(f, "runs-dir")
+        .map(|d| run::resolve(&repo, std::path::Path::new(d)))
+        .unwrap_or_else(|| RunDir::default_runs(&repo));
+    RunDir::new(&runs, id)
+}
+
+fn load_config(f: &[(String, Option<String>)]) -> StackConfig {
+    match get(f, "config") {
+        Some(p) => {
+            let repo = run::repo_root().ok();
+            let path = std::path::PathBuf::from(p);
+            let path = if path.exists() {
+                path
+            } else {
+                repo.map(|r| r.join(p)).unwrap_or(path)
+            };
+            StackConfig::from_file(&path).unwrap_or_else(|e| die(e))
+        }
+        None => StackConfig::default(),
     }
-    if !(41_000..=41_999).contains(&p) {
-        return Err(format!("M1 port {p} is outside 41000-41999"));
+}
+
+fn check_ports(f: &[(String, Option<String>)]) -> i32 {
+    let mut bad = 0;
+    if let Some(list) = get(f, "ports") {
+        for p in list.split(',').filter(|s| !s.trim().is_empty()) {
+            match p.trim().parse::<u16>() {
+                Ok(p) => {
+                    if let Err(e) = ports::check(p) {
+                        eprintln!("{e}");
+                        bad += 1;
+                    }
+                }
+                Err(_) => {
+                    eprintln!("`{p}` is not a port");
+                    bad += 1;
+                }
+            }
+        }
+    } else if has(f, "config") {
+        let mut c = load_config(f);
+        if let Some(b) = get(f, "base-port") {
+            c.base_port = b
+                .parse()
+                .unwrap_or_else(|_| die("--base-port is not a port"));
+        }
+        let ps = c.ports().unwrap_or_else(|e| die(e));
+        let probs = ports::problems(&ps, true);
+        for p in &probs {
+            eprintln!("{p}");
+        }
+        bad = probs.len();
+        if bad == 0 {
+            println!(
+                "ports ok: {}",
+                ps.all()
+                    .iter()
+                    .map(|(n, p)| format!("{n} {p}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+    } else {
+        usage()
     }
-    if fclient::ports::port_in_use(p) {
-        return Err(format!("M1 port {p} is busy"));
+    if bad == 0 {
+        0
+    } else {
+        1
     }
-    Ok(())
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    match args.first().map(String::as_str) {
-        Some("check-ports") => {
-            let ports: Vec<u16> = match (args.get(1).map(String::as_str), args.get(2)) {
-                (Some("--ports"), Some(list)) => list
-                    .split(',')
-                    .filter(|s| !s.is_empty())
-                    .map(|s| s.trim().parse().unwrap_or(0))
-                    .collect(),
-                _ => {
-                    eprintln!("usage: frontier-stack check-ports --ports P1,P2,... (--config arrives in wave 5)");
-                    std::process::exit(2)
-                }
-            };
-            let mut bad = 0;
-            for p in ports {
-                if let Err(e) = check(p) {
-                    eprintln!("{e}");
-                    bad += 1;
-                }
-            }
-            std::process::exit(if bad == 0 { 0 } else { 1 });
+    let Some(cmd) = args.first().cloned() else {
+        usage()
+    };
+    let flags = config::split_flags(&args[1..]).unwrap_or_else(|e| die(e));
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap_or_else(|e| die(e));
+    let code = match cmd.as_str() {
+        "check-ports" => check_ports(&flags),
+        "up" => {
+            let mut c = load_config(&flags);
+            let rest: Vec<(String, Option<String>)> = flags
+                .iter()
+                .filter(|(k, _)| k != "config")
+                .cloned()
+                .collect();
+            config::apply_flags(&mut c, &rest).unwrap_or_else(|e| die(e));
+            rt.block_on(up::up(c))
         }
-        _ => {
-            eprintln!("frontier-stack: skeleton (M1 wave 1): only `check-ports --ports ...`; up/verify/tamper/load/report/down arrive in wave 5.");
-            std::process::exit(2)
+        "verify" => rt.block_on(verifyrun::verify(&run_dir(&flags))),
+        "tamper" => verifyrun::tamper(&run_dir(&flags), has(&flags, "strict")),
+        "load" => {
+            let n: usize = get(&flags, "viewers")
+                .map(|v| v.parse().unwrap_or_else(|_| die("--viewers")))
+                .unwrap_or(5_000);
+            let h: f64 = get(&flags, "game-hours")
+                .map(|v| v.parse().unwrap_or_else(|_| die("--game-hours")))
+                .unwrap_or(1.0);
+            rt.block_on(load::load(&run_dir(&flags), n, h))
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn port_rule() {
-        assert!(check(4185).is_err());
-        assert!(check(38_810).is_err());
-        let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let p = l.local_addr().unwrap().port();
-        if (41_000..=41_999).contains(&p) {
-            assert!(check(p).is_err(), "busy");
-        }
-    }
+        "report" => rt.block_on(report::report(&run_dir(&flags))),
+        "down" => up::down(&run_dir(&flags)),
+        "-h" | "--help" | "help" => usage(),
+        other => die(format!("unknown subcommand `{other}`")),
+    };
+    std::process::exit(code);
 }

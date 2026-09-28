@@ -4483,6 +4483,14 @@ name = "stack"
 version = "0.1.0"
 dependencies = [
  "fclient",
+ "frontier-abi",
+ "hex",
+ "keeper",
+ "permutation-rules",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "verify",
 ]
 
 [[package]]
