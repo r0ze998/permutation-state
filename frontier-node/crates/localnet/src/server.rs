@@ -884,7 +884,14 @@ mod tests {
     #[test]
     fn ports_and_base58() {
         assert!(check_port(0).is_ok());
-        assert!(check_port(41_010).is_ok());
+        // An idle M1 port passes. The port is chosen at run time (nothing is
+        // bound): a fixed 41010 failed whenever a local stack, whose localnet
+        // RPC is base + 10, was up (W5-D, integ-W5).
+        let idle = (41_000..=41_999u16)
+            .rev()
+            .find(|&p| !fclient::ports::port_in_use(p))
+            .expect("an idle port in 41000-41999");
+        assert!(check_port(idle).is_ok(), "idle port {idle}");
         assert!(check_port(4_185).is_err());
         assert!(check_port(38_810).is_err());
         let k = Address::new_from_array([7; 32]);
