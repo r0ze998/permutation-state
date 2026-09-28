@@ -11,13 +11,13 @@ use fclient::abi::layout::entry as le;
 use fclient::seal::{validate, PlainError};
 use fclient::Signer;
 use frontier_agents::fixture::{self, FINAL, JOINED, PROVISIONAL, SEED, UNJOINED};
-use frontier_agents::keys;
 use frontier_agents::obs::{BellView, MeView, Observation, Overview, ProvinceView, SeasonView};
 use frontier_agents::policy::{
     self, decide, Ctx, Intent, MarchMemo, Memory, RevealRoute, SealKind,
 };
 use frontier_agents::profile::{AgentSpec, Arch};
 use frontier_agents::Persona;
+use frontier_agents::{keys, recorded};
 use permutation_rules::frontier::geometry::ProvinceCoord;
 use serde_json::Value;
 
@@ -495,6 +495,26 @@ fn owners_reveal_in_the_arrival_bell_by_persona() {
         reveals(Persona::LateRevealer, bell - 2, true),
         vec![(RevealRoute::Keeper, true), (RevealRoute::DirectSelf, true)]
     );
+    // W6-C: judged on the time the herald observed, not the runner's clock:
+    // a runner clock ahead of the chain does not make it reveal early.
+    {
+        let mut o2 = o.clone();
+        o2.season.latest_unix = o2.now - 3 * 600;
+        let m = memo(&o2, Persona::LateRevealer, bell - 2);
+        let mem = Memory {
+            marches: vec![m],
+            ..Memory::default()
+        };
+        let s = spec(FINAL, Arch::Bot, Some(Persona::LateRevealer));
+        let mut c = ctx(&s, &mem, true);
+        c.session = false;
+        assert!(
+            !decide(&o2, &c)
+                .iter()
+                .any(|i| matches!(i, Intent::Reveal { .. })),
+            "the herald has not seen the window close yet"
+        );
+    }
     // forger: a forged direct reveal, and the honest one.
     assert_eq!(
         reveals(Persona::Forger, bell, true),
@@ -789,130 +809,68 @@ fn the_recorded_herald_parses_and_drives_the_policies() {
     let wallets = idx["wallets"].as_array().expect("wallets");
     assert_eq!(mes, wallets.len(), "one me file per recorded wallet");
     let recorded_bell = idx["recordedBell"].as_u64().expect("recordedBell") as u32;
-    let mut decided = 0;
-    let mut marches = 0;
+    // The decisions (W6-C: one rule with the recorder, `recorded::plans`).
     // An idle province may sit up to a keeper skip batch behind the
     // recording's bell; a bot then nudges instead of acting (the residency
-    // gate, integ-W4 review). The marches are checked as the bots plan them
-    // once their provinces are caught up (as after the nudge).
+    // gate, integ-W4 review), so the plans are taken with the provinces
+    // caught up (as after the nudge). W5-C: the bots march only a host with
+    // the stamina Depart charges; a wallet that plans nothing is decided
+    // again with its roster rested, which still checks the plan against the
+    // recorded herald.
+    let rec = recorded::load(&dir).expect("the recording loads");
+    assert_eq!(rec.wallets.len(), wallets.len());
     let now_bell = season.bell_at(season.latest_unix);
-    let caught_up: BTreeMap<_, _> = provinces
-        .iter()
-        .map(|(k, v)| {
-            let mut v = v.clone();
-            v.province.resolved_next = v.province.resolved_next.max(now_bell.saturating_sub(1));
-            (*k, v)
-        })
-        .collect();
-    // W5-C: the bots march only a host with the stamina Depart charges
-    // (the program refuses less as `Cooldown`; the committed wave-4
-    // recording's two planned marches had 27 and 35 of the 74 it costs).
-    // Hosts that marched recently are tired at any recorded bell, so a
-    // wallet that plans nothing is decided again with its roster rested
-    // (stamina at the cap, as after enough bells), which still checks the
-    // plan against the recorded herald.
-    let rested: BTreeMap<_, _> = caught_up
-        .iter()
-        .map(|(k, v)| {
-            let mut v = v.clone();
-            for e in v.province.entries.iter_mut() {
-                if e.state == le::STATE_ROSTER {
-                    e.stamina_value = permutation_rules::frontier::host::STAMINA_CAP;
-                    e.stamina_bell = now_bell;
-                }
-            }
-            (*k, v)
-        })
-        .collect();
-    let mut rested_marches = 0;
-    for w in wallets {
-        let index = w["index"].as_u64().unwrap() as u32;
-        let wallet = keys::wallet(seed, index).pubkey();
-        assert_eq!(w["wallet"].as_str().unwrap(), wallet.to_string());
-        let me = MeView::from_json(&json(&rd(&dir.join(format!("h/me/{wallet}.json"))))).unwrap();
+    for (w, rw) in wallets.iter().zip(&rec.wallets) {
+        assert_eq!(w["wallet"].as_str().unwrap(), rw.wallet.to_string());
+        assert_eq!(rw.wallet, keys::wallet(seed, rw.spec.index).pubkey());
         // The recording is taken mid-play: a wallet whose join bell has
         // not come yet (or came within the last few bells) may still be
         // outside; every other one has joined.
-        let join_bell = w["joinBell"].as_u64().unwrap() as u32;
-        if me.citizen.is_none() {
+        if rw.me.citizen.is_none() {
             assert!(
-                join_bell + 6 >= recorded_bell,
-                "{wallet}: not joined at bell {recorded_bell} (join bell {join_bell})"
+                rw.spec.join_bell + 6 >= recorded_bell,
+                "{}: not joined at bell {recorded_bell} (join bell {})",
+                rw.wallet,
+                rw.spec.join_bell
             );
-            continue;
         }
-        let arch = frontier_agents::ARCHS
-            .iter()
-            .copied()
-            .find(|a| a.key() == w["arch"].as_str().unwrap())
-            .expect("arch");
-        let s = AgentSpec {
-            index,
-            arch,
-            faction: w["faction"].as_u64().unwrap() as u8,
-            join_day: 0,
-            join_bell: w["joinBell"].as_u64().unwrap() as u32,
-            persona: w["persona"].as_str().and_then(Persona::parse),
-        };
-        let o = Observation {
-            now: season.latest_unix,
-            season: season.clone(),
-            me,
-            provinces: caught_up.clone(),
-            province_bells: BTreeMap::new(),
-            overviews: overviews.clone(),
-            bells: bells.clone(),
-        };
-        let mem = Memory::default();
-        let mut c = ctx(&s, &mem, true);
-        c.seed = seed;
-        c.wallet = wallet;
-        let planned = departs(&decide(&o, &c)).len();
-        for d in departs(&decide(&o, &c)) {
-            check_march(&o, d);
-            let host = o.provinces[&d.host_at]
-                .province
-                .entries
-                .iter()
-                .find(|e| e.id == d.host_id)
-                .expect("the host");
-            let st = permutation_rules::frontier::host::Stamina {
-                value: host.stamina_value,
-                bell: host.stamina_bell,
-            };
-            assert!(
-                st.at(now_bell)
-                    >= permutation_rules::frontier::travel::march_stamina(
-                        permutation_rules::frontier::travel::MAX_PATH_STEPS as u32
-                    ),
-                "a planned march has the stamina Depart charges"
-            );
-            marches += 1;
-        }
-        if planned == 0 {
-            let o = Observation {
-                provinces: rested.clone(),
-                ..o
-            };
-            for d in departs(&decide(&o, &c)) {
-                check_march(&o, d);
-                rested_marches += 1;
-            }
-        }
-        decided += 1;
     }
+    let plans = recorded::plans(&rec, fixture::REVEAL_LOADED_LIMIT);
+    for m in &plans.marches {
+        check_march(&m.obs, &m.plan);
+        let host = m.obs.provinces[&m.plan.host_at]
+            .province
+            .entries
+            .iter()
+            .find(|e| e.id == m.plan.host_id)
+            .expect("the host");
+        let st = permutation_rules::frontier::host::Stamina {
+            value: host.stamina_value,
+            bell: host.stamina_bell,
+        };
+        assert!(
+            st.at(now_bell)
+                >= permutation_rules::frontier::travel::march_stamina(
+                    permutation_rules::frontier::travel::MAX_PATH_STEPS as u32
+                ),
+            "a planned march has the stamina Depart charges"
+        );
+    }
+    let (marches, rested_marches) = (plans.unrested(), plans.rested());
     println!(
-        "recorded herald: {} provinces, {} bell-region files, {} overviews, {decided} wallets decided, {marches} marches planned and checked ({rested_marches} more with rested hosts)",
+        "recorded herald (bell {recorded_bell}): {} provinces, {} bell-region files, {} overviews, {} wallets decided, {marches} marches planned with the recorded stamina ({rested_marches} more with rested hosts)",
         provinces.len(),
         bells.len(),
-        overviews.len()
+        overviews.len(),
+        plans.decided
     );
     // Integ-W4 review (W4-F): a recording of the strict day, not of the
     // stub world (whose provinces never moved: every latest file was the
-    // OpenProvince bytes), and one that drives marches.
+    // OpenProvince bytes). W6-C (DECISIONS O11): one that drives a march
+    // **with the hosts' recorded stamina**, not only once rested.
     assert!(
-        marches + rested_marches > 0,
-        "the recorded herald drives at least one march"
+        marches > 0,
+        "the recorded herald drives at least one unrested march ({rested_marches} with rested hosts only)"
     );
     for (pq, v) in &provinces {
         assert!(

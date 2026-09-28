@@ -172,11 +172,12 @@ async fn held_anchor_falls_back_and_held_cache_switches_nonce() {
     assert!(w.now() > fclient::clock::bell_end(genesis_ts, sb) + BELL_SECS);
 }
 
-/// A hold longer than the version cap plus blockhash expiry (240 slots of
-/// 64 versions + 151): the capped write ends, is re-planned with a fresh
-/// escalation and the anchor lands once the hold ends; newer bells keep
-/// being anchored meanwhile (integ-W2 review of W2-F: before the fix the
-/// write stayed pending for good and the anchor never landed).
+/// A hold longer than the version cap plus blockhash expiry of a per-slot
+/// resend (240 slots vs 64 versions + 151): the anchor lands once the hold
+/// ends and newer bells keep being anchored meanwhile (integ-W2 review of
+/// W2-F: before that fix the write stayed pending for good and the anchor
+/// never landed). W6-C: at P_delay the write resends every 16 slots, so it
+/// lands within a cadence of the hold's end without reaching its cap.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn anchor_held_past_the_version_cap_lands_after_the_hold() {
     let w = world().await;
@@ -243,9 +244,19 @@ async fn anchor_held_past_the_version_cap_lands_after_the_hold() {
     assert!(an.slot >= e.saturating_sub(1), "not while held");
     let expired = k.journal.as_ref().unwrap().alerts("write-expired").unwrap();
     println!("write-expired alerts: {expired:?}");
+    // W6-C: a D write held at P_delay sends a fresh version every 16 slots
+    // (`EngineParams::cap_resend_slots`) instead of one per slot, so it
+    // never reaches the 64-version cap inside this hold and always has an
+    // unexpired version out: it lands within one cadence of the hold's end
+    // (before W6-C it ran into the cap, expired, and was re-planned; that
+    // path is `engine::tests::capped_write_whose_versions_expired_ends_and_restarts`).
     assert!(
-        expired.iter().any(|a| a.1.contains(&format!(":{hb}:"))),
-        "the capped write was ended and alerted"
+        at <= e + 16 + 2,
+        "lands within a resend cadence of the hold's end ({at} vs {e})"
+    );
+    assert!(
+        expired.iter().all(|a| !a.1.contains(&format!(":{hb}:"))),
+        "no version cap reached: {expired:?}"
     );
     // Newer bells were anchored in every region while it was held.
     let sc = fclient::clock::SeasonClock::from_season(&w.season());

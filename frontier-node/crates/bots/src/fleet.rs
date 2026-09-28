@@ -376,7 +376,15 @@ async fn run_bot<H: HeraldPort, R: RelayPort, D: DirectPort>(
             continue;
         };
         if now >= until {
-            return;
+            // W6-C: end on the herald's own time, never on an extrapolation
+            // alone (a bad rate estimate once ran the fleet's clock ≈ 40
+            // bells ahead and every bot stopped at bell ≈ 102 of 144).
+            let _ = sh.season().await;
+            if sh.clock.observed().is_none_or(|u| u >= until) {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(1_000)).await;
+            continue;
         }
         let eager = sh.cfg.eager_personas;
         let ran = pace.plan(&bot, &t, now, eager);
@@ -390,7 +398,17 @@ async fn run_bot<H: HeraldPort, R: RelayPort, D: DirectPort>(
         } else {
             0
         };
+        // W6-C: a long sleep is computed from the rate estimate of one
+        // moment; nap at most `MAX_NAP` and plan again, so a bot whose wake
+        // is far off (a late join bell, the next session) follows the rate
+        // as it is refined. Before, a late joiner slept on an early,
+        // low estimate past the end of play (the W6-C stack runs with
+        // eager personas: every bot action stopped at bell 102, then 124,
+        // of 144).
         let d = sh.clock.wall_until(wake);
-        tokio::time::sleep(d.max(std::time::Duration::from_millis(50))).await;
+        tokio::time::sleep(d.clamp(std::time::Duration::from_millis(50), MAX_NAP)).await;
     }
 }
+
+/// The longest a bot sleeps before it re-plans on the game clock.
+pub const MAX_NAP: std::time::Duration = std::time::Duration::from_secs(5);

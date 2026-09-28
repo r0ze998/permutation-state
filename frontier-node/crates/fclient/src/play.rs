@@ -276,9 +276,117 @@ pub fn bounces_unranked(p: i32, q: i32, bell: u32, recorded: &[SlotEntry], x: &S
     !in_final_set(p, q, bell, &all, x)
 }
 
+// ------------------------------------------------------------------ defence claims
+
+/// Bells after a bell's reveal close during which its late Reveals' defence
+/// refunds may be claimed (§5.12, I-52; `frontier_abi` beacon layout
+/// `CLAIM_GRACE_BELLS`).
+pub const CLAIM_GRACE_BELLS: i64 = 6;
+
+/// The end (game time) of the claim grace of an ArrivalSlot whose defence
+/// claim is **open** at `now`, else `None` (W6-C: the keeper's claims duty
+/// and the stack's `defence-pool` hold decide it the same way): the slot is
+/// unclaimed, its Reveal landed `lateness_slots` or more after THE anchor
+/// (`anchor_slot`, `anchor_a`), its evidence gives a refund, and `now` is
+/// before `reveal_close(bell, A) + 6 bells`.
+pub fn open_claim(
+    sl: &crate::decode::ArrivalSlot,
+    anchor_slot: u64,
+    anchor_a: i64,
+    season: &crate::decode::Season,
+    now: i64,
+) -> Option<i64> {
+    if sl.claimed != 0 || sl.ev_slot < anchor_slot + season.lateness_slots as u64 {
+        return None;
+    }
+    let clock = crate::clock::SeasonClock::from_season(season);
+    let grace_end = clock.reveal_close(sl.bell, anchor_a) + CLAIM_GRACE_BELLS * 600;
+    if now >= grace_end {
+        return None;
+    }
+    let tip_min = crate::fees::min_tip_lamports(
+        season.min_reveal_priority_milli,
+        season.reveal_cu_limit,
+        season.reveal_loaded_limit,
+    );
+    let params = crate::fees::DefenceParams {
+        defence_cap_milli: season.defence_cap_milli,
+        tip_min,
+    };
+    let ev = crate::fees::Evidence {
+        ev_price: sl.ev_price,
+        ev_limit: sl.ev_limit,
+        ev_loaded: sl.ev_loaded,
+        created_day: sl.flags & 2 != 0,
+    };
+    (crate::fees::defence_refund(&ev, &params) > 0).then_some(grace_end)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// W6-C: a defence claim is open when the slot is unclaimed, its Reveal
+    /// was late by `lateness_slots`, its evidence gives a refund and the
+    /// grace (`reveal_close + 6 bells`) has not ended.
+    #[test]
+    fn open_claims_are_late_unclaimed_refundable_and_in_grace() {
+        use crate::abi::layout::{arrival_slot as a, season as l};
+        let put = |d: &mut Vec<u8>, o: usize, v: &[u8]| d[o..o + v.len()].copy_from_slice(v);
+        let mut sd = vec![0u8; crate::abi::size::SEASON];
+        put(&mut sd, 0, crate::abi::magic::SEASON);
+        put(&mut sd, l::GENESIS_TS, &1_000_000i64.to_le_bytes());
+        put(&mut sd, l::REVEAL_WINDOW, &600u32.to_le_bytes());
+        put(&mut sd, l::MIN_REVEAL_PRIORITY_MILLI, &433u32.to_le_bytes());
+        put(&mut sd, l::REVEAL_CU_LIMIT, &26_500u32.to_le_bytes());
+        put(&mut sd, l::REVEAL_LOADED_LIMIT, &1_146_880u32.to_le_bytes());
+        put(&mut sd, l::DEFENCE_CAP_MILLI, &2_000u32.to_le_bytes());
+        sd[l::LATENESS_SLOTS] = 10;
+        let season = crate::decode::Season::decode(&sd).unwrap();
+        let slot = |ev_slot: u64, price: u64, claimed: u8| {
+            let mut d = vec![0u8; crate::abi::size::ARRIVAL_SLOT];
+            put(&mut d, 0, crate::abi::magic::ARRIVAL_SLOT);
+            put(&mut d, a::BELL, &40u32.to_le_bytes());
+            put(&mut d, a::EV_SLOT, &ev_slot.to_le_bytes());
+            put(&mut d, a::EV_PRICE, &price.to_le_bytes());
+            put(&mut d, a::EV_LIMIT, &26_500u32.to_le_bytes());
+            put(&mut d, a::EV_LOADED, &1_146_880u32.to_le_bytes());
+            d[a::CLAIMED] = claimed;
+            crate::decode::ArrivalSlot::decode(&d).unwrap()
+        };
+        let a_ts = 1_000_000 + 41 * 600 + 2;
+        let close = crate::clock::SeasonClock::from_season(&season).reveal_close(40, a_ts);
+        let grace = close + CLAIM_GRACE_BELLS * 600;
+        let rich = 200_000_000; // µlamports per CU: a bid far above the tip
+        assert_eq!(
+            open_claim(&slot(110, rich, 0), 100, a_ts, &season, close),
+            Some(grace)
+        );
+        assert_eq!(
+            open_claim(&slot(110, rich, 0), 100, a_ts, &season, grace - 1),
+            Some(grace)
+        );
+        assert_eq!(
+            open_claim(&slot(110, rich, 0), 100, a_ts, &season, grace),
+            None,
+            "grace over"
+        );
+        assert_eq!(
+            open_claim(&slot(109, rich, 0), 100, a_ts, &season, close),
+            None,
+            "not late"
+        );
+        assert_eq!(
+            open_claim(&slot(110, rich, 1), 100, a_ts, &season, close),
+            None,
+            "claimed"
+        );
+        assert_eq!(
+            open_claim(&slot(110, 0, 0), 100, a_ts, &season, close),
+            None,
+            "no refund"
+        );
+    }
 
     fn e(host: u64, citizen: u64, troops: u32) -> SlotEntry {
         SlotEntry {

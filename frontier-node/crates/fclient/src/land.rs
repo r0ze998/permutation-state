@@ -194,6 +194,60 @@ pub fn ring_open_check(
     Ok(())
 }
 
+/// A ring opening the chain is in (W6-C: the stack's `frontier-fund` hold
+/// aims at it, §13.4 "hold Frontier and one ProvinceFund during a ring
+/// opening").
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RingOpening {
+    /// Ring `ring` is open but some of its provinces are not on chain yet
+    /// (its seed or its OpenProvince writes pending); `wedge` is the wedge
+    /// of the first missing province (its ProvinceFund pays for it).
+    InProgress {
+        ring: u16,
+        wedge: u8,
+        missing: usize,
+    },
+    /// OpenRing(`ring`) may land now by the rule of §5.9 on the folded
+    /// values; `wedge` is the most crowded wedge.
+    Due { ring: u16, wedge: u8 },
+}
+
+/// The ring opening under way or due at `now`, if any. `on_chain` holds
+/// the provinces present on chain (`(p, q)`); `fund_lamports` the six
+/// ProvinceFund balances. Genesis rings count as a ring opening too while
+/// incomplete.
+pub fn ring_opening(
+    s: &Season,
+    fr: &Frontier,
+    fund_lamports: &[u64; 6],
+    on_chain: &std::collections::BTreeSet<(i32, i32)>,
+    now: i64,
+) -> Option<RingOpening> {
+    use permutation_rules::frontier::geometry::ring_provinces;
+    for d in 0..fr.rings_opened {
+        let missing: Vec<_> = ring_provinces(d as u32)
+            .into_iter()
+            .filter(|pc| !on_chain.contains(&(pc.p, pc.q)))
+            .collect();
+        if let Some(first) = missing.first() {
+            return Some(RingOpening::InProgress {
+                ring: d,
+                wedge: first.wedge().unwrap_or(0),
+                missing: missing.len(),
+            });
+        }
+    }
+    ring_open_check(s, fr, fund_lamports, now).ok()?;
+    let wedge = (0..6usize)
+        .filter(|&w| fr.wedge_open[w] > 0)
+        .max_by_key(|&w| (fr.wedge_occupied[w] as u64 * 10_000) / fr.wedge_open[w] as u64)
+        .unwrap_or(0) as u8;
+    Some(RingOpening::Due {
+        ring: fr.rings_opened,
+        wedge,
+    })
+}
+
 /// Seconds a holding has been idle and whether it can be released (§5.9
 /// ReleaseDormant: order 1, `now ≥ last_owner_action + release_after`, no
 /// transit in state 1–3).
@@ -325,6 +379,49 @@ mod tests {
             ring_open_check(&s, &fr, &rich, now),
             Err(RingWait::NotCrowded)
         );
+    }
+
+    /// W6-C: the ring opening the `frontier-fund` hold aims at: a ring
+    /// with provinces still to open (its first missing province's wedge),
+    /// else a crowding ring that may open now (the most crowded wedge).
+    #[test]
+    fn the_ring_opening_under_way_or_due() {
+        use permutation_rules::frontier::geometry::ring_provinces;
+        let g = 1_000_000;
+        let s = season(g);
+        let rich = [10_000_000_000u64; 6];
+        let now = g + 10 * 600;
+        let all = |d: u32| -> std::collections::BTreeSet<(i32, i32)> {
+            (0..d)
+                .flat_map(ring_provinces)
+                .map(|pc| (pc.p, pc.q))
+                .collect()
+        };
+        // Rings 0..4 complete, not crowded: nothing.
+        let fr = frontier(4, 3, [100; 6], [0; 6]);
+        assert_eq!(ring_opening(&s, &fr, &rich, &all(4), now), None);
+        // Crowded in wedge 4: due, ring 4.
+        let fr = frontier(4, 3, [100; 6], [0, 0, 55, 0, 60, 0]);
+        assert_eq!(
+            ring_opening(&s, &fr, &rich, &all(4), now),
+            Some(RingOpening::Due { ring: 4, wedge: 4 })
+        );
+        // Ring 4 opened, two of its provinces on chain: in progress.
+        let fr = frontier(5, 10, [100; 6], [0; 6]);
+        let mut on = all(4);
+        let r4 = ring_provinces(4);
+        on.insert((r4[0].p, r4[0].q));
+        on.insert((r4[1].p, r4[1].q));
+        let got = ring_opening(&s, &fr, &rich, &on, now);
+        assert_eq!(
+            got,
+            Some(RingOpening::InProgress {
+                ring: 4,
+                wedge: r4[2].wedge().unwrap(),
+                missing: r4.len() - 2,
+            })
+        );
+        assert_eq!(ring_opening(&s, &fr, &rich, &all(5), now), None);
     }
 
     fn holding(state: u8, ticket_bell: u32, score: u64, owner: [u8; 32]) -> Holding {

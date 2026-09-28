@@ -7,7 +7,7 @@
 //! | SettleDeparture (`settle-departure`) | the origin resolved past `depart_bell` | SettleDeparture | D |
 //! | Gather (`gather`) | window closed, the ArrivalDay bit set, every present arrival's transit in state ≥ 2 | GatherClash parts (a clear bit after a `NotQuiet` skip: one part) | D |
 //! | Resolve (`resolve`) | all positions gathered, `resolved_next == b`, the seed of THE anchor | ResolveFromInputs | D |
-//! | Skip (`skip`) | closed windows with clear bits from `resolved_next` | SkipQuiet over ≤ 24 bells: at once when the province has pending changes, a departure to settle, a known arrival ahead, a nudge or the season's end in reach; otherwise once 24 bells are due (≤ 6 per idle province-day). CU limit `90k + 30k` per bell with pending ops (I-50, v1.7), capped at 1.4M; a committed prefix is re-planned; running out of CU is `NotQuiet` (gather and resolve) | D |
+//! | Skip (`skip`) | closed windows with clear bits from `resolved_next` | SkipQuiet over ≤ 24 bells: as soon as the run of closed quiet bells covers the province's **target bell** (a nudge: at once; a pending change or `Leave`: its bell; a departure to settle: its bell; an arrival ahead: the bell before it; W6-C), once 24 bells are due (≤ 6 per idle province-day), or when it reaches the season's end. CU limit `90k + 30k` per bell with pending ops (I-50, v1.7), capped at 1.4M; a committed prefix is re-planned; running out of CU is `NotQuiet` (gather and resolve) | D |
 //! | Returns (`settle-departure`) | a `Leave` entry whose bell resolved (§21) | the return settle: SettleDeparture with `transit_slot = 0xFF` per (province, Holding) (W4-A's choice) | D |
 //! | Settle (`settle`) | `close + 600` passed and the destination resolved past `arrive` | SettleTransit for every transit incl. refused, displaced, unrevealed and bad seals, with the **logged** commitment and seal | D |
 //! | Closes (`close`) | slots settled and past the claim grace (or claimed), days whose province resolved past the day, inputs resolved, settled and past `clash_close_grace` | CloseArrivalSlot / CloseArrivalDay / CloseClashInputs | N |
@@ -49,7 +49,7 @@ const PROVINCE_READ_SLOTS: u64 = 8;
 /// Bells per SkipQuiet at most.
 const SKIP_MAX: u32 = 24;
 /// Claim grace (§5.12, I-52), bells.
-pub const CLAIM_GRACE_BELLS: i64 = 6;
+pub const CLAIM_GRACE_BELLS: i64 = fclient::play::CLAIM_GRACE_BELLS;
 const BELL_SECS: i64 = 600;
 
 /// Owner reveal material (`/v1/reveal`).
@@ -1202,22 +1202,58 @@ impl PlayDuty {
 
     // ------------------------------------------------------------ gathers, resolves, skips
 
-    /// Provinces whose `resolved_next` should move now (not batched).
-    fn urgent(&self, t: &Tick<'_>, pq: (i16, i16), s: &ProvState) -> bool {
-        if self.nudged.contains_key(&pq) || !s.pending_bells.is_empty() || !s.leaves.is_empty() {
-            return true;
+    /// The earliest bell a province must be resolved through soon (its
+    /// `resolved_next` must pass it), or `None` when nothing waits on it
+    /// (W6-C, W5-B F4). A skip goes out as soon as its run of closed quiet
+    /// bells covers this bell, in one transaction; before W6-C any pending
+    /// work made the province "urgent" and every bell was skipped alone as
+    /// it closed (13–40 SkipQuiet per province-day p99 in the W5 runs).
+    ///
+    /// - a nudge (a player acting there now): the next bell (at once);
+    /// - a pending resident change or a `Leave` entry: its bell;
+    /// - a departure from here to settle: its departure bell;
+    /// - an arrival here ahead: the bell before it (so the arrival bell is
+    ///   next when its window closes: close → resolve stays short); an
+    ///   arrival bell itself left clear (nothing revealed), and a
+    ///   settlement judged against this province (a bad seal nobody
+    ///   revealed is settled against its origin): that bell.
+    ///
+    /// The season's end is `end_flush` in [`Self::clashes`].
+    fn skip_target(&self, pq: (i16, i16), s: &ProvState) -> Option<u32> {
+        if self.nudged.contains_key(&pq) {
+            return Some(s.rn);
         }
-        if t.season.end_bell.saturating_sub(s.rn) <= SKIP_MAX {
-            return true;
-        }
-        // A departure from here to settle, an arrival here ahead, or a
-        // settlement judged against this province (a bad seal nobody
-        // revealed is settled against its origin).
-        self.index.departs.iter().any(|(k, d)| {
-            !self.index.settled.contains_key(k)
-                && ((d.origin == pq && !self.index.departure_settled.contains(k))
-                    || (self.dest_of(k, d).unwrap_or(d.origin) == pq && s.rn <= d.arrive))
-        })
+        let own = s
+            .pending_bells
+            .iter()
+            .copied()
+            .chain(s.leaves.iter().map(|l| l.2));
+        let marches = self.index.departs.iter().filter_map(|(k, d)| {
+            if self.index.settled.contains_key(k) {
+                return None;
+            }
+            let from_here = (d.origin == pq
+                && !self.index.departure_settled.contains(k)
+                && d.depart_bell >= s.rn)
+                .then_some(d.depart_bell);
+            let to_here = (self.dest_of(k, d).unwrap_or(d.origin) == pq && s.rn <= d.arrive)
+                .then(|| d.arrive.saturating_sub(1).max(s.rn));
+            match (from_here, to_here) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            }
+        });
+        // Bells already passed wait on nothing here (their settlement can
+        // go now).
+        own.chain(marches).filter(|&b| b >= s.rn).min()
+    }
+
+    /// Whether a skip of `n` bells from `b` goes out now: it covers the
+    /// province's target bell, it is a whole batch, or it reaches the
+    /// season's end.
+    fn skip_now(&self, end_bell: u32, pq: (i16, i16), s: &ProvState, b: u32, n: u32) -> bool {
+        let covers = self.skip_target(pq, s).is_some_and(|tb| tb < b + n);
+        covers || n >= SKIP_MAX || b + n >= end_bell
     }
 
     fn dest_of(&self, k: &(u64, u32), d: &DepartRec) -> Option<(i16, i16)> {
@@ -1301,9 +1337,7 @@ impl PlayDuty {
                 bb += 1;
             }
             let n = srcs.len() as u32;
-            let urgent = self.urgent(t, pq, &s);
-            let end_flush = b + n >= t.season.end_bell;
-            if !(urgent || n >= SKIP_MAX || end_flush) {
+            if !self.skip_now(t.season.end_bell, pq, &s, b, n) {
                 continue;
             }
             let a = t.addrs.clone();
@@ -1853,15 +1887,6 @@ impl PlayDuty {
         if t.cfg.beneficiary != keeper || !t.slot.is_multiple_of(4) {
             return Ok(());
         }
-        let tip_min = fclient::fees::min_tip_lamports(
-            t.season.min_reveal_priority_milli,
-            t.season.reveal_cu_limit,
-            t.season.reveal_loaded_limit,
-        );
-        let params = fclient::fees::DefenceParams {
-            defence_cap_milli: t.season.defence_cap_milli,
-            tip_min,
-        };
         let mine: Vec<(i16, i16, u32, u8, u8)> = self
             .index
             .slots
@@ -1894,19 +1919,11 @@ impl PlayDuty {
             else {
                 continue;
             };
-            if sl.beneficiary != keeper || sl.claimed != 0 {
-                continue;
-            }
-            if sl.ev_slot < an_slot + t.season.lateness_slots as u64 {
-                continue;
-            }
-            let ev = fclient::fees::Evidence {
-                ev_price: sl.ev_price,
-                ev_limit: sl.ev_limit,
-                ev_loaded: sl.ev_loaded,
-                created_day: sl.flags & 2 != 0,
-            };
-            if fclient::fees::defence_refund(&ev, &params) == 0 {
+            // Late, unclaimed, a refund, inside the grace: the rule the
+            // stack's `defence-pool` hold aims at too (W6-C).
+            if sl.beneficiary != keeper
+                || fclient::play::open_claim(&sl, an_slot, an.a, t.season, t.now).is_none()
+            {
                 continue;
             }
             let day = t.clock.bell_at(t.now).unwrap_or(0) / abi::BELLS_PER_DAY;
@@ -2064,6 +2081,104 @@ mod review_tests {
             "another bell"
         );
         assert!(!w(None), "absent");
+    }
+
+    fn prov(rn: u32) -> ProvState {
+        ProvState {
+            region: 0,
+            rn,
+            read_slot: 1,
+            pending_bells: BTreeSet::new(),
+            active: true,
+            leaves: vec![],
+            last_digest: [0; 32],
+            contested: false,
+        }
+    }
+
+    fn depart(host: u64, origin: (i16, i16), depart_bell: u32, arrive: u32) -> DepartRec {
+        DepartRec {
+            host,
+            origin,
+            origin_tile: 0,
+            depart_bell,
+            arrive,
+            dep_mass: 1,
+            tip: 0,
+            seal_root: [0; 32],
+            commit: [0; 32],
+            seal: [0; 165],
+            slot: 1,
+        }
+    }
+
+    /// W6-C (W5-B F4): a province with pending work is skipped in one
+    /// transaction once the run of closed quiet bells covers the bell the
+    /// work waits for, not bell by bell as each closes; an idle one waits
+    /// for a whole batch; the season's end flushes.
+    #[test]
+    fn skips_wait_for_the_target_bell() {
+        let mut d = PlayDuty::default();
+        let pq = (1, 0);
+        let end = 1_000;
+        // Idle: only a whole batch (or the end) goes.
+        let s = prov(100);
+        assert_eq!(d.skip_target(pq, &s), None);
+        assert!(!d.skip_now(end, pq, &s, 100, 23));
+        assert!(d.skip_now(end, pq, &s, 100, 24));
+        assert!(d.skip_now(110, pq, &s, 100, 10), "reaches the end");
+        // A resident change pending at bell 110: nothing before it closes,
+        // then one skip through it (before W6-C: a skip per bell).
+        let mut s = prov(100);
+        s.pending_bells.insert(110);
+        assert_eq!(d.skip_target(pq, &s), Some(110));
+        assert!(!d.skip_now(end, pq, &s, 100, 1));
+        assert!(!d.skip_now(end, pq, &s, 100, 10));
+        assert!(d.skip_now(end, pq, &s, 100, 11));
+        // A Leave entry's bell likewise.
+        let mut s = prov(100);
+        s.leaves.push((3, 9, 104));
+        assert_eq!(d.skip_target(pq, &s), Some(104));
+        // A departure from here to settle: its departure bell; once
+        // resolved past it (settlement can go), nothing.
+        d.index.departs.insert((7, 105), depart(7, pq, 105, 112));
+        // Revealed at (5, 5) (a march never revealed is judged at its
+        // origin, below).
+        d.index.slots.insert(
+            (5, 5, 112, 0, 0),
+            crate::playindex::RevealRec {
+                dest: (5, 5),
+                arrive: 112,
+                faction: 0,
+                i: 0,
+                host: 7,
+                displaced: None,
+                beneficiary: Address::new_from_array([0; 32]),
+                slot: 1,
+                created_day: false,
+            },
+        );
+        assert_eq!(d.skip_target((5, 5), &prov(100)), Some(111));
+        let s = prov(100);
+        assert_eq!(d.skip_target(pq, &s), Some(105));
+        assert_eq!(d.skip_target(pq, &prov(106)), None);
+        d.index.departure_settled.insert((7, 105));
+        assert_eq!(d.skip_target(pq, &s), None);
+        // An arrival here ahead: the bell before it, so the arrival bell is
+        // next when its window closes; with the province already at the
+        // arrival bell (left clear: nothing revealed), that bell.
+        let dest = (2, 0);
+        d.index.departs.insert((8, 105), depart(8, dest, 105, 120));
+        d.index.departure_settled.insert((8, 105));
+        d.transits.insert((8, 105), TransitState::default());
+        // The destination is unknown to this keeper: judged at the origin.
+        assert_eq!(d.skip_target(dest, &prov(100)), Some(119));
+        assert_eq!(d.skip_target(dest, &prov(120)), Some(120));
+        assert_eq!(d.skip_target(dest, &prov(121)), None);
+        // A nudge: at once.
+        d.nudged.insert(pq, 130);
+        assert_eq!(d.skip_target(pq, &prov(100)), Some(100));
+        assert!(d.skip_now(end, pq, &prov(100), 100, 1));
     }
 
     #[test]

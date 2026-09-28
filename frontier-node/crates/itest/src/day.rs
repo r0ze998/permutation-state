@@ -61,7 +61,8 @@ pub struct DayCfg {
     /// Every bot joins on day 0 (a one-day run otherwise leaves 40% idle).
     pub all_join_day0: bool,
     /// Record the herald's answers into this directory (the agents'
-    /// recorded fixtures) at `record_bell`.
+    /// recorded fixtures) at the first bell from `record_bell` whose herald
+    /// drives an unrested march (W6-C).
     pub record: Option<PathBuf>,
     /// The bell the recording is taken at (integ-W4 review, W4-F: two
     /// thirds into play, while the bots still hold hosts and march; at the
@@ -230,6 +231,20 @@ async fn herald(w: &World, dir: &Path, relay_addr: &str) -> Result<Herald, Strin
         base,
         task,
     })
+}
+
+fn copy_dir(from: &Path, to: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(to).map_err(|e| format!("{}: {e}", to.display()))?;
+    for e in std::fs::read_dir(from).map_err(|e| format!("{}: {e}", from.display()))? {
+        let e = e.map_err(|e| e.to_string())?;
+        let (src, dst) = (e.path(), to.join(e.file_name()));
+        if src.is_dir() {
+            copy_dir(&src, &dst)?;
+        } else {
+            std::fs::copy(&src, &dst).map_err(|e| format!("{}: {e}", src.display()))?;
+        }
+    }
+    Ok(())
 }
 
 /// Paths the recorded fixture set holds.
@@ -455,7 +470,19 @@ pub async fn run(cfg: DayCfg) -> Result<DayOut, String> {
     let mut slots = 0u64;
     let mut standin_moves = 0u64;
     let (mut bot_runs, mut bot_actions) = (0u64, 0u64);
+    // W6-C (DECISIONS O11): the recording is taken at the first bell from
+    // `record_bell` whose herald drives an unrested march (a recorded
+    // wallet plans a march with its host's recorded stamina,
+    // `frontier_agents::recorded`), once per bell, **before** the bots act
+    // at that step (the state they decide on: taken after, a host rested
+    // this bell has already marched, and the integ-W5 re-recordings at
+    // bells 60, 120 and 140 drove none). If no bell of play does, the try
+    // with the most marches is kept (the recorded-herald test then fails).
     let mut recorded = false;
+    let mut rec_tried: Option<u32> = None;
+    let mut rec_best: Option<(usize, usize, u32)> = None;
+    let rec_try = cfg.dir.join("record-try");
+    let rec_keep = cfg.dir.join("record-best");
     while w.now() < end {
         k.tick().await?;
         w.step();
@@ -467,31 +494,62 @@ pub async fn run(cfg: DayCfg) -> Result<DayOut, String> {
             h.ing.step(&mut h.src).await?;
             let (slot, now) = (w.slot(), w.now());
             h.ing.observe_clock(slot, now);
+            let record_at = genesis_ts + cfg.record_bell.min(cfg.play_bells) as i64 * 600;
+            let bell = sc.bell_at(now).unwrap_or(0);
+            if cfg.record.is_some()
+                && !recorded
+                && now >= record_at
+                && now < end_play
+                && rec_tried != Some(bell)
+            {
+                rec_tried = Some(bell);
+                let wallets: Vec<(AgentSpec, String)> = fleet
+                    .bots
+                    .iter()
+                    .filter(|b| b.spec.index < 32 || b.spec.persona.is_some())
+                    .map(|b| (b.spec, b.wallet.pubkey().to_string()))
+                    .collect();
+                let rings = frontier_bots::bot::Shared::season(&fleet.shared)
+                    .await
+                    .map(|s| s.rings_opened())
+                    .unwrap_or(4);
+                record(&h.base, &rec_try, &wallets, cfg.seed, rings, bell).await;
+                let (unrested, rested) = match frontier_agents::recorded::load(&rec_try) {
+                    Ok(r) => {
+                        let p = frontier_agents::recorded::plans(
+                            &r,
+                            frontier_agents::fixture::REVEAL_LOADED_LIMIT,
+                        );
+                        (p.unrested(), p.rested())
+                    }
+                    Err(e) => {
+                        eprintln!("itest: recording at bell {bell} does not load: {e}");
+                        (0, 0)
+                    }
+                };
+                if rec_best.is_none_or(|b| (unrested, rested) > (b.0, b.1)) {
+                    let _ = std::fs::remove_dir_all(&rec_keep);
+                    std::fs::rename(&rec_try, &rec_keep).map_err(|e| e.to_string())?;
+                    rec_best = Some((unrested, rested, bell));
+                }
+                if unrested > 0 {
+                    recorded = true;
+                }
+            }
             if now < end_play && now >= genesis_ts {
                 fleet.shared.clock.set(now);
                 let (r, a) = fleet.step_due(cfg.bot_concurrency).await;
                 bot_runs += r as u64;
                 bot_actions += a as u64;
             }
-            let record_at = genesis_ts + cfg.record_bell.min(cfg.play_bells) as i64 * 600;
-            if now >= record_at && !recorded {
-                recorded = true;
-                if let Some(out) = &cfg.record {
-                    let wallets: Vec<(AgentSpec, String)> = fleet
-                        .bots
-                        .iter()
-                        .filter(|b| b.spec.index < 32 || b.spec.persona.is_some())
-                        .map(|b| (b.spec, b.wallet.pubkey().to_string()))
-                        .collect();
-                    let rings = frontier_bots::bot::Shared::season(&fleet.shared)
-                        .await
-                        .map(|s| s.rings_opened())
-                        .unwrap_or(4);
-                    let bell = sc.bell_at(now).unwrap_or(0);
-                    record(&h.base, out, &wallets, cfg.seed, rings, bell).await;
-                }
-            }
         }
+    }
+    if let (Some(out), Some((unrested, rested, bell))) = (&cfg.record, rec_best) {
+        let _ = std::fs::remove_dir_all(out);
+        copy_dir(&rec_keep, out)?;
+        eprintln!(
+            "itest: herald recorded at bell {bell}: {unrested} marches planned with the recorded stamina, {rested} with rested hosts"
+        );
     }
     // Final ingest.
     while h.ing.step(&mut h.src).await? > 0 {}

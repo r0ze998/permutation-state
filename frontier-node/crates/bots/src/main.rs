@@ -7,7 +7,14 @@
 //!               [--personas default|off|<n per persona>]
 //!               [--journal DIR] [--report FILE] [--invites FILE]
 //!               [--game-hours H] [--scale S] [--control 127.0.0.1:41070]
+//!               [--day0-share F] [--eager-personas]
 //! ```
+//!
+//! `--day0-share F` (0–1) is the share of the roster that joins on day 0
+//! (default: the mix's 0.6; `itest::inproc_day` uses 1.0); `--eager-personas`
+//! gives the persona bots a session every bell (as `inproc_day` does), so a
+//! short stack run observes them. W6-C (W5-B F2: in the stack 25 of 100 bots
+//! joined in a one-day run and no persona marched).
 //!
 //! Binds no port (a client of the herald, the relay and the local chain),
 //! except `--control` (§10.3 bots control / metrics: `GET /metrics`,
@@ -42,14 +49,20 @@ struct Args {
     game_hours: Option<f64>,
     scale: f64,
     control: Option<String>,
+    day0_share: Option<f64>,
+    eager_personas: bool,
 }
 
 fn usage(e: &str) -> ! {
-    eprintln!("frontier-bots: {e}\nusage: frontier-bots --herald URL --relay URL [--rpc URL] [--seed N] [--bots N] [--first-index N] [--days N] [--personas default|off|N] [--journal DIR] [--report FILE] [--invites FILE] [--game-hours H] [--scale S] [--control 127.0.0.1:PORT]");
+    eprintln!("frontier-bots: {e}\nusage: frontier-bots --herald URL --relay URL [--rpc URL] [--seed N] [--bots N] [--first-index N] [--days N] [--personas default|off|N] [--journal DIR] [--report FILE] [--invites FILE] [--game-hours H] [--scale S] [--control 127.0.0.1:PORT] [--day0-share F] [--eager-personas]");
     std::process::exit(2);
 }
 
 fn parse() -> Args {
+    parse_from(std::env::args().skip(1))
+}
+
+fn parse_from(args: impl Iterator<Item = String>) -> Args {
     let mut a = Args {
         herald: String::new(),
         relay: String::new(),
@@ -65,8 +78,10 @@ fn parse() -> Args {
         game_hours: None,
         scale: 20.0,
         control: None,
+        day0_share: None,
+        eager_personas: false,
     };
-    let mut it = std::env::args().skip(1);
+    let mut it = args;
     while let Some(k) = it.next() {
         let mut v = || {
             it.next()
@@ -108,6 +123,16 @@ fn parse() -> Args {
                 }
                 a.control = Some(c);
             }
+            "--day0-share" => {
+                let f: f64 = v()
+                    .parse()
+                    .unwrap_or_else(|_| usage("--day0-share: a number in [0, 1]"));
+                if !(0.0..=1.0).contains(&f) {
+                    usage("--day0-share: a number in [0, 1]");
+                }
+                a.day0_share = Some(f);
+            }
+            "--eager-personas" => a.eager_personas = true,
             "-h" | "--help" => usage("help"),
             _ => usage(&format!("unknown argument {k}")),
         }
@@ -180,6 +205,7 @@ async fn go<D: frontier_bots::ports::DirectPort + 'static>(a: Args, direct: Opti
         }
     }
     cfg.slot_game_secs = 0.4 * a.scale;
+    cfg.eager_personas = a.eager_personas;
     let clock = ClockSource::Game(Mutex::new(GameClock::new(a.scale)));
     let mut shared = Shared::new(
         HttpHerald::new(&a.herald),
@@ -201,10 +227,13 @@ async fn go<D: frontier_bots::ports::DirectPort + 'static>(a: Args, direct: Opti
             }
         }
     }
-    let mix = Mix {
+    let mut mix = Mix {
         persona_count: a.personas,
         ..Mix::for_season_days(a.days)
     };
+    if let Some(f) = a.day0_share {
+        mix.day0_share = f;
+    }
     let mut r = roster(a.bots, a.seed, &mix);
     for s in &mut r {
         s.index += a.first_index;
@@ -234,6 +263,27 @@ async fn go<D: frontier_bots::ports::DirectPort + 'static>(a: Args, direct: Opti
         None => end,
     };
     let mut fleet = Fleet::new(shared, &r);
+    // W6-C: with `--rpc`, the game clock follows the chain's Clock sysvar
+    // (read every 200 ms, as drand-replay does), not only the herald's
+    // `latestSlot/latestUnix` sampled when a bot runs. The herald's samples
+    // lag and arrive in bursts; a rate estimated from them ran the fleet's
+    // clock ahead (every bot stopped at bell 102 of 144) or slow enough
+    // that no bot came due again (actions stopped at bell 20-50) in the
+    // W6-C stack runs. The herald's samples still count when they are
+    // newer (never, in practice: the clock is monotone in slot).
+    if let Some(url) = a.rpc.clone() {
+        let sh = fleet.shared.clone();
+        let port = fclient::rpc::RpcPort::localnet(url, fclient::addr::system_program());
+        tokio::spawn(async move {
+            use fclient::ports::ChainPort;
+            loop {
+                if let Ok(c) = port.clock().await {
+                    sh.clock.observe(c.slot, c.unix_timestamp);
+                }
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+        });
+    }
     if let Some(p) = &journal_path {
         match fleet.restore(p) {
             Ok(n) if n > 0 => eprintln!("frontier-bots: restored {n} marches from {}", p.display()),
@@ -242,11 +292,14 @@ async fn go<D: frontier_bots::ports::DirectPort + 'static>(a: Args, direct: Opti
         }
     }
     eprintln!(
-        "frontier-bots: {} bots (seed {}, first index {}), {} personas each, until game time {until}",
+        "frontier-bots: {} bots (seed {}, first index {}), {} personas each, day-0 share {}, eager personas {}, {} join on day 0, until game time {until}",
         r.len(),
         a.seed,
         a.first_index,
-        mix.personas_for(a.bots)
+        mix.personas_for(a.bots),
+        mix.day0_share,
+        a.eager_personas,
+        r.iter().filter(|s| s.join_day == 0).count()
     );
     let sh = fleet.shared.clone();
     let rp = a.report.clone();
@@ -328,7 +381,38 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::is_loopback_url;
+    use super::{is_loopback_url, parse_from};
+
+    /// W6-C (W5-B R3): the stack passes `--day0-share` and
+    /// `--eager-personas` through `bots_args`.
+    #[test]
+    fn day0_share_and_eager_personas_parse() {
+        let args = |v: &[&str]| {
+            v.iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+                .into_iter()
+        };
+        let base = [
+            "--herald",
+            "http://127.0.0.1:41040",
+            "--relay",
+            "http://127.0.0.1:41033",
+        ];
+        let a = parse_from(args(&base));
+        assert_eq!((a.day0_share, a.eager_personas), (None, false));
+        let mut v = base.to_vec();
+        v.extend(["--day0-share", "1.0", "--eager-personas"]);
+        let a = parse_from(args(&v));
+        assert_eq!((a.day0_share, a.eager_personas), (Some(1.0), true));
+        // The roster then joins everyone on day 0.
+        let mix = frontier_agents::profile::Mix {
+            day0_share: a.day0_share.unwrap(),
+            ..frontier_agents::profile::Mix::for_season_days(1)
+        };
+        let r = frontier_agents::profile::roster(100, 1, &mix);
+        assert!(r.iter().all(|s| s.join_day == 0));
+    }
 
     #[test]
     fn loopback_urls_only() {

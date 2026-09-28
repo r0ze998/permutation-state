@@ -223,6 +223,39 @@ pub struct Keeper<P: ChainPort, D: DrandPort> {
     pub spend_by_day: BTreeMap<u32, u64>,
     season_read_slot: Option<u64>,
     wrong_key_alerted: bool,
+    /// The last payer care: `(slot, Clock now, transfers planned)`.
+    care_last: Option<(u64, i64, usize)>,
+}
+
+/// Slots between two cares while a pool is below its minimum (the top-up
+/// of the previous care has had a block to land).
+pub const CARE_LOW_GAP_SLOTS: u64 = 2;
+
+/// Whether payer care runs this tick (W6-C, W5-B F1). Care runs at rest,
+/// never while care transfers are still pending (that would top the same
+/// payer up twice): on the first tick; every `care_every_slots` slots or
+/// `care_every_game_secs` game seconds, whichever comes first (a cadence in
+/// slots alone ran every 10 bells at 100×); and, when a pool is below its
+/// minimum effective N (`low`), `CARE_LOW_GAP_SLOTS` after a care that
+/// planned transfers (§8.2: "tops up at once"; a care that found no
+/// funder able to pay waits for the cadence).
+pub fn care_due(
+    cfg: &KeeperConfig,
+    last: Option<(u64, i64, usize)>,
+    slot: u64,
+    now: i64,
+    low: bool,
+    care_pending: bool,
+) -> bool {
+    if care_pending {
+        return false;
+    }
+    let Some((s0, n0, planned)) = last else {
+        return true;
+    };
+    slot >= s0 + cfg.care_every_slots.max(1)
+        || now >= n0 + cfg.care_every_game_secs.max(1) as i64
+        || (low && planned > 0 && slot >= s0 + CARE_LOW_GAP_SLOTS)
 }
 
 impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
@@ -251,6 +284,8 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
             p_delay_milli: cfg.p_delay_milli,
             contested_slots: cfg.contested_slots,
             per_write_cap: cfg.per_write_cap_lamports,
+            d_resend_slots: cfg.d_resend_slots,
+            cap_resend_slots: cfg.cap_resend_slots,
             ..EngineParams::default()
         };
         let pk96 = drand.info().public_key;
@@ -289,6 +324,7 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
             spend_by_day: BTreeMap::new(),
             season_read_slot: None,
             wrong_key_alerted: false,
+            care_last: None,
             cfg,
             port,
             drand,
@@ -410,16 +446,22 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
             .season
             .as_ref()
             .and_then(|s| SeasonClock::from_season(s).bell_at(now));
-        if self
-            .payers
-            .refreshed_slot
-            .is_none_or(|r| slot >= r + self.cfg.care_every_slots)
-        {
+        let low = self.payers.effective_n(Class::W)
+            < fclient::payers::MIN_REVEAL.min(self.payers.reveal.keys.len())
+            || self.payers.effective_n(Class::D)
+                < fclient::payers::MIN_DELAY.min(self.payers.delay.keys.len());
+        let care_pending = self
+            .engine
+            .pending_keys()
+            .iter()
+            .any(|k| k.starts_with("care:"));
+        if care_due(&self.cfg, self.care_last, slot, now, low, care_pending) {
             self.payers
                 .refresh(&self.port, slot)
                 .await
                 .map_err(|e| e.to_string())?;
-            self.plan_care(slot);
+            let planned = self.plan_care(slot);
+            self.care_last = Some((slot, now, planned));
         }
         if let Some(b) = bell {
             if self.effective_n.last().is_none_or(|x| x.0 != b) {
@@ -732,8 +774,10 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
     }
 
     /// Top-ups and sweeps as class N transfers signed by their source.
-    fn plan_care(&mut self, slot: u64) {
-        for tr in self.payers.care_plan() {
+    fn plan_care(&mut self, slot: u64) -> usize {
+        let plan = self.payers.care_plan();
+        let n = plan.len();
+        for tr in plan {
             let ix = tr.instruction();
             self.engine.ensure(
                 WriteSpec {
@@ -751,6 +795,7 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
                 slot,
             );
         }
+        n
     }
 
     /// The status JSON (`GET /v1/status`).
@@ -969,6 +1014,39 @@ pub const W2F_TAGS: [u8; 9] = [
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// W6-C (W5-B F1): payer care runs on a game-time cadence as well as a
+    /// slot one, at once (after a block) when a pool is below its minimum
+    /// and the last care planned top-ups, and never over pending transfers.
+    #[test]
+    fn payer_care_cadence_follows_game_time_and_low_pools() {
+        let c = KeeperConfig::new(
+            Address::new_from_array([1; 32]),
+            1,
+            Address::new_from_array([2; 32]),
+        );
+        assert_eq!((c.care_every_slots, c.care_every_game_secs), (150, 300));
+        assert!(care_due(&c, None, 10, 1_000, false, false), "first tick");
+        assert!(
+            !care_due(&c, None, 10, 1_000, true, true),
+            "never over pending care"
+        );
+        let last = Some((10, 1_000, 0));
+        // At 100× a slot is 40 game s: 300 game s pass after 8 slots, long
+        // before 150 slots (the old cadence: 10 bells).
+        assert!(!care_due(&c, last, 17, 1_280, false, false));
+        assert!(care_due(&c, last, 18, 1_320, false, false));
+        // At 1× (0.4 game s a slot) the slot cadence comes first.
+        assert!(!care_due(&c, last, 159, 1_060, false, false));
+        assert!(care_due(&c, last, 160, 1_060, false, false));
+        // A low pool: at once after a care that planned top-ups, but not
+        // when the last care found nothing to fund.
+        let topped = Some((10, 1_000, 150));
+        assert!(!care_due(&c, topped, 11, 1_040, true, false));
+        assert!(care_due(&c, topped, 12, 1_080, true, false));
+        assert!(!care_due(&c, last, 12, 1_080, true, false));
+        assert!(!care_due(&c, topped, 12, 1_080, true, true));
+    }
 
     #[test]
     fn escalation_by_class() {

@@ -81,6 +81,14 @@ impl ClockSource {
             ClockSource::Game(g) => g.lock().expect("clock").now(),
         }
     }
+    /// The last game time actually observed (the herald's `latestUnix`),
+    /// not extrapolated.
+    pub fn observed(&self) -> Option<i64> {
+        match self {
+            ClockSource::Fixed(a) => Some(a.load(Ordering::SeqCst)),
+            ClockSource::Game(g) => g.lock().expect("clock").last().map(|c| c.unix_timestamp),
+        }
+    }
     /// Game seconds per wall second.
     pub fn scale(&self) -> f64 {
         match self {

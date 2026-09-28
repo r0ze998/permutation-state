@@ -146,6 +146,10 @@ pub struct Liveness {
     /// Valid seals never revealed: `(host_id, arrive_bell, signatures of
     /// the failed Reveal attempts)`.
     pub valid_unrevealed: Vec<(u64, u32, Vec<String>)>,
+    /// Valid seals never revealed that settled with an outcome other than
+    /// `ROUTED` (no loss by rule: outranked, quota-refused, the citizen's
+    /// second arrival): `(host_id, arrive_bell, outcome)` (W6-C).
+    pub unrevealed_by_rule: Vec<(u64, u32, u8)>,
     pub reveals_near_close: u64,
     pub max_anchor_delay_s: f64,
     /// Province-bells with more than one faction's arrivals or residents.
