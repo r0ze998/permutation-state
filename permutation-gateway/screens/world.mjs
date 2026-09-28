@@ -12,7 +12,9 @@
 //   holding  a Citizen with a final Holding at province (2,0), three hosts
 //            (one marching, one free, one Scout) and a resolved clash at
 //            bell 39 in its province (report, tracker, bell sheet)
+import { readFileSync } from 'node:fs';
 import { keyFromSeed } from '../../permutation-server/web/session.mjs';
+import { ACCOUNTS } from '../../permutation-server/web/frontier/abi.mjs';
 import { toHex } from '../../permutation-server/web/sdk/bytes.mjs';
 import { decode as fromBase58 } from '../../permutation-server/web/sdk/base58.mjs';
 import { KINDS } from '../../permutation-server/web/frontier/flog.mjs';
@@ -185,7 +187,21 @@ export function events() {
 
 // ------------------------------------------------------------------ the herald's files
 const SEASON = JSON.parse(fixtures().get('season.json').toString());
-export const seasonRecord = () => ({ ...SEASON, headSeq: '812' });
+/**
+ * The node tests' season record, with the M1_LOCAL_7D dormancy and release
+ * times written into the Season bytes (the shared fixture leaves them 0,
+ * which would show every holding as dormant).
+ */
+const PRESET = JSON.parse(readFileSync(new URL('../../frontier-abi/vectors/presets.json', import.meta.url), 'utf8')).presets.find(x => x.name === 'M1_LOCAL_7D').fields;
+function seasonBytes() {
+  const b = Buffer.from(SEASON.bytes_b64, 'base64');
+  const field = name => ACCOUNTS.Season.fields.find(f => f[0] === name)[1];
+  b.writeUInt32LE(PRESET.dormant_after_secs, field('DORMANT_AFTER_SECS'));
+  b.writeUInt32LE(PRESET.release_after_secs, field('RELEASE_AFTER_SECS'));
+  return b.toString('base64');
+}
+const SEASON_B64 = seasonBytes();
+export const seasonRecord = () => ({ ...SEASON, headSeq: '812', bytes_b64: SEASON_B64 });
 
 /** `/h/me/{wallet}` for a stage (a wallet that has not joined: a record with no Citizen). */
 export function meRecord(v, stage) {
