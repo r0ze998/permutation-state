@@ -2,6 +2,9 @@
 # nights green): test key, 100 bots x 1 game day at 100x, the second stack
 # instance on ports 41500-41599 (§10.3 "base + 500"), with the adversary
 # schedule (every frontier_hold shape once). scripts/m1-nightly.sh runs it.
+# integ-W6 (W6-C R1): the fleet runs with the in-process day's pacing
+# (`--day0-share 1 --eager-personas` through W6-A's `eager_bots`), so a
+# nightly marches and every persona reaches its test.
 run_id = "nightly"
 mode = "accel"
 beacon = "test-key"
@@ -11,6 +14,7 @@ days = 1
 drain_bells = 26
 bots = 100
 bot_seed = 1
+eager_bots = true
 season_id = 7
 base_port = 41500
 g0 = 1785542400
