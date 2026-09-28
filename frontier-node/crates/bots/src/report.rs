@@ -128,8 +128,17 @@ impl Report {
         };
         match p {
             Persona::SettleRacer => judge(tagged("redepart"), &["HostInTransit"]),
+            // integ-W6 (W6-C F1): the keeper's `202` on `/f/reveal` means
+            // "queued" (§8.2, `/v1/reveal`: the keeper's pipeline never
+            // sends at or after `A + W − 2 slots` and expires the track), not
+            // a Reveal the program took, so it is not evidence either way.
+            // A late Reveal the program accepts shows as the direct route's
+            // `ok`, which still reads `violated`.
             Persona::LateRevealer => judge(
-                tagged("late"),
+                tagged("late")
+                    .into_iter()
+                    .filter(|o| !(o.route == "keeper" && o.ok))
+                    .collect(),
                 &["WindowClosed", "LatchClosed", "Archived", "TooLate"],
             ),
             Persona::Forger => judge(
@@ -190,8 +199,10 @@ impl Report {
                     .iter()
                     .filter(|o| o.persona == Some(p))
                 {
+                    // The route too (integ-W6, W6-C F1: a keeper `202`
+                    // and a direct simulation read alike without it).
                     *codes
-                        .entry(format!("{}:{}", o.action, o.result()))
+                        .entry(format!("{}@{}:{}", o.action, o.route, o.result()))
                         .or_default() += 1;
                 }
                 json!({
@@ -243,8 +254,25 @@ mod tests {
         assert_eq!(r.verdict(Persona::ZeroTip), Verdict::Observed);
         r.record(o(Persona::LateRevealer, "late", false, "WindowClosed", 410));
         assert_eq!(r.verdict(Persona::LateRevealer), Verdict::Observed);
-        r.record(o(Persona::LateRevealer, "late", true, "", 202));
+        // A keeper's 202 is "queued", not a landing (W6-C F1).
+        let mut queued = o(Persona::LateRevealer, "late", true, "", 202);
+        queued.route = "keeper";
+        r.record(queued);
+        assert_eq!(r.verdict(Persona::LateRevealer), Verdict::Observed);
+        // A late Reveal the program took (the direct route) is a violation.
+        let mut took = o(Persona::LateRevealer, "late", true, "", 0);
+        took.route = "direct";
+        r.record(took);
         assert_eq!(r.verdict(Persona::LateRevealer), Verdict::Violated);
+        assert_eq!(
+            r.to_json()["personas"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|p| p["persona"] == "late_revealer")
+                .unwrap()["results"]["x@keeper:ok"],
+            1
+        );
         r.record(o(Persona::Spammer, "spam", true, "", 200));
         assert_eq!(r.verdict(Persona::Spammer), Verdict::Pending);
         r.record(o(Persona::Spammer, "spam", false, "QuotaExceeded", 429));
