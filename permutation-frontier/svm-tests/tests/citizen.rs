@@ -1610,7 +1610,9 @@ fn g01_settle_ticket_displacement_three_provinces() {
 /// others"), measured and asserted against the §5.5 ceilings.
 #[test]
 fn g01_land_other_instructions() {
-    let mut c = Chain::test_beacon();
+    // W5-A: on the release binary (seeds crafted), and every row also runs
+    // `L(kind)` at its programdata length (`common::loaded_check(`).
+    let mut c = Chain::release();
     let (w, ring2) = World::land_long(&mut c, 1, 0);
     let k = w.keeper.insecure_clone();
     let mut rows: Vec<(Ix, String, Need)> = vec![];
@@ -1622,6 +1624,7 @@ fn g01_land_other_instructions() {
         let need = c
             .measure(ixs, s)
             .unwrap_or_else(|f| panic!("{label}: {f:?}"));
+        common::loaded_check(c, ix, ixs, s);
         rows.push((ix, label.to_string(), need));
     };
     // OpenRing beyond g (the longer path): a bell later, wedge 0 at θ
@@ -1674,7 +1677,9 @@ fn g01_land_other_instructions() {
     let p0 = ring2[0];
     let bell = w.now_bell(&c);
     file(&w, &mut c, &a, &[site(p0, 0)]);
-    w.seed_ready(&mut c, bell, region(p0.0, p0.1));
+    let at = w.bell_end(bell);
+    w.craft_seed(&mut c, bell, region(p0.0, p0.1), at, [0x42; 32]);
+    c.set_time(at + 3_600);
     expect_lands(w.settle_ticket(&mut c, &a, 0, None), "fresh");
     let h = cix::HoldingRef {
         p: p0.0,
@@ -1738,4 +1743,184 @@ fn g01_land_other_instructions() {
         );
     }
     assert!(over.is_empty(), "over budget: {over:?}");
+}
+
+// ================================================================ W5-A: G13 completion
+
+/// A running release season with the genesis rings and ring 2 of wedge 0.
+fn land_release() -> (Chain, World, Vec<(i16, i16)>) {
+    let mut c = Chain::release();
+    let (w, v) = World::land(&mut c, 1, 0);
+    (c, w, v)
+}
+
+/// Join with the wallet not signing (the relay pays): `Auth`; `L(Join)`.
+/// SetSession on an Ended season (`WrongStatus`) and with a Citizen of
+/// another season at the canonical address (`BadAccount`); SetVigil on a
+/// Season of another ruleset (`RulesetMismatch`).
+#[test]
+fn citizen_g13_join_session_vigil() {
+    let (mut c, w, _) = land_release();
+    let who = c.funded(b"g13-joiner", 10);
+    let relay = c.funded(b"g13-relay", 10);
+    let ix = cix::join(
+        &w.a,
+        who.pubkey(),
+        relay.pubkey(),
+        2,
+        &Address::default(),
+        0,
+        None,
+    );
+    assert_code(
+        c.fork().send(&[without_signer(ix.clone(), 0)], &[&relay]),
+        E::Auth,
+    );
+    common::loaded_check(&c, Ix::Join, std::slice::from_ref(&ix), &[&relay, &who]);
+    let a = w.citizen(&mut c, "a", 0);
+    let session = keypair(b"g13-session");
+    let set = cix::set_session(&w.a, &a.player(), &session.pubkey(), c.now + 60);
+    let mut f = c.fork();
+    w.craft_status(&mut f, S::STATUS_ENDED);
+    assert_code(
+        f.send(std::slice::from_ref(&set), &[&a.wallet]),
+        E::WrongStatus,
+    );
+    let mut f = c.fork();
+    f.edit(&w.a.citizen(&a.key()), |d| d[8] ^= 1);
+    assert_code(f.send(&[set], &[&a.wallet]), E::BadAccount);
+    let mut f = c.fork();
+    f.edit(&w.a.season, |d| d[S::RULESET_HASH] ^= 1);
+    assert_code(
+        f.send(&[cix::set_vigil(&w.a, &a.player(), 120)], &[&a.wallet]),
+        E::RulesetMismatch,
+    );
+}
+
+/// FileTicket: a Province's bytes at another address (`BadAddress`), a
+/// fourth Province account (`TooManyAccounts`); `L(FileTicket)` with
+/// three Provinces.
+#[test]
+fn citizen_g13_file_ticket_forgery_shape_loaded() {
+    let (mut c, w, ring2) = land_release();
+    let ring3 = w.open_provinces(&mut c, 3, Some(0));
+    let sites = [site(ring2[0], 0), site(ring2[1], 0), site(ring3[0], 0)];
+    let a = w.citizen(&mut c, "a", 0);
+    let ix = w.file_ticket_ix(&a, &sites);
+    let pk = w.a.province(sites[0].p as i32, sites[0].q as i32);
+    let fake = copy_to_fresh(&mut c, &pk, b"g13 province");
+    assert_code(
+        c.fork().send(
+            &[with_account(ix.clone(), player_at::PROVINCE0, fake)],
+            &[&a.wallet],
+        ),
+        E::BadAddress,
+    );
+    let mut extra = ix.clone();
+    extra
+        .accounts
+        .push(solana_instruction::AccountMeta::new_readonly(
+            w.a.province(ring3[1].0 as i32, ring3[1].1 as i32),
+            false,
+        ));
+    assert_code(c.fork().send(&[extra], &[&a.wallet]), E::TooManyAccounts);
+    common::loaded_check(&c, Ix::FileTicket, &[ix], &[&a.wallet]);
+}
+
+/// SettleTicket's archive-entry seed path (`[archive] [archive]`): with the
+/// ticket bell's anchor and cache gone and an AnchorArchive holding the
+/// same `A` and seed, the settlement lands with the same outcome and the
+/// same Holding as through the cache. (A real ArchiveAnchors cannot reach
+/// an open ticket: `archive_after` ≥ 48 h, a ticket expires after 24 bells,
+/// and an expired ticket settles without a seed; the archive is crafted
+/// as ArchiveAnchors writes it.) Then `L(SettleTicket)` at the largest
+/// account list (a displacement of a three-province ticket).
+#[test]
+fn citizen_g13_settle_ticket_archive_path_and_loaded() {
+    use frontier_abi::layout::beacon::{anchor_archive as AA, archive_entry as AE};
+    use permutation_frontier_svm_tests::world::archive_part;
+    let (mut c, w, ring2) = land_release();
+    let a = w.citizen(&mut c, "a", 0);
+    let p0 = ring2[0];
+    let bell = w.now_bell(&c);
+    file(&w, &mut c, &a, &[site(p0, 0)]);
+    let r0 = region(p0.0, p0.1);
+    let at = w.bell_end(bell) + 17;
+    w.craft_seed(&mut c, bell, r0, at, [0x5a; 32]);
+    c.set_time(at + 3_600);
+    let hk = w.a.holding(p0.0 as i32, p0.1 as i32, 0);
+    let mut via_cache = c.fork();
+    let l1 = expect_lands(
+        w.settle_ticket(&mut via_cache, &a, 0, None),
+        "via the cache",
+    );
+    let arch = w.craft_archive(&mut c, r0, archive_part(bell), &[bell]);
+    c.edit(&arch, |d| {
+        let o = AA::entry(bell);
+        let a_off = (at - w.bell_end(bell)) as u32;
+        d[o + AE::A_OFF..o + AE::A_OFF + 4].copy_from_slice(&a_off.to_le_bytes());
+        d[o + AE::SEED..o + AE::SEED + 32].copy_from_slice(&[0x5a; 32]);
+    });
+    c.remove(&w.a.anchor(bell, r0));
+    c.remove(&w.a.seed_cache(bell, r0, 0));
+    let ix = w.settle_ticket_ix_src(&c, &a, 0, None, SeedSource::Archive);
+    let l2 = expect_lands(c.send(&[ix], &[&w.keeper]), "via the archive");
+    assert_eq!(c.data(&hk), via_cache.data(&hk), "the same Holding");
+    assert_eq!(
+        one(&l1.logs, Kind::SETTLE).u64("outcome"),
+        one(&l2.logs, Kind::SETTLE).u64("outcome")
+    );
+    // L(SettleTicket): the displacement list (crafted seed, release).
+    let mut d = Chain::release();
+    let (wd, hi, disp) = displacement_setup(&mut d, true);
+    let ix = wd.settle_ticket_ix(&d, &hi, 0, Some(&disp));
+    assert_eq!(ix.accounts.len(), 14);
+    common::loaded_check(&d, Ix::SettleTicket, &[ix], &[&wd.keeper]);
+}
+
+/// ReleaseDormant, CloseHolding and CloseCitizen with a forged account:
+/// the Holding or the Citizen of another season at its canonical address
+/// (`BadAccount`).
+#[test]
+fn citizen_g13_season_end_closes_refuse_forgeries() {
+    let mut c = Chain::release();
+    let (w, ring2) = World::land_long(&mut c, 1, 0);
+    let a = w.citizen(&mut c, "a", 0);
+    let p0 = ring2[0];
+    let bell = w.now_bell(&c);
+    file(&w, &mut c, &a, &[site(p0, 0)]);
+    let at = w.bell_end(bell);
+    w.craft_seed(&mut c, bell, region(p0.0, p0.1), at, [0x42; 32]);
+    c.set_time(at + 3_600);
+    expect_lands(w.settle_ticket(&mut c, &a, 0, None), "fresh");
+    let h = cix::HoldingRef {
+        p: p0.0,
+        q: p0.1,
+        site: 0,
+    };
+    let hk = w.a.holding(p0.0 as i32, p0.1 as i32, 0);
+    let ck = w.a.citizen(&a.key());
+    let k = w.keeper.insecure_clone();
+    let last = rd_i64(&c.data(&hk), H::LAST_OWNER_ACTION);
+    let mut f = c.fork();
+    f.set_time(last + 864_000);
+    let rel = cix::release_dormant(&w.a, k.pubkey(), h, &a.key(), 0, a.key());
+    let mut g = f.fork();
+    g.edit(&hk, |d| d[8] ^= 1);
+    assert_code(g.send(std::slice::from_ref(&rel), &[&k]), E::BadAccount);
+    let mut g = f.fork();
+    g.edit(&ck, |d| d[8] ^= 1);
+    assert_code(g.send(std::slice::from_ref(&rel), &[&k]), E::BadAccount);
+    expect_lands(f.send(&[rel], &[&k]), "ReleaseDormant");
+    w.craft_status(&mut c, S::STATUS_ABORTED);
+    let ch = cix::close_holding(&w.a, k.pubkey(), h, a.key());
+    let mut g = c.fork();
+    g.edit(&hk, |d| d[8] ^= 1);
+    assert_code(g.send(std::slice::from_ref(&ch), &[&k]), E::BadAccount);
+    expect_lands(c.send(&[ch], &[&k]), "CloseHolding");
+    let cc = cix::close_citizen(&w.a, k.pubkey(), &a.key(), a.key(), None);
+    let mut g = c.fork();
+    g.edit(&ck, |d| d[8] ^= 1);
+    assert_code(g.send(std::slice::from_ref(&cc), &[&k]), E::BadAccount);
+    expect_lands(c.send(&[cc], &[&k]), "CloseCitizen");
 }

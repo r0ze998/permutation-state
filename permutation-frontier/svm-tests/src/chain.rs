@@ -690,6 +690,13 @@ impl Chain {
         self.put(*k, Address::default(), vec![], have + lamports);
     }
 
+    /// Sets an existing account's lamports (owner and data kept).
+    pub fn edit_lamports(&mut self, k: &Address, lamports: u64) {
+        let mut a = self.svm.get_account(k).expect("account exists");
+        a.lamports = lamports;
+        self.svm.set_account(*k, a).expect("set_account");
+    }
+
     /// Replaces an existing account's data (owner and lamports kept).
     pub fn set_data(&mut self, k: &Address, data: Vec<u8>) {
         let mut a = self.svm.get_account(k).expect("account exists");

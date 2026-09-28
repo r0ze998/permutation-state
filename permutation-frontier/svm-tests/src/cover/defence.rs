@@ -36,5 +36,8 @@ pub const CLAIM_DEFENCE: &[Cover] = &[
         &[Err(E::NotEligible), Lands("claim_ix(")],
     ),
     Cover::Test("defence::g01_loaded_limit_w4b_claim_defence", &[Loaded]),
-    Cover::Pending("W5-A: TooManyAccounts, Auth"),
+    Cover::Test(
+        "defence::g13_claim_defence_refusals",
+        &[Err(E::TooManyAccounts), Err(E::Auth)],
+    ),
 ];

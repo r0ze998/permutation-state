@@ -2300,3 +2300,79 @@ fn clash_closes_after_the_season_end() {
     );
     expect_lands(keeper_send(&mut c, &w, ad), "CloseArrivalDay after the end");
 }
+
+// ================================================================ W5-A: G13 completion
+
+/// The probe deployed next to the Frontier program, for CPIs.
+fn with_probe(c: &mut Chain) -> Address {
+    let so = permutation_frontier_svm_tests::probe::load();
+    let k = Address::new_from_array(permutation_frontier_svm_tests::sha256(&[b"cpi probe"]));
+    c.deploy(k, &so, so.len(), None);
+    k
+}
+
+/// G13 rows of the clash area W4-A left to W5-A: GatherClash,
+/// ResolveFromInputs and SkipQuiet through a CPI (`NotTopLevel`);
+/// GatherClash on a Season of another ruleset (`RulesetMismatch`);
+/// ResolveFromInputs on an Aborted season (`WrongStatus`) and over a
+/// stored roster the kernel refuses (two entries with one host id:
+/// `Kernel`).
+#[test]
+fn clash_g13_top_level_ruleset_status_kernel() {
+    let (mut c, w) = world_on(Build::TestBeacon);
+    let probe_id = with_probe(&mut c);
+    let via = |ix: &Instruction| permutation_frontier_svm_tests::probe::cpi(probe_id, ix);
+    let f = Fill::adversarial(1, 11, 4, -2);
+    ready(&mut c, &w, &f);
+    let parts = w.gather_parts(&c, f.dest(), B, &THIRDS);
+    assert_code(
+        keeper_send(&mut c.fork(), &w, via(&parts[0])),
+        E::NotTopLevel,
+    );
+    let mut g = c.fork();
+    g.edit(&w.a.season, |d| d[S::RULESET_HASH] ^= 1);
+    assert_code(
+        keeper_send(&mut g, &w, parts[0].clone()),
+        E::RulesetMismatch,
+    );
+    for ix in parts {
+        expect_lands(keeper_send(&mut c, &w, ix), "GatherClash");
+    }
+    let rfi = w.resolve_ix(f.dest(), B);
+    assert_code(keeper_send(&mut c.fork(), &w, via(&rfi)), E::NotTopLevel);
+    let mut ab = c.fork();
+    w.craft_status(&mut ab, S::STATUS_ABORTED);
+    assert_code(keeper_send(&mut ab, &w, rfi.clone()), E::WrongStatus);
+    // Two live entries naming one host: the kernel's DuplicateId.
+    let mut k = c.fork();
+    let pk = w.a.province(f.p, f.q);
+    k.edit(&pk, |d| {
+        let live: Vec<usize> = (0..P::ENTRIES_N)
+            .filter(|&i| read_entry(d, i).unwrap().state == EN::STATE_ROSTER)
+            .collect();
+        let a = read_entry(d, live[0]).unwrap();
+        let mut b = read_entry(d, live[1]).unwrap();
+        b.id = a.id;
+        write_entry(d, live[1], &b).unwrap();
+    });
+    assert_code(keeper_send(&mut k, &w, rfi.clone()), E::Kernel);
+    expect_lands(keeper_send(&mut c, &w, rfi), "ResolveFromInputs");
+    // SkipQuiet through a CPI.
+    let b0 = 130u32;
+    let (mut c2, w2) = world_on(Build::TestBeacon);
+    let probe2 = with_probe(&mut c2);
+    let q = quiet_world(12, 5, 21, 8, b0, false);
+    w2.to_bell(&mut c2, b0, 1);
+    craft_quiet(&mut c2, &w2, &q, b0, false);
+    ready_run(&mut c2, &w2, &q, b0, 2);
+    let skip = w2.skip_ix(q.dest(), b0, 1);
+    assert_code(
+        keeper_send(
+            &mut c2.fork(),
+            &w2,
+            permutation_frontier_svm_tests::probe::cpi(probe2, &skip),
+        ),
+        E::NotTopLevel,
+    );
+    expect_lands(keeper_send(&mut c2, &w2, skip), "SkipQuiet");
+}

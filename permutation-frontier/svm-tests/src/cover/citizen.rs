@@ -2,7 +2,7 @@
 //! tickets, dormancy, season-end closes), W3-A. Codes the wave-3 tests do
 //! not reach yet are `Pending` for W5-A (G13 completion).
 
-use super::{Cover, Err, Lands, E};
+use super::{Cover, Err, Lands, Loaded, E};
 
 /// Ignored tests of this area waiting for a fix: (test, unit).
 pub const PENDING: &[(&str, &str)] = &[];
@@ -42,7 +42,10 @@ pub const JOIN: &[Cover] = &[
         "citizen::citizen_season_end_closes_holding_and_citizen",
         &[Err(E::WrongStatus)],
     ),
-    Cover::Pending("W5-A: Auth (unsigned wallet), g01_loaded_limit"),
+    Cover::Test(
+        "citizen::citizen_g13_join_session_vigil",
+        &[Err(E::Auth), Loaded],
+    ),
 ];
 
 pub const SET_SESSION: &[Cover] = &[
@@ -55,7 +58,11 @@ pub const SET_SESSION: &[Cover] = &[
             Err(E::Bucket),
         ],
     ),
-    Cover::Pending("W5-A: WrongStatus, BadAccount (G3 citizen forgeries through SetSession), g01"),
+    Cover::Test(
+        "citizen::citizen_g13_join_session_vigil",
+        &[Err(E::WrongStatus), Err(E::BadAccount)],
+    ),
+    Cover::Test("citizen::g01_land_other_instructions", &[Loaded]),
 ];
 
 pub const SET_VIGIL: &[Cover] = &[
@@ -74,7 +81,11 @@ pub const SET_VIGIL: &[Cover] = &[
         "citizen::g03_player_prologue_refuses_forged_citizens_and_seasons",
         &[Err(E::BadAddress), Err(E::BadAccount)],
     ),
-    Cover::Pending("W5-A: RulesetMismatch, g01"),
+    Cover::Test(
+        "citizen::citizen_g13_join_session_vigil",
+        &[Err(E::RulesetMismatch)],
+    ),
+    Cover::Test("citizen::g01_land_other_instructions", &[Loaded]),
 ];
 
 pub const FILE_TICKET: &[Cover] = &[
@@ -101,7 +112,10 @@ pub const FILE_TICKET: &[Cover] = &[
         "citizen::g01_file_ticket_three_provinces_full_cohorts",
         &[Lands("FileTicket at the 14k limit")],
     ),
-    Cover::Pending("W5-A: BadAddress (Province forgery), TooManyAccounts, g01_loaded_limit"),
+    Cover::Test(
+        "citizen::citizen_g13_file_ticket_forgery_shape_loaded",
+        &[Err(E::BadAddress), Err(E::TooManyAccounts), Loaded],
+    ),
 ];
 
 pub const SETTLE_TICKET: &[Cover] = &[
@@ -151,7 +165,10 @@ pub const SETTLE_TICKET: &[Cover] = &[
         "citizen::g01_settle_ticket_displacement_three_provinces",
         &[Lands("SettleTicket at the 40k limit")],
     ),
-    Cover::Pending("W5-A: archive-entry seed path with a real archive (ArchiveAnchors, W4-B), g01_loaded_limit"),
+    Cover::Test(
+        "citizen::citizen_g13_settle_ticket_archive_path_and_loaded",
+        &[Lands("via the archive"), Loaded],
+    ),
 ];
 
 pub const RELEASE_DORMANT: &[Cover] = &[
@@ -164,7 +181,11 @@ pub const RELEASE_DORMANT: &[Cover] = &[
             Lands("ReleaseDormant"),
         ],
     ),
-    Cover::Pending("W5-A: BadAccount forgeries, g01 budget and loaded limit"),
+    Cover::Test(
+        "citizen::citizen_g13_season_end_closes_refuse_forgeries",
+        &[Err(E::BadAccount), Lands("ReleaseDormant")],
+    ),
+    Cover::Test("citizen::g01_land_other_instructions", &[Loaded]),
 ];
 
 pub const CLOSE_HOLDING: &[Cover] = &[
@@ -181,7 +202,11 @@ pub const CLOSE_HOLDING: &[Cover] = &[
         "lifecycle::close_holding_and_citizen_on_the_tombstone",
         &[Err(E::BadAddress), Lands("CloseHolding on the tombstone")],
     ),
-    Cover::Pending("W5-A: BadAccount forgeries, g01 budget and loaded limit"),
+    Cover::Test(
+        "citizen::citizen_g13_season_end_closes_refuse_forgeries",
+        &[Err(E::BadAccount), Lands("CloseHolding")],
+    ),
+    Cover::Test("citizen::g01_land_other_instructions", &[Loaded]),
 ];
 
 pub const CLOSE_CITIZEN: &[Cover] = &[
@@ -199,5 +224,9 @@ pub const CLOSE_CITIZEN: &[Cover] = &[
         "lifecycle::close_holding_and_citizen_on_the_tombstone",
         &[Lands("CloseCitizen on the tombstone")],
     ),
-    Cover::Pending("W5-A: BadAccount forgeries, g01 budget and loaded limit"),
+    Cover::Test(
+        "citizen::citizen_g13_season_end_closes_refuse_forgeries",
+        &[Err(E::BadAccount), Lands("CloseCitizen")],
+    ),
+    Cover::Test("citizen::g01_land_other_instructions", &[Loaded]),
 ];
