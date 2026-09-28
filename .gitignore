@@ -34,3 +34,6 @@ test-ledger/
 
 # frontier-stack run directories (W5-B request R2; logs, WAL, snapshots, keys of test runs)
 /frontier-node/.local/
+
+# frontier screens smoke artefacts (W5-E request R2; screenshots stay out of git)
+permutation-gateway/screens/artifacts/
