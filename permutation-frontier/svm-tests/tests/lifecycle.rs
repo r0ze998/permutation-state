@@ -16,7 +16,9 @@ use frontier_abi::log::{bond_outcome, EntityKind, Kind};
 use frontier_abi::tags::Ix;
 use permutation_frontier_svm_tests::budget::{assert_within, ceilings};
 use permutation_frontier_svm_tests::chain::{assert_code, expect_lands, with_account, Chain};
-use permutation_frontier_svm_tests::ix::season::{abort_at, abort_season, close_part, end_season};
+use permutation_frontier_svm_tests::ix::season::{
+    abort_at, abort_season, close_float, close_part, end_season,
+};
 use permutation_frontier_svm_tests::records::{self, ChainWatch};
 use permutation_frontier_svm_tests::world::World;
 use permutation_frontier_svm_tests::{Address, FrontierError as E, Instruction, Keypair, Signer};
@@ -192,7 +194,7 @@ fn g13_close_season_in_parts() {
     assert_code(send(&mut c, theirs, &stranger), E::Auth);
     let bad = {
         let mut ix = close_part(&w.a, au, 7);
-        ix.data[1] = 8;
+        ix.data[1] = 11;
         ix
     };
     assert_code(send(&mut c, bad, &w.authority), E::BadData);
@@ -433,4 +435,283 @@ fn close_holding_and_citizen_on_the_tombstone() {
     };
     expect_lands(send(&mut c, cz, &any), "CloseCitizen on the tombstone");
     assert!(c.is_absent(&e.citizen));
+}
+
+// ================================================================ v1.8 (W5-A): the season's float
+
+/// A short-header account of `kind` for season 1 at `k` with `fields`
+/// written at their offsets (the state OpenRing, ArchiveAnchors and
+/// ClaimDefence leave; only the fields CloseSeason reads matter).
+fn craft_short(c: &mut Chain, k: Address, magic: [u8; 8], size: usize, fields: &[(usize, &[u8])]) {
+    let mut d = vec![0u8; size];
+    d[..8].copy_from_slice(&magic);
+    d[8..16].copy_from_slice(&1u64.to_le_bytes());
+    for (o, b) in fields {
+        d[*o..*o + b.len()].copy_from_slice(b);
+    }
+    c.put_program_account(k, d);
+}
+
+/// CloseSeason parts 8–10 (v1.8, W4-B F3): RingSeeds close to their payer
+/// from `end + 72 h`; AnchorArchives and DefenceClaims to their `rent_to`
+/// and beneficiary only once no reader can run (the tombstone, or
+/// Aborted): `TooEarly` before. Each pair's recipient must be the stored
+/// one (`BadAccount`), the target at its canonical address (`BadAddress`);
+/// an odd or empty pair list is `TooManyAccounts`, a part above 10
+/// `BadData`; absent targets are skipped (a repeat lands). Every close
+/// logs `CLOSE` with its recipient; the rent goes there.
+#[test]
+fn g13_close_season_float_parts() {
+    use frontier_abi::layout::beacon::{anchor_archive as AA, defence_claim as DCL};
+    use frontier_abi::layout::world::ring_seed as RS;
+    let (mut c, w) = ended(1);
+    let au = w.authority.pubkey();
+    let payer = c.funded(b"w5a-ring-payer", 1);
+    let keeper = c.funded(b"w5a-claim-keeper", 1);
+    let rings: Vec<Address> = [3u16, 4]
+        .iter()
+        .map(|&d| {
+            let k = w.a.ring_seed(d);
+            craft_short(
+                &mut c,
+                k,
+                RS::MAGIC,
+                RS::SIZE,
+                &[
+                    (RS::D, &d.to_le_bytes()),
+                    (RS::PAYER, payer.pubkey().as_ref()),
+                ],
+            );
+            k
+        })
+        .collect();
+    let archives: Vec<Address> = [(0u8, 0u32), (5, 1)]
+        .iter()
+        .map(|&(r, part)| w.craft_archive(&mut c, r, part, &[part * 72]))
+        .collect();
+    let claims: Vec<Address> = [2u32, 3]
+        .iter()
+        .map(|&day| {
+            let k = w.a.defence_claim(&keeper.pubkey(), day);
+            craft_short(
+                &mut c,
+                k,
+                DCL::MAGIC,
+                DCL::SIZE,
+                &[
+                    (DCL::BENEFICIARY, keeper.pubkey().as_ref()),
+                    (DCL::DAY, &day.to_le_bytes()),
+                ],
+            );
+            k
+        })
+        .collect();
+    let ring_pairs: Vec<(Address, Address)> = rings.iter().map(|k| (*k, payer.pubkey())).collect();
+    let arch_pairs: Vec<(Address, Address)> =
+        archives.iter().map(|k| (*k, w.keeper.pubkey())).collect();
+    let claim_pairs: Vec<(Address, Address)> =
+        claims.iter().map(|k| (*k, keeper.pubkey())).collect();
+    // Before end + 72 h every part is TooEarly.
+    assert_code(
+        send(&mut c, close_float(&w.a, au, 8, &ring_pairs), &w.authority),
+        E::TooEarly,
+    );
+    c.set_time(w.end_ts() + 72 * 3_600);
+    // Archives and claims wait for the tombstone.
+    assert_code(
+        send(&mut c, close_float(&w.a, au, 9, &arch_pairs), &w.authority),
+        E::TooEarly,
+    );
+    assert_code(
+        send(
+            &mut c,
+            close_float(&w.a, au, 10, &claim_pairs),
+            &w.authority,
+        ),
+        E::TooEarly,
+    );
+    // Shape and key refusals.
+    let mut odd = close_float(&w.a, au, 8, &ring_pairs);
+    odd.accounts.pop();
+    assert_code(send(&mut c, odd, &w.authority), E::TooManyAccounts);
+    assert_code(
+        send(&mut c, close_float(&w.a, au, 8, &[]), &w.authority),
+        E::TooManyAccounts,
+    );
+    let mut eleven = close_float(&w.a, au, 8, &ring_pairs);
+    eleven.data[1] = 11;
+    assert_code(send(&mut c, eleven, &w.authority), E::BadData);
+    let wrong_to = close_float(&w.a, au, 8, &[(rings[0], au)]);
+    assert_code(send(&mut c, wrong_to, &w.authority), E::BadAccount);
+    let moved = common::copy_to_fresh(&mut c, &rings[0], b"w5a-moved-ring");
+    let off = close_float(&w.a, au, 8, &[(moved, payer.pubkey())]);
+    assert_code(send(&mut c, off, &w.authority), E::BadAddress);
+    let not_a_ring = close_float(&w.a, au, 8, &[(archives[0], w.keeper.pubkey())]);
+    assert_code(send(&mut c, not_a_ring, &w.authority), E::BadAccount);
+    let stranger = c.funded(b"w5a-float-stranger", 1);
+    let theirs = close_float(&w.a, stranger.pubkey(), 8, &ring_pairs);
+    assert_code(send(&mut c, theirs, &stranger), E::Auth);
+    // Part 8: both RingSeeds to their payer.
+    let (p0, rent_rs) = (c.lamports(&payer.pubkey()), c.lamports(&rings[0]));
+    let l = expect_lands(
+        send(&mut c, close_float(&w.a, au, 8, &ring_pairs), &w.authority),
+        "close_float(8",
+    );
+    assert!(rings.iter().all(|k| c.is_absent(k)));
+    assert_eq!(c.lamports(&payer.pubkey()), p0 + 2 * rent_rs);
+    let closes = records::of_kind(&l.logs, Kind::CLOSE);
+    assert_eq!(closes.len(), 2);
+    assert!(closes
+        .iter()
+        .all(|r| r.key[0] == AccountKind::RingSeed as u8));
+    assert_eq!(closes[0].field("recipient", true), payer.pubkey().as_ref());
+    let budget = ceilings(Ix::CloseSeason, 0, c.programdata_len());
+    let need = c.measure(&[close_float(&w.a, au, 8, &ring_pairs)], &[&w.authority]);
+    assert_within(
+        "CloseSeason part 8 (repeat)",
+        &need.expect("repeat lands"),
+        &budget,
+    );
+    expect_lands(
+        send(&mut c, close_float(&w.a, au, 8, &ring_pairs), &w.authority),
+        "close_float(8 repeat",
+    );
+    // The final part, then archives and claims on the tombstone.
+    expect_lands(send(&mut c, close_part(&w.a, au, 7), &w.authority), "final");
+    let (k0, rent_aa) = (c.lamports(&w.keeper.pubkey()), c.lamports(&archives[0]));
+    let l = expect_lands(
+        send(&mut c, close_float(&w.a, au, 9, &arch_pairs), &w.authority),
+        "close_float(9",
+    );
+    assert!(archives.iter().all(|k| c.is_absent(k)));
+    assert_eq!(c.lamports(&w.keeper.pubkey()), k0 + 2 * rent_aa);
+    assert!(records::of_kind(&l.logs, Kind::CLOSE)
+        .iter()
+        .all(|r| r.key[0] == AccountKind::AnchorArchive as u8));
+    let _ = AA::SIZE;
+    let (b0, rent_dc) = (c.lamports(&keeper.pubkey()), c.lamports(&claims[0]));
+    expect_lands(
+        send(
+            &mut c,
+            close_float(&w.a, au, 10, &claim_pairs),
+            &w.authority,
+        ),
+        "close_float(10",
+    );
+    assert!(claims.iter().all(|k| c.is_absent(k)));
+    assert_eq!(c.lamports(&keeper.pubkey()), b0 + 2 * rent_dc);
+}
+
+/// Parts 9 and 10 on an Aborted season (no reader of archives or claims
+/// runs once Aborted): they land without the tombstone.
+#[test]
+fn g13_close_season_float_on_an_aborted_season() {
+    let mut c = Chain::release();
+    let w = World::announced(&mut c, 1);
+    let au = w.authority.pubkey();
+    expect_lands(
+        send(&mut c, abort_season(&w.a, au, au), &w.authority),
+        "abort_season(",
+    );
+    let arch = w.craft_archive(&mut c, 2, 0, &[1]);
+    let l = expect_lands(
+        send(
+            &mut c,
+            close_float(&w.a, au, 9, &[(arch, w.keeper.pubkey())]),
+            &w.authority,
+        ),
+        "close_float(9 aborted",
+    );
+    assert!(c.is_absent(&arch));
+    assert_eq!(records::of_kind(&l.logs, Kind::CLOSE).len(), 1);
+}
+
+/// G1 of the float parts: the largest pair list a legacy transaction fits
+/// (10 pairs: 30 accounts with the fixed ten) for each part, within
+/// CloseSeason's 60k CU and 1,232 B. Archives are 6,144 B each, so part 9
+/// needs a loaded-data limit above `L(CloseSeason)` (whose worst set is the
+/// 48 JoinShards): the client adds 6,272 B per archive pair (measured here
+/// with the ladder profile and a limit that covers the set); at
+/// `L(CloseSeason)` two archive pairs fit.
+#[test]
+fn g01_budget_close_season_float_parts() {
+    use frontier_abi::layout::beacon::defence_claim as DCL;
+    use frontier_abi::layout::world::ring_seed as RS;
+    use permutation_frontier_svm_tests::chain::{loaded_limit, Profile, PAGE};
+    let (mut c, w) = ended(1);
+    let au = w.authority.pubkey();
+    c.set_time(w.end_ts() + 72 * 3_600);
+    expect_lands(send(&mut c, close_part(&w.a, au, 7), &w.authority), "final");
+    let payer = c.funded(b"w5a-ring-payer", 1);
+    let rings: Vec<(Address, Address)> = (1u16..=10)
+        .map(|d| {
+            let k = w.a.ring_seed(d);
+            craft_short(
+                &mut c,
+                k,
+                RS::MAGIC,
+                RS::SIZE,
+                &[
+                    (RS::D, &d.to_le_bytes()),
+                    (RS::PAYER, payer.pubkey().as_ref()),
+                ],
+            );
+            (k, payer.pubkey())
+        })
+        .collect();
+    let archives: Vec<(Address, Address)> = (0u8..10)
+        .map(|r| (w.craft_archive(&mut c, r, 3, &[216]), w.keeper.pubkey()))
+        .collect();
+    let claims: Vec<(Address, Address)> = (0u32..10)
+        .map(|day| {
+            let b = c
+                .funded(format!("w5a-claimer-{day}").as_bytes(), 1)
+                .pubkey();
+            let k = w.a.defence_claim(&b, day);
+            craft_short(
+                &mut c,
+                k,
+                DCL::MAGIC,
+                DCL::SIZE,
+                &[
+                    (DCL::BENEFICIARY, b.as_ref()),
+                    (DCL::DAY, &day.to_le_bytes()),
+                ],
+            );
+            (k, b)
+        })
+        .collect();
+    let pd = c.programdata_len();
+    let l_kind = loaded_limit(Ix::CloseSeason, pd);
+    for (part, pairs) in [(8u8, &rings), (9, &archives), (10, &claims)] {
+        let ix = close_float(&w.a, au, part, pairs);
+        let p = Profile::ladder(Ix::CloseSeason, pd).with_loaded(l_kind + 20 * 4 * PAGE);
+        let need = c
+            .measure_with(&p, std::slice::from_ref(&ix), &[&w.authority])
+            .unwrap_or_else(|f| panic!("part {part}: {f:?}"));
+        let mut ceil = ceilings(Ix::CloseSeason, 0, pd);
+        ceil.loaded = p.loaded_limit.expect("set");
+        assert_within(&format!("CloseSeason part {part}, 10 pairs"), &need, &ceil);
+        if part == 9 {
+            assert!(
+                need.loaded > l_kind as u64,
+                "10 archives exceed L(CloseSeason)"
+            );
+            let two = close_float(&w.a, au, 9, &archives[..2]);
+            let t = c.transaction(
+                &Profile::ladder(Ix::CloseSeason, pd),
+                &[two],
+                &[&w.authority],
+            );
+            assert!(
+                c.loaded_size(&t.message) <= l_kind as u64,
+                "two archive pairs fit L(CloseSeason)"
+            );
+        } else {
+            assert!(
+                need.loaded <= l_kind as u64,
+                "part {part} fits L(CloseSeason)"
+            );
+        }
+    }
 }

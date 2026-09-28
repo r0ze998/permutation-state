@@ -66,6 +66,26 @@ pub fn close_part(a: &Addresses, authority: Address, part: u8) -> Instruction {
     close_season(a, authority, part, &shards, &logs)
 }
 
+/// CloseSeason's float parts (v1.8, W5-A): part 8 RingSeeds, 9
+/// AnchorArchives, 10 DefenceClaims, each `(target, recipient)` pair in
+/// the repeat group (the recipient is the target's stored payer, `rent_to`
+/// or beneficiary). Request: the same builder in `fclient::ix` (W5-C).
+pub fn close_float(
+    a: &Addresses,
+    authority: Address,
+    part: u8,
+    pairs: &[(Address, Address)],
+) -> Instruction {
+    let mut ix = close_season(a, authority, part, &[], &[]);
+    for (t, r) in pairs {
+        ix.accounts
+            .push(solana_instruction::AccountMeta::new(*t, false));
+        ix.accounts
+            .push(solana_instruction::AccountMeta::new(*r, false));
+    }
+    ix
+}
+
 /// Positions of AbortSeason's accounts (§5.7).
 pub mod abort_at {
     pub const ANY: usize = 0;

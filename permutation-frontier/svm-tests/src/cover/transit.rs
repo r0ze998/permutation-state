@@ -113,5 +113,8 @@ pub const SWEEP_POOL_OWED: &[Cover] = &[
         ],
     ),
     Cover::Test("transit::g01_loaded_limit_w4b_transit", &[Loaded]),
-    Cover::Pending("W5-A: BadAccount, TooManyAccounts"),
+    Cover::Test(
+        "transit::g13_sweep_pool_owed_refusals",
+        &[Err(E::BadAccount), Err(E::TooManyAccounts)],
+    ),
 ];

@@ -284,6 +284,16 @@ fn g13_claim_defence_refusals() {
     let mut f = s.c.fork();
     s.w.craft_status(&mut f, frontier_abi::layout::world::season::STATUS_ABORTED);
     assert_code(f.send(std::slice::from_ref(&ix), &[&k]), E::WrongStatus);
+    // W5-A (G13): a slot account missing for the data's slot count
+    // (TooManyAccounts); the keeper position not signing, another key
+    // paying the fee (Auth).
+    let mut short = ix.clone();
+    short.accounts.pop();
+    assert_code(s.c.fork().send(&[short], &[&k]), E::TooManyAccounts);
+    let payer = s.c.funded(b"w5a-claim-fee-payer", 1);
+    let mut unsigned = ix.clone();
+    unsigned.accounts[0].is_signer = false;
+    assert_code(s.c.fork().send(&[unsigned], &[&payer]), E::Auth);
     // WindowClosed: past close + 6 bells.
     let region = World::region(DEST.0, DEST.1);
     let a = s.w.anchor_a(&s.c, BELL, region).unwrap();

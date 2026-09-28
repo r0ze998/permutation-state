@@ -58,8 +58,14 @@ pub const POST_ANCHOR: &[Cover] = &[
         "archive::g02_recreate_after_archive_refused_and_caches_close",
         &[Err(E::Archived)],
     ),
-    Cover::Pending(
-        "W5-A: BadData (region ≥ 16, bell ≥ end_bell), WrongStatus, TooEarly (test-beacon)",
+    Cover::Test(
+        "g13_complete::g13_post_anchor_data_status_early",
+        &[
+            Err(E::BadData),
+            Err(E::WrongStatus),
+            Err(E::TooEarly),
+            Lands("PostAnchor"),
+        ],
     ),
 ];
 
@@ -102,7 +108,10 @@ pub const POST_ANCHOR_MULTI: &[Cover] = &[
         "g05_one_anchor::g05_multi_anchor_equals_single_anchors",
         &[Err(E::BadData)],
     ),
-    Cover::Pending("W5-A: WrongRound"),
+    Cover::Test(
+        "g13_complete::g13_post_anchor_multi_wrong_round",
+        &[Err(E::WrongRound), Lands("PostAnchorMulti")],
+    ),
 ];
 
 pub const POST_SEED: &[Cover] = &[
@@ -192,7 +201,15 @@ pub const ARCHIVE_ANCHORS: &[Cover] = &[
         &[Lands("w.settle_ix(")],
     ),
     Cover::Test("archive::g01_loaded_limit_w4b_archive", &[Loaded]),
-    Cover::Pending("W5-A: WrongStatus, TooManyAccounts, Auth"),
+    Cover::Test(
+        "g13_complete::g13_archive_anchors_status_shape_auth",
+        &[
+            Err(E::WrongStatus),
+            Err(E::TooManyAccounts),
+            Err(E::Auth),
+            Lands("ArchiveAnchors"),
+        ],
+    ),
 ];
 
 pub const CLOSE_SEED_CACHE: &[Cover] = &[
@@ -207,5 +224,13 @@ pub const CLOSE_SEED_CACHE: &[Cover] = &[
         ],
     ),
     Cover::Test("archive::g01_loaded_limit_w4b_archive", &[Loaded]),
-    Cover::Pending("W5-A: WrongStatus, BadAccount, TooManyAccounts"),
+    Cover::Test(
+        "g13_complete::g13_close_seed_cache_status_account_shape",
+        &[
+            Err(E::WrongStatus),
+            Err(E::BadAccount),
+            Err(E::TooManyAccounts),
+            Lands("CloseSeedCache"),
+        ],
+    ),
 ];

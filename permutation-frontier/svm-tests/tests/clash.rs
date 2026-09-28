@@ -714,8 +714,8 @@ fn clash_dissolve_returns_troops_to_the_reserve() {
 
 /// The return settle of a host whose Holding was re-founded (another
 /// generation) or is gone: the troops are lost (`STRANDED`), the entry
-/// freed. (A resident bounced home by its clash also leaves as a Leave;
-/// that path has no test of its own yet: integ-W4 review, W5-A.)
+/// freed. (A resident bounced home by its clash leaves as a Leave too:
+/// `clash_bounced_resident_leaves_and_returns`, W5-A.)
 #[test]
 fn clash_return_settle_loses_troops_of_a_refounded_holding() {
     let (mut c, w, e, id) = estate();
@@ -2299,4 +2299,205 @@ fn clash_closes_after_the_season_end() {
         "CloseClashInputs after the end",
     );
     expect_lands(keeper_send(&mut c, &w, ad), "CloseArrivalDay after the end");
+}
+
+// ================================================================ W5-A: G13 completion
+
+/// The probe deployed next to the Frontier program, for CPIs.
+fn with_probe(c: &mut Chain) -> Address {
+    let so = permutation_frontier_svm_tests::probe::load();
+    let k = Address::new_from_array(permutation_frontier_svm_tests::sha256(&[b"cpi probe"]));
+    c.deploy(k, &so, so.len(), None);
+    k
+}
+
+/// G13 rows of the clash area W4-A left to W5-A: GatherClash,
+/// ResolveFromInputs and SkipQuiet through a CPI (`NotTopLevel`);
+/// GatherClash on a Season of another ruleset (`RulesetMismatch`);
+/// ResolveFromInputs on an Aborted season (`WrongStatus`) and over a
+/// stored roster the kernel refuses (two entries with one host id:
+/// `Kernel`).
+#[test]
+fn clash_g13_top_level_ruleset_status_kernel() {
+    let (mut c, w) = world_on(Build::TestBeacon);
+    let probe_id = with_probe(&mut c);
+    let via = |ix: &Instruction| permutation_frontier_svm_tests::probe::cpi(probe_id, ix);
+    let f = Fill::adversarial(1, 11, 4, -2);
+    ready(&mut c, &w, &f);
+    let parts = w.gather_parts(&c, f.dest(), B, &THIRDS);
+    assert_code(
+        keeper_send(&mut c.fork(), &w, via(&parts[0])),
+        E::NotTopLevel,
+    );
+    let mut g = c.fork();
+    g.edit(&w.a.season, |d| d[S::RULESET_HASH] ^= 1);
+    assert_code(
+        keeper_send(&mut g, &w, parts[0].clone()),
+        E::RulesetMismatch,
+    );
+    for ix in parts {
+        expect_lands(keeper_send(&mut c, &w, ix), "GatherClash");
+    }
+    let rfi = w.resolve_ix(f.dest(), B);
+    assert_code(keeper_send(&mut c.fork(), &w, via(&rfi)), E::NotTopLevel);
+    let mut ab = c.fork();
+    w.craft_status(&mut ab, S::STATUS_ABORTED);
+    assert_code(keeper_send(&mut ab, &w, rfi.clone()), E::WrongStatus);
+    // Two live entries naming one host: the kernel's DuplicateId.
+    let mut k = c.fork();
+    let pk = w.a.province(f.p, f.q);
+    k.edit(&pk, |d| {
+        let live: Vec<usize> = (0..P::ENTRIES_N)
+            .filter(|&i| read_entry(d, i).unwrap().state == EN::STATE_ROSTER)
+            .collect();
+        let a = read_entry(d, live[0]).unwrap();
+        let mut b = read_entry(d, live[1]).unwrap();
+        b.id = a.id;
+        write_entry(d, live[1], &b).unwrap();
+    });
+    assert_code(keeper_send(&mut k, &w, rfi.clone()), E::Kernel);
+    expect_lands(keeper_send(&mut c, &w, rfi), "ResolveFromInputs");
+    // SkipQuiet through a CPI.
+    let b0 = 130u32;
+    let (mut c2, w2) = world_on(Build::TestBeacon);
+    let probe2 = with_probe(&mut c2);
+    let q = quiet_world(12, 5, 21, 8, b0, false);
+    w2.to_bell(&mut c2, b0, 1);
+    craft_quiet(&mut c2, &w2, &q, b0, false);
+    ready_run(&mut c2, &w2, &q, b0, 2);
+    let skip = w2.skip_ix(q.dest(), b0, 1);
+    assert_code(
+        keeper_send(
+            &mut c2.fork(),
+            &w2,
+            permutation_frontier_svm_tests::probe::cpi(probe2, &skip),
+        ),
+        E::NotTopLevel,
+    );
+    expect_lands(keeper_send(&mut c2, &w2, skip), "SkipQuiet");
+}
+
+/// The bounced-resident rule (integ-W4 review, DECISIONS M16; W4-A §1): a
+/// **resident** the kernel sends home (`Fate::Bounced`: it lost its hex and
+/// no neighbour takes it) becomes a `Leave` issued at the bell, kept as a
+/// departed entry after the resolve (its post-clash troops), and the
+/// return settle (SettleDeparture `0xFF`) credits `reserve += troops /
+/// 1,000` to its live Holding and frees the entry; with the Holding
+/// re-founded the troops are lost (`STRANDED`). The fill is the first of a
+/// native search over the adversarial kinds whose outcome bounces a
+/// resident.
+#[test]
+fn clash_bounced_resident_leaves_and_returns() {
+    use permutation_frontier_svm_tests::world::clash::{bell_seed, resident_id};
+    use permutation_rules::frontier::clash::Fate;
+    let (p, q) = (5, -3);
+    let region = region_of(ProvinceCoord::new(p, q));
+    let mut found = None;
+    'search: for seed in 1..=4_000u64 {
+        for kind in 0..=5u8 {
+            let f = Fill::adversarial(kind, seed, p, q);
+            let out = f.native(&bell_seed(B, region), B);
+            if let Some(fr) = out
+                .fighters
+                .iter()
+                .find(|fr| !fr.arrival && fr.fate == Fate::Bounced && fr.troops >= 1_000)
+            {
+                found = Some((f, *fr));
+                break 'search;
+            }
+        }
+    }
+    let (f, fr) = found.expect("a fill that bounces a resident");
+    let n = (0..48usize)
+        .find(|&k| resident_id(p, q, (k / 8) as u8, k % 8) == fr.id)
+        .expect("a fill resident");
+    let (faction, site) = ((n / 8) as u8, (n % 12) as u8);
+    println!(
+        "bounced resident: fill {} host {:#x} ({} milli-troops)",
+        f.name, fr.id, fr.troops
+    );
+    let (mut c, w) = world_on(Build::TestBeacon);
+    ready(&mut c, &w, &f);
+    for ix in w.gather_parts(&c, f.dest(), B, &THIRDS) {
+        expect_lands(keeper_send(&mut c, &w, ix), "GatherClash");
+    }
+    expect_lands(
+        keeper_send(&mut c, &w, w.resolve_ix(f.dest(), B)),
+        "ResolveFromInputs",
+    );
+    let (_, x) = w
+        .entries(&c, f.dest())
+        .into_iter()
+        .find(|(_, x)| x.id == fr.id)
+        .expect("kept as departed");
+    assert_eq!((x.state, x.op), (EN::STATE_DEPARTED, EntryOp::Leave));
+    assert_eq!(x.pend_bell, B);
+    assert_eq!(x.troops, fr.troops, "post-clash troops");
+    // Its Holding (generation 1, the fill's residents' holdings), crafted
+    // after the clash: the return credits the reserve.
+    let e = w.craft_estate(&mut c, "bounced", faction, (p as i16, q as i16), site);
+    let before = u32_at(&c.data(&e.holding), H::reserve(x.unit as usize));
+    let mut stranded = c.fork();
+    let rix = cix::settle_return(&w.a, w.keeper.pubkey(), (p as i16, q as i16), e.href());
+    // Other residents of this Holding may have left too: the return
+    // settle frees at most 3 per transaction (RETURN_MAX); repeat until
+    // AlreadyDone.
+    let mut mine = None;
+    let mut returned_same_unit = 0u32;
+    for _ in 0..8 {
+        match keeper_send(&mut c, &w, rix.clone()) {
+            Ok(l) => {
+                for r in records::of_kind(&l.logs, Kind::DEPARTURE_SETTLED) {
+                    assert_eq!(r.u64("destroyed"), 2, "a return");
+                    let id = r.key_u64("host_id");
+                    let unit = w
+                        .entries(&stranded, f.dest())
+                        .into_iter()
+                        .find(|(_, y)| y.id == id)
+                        .map(|(_, y)| y.unit);
+                    if unit == Some(x.unit) {
+                        returned_same_unit += r.u64("troops_after") as u32 / 1_000;
+                    }
+                    if id == fr.id {
+                        mine = Some(r.u64("troops_after") as u32);
+                    }
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    assert_eq!(mine, Some(fr.troops), "the bounced resident returned");
+    assert_eq!(
+        u32_at(&c.data(&e.holding), H::reserve(x.unit as usize)),
+        before + returned_same_unit,
+        "whole troops back to the reserve"
+    );
+    assert!(returned_same_unit >= fr.troops / 1_000);
+    assert!(
+        w.entries(&c, f.dest()).iter().all(|(_, y)| y.id != fr.id),
+        "freed"
+    );
+    assert_code(keeper_send(&mut c, &w, rix.clone()), E::AlreadyDone);
+    // Re-founded (another generation): the troops are lost.
+    stranded.edit(&e.holding, |d| d[H::GEN] = 2);
+    let mut lost = false;
+    for _ in 0..8 {
+        match keeper_send(&mut stranded, &w, rix.clone()) {
+            Ok(l) => {
+                assert!(records::of_kind(&l.logs, Kind::DEPARTURE_SETTLED).is_empty());
+                lost |= records::of_kind(&l.logs, Kind::STRANDED)
+                    .iter()
+                    .any(|r| r.key_u64("host_id") == fr.id);
+            }
+            Err(_) => break,
+        }
+    }
+    assert!(
+        lost,
+        "STRANDED: the troops of a re-founded holding are lost"
+    );
+    assert!(w
+        .entries(&stranded, f.dest())
+        .iter()
+        .all(|(_, y)| y.id != fr.id));
 }

@@ -125,6 +125,195 @@ use alloc::vec;
 use alloc::vec::Vec;
 use borsh::{BorshDeserialize, BorshSerialize};
 
+/// A sort key (M1 W5-A): `(a, b, c)` compared lexicographically, then the
+/// element's position, so equal keys keep their order (a stable sort).
+/// Three `u64` words, not a `u128`: SBF has no 128-bit compare.
+#[derive(Clone, Copy)]
+pub(crate) struct SortKey {
+    a: u64,
+    b: u64,
+    c: u64,
+    pos: u32,
+}
+
+impl SortKey {
+    #[inline(always)]
+    fn lt(&self, o: &SortKey) -> bool {
+        if self.a != o.a {
+            return self.a < o.a;
+        }
+        if self.b != o.b {
+            return self.b < o.b;
+        }
+        if self.c != o.c {
+            return self.c < o.c;
+        }
+        self.pos < o.pos
+    }
+}
+
+/// A key for [`sort_by_key3`]: three words compared in order.
+pub(crate) type Key3 = (u64, u64, u64);
+
+/// The kernel's one sort body (M1 W5-A, `.so` size): a natural merge sort
+/// of precomputed [`SortKey`]s. Every on-chain ordering of more than
+/// [`SMALL_SORT`] elements encodes its key into three words and shares this
+/// body, instead of one monomorphized `core::slice::sort` per key type
+/// (≈ 186 KB of the release `.so` before). The keys are computed once per
+/// element; ascending runs are found first (a roster passed in id order,
+/// or two sorted lists one after the other, costs one scan and at most one
+/// merge). The position makes every key distinct, so the result is the
+/// stable order `sort_by_key` gave (the host-only reference
+/// [`resolve_clash_ref`] keeps the core sorts; the equivalence test and
+/// `sort_keys_equal_the_core_stable_sort` compare the two).
+#[inline(never)]
+pub(crate) fn sort_keys(v: &mut [SortKey]) {
+    const MIN_RUN: usize = 8;
+    let n = v.len();
+    let mut runs: Vec<usize> = Vec::with_capacity(n / MIN_RUN + 2);
+    let mut s = 0;
+    while s < n {
+        let mut e = s + 1;
+        while e < n && v[e - 1].lt(&v[e]) {
+            e += 1;
+        }
+        let want = if s + MIN_RUN < n { s + MIN_RUN } else { n };
+        while e < want {
+            let x = v[e];
+            let mut j = e;
+            while j > s && x.lt(&v[j - 1]) {
+                v[j] = v[j - 1];
+                j -= 1;
+            }
+            v[j] = x;
+            e += 1;
+        }
+        runs.push(e);
+        s = e;
+    }
+    if runs.len() < 2 {
+        return;
+    }
+    let mut buf: Vec<SortKey> = Vec::with_capacity(n);
+    while runs.len() > 1 {
+        let (mut out, mut k, mut lo) = (0, 0, 0);
+        while k < runs.len() {
+            if k + 1 < runs.len() {
+                let (mid, hi) = (runs[k], runs[k + 1]);
+                merge_runs(v, lo, mid, hi, &mut buf);
+                runs[out] = hi;
+                lo = hi;
+                k += 2;
+            } else {
+                runs[out] = runs[k];
+                k += 1;
+            }
+            out += 1;
+        }
+        runs.truncate(out);
+    }
+}
+
+/// Merges the sorted runs `v[lo..mid]` and `v[mid..hi]` (left first on a
+/// tie, which cannot happen: positions differ). Only the part of the left
+/// run that moves is copied out; the right run's tail already in place
+/// stays.
+fn merge_runs(v: &mut [SortKey], lo: usize, mid: usize, hi: usize, buf: &mut Vec<SortKey>) {
+    let mut lo = lo;
+    while lo < mid && !v[mid].lt(&v[lo]) {
+        lo += 1;
+    }
+    if lo == mid {
+        return;
+    }
+    let mut hi = hi;
+    while hi > mid && !v[hi - 1].lt(&v[mid - 1]) {
+        hi -= 1;
+    }
+    buf.clear();
+    buf.extend_from_slice(&v[lo..mid]);
+    let (mut i, mut j, mut w) = (0, mid, lo);
+    let l = buf.len();
+    while i < l && j < hi {
+        if v[j].lt(&buf[i]) {
+            v[w] = v[j];
+            j += 1;
+        } else {
+            v[w] = buf[i];
+            i += 1;
+        }
+        w += 1;
+    }
+    while i < l {
+        v[w] = buf[i];
+        i += 1;
+        w += 1;
+    }
+}
+
+/// Up to this many elements [`sort_by_key3`] sorts in place by insertion
+/// (keys recomputed per comparison, no allocation), like the core sort's
+/// small-sort path.
+pub(crate) const SMALL_SORT: usize = 12;
+
+/// `v` sorted stably by `key` (three words, compared lexicographically):
+/// by insertion up to [`SMALL_SORT`] elements, else through [`sort_keys`].
+#[inline(always)]
+pub(crate) fn sort_by_key3<T: Copy>(v: &mut [T], key: impl Fn(&T) -> Key3) {
+    let n = v.len();
+    if n <= SMALL_SORT {
+        for i in 1..n {
+            let x = v[i];
+            let kx = key(&x);
+            let mut j = i;
+            while j > 0 && kx < key(&v[j - 1]) {
+                v[j] = v[j - 1];
+                j -= 1;
+            }
+            v[j] = x;
+        }
+        return;
+    }
+    // Already in order (a roster passed in id order): one key per element
+    // and no allocation.
+    let mut prev = key(&v[0]);
+    let mut i = 1;
+    while i < n {
+        let k = key(&v[i]);
+        if k < prev {
+            break;
+        }
+        prev = k;
+        i += 1;
+    }
+    if i == n {
+        return;
+    }
+    let mut ks: Vec<SortKey> = Vec::with_capacity(n);
+    for (pos, x) in v.iter().enumerate() {
+        let (a, b, c) = key(x);
+        ks.push(SortKey {
+            a,
+            b,
+            c,
+            pos: pos as u32,
+        });
+    }
+    sort_keys(&mut ks);
+    if ks.iter().enumerate().all(|(i, k)| k.pos as usize == i) {
+        return;
+    }
+    let out: Vec<T> = ks.iter().map(|k| v[k.pos as usize]).collect();
+    v.copy_from_slice(&out);
+}
+
+/// [`Unit::order`] as a [`sort_by_key3`] key: fewer troops later, then
+/// the tie key, then the id.
+#[inline(always)]
+fn order_key(u: &Unit) -> Key3 {
+    ((u32::MAX - u.troops) as u64, u.tie, u.id)
+}
+
 /// Arrival slots per (province, bell): 4 per faction.
 pub const MAX_ARRIVALS: usize = 24;
 /// Holdings (sites) per province.
@@ -325,7 +514,7 @@ impl RelationsLog {
             .iter()
             .filter(|d| d.from_bell <= bell)
             .collect();
-        ds.sort_by_key(|d| (d.from_bell, d.seq));
+        sort_by_key3(&mut ds, |d| (d.from_bell as u64, d.seq, 0));
         let mut r = self.base;
         for d in ds {
             r.set_peaceful(d.a, d.b, d.peaceful);
@@ -597,7 +786,13 @@ impl Unit {
         k[1..].copy_from_slice(&self.id.to_le_bytes());
         k
     }
-    /// Mass order: more troops first, then the lower tie key, then id.
+    /// Mass order: more troops first, then the lower tie key, then id (the
+    /// host-only reference; the on-chain body sorts by [`order_key`]).
+    #[cfg(any(
+        test,
+        feature = "std",
+        not(any(target_os = "solana", target_arch = "wasm32"))
+    ))]
     fn order(&self) -> (core::cmp::Reverse<MilliTroops>, u64, u64) {
         (core::cmp::Reverse(self.troops), self.tie, self.id)
     }
@@ -646,7 +841,7 @@ fn validate(inp: &ClashInput) -> Result<(), ClashError> {
             return Err(ClashError::ArrivalWithoutStance(a.id));
         }
     }
-    ids.sort_unstable();
+    sort_by_key3(&mut ids, |&x| (x, 0, 0));
     if let Some(w) = ids.windows(2).find(|w| w[0] == w[1]) {
         return Err(ClashError::DuplicateId(w[0]));
     }
@@ -708,11 +903,11 @@ fn fair_share(units: &[Unit], cands: &[usize], cap: usize, rel: Relations) -> Ve
         return cands.to_vec();
     }
     let mut factions: Vec<u8> = cands.iter().map(|&i| units[i].faction).collect();
-    factions.sort_unstable();
+    sort_by_key3(&mut factions, |&f| (f as u64, 0, 0));
     factions.dedup();
     let side = side_of(&factions, rel);
     let mut sides: Vec<u8> = factions.iter().map(|&f| side[f as usize]).collect();
-    sides.sort_unstable();
+    sort_by_key3(&mut sides, |&f| (f as u64, 0, 0));
     sides.dedup();
     let g = cap / sides.len();
     let mut taken = vec_of(false, cands.len());
@@ -777,7 +972,10 @@ fn share_hex(units: &mut [Unit], cands: &[usize], garrison: Option<usize>, rel: 
                 .copied()
                 .filter(|&i| !rel.hostile(units[i].faction, owner))
                 .collect();
-            own.sort_by_key(|&i| (units[i].faction != owner, units[i].order()));
+            sort_by_key3(&mut own, |&i| {
+                let (a, b, c) = order_key(&units[i]);
+                ((((units[i].faction != owner) as u64) << 32) | a, b, c)
+            });
             a.extend(own.into_iter().take(room));
             a
         }
@@ -946,7 +1144,7 @@ fn build_units(inp: &ClashInput, cs: &Seed) -> (Vec<Unit>, usize) {
         .map(|f| (f, false))
         .chain(inp.arrivals.iter().map(|f| (f, true)))
         .collect();
-    hosts.sort_by_key(|(f, _)| f.id);
+    sort_by_key3(&mut hosts, |h| (h.0.id, 0, 0));
     for (f, arrival) in hosts {
         units.push(Unit {
             id: f.id,
@@ -967,7 +1165,7 @@ fn build_units(inp: &ClashInput, cs: &Seed) -> (Vec<Unit>, usize) {
     }
     let n_hosts = units.len();
     let mut gs: Vec<&Garrison> = inp.garrisons.iter().collect();
-    gs.sort_by_key(|g| g.id);
+    sort_by_key3(&mut gs, |g| (g.id, 0, 0));
     for g in gs {
         units.push(Unit {
             id: g.id,
@@ -1000,7 +1198,7 @@ fn first_admission(
     let mut order: Vec<usize> = (0..n_hosts)
         .filter(|&i| units[i].arrival && units[i].st == St::In)
         .collect();
-    order.sort_by_key(|&i| units[i].order());
+    sort_by_key3(&mut order, |&i| order_key(&units[i]));
     let mut capped = [false; MAX_UNITS];
     for &i in &order {
         units[i].st = St::Out(Fate::Bounced);
@@ -1523,7 +1721,7 @@ pub fn resolve_clash(rules: &Ruleset, inp: &ClashInput) -> Result<ClashOutcome, 
         if cands.len() <= OWNER_HEX_SLOTS {
             continue;
         }
-        cands.sort_by_key(|&i| units[i].order());
+        sort_by_key3(&mut cands, |&i| order_key(&units[i]));
         bounced |= share_hex(&mut units, &cands, garrison, rel);
     }
     if bounced {
@@ -1701,7 +1899,9 @@ pub fn resolve_clash(rules: &Ruleset, inp: &ClashInput) -> Result<ClashOutcome, 
                 *field_key[f as usize].get_or_insert_with(|| rand_id(&cs, b"field", f as u64));
             ranked.push((core::cmp::Reverse(s), !defender, key, f));
         }
-        ranked.sort();
+        // (Reverse(s), !defender, key, f), pushed in f order: f is the
+        // position, the last tie.
+        sort_by_key3(&mut ranked, |r| (u64::MAX - r.0 .0, r.1 as u64, r.2));
         let mut kept: u8 = 0;
         for (_, _, _, f) in ranked {
             let mut ok = true;
@@ -1731,7 +1931,7 @@ pub fn resolve_clash(rules: &Ruleset, inp: &ClashInput) -> Result<ClashOutcome, 
             }
         }
     }
-    withdrawing.sort_by_key(|&i| units[i].order());
+    sort_by_key3(&mut withdrawing, |&i| order_key(&units[i]));
     for &i in &withdrawing {
         units[i].st = St::Out(Fate::Bounced);
     }
@@ -1962,9 +2162,15 @@ pub fn quota_set(p: ProvinceCoord, bell: u32, arrivals: &[SlotEntry]) -> Vec<Slo
             None => best.push(*a),
         }
     }
-    best.sort_by_key(rank);
+    sort_by_key3(&mut best, |e| {
+        (
+            (u32::MAX - e.troops) as u64,
+            slot_key(p, bell, e.host_id),
+            e.host_id,
+        )
+    });
     best.truncate(FACTION_ARRIVAL_SLOTS);
-    best.sort_by_key(|e| e.host_id);
+    sort_by_key3(&mut best, |e| (e.host_id, 0, 0));
     best
 }
 
@@ -2036,6 +2242,40 @@ pub const fn reveal_open(clock: &BeaconClock, now: i64, anchor_ts: i64, latest_r
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// W5-A: the shared sort is the core stable sort (every length up to
+    /// 200, many equal keys, so stability is exercised on every merge; keys
+    /// in `hi` and in `lo`).
+    #[test]
+    fn sort_keys_equal_the_core_stable_sort() {
+        let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
+        for n in 0..200usize {
+            for m in [1u64, 3, 7, 1_000, u64::MAX] {
+                let keys: Vec<(u64, u64)> = (0..n)
+                    .map(|_| {
+                        x ^= x << 13;
+                        x ^= x >> 7;
+                        x ^= x << 17;
+                        let a = x % m;
+                        x ^= x << 13;
+                        x ^= x >> 7;
+                        x ^= x << 17;
+                        (a, x % m)
+                    })
+                    .collect();
+                let mut want: Vec<usize> = (0..n).collect();
+                want.sort_by_key(|&i| keys[i]);
+                let mut got: Vec<usize> = (0..n).collect();
+                sort_by_key3(&mut got, |&i| (keys[i].0, 0, keys[i].1));
+                assert_eq!(got, want, "n {n} m {m}");
+                let mut want: Vec<usize> = (0..n).collect();
+                want.sort_by_key(|&i| keys[i].1);
+                let mut got: Vec<usize> = (0..n).collect();
+                sort_by_key3(&mut got, |&i| (0, keys[i].1, 0));
+                assert_eq!(got, want, "lo only: n {n} m {m}");
+            }
+        }
+    }
 
     /// Rule 6 at its edges: the `refund-strict` mutant (`>=` → `>`) and the
     /// `d > 0` guard are both killed here (W1-A notes: no generated fill

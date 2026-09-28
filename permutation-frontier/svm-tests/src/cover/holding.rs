@@ -4,25 +4,32 @@
 //!
 //! The player-prologue codes (WrongStatus, RulesetMismatch, Bucket,
 //! SessionExpired, Auth, BadAddress of the Citizen, TooManyAccounts) run
-//! through one shared path (`proc::holding::player`) and are asserted
-//! once, for Muster (`host::host_player_prologue_refusals`); the per-
-//! instruction rows are W5-A's G13 completion.
+//! through one shared path (`proc::holding::player`); W5-A asserts them
+//! per instruction (`g13_complete::prologue_rows`).
 
-use super::{Cover, Err, Lands, E};
+use super::{Cover, Err, Lands, Loaded, E};
 
 /// Ignored tests of this area waiting for a fix: (test, unit).
 pub const PENDING: &[(&str, &str)] = &[];
-
-const PROLOGUE: Cover = Cover::Pending(
-    "W5-A: per-instruction rows of the shared player-prologue codes (asserted for Muster)",
-);
 
 pub const HARVEST: &[Cover] = &[
     Cover::Test(
         "holding::holding_harvest_settles_the_stores",
         &[Lands("hx::harvest("), Err(E::NotFinal)],
     ),
-    PROLOGUE,
+    Cover::Test(
+        "g13_complete::g13_harvest_prologue_and_loaded",
+        &[
+            Err(E::WrongStatus),
+            Err(E::RulesetMismatch),
+            Err(E::Bucket),
+            Err(E::SessionExpired),
+            Err(E::Auth),
+            Err(E::BadAddress),
+            Err(E::TooManyAccounts),
+            Loaded,
+        ],
+    ),
 ];
 
 pub const BUILD: &[Cover] = &[
@@ -43,7 +50,19 @@ pub const BUILD: &[Cover] = &[
             Lands("hx::build_item("),
         ],
     ),
-    PROLOGUE,
+    Cover::Test(
+        "g13_complete::g13_build_prologue_and_loaded",
+        &[
+            Err(E::WrongStatus),
+            Err(E::RulesetMismatch),
+            Err(E::Bucket),
+            Err(E::SessionExpired),
+            Err(E::Auth),
+            Err(E::BadAddress),
+            Err(E::TooManyAccounts),
+            Loaded,
+        ],
+    ),
 ];
 
 pub const TRAIN: &[Cover] = &[
@@ -51,7 +70,19 @@ pub const TRAIN: &[Cover] = &[
         "holding::holding_train_is_immediate",
         &[Lands("hx::train("), Err(E::BadData), Err(E::Insufficient)],
     ),
-    PROLOGUE,
+    Cover::Test(
+        "g13_complete::g13_train_prologue_and_loaded",
+        &[
+            Err(E::WrongStatus),
+            Err(E::RulesetMismatch),
+            Err(E::Bucket),
+            Err(E::SessionExpired),
+            Err(E::Auth),
+            Err(E::BadAddress),
+            Err(E::TooManyAccounts),
+            Loaded,
+        ],
+    ),
 ];
 
 pub const SETTLE_EXPLORE: &[Cover] = &[
@@ -67,5 +98,14 @@ pub const SETTLE_EXPLORE: &[Cover] = &[
         "holding::holding_settle_explore_after_the_floor_rolls",
         &[Lands("hx::settle_explore(")],
     ),
-    Cover::Pending("W5-A: WrongStatus, BadAddress (citizen, cache), SeedNotReady via the archive"),
+    Cover::Test(
+        "g13_complete::g13_explore_and_settle_explore",
+        &[
+            Err(E::WrongStatus),
+            Err(E::BadAddress),
+            Err(E::SeedNotReady),
+            Loaded,
+            Lands("SettleExplore"),
+        ],
+    ),
 ];

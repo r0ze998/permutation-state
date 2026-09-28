@@ -33,7 +33,16 @@ pub const ANNOUNCE_SEASON: &[Cover] = &[
         "g01_loaded_limit::g01_loaded_limit_announce_season",
         &[Loaded],
     ),
-    Cover::Pending("W5-A: TooManyAccounts, BadData, Insufficient"),
+    Cover::Test(
+        "g13_complete::g13_announce_season_shape_funds_overflow",
+        &[
+            Err(E::TooManyAccounts),
+            Err(E::BadData),
+            Err(E::Insufficient),
+            Err(E::Overflow),
+            Lands("w.announce("),
+        ],
+    ),
 ];
 
 pub const CREATE_SEASON: &[Cover] = &[
@@ -59,7 +68,14 @@ pub const CREATE_SEASON: &[Cover] = &[
         "g01_loaded_limit::g01_loaded_limit_create_season",
         &[Loaded],
     ),
-    Cover::Pending("W5-A: BadAccount (present targets), TooManyAccounts"),
+    Cover::Test(
+        "g13_complete::g13_create_season_present_target_and_shape",
+        &[
+            Err(E::TooManyAccounts),
+            Err(E::BadAccount),
+            Lands("CreateSeason"),
+        ],
+    ),
 ];
 
 pub const INIT_BEACON_LOGS: &[Cover] = &[
@@ -157,7 +173,15 @@ pub const END_SEASON: &[Cover] = &[
         ],
     ),
     Cover::Test("lifecycle::g01_loaded_limit_w4b_lifecycle", &[Loaded]),
-    Cover::Pending("W5-A: BadAccount, BadAddress, TooManyAccounts"),
+    Cover::Test(
+        "g13_complete::g13_end_season_accounts",
+        &[
+            Err(E::BadAccount),
+            Err(E::BadAddress),
+            Err(E::TooManyAccounts),
+            Lands("EndSeason"),
+        ],
+    ),
 ];
 
 pub const CLOSE_SEASON: &[Cover] = &[
@@ -177,7 +201,32 @@ pub const CLOSE_SEASON: &[Cover] = &[
         &[Lands("close_part(")],
     ),
     Cover::Test("lifecycle::g01_loaded_limit_w4b_lifecycle", &[Loaded]),
-    Cover::Pending("W5-A: WrongStatus, BadAddress, TooManyAccounts"),
+    Cover::Test(
+        "g13_complete::g13_close_season_status_and_accounts",
+        &[
+            Err(E::WrongStatus),
+            Err(E::BadAddress),
+            Err(E::TooManyAccounts),
+            Lands("CloseSeason part 0"),
+        ],
+    ),
+    // v1.8 (W5-A): the float parts 8–10.
+    Cover::Test(
+        "lifecycle::g13_close_season_float_parts",
+        &[
+            Err(E::TooEarly),
+            Err(E::TooManyAccounts),
+            Err(E::BadData),
+            Err(E::BadAccount),
+            Err(E::BadAddress),
+            Err(E::Auth),
+            Lands("close_float("),
+        ],
+    ),
+    Cover::Test(
+        "lifecycle::g13_close_season_float_on_an_aborted_season",
+        &[Lands("close_float(")],
+    ),
 ];
 
 pub const ABORT_SEASON: &[Cover] = &[
@@ -192,5 +241,12 @@ pub const ABORT_SEASON: &[Cover] = &[
         ],
     ),
     Cover::Test("lifecycle::g01_loaded_limit_w4b_lifecycle", &[Loaded]),
-    Cover::Pending("W5-A: BadAccount, TooManyAccounts"),
+    Cover::Test(
+        "g13_complete::g13_abort_season_accounts",
+        &[
+            Err(E::BadAccount),
+            Err(E::TooManyAccounts),
+            Lands("AbortSeason"),
+        ],
+    ),
 ];

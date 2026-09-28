@@ -983,6 +983,20 @@ fn g13_sweep_pool_owed_refusals() {
     let mut f = c.fork();
     w.craft_status(&mut f, frontier_abi::layout::world::season::STATUS_ABORTED);
     assert_code(send(&mut f, ix.clone(), &any), E::WrongStatus);
+    // W5-A (G13): the Holding passed read-only (BadAccount), an account
+    // too many (TooManyAccounts).
+    let hpos = permutation_frontier_svm_tests::ix::transit::sweep_at::HOLDING;
+    let mut ro = ix.clone();
+    ro.accounts[hpos].is_writable = false;
+    assert_code(send(&mut c.fork(), ro, &any), E::BadAccount);
+    let mut extra = ix.clone();
+    extra
+        .accounts
+        .push(solana_instruction::AccountMeta::new_readonly(
+            permutation_frontier_svm_tests::keypair(b"sweep extra").pubkey(),
+            false,
+        ));
+    assert_code(send(&mut c.fork(), extra, &any), E::TooManyAccounts);
     // (the 5 lamports were crafted into pool_owed and are in the Holding's
     // lamports above its rent and escrow)
     expect_lands(send(&mut c, ix, &any), "sweep_pool_owed(");

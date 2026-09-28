@@ -1,7 +1,7 @@
 //! Coverage of the map area (§5.9: rings and provinces), W3-A. Codes the
 //! wave-3 tests do not reach yet are `Pending` for W5-A (G13 completion).
 
-use super::{Cover, Err, Lands, E};
+use super::{Cover, Err, Lands, Loaded, E};
 
 /// Ignored tests of this area waiting for a fix: (test, unit).
 pub const PENDING: &[(&str, &str)] = &[];
@@ -44,7 +44,17 @@ pub const OPEN_RING: &[Cover] = &[
         "map::g02_recreate_province_and_ring_seed_refused_after_close",
         &[Err(E::WrongStatus)],
     ),
-    Cover::Pending("W5-A: Auth, TooManyAccounts, RulesetMismatch, g01_loaded_limit"),
+    Cover::Test(
+        "g13_complete::g13_open_ring_auth_shape_ruleset",
+        &[
+            Err(E::Auth),
+            Err(E::TooManyAccounts),
+            Err(E::RulesetMismatch),
+            Loaded,
+            Lands("OpenRing"),
+        ],
+    ),
+    Cover::Test("citizen::g01_land_other_instructions", &[Loaded]),
 ];
 
 pub const CONSUME_RING_SEED: &[Cover] = &[
@@ -66,8 +76,9 @@ pub const CONSUME_RING_SEED: &[Cover] = &[
         "map::g03_land_accounts_forged_in_map_instructions",
         &[Err(E::BadAccount), Err(E::BadAddress)],
     ),
-    Cover::Pending(
-        "W5-A: NotTopLevel (probe CPI), Auth, 32-round worst hint path (G1), g01_loaded_limit",
+    Cover::Test(
+        "g13_complete::g13_consume_ring_seed_top_level_auth_and_g01",
+        &[Err(E::NotTopLevel), Err(E::Auth), Loaded],
     ),
 ];
 
@@ -102,7 +113,10 @@ pub const OPEN_PROVINCE: &[Cover] = &[
         "map::g01_open_province_worst_of_rings_2_to_10",
         &[Lands("OpenProvince (")],
     ),
-    Cover::Pending("W5-A: NotTopLevel (probe CPI), g01_loaded_limit"),
+    Cover::Test(
+        "g13_complete::g13_open_province_top_level_and_loaded",
+        &[Err(E::NotTopLevel), Loaded, Lands("OpenProvince")],
+    ),
 ];
 
 pub const FOLD_OCCUPANCY: &[Cover] = &[
@@ -122,7 +136,11 @@ pub const FOLD_OCCUPANCY: &[Cover] = &[
         "map::g03_land_accounts_forged_in_map_instructions",
         &[Err(E::BadAddress), Err(E::BadAccount)],
     ),
-    Cover::Pending("W5-A: TooManyAccounts, g01 budget and loaded limit per part"),
+    Cover::Test(
+        "g13_complete::g13_fold_occupancy_shape_and_g01_per_part",
+        &[Err(E::TooManyAccounts), Loaded, Lands("FoldOccupancy")],
+    ),
+    Cover::Test("citizen::g01_land_other_instructions", &[Loaded]),
 ];
 
 pub const CLOSE_PROVINCE: &[Cover] = &[
@@ -139,5 +157,9 @@ pub const CLOSE_PROVINCE: &[Cover] = &[
         "map::g03_land_accounts_forged_in_map_instructions",
         &[Err(E::BadAddress)],
     ),
-    Cover::Pending("W5-A: g01 budget and loaded limit"),
+    Cover::Test(
+        "g13_complete::g13_close_province_g01",
+        &[Loaded, Lands("CloseProvince")],
+    ),
+    Cover::Test("citizen::g01_land_other_instructions", &[Loaded]),
 ];

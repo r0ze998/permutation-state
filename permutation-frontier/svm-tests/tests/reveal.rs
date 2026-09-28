@@ -1088,4 +1088,7 @@ fn g01_reveal_worst() {
         std::slice::from_ref(&ix),
         &[&w.keeper],
     ));
+    // W5-A: g01_loaded_limit_reveal against the release binary (the named
+    // fill is Reveal's worst account set: 18 accounts, three path provinces).
+    common::loaded_check(&c, Ix::Reveal, &[ix], &[&w.keeper]);
 }

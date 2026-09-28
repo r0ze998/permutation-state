@@ -1,6 +1,6 @@
 //! Coverage of Reveal (§5.11, W3-B).
 
-use super::{Cover, Err, Lands, E};
+use super::{Cover, Err, Lands, Loaded, E};
 
 /// Ignored tests of this area waiting for a fix: (test, unit).
 pub const PENDING: &[(&str, &str)] = &[];
@@ -68,5 +68,5 @@ pub const REVEAL: &[Cover] = &[
         &[Lands("Reveal on pre-funded addresses")],
     ),
     Cover::Test("reveal::g09_reveal_quota_is_order_free", &[Lands("Reveal")]),
-    Cover::Pending("W5-A: g01_loaded_limit_reveal (Loaded) against the release .so"),
+    Cover::Test("reveal::g01_reveal_worst", &[Loaded]),
 ];

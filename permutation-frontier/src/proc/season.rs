@@ -37,8 +37,8 @@ use crate::events::{self, Buf, Chained};
 use crate::init::{self, SeasonSigner};
 use crate::layout::world::SeasonCore;
 use crate::layout::{
-    defence_pool as DP, frontier as FR, init_header, join_shard as JS, province_fund as PF,
-    season as S, Ro, Rw,
+    anchor_archive as AA, defence_claim as DCL, defence_pool as DP, frontier as FR, init_header,
+    join_shard as JS, province_fund as PF, ring_seed as RS, season as S, Ro, Rw,
 };
 use crate::prologue::{self, check_accounts, expect_key, key};
 use crate::{FrontierError, R};
@@ -751,8 +751,33 @@ pub const fn close_part_counts(part: u8) -> Option<[u8; 5]> {
     }
 }
 
+/// The group counts of a CloseSeason with `n` accounts: parts 0–7 as
+/// [`close_part_counts`]; the float parts 8–10 carry `pairs` of `[target
+/// w] [recipient w]` in the repeat group (1 to [`CLOSE_PAIRS_MAX`] pairs).
+pub const fn close_counts(part: u8, n: usize) -> Option<[u8; 5]> {
+    match part {
+        CLOSE_RING_SEEDS..=CLOSE_CLAIMS => {
+            let fixed = 10;
+            if n <= fixed || (n - fixed) % 2 != 0 || (n - fixed) / 2 > CLOSE_PAIRS_MAX {
+                return None;
+            }
+            Some([1, 6, 1, (n - fixed) as u8, 0])
+        }
+        _ => close_part_counts(part),
+    }
+}
+
 /// The final CloseSeason part.
 pub const CLOSE_FINAL_PART: u8 = 7;
+/// v1.8 (W5-A, W4-B F3): the float the final part cannot reach. Part 8
+/// closes RingSeeds (rent to the stored payer), part 9 AnchorArchives (to
+/// `rent_to`), part 10 DefenceClaims (to the beneficiary).
+pub const CLOSE_RING_SEEDS: u8 = 8;
+pub const CLOSE_ARCHIVES: u8 = 9;
+pub const CLOSE_CLAIMS: u8 = 10;
+/// Most `[target] [recipient]` pairs per float part (the repeat group holds
+/// 48 accounts; a legacy transaction fits about 10 pairs).
+pub const CLOSE_PAIRS_MAX: usize = 24;
 
 /// A Season tombstone (128 B, status Closed) at its PDA: `(id, authority)`.
 pub(crate) fn tombstone(season_ai: &AccountInfo, p: &Pubkey) -> R<(u64, [u8; 32])> {
@@ -800,6 +825,66 @@ fn close_one<'a>(
     Ok(true)
 }
 
+/// One pair of a float part: `target` (a RingSeed, AnchorArchive or
+/// DefenceClaim by part) is closed to `recipient`, which must be the
+/// target's stored payer, `rent_to` or beneficiary (`BadAccount`). The
+/// target is found by its own key fields and must sit at their canonical
+/// address (`BadAddress`); an absent (or pre-funded) target is skipped, so
+/// a repeat is a success. Logs `CLOSE` with the recipient.
+fn close_float<'a>(
+    p: &Pubkey,
+    ctx: &addr::AddrCtx,
+    part: u8,
+    target: &AccountInfo<'a>,
+    recipient: &AccountInfo<'a>,
+    season_id: u64,
+    bell: u32,
+) -> R<bool> {
+    let kind = match part {
+        CLOSE_RING_SEEDS => AccountKind::RingSeed,
+        CLOSE_ARCHIVES => AccountKind::AnchorArchive,
+        _ => AccountKind::DefenceClaim,
+    };
+    if !prologue::presence(target, p, kind, season_id)? {
+        return Ok(false);
+    }
+    let mut raw = [0u8; 12];
+    let (expected, n, to) = {
+        let d = target.try_borrow_data()?;
+        let r = Ro(&d);
+        match kind {
+            AccountKind::RingSeed => {
+                let dd = r.u16(RS::D)?;
+                raw[..2].copy_from_slice(&dd.to_le_bytes());
+                (ctx.ring_seed(dd), 2, r.arr::<32>(RS::PAYER)?)
+            }
+            AccountKind::AnchorArchive => {
+                let (region, part) = (r.u8(AA::REGION)?, r.u32(AA::PART)?);
+                raw[0] = region;
+                raw[1..5].copy_from_slice(&part.to_le_bytes());
+                (
+                    ctx.anchor_archive(region, part),
+                    5,
+                    r.arr::<32>(AA::RENT_TO)?,
+                )
+            }
+            _ => {
+                let (b, day) = (r.arr::<32>(DCL::BENEFICIARY)?, r.u32(DCL::DAY)?);
+                raw[..8].copy_from_slice(&addr::keeper_tag8(&b));
+                raw[8..].copy_from_slice(&day.to_le_bytes());
+                (ctx.defence_claim(&b, day), 12, b)
+            }
+        }
+    };
+    expect_key(target, &expected)?;
+    if key(recipient) != to {
+        return Err(BAD_ACCOUNT);
+    }
+    super::beacon::emit_close_short(kind, &raw[..n], &to, target.lamports(), bell)?;
+    init::close_to(p, target, recipient, &init::Sink::Never, bell)?;
+    Ok(true)
+}
+
 /// 0x05 CloseSeason(part): `[authority s,w] [season w] [frontier w] [pfund
 /// × 6 w] [dpool w] [js × n w] [blog × m w]`, class O (§5.7), repeatable
 /// in parts ([`close_part_counts`]). The Season Ended with `now ≥ end + 72
@@ -813,15 +898,18 @@ fn close_one<'a>(
 /// Closed) and shrinks the Season to 128 B, the lamports above its rent
 /// (the creation bond included) going to the authority.
 ///
-/// Not reachable from this account list (W4-B notes, F3): RingSeeds,
-/// AnchorArchives and DefenceClaims, which §5.2 lists as closed by
-/// CloseSeason (the authority's and keepers' float; v1.7 leaves them to the
-/// architect). Holdings and Citizens left open when the final part runs
+/// v1.8 (W5-A, W4-B F3): parts 8–10 close RingSeeds, AnchorArchives and
+/// DefenceClaims (§5.2) through the repeat group as `[target] [recipient]`
+/// pairs ([`close_float`]); parts 9 and 10 only on the tombstone or an
+/// Aborted season (`TooEarly` before). Holdings and Citizens left open when the final part runs
 /// still close on the tombstone (v1.7: CloseHolding, CloseCitizen), so a
 /// final part run early never locks a player's rent.
 pub fn close_season(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
     let x = aix::CloseSeason::decode(d)?;
-    let counts = close_part_counts(x.part).ok_or(FrontierError::BadData)?;
+    if close_part_counts(x.part).is_none() && !(CLOSE_RING_SEEDS..=CLOSE_CLAIMS).contains(&x.part) {
+        return Err(FrontierError::BadData.into());
+    }
+    let counts = close_counts(x.part, a.len()).ok_or(FrontierError::TooManyAccounts)?;
     check_accounts(Ix::CloseSeason, a, Some(&counts))?;
     let now = prologue::now()?;
     let (authority, season_ai, frontier_ai, funds, dpool, rest) = match a {
@@ -868,6 +956,22 @@ pub fn close_season(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
     }
     let ctx = addr::ctx(&key(season_ai), &p.to_bytes());
     match x.part {
+        CLOSE_RING_SEEDS..=CLOSE_CLAIMS => {
+            // Archives and claims are read by SettleTransit, SettleTicket,
+            // SettleExplore and ClaimDefence while the season is Running
+            // or Ended: they close only once none of those can run (the
+            // tombstone, or Aborted). RingSeeds close from end + 72 h like
+            // the other parts (OpenRing and OpenProvince need Running).
+            if x.part != CLOSE_RING_SEEDS && !tomb && status != S::STATUS_ABORTED {
+                return Err(FrontierError::TooEarly.into());
+            }
+            for pair in rest.chunks(2) {
+                if let [target, recipient] = pair {
+                    close_float(p, &ctx, x.part, target, recipient, id, bell)?;
+                }
+            }
+            Ok(())
+        }
         0..=5 => {
             for (s, shard) in rest.iter().enumerate() {
                 let s = s as u8;

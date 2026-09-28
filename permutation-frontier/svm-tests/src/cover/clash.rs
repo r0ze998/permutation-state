@@ -42,7 +42,14 @@ pub const GATHER_CLASH: &[Cover] = &[
     ),
     Cover::Test("clash::g03_forgery_clash_accounts", &[Err(E::BadAccount)]),
     Cover::Test("clash::g01_budget_clash_kinds", &[Loaded]),
-    Cover::Pending("W5-A: NotTopLevel (a CPI through the probe), RulesetMismatch"),
+    Cover::Test(
+        "clash::clash_g13_top_level_ruleset_status_kernel",
+        &[
+            Err(E::NotTopLevel),
+            Err(E::RulesetMismatch),
+            Lands("GatherClash"),
+        ],
+    ),
 ];
 
 pub const RESOLVE_FROM_INPUTS: &[Cover] = &[
@@ -62,7 +69,15 @@ pub const RESOLVE_FROM_INPUTS: &[Cover] = &[
     ),
     Cover::Test("clash::g03_forgery_clash_accounts", &[Err(E::BadAccount)]),
     Cover::Test("clash::g01_budget_clash_kinds", &[Loaded]),
-    Cover::Pending("W5-A: NotTopLevel, Kernel (an inconsistent stored roster), WrongStatus"),
+    Cover::Test(
+        "clash::clash_g13_top_level_ruleset_status_kernel",
+        &[
+            Err(E::NotTopLevel),
+            Err(E::WrongStatus),
+            Err(E::Kernel),
+            Lands("ResolveFromInputs"),
+        ],
+    ),
 ];
 
 pub const RESOLVE_CLASH: &[Cover] = &[Cover::Test(
@@ -94,7 +109,10 @@ pub const SKIP_QUIET: &[Cover] = &[
         &[Lands("SkipQuiet")],
     ),
     Cover::Test("clash::g01_budget_clash_kinds", &[Loaded]),
-    Cover::Pending("W5-A: NotTopLevel"),
+    Cover::Test(
+        "clash::clash_g13_top_level_ruleset_status_kernel",
+        &[Err(E::NotTopLevel), Lands("SkipQuiet")],
+    ),
 ];
 
 pub const CLOSE_CLASH_INPUTS: &[Cover] = &[

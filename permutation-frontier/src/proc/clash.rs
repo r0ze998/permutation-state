@@ -1291,30 +1291,6 @@ fn heap_used() -> u64 {
     crate::heap::peak()
 }
 
-/// Runs `f` and frees every heap block it allocated (the bump allocator
-/// frees only its top block; `f` returns plain data, so nothing it
-/// allocated is live afterwards). The high-water mark is kept.
-/// Request: move to `heap.rs` as `heap::scoped` (W2-A's file).
-fn heap_scoped<T>(f: impl FnOnce() -> T) -> T {
-    #[cfg(all(target_os = "solana", feature = "custom-heap"))]
-    {
-        let next = crate::heap::HEAP_START as *mut usize;
-        // SAFETY: the first word of the heap region is the bump allocator's
-        // `next` pointer (heap.rs); it is read before and restored after
-        // `f`, whose allocations are all dead when it returns (its result
-        // is plain data at every call site).
-        let saved = unsafe { *next };
-        let v = f();
-        // SAFETY: as above.
-        unsafe { *next = saved };
-        v
-    }
-    #[cfg(not(all(target_os = "solana", feature = "custom-heap")))]
-    {
-        f()
-    }
-}
-
 /// A kernel clash refusal as a program code.
 fn clash_err(_e: kc::ClashError) -> crate::Error {
     kernel(sub::CLASH_INPUT)
@@ -2208,7 +2184,7 @@ pub fn skip_quiet(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
                 true
             } else if tests < SKIP_KERNEL_TESTS && first {
                 tests += 1;
-                let q = heap_scoped(|| {
+                let q = crate::heap::scoped(|| {
                     let built = model::build(&pd, None, b).map_err(|_| ())?;
                     kc::is_quiet(&kc::frontier_ruleset(), &built.input(&[0; 32])).map_err(|_| ())
                 });

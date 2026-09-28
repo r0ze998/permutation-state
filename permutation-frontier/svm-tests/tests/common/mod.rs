@@ -66,3 +66,48 @@ pub fn copy_to_fresh(c: &mut Chain, from: &Address, label: &[u8]) -> Address {
     c.put_program_account(k, d);
     k
 }
+
+/// `g01_loaded_limit_*` (§13.1, I-45): sends `ixs` at `L(ix)` at the
+/// chain's deployed programdata length (must load and land, on a fork) and
+/// one page below the tight limit (must fail `MaxLoadedAccountsDataSize
+/// Exceeded` with the fee charged); `L(ix)` is the tight limit or one page
+/// above it (the formula over-counts by less than a page, so `ixs` must be
+/// the kind's worst account set). Returns the need.
+#[track_caller]
+pub fn loaded_check(
+    c: &Chain,
+    ix: frontier_abi::tags::Ix,
+    ixs: &[permutation_frontier_svm_tests::Instruction],
+    signers: &[&Keypair],
+) -> u64 {
+    use permutation_frontier_svm_tests::chain::{
+        assert_loaded_exceeded, expect_lands, Profile, PAGE,
+    };
+    let pd = c.programdata_len();
+    let l = frontier_abi::budgets::loaded_limit_for(ix, pd);
+    let p = Profile::ladder(ix, pd).with_loaded(l);
+    let t = c.transaction(&p, ixs, signers);
+    let need = c.loaded_size(&t.message);
+    let tight = (need.div_ceil(PAGE as u64) * PAGE as u64) as u32;
+    println!(
+        "g01 L({}) = {l} B at programdata {pd} B: need {need} B, tight {tight} B, slack {} B",
+        ix.name(),
+        l as u64 - need.min(l as u64)
+    );
+    assert!(
+        need <= l as u64,
+        "{}: need {need} B > L(kind) {l} B",
+        ix.name()
+    );
+    let mut f = c.fork();
+    let landed = expect_lands(f.send_with(&p, ixs, signers), ix.name());
+    assert_eq!(landed.loaded, need);
+    let mut f = c.fork();
+    assert_loaded_exceeded(f.send_with(&p.with_loaded(tight - PAGE), ixs, signers));
+    assert!(
+        l == tight || l == tight + PAGE,
+        "{}: L(kind) {l} B is not within a page of the tight {tight} B (not the worst set?)",
+        ix.name()
+    );
+    need
+}

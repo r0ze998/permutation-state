@@ -1,7 +1,7 @@
 //! Coverage of the host area (§5.10, §5.11): Muster, Dissolve, Garrison,
 //! Explore, DisbandStranded, Depart, SettleDeparture (W3-B).
 
-use super::{Cover, Err, Lands, E};
+use super::{Cover, Err, Lands, Loaded, E};
 
 /// Ignored tests of this area waiting for a fix: (test, unit).
 pub const PENDING: &[(&str, &str)] = &[];
@@ -41,6 +41,7 @@ pub const MUSTER: &[Cover] = &[
             Err(E::TooManyAccounts),
         ],
     ),
+    Cover::Test("g13_complete::g13_muster_and_disband_loaded", &[Loaded]),
 ];
 
 pub const DISSOLVE: &[Cover] = &[
@@ -54,7 +55,20 @@ pub const DISSOLVE: &[Cover] = &[
             Err(E::HostInTransit),
         ],
     ),
-    Cover::Pending("W5-A: NotFinal, prologue rows"),
+    Cover::Test(
+        "g13_complete::g13_dissolve_not_final_prologue_and_loaded",
+        &[
+            Err(E::NotFinal),
+            Err(E::WrongStatus),
+            Err(E::RulesetMismatch),
+            Err(E::Bucket),
+            Err(E::SessionExpired),
+            Err(E::Auth),
+            Err(E::BadAddress),
+            Err(E::TooManyAccounts),
+            Loaded,
+        ],
+    ),
 ];
 
 pub const GARRISON: &[Cover] = &[
@@ -67,7 +81,22 @@ pub const GARRISON: &[Cover] = &[
             Err(E::Kernel),
         ],
     ),
-    Cover::Pending("W5-A: NotFinal, NotResident, HostBusy (two pending bells), prologue rows"),
+    Cover::Test(
+        "g13_complete::g13_garrison_final_resident_busy_prologue_and_loaded",
+        &[
+            Err(E::NotFinal),
+            Err(E::NotResident),
+            Err(E::HostBusy),
+            Err(E::WrongStatus),
+            Err(E::RulesetMismatch),
+            Err(E::Bucket),
+            Err(E::SessionExpired),
+            Err(E::Auth),
+            Err(E::BadAddress),
+            Err(E::TooManyAccounts),
+            Loaded,
+        ],
+    ),
 ];
 
 pub const EXPLORE: &[Cover] = &[
@@ -86,16 +115,23 @@ pub const EXPLORE: &[Cover] = &[
             Lands("hx::explore("),
         ],
     ),
+    Cover::Test(
+        "g13_complete::g13_explore_and_settle_explore",
+        &[Loaded, Lands("Explore")],
+    ),
 ];
 
-pub const DISBAND_STRANDED: &[Cover] = &[Cover::Test(
-    "host::host_disband_stranded_frees_a_host_of_a_gone_holding",
-    &[
-        Err(E::NotDormant),
-        Lands("hix::disband_stranded("),
-        Err(E::BadData),
-    ],
-)];
+pub const DISBAND_STRANDED: &[Cover] = &[
+    Cover::Test(
+        "host::host_disband_stranded_frees_a_host_of_a_gone_holding",
+        &[
+            Err(E::NotDormant),
+            Lands("hix::disband_stranded("),
+            Err(E::BadData),
+        ],
+    ),
+    Cover::Test("g13_complete::g13_muster_and_disband_loaded", &[Loaded]),
+];
 
 pub const DEPART: &[Cover] = &[
     Cover::Test(
@@ -117,6 +153,10 @@ pub const DEPART: &[Cover] = &[
             Err(E::Insufficient),
             Err(E::NotFinal),
         ],
+    ),
+    Cover::Test(
+        "g13_complete::g13_depart_and_settle_departure",
+        &[Loaded, Lands("Depart")],
     ),
 ];
 
@@ -141,8 +181,20 @@ pub const SETTLE_DEPARTURE: &[Cover] = &[
         &[Lands("cix::settle_return("), Err(E::AlreadyDone)],
     ),
     Cover::Test(
+        "clash::clash_bounced_resident_leaves_and_returns",
+        &[Lands("ResolveFromInputs"), Err(E::AlreadyDone)],
+    ),
+    Cover::Test(
         "clash::clash_return_settle_is_bounded",
         &[Lands("return 1"), Err(E::AlreadyDone)],
     ),
-    Cover::Pending("W5-A: NotResident (entry gone), WrongStatus"),
+    Cover::Test(
+        "g13_complete::g13_depart_and_settle_departure",
+        &[
+            Err(E::WrongStatus),
+            Err(E::NotResident),
+            Loaded,
+            Lands("SettleDeparture"),
+        ],
+    ),
 ];

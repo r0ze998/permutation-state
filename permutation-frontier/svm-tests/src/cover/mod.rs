@@ -134,6 +134,19 @@ pub const EXEMPT: &[(E, &str)] = &[
         E::NotImplemented,
         "dev stubs only; RELEASE_CHECK=1 fails if any path returns it",
     ),
+    // W5-A (G13 completion, amendment request §5.4): two codes of the
+    // table no M1 path emits. A ticket for a taken site ends as the SETTLE
+    // outcome `taken` (I-47), not a refusal; an instruction on an Aborted
+    // season is `WrongStatus` (§5.6 status sets). Kept reserved (codes
+    // are stable forever).
+    (
+        E::SiteTaken,
+        "reserved in M1: a taken site is the SETTLE outcome `taken` (I-47)",
+    ),
+    (
+        E::Aborted,
+        "reserved in M1: an Aborted season is `WrongStatus` (§5.6)",
+    ),
 ];
 
 /// Ignored tests that run only when an environment variable provides what

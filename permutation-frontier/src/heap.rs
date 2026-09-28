@@ -130,6 +130,31 @@ pub fn peak() -> u64 {
     }
 }
 
+/// Runs `f` and then frees every heap block it allocated: the bump
+/// allocator's `next` word is restored, so the space is handed out again
+/// (the high-water mark is kept). Sound only when nothing `f` allocated is
+/// live afterwards: `f` must return plain data (W4-A D9; SkipQuiet's
+/// kernel quiet test).
+pub fn scoped<T: Copy>(f: impl FnOnce() -> T) -> T {
+    #[cfg(all(target_os = "solana", feature = "custom-heap"))]
+    {
+        let next = HEAP_START as *mut usize;
+        // SAFETY: the first word of the heap region is the bump allocator's
+        // `next` pointer ([`Bump`]); it is read before and restored after
+        // `f`, whose allocations are all dead when it returns (`T: Copy`
+        // owns no heap block).
+        let saved = unsafe { *next };
+        let v = f();
+        // SAFETY: as above.
+        unsafe { *next = saved };
+        v
+    }
+    #[cfg(not(all(target_os = "solana", feature = "custom-heap")))]
+    {
+        f()
+    }
+}
+
 /// CU checkpoint of `trace` builds: logs `("CU", tag, heap peak)` and the
 /// remaining compute units; the harness takes differences. Free in every
 /// other build.
@@ -178,6 +203,12 @@ mod tests {
             assert_eq!(f as usize, e as usize + 1);
         }
         drop(region);
+    }
+
+    #[test]
+    fn scoped_returns_the_closures_value() {
+        assert_eq!(scoped(|| 41 + 1), 42);
+        assert_eq!(scoped(|| Ok::<bool, ()>(true)), Ok(true));
     }
 
     #[test]

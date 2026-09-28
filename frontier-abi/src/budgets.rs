@@ -2,12 +2,12 @@
 //!
 //! Per instruction kind: the CU budget the gate asserts, the CU limit to
 //! request, the loaded-data limit `L(kind)`, the tx byte ceiling, the heap
-//! ceiling and the lock count. **Wave-1 values are placeholders**: the CU
-//! limit equals the budget until W5-A regenerates it from the G1
-//! measurements (measured max + 5%), and `L(kind)` is computed from the
-//! kind's worst account set (from [`crate::prologue::accounts_of`]) with a
-//! placeholder programdata length until the release `.so` exists; the
-//! value requested is never below the 1-MiB working default (I-45).
+//! ceiling and the lock count. **W5-A regenerated the table:** the CU
+//! limit is the G1 measured maximum + 5 % ([`MEASURED`]), and `L(kind)` is
+//! computed from the kind's worst account set (from
+//! [`crate::prologue::accounts_of`]) at the release `.so`'s programdata
+//! length ([`PLACEHOLDER_SO_LEN`]); the value requested is never below the
+//! 1-MiB working default (I-45).
 //!
 //! `L(kind) = round_up(programdata_len + 45 + Σ_accounts (data_len + 64), 32,768)`
 //! over every account the transaction loads (SIMD-0186 counts the LoaderV3
@@ -43,16 +43,17 @@ pub const PROGRAM_ACCOUNT_LEN: u32 = 36;
 /// Data counted for a builtin program account (System, ComputeBudget,
 /// the incinerator) [estimate, conservative].
 pub const BUILTIN_DATA_LEN: u32 = 64;
-/// Placeholder `.so` length for `L(kind)`, deployed at
+/// The `.so` length `L(kind)` is computed for, deployed at
 /// `round_up(1.25 × .so, 4 KiB)` (I-45). Waves 1–3 used SP-V2's
-/// `program-kprobe` release `.so` (540,608 B). integ-W4 (contract v1.6
-/// §22): the merged wave-4 release `.so` is 1,021,160 B [measured] (the
-/// clash kernel is linked; W4-A §2), so its programdata (1,277,952 B) no
-/// longer fits the 1-MiB working default and every transaction was refused
-/// `MaxLoadedAccountsDataSizeExceeded` before the program ran. The
-/// placeholder is 1 MiB (≈ 27 KB of growth headroom over the merged `.so`)
-/// until W5-A regenerates `L(kind)` and the presets from the final `.so`.
-pub const PLACEHOLDER_SO_LEN: u32 = 1_048_576;
+/// `program-kprobe` release `.so` (540,608 B); integ-W4 a 1-MiB
+/// placeholder over the merged wave-4 `.so` (1,021,160 B; v1.7:
+/// 1,032,184 B). **W5-A (regenerated from the release `.so`):** the
+/// kernel's shared sort brought the release `.so` to **869,536 B**
+/// [measured, `scripts/build-frontier.sh`, max_len 1,089,536]; the value is
+/// that length rounded up to 16 KiB (≈ 15 KB of growth headroom). The svm
+/// guard `g01_loaded_limit_table_covers_the_release_so` fails when the
+/// release `.so` outgrows it.
+pub const PLACEHOLDER_SO_LEN: u32 = 884_736;
 pub const PLACEHOLDER_PROGRAMDATA_LEN: u32 = max_len_for(PLACEHOLDER_SO_LEN);
 
 /// `--max-len = round_up(1.25 × so_len, 4,096)` (I-45).
@@ -69,7 +70,7 @@ pub struct Budget {
     pub cu_budget: u32,
     /// Extra CU per unit of work (SkipQuiet: per recomputed bell).
     pub cu_per_unit: u32,
-    /// CU limit to request [placeholder: the budget until W5-A].
+    /// CU limit to request (W5-A: the G1 maximum + 5 %, [`MEASURED`]).
     pub cu_limit: u32,
     /// Tx byte ceiling as §5.5 lists it. Many rows are below the smallest
     /// real transaction (64-B signatures, blockhash, the three ComputeBudget
@@ -78,25 +79,33 @@ pub struct Budget {
 }
 
 macro_rules! budgets {
-    ($( $ix:ident: $cu:expr, $per:expr, $tx:expr; )*) => {
+    ($( $ix:ident: $cu:expr, $per:expr, $tx:expr, $measured:expr; )*) => {
         /// §5.5 budget table.
         pub const TABLE: &[Budget] = &[ $( Budget {
             ix: Ix::$ix,
             cu_budget: $cu,
             cu_per_unit: $per,
-            cu_limit: limit_of($cu, $per),
+            cu_limit: limit_of($cu, $per, $measured),
             tx_contract: $tx,
         }, )* ];
+        /// The G1 maxima the CU limits come from (W5-A), per kind in table
+        /// order: `(kind, measured max CU)`; 0 = no fixed measure (SkipQuiet
+        /// scales with its bells, ResolveClash is ungated and test-only).
+        pub const MEASURED: &[(Ix, u32)] = &[ $( (Ix::$ix, $measured), )* ];
     };
 }
 
-/// Placeholder CU limit: the budget (SkipQuiet: 24 recomputed bells;
-/// ResolveClash: the ladder maximum), capped at 1.4M.
-const fn limit_of(cu: u32, per: u32) -> u32 {
+/// The CU limit to request (§5.5, I-50): the G1 measured maximum + 5 %,
+/// rounded up to 500 (W5-A, from the release and test-beacon `.so` over
+/// the svm suite's worst fills, `PSF_CU_LOG`); SkipQuiet: the budget at 24
+/// recomputed bells; ResolveClash: the ladder maximum; capped at 1.4M.
+const fn limit_of(cu: u32, per: u32, measured: u32) -> u32 {
     let l = if cu == 0 {
         CU_LADDER_MAX
-    } else {
+    } else if measured == 0 {
         cu + 24 * per
+    } else {
+        ((measured as u64 * 105).div_ceil(100 * 500) * 500) as u32
     };
     if l > CU_LADDER_MAX {
         CU_LADDER_MAX
@@ -106,56 +115,56 @@ const fn limit_of(cu: u32, per: u32) -> u32 {
 }
 
 budgets! {
-    AnnounceSeason: 25_000, 0, 480;
-    CreateSeason: 70_000, 0, 1_100;
-    InitBeaconLogs: 80_000, 0, 900;
-    InitShards: 45_000, 0, 600;
-    ConsumeGenesisSeed: 345_000, 0, 760;
-    EndSeason: 10_000, 0, 300;
-    CloseSeason: 60_000, 0, 1_232;
-    AbortSeason: 20_000, 0, 300;
-    SetWindowSchedule: 5_000, 0, 200;
-    PostAnchor: 345_000, 0, 800;
-    PostAnchorMulti: 400_000, 0, 1_232;
-    PostSeed: 345_000, 0, 800;
-    PostBeacon: 340_000, 0, 760;
-    ArchiveAnchors: 60_000, 0, 1_232;
-    CloseSeedCache: 6_000, 0, 300;
-    OpenRing: 30_000, 0, 600;
-    ConsumeRingSeed: 345_000, 0, 760;
-    OpenProvince: 220_000, 0, 400;
-    FoldOccupancy: 30_000, 0, 1_200;
-    CloseProvince: 10_000, 0, 300;
-    Join: 25_000, 0, 700;
-    SetSession: 6_000, 0, 300;
-    SetVigil: 6_000, 0, 250;
-    FileTicket: 17_000, 0, 560;
-    SettleTicket: 40_000, 0, 900;
-    ReleaseDormant: 25_000, 0, 480;
-    CloseHolding: 15_000, 0, 330;
-    CloseCitizen: 10_000, 0, 300;
-    Harvest: 17_500, 0, 320;
-    Build: 22_000, 0, 360;
-    Train: 17_500, 0, 330;
-    Muster: 25_000, 0, 380;
-    Dissolve: 25_000, 0, 380;
-    Garrison: 25_000, 0, 380;
-    Explore: 20_000, 0, 380;
-    SettleExplore: 15_000, 0, 400;
-    DisbandStranded: 12_000, 0, 300;
-    Depart: 24_500, 0, 800;
-    Reveal: 26_000, 0, 1_100;
-    SettleDeparture: 15_000, 0, 400;
-    SettleTransit: 85_000, 0, 1_100;
-    SweepPoolOwed: 8_000, 0, 300;
-    GatherClash: 49_000, 0, 1_232;
-    ResolveFromInputs: 340_000, 0, 460;
-    ResolveClash: 0, 0, 1_232;
-    SkipQuiet: 90_000, 30_000, 1_232;
-    CloseClashInputs: 8_000, 0, 300;
-    CloseArrivalDay: 8_000, 0, 300;
-    CloseArrivalSlot: 8_000, 0, 300;
-    ClaimDefence: 25_500, 0, 1_000;
+    AnnounceSeason: 25_000, 0, 480, 18_608;
+    CreateSeason: 70_000, 0, 1_100, 42_198;
+    InitBeaconLogs: 80_000, 0, 900, 74_690;
+    InitShards: 45_000, 0, 600, 39_314;
+    ConsumeGenesisSeed: 345_000, 0, 760, 329_426;
+    EndSeason: 10_000, 0, 300, 3_298;
+    CloseSeason: 60_000, 0, 1_232, 37_423;
+    AbortSeason: 20_000, 0, 300, 4_567;
+    SetWindowSchedule: 5_000, 0, 200, 3_610;
+    PostAnchor: 345_000, 0, 800, 339_142;
+    PostAnchorMulti: 400_000, 0, 1_232, 380_130;
+    PostSeed: 345_000, 0, 800, 339_178;
+    PostBeacon: 340_000, 0, 760, 332_479;
+    ArchiveAnchors: 60_000, 0, 1_232, 45_441;
+    CloseSeedCache: 6_000, 0, 300, 5_590;
+    OpenRing: 30_000, 0, 600, 15_210;
+    ConsumeRingSeed: 345_000, 0, 760, 332_701;
+    OpenProvince: 220_000, 0, 400, 148_459;
+    FoldOccupancy: 30_000, 0, 1_200, 28_737;
+    CloseProvince: 10_000, 0, 300, 5_502;
+    Join: 25_000, 0, 700, 12_495;
+    SetSession: 6_000, 0, 300, 5_259;
+    SetVigil: 6_000, 0, 250, 5_204;
+    FileTicket: 17_000, 0, 560, 16_096;
+    SettleTicket: 40_000, 0, 900, 22_383;
+    ReleaseDormant: 25_000, 0, 480, 11_864;
+    CloseHolding: 15_000, 0, 330, 6_750;
+    CloseCitizen: 10_000, 0, 300, 6_191;
+    Harvest: 17_500, 0, 320, 16_409;
+    Build: 22_000, 0, 360, 19_145;
+    Train: 17_500, 0, 330, 16_641;
+    Muster: 25_000, 0, 380, 20_669;
+    Dissolve: 25_000, 0, 380, 18_602;
+    Garrison: 25_000, 0, 380, 18_052;
+    Explore: 20_000, 0, 380, 18_865;
+    SettleExplore: 15_000, 0, 400, 8_281;
+    DisbandStranded: 12_000, 0, 300, 5_439;
+    Depart: 24_500, 0, 800, 23_167;
+    Reveal: 26_000, 0, 1_100, 25_155;
+    SettleDeparture: 15_000, 0, 400, 10_552;
+    SettleTransit: 85_000, 0, 1_100, 63_281;
+    SweepPoolOwed: 8_000, 0, 300, 5_066;
+    GatherClash: 49_000, 0, 1_232, 46_347;
+    ResolveFromInputs: 340_000, 0, 460, 329_863;
+    ResolveClash: 0, 0, 1_232, 0;
+    SkipQuiet: 90_000, 30_000, 1_232, 0;
+    CloseClashInputs: 8_000, 0, 300, 7_064;
+    CloseArrivalDay: 8_000, 0, 300, 5_622;
+    CloseArrivalSlot: 8_000, 0, 300, 6_120;
+    ClaimDefence: 25_500, 0, 1_000, 24_111;
 }
 
 /// The row of `ix`.
@@ -399,6 +408,31 @@ mod tests {
         assert_eq!(cu_gate(Ix::SkipQuiet, 2), 150_000);
         assert_eq!(budget(Ix::Reveal).cu_budget, 26_000);
         assert_eq!(budget(Ix::ResolveFromInputs).cu_budget, 340_000);
+        // W5-A: limits are the G1 maxima + 5 %, rounded up to 500.
+        assert_eq!(budget(Ix::Reveal).cu_limit, 26_500);
+        assert_eq!(budget(Ix::ResolveFromInputs).cu_limit, 346_500);
+        assert_eq!(budget(Ix::SkipQuiet).cu_limit, 90_000 + 24 * 30_000);
+        assert_eq!(budget(Ix::ResolveClash).cu_limit, CU_LADDER_MAX);
+        for (ix, m) in MEASURED {
+            let b = budget(*ix);
+            assert!(
+                b.cu_limit >= *m,
+                "{}: the limit covers the maximum",
+                ix.name()
+            );
+            if *m > 0 && b.cu_budget > 0 {
+                assert!(
+                    *m <= b.cu_budget,
+                    "{}: the G1 maximum is within its gate",
+                    ix.name()
+                );
+                assert!(
+                    b.cu_limit <= *m + *m / 20 + 501,
+                    "{}: +5 %, rounded to 500",
+                    ix.name()
+                );
+            }
+        }
     }
 
     #[test]
@@ -406,9 +440,10 @@ mod tests {
         // round_up(1.25 × 540,608 = 675,760, 4,096) = 675,840 (waves 1–3)
         assert_eq!(max_len_for(540_608), 675_840);
         // round_up(1.25 × 1,048,576 = 1,310,720, 4,096) (integ-W4)
-        assert_eq!(PLACEHOLDER_PROGRAMDATA_LEN, 1_310_720);
-        // the merged wave-4 release `.so` [measured] fits under it
-        assert!(max_len_for(1_021_160) <= PLACEHOLDER_PROGRAMDATA_LEN);
+        assert_eq!(max_len_for(1_048_576), 1_310_720);
+        // W5-A: the release `.so` [measured] fits under the table's length
+        assert_eq!(PLACEHOLDER_PROGRAMDATA_LEN, 1_105_920);
+        assert!(max_len_for(869_536) <= PLACEHOLDER_PROGRAMDATA_LEN);
         assert_eq!(max_len_for(4_096), 8_192);
     }
 

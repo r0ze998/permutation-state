@@ -115,18 +115,19 @@ fn g13_coverage_registry_names_real_tests_that_assert_their_codes() {
         problems.join("\n")
     );
     println!("{} Pending entries:\n{}", pending.len(), pending.join("\n"));
+    let missing: Vec<_> = FrontierError::ALL
+        .iter()
+        .filter(|e| !EXEMPT.iter().any(|(x, _)| x == *e))
+        .filter(|e| !asserted.contains(&e.code()))
+        .map(|e| e.name())
+        .collect();
+    println!("{} codes no test asserts yet: {missing:?}", missing.len());
     if release_check() {
         assert!(
             pending.is_empty(),
             "RELEASE_CHECK=1: pending coverage:\n{}",
             pending.join("\n")
         );
-        let missing: Vec<_> = FrontierError::ALL
-            .iter()
-            .filter(|e| !EXEMPT.iter().any(|(x, _)| x == *e))
-            .filter(|e| !asserted.contains(&e.code()))
-            .map(|e| e.name())
-            .collect();
         assert!(
             missing.is_empty(),
             "RELEASE_CHECK=1: codes no test asserts: {missing:?}"
@@ -147,6 +148,8 @@ fn g13_coverage_exempt_codes_are_reserved_ones() {
                 FrontierError::Reserved14
                     | FrontierError::TipNotPreset
                     | FrontierError::NotImplemented
+                    | FrontierError::SiteTaken
+                    | FrontierError::Aborted
             ),
             "{e:?} exempt: {why}"
         );
