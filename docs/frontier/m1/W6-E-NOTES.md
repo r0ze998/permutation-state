@@ -28,7 +28,8 @@
 | `w6a-real1` (**W6-A's archive smoke with real quicknet rounds and the release `.so` 874,120 B, sha256 `1b1968af…06fc`**; verify PASS) | 10 | 19,911 / 21,418 / 21,418 |
 | **pooled in play** | **18** | **19,772 / 21,418 / 21,418** (whole transaction ≈ +450) |
 | svm suite, every landed single-Reveal transaction, run here (`PSF_FEATURES="test-beacon" PSF_CU_LOG=… svm-tests/run.sh --release --no-fail-fast`) | 126 | 20,172 / 25,155 / 25,155 (units per transaction; the G1 worst 25,155 is `budgets::MEASURED`) |
-| **not included** | — | W6-A's scale-2 latency run (`w6-latency`, running, ≈ 3 h), W6-A's nightly `w6a-nightly-1` (started while this unit was finishing; see §6), the 7-day season `w6-s7` (main session, after wave 6) |
+| `w6a-nightly-1` (W6-A's first wave-6 nightly: test key, 100 bots × 1 game day, verify PASS; read after it finished) | 0 | — (its bots marched none) |
+| **not included** | — | W6-A's scale-2 latency run (`w6-latency`, running, ≈ 3 h), the 7-day season `w6-s7` (main session, after wave 6) |
 
 Every in-play Reveal so far was the first of its province-bell (ArrivalDay written, 3 write locks) and ≤ 1 reveal per bell: the bots of these runs march rarely (W6-C's `--day0-share`/`--eager-personas` fix is wave 6). The model is re-run in one command from any run directory (`m1/c4-v3/README.md`); only the in-play rows and the measured R99 can move, since the scheduler prices the *requested* limit.
 
@@ -76,5 +77,5 @@ None (no manifest, lockfile, toolchain or `.gitignore` change; the scripts use t
 
 ## 6. Pending
 
-- Re-run the model with W6-A's `w6-latency` and `w6a-nightly-1` run directories when they finish, and with `w6-s7` after the main session's 7-day season (commands in `m1/c4-v3/README.md`); update DESIGN §22.2's in-play rows and §22.4's measured R99 then (the triage pass or W7-C).
+- Re-run the model with W6-A's `w6-latency` run directory when it finishes (`w6a-nightly-1` was read: no Reveal), and with `w6-s7` after the main session's 7-day season (commands in `m1/c4-v3/README.md`); update DESIGN §22.2's in-play rows and §22.4's measured R99 then (the triage pass or W7-C).
 - Owner confirmations: D18 (keep 20 SOL, caps final), the R99 recommendation, and — separately and only if wanted — O-M1-18 (the playtest), for which the runbook's gaps G1–G8 must close first.
