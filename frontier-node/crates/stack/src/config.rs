@@ -134,6 +134,11 @@ pub struct StackConfig {
     pub scale: f64,
     /// The pre-season scale: AnnounceSeason's 24-h lead in ≈ 43 s (I-54).
     pub preseason_scale: f64,
+    /// The scale of the keeper-only drain after play (W6-A). `None`: the
+    /// run's scale, but at least 20× (the exit run's scale), so a scale-2
+    /// latency run does not spend 2.2 h of wall time on its 26-bell drain.
+    /// Latencies are judged over play only.
+    pub drain_scale: Option<f64>,
     /// Play length in game days (fractional allowed), unless `game_hours`.
     pub days: f64,
     pub game_hours: Option<f64>,
@@ -146,6 +151,12 @@ pub struct StackConfig {
     pub personas: String,
     /// Extra `frontier-bots` flags, passed through as given.
     pub bots_args: Vec<String>,
+    /// Pass `--day0-share 1 --eager-personas` to `frontier-bots` when it
+    /// supports them (W6-A; the in-process day's pacing, W5-B F2). `None`:
+    /// on for runs shorter than one game day (the 6-game-hour latency run
+    /// otherwise saw 43 of 300 bots join and no march in 3.5 game hours),
+    /// off otherwise.
+    pub eager_bots: Option<bool>,
     pub season_id: u64,
     pub base_port: u16,
     pub offsets: Offsets,
@@ -210,6 +221,7 @@ impl Default for StackConfig {
             beacon: Beacon::TestKey,
             scale: 100.0,
             preseason_scale: 2_000.0,
+            drain_scale: None,
             days: 1.0,
             game_hours: None,
             drain_bells: 26,
@@ -217,6 +229,7 @@ impl Default for StackConfig {
             bot_seed: 1,
             personas: "default".into(),
             bots_args: vec![],
+            eager_bots: None,
             season_id: 7,
             base_port: 41_000,
             offsets: Offsets::default(),
@@ -326,6 +339,9 @@ impl StackConfig {
         if let Some(v) = f!("preseason_scale") {
             c.preseason_scale = pos(v, "preseason_scale")?;
         }
+        if let Some(v) = f!("drain_scale") {
+            c.drain_scale = Some(pos(v, "drain_scale")?);
+        }
         if let Some(v) = f!("days") {
             c.days = pos(v, "days")?;
         }
@@ -350,6 +366,9 @@ impl StackConfig {
         }
         if let Some(v) = s!("bots_args") {
             c.bots_args = v.split_whitespace().map(String::from).collect();
+        }
+        if let Some(v) = b!("eager_bots") {
+            c.eager_bots = Some(v);
         }
         if let Some(v) = i!("season_id") {
             c.season_id = v as u64;
@@ -508,6 +527,9 @@ impl StackConfig {
         if !(self.preseason_scale > 0.0 && self.preseason_scale <= 100_000.0) {
             return Err("preseason_scale in (0, 100000]".into());
         }
+        if !(self.drain_scale() > 0.0 && self.drain_scale() <= 100_000.0) {
+            return Err("drain_scale in (0, 100000]".into());
+        }
         if let Some(t) = self
             .chaos_targets
             .iter()
@@ -554,6 +576,17 @@ impl StackConfig {
     }
 
     /// Play length in game seconds.
+    /// Whether the fleet is asked for the in-process day's pacing.
+    pub fn eager_bots(&self) -> bool {
+        self.eager_bots.unwrap_or(self.play_secs() < 86_400)
+    }
+
+    /// The drain's scale: `drain_scale`, else the run's scale but at
+    /// least 20×.
+    pub fn drain_scale(&self) -> f64 {
+        self.drain_scale.unwrap_or(self.scale.max(20.0))
+    }
+
     pub fn play_secs(&self) -> i64 {
         match self.game_hours {
             Some(h) => (h * 3_600.0).round() as i64,
@@ -578,6 +611,7 @@ impl StackConfig {
             "beacon": self.beacon.name(),
             "scale": self.scale,
             "preseason_scale": self.preseason_scale,
+            "drain_scale": self.drain_scale(),
             "days": self.days,
             "game_hours": self.game_hours,
             "drain_bells": self.drain_bells,
@@ -585,6 +619,7 @@ impl StackConfig {
             "bot_seed": self.bot_seed,
             "personas": self.personas,
             "bots_args": self.bots_args,
+            "eager_bots": self.eager_bots(),
             "season_id": self.season_id,
             "base_port": self.base_port,
             "g0": self.g0,
@@ -644,6 +679,7 @@ pub fn apply_flags(c: &mut StackConfig, flags: &[(String, Option<String>)]) -> R
             "beacon" => c.beacon = parse_beacon(&need(k, v)?)?,
             "scale" => c.scale = pos(num(k, v)?, "--scale")?,
             "preseason-scale" => c.preseason_scale = pos(num(k, v)?, "--preseason-scale")?,
+            "drain-scale" => c.drain_scale = Some(pos(num(k, v)?, "--drain-scale")?),
             "days" => {
                 c.days = pos(num(k, v)?, "--days")?;
                 c.game_hours = None;
@@ -695,6 +731,8 @@ pub fn apply_flags(c: &mut StackConfig, flags: &[(String, Option<String>)]) -> R
             }
             "viewer-start-hours" => c.viewer_start_hours = num(k, v)?.max(0.0),
             "keep-running" => c.pause_at_end = false,
+            "eager-bots" => c.eager_bots = Some(true),
+            "no-eager-bots" => c.eager_bots = Some(false),
             "no-keeper-b" => c.keeper_b = false,
             "runs-dir" => c.runs_dir = Some(need(k, v)?.into()),
             other => return Err(format!("unknown flag --{other}")),
@@ -712,6 +750,8 @@ pub const SWITCHES: &[&str] = &[
     "no-adversary",
     "keep-running",
     "no-keeper-b",
+    "eager-bots",
+    "no-eager-bots",
     "json",
     "strict",
     "force",
@@ -784,6 +824,40 @@ mod tests {
         assert_eq!(c.play_secs(), 21_600);
         assert!(!c.chaos);
         assert_eq!(c.ports().unwrap().herald, 41_041);
+    }
+
+    /// W6-A: eager bots by default only below one game day.
+    #[test]
+    fn eager_bots_defaults() {
+        let mut c = StackConfig::default();
+        assert!(!c.eager_bots(), "a one-day run keeps the fleet's pacing");
+        c.game_hours = Some(6.0);
+        assert!(c.eager_bots());
+        let f = split_flags(&["--no-eager-bots".into()]).unwrap();
+        apply_flags(&mut c, &f).unwrap();
+        assert!(!c.eager_bots());
+        let t = StackConfig::from_toml("days = 7\neager_bots = true\n").unwrap();
+        assert!(t.eager_bots());
+    }
+
+    /// W6-A: the drain of a slow run goes at 20x unless set; faster runs
+    /// drain at their own scale.
+    #[test]
+    fn drain_scale_defaults() {
+        let mut c = StackConfig::default();
+        assert_eq!(c.drain_scale(), 100.0);
+        c.scale = 2.0;
+        assert_eq!(c.drain_scale(), 20.0);
+        c.scale = 20.0;
+        assert_eq!(c.drain_scale(), 20.0);
+        let f = split_flags(&["--drain-scale".into(), "50".into()]).unwrap();
+        apply_flags(&mut c, &f).unwrap();
+        assert_eq!(c.drain_scale(), 50.0);
+        let t = StackConfig::from_toml("scale = 2\ndrain_scale = 2\n").unwrap();
+        assert_eq!(t.drain_scale(), 2.0);
+        assert!(split_flags(&["--drain-scale".into(), "0".into()])
+            .and_then(|f| apply_flags(&mut StackConfig::default(), &f))
+            .is_err());
     }
 
     #[test]

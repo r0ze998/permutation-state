@@ -338,4 +338,28 @@ mod tests {
         );
         assert!(pins(&json!({})).is_err());
     }
+
+    /// W6-A archive smoke: on a real-round run the pinned key is quicknet's,
+    /// so T10 ("wrong drand key") must swap in another key (it used to set
+    /// quicknet's and was missed).
+    #[test]
+    fn t10_uses_a_key_other_than_the_pinned_one() {
+        let fx = fixtures(&repo()).expect("fixtures");
+        let mut run = fx
+            .iter()
+            .find(|(n, _)| *n == "land-program")
+            .expect("land-program")
+            .1
+            .clone();
+        let test_key = fclient::beacon::TestKey::new().pk96;
+        let quicknet = pins(&json!({"beacon": "archive", "so": {}})).unwrap().0;
+        for pinned in [test_key, quicknet] {
+            run.cfg.quicknet_pk = pinned;
+            let case = tamper::t10(&run).expect("t10");
+            assert_ne!(case.input.cfg.quicknet_pk, pinned);
+            assert!(
+                case.input.cfg.quicknet_pk == test_key || case.input.cfg.quicknet_pk == quicknet
+            );
+        }
+    }
 }

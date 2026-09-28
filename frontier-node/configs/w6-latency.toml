@@ -1,7 +1,11 @@
 # The scale-2 latency run (M1 contract §12 Gate W6, §13.4 criterion 3's
 # game-second targets: round -> anchor <= 5 s, S -> cache <= 5 s, anchor ->
 # last reveal <= 30 s, close -> resolve <= 60 s, all p99): 6 game hours
-# (3 h of wall time), 300 bots, chaos on.
+# (3 h of wall time), 300 bots, chaos on. The 26-bell keeper-only drain
+# runs at 20x (`drain_scale`, W6-A: at 2x it took 2.2 h more); latencies
+# are judged over play only. The fleet gets `--day0-share 1
+# --eager-personas` when frontier-bots offers them (`eager_bots`, the
+# default below one game day), so marches happen within 6 game hours.
 #
 #   frontier-stack up --config frontier-node/configs/w6-latency.toml
 run_id = "w6-latency"
@@ -9,6 +13,7 @@ mode = "accel"
 beacon = "test-key"
 scale = 2
 preseason_scale = 2000
+drain_scale = 20
 game_hours = 6
 drain_bells = 26
 bots = 300

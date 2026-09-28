@@ -5,7 +5,10 @@
 # adversary schedule), then verify, tamper, a 5,000-viewer load for one game
 # hour, the run report, and down (always, also on failure).
 #
-#   scripts/m1-nightly.sh [--no-build] [extra `frontier-stack up` flags...]
+#   scripts/m1-nightly.sh [--no-build] [--run-id ID] [extra `frontier-stack up` flags...]
+#
+# --run-id (W6-A) names the run (default nightly-YYYYMMDD), so more than one
+# night can run on one date without replacing the previous run directory.
 #
 # Builds first (frontier-node release binaries and the test-beacon .so)
 # unless --no-build. Writes frontier-node/.local/frontier/<run-id>/ and a
@@ -19,11 +22,14 @@ CONFIG="frontier-node/configs/nightly.toml"
 RUN_ID="nightly-$(date -u +%Y%m%d)"
 BUILD=1
 EXTRA=""
-for a in "$@"; do
-  case "$a" in
+while [ $# -gt 0 ]; do
+  case "$1" in
     --no-build) BUILD=0 ;;
-    *) EXTRA="$EXTRA $a" ;;
+    --run-id) shift; RUN_ID="${1:-}"; [ -n "$RUN_ID" ] || { echo "--run-id needs a value" >&2; exit 2; } ;;
+    --run-id=*) RUN_ID="${1#--run-id=}" ;;
+    *) EXTRA="$EXTRA $1" ;;
   esac
+  shift
 done
 
 cd "$ROOT" || exit 2

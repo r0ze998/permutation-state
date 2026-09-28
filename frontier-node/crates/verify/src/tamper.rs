@@ -663,11 +663,19 @@ pub fn t09(march: &Input) -> Made {
     })
 }
 
-/// T10: the wrong drand key.
+/// T10: the wrong drand key. A test-key run is judged against the real
+/// quicknet key; a real-round run (the pinned key *is* quicknet's; W6-A
+/// archive smoke: the old builder left the input unchanged and T10 was
+/// missed) against the test key.
 pub fn t10(land: &Input) -> Made {
     let mut inp = land.clone();
-    inp.cfg.quicknet_pk =
+    let quicknet: [u8; 96] =
         crate::input::hex_arr(fclient::beacon::QUICKNET_PK).need("quicknet key")?;
+    inp.cfg.quicknet_pk = if land.cfg.quicknet_pk == quicknet {
+        fclient::beacon::TestKey::new().pk96
+    } else {
+        quicknet
+    };
     Ok(Case {
         class: "T10",
         what: "wrong quicknet key",
