@@ -15,6 +15,7 @@
 //! | [`seal`] | the 37-B plaintext, tlock seals, the stock opener and seal codes |
 //! | [`land`] | ticket scores and order, cohorts, expiry, the ring crowding rule, dormancy (W3-C) |
 //! | [`play`] | seal opening, reveal order and slot index, path provinces, gather parts, settlement rank (W4-C) |
+//! | [`clash_model`] | the program's ClashInput builder over account bytes (herald, verifier; integ-W4 review) |
 //! | [`clock`] | rule times and the `GameClock` |
 //! | [`payers`] | reveal and delay pools, uniform draws, funders, payer care |
 //! | [`vectors`] | `permutation-gateway/test/frontier-vectors.json` |
@@ -22,6 +23,7 @@ pub mod abi;
 pub mod addr;
 pub mod beacon;
 pub mod budgets;
+pub mod clash_model;
 pub mod clock;
 pub mod decode;
 pub mod fees;

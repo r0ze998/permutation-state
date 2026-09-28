@@ -81,12 +81,17 @@ macro_rules! tamper_test {
 }
 
 tamper_test!(tamper_t01_drop_a_depart, t01, march);
+tamper_test!(tamper_t01b_drop_an_unchained_transaction, t01b, land);
 tamper_test!(tamper_t02_flip_a_reveal_plaintext_byte, t02, march);
 tamper_test!(tamper_t03_shift_an_anchor_a, t03, land);
 tamper_test!(tamper_t04_inject_a_second_anchor, t04, land);
 tamper_test!(tamper_t05_swap_a_cache_signature, t05, land);
 tamper_test!(tamper_t06_set_account_on_a_province, t06, march);
-tamper_test!(tamper_t06b_rogue_write_between_resolves, t06b, march);
+tamper_test!(
+    tamper_t06b_rogue_write_between_resolves,
+    t06b,
+    march_program
+);
 tamper_test!(tamper_t07_valid_seal_marked_bad, t07, march);
 tamper_test!(tamper_t08_displacement_slot_changed, t08, march);
 tamper_test!(tamper_t09_departure_mass_altered, t09, march);
@@ -107,7 +112,7 @@ tamper_test!(tamper_t22_bad_seal_logged_as_surviving, t22, march);
 /// Every class of §8.5 has a case, each with a `mutate-` feature.
 #[test]
 fn tamper_classes_are_complete() {
-    let cases = tamper::all(&land(), &march());
+    let cases = tamper::all(&land(), &march(), &march_program());
     for n in 1..=22 {
         let c = format!("T{n}");
         assert!(cases.iter().any(|x| x.class == c), "{c} missing");
@@ -119,3 +124,35 @@ fn tamper_classes_are_complete() {
 }
 
 tamper_test!(tamper_v9a_non_canonical_address, v9a, land);
+
+// The classes that apply to the season recorded from the merged program
+// (`march-program.json.gz`, integ-W4 review: T1–T22 had run only on the
+// synthetic season and the wave-3 land recording).
+tamper_test!(
+    tamper_program_t02_flip_a_reveal_plaintext_byte,
+    t02,
+    march_program
+);
+tamper_test!(
+    tamper_program_t06_set_account_on_a_province,
+    t06,
+    march_program
+);
+tamper_test!(tamper_program_t07_valid_seal_marked_bad, t07, march_program);
+tamper_test!(
+    tamper_program_t09_departure_mass_altered,
+    t09,
+    march_program
+);
+tamper_test!(
+    tamper_program_t12_truncate_the_last_game_day,
+    t12,
+    march_program
+);
+tamper_test!(
+    tamper_program_t15_origin_values_from_a_later_bell,
+    t15,
+    march_program
+);
+tamper_test!(tamper_program_t21_tampered_explore_find, t21, march_program);
+tamper_test!(tamper_program_t23_forged_writeback, t23, march_program);

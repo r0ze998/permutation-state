@@ -7,7 +7,8 @@
 //!   engagements and the packed fates must be the record's, the Province
 //!   must be resolved through the bell afterwards, and each province's
 //!   CLASH and SKIP records must advance `resolved_next` one bell at a time
-//!   from its opening.
+//!   from its opening; the Province and ClashInputs the resolve wrote must
+//!   be the outcome's write-back ([`writeback`], integ-W4 review).
 //! - **Quiet skips:** no bell of a SKIP run has a REVEAL (an ArrivalSlot)
 //!   before it (`SkipOverArrival`), and the Province before the run is
 //!   quiet by `clash::is_quiet` (checked once per run when no entry has a
@@ -72,6 +73,169 @@ pub fn packed_fates(
     plog::pack_fates(&fates)
 }
 
+/// The write-back of a replayed clash (§5.11 v1.6 §22, W4-A's pinned
+/// rules; integ-W4 review, W4-D major: V7 compared only the digests, so a
+/// Province or ClashInputs written back wrong passed). Against the
+/// transaction's post-states: every resident the clash changed carries its
+/// post-clash troops, stamina (at the bell) and tile, an unchanged one its
+/// bytes of before; a destroyed resident is gone unless a departure, leave
+/// or forfeit was pending; a bounced one leaves (`Leave`); every arrival
+/// that stays or withdraws is a roster entry with its post-clash troops and
+/// tile from the next bell; the ClashInputs fate table holds the fates and
+/// troops; the camp is cleared exactly when it lost (below one troop, or
+/// its hex held by hostile hosts), else keeps its whole troops.
+pub fn writeback(
+    built: &crate::clash_input::Built,
+    o: &permutation_rules::frontier::clash::ClashOutcome,
+    before: &[u8],
+    after: &[u8],
+    inputs_after: Option<&[u8]>,
+) -> Vec<String> {
+    use frontier_abi::entry::{find_entry, read_entry, EntryOp};
+    use frontier_abi::layout::province::entry as E;
+    use permutation_rules::frontier::host::STAMINA_CAP;
+    let b = built.bell;
+    let mut bad = vec![];
+    let entry = |d: &[u8], id: u64| find_entry(d, id).and_then(|i| read_entry(d, i).ok());
+    let tile_of = |f: &Fate| match f {
+        Fate::Stays { tile } | Fate::Withdrew { tile } => Some(*tile),
+        _ => None,
+    };
+    for f in &built.residents {
+        let Some(fr) = o.fighter(f.id) else {
+            bad.push(format!("resident {} missing from the outcome", f.id));
+            continue;
+        };
+        let Some(pre) = entry(before, f.id) else {
+            bad.push(format!("resident {} not in the Province before", f.id));
+            continue;
+        };
+        let post = entry(after, f.id);
+        let pending = !matches!(pre.op, EntryOp::None);
+        match (&fr.fate, post) {
+            (Fate::Destroyed, None) if !pending => {}
+            (Fate::Destroyed, Some(_)) if !pending => {
+                bad.push(format!("resident {} destroyed but still an entry", f.id))
+            }
+            (_, None) => {
+                // Freed by the bell's settle: a forfeit (or a destroyed
+                // host with a pending change) is gone afterwards.
+                if !matches!(pre.op, EntryOp::Forfeit) && fr.fate != Fate::Destroyed {
+                    bad.push(format!("resident {} vanished", f.id));
+                }
+            }
+            (fate, Some(e)) => {
+                let same = fr.troops == f.troops
+                    && fr.stamina == f.stamina
+                    && !fr.engaged
+                    && tile_of(fate).is_none_or(|t| t == pre.tile);
+                let (troops, stamina, tile) = if same {
+                    (pre.troops, pre.stamina_value, pre.tile)
+                } else {
+                    (
+                        fr.troops,
+                        fr.stamina.min(STAMINA_CAP),
+                        tile_of(fate).unwrap_or(pre.tile),
+                    )
+                };
+                // A departure settled at this bell (`Spend` → state 3)
+                // pays its march stamina afterwards: its stamina is
+                // SettleDeparture's to judge (V8), not the clash's.
+                let departed =
+                    e.state == E::STATE_DEPARTED && matches!(pre.op, EntryOp::Spend { .. });
+                if e.troops != troops || (!departed && e.stamina_value != stamina) || e.tile != tile
+                {
+                    bad.push(format!(
+                        "resident {}: written ({}, {}, tile {}), the clash leaves ({troops}, {stamina}, tile {tile})",
+                        f.id, e.troops, e.stamina_value, e.tile
+                    ));
+                }
+                if !same && !departed && e.stamina_bell != b {
+                    bad.push(format!(
+                        "resident {}: stamina clock {} not the bell",
+                        f.id, e.stamina_bell
+                    ));
+                }
+                if matches!(fate, Fate::Bounced | Fate::Retreated)
+                    && !pending
+                    && !(e.state == E::STATE_DEPARTED && matches!(e.op, EntryOp::Leave))
+                {
+                    bad.push(format!("resident {} bounced but does not leave", f.id));
+                }
+            }
+        }
+    }
+    for (a, &k) in built.arrivals.iter().zip(&built.arrival_pos) {
+        let Some(fr) = o.fighter(a.id) else {
+            bad.push(format!("arrival {} missing from the outcome", a.id));
+            continue;
+        };
+        if let Some(t) = tile_of(&fr.fate) {
+            match entry(after, a.id) {
+                Some(e)
+                    if e.state == E::STATE_ROSTER
+                        && e.troops == fr.troops
+                        && e.tile == t
+                        && e.from_bell == b + 1 => {}
+                e => bad.push(format!(
+                    "arrival {} stays: entry {:?}, the clash leaves ({}, tile {t}) from bell {}",
+                    a.id,
+                    e.map(|e| (e.state, e.troops, e.tile, e.from_bell)),
+                    fr.troops,
+                    b + 1
+                )),
+            }
+        }
+        if let Some(ci) = inputs_after {
+            use frontier_abi::layout::clash::arrival as AR;
+            let o_ = CI::arrival(k);
+            let (fate, ta) = (
+                ci.get(o_ + AR::FATE).copied(),
+                ci.get(o_ + AR::TROOPS_AFTER..o_ + AR::TROOPS_AFTER + 4)
+                    .map(|x| u32::from_le_bytes(x.try_into().unwrap_or([0; 4]))),
+            );
+            if fate != Some(fate_code(&fr.fate)) || ta != Some(fr.troops) {
+                bad.push(format!(
+                    "inputs position {k}: fate {fate:?} troops {ta:?}, the clash gives {} {}",
+                    fate_code(&fr.fate),
+                    fr.troops
+                ));
+            }
+        }
+    }
+    if let Some(g) = built
+        .garrisons
+        .iter()
+        .find(|g| g.faction == permutation_rules::frontier::clash::NEUTRAL)
+    {
+        if let (Some(gr), Ok(pv)) = (
+            o.garrisons.iter().find(|x| x.id == g.id),
+            fclient::decode::Province::decode(after),
+        ) {
+            let whole = gr.troops / 1_000;
+            let cleared = whole == 0 || gr.attackers_hold;
+            let ok = if cleared {
+                pv.camp.state == 0
+            } else {
+                pv.camp.state == 1 && pv.camp.troops == whole
+            };
+            if !ok {
+                bad.push(format!(
+                    "camp: written (state {}, {} troops), the clash leaves {}",
+                    pv.camp.state,
+                    pv.camp.troops,
+                    if cleared {
+                        "it cleared".to_string()
+                    } else {
+                        format!("{whole} troops")
+                    }
+                ));
+            }
+        }
+    }
+    bad
+}
+
 pub fn run(cx: &mut Ctx) {
     clashes_and_skips(cx);
     transits(cx);
@@ -122,6 +286,18 @@ fn clashes_and_skips(cx: &mut Ctx) {
                     cx.missing(V, what, b, Some(r.tx), "no seed of the bell");
                     continue;
                 };
+                // v1.6 §22: the CLASH input digest (integ-W4 review: pinned,
+                // now judged).
+                if crate::clash_input::input_digest(pv, ci, b, &seed) != r.p32("input_digest") {
+                    cx.fail(
+                        V,
+                        CLASH_REPLAY_MISMATCH,
+                        what.clone(),
+                        b,
+                        Some(r.tx),
+                        "the input digest is not sha256(PSF-CLASH-INPUT-v1 ‖ bell ‖ seed ‖ Province state ‖ arrival records)",
+                    );
+                }
                 let built = match builder.build(pv, ci, b, &seed) {
                     Ok(x) => x,
                     Err(e) => {
@@ -151,6 +327,21 @@ fn clashes_and_skips(cx: &mut Ctx) {
                                 Some(r.tx),
                                 format!("replayed digest {} ({} engagements) differs from the logged one", hex::encode(&o.digest()[..8]), o.engagements),
                             );
+                        }
+                        let tx = &w.txs[r.tx];
+                        if let Some(after) = tx.post_data(&pk) {
+                            let ci_after = tx.post_data(&f.ctx.clash_inputs(p, q, b));
+                            let bad = writeback(&built, &o, pv, after, ci_after);
+                            if !bad.is_empty() {
+                                cx.fail(
+                                    V,
+                                    CLASH_REPLAY_MISMATCH,
+                                    what.clone(),
+                                    b,
+                                    Some(r.tx),
+                                    format!("write-back: {}", bad.join("; ")),
+                                );
+                            }
                         }
                         let factions: std::collections::BTreeSet<u8> = built
                             .residents
@@ -224,6 +415,20 @@ fn clashes_and_skips(cx: &mut Ctx) {
                     );
                     continue;
                 };
+                // v1.6 §22: SKIP's quiet digest over the Province it left.
+                if let Some(after) = w.txs[r.tx].post_data(&f.ctx.province(p, q)) {
+                    if crate::clash_input::quiet_digest(after, b0, k as u8) != r.p32("quiet_digest")
+                    {
+                        cx.fail(
+                            V,
+                            CLASH_REPLAY_MISMATCH,
+                            what.clone(),
+                            b0,
+                            Some(r.tx),
+                            "the quiet digest is not sha256(PSF-QUIET-v1 ‖ b0 ‖ n ‖ Province state after)",
+                        );
+                    }
+                }
                 match builder.build(pv, &[], b0, &[0; 32]).and_then(|x| x.quiet()) {
                     Ok(true) => {}
                     Ok(false) => cx.fail(

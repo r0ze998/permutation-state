@@ -20,6 +20,9 @@ keeper = { path = "../keeper" }
 herald = { path = "../herald" }
 agents = { path = "../agents" }
 bots = { path = "../bots" }
+# integ-W4 review (W4-D blocker): VERIFY_DUMP records the day as a verifier
+# fixture (a workspace crate; no new crate).
+verify = { path = "../verify" }
 tokio.workspace = true
 axum.workspace = true
 serde_json.workspace = true

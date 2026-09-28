@@ -7,15 +7,23 @@
 //!   its result of the replayed clash applied (`Host::apply_clash`), its
 //!   departure settled (`Host::settle`), then `Host::march_values`.
 //! - Every gathered arrival's troops and stamina are its DEPARTURE_SETTLED
-//!   values — never a later bell's.
+//!   values — never a later bell's — the stamina refilled from
+//!   `depart_bell + 1` to the arrival bell (W4-A's pinned rule, v1.6 §22:
+//!   the program's `model::arrival_stamina`; integ-W4 review).
+//! - A return settle (`DEPARTURE_SETTLED.destroyed = 2`, SettleDeparture
+//!   with `transit_slot = 0xFF`, v1.6 §22) freed a `Leave` entry (state 3)
+//!   of the host in the Province and credited its whole troops to the
+//!   Holding's reserve (integ-W4 review: V8 looked for a DEPART).
 //!
 //! Code: `OriginValueMismatch`.
 
 use std::collections::HashMap;
 
-use frontier_abi::entry::{find_entry, read_entry};
+use frontier_abi::entry::{find_entry, read_entry, EntryOp};
+use frontier_abi::layout::player::holding as HL;
+use frontier_abi::layout::province::entry as EN;
 use frontier_abi::log::Kind;
-use permutation_rules::frontier::host::Host;
+use permutation_rules::frontier::host::{Host, Stamina};
 
 use super::Ctx;
 use crate::clash_input::{ClashBuilder, ContractBuilder};
@@ -95,18 +103,80 @@ pub fn origin_values(
     h.march_values(b, b + 1).map_err(|e| format!("{e:?}"))
 }
 
+/// A return settle (`destroyed = 2`): the Leave entry it freed and the
+/// reserve it credited (`Err`: what does not hold).
+fn check_return(cx: &Ctx, n: usize, host: u64) -> Result<(), String> {
+    let w = cx.w;
+    let r = &w.recs[n];
+    let tx = &w.txs[r.tx];
+    let ix = tx
+        .ixs
+        .first()
+        .ok_or("a return settle outside a program instruction")?;
+    let (pk, hk) = (
+        ix.key(2).ok_or("no province account")?,
+        ix.key(3).ok_or("no holding account")?,
+    );
+    let pv = w
+        .state_before(&pk, r.tx)
+        .ok_or("no Province state before the return")?;
+    let i = find_entry(pv, host).ok_or("no entry of the host before the return")?;
+    let e = read_entry(pv, i).map_err(|e| format!("{e:?}"))?;
+    if e.state != EN::STATE_DEPARTED || e.op != EntryOp::Leave {
+        return Err(format!(
+            "the entry is in state {} op {:?}, not a departed Leave",
+            e.state, e.op
+        ));
+    }
+    let whole = e.troops / 1_000;
+    if r.pu32("troops_after") != whole * 1_000 {
+        return Err(format!(
+            "logged {} troops, the entry held {} (whole {whole})",
+            r.pu32("troops_after"),
+            e.troops
+        ));
+    }
+    let at = HL::reserve(e.unit as usize);
+    let rd = |d: &[u8]| {
+        d.get(at..at + 4)
+            .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+    };
+    let before = w.state_before(&hk, r.tx).and_then(rd);
+    let after = tx.post_data(&hk).and_then(rd);
+    match (before, after) {
+        (Some(b), Some(a)) if a >= b && a - b >= whole => Ok(()),
+        (b, a) => Err(format!(
+            "reserve[{}] {b:?} → {a:?}, the return credits {whole}",
+            e.unit
+        )),
+    }
+}
+
 pub fn run(cx: &mut Ctx) {
     let w = cx.w;
     let f = cx.f;
-    let mut settled: HashMap<u64, Vec<(usize, u32, u16)>> = HashMap::new();
+    // host → (record, troops, stamina, depart bell) of its settlements.
+    let mut settled: HashMap<u64, Vec<(usize, u32, u16, u32)>> = HashMap::new();
     let res = resolutions(cx);
     for (n, r) in w.recs.iter().enumerate() {
         match r.kind {
+            Kind::DEPARTURE_SETTLED if r.pu8("destroyed") == 2 => {
+                let host = r.ku64("host_id");
+                if let Err(e) = check_return(cx, n, host) {
+                    cx.fail(
+                        V,
+                        ORIGIN_VALUE_MISMATCH,
+                        format!("return of host {host}"),
+                        r.bell,
+                        Some(r.tx),
+                        e,
+                    );
+                }
+            }
             Kind::DEPARTURE_SETTLED => {
                 let host = r.ku64("host_id");
                 let what = format!("departure of host {host}");
                 let (ta, sa) = (r.pu32("troops_after"), r.pu16("stamina_after"));
-                settled.entry(host).or_default().push((n, ta, sa));
                 let Some(d) = f.depart_of(w, host, n, None) else {
                     cx.fail(
                         V,
@@ -124,6 +194,7 @@ pub fn run(cx: &mut Ctx) {
                     dr.pi32("origin_q"),
                     dr.pu32("depart_bell"),
                 );
+                settled.entry(host).or_default().push((n, ta, sa, b));
                 let Some(res) = resolution(&res, p, q, b, n) else {
                     cx.fail(
                         V,
@@ -162,6 +233,15 @@ pub fn run(cx: &mut Ctx) {
                 };
                 for a in ci.arrivals.iter().filter(|a| a.present == 1) {
                     let last = settled.get(&a.host_id).and_then(|v| v.last()).copied();
+                    // The stamina refilled over the march (v1.6 §22).
+                    let last = last.map(|(n, t, s, db)| {
+                        let s = Stamina {
+                            value: s,
+                            bell: db.saturating_add(1),
+                        }
+                        .at(b);
+                        (n, t, s)
+                    });
                     match last {
                         Some((_, t, s)) if (t, s) == (a.troops, a.stamina) => {}
                         Some((_, t, s)) => cx.fail(

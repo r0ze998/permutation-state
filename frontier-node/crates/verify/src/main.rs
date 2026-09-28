@@ -73,6 +73,7 @@ fn main() {
         }
     }
     let quicknet = || hex_arr::<96>(fclient::beacon::QUICKNET_PK).expect("pinned quicknet key");
+    let from_fixture = fixture.is_some();
     let mut inp = if let Some(f) = fixture {
         Input::load(&f).unwrap_or_else(|e| usage(&e))
     } else {
@@ -103,10 +104,37 @@ fn main() {
                     v.get("final_slot").and_then(|x| x.as_u64()).unwrap_or(0),
                 )
             }
-            (None, Some(u)) => rt
-                .block_on(input::fetch_finals(u, &input::written_keys(&txs)))
-                .unwrap_or_else(|e| usage(&e)),
+            (None, Some(u)) => {
+                // Every program account of the season, not only those the
+                // archive's transactions wrote (integ-W4 review).
+                let mut keys = input::written_keys(&txs);
+                match rt.block_on(input::program_accounts(u, &program, season_id)) {
+                    Ok(v) => {
+                        for k in v {
+                            if !keys.contains(&k) {
+                                keys.push(k);
+                            }
+                        }
+                    }
+                    Err(e) => eprintln!(
+                        "frontier-verify: getProgramAccounts failed ({e}): only the archive's written accounts are read"
+                    ),
+                }
+                rt.block_on(input::fetch_finals(u, &keys))
+                    .unwrap_or_else(|e| usage(&e))
+            }
             (None, None) => usage("--finals or --rpc is required with --archive"),
+        };
+        // V2's `.so` hash from the ProgramData account (integ-W4 review).
+        let program_hashes = match &rpc {
+            Some(u) => match rt.block_on(input::program_hash(u, &program)) {
+                Ok((slot, h)) => vec![(slot, h)],
+                Err(e) => {
+                    eprintln!("frontier-verify: the deployed .so hash: {e}");
+                    vec![]
+                }
+            },
+            None => vec![],
         };
         Input {
             cfg: Config {
@@ -119,13 +147,21 @@ fn main() {
             txs,
             finals,
             final_slot,
-            program_hashes: vec![],
+            program_hashes,
             provenance: archive
                 .map(|d| format!("archive {}", d.display()))
                 .unwrap_or_else(|| format!("rpc {}", rpc.clone().unwrap_or_default())),
             scenarios: vec![],
         }
     };
+    // A fixture carries its own trust roots; say so when the operator did
+    // not pin them (integ-W4 review, W4-D minor).
+    if from_fixture && pk.is_none() {
+        eprintln!("frontier-verify: warning: the drand key is the fixture's own (pass --test-key or --quicknet-pk to pin it)");
+    }
+    if from_fixture && ruleset.is_none() {
+        eprintln!("frontier-verify: warning: the ruleset hash is the fixture's own (pass --ruleset to pin it)");
+    }
     if let Some(k) = pk {
         inp.cfg.quicknet_pk = k;
     }
@@ -149,6 +185,9 @@ fn main() {
             "frontier-verify: cannot write the report to {}: {e}",
             out.display()
         );
+        // A report that cannot be written is not a verification (integ-W4
+        // review, W4-D minor).
+        std::process::exit(verify_core::EXIT_UNVERIFIABLE);
     }
     if json {
         println!(

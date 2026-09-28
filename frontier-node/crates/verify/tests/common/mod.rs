@@ -38,6 +38,12 @@ pub fn march() -> Input {
     fixture("march-synth.json")
 }
 
+/// The march season recorded from the merged program (`itest::inproc_day`
+/// with `VERIFY_DUMP`; integ-W4 review, W4-D R5).
+pub fn march_program() -> Input {
+    fixture("march-program.json.gz")
+}
+
 #[derive(Clone)]
 pub struct Gated {
     pub key: Arc<TestKey>,

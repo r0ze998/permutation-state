@@ -10,9 +10,8 @@
 //! - every Reveal's plaintext and salt give DEPART's commitment and root,
 //!   and a valid seal's revealed plaintext is the opened one;
 //! - SettleTransit judged the logged pair (its commit and seal = DEPART's);
-//! - **every TRANSIT_SETTLED seal code agrees with the stock opener**
-//!   (`code > 0 ⇔` the opener fails, the commitment mismatches or the
-//!   plaintext is invalid; codes 1 and 3 are not separable off chain);
+//! - **every TRANSIT_SETTLED seal code is the stock opener's** (exactly;
+//!   codes 1 and 3 are not separable off chain, integ-W4 review);
 //! - **a bad seal whose transit settled with another outcome is a FAIL**.
 //!
 //! Warnings (liveness, E5 gates them): a valid seal never revealed
@@ -193,7 +192,11 @@ pub fn run(cx: &mut Ctx) {
                     continue;
                 };
                 let (code, outcome) = (r.pu8("seal_code"), r.pu8("outcome"));
-                if (code > 0) != (j.code > 0) {
+                // The exact code, but for the documented ambiguity: codes 1
+                // (FO check) and 3 are not separable off chain (integ-W4
+                // review, W4-D minor: only `> 0` was compared).
+                let same = |a: u8, b: u8| a == b || (matches!(a, 1 | 3) && matches!(b, 1 | 3));
+                if !same(code, j.code) {
                     cx.fail(
                         V,
                         VERDICT_DISAGREES_WITH_TLOCK,

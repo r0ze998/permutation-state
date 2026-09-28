@@ -14,7 +14,10 @@
 //! - **Terrain:** PROVINCE_OPEN's digest = `sha256("PSF-TERRAIN-v1" ‖
 //!   terrain block)` of `terrain::generate_province(ring_seed, P)` in the
 //!   program's pinned encoding, with its ring, wedge, region and site count.
-//! - **Camps:** the initial camp and every CAMP record = `camp::place`.
+//! - **Camps:** the initial camp = `camp::place(ring seed, …, initial)`;
+//!   every CAMP spawn = the program's day check (`camp_seed` from the
+//!   Province's terrain block, v1.6 §22), a clear (`troops = 0`) a present
+//!   camp gone.
 //!
 //! Codes: `TicketScoreMismatch`, `DisplacementRule`, `CohortMismatch`,
 //! `TerrainMismatch`, `CampMismatch`.
@@ -154,31 +157,63 @@ pub fn run(cx: &mut Ctx) {
         }
         terrains.insert((p, q), t);
     }
-    for (n, r) in w
-        .recs
-        .iter()
-        .enumerate()
-        .filter(|(_, r)| r.kind == Kind::CAMP)
-    {
+    // CAMP records (v1.6 §22, W4-A D3): a spawn of the day's check at the
+    // first resolve or skip of a day, drawn from `sha256("PSF-CAMP-v1" ‖
+    // province[TERRAIN ..= SITE_COUNT])` with `has_holding` of the Province
+    // then (the program's `camp_check`, `fclient::clash_model::camp_at`);
+    // or a clear (`troops = 0`: the camp present before, gone after).
+    // Integ-W4 review: V11 read every CAMP as a ring-seed spawn.
+    for r in w.recs.iter().filter(|r| r.kind == Kind::CAMP) {
         let (p, q) = r.pq();
-        let c = ProvinceCoord::new(p, q);
         let what = format!("camp ({p}, {q})");
-        let (Some(seed), Some(t)) = (f.ring_seeds.get(&(c.ring() as u16)), terrains.get(&(p, q)))
-        else {
+        let pk = f.ctx.province(p, q);
+        let Some(before) = w.state_before(&pk, r.tx) else {
             cx.missing(
                 V,
                 what,
                 r.bell,
                 Some(r.tx),
-                "no terrain for the camp's province",
+                "no Province state before the camp's record",
             );
             continue;
         };
-        let has_holding =
-            (0..t.site_count).any(|s| f.owner_at((p, q, s), n).is_some_and(|o| o.owner.is_some()));
         let got = (r.pu8("tile"), r.pu32("troops"));
-        let want =
-            camp::place(seed, c, t, r.pu32("day"), has_holding, false).map(|x| (x.tile, x.troops));
+        let camp_state = |d: &[u8]| {
+            fclient::decode::Province::decode(d)
+                .ok()
+                .map(|pv| pv.camp.state)
+        };
+        if got.1 == 0 {
+            let after = w.txs[r.tx].post_data(&pk).and_then(camp_state);
+            if camp_state(before) != Some(1) || after != Some(0) {
+                cx.fail(
+                    V,
+                    CAMP_MISMATCH,
+                    what,
+                    r.bell,
+                    Some(r.tx),
+                    format!(
+                        "a clear (troops 0) of a camp in state {:?} → {after:?}",
+                        camp_state(before)
+                    ),
+                );
+            }
+            continue;
+        }
+        let want = fclient::decode::Province::decode(before)
+            .map_err(|e| format!("{e:?}"))
+            .and_then(|pv| {
+                let t = fclient::clash_model::terrain_of(&pv)?;
+                fclient::clash_model::camp_at(&pv, before, &t, r.pu32("day") * 144)
+            })
+            .map(|c| c.spawned.then_some((c.tile, c.troops)));
+        let want = match want {
+            Ok(x) => x,
+            Err(e) => {
+                cx.missing(V, what, r.bell, Some(r.tx), e);
+                continue;
+            }
+        };
         if want != Some(got) {
             cx.fail(
                 V,
@@ -328,7 +363,44 @@ fn settle(
         }
         _ => {}
     }
+    let tx_time = w.txs[r.tx].time;
+    // v1.6 §22 (K9, integ-W4 review): a fresh settlement waits while an
+    // earlier ticket cohort of the same Province is open (filed > settled,
+    // within its 24 bells), as the Province stood before.
+    if outcome == settle_outcome::FRESH && r.bell != NO_BELL {
+        if let Some(pv) = w
+            .state_before(&f.ctx.province(p, q), r.tx)
+            .and_then(|d| fclient::decode::Province::decode(d).ok())
+        {
+            let open = pv.cohorts.iter().any(|c| {
+                c.bell < tb && c.filed > c.settled && r.bell < c.bell.saturating_add(COHORT_BELLS)
+            });
+            if open {
+                cx.fail(
+                    V,
+                    COHORT_MISMATCH,
+                    what.clone(),
+                    r.bell,
+                    Some(r.tx),
+                    format!("a fresh settlement of cohort {tb} while an earlier cohort was open"),
+                );
+            }
+        }
+    }
     match (outcome, holder, holder_tag) {
+        // §8.5: displacement only of a provisional holding (before its
+        // `final_ts`; integ-W4 review).
+        (settle_outcome::DISPLACE, Some(h), Some(_)) if tx_time >= h.final_ts => cx.fail(
+            V,
+            DISPLACEMENT_RULE,
+            what,
+            r.bell,
+            Some(r.tx),
+            format!(
+                "displacement at {tx_time} of a holding final since {}",
+                h.final_ts
+            ),
+        ),
         (settle_outcome::FRESH, Some(_), _) => cx.fail(
             V,
             DISPLACEMENT_RULE,

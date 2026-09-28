@@ -12,7 +12,11 @@ use verify_core::input::Input;
 /// program's recording as on the synthetic one.
 #[test]
 fn rechain_is_the_identity_on_honest_archives() {
-    for (name, inp) in [("land", land()), ("march", march())] {
+    for (name, inp) in [
+        ("land", land()),
+        ("march", march()),
+        ("march-program", march_program()),
+    ] {
         let mut again = inp.clone();
         verify_core::tamper::rechain(&mut again);
         for (a, b) in inp.txs.iter().zip(&again.txs) {
@@ -35,6 +39,12 @@ fn fixture_round_trip() {
     assert_eq!(back.txs, inp.txs);
     assert_eq!(back.finals, inp.finals);
     assert_eq!(back.program_hashes, inp.program_hashes);
+    // gzip (the program recording's form)
+    let pz = dir.join("x.json.gz");
+    inp.save(&pz).unwrap();
+    let back = Input::load(&pz).unwrap();
+    assert_eq!(back.txs, inp.txs);
+    assert_eq!(back.finals, inp.finals);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

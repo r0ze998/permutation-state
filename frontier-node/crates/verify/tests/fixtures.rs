@@ -56,6 +56,45 @@ fn land_program_passes() {
     );
 }
 
+/// The march season recorded from the merged program (`itest::inproc_day`
+/// with `VERIFY_DUMP`, 100 bots over one game day and the drain; integ-W4
+/// review, W4-D blocker: the verifier had never judged the program's own
+/// clash, transit, camp and payment records, and FAILed them).
+#[test]
+fn march_program_passes() {
+    let inp = march_program();
+    let r = verify_core::verify(&inp);
+    assert_eq!(r.verdict, Verdict::Pass, "{}", show(&r));
+    let k = kinds(&inp);
+    for (kind, min) in [
+        (Kind::JOIN, 100),
+        (Kind::SETTLE, 90),
+        (Kind::DEPART, 40),
+        (Kind::REVEAL, 30),
+        (Kind::DEPARTURE_SETTLED, 40),
+        (Kind::GATHER, 40),
+        (Kind::CLASH, 40),
+        (Kind::SKIP, 500),
+        (Kind::TRANSIT_SETTLED, 40),
+        (Kind::EXPLORE_RESULT, 10),
+        (Kind::CAMP, 1),
+    ] {
+        assert!(
+            k.get(&(kind as u8)).copied().unwrap_or(0) >= min,
+            "{kind:?}: {k:?}"
+        );
+    }
+    // Bad seals destroyed at settlement are in it.
+    let bad = inp
+        .txs
+        .iter()
+        .filter(|t| t.err.is_none())
+        .flat_map(|t| fclient::log::bodies_from_logs(&t.logs, &inp.cfg.program).unwrap())
+        .filter(|b| b[1] == Kind::TRANSIT_SETTLED as u8 && b[14] == 8)
+        .count();
+    assert!(bad >= 5, "{bad} bad-seal settlements");
+}
+
 #[test]
 fn march_synth_passes() {
     let inp = march();
@@ -66,8 +105,10 @@ fn march_synth_passes() {
         (Kind::DEPART, 12),
         (Kind::REVEAL, 7),
         (Kind::DEPARTURE_SETTLED, 11),
-        (Kind::GATHER, 3),
-        (Kind::CLASH, 3),
+        // integ-W4: regenerated with the program's clash rules (the camp,
+        // its day check), one contested bell of the old season is quiet.
+        (Kind::GATHER, 2),
+        (Kind::CLASH, 2),
         (Kind::SKIP, 10),
         (Kind::TRANSIT_SETTLED, 11),
         (Kind::DEFENCE_CLAIM, 1),

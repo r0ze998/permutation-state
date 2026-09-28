@@ -2,9 +2,10 @@
 //! bytes (V7's replay; contract §5.11 ResolveFromInputs).
 //!
 //! ResolveFromInputs builds the kernel's `ClashInput` from the Province as
-//! it stood before the resolve and the gathered ClashInputs. The program's
-//! builder is W4-A's (a stub on the wave-3 base this unit was cut from);
-//! [`ContractBuilder`] follows the §5.11 text: residents in state 1 with
+//! it stood before the resolve and the gathered ClashInputs. Integ-W4
+//! review: [`ContractBuilder`] is now the program's builder as
+//! `fclient::clash_model` transcribes it (shared with the herald). The
+//! wave-4 unit's reading of the §5.11 text was: residents in state 1 with
 //! `from_bell ≤ bell` at `Host::values_at(bell)` fighting at Hold;
 //! garrisons from the site mirror at `GarrisonState::at(bell)` with walls
 //! effective at the bell; the present arrival records; the terrain from the
@@ -15,21 +16,17 @@
 //! (I-56) is not modelled (W4-A's builder is normative; the integrator
 //! swaps it in through [`ClashBuilder`] when it lands, as the herald does).
 
-use frontier_abi::addr::holding_key_of_host;
-use frontier_abi::entry::{read_entry, unit_from_u8};
 use frontier_abi::layout::clash::clash_inputs as CI;
-use frontier_abi::layout::province::{entry as E, province as PV, site as S};
 use permutation_rules::frontier::clash::{
-    self, ClashInput, ClashOutcome, Fighter, Garrison, Occupancy, Relations, NEUTRAL,
+    self, ClashInput, ClashOutcome, Fighter, Garrison, Occupancy, Relations,
 };
 use permutation_rules::frontier::geometry::{ProvinceCoord, PROVINCE_TILES};
-use permutation_rules::frontier::host::GarrisonState;
-use permutation_rules::frontier::stance::{Posture, Stance};
+use permutation_rules::frontier::stance::Stance;
 use permutation_rules::frontier::terrain::ProvinceTerrain;
 use permutation_rules::hash::sha256;
 use permutation_rules::map::{Terrain, TileResource};
 
-use fclient::decode::{ClashInputs, Province};
+use fclient::decode::Province;
 
 /// Builds and resolves the clash of a province-bell.
 pub trait ClashBuilder {
@@ -124,12 +121,16 @@ impl Built {
     }
 }
 
-/// The builder that follows the contract text (see the module note).
+/// The program's builder (`fclient::clash_model`, one transcription of
+/// W4-A's `proc::clash::model::build` shared with the herald; integ-W4
+/// review: the verifier's own §5.11 reading failed an honest program
+/// season — camp troops, the 12-garrison cap, the day's camp check,
+/// `dealt_bps` 0, id order).
 pub struct ContractBuilder;
 
 impl ClashBuilder for ContractBuilder {
     fn name(&self) -> &'static str {
-        "contract-5.11-w4d"
+        "program-model-fclient"
     }
     fn build(
         &self,
@@ -138,161 +139,48 @@ impl ClashBuilder for ContractBuilder {
         bell: u32,
         seed: &[u8; 32],
     ) -> Result<Built, String> {
-        let pv = Province::decode(province_before).map_err(|e| format!("province: {e:?}"))?;
-        let ci = if inputs.is_empty() {
-            None
-        } else {
-            Some(ClashInputs::decode(inputs).map_err(|e| format!("inputs: {e:?}"))?)
-        };
-        if let Some(ci) = &ci {
-            if (ci.p, ci.q, ci.bell) != (pv.p, pv.q, bell) {
-                return Err("inputs and province are different province-bells".into());
-            }
-        }
-        let terrain = terrain_of(&pv)?;
-        let mut residents = vec![];
-        let mut pending = [0u8; clash::FACTION_LIMIT as usize];
-        let mut used = 0u8;
-        for i in 0..PV::ENTRIES_N {
-            let e = read_entry(province_before, i).map_err(|x| format!("entry {i}: {x:?}"))?;
-            match e.state {
-                E::STATE_ROSTER => {
-                    used += 1;
-                    if e.from_bell > bell {
-                        continue;
-                    }
-                    let h = e.to_host().map_err(|x| format!("entry {i}: {x:?}"))?;
-                    let (troops, stamina) = h
-                        .values_at(bell)
-                        .map_err(|x| format!("host {}: {x:?}", e.id))?;
-                    residents.push(Fighter {
-                        id: e.id,
-                        faction: e.faction,
-                        unit: h.unit,
-                        troops,
-                        stamina,
-                        tile: e.tile,
-                        posture: Posture::Stance(Stance::Hold),
-                        retreat_bps: None,
-                        dealt_bps: e.dealt_bps as u32,
-                    });
-                }
-                E::STATE_MUSTER_PENDING => {
-                    used += 1;
-                    if let Some(c) = pending.get_mut(e.faction as usize) {
-                        *c = c.saturating_add(1);
-                    }
-                }
-                E::STATE_DEPARTED => used += 1,
-                _ => {}
-            }
-        }
-        let mut garrisons = vec![];
-        for i in 0..(pv.site_count as usize).min(PV::SITES_N) {
-            let m = &pv.site_mirror[i];
-            if m.state != S::STATE_HOLDING {
-                continue;
-            }
-            let pend = |b: u32, d: i64| (b != S::NO_BELL).then_some((b, d));
-            let g = GarrisonState {
-                troops: m.garrison,
-                pending: [
-                    pend(m.pend0_bell, m.pend0_delta),
-                    pend(m.pend1_bell, m.pend1_delta),
-                ],
-            };
-            let troops = g.at(bell).map_err(|x| format!("garrison {i}: {x:?}"))?;
-            let walls = m.walls_committed > 0
-                || [m.wall_item0, m.wall_item1]
-                    .iter()
-                    .any(|(eff, d)| *d > 0 && *eff != S::NO_BELL && *eff <= bell);
-            let id = frontier_abi::addr::host_id(pv.p as i32, pv.q as i32, i as u8, m.gen, 0)
-                .map(holding_key_of_host)
-                .ok_or(format!("site {i}: no holding id"))?;
-            garrisons.push(Garrison {
-                id,
-                faction: m.faction,
-                tile: pv.sites[i],
-                troops,
-                walls,
-                posture: Posture::Stance(Stance::Hold),
-            });
-        }
-        if pv.camp.state == 1 {
-            garrisons.push(Garrison {
-                id: u64::MAX - pv.camp.gen as u64,
-                faction: NEUTRAL,
-                tile: pv.camp.tile,
-                troops: pv.camp.troops,
-                walls: false,
-                posture: Posture::Stance(Stance::Hold),
-            });
-        }
-        let mut arrivals = vec![];
-        let mut arrival_pos = vec![];
-        if let Some(ci) = &ci {
-            for (k, a) in ci
-                .arrivals
-                .iter()
-                .enumerate()
-                .filter(|(_, a)| a.present == 1)
-            {
-                arrivals.push(Fighter {
-                    id: a.host_id,
-                    faction: a.faction,
-                    unit: unit_from_u8(a.unit).ok_or(format!("arrival unit {}", a.unit))?,
-                    troops: a.troops,
-                    stamina: a.stamina,
-                    tile: a.tile,
-                    posture: Posture::Stance(
-                        *STANCES
-                            .get(a.stance as usize)
-                            .ok_or(format!("arrival stance {}", a.stance))?,
-                    ),
-                    retreat_bps: (a.retreat != 0).then_some(a.retreat as u32),
-                    dealt_bps: a.dealt as u32,
-                });
-                arrival_pos.push(k);
-            }
-        }
+        let b = fclient::clash_model::build(province_before, inputs, bell, seed)?;
         Ok(Built {
-            province: ProvinceCoord::new(pv.p as i32, pv.q as i32),
-            bell,
-            seed: *seed,
-            terrain,
-            residents,
-            garrisons,
-            arrivals,
-            arrival_pos,
-            relations: Relations {
-                peaceful: pv.relations,
-            },
-            occupancy: Occupancy {
-                pending,
-                storage_free: Occupancy::STORAGE.saturating_sub(used),
-            },
+            province: b.province,
+            bell: b.bell,
+            seed: b.seed,
+            terrain: b.terrain,
+            residents: b.residents,
+            garrisons: b.garrisons,
+            arrivals: b.arrivals,
+            arrival_pos: b.arrival_pos,
+            relations: b.relations,
+            occupancy: b.occupancy,
         })
     }
 }
 
-/// CLASH's input digest as the synthetic fixture writes it: `sha256(
-/// "PSF-CLASH-INPUTS-v1" ‖ the 24 arrival records ‖ le32(bell))`. **Not
-/// pinned by the contract** (§6 names the field only); V7 does not judge
-/// it until W4-A pins the program's (W4-D notes, request to the
-/// integrator).
-pub fn provisional_input_digest(inputs: &[u8], bell: u32) -> [u8; 32] {
-    let rec = inputs.get(CI::ARRIVALS..CI::ARRIVALS + 960).unwrap_or(&[]);
-    sha256(&[b"PSF-CLASH-INPUTS-v1", rec, &bell.to_le_bytes()])
+/// CLASH's `input_digest` (contract v1.6 §22, W4-A §1): `sha256(
+/// "PSF-CLASH-INPUT-v1" ‖ le32(b) ‖ seed ‖ province[SITE_MIRROR ..
+/// TICKET_COHORTS] before ‖ inputs[ARRIVALS .. POSTURES])`.
+pub fn input_digest(province_before: &[u8], inputs: &[u8], bell: u32, seed: &[u8; 32]) -> [u8; 32] {
+    use frontier_abi::layout::province::province as PV;
+    sha256(&[
+        b"PSF-CLASH-INPUT-v1",
+        &bell.to_le_bytes(),
+        seed,
+        province_before
+            .get(PV::SITE_MIRROR..PV::TICKET_COHORTS)
+            .unwrap_or(&[]),
+        inputs.get(CI::ARRIVALS..CI::POSTURES).unwrap_or(&[]),
+    ])
 }
 
-/// SKIP's quiet digest as the synthetic fixture writes it (not pinned;
-/// not judged).
-pub fn provisional_quiet_digest(p: i32, q: i32, b0: u32, n: u8) -> [u8; 32] {
+/// SKIP's `quiet_digest` (contract v1.6 §22): `sha256("PSF-QUIET-v1" ‖
+/// le32(b0) ‖ n ‖ province[SITE_MIRROR .. TICKET_COHORTS] after)`.
+pub fn quiet_digest(province_after: &[u8], b0: u32, n: u8) -> [u8; 32] {
+    use frontier_abi::layout::province::province as PV;
     sha256(&[
         b"PSF-QUIET-v1",
-        &p.to_le_bytes(),
-        &q.to_le_bytes(),
         &b0.to_le_bytes(),
         &[n],
+        province_after
+            .get(PV::SITE_MIRROR..PV::TICKET_COHORTS)
+            .unwrap_or(&[]),
     ])
 }

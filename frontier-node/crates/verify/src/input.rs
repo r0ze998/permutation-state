@@ -159,9 +159,22 @@ impl Input {
         })
     }
 
+    /// Reads a fixture; a `.gz` path is gzip-compressed JSON (integ-W4:
+    /// the recorded march season of the program, DECISIONS J2's `flate2`).
     pub fn load(path: &Path) -> Result<Input, String> {
-        let s = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let v: Value = serde_json::from_str(&s).map_err(|e| format!("{}: {e}", path.display()))?;
+        let raw = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let bytes = if path.extension().is_some_and(|x| x == "gz") {
+            use std::io::Read;
+            let mut out = vec![];
+            flate2::read::GzDecoder::new(&raw[..])
+                .read_to_end(&mut out)
+                .map_err(|e| format!("{}: {e}", path.display()))?;
+            out
+        } else {
+            raw
+        };
+        let v: Value =
+            serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
         Input::from_json(&v)
     }
 
@@ -189,6 +202,14 @@ impl Input {
         out.push_str("}\n");
         if let Some(d) = path.parent() {
             std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
+        }
+        if path.extension().is_some_and(|x| x == "gz") {
+            use std::io::Write;
+            let f = std::fs::File::create(path).map_err(|e| e.to_string())?;
+            let mut z = flate2::write::GzEncoder::new(f, flate2::Compression::best());
+            z.write_all(out.as_bytes()).map_err(|e| e.to_string())?;
+            z.finish().map_err(|e| e.to_string())?;
+            return Ok(());
         }
         std::fs::write(path, out).map_err(|e| e.to_string())
     }
@@ -254,6 +275,113 @@ pub async fn fetch_finals(
         }
     }
     Ok((m, slot))
+}
+
+/// Every account the program owns now, of this season (the season id at
+/// the common header offset 8), over RPC (`getProgramAccounts`; integ-W4
+/// review, W4-D major: the finals were read only for the keys the
+/// archive's transactions wrote, so an archive with transactions filtered
+/// out hid the accounts they explain).
+pub async fn program_accounts(
+    url: &str,
+    program: &Address,
+    season_id: u64,
+) -> Result<Vec<Address>, String> {
+    let c = fclient::rpc::RpcClient::new(url);
+    let v = c
+        .call(
+            "getProgramAccounts",
+            serde_json::json!([program.to_string(), {"encoding": "base64", "commitment": "confirmed"}]),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    let arr = v
+        .as_array()
+        .or_else(|| v.get("value").and_then(|x| x.as_array()))
+        .ok_or("getProgramAccounts: not an array")?;
+    let mut out = vec![];
+    for x in arr {
+        let k: Address = x
+            .get("pubkey")
+            .and_then(|p| p.as_str())
+            .and_then(|p| p.parse().ok())
+            .ok_or("getProgramAccounts: pubkey")?;
+        let data = x
+            .pointer("/account/data/0")
+            .and_then(|d| d.as_str())
+            .map(|d| {
+                use base64::Engine as _;
+                base64::engine::general_purpose::STANDARD
+                    .decode(d)
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+        if data.get(8..16).map(crate::world::le) == Some(season_id) {
+            out.push(k);
+        }
+    }
+    Ok(out)
+}
+
+/// The deployed `.so`'s sha256 and the ProgramData's last deploy slot, over
+/// RPC (upgradeable loader: the program account names its ProgramData;
+/// ProgramData = 45-B header ‖ the ELF padded to `max_len`, the ELF's own
+/// length from its header). Integ-W4 review, W4-D major: V2's `.so` hash
+/// had no source in RPC and archive modes.
+pub async fn program_hash(url: &str, program: &Address) -> Result<(u64, [u8; 32]), String> {
+    let port = fclient::rpc::RpcPort::new(url, *program);
+    let got = port
+        .rpc
+        .get_multiple_accounts(&[*program], 0)
+        .await
+        .map_err(|e| e.to_string())?;
+    let pa = got
+        .into_iter()
+        .next()
+        .flatten()
+        .ok_or("the program account is absent")?;
+    let pd_key: [u8; 32] = pa
+        .data
+        .get(4..36)
+        .and_then(|x| x.try_into().ok())
+        .ok_or("the program account is not an upgradeable Program")?;
+    let got = port
+        .rpc
+        .get_multiple_accounts(&[Address::new_from_array(pd_key)], 0)
+        .await
+        .map_err(|e| e.to_string())?;
+    let pd = got
+        .into_iter()
+        .next()
+        .flatten()
+        .ok_or("the ProgramData account is absent")?;
+    let slot = pd
+        .data
+        .get(4..12)
+        .map(crate::world::le)
+        .ok_or("ProgramData header")?;
+    let elf = pd.data.get(45..).ok_or("ProgramData: no ELF")?;
+    let n = elf_len(elf).ok_or("ProgramData: not an ELF64")?;
+    Ok((slot, permutation_rules::hash::sha256(&[&elf[..n]])))
+}
+
+/// The length of an ELF64 file from its header: the end of its section
+/// header table or of its last program segment, whichever is later.
+pub fn elf_len(b: &[u8]) -> Option<usize> {
+    if b.get(..4)? != b"\x7fELF" || *b.get(4)? != 2 {
+        return None;
+    }
+    let u16_at = |o: usize| Some(u16::from_le_bytes(b.get(o..o + 2)?.try_into().ok()?) as u64);
+    let u64_at = |o: usize| Some(u64::from_le_bytes(b.get(o..o + 8)?.try_into().ok()?));
+    let (phoff, shoff) = (u64_at(0x20)?, u64_at(0x28)?);
+    let (phentsize, phnum) = (u16_at(0x36)?, u16_at(0x38)?);
+    let (shentsize, shnum) = (u16_at(0x3A)?, u16_at(0x3C)?);
+    let mut end = shoff + shentsize * shnum;
+    for i in 0..phnum {
+        let o = (phoff + i * phentsize) as usize;
+        end = end.max(u64_at(o + 8)? + u64_at(o + 0x20)?);
+    }
+    usize::try_from(end).ok().filter(|&n| n <= b.len())
 }
 
 /// The program's transactions over RPC: `frontier_feed` on a local node,

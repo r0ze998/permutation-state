@@ -42,6 +42,11 @@ solana-address.workspace = true
 hex.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+# integ-W4 review (W4-D blocker): the program's recorded march season is
+# committed gzip-compressed (DECISIONS J2's flate2; no new crate).
+flate2.workspace = true
+# integ-W4 review: getProgramAccounts' base64 data (a workspace dependency).
+base64.workspace = true
 
 [dev-dependencies]
 keeper = { path = "../keeper" }

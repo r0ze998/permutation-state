@@ -423,19 +423,31 @@ pub fn t06b(march: &Input) -> Case {
             .or_default()
             .push((t, i));
     }
-    let (pq, v) = by
-        .into_iter()
-        .find(|(_, v)| v.len() >= 2)
-        .expect("two clashes in one province");
-    let (t2, i2) = v[1];
+    // A later clash of a province whose state before it has a resident
+    // (integ-W4: the program recording has clashes of arrivals into empty
+    // provinces too).
+    let resident = |d: &[u8]| {
+        (0..56).find(|&k| frontier_abi::entry::read_entry(d, k).is_ok_and(|x| x.state == 1))
+    };
+    type ByProvince = Vec<((i32, i32), Vec<(usize, usize)>)>;
+    let mut by: ByProvince = by.into_iter().collect();
+    by.sort();
+    let (pq, (t2, i2)) = by
+        .iter()
+        .filter(|(_, v)| v.len() >= 2)
+        .flat_map(|(pq, v)| v[1..].iter().map(move |x| (*pq, *x)))
+        .find(|(pq, (t2, _))| {
+            w.state_before(&f.ctx.province(pq.0, pq.1), *t2)
+                .and_then(resident)
+                .is_some()
+        })
+        .expect("two clashes in one province, a resident before the second");
     let r2 = &w.recs[rec_at(&w, t2, i2)];
     let b2 = r2.ku32("bell");
     let pk = f.ctx.province(pq.0, pq.1);
     let mut before = w.state_before(&pk, t2).expect("state").to_vec();
     // The rogue write: the first roster entry loses troops.
-    let e = (0..56)
-        .find(|&k| frontier_abi::entry::read_entry(&before, k).is_ok_and(|x| x.state == 1))
-        .expect("a resident");
+    let e = resident(&before).expect("a resident");
     let o = frontier_abi::layout::province::province::entry(e)
         + frontier_abi::layout::province::entry::TROOPS;
     let v2 = le(&before[o..o + 4]) as u32 / 2;
@@ -490,6 +502,15 @@ pub fn t07(march: &Input) -> Case {
         .ix(Ix::SettleTransit.tag())
         .and_then(|x| x.key(11))
         .expect("settler");
+    // A careful forger keeps `pool_owed_delta` = the pool's pairs + the
+    // transaction's DIVERTs (V13 since the integ-W4 review).
+    let diverted: u64 = w.txs[t]
+        .recs
+        .iter()
+        .map(|&n| &w.recs[n])
+        .filter(|x| x.kind == Kind::DIVERT)
+        .map(|x| x.pu64("amount"))
+        .sum();
     forge_transit(
         &mut inp,
         t,
@@ -506,7 +527,7 @@ pub fn t07(march: &Input) -> Case {
                 settler[..8].try_into().unwrap_or([0; 8]),
             ),
         ],
-        0,
+        diverted,
     );
     rechain(&mut inp);
     Case {
@@ -663,13 +684,20 @@ fn beacon_day(f: &Facts, t: i64) -> Option<u32> {
 pub fn t13(march: &Input) -> Case {
     let mut inp = march.clone();
     let (w, f) = world(&inp);
-    let (t, i) = find(&inp, Kind::REVEAL)[1];
-    let r = &w.recs[rec_at(&w, t, i)];
-    let (p, q) = r.pq();
-    let a = f
-        .anchor(r.ku32("arrive"), Facts::region(p, q))
-        .expect("anchor");
-    inp.txs[t].block_time = f.close(r.ku32("arrive"), a.a) + 5;
+    // A Reveal that landed after its bell's THE anchor (an owner's in-bell
+    // Reveal before the anchor is allowed at any Clock; integ-W4: the
+    // program recording's second Reveal is one).
+    let (t, a, arrive) = find(&inp, Kind::REVEAL)
+        .into_iter()
+        .filter_map(|(t, i)| {
+            let r = &w.recs[rec_at(&w, t, i)];
+            let (p, q) = r.pq();
+            let a = f.anchor(r.ku32("arrive"), Facts::region(p, q))?;
+            (w.recs[a.rec].tx < t).then_some((t, a, r.ku32("arrive")))
+        })
+        .nth(1)
+        .expect("a Reveal after its anchor");
+    inp.txs[t].block_time = f.close(arrive, a.a) + 5;
     Case {
         class: "T13",
         what: "move a Reveal past A + W",
@@ -757,15 +785,73 @@ pub fn t15(march: &Input) -> Case {
     let (od, _) = field(Kind::CLASH, "outcome_digest");
     let (oe, _) = field(Kind::CLASH, "engagements");
     let (of, _) = field(Kind::CLASH, "fates");
+    let (oi, _) = field(Kind::CLASH, "input_digest");
+    let in_digest = crate::clash_input::input_digest(
+        w2.state_before(&pk, t).expect("province"),
+        w2.state_before(&ck, t).expect("inputs"),
+        b,
+        &f2.bell_seed(b, Facts::region(pq.0, pq.1)).expect("seed"),
+    );
     edit_payload(&mut inp, t, i, |p| {
         p[od..od + 32].copy_from_slice(&out.digest());
         p[oe..oe + 4].copy_from_slice(&out.engagements.to_le_bytes());
         p[of..of + 9].copy_from_slice(&fates);
+        p[oi..oi + 32].copy_from_slice(&in_digest);
     });
     let oa = CI::arrival(pos) + AR::TROOPS_AFTER;
     edit_account_from(&mut inp, &ck, t, |d| {
         d[oa..oa + 4].copy_from_slice(&troops_after.to_le_bytes())
     });
+    // The write-back the forger's resolve would leave (V7 checks it since
+    // the integ-W4 review): every fighter whose post-clash troops moved,
+    // in the Province it wrote and every later state of it.
+    {
+        use frontier_abi::entry::{find_entry, read_entry, write_entry};
+        let post = w2.txs[t]
+            .post_data(&pk)
+            .expect("the Province written")
+            .to_vec();
+        let fixes: Vec<(u64, u32, u32)> = out
+            .fighters
+            .iter()
+            .filter_map(|fr| {
+                let e = read_entry(&post, find_entry(&post, fr.id)?).ok()?;
+                (e.troops != fr.troops).then_some((fr.id, e.troops, fr.troops))
+            })
+            .collect();
+        edit_account_from(&mut inp, &pk, t, |d| {
+            for &(id, old, new) in &fixes {
+                if let Some(i) = find_entry(d, id) {
+                    if let Ok(mut e) = read_entry(d, i) {
+                        if e.troops == old {
+                            e.troops = new;
+                            let _ = write_entry(d, i, &e);
+                        }
+                    }
+                }
+            }
+        });
+    }
+    // Every later SKIP of the province digests the forged state (v1.6).
+    {
+        let (w3, _) = world(&inp);
+        let (oq, _) = field(Kind::SKIP, "quiet_digest");
+        for (t3, i3) in find(&inp, Kind::SKIP) {
+            if t3 <= t {
+                continue;
+            }
+            let r3 = &w3.recs[rec_at(&w3, t3, i3)];
+            if r3.pq() != pq {
+                continue;
+            }
+            let (b0, n) = (r3.pu32("b0"), r3.pu8("n"));
+            let Some(after) = w3.txs[t3].post_data(&pk) else {
+                continue;
+            };
+            let qd = crate::clash_input::quiet_digest(after, b0, n);
+            edit_payload(&mut inp, t3, i3, |p| p[oq..oq + 32].copy_from_slice(&qd));
+        }
+    }
     // The transit settles with the forged troops.
     let (tt, ti) = *find(&inp, Kind::TRANSIT_SETTLED)
         .iter()
@@ -1021,6 +1107,77 @@ pub fn t22(march: &Input) -> Case {
     }
 }
 
+/// T1b (integ-W4 review, W4-D major): drop an **unchained** transaction —
+/// the last PostAnchor (Multi) and the PostSeeds of its bell — keeping the
+/// anchor and cache accounts in the finals. Nothing chains them, so before
+/// the review V1 passed it; now an account no transaction explains is a
+/// gap.
+pub fn t01b(land: &Input) -> Case {
+    let mut inp = land.clone();
+    let (w, _) = world(&inp);
+    let anchors = find(&inp, Kind::ANCHOR);
+    let (ta, ia) = *anchors.last().expect("an ANCHOR");
+    let bell = w.recs[rec_at(&w, ta, ia)].ku32("bell");
+    let mut drop: Vec<usize> = vec![ta];
+    for (t, i) in find(&inp, Kind::SEED) {
+        if w.recs[rec_at(&w, t, i)].ku32("bell") == bell {
+            drop.push(t);
+        }
+    }
+    drop.sort_unstable();
+    drop.dedup();
+    for t in drop.into_iter().rev() {
+        inp.txs.remove(t);
+    }
+    Case {
+        class: "T1b",
+        what: "drop an unchained transaction (an anchor and its seeds)",
+        feature: Some("mutate-v1"),
+        codes: &[CHAIN_GAP],
+        input: inp,
+    }
+}
+
+/// T23 (integ-W4 review, W4-D major): a resolve's **write-back** forged —
+/// +25,000 milli-troops written to a resident in the last CLASH's Province
+/// post-state (and every later state of it, and the final). The digests,
+/// fates and chains are untouched (account bytes are not chained), so only
+/// V7's write-back replay sees it.
+pub fn t23(march: &Input) -> Case {
+    let mut inp = march.clone();
+    let (w, f) = world(&inp);
+    let (t, i) = *find(&inp, Kind::CLASH).last().expect("a CLASH");
+    let r = &w.recs[rec_at(&w, t, i)];
+    let pk = f.ctx.province(r.pq().0, r.pq().1);
+    let post = w.txs[t].post_data(&pk).expect("the Province's post-state");
+    // A resident that stays put (no later departure: V8 would read it).
+    let later: std::collections::BTreeSet<u64> = w
+        .recs
+        .iter()
+        .filter(|x| x.tx > t && x.kind == Kind::DEPART)
+        .map(|x| x.ku64("host_id"))
+        .collect();
+    let e = (0..frontier_abi::layout::province::province::ENTRIES_N)
+        .find(|&k| {
+            frontier_abi::entry::read_entry(post, k)
+                .is_ok_and(|x| x.state == 1 && !later.contains(&x.id))
+        })
+        .expect("a resident after the clash");
+    let o = frontier_abi::layout::province::province::entry(e)
+        + frontier_abi::layout::province::entry::TROOPS;
+    edit_account_from(&mut inp, &pk, t, |d| {
+        let v = le(&d[o..o + 4]) as u32 + 25_000;
+        d[o..o + 4].copy_from_slice(&v.to_le_bytes());
+    });
+    Case {
+        class: "T23",
+        what: "a resolve's write-back forged in its own transaction",
+        feature: Some("mutate-v7"),
+        codes: &[CLASH_REPLAY_MISMATCH],
+        input: inp,
+    }
+}
+
 /// V9 (no §8.5 class; the check of its check): an account at a
 /// non-canonical address — an anchor whose stored region is not the one
 /// its address derives (its post-state and final state agree, so only V9
@@ -1046,16 +1203,19 @@ pub fn v9a(land: &Input) -> Case {
     }
 }
 
-/// Every class over the two recorded fixtures.
-pub fn all(land: &Input, march: &Input) -> Vec<Case> {
+/// Every class over the recorded fixtures (`program`: the march season
+/// recorded from the merged program, integ-W4 review).
+pub fn all(land: &Input, march: &Input, program: &Input) -> Vec<Case> {
     vec![
         t01(march),
+        t01b(land),
         t02(march),
         t03(land),
         t04(land),
         t05(land),
         t06(march),
-        t06b(march),
+        t06b(program),
+        t23(program),
         t07(march),
         t08(march),
         t09(march),

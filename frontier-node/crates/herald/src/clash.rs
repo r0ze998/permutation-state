@@ -15,22 +15,7 @@
 //! input gives `heraldCheck: "unchecked"` with the reason instead of a
 //! false `MISMATCH` alarm.
 
-use frontier_abi::addr::holding_key_of_host;
-use frontier_abi::entry::{read_entry, unit_from_u8};
-use frontier_abi::layout::province::{entry as E, province as PV, site as S};
-use permutation_rules::fixed::{Bps, BPS_ONE, MILLI};
-use permutation_rules::frontier::camp as kcamp;
-use permutation_rules::frontier::clash::{
-    self, ClashInput, ClashOutcome, Fate, Fighter, Garrison, Occupancy, Relations, MAX_GARRISONS,
-    NEUTRAL,
-};
-use permutation_rules::frontier::geometry::{ProvinceCoord, PROVINCE_TILES};
-use permutation_rules::frontier::host::{GarrisonState, MAX_HOST_TROOPS};
-use permutation_rules::frontier::stance::{Posture, Stance};
-use permutation_rules::frontier::terrain::ProvinceTerrain;
-use permutation_rules::map::{Terrain, TileResource};
-
-use fclient::decode::{ClashInputs, Province};
+use permutation_rules::frontier::clash::{self, ClashOutcome, Fate};
 
 /// Builds the kernel input of one province-bell and resolves it.
 pub trait ClashBuilder: Send + Sync {
@@ -47,140 +32,17 @@ pub trait ClashBuilder: Send + Sync {
     ) -> Result<ClashOutcome, String>;
 }
 
-/// The §5.11 ResolveFromInputs input, as the contract text states it:
-/// residents in state 1 with `from_bell ≤ bell` at `Host::values_at(bell)`
-/// fighting at Hold; garrisons from the site mirror at `GarrisonState::at`
-/// with walls effective at the bell; arrivals = the present records;
-/// terrain from the compact arrays; relations from the Province (0 in M1);
-/// the storage room from the entry states; the camp, if present, as a
-/// NEUTRAL garrison.
-///
-/// integ-W4: aligned with the program's builder (W4-A,
-/// `permutation-frontier` `proc::clash::model::build`, normative; its move
-/// into `frontier-abi` is W4-A's request D8 for W5): the camp's troops are
-/// whole troops (× 1,000 to milli, capped at `MAX_HOST_TROOPS`), the camp
-/// fights only while fewer than `MAX_GARRISONS` garrisons stand, the day's
-/// camp check runs first (I-56: `camp::place` with `sha256("PSF-CAMP-v1" ‖
-/// province[TERRAIN ..= SITE_COUNT])`), a stored `dealt_bps` of 0 reads as
-/// 1.0, garrisons are capped at `MAX_HOST_TROOPS`, and residents and
-/// arrivals go to the kernel in id order. Before this, 56 of 121 CLASH
-/// records of the in-process day were herald `MISMATCH` alarms.
+/// The program's ClashInput builder (`fclient::clash_model`, one
+/// transcription of W4-A's `proc::clash::model::build` shared with the
+/// verifier; integ-W4 `3acc6b1` aligned the herald's own copy first, the
+/// wave-4 review moved it to fclient). Moving the program's model into
+/// `frontier-abi` stays W4-A's request D8 for W5.
 pub struct Provisional;
 
-/// Domain of the camp seed (the program's `model::CAMP_DOMAIN`).
-pub const CAMP_DOMAIN: &[u8] = b"PSF-CAMP-v1";
-
-/// A doctrine multiplier as stored (0 reads as none, the program's `bps`).
-fn bps(v: u16) -> Bps {
-    if v == 0 {
-        BPS_ONE
-    } else {
-        v as Bps
-    }
-}
-
-/// The camp a clash of `bell` sees (I-56; the program's `camp_check`):
-/// `(tile, present, whole troops, gen)` after the day's check.
-fn camp_at(
-    pv: &Province,
-    pd: &[u8],
-    terrain: &ProvinceTerrain,
-    bell: u32,
-) -> Result<(u8, bool, u32, u32), String> {
-    let c = &pv.camp;
-    let day = bell / 144;
-    if day < c.next_check_day {
-        return Ok((c.tile, c.state == 1, c.troops, c.gen));
-    }
-    let block = pd
-        .get(PV::TERRAIN..PV::SITE_COUNT + 1)
-        .ok_or("province: short terrain block")?;
-    let seed = permutation_rules::hash::sha256(&[CAMP_DOMAIN, block]);
-    let has_holding = pv.site_mirror[..(pv.site_count as usize).min(PV::SITES_N)]
-        .iter()
-        .any(|m| m.state == S::STATE_HOLDING);
-    let coord = ProvinceCoord::new(pv.p as i32, pv.q as i32);
-    Ok(
-        match kcamp::place(&seed, coord, terrain, day, has_holding, false) {
-            Some(k) => (k.tile, true, k.troops, c.gen.wrapping_add(1)),
-            None => (c.tile, c.state == 1, c.troops, c.gen),
-        },
-    )
-}
-
-/// Terrain classes in declaration (= borsh) order.
-pub const TERRAINS: [Terrain; 6] = [
-    Terrain::Grassland,
-    Terrain::Plains,
-    Terrain::Forest,
-    Terrain::Hills,
-    Terrain::Mountain,
-    Terrain::Water,
-];
-const RESOURCES: [TileResource; 3] = [
-    TileResource::Wheat,
-    TileResource::Iron,
-    TileResource::Horses,
-];
-/// Stances in `seal` byte order (0 Hold, 1 Assault, 2 Flank, 3 Brace).
-const STANCES: [Stance; 4] = [Stance::Hold, Stance::Assault, Stance::Flank, Stance::Brace];
-
-/// The kernel terrain of a Province account.
-pub fn terrain_of(pv: &Province) -> Result<ProvinceTerrain, String> {
-    let mut terrain = [Terrain::Grassland; PROVINCE_TILES];
-    let mut resource = [None; PROVINCE_TILES];
-    for i in 0..PROVINCE_TILES {
-        terrain[i] = *TERRAINS
-            .get(pv.terrain[i] as usize)
-            .ok_or(format!("terrain byte {} at tile {i}", pv.terrain[i]))?;
-        resource[i] = match pv.resource[i] {
-            0 => None,
-            r => Some(
-                *RESOURCES
-                    .get(r as usize - 1)
-                    .ok_or(format!("resource byte {r} at tile {i}"))?,
-            ),
-        };
-    }
-    Ok(ProvinceTerrain {
-        terrain,
-        resource,
-        sites: pv.sites,
-        site_count: pv.site_count,
-    })
-}
-
-/// The owned parts of a `ClashInput` (it borrows them).
-pub struct BuiltInput {
-    pub province: ProvinceCoord,
-    pub bell: u32,
-    pub seed: [u8; 32],
-    pub terrain: ProvinceTerrain,
-    pub residents: Vec<Fighter>,
-    pub garrisons: Vec<Garrison>,
-    pub arrivals: Vec<Fighter>,
-    pub relations: Relations,
-    pub occupancy: Occupancy,
-}
-
-impl BuiltInput {
-    pub fn input(&self) -> ClashInput<'_> {
-        ClashInput {
-            province: self.province,
-            bell: self.bell,
-            seed: self.seed,
-            terrain: &self.terrain,
-            residents: &self.residents,
-            garrisons: &self.garrisons,
-            arrivals: &self.arrivals,
-            relations: self.relations,
-            occupancy: self.occupancy,
-        }
-    }
-}
+pub use fclient::clash_model::{terrain_of, BuiltInput, CAMP_DOMAIN, TERRAINS};
 
 impl Provisional {
-    /// The input the provisional builder hands to the kernel.
+    /// The input the builder hands to the kernel.
     pub fn build(
         &self,
         province_before: &[u8],
@@ -188,128 +50,10 @@ impl Provisional {
         bell: u32,
         seed: &[u8; 32],
     ) -> Result<BuiltInput, String> {
-        let pv = Province::decode(province_before).map_err(|e| format!("province: {e:?}"))?;
-        let ci = ClashInputs::decode(inputs).map_err(|e| format!("inputs: {e:?}"))?;
-        if (ci.p, ci.q, ci.bell) != (pv.p, pv.q, bell) {
-            return Err("inputs and province are different province-bells".into());
+        if inputs.is_empty() {
+            return Err("inputs: empty".into());
         }
-        let terrain = terrain_of(&pv)?;
-        let mut residents = vec![];
-        let mut pending = [0u8; clash::FACTION_LIMIT as usize];
-        let mut used = 0u8;
-        for i in 0..PV::ENTRIES_N {
-            let e = read_entry(province_before, i).map_err(|x| format!("entry {i}: {x:?}"))?;
-            match e.state {
-                E::STATE_ROSTER => {
-                    used += 1;
-                    if e.from_bell > bell {
-                        continue;
-                    }
-                    let h = e.to_host().map_err(|x| format!("entry {i}: {x:?}"))?;
-                    let (troops, stamina) = h
-                        .values_at(bell)
-                        .map_err(|x| format!("host {}: {x:?}", e.id))?;
-                    residents.push(Fighter {
-                        id: e.id,
-                        faction: e.faction,
-                        unit: h.unit,
-                        troops,
-                        stamina,
-                        tile: e.tile,
-                        posture: Posture::Stance(Stance::Hold),
-                        retreat_bps: None,
-                        dealt_bps: bps(e.dealt_bps),
-                    });
-                }
-                E::STATE_MUSTER_PENDING => {
-                    used += 1;
-                    if let Some(c) = pending.get_mut(e.faction as usize) {
-                        *c = c.saturating_add(1);
-                    }
-                }
-                E::STATE_DEPARTED => used += 1,
-                _ => {}
-            }
-        }
-        let mut garrisons = vec![];
-        for i in 0..(pv.site_count as usize).min(PV::SITES_N) {
-            let m = &pv.site_mirror[i];
-            if m.state != S::STATE_HOLDING {
-                continue;
-            }
-            let pend = |b: u32, d: i64| (b != S::NO_BELL).then_some((b, d));
-            let g = GarrisonState {
-                troops: m.garrison,
-                pending: [
-                    pend(m.pend0_bell, m.pend0_delta),
-                    pend(m.pend1_bell, m.pend1_delta),
-                ],
-            };
-            let troops = g.at(bell).map_err(|x| format!("garrison {i}: {x:?}"))?;
-            let walls = m.walls_committed > 0
-                || [m.wall_item0, m.wall_item1]
-                    .iter()
-                    .any(|(eff, d)| *d > 0 && *eff != S::NO_BELL && *eff <= bell);
-            let id = frontier_abi::addr::host_id(pv.p as i32, pv.q as i32, i as u8, m.gen, 0)
-                .map(holding_key_of_host)
-                .ok_or(format!("site {i}: no holding id"))?;
-            garrisons.push(Garrison {
-                id,
-                faction: m.faction,
-                tile: pv.sites[i],
-                troops: troops.min(MAX_HOST_TROOPS),
-                walls,
-                posture: Posture::Stance(Stance::Hold),
-            });
-        }
-        let (camp_tile, camp_present, camp_troops, camp_gen) =
-            camp_at(&pv, province_before, &terrain, bell)?;
-        if camp_present && garrisons.len() < MAX_GARRISONS {
-            garrisons.push(Garrison {
-                id: u64::MAX - camp_gen as u64,
-                faction: NEUTRAL,
-                tile: camp_tile,
-                troops: (camp_troops as u64 * MILLI as u64).min(MAX_HOST_TROOPS as u64) as u32,
-                walls: false,
-                posture: Posture::Stance(Stance::Hold),
-            });
-        }
-        let mut arrivals = vec![];
-        for a in ci.arrivals.iter().filter(|a| a.present == 1) {
-            arrivals.push(Fighter {
-                id: a.host_id,
-                faction: a.faction,
-                unit: unit_from_u8(a.unit).ok_or(format!("arrival unit {}", a.unit))?,
-                troops: a.troops,
-                stamina: a.stamina,
-                tile: a.tile,
-                posture: Posture::Stance(
-                    *STANCES
-                        .get(a.stance as usize)
-                        .ok_or(format!("arrival stance {}", a.stance))?,
-                ),
-                retreat_bps: (a.retreat != 0).then_some(a.retreat as u32),
-                dealt_bps: bps(a.dealt),
-            });
-        }
-        residents.sort_by_key(|f| f.id);
-        arrivals.sort_by_key(|f| f.id);
-        Ok(BuiltInput {
-            province: ProvinceCoord::new(pv.p as i32, pv.q as i32),
-            bell,
-            seed: *seed,
-            terrain,
-            residents,
-            garrisons,
-            arrivals,
-            relations: Relations {
-                peaceful: pv.relations,
-            },
-            occupancy: Occupancy {
-                pending,
-                storage_free: Occupancy::STORAGE.saturating_sub(used),
-            },
-        })
+        fclient::clash_model::build(province_before, inputs, bell, seed)
     }
 }
 

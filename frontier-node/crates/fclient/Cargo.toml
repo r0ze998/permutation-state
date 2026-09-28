@@ -9,6 +9,9 @@ license.workspace = true
 
 [dependencies]
 permutation-rules.workspace = true
+# integ-W4 review: the shared ClashInput builder (`clash_model`) reads the
+# ABI's entry codec (herald, verifier; a workspace path crate).
+frontier-abi.workspace = true
 solana-address.workspace = true
 solana-hash.workspace = true
 solana-instruction.workspace = true
@@ -32,4 +35,3 @@ rand.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
-frontier-abi.workspace = true

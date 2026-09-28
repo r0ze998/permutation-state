@@ -13,8 +13,10 @@
 //!   fee to the resolver, bond to the rent payer; `routed` without → tip
 //!   and fee to the pool, bond to the rent payer. The recipients are the
 //!   SettleTransit's own accounts; the slot beneficiary is the last Reveal's
-//!   and the resolver the inputs'. The encoding of the pairs is not assumed
-//!   (only the sums per recipient).
+//!   and the resolver the inputs'. The pairs name the intended recipients
+//!   (W4-B P9: the Holding's own prefix is the pool), summed per recipient;
+//!   `pool_owed_delta` = the pool's pairs + the transaction's DIVERT amounts
+//!   (integ-W4 review).
 //! - **DEFENCE_CLAIM:** the amount is `Σ fees::defence_refund(slot evidence,
 //!   season)` over the claimed slots (each late by `≥ lateness_slots`
 //!   against THE anchor's slot, unclaimed, the keeper's own), capped by the
@@ -158,6 +160,16 @@ fn transits(cx: &mut Ctx) {
             }
             _ => {}
         }
+        // W4-B P9 (v1.6 §22): each pair names the **intended** recipient
+        // (the Holding's own address for `pool_owed`); a payment the
+        // runtime could not credit (an unfunded wallet below rent, a
+        // program account) is diverted into `pool_owed` with a DIVERT
+        // record, and `pool_owed_delta` counts routed and diverted
+        // lamports. So the sums per intended recipient are the pairs'
+        // (the Holding's prefix read as the pool), and the delta must be
+        // the pool's pairs plus the transaction's DIVERTs (integ-W4
+        // review: the DIVERTs were credited a second time).
+        let holding = ix.key(2).map(|k| prefix(&k)).unwrap_or([0; 8]);
         let mut got = Pay::new();
         for (to, amt) in [
             ("tip_to", "tip"),
@@ -166,22 +178,29 @@ fn transits(cx: &mut Ctx) {
             ("reward_to", "reward"),
         ] {
             let k: [u8; 8] = r.p(to).try_into().unwrap_or([0; 8]);
-            add(&mut got, k, r.pu64(amt));
+            add(&mut got, if k == holding { POOL } else { k }, r.pu64(amt));
         }
-        add(&mut got, POOL, r.pu64("pool_owed_delta"));
-        for dv in tx
+        let diverted: u64 = tx
             .recs
             .iter()
             .map(|&i| &w.recs[i])
             .filter(|x| x.kind == Kind::DIVERT)
-        {
-            let to = prefix(&dv.k("recipient").try_into().unwrap_or([0; 32]));
-            let a = dv.pu64("amount");
-            add(&mut got, to, a);
-            if let Some(v) = got.get_mut(&POOL) {
-                *v = v.saturating_sub(a);
-            }
-            got.retain(|_, v| *v > 0);
+            .map(|dv| dv.pu64("amount"))
+            .sum();
+        let pool_ok = r.pu64("pool_owed_delta") == got.get(&POOL).copied().unwrap_or(0) + diverted;
+        if !pool_ok {
+            cx.fail(
+                V,
+                PAYMENT_MISMATCH,
+                what.clone(),
+                r.bell,
+                Some(r.tx),
+                format!(
+                    "pool_owed_delta {} is not the pool's pairs {} plus the diverted {diverted}",
+                    r.pu64("pool_owed_delta"),
+                    got.get(&POOL).copied().unwrap_or(0)
+                ),
+            );
         }
         let named_ok = chain_slot_ben
             .is_none_or(|b| b == slot_ben || outcome != transit_outcome::STAYS)

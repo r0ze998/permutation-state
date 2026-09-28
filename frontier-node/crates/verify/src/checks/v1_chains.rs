@@ -4,7 +4,8 @@
 //! order, optional links), each link resolved to an account address —
 //! from the key and payload where they determine it, through the JOIN and
 //! SETTLE facts for a citizen named by its tag or by its holding, and to
-//! the transaction's writable account of that kind (account order) where
+//! the transaction's writable account of that kind (the program
+//! instruction's account order, integ-W4 review) where
 //! the record leaves it to the transaction (`InTx`) — and each chain is
 //! walked: `seq` contiguous from 1, `head = sha256(prev ‖ le64(seq) ‖
 //! body_without_tail)`. A CLOSE record's payload must be the chain as it
@@ -55,6 +56,7 @@ pub fn resolve(
     who: &EntityRef,
     entity: EntityKind,
     used: &[Key],
+    link: Option<plog::Link>,
 ) -> Option<Key> {
     let citizen = |c: &CitizenRef| -> Option<Key> {
         match c {
@@ -71,12 +73,36 @@ pub fn resolve(
         }
         EntityRef::Citizen(c) => citizen(c),
         EntityRef::InTx => {
+            // The program chains the accounts a record leaves to the
+            // transaction in its **instruction's** account order (SETTLE's
+            // other ticket Provinces, TRANSIT_SETTLED's destination then
+            // home, GATHER's Holdings). The message's key order is sorted
+            // by address within each signer/writable group, so it is not
+            // that order (integ-W4 review, W4-D blocker: SETTLE links
+            // resolved to the wrong Provinces on a recorded program day).
             let tx = &w.txs[r.tx];
-            tx.keys
+            let cands: Vec<Key> = tx
+                .ixs
                 .iter()
+                .flat_map(|ix| ix.accounts.iter())
+                .chain(tx.keys.iter())
                 .filter(|(k, wr)| *wr && !used.contains(k))
                 .map(|(k, _)| *k)
-                .find(|k| kind_of(w, kinds, k, r.tx) == Some(entity))
+                .filter(|k| kind_of(w, kinds, k, r.tx) == Some(entity))
+                .collect();
+            // An optional link the record leaves to the transaction may be
+            // any one of its accounts of the kind (TRANSIT_SETTLED writes
+            // the home Province without the destination when a host goes
+            // home): the account whose post-state header is this link
+            // (the transaction's last record of it) is the one; else the
+            // first in instruction order.
+            link.and_then(|l| {
+                cands
+                    .iter()
+                    .copied()
+                    .find(|k| tx.post_data(k).and_then(header) == Some((l.seq, l.head)))
+            })
+            .or_else(|| cands.first().copied())
         }
         other => other.address(&f.ctx),
     }
@@ -131,8 +157,18 @@ pub fn match_links(
             return Err(TailError::Missing(e.entity));
         }
         let used: Vec<Key> = out.iter().map(|x| x.2).collect();
-        let k = resolve(w, f, kinds, n, r, &e.who, e.entity, &used)
-            .ok_or_else(|| TailError::Unresolved(e.entity, format!("{:?}", e.who)))?;
+        let k = resolve(
+            w,
+            f,
+            kinds,
+            n,
+            r,
+            &e.who,
+            e.entity,
+            &used,
+            r.links.get(li).copied(),
+        )
+        .ok_or_else(|| TailError::Unresolved(e.entity, format!("{:?}", e.who)))?;
         kinds.insert(k, e.entity);
         out.push((li, e.entity, k));
         li += 1;
@@ -283,6 +319,20 @@ pub fn run(cx: &mut Ctx) {
             continue;
         }
         let chained = kind_by_magic(&a.data).is_some_and(|x| x.chained());
+        // Integ-W4 review (W4-D major): an **unchained** program account
+        // (anchor, cache, slot, day, archive, claim, …) no transaction of
+        // the archive wrote is a gap too — dropping the transaction that
+        // created it (and those that read it) passed before.
+        if w.has_post && !chained && w.last_post(k).is_none() {
+            cx.fail(
+                V,
+                CHAIN_GAP,
+                ent("account", k),
+                0,
+                None,
+                "a program account no transaction of the archive wrote",
+            );
+        }
         if chained
             && !st.contains_key(k)
             && !closed.contains(k)

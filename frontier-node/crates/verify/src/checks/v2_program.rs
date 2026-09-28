@@ -37,6 +37,9 @@ pub fn run(cx: &mut Ctx) {
             None,
             "the Season account is not owned by the program",
         ),
+        // The Closed tombstone (128 B) keeps no ruleset hash; SEASON_CREATED's
+        // is judged below.
+        Some(Some(a)) if a.data.len() == S::TOMBSTONE_SIZE => {}
         Some(Some(a))
             if a.data.get(S::RULESET_HASH..S::RULESET_HASH + 32)
                 != Some(&cx.cfg.ruleset_hash[..]) =>
@@ -50,6 +53,14 @@ pub fn run(cx: &mut Ctx) {
                 "the Season account's ruleset hash is not the expected one",
             );
         }
+        // Integ-W4 review (W4-D major): an absent Season is not a pass.
+        None | Some(None) => cx.missing(
+            V,
+            "Season",
+            0,
+            None,
+            "no final state of the Season account was read",
+        ),
         _ => {}
     }
     for (i, t) in w.txs.iter().enumerate() {

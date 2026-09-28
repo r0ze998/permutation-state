@@ -21,6 +21,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use fclient::decode::Province;
 use fclient::ix::{
     self, AnchorSource, ArchiveItem, ClaimSlot, DepartArgs, HoldingRef, Player, RevealArgs,
     SeedSource, SettleTransitArgs, Site,
@@ -49,21 +50,20 @@ use permutation_rules::frontier::beacon;
 use permutation_rules::frontier::camp;
 use permutation_rules::frontier::clash::{
     admit_arrival, apply_slot, ready_bell_after, ClashOutcome, FactionSlots, Fate, SlotDecision,
-    SlotEntry,
+    SlotEntry, NEUTRAL,
 };
 use permutation_rules::frontier::explore;
 use permutation_rules::frontier::fees::{self, DefenceParams};
 use permutation_rules::frontier::geometry::{region_of, ring_provinces, ProvinceCoord};
 use permutation_rules::frontier::host::{rout_survivors, Host, Stamina};
+use permutation_rules::frontier::stance::{Posture, Stance};
 use permutation_rules::frontier::terrain::generate_province;
 use permutation_rules::hash::sha256;
 
 use super::{Gen, OP};
 use crate::checks::v11_land::{encode_terrain, terrain_digest};
 use crate::checks::v7_replay::{fate_code, packed_fates};
-use crate::clash_input::{
-    provisional_input_digest, provisional_quiet_digest, Built, ClashBuilder, ContractBuilder,
-};
+use crate::clash_input::{input_digest, quiet_digest, Built, ClashBuilder, ContractBuilder};
 use crate::world::{le, Key};
 
 const NB: u32 = plog::NO_BELL;
@@ -147,7 +147,14 @@ struct St {
     /// The faction slots per (P, Q, bell, faction): march indices.
     slots: BTreeMap<(i32, i32, u32, u8), [Option<usize>; 4]>,
     keeper_budget_price: u64,
+    /// Camp spawns of the day's check waiting for their transaction's
+    /// CAMP record: `((P, Q), (tile, troops, day))`.
+    pending_camps: Vec<PendingCamp>,
 }
+
+/// A camp spawn of the day's check waiting for its CAMP record: `((P, Q),
+/// (tile, troops, day))`.
+type PendingCamp = ((i32, i32), (u8, u32, u32));
 
 fn i16b(v: i32) -> [u8; 2] {
     (v as i16).to_le_bytes()
@@ -296,39 +303,86 @@ impl St {
             .unwrap_or(false)
     }
 
-    /// Applies what the resolve or skip of bell `b` does to the Province
-    /// (the synthetic write-back, W4-D notes §3).
+    /// Applies what the resolve or skip of bell `b` does to the Province:
+    /// the program's write-back and settle (W4-A, `proc::clash::model::
+    /// apply` and `settle_bell`, v1.6 §22; integ-W4 review: this
+    /// generator's own choices no longer passed the verifier's write-back
+    /// check). The day's camp check (I-56) is persisted and a spawn logged.
     fn write_back(&mut self, pq: (i32, i32), b: u32, o: Option<(&Built, &ClashOutcome)>) {
         let pk = self.pk(pq);
         let mut d = self.g.get(&pk).to_vec();
+        // The day's camp check (the program's `camp_check`, at the first
+        // resolve or skip of a day).
+        let mut spawned = None;
+        {
+            let pv = Province::decode(&d).expect("province");
+            let t = fclient::clash_model::terrain_of(&pv).expect("terrain");
+            let c = fclient::clash_model::camp_at(&pv, &d, &t, b).expect("camp");
+            if c.checked {
+                d[PV::CAMP + CP::TILE] = c.tile;
+                d[PV::CAMP + CP::STATE] = c.present as u8;
+                d[PV::CAMP + CP::TROOPS..PV::CAMP + CP::TROOPS + 4]
+                    .copy_from_slice(&c.troops.to_le_bytes());
+                d[PV::CAMP + CP::NEXT_CHECK_DAY..PV::CAMP + CP::NEXT_CHECK_DAY + 4]
+                    .copy_from_slice(&(b / 144 + 1).to_le_bytes());
+                d[PV::CAMP + CP::GEN..PV::CAMP + CP::GEN + 4].copy_from_slice(&c.gen.to_le_bytes());
+                if c.spawned {
+                    spawned = Some((c.tile, c.troops, b / 144));
+                }
+            }
+        }
         if let Some((built, out)) = o {
-            for i in 0..PV::ENTRIES_N {
-                let Ok(mut e) = read_entry(&d, i) else {
+            for f in &built.residents {
+                let Some(fr) = out.fighter(f.id) else {
                     continue;
                 };
-                if e.state != E::STATE_ROSTER || e.from_bell > b {
+                let Some(i) = frontier_abi::entry::find_entry(&d, f.id) else {
                     continue;
-                }
-                if let Some(fr) = out.fighter(e.id) {
-                    if matches!(fr.fate, Fate::Destroyed) || fr.troops == 0 {
+                };
+                let mut e = read_entry(&d, i).expect("entry");
+                let pending = !matches!(e.op, EntryOp::None);
+                let tile = match fr.fate {
+                    Fate::Stays { tile } | Fate::Withdrew { tile } => Some(tile),
+                    _ => None,
+                };
+                match fr.fate {
+                    Fate::Destroyed if !pending => {
                         write_entry(&mut d, i, &Entry::FREE).expect("entry");
                         continue;
                     }
-                    let mut h = e.to_host().expect("host");
-                    h.apply_clash(b, fr.troops, fr.stamina, fr.engaged)
-                        .expect("apply");
-                    e.set_host(&h);
-                    if let Fate::Stays { tile } | Fate::Withdrew { tile } = fr.fate {
-                        e.tile = tile;
+                    Fate::Bounced | Fate::Retreated if !pending => {
+                        e.op = EntryOp::Leave;
+                        e.pend_bell = b;
                     }
-                    write_entry(&mut d, i, &e).expect("entry");
+                    _ => {}
                 }
+                let same = fr.troops == f.troops
+                    && fr.stamina == f.stamina
+                    && !fr.engaged
+                    && tile.is_none_or(|t| t == e.tile);
+                if !same {
+                    e.troops = fr.troops;
+                    e.stamina_value = fr
+                        .stamina
+                        .min(permutation_rules::frontier::host::STAMINA_CAP);
+                    e.stamina_bell = b;
+                    if fr.engaged {
+                        e.ready_bell = e.ready_bell.max(ready_bell_after(b));
+                    }
+                    if let Some(t) = tile {
+                        e.tile = t;
+                    }
+                }
+                write_entry(&mut d, i, &e).expect("entry");
             }
             for a in &built.arrivals {
                 let Some(fr) = out.fighter(a.id) else {
                     continue;
                 };
                 if let Fate::Stays { tile } | Fate::Withdrew { tile } = fr.fate {
+                    let dealt = permutation_rules::frontier::doctrine::of_faction(a.faction)
+                        .expect("doctrine")
+                        .dealt_bps(Posture::Stance(Stance::Hold), false);
                     let h = Host {
                         id: a.id,
                         owner: holding_key_of_host(a.id),
@@ -346,46 +400,49 @@ impl St {
                         },
                         pending: None,
                     };
-                    let e = Entry::from_host(&h, tile, E::STATE_ROSTER, a.dealt_bps as u16, b + 1);
+                    let e = Entry::from_host(&h, tile, E::STATE_ROSTER, dealt as u16, b + 1);
                     let i = (0..PV::ENTRIES_N)
                         .find(|&i| read_entry(&d, i).is_ok_and(|x| x.state == E::STATE_FREE))
                         .expect("room");
                     write_entry(&mut d, i, &e).expect("entry");
                 }
             }
-            for gr in &out.garrisons {
-                let cg = u32::from_le_bytes(
-                    d[PV::CAMP + CP::GEN..PV::CAMP + CP::GEN + 4]
-                        .try_into()
-                        .expect("4"),
-                );
-                if gr.id == u64::MAX - cg as u64 {
-                    d[PV::CAMP + CP::TROOPS..PV::CAMP + CP::TROOPS + 4]
-                        .copy_from_slice(&gr.troops.to_le_bytes());
-                    if gr.troops == 0 {
+            if let Some(g) = built.garrisons.iter().find(|g| g.faction == NEUTRAL) {
+                if let Some(gr) = out.garrisons.iter().find(|x| x.id == g.id) {
+                    let whole = gr.troops / 1_000;
+                    if whole == 0 || gr.attackers_hold {
                         d[PV::CAMP + CP::STATE] = CP::STATE_NONE;
+                        d[PV::CAMP + CP::TROOPS..PV::CAMP + CP::TROOPS + 4]
+                            .copy_from_slice(&0u32.to_le_bytes());
+                    } else {
+                        d[PV::CAMP + CP::TROOPS..PV::CAMP + CP::TROOPS + 4]
+                            .copy_from_slice(&whole.to_le_bytes());
                     }
                 }
             }
             d[PV::LAST_DIGEST..PV::LAST_DIGEST + 32].copy_from_slice(&out.digest());
         }
-        // Pending changes of bell b settle.
+        // Pending changes of bell b settle (the program's `settle_bell`).
         for i in 0..PV::ENTRIES_N {
             let Ok(mut e) = read_entry(&d, i) else {
                 continue;
             };
             match (e.state, e.op) {
-                (E::STATE_ROSTER, EntryOp::Spend { .. }) if e.pend_bell == b => {
+                (E::STATE_ROSTER, EntryOp::Spend { .. }) if e.pend_bell <= b => {
                     let mut h = e.to_host().expect("host");
                     h.settle(b + 1).expect("settle");
                     e.set_host(&h);
                     e.state = E::STATE_DEPARTED;
                     write_entry(&mut d, i, &e).expect("entry");
                 }
-                (_, EntryOp::Forfeit) if e.pend_bell == b => {
+                (E::STATE_ROSTER, EntryOp::Leave) if e.pend_bell <= b => {
+                    e.state = E::STATE_DEPARTED;
+                    write_entry(&mut d, i, &e).expect("entry");
+                }
+                (_, EntryOp::Forfeit) if e.pend_bell <= b => {
                     write_entry(&mut d, i, &Entry::FREE).expect("entry")
                 }
-                (E::STATE_MUSTER_PENDING, _) if e.from_bell == b + 1 => {
+                (E::STATE_MUSTER_PENDING, _) if e.from_bell <= b + 1 => {
                     e.state = E::STATE_ROSTER;
                     write_entry(&mut d, i, &e).expect("entry");
                 }
@@ -398,6 +455,33 @@ impl St {
         d[ep..ep + 4].copy_from_slice(&n.to_le_bytes());
         *self.g.d(&pk) = d;
         self.next.insert(pq, b + 1);
+        if let Some(sp) = spawned {
+            self.pending_camps.push((pq, sp));
+        }
+    }
+
+    /// The CAMP records of the day checks waiting for `pq` (the program
+    /// logs them before its CLASH or SKIP record).
+    fn camp_records(&mut self, pq: (i32, i32)) -> Vec<Vec<u8>> {
+        let pk = self.pk(pq);
+        let key = [pq.0.to_le_bytes(), pq.1.to_le_bytes()].concat();
+        let mine: Vec<(u8, u32, u32)> = self
+            .pending_camps
+            .iter()
+            .filter(|(x, _)| *x == pq)
+            .map(|(_, c)| *c)
+            .collect();
+        self.pending_camps.retain(|(x, _)| *x != pq);
+        let bell = self.g.bell();
+        mine.into_iter()
+            .map(|(tile, troops, day)| {
+                let mut pl = vec![tile];
+                pl.extend(troops.to_le_bytes());
+                pl.extend(day.to_le_bytes());
+                self.g
+                    .rec(Kind::CAMP, bell, &key, &pl, &[(En::Province, pk)])
+            })
+            .collect()
     }
 
     /// Emits the SkipQuiet of the bells in `run` (their write-back is
@@ -408,18 +492,20 @@ impl St {
         }
         let (b0, n) = (run[0], run.len() as u8);
         let pk = self.pk(pq);
+        let mut bodies = self.camp_records(pq);
         let mut pl = b0.to_le_bytes().to_vec();
         pl.push(n);
-        pl.extend(provisional_quiet_digest(pq.0, pq.1, b0, n));
+        pl.extend(quiet_digest(self.g.get(&pk), b0, n));
         let key = [pq.0.to_le_bytes(), pq.1.to_le_bytes()].concat();
         let bell = self.g.bell();
         let body = self
             .g
             .rec(Kind::SKIP, bell, &key, &pl, &[(En::Province, pk)]);
+        bodies.push(body);
         let src = vec![AnchorSource::Anchor; n as usize];
         let ixs = [ix::skip_quiet(&self.g.a, self.keeper(), pq, b0, n, &src)];
         let k = self.keeper_kp();
-        self.g.send(&ixs, &[&k], &OP, vec![body]);
+        self.g.send(&ixs, &[&k], &OP, bodies);
         run.clear();
     }
 
@@ -485,6 +571,13 @@ impl St {
         for &(pos, mi) in &present {
             let m = &self.marches[mi];
             let (troops, stamina) = m.after.expect("departure settled before the gather");
+            // The program's `model::arrival_stamina` (v1.6 §22): refilled
+            // from `depart_bell + 1` to the arrival bell.
+            let stamina = Stamina {
+                value: stamina,
+                bell: m.depart + 1,
+            }
+            .at(b);
             let sk = self.g.ctx.arrival_slot(p, q, b, m.faction, (pos % 4) as u8);
             let sd = self.g.get(&sk).to_vec();
             let o = CI::arrival(pos);
@@ -547,6 +640,7 @@ impl St {
         let t = self.g.time + 3;
         self.advance_to(t);
         let (seed, _) = self.seeds[&b];
+        let in_digest = input_digest(self.g.get(&pk), self.g.get(&ck), b, &seed);
         let built = ContractBuilder
             .build(self.g.get(&pk), self.g.get(&ck), b, &seed)
             .expect("the synthetic inputs build");
@@ -571,8 +665,9 @@ impl St {
             g.put(&ck, CI::RESOLVED_TS, &rts.to_le_bytes());
         }
         self.write_back(pq, b, Some((&built, &out)));
+        let mut bodies = self.camp_records(pq);
         let mut pl = out.digest().to_vec();
-        pl.extend(provisional_input_digest(self.g.get(&ck), b));
+        pl.extend(in_digest);
         pl.extend(out.engagements.to_le_bytes());
         pl.extend(fates);
         let bell = self.g.bell();
@@ -583,6 +678,7 @@ impl St {
             &pl,
             &[(En::Province, pk), (En::ClashInputs, ck)],
         );
+        bodies.push(body);
         let ixs = [ix::resolve_from_inputs(
             &self.g.a,
             kp,
@@ -591,7 +687,7 @@ impl St {
             SeedSource::Cache { nonce: 0 },
             &kp,
         )];
-        self.g.send(&ixs, &[&k], &OP, vec![body]);
+        self.g.send(&ixs, &[&k], &OP, bodies);
     }
 
     // ------------------------------------------------------------ players
@@ -1137,9 +1233,10 @@ impl St {
             } else {
                 outcome = transit_outcome::ROUTED;
                 troops = rout_survivors(after);
+                // W4-B P9: a `pool_owed` payment names the Holding itself.
                 (tx8, tipv, fx8, feev, bx8, bondv, rx8, rewv, pool) = (
-                    z.clone(),
-                    0,
+                    pre8(&hk),
+                    tip,
                     pre8(&resolver),
                     fee,
                     pre8(&rent),
@@ -1153,10 +1250,10 @@ impl St {
             outcome = transit_outcome::ROUTED;
             troops = rout_survivors(m.after.map(|a| a.0).unwrap_or(m.dep_mass));
             (tx8, tipv, fx8, feev, bx8, bondv, rx8, rewv, pool) = (
-                z.clone(),
-                0,
-                z.clone(),
-                0,
+                pre8(&hk),
+                tip,
+                pre8(&hk),
+                fee,
                 pre8(&rent),
                 bond,
                 z.clone(),
@@ -1440,6 +1537,7 @@ pub fn march() -> crate::Input {
         arrivals: BTreeMap::new(),
         slots: BTreeMap::new(),
         keeper_budget_price: 0,
+        pending_camps: vec![],
     };
     let _ = s.keeper_budget_price;
     // ---- citizens, one ticket cohort (bell 0), holdings (bell 2)
