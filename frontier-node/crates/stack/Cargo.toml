@@ -17,3 +17,14 @@ path = "src/main.rs"
 
 [dependencies]
 fclient.workspace = true
+frontier-abi.workspace = true
+permutation-rules.workspace = true
+verify = { path = "../verify" }
+tokio.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+
+[dev-dependencies]
+# The keeper's own parser checks the keeper.toml the stack writes (W5-B R1).
+keeper = { path = "../keeper" }
