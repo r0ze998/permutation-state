@@ -25,6 +25,9 @@ import { html, setHtml } from '../util.mjs';
 import { ACTIONS, FORMS, bind, startPlay } from './controller.mjs';
 import { renderTabs, renderNotice, factionChip, quotaChip, mountSheet } from './screens/shell.mjs';
 import { createTerrain } from './map/terrain.mjs';
+import { provincePixel } from './map/layers.mjs';
+
+const ART_PREVIEW = new URLSearchParams(globalThis.location?.search ?? '').get('art') === '1';
 import * as joinScreen from './screens/join.mjs';
 import * as holdingScreen from './screens/holding.mjs';
 import * as hostScreen from './screens/host.mjs';
@@ -361,7 +364,7 @@ export async function boot() {
     map = new FrontierMap(canvas, {
       source: () => {
         const own = (FS.holdings ?? []).map(h => ({ p: h.p, q: h.q }));
-        return { overviews: FS.overviews, ringsOpen: FS.record?.rings?.length ?? 1, own, known: new Set(own.map(o => `${o.p},${o.q}`)), showAll: !FS.view.fog, selected: FS.selected, terrainOf };
+        return { overviews: FS.overviews, ringsOpen: FS.record?.rings?.length ?? 1, own, known: new Set(own.map(o => `${o.p},${o.q}`)), showAll: ART_PREVIEW || !FS.view.fog, selected: FS.selected, terrainOf };
       },
       onSelect: hit => {
         FS.selected = hit;
@@ -370,8 +373,13 @@ export async function boot() {
       },
       onView: (_, lod) => { FS.view.lod = lod; },
       // Sprite art at tile LOD, opt-in with ?art=1 (docs/frontier/art/tiles/LOD.md).
-      art: new URLSearchParams(globalThis.location?.search ?? '').get('art') === '1',
+      art: ART_PREVIEW,
     });
+    // The art preview opens on the tiles with everything shown (presentation only).
+    if (ART_PREVIEW) {
+      const c = provincePixel(2, 0);
+      map.setView({ x: c.x, y: c.y, zoom: 0.8 });
+    }
   }
   invalidate('chip', 'status', 'panel');
   if (await loadSeason(herald)) {
