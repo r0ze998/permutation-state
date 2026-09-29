@@ -8,12 +8,16 @@
 //! | `202 {accepted, track}` | the material opens the march's seal root and the window is open (or not open yet) |
 //! | `409 CommitMismatch` | `sha256(commit(plain, salt) ‖ ct_hash) ≠ transit.seal_root` |
 //! | `409 TransitState` | no Holding at the address, or its transit slot is not in state 1–3 |
+//! | `409 ArrivalBell` | the transit arrives at or after the season's `end_bell`, whatever the season status (no anchor of that bell can exist; W6T-2) |
+//! | `409 Shielded` | §5.11 step 6's shield rules: the destination tile is another faction's holding site shielded past the arrival bell, or the host's own Holding is shielded at `bell_start(arrive)` (not dormant) and the destination is another faction's holding site (W6T-2; w6-s7 routed 27 honest marches this way while their owners were told 202) |
 //! | `410 WindowClosed` | THE anchor's window closed (`now ≥ A + W` or the BeaconLog reached `S(A)`), the bell is archived, the latch is closed (ClashInputs present or the destination resolved past `arrive`), or the season no longer takes reveals |
 //! | `422 BadPlaintext` | `Plain::validate` against the transit's host and arrival bell |
 //!
 //! The checks mirror the program's Reveal in its order (season, holding and
-//! transit, plaintext, commitment, window, latch) and read the same
-//! accounts (canonical addresses only). An anchor not yet posted is not a
+//! transit, plaintext, commitment, window, latch, the shield part of step
+//! 6) and read the same accounts (canonical addresses only). The path and
+//! travel-time part of step 6 stays the program's. Every refusal body
+//! carries its code as `code` and as `error` (the relay's field). An anchor not yet posted is not a
 //! refusal: owners submit from the arrival bell's start (§9.1) and the
 //! keeper holds the material until THE anchor lands.
 
@@ -132,8 +136,17 @@ pub fn judge(req: &RevealReq, r: &Reads, now: i64) -> Result<Accepted, Refusal> 
         ));
     }
     let tr = h.transit[i];
-    if eff == status::ENDED && tr.arrive_bell >= s.end_bell {
-        return Err(refuse(410, "WindowClosed", "the season takes no reveal"));
+    // No anchor exists at or after the season's end, Running or Ended:
+    // the march can never be revealed (W6T-2).
+    if tr.arrive_bell >= s.end_bell {
+        return Err(refuse(
+            409,
+            "ArrivalBell",
+            format!(
+                "arrival bell {} is at or after the season's end bell {}",
+                tr.arrive_bell, s.end_bell
+            ),
+        ));
     }
     // 2. The plaintext against the transit.
     let p = seal::unpack(&req.plain);
@@ -218,6 +231,32 @@ pub fn judge(req: &RevealReq, r: &Reads, now: i64) -> Result<Accepted, Refusal> 
             "WindowClosed",
             "LatchClosed: the destination resolved past the arrival bell",
         ));
+    }
+    // 6. The shield rules (the program's order: after the path, which
+    // the program judges).
+    let n = (dest_pv.site_count as usize).min(dest_pv.sites.len());
+    if let Some(k) = (0..n).find(|&k| dest_pv.sites[k] == p.dest_tile) {
+        let m = dest_pv.site_mirror[k];
+        let other = m.state == fclient::abi::layout::site::STATE_HOLDING && m.faction != tr.faction;
+        if other && m.shield_until_bell > arrive {
+            return Err(refuse(
+                409,
+                "Shielded",
+                format!(
+                    "the destination holding is shielded until bell {}",
+                    m.shield_until_bell
+                ),
+            ));
+        }
+        let dormant = h.flags & frontier_abi::layout::player::holding::FLAG_DORMANT_CACHE != 0;
+        let start = permutation_rules::frontier::beacon::bell_start(s.genesis_ts, arrive);
+        if other && !dormant && h.shield_until > start {
+            return Err(refuse(
+                409,
+                "Shielded",
+                "the host's own holding is shielded at the arrival bell: it may not target another faction's holding",
+            ));
+        }
     }
     Ok(Accepted {
         host_id: tr.host_id,
@@ -459,7 +498,7 @@ mod tests {
         assert!(judge(&req, &r6, now).is_ok());
         put(&mut sd, l::season::END_BELL, &40u32.to_le_bytes());
         r6.season = acct(sd);
-        assert_eq!(judge(&req, &r6, now).unwrap_err().code, "WindowClosed");
+        assert_eq!(judge(&req, &r6, now).unwrap_err().code, "ArrivalBell");
         // Wave-3 review: a Holding of another season, or read at a
         // non-canonical address; a destination that does not exist; the
         // season status comes before the holding.
@@ -482,5 +521,109 @@ mod tests {
         r10.season = acct(sd);
         r10.holding = None;
         assert_eq!(judge(&req, &r10, now).unwrap_err().code, "WindowClosed");
+    }
+
+    fn set_holding(r: &mut Reads, f: impl FnOnce(&mut Vec<u8>)) {
+        let mut d = r.holding.clone().unwrap().data;
+        f(&mut d);
+        r.holding = acct(d);
+    }
+
+    /// §5.11 step 6 (w6-s7 criterion 4: 27 honest marches refused
+    /// `Shielded` at every Reveal and routed, their owners told 202): the
+    /// accept path answers 409 `Shielded` when the host's own Holding is
+    /// shielded at `bell_start(arrive)` (not dormant) and the destination
+    /// tile is another faction's holding site, or when that site is itself
+    /// shielded past the arrival bell.
+    #[test]
+    fn reveal_accept_refuses_own_shield_war_target() {
+        use l::site as sm;
+        let (req, mut r, now) = fixture();
+        let start = 1_000_000 + 40 * 600;
+        let war = |shield_bell: u32| {
+            acct(crate::testkit::province(
+                0,
+                &[
+                    (5, sm::STATE_HOLDING, 1, shield_bell),
+                    (9, sm::STATE_HOLDING, 2, 0),
+                ],
+            ))
+        };
+        let faction = |r: &mut Reads, f: u8| set_holding(r, |d| d[l::holding::FACTION] = f);
+        faction(&mut r, 2);
+        r.dest_province = war(0);
+        assert!(
+            judge(&req, &r, now).is_ok(),
+            "no shield: a war target is open"
+        );
+        // Our holding shielded past the arrival bell's start.
+        let shield = |r: &mut Reads, until: i64| {
+            set_holding(r, |d| {
+                d[l::holding::SHIELD_UNTIL..l::holding::SHIELD_UNTIL + 8]
+                    .copy_from_slice(&until.to_le_bytes())
+            })
+        };
+        shield(&mut r, start + 1);
+        let e = judge(&req, &r, now).unwrap_err();
+        assert_eq!((e.http, e.code), (409, "Shielded"), "{}", e.detail);
+        // Dormant: the shield does not hold.
+        set_holding(&mut r, |d| d[l::holding::FLAGS] |= 1);
+        assert!(judge(&req, &r, now).is_ok(), "dormant");
+        set_holding(&mut r, |d| d[l::holding::FLAGS] &= !1);
+        // A shield that ends at the bell's start does not hold.
+        shield(&mut r, start);
+        assert!(judge(&req, &r, now).is_ok(), "shield over at bell_start");
+        shield(&mut r, start + 1);
+        // Our own faction's holding site, a free site, a tile with no site.
+        for (tile, state, f) in [
+            (5u8, sm::STATE_HOLDING, 2u8),
+            (5, sm::STATE_FREE, 1),
+            (6, sm::STATE_HOLDING, 1),
+        ] {
+            r.dest_province = acct(crate::testkit::province(0, &[(tile, state, f, 0)]));
+            assert!(
+                judge(&req, &r, now).is_ok(),
+                "tile {tile} state {state} faction {f}"
+            );
+        }
+        // The destination holding shielded past the arrival bell.
+        shield(&mut r, 0);
+        r.dest_province = war(41);
+        let e = judge(&req, &r, now).unwrap_err();
+        assert_eq!((e.http, e.code), (409, "Shielded"), "{}", e.detail);
+        r.dest_province = war(40);
+        assert!(
+            judge(&req, &r, now).is_ok(),
+            "shield until the arrival bell"
+        );
+    }
+
+    /// An arrival at or after `end_bell` can never be revealed (no anchor
+    /// of that bell exists; Reveal refuses `WrongStatus` once Ended): 409
+    /// `ArrivalBell` whatever the season status, before the relay queues
+    /// it (w6-s7: 9 such marches, 27 failed Reveals).
+    #[test]
+    fn reveal_accept_refuses_arrival_at_end_bell() {
+        let (req, r, now) = fixture();
+        for st in [status::RUNNING, status::ENDED] {
+            for (end, ok) in [(40u32, false), (39, false), (41, true)] {
+                let mut r2 = r.clone();
+                let mut sd = r2.season.clone().unwrap().data;
+                sd[l::season::STATUS] = st;
+                put(&mut sd, l::season::END_BELL, &end.to_le_bytes());
+                r2.season = acct(sd);
+                match judge(&req, &r2, now) {
+                    Ok(_) => assert!(ok, "status {st} end {end}: accepted"),
+                    Err(e) => {
+                        assert!(!ok, "status {st} end {end}: {e:?}");
+                        assert_eq!(
+                            (e.http, e.code),
+                            (409, "ArrivalBell"),
+                            "status {st} end {end}"
+                        );
+                    }
+                }
+            }
+        }
     }
 }

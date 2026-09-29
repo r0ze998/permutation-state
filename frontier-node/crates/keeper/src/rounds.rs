@@ -4,7 +4,11 @@
 //! any transaction carries it, so a bad beacon never costs a 345k-CU
 //! transaction; its hash-to-curve hints (2 × 145 B, SP-V2) are computed once
 //! and cached. A round the drand port does not serve yet is asked again at
-//! most once per slot.
+//! most once per slot by the tick, and again on the keeper's idle ticks
+//! inside that slot ([`Rounds::take_missed`], W6T-2): the round is public
+//! from its time, not from the next slot (drand-replay answers 425 until it
+//! has polled the chain's Clock, and a real drand publishes with no regard
+//! to slot boundaries).
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -38,6 +42,14 @@ impl Rounds {
     /// `QUICKNET_PK_HASH` of the key in use (the season pins it).
     pub fn pk_hash(&self) -> [u8; 32] {
         beacon::pk_hash(&self.pk96)
+    }
+
+    /// Whether a round asked for in `slot` was not served; the asks of that
+    /// slot are forgotten, so the idle ticks of the same slot ask again.
+    pub fn take_missed(&mut self, slot: u64) -> bool {
+        let n = self.asked.len();
+        self.asked.retain(|_, s| *s != slot);
+        self.asked.len() != n
     }
 
     /// The verified round `r`, if published.
