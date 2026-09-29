@@ -194,14 +194,16 @@ pub fn classify_failure(kind: &str, err: &str) -> (&'static str, &'static str) {
         ("Reveal", "Shielded" | "WrongStatus") => ("waste", "bot-bug"),
         ("Depart" | "Reveal", "ArrivalBell") => ("waste", "bot-bug"),
         // Bot policy: acting on a stale view.
-        (_, "NotResident" | "ProvinceFull" | "QueueFull") => ("waste", "bot-policy"),
+        (_, "NotResident" | "ProvinceFull" | "QueueFull" | "Insufficient") => {
+            ("waste", "bot-policy")
+        }
         // Persona and adversary traffic, races the program settles, drain.
         ("Depart", "TipTooLow" | "TipNotPreset") => ("expected", "persona"),
         ("Reveal", "WindowClosed") => ("expected", "persona"),
         ("Reveal", "BadAddress") => ("expected", "adversary"),
         (_, "HostInTransit") => ("expected", "persona"),
         ("SettleTicket", "NoTicket") => ("expected", "race"),
-        ("ResolveFromInputs", "OutOfOrder") => ("expected", "bounded duplicate"),
+        ("ResolveFromInputs" | "SkipQuiet", "OutOfOrder") => ("expected", "bounded duplicate"),
         ("SkipQuiet", "NotQuiet") => ("expected", "race"),
         ("FoldOccupancy", "FoldStale") => ("expected", "race"),
         _ => ("unclassified", ""),
@@ -2347,6 +2349,12 @@ mod tests {
             "expected"
         );
         assert_eq!(classify_failure("Nope", "Whatever").0, "unclassified");
+        // Seen in the U4 R3 run.
+        assert_eq!(classify_failure("SkipQuiet", "OutOfOrder").0, "expected");
+        assert_eq!(
+            classify_failure("Train", "Insufficient"),
+            ("waste", "bot-policy")
+        );
     }
 
     /// W6T-4: the keeper status comes from the last answered sample and
