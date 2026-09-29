@@ -35,7 +35,7 @@ Every in-play Reveal so far was the first of its province-bell (ArrivalDay writt
 
 **`L(reveal)`** 1,146,880 B (35 pages) from `frontier-abi/vectors/budgets.json`; at the actual W6-base release `.so` (programdata 1,093,632 B) the need is 1,124,234 B, the same 35 pages [measured formula].
 
-**Value side [sim]:** `frontier-sim c4` re-run at the W6-E base (`--agents 50000 --seeds 3`, 9 min 15 s; `--agents 10000 --seeds 3`, 71 s; `--agents 50000 --seeds 1 --relics`, 10 min 47 s on a machine shared with W6-B's doctrine gates): p99 bell $1,407, max $1,512, $2,262 with five relic clashes, $2,227 with Relic Sites on; R99 49–50 (10k), 243–246 (50k). Before Phase B's variance stream (W6-B commits it); the clash counts that value a bell do not depend on the variance stream in any way the gates showed.
+**Value side [sim]:** `frontier-sim c4` re-run at the W6-E base (`--agents 50000 --seeds 3`, 9 min 15 s; `--agents 10000 --seeds 3`, 71 s; `--agents 50000 --seeds 1 --relics`, 10 min 47 s on a machine shared with W6-B's doctrine gates): p99 bell $1,407, max $1,512, $2,262 with five relic clashes, $2,227 with Relic Sites on; R99 49–50 (10k), 243–246 (50k). Before Phase B's variance stream (W6-B commits it). **integ-W6r (review response):** the clash counts do depend on the variance stream, slightly — re-run on the merged Phase B tree (`c4 --agents 10000 --seeds 3`) the per-bell counts move by ≤ 2 at 10k (numbers in `integ-W6r-NOTES.md` §2) and the total reveals by < 1 %; the C4 margins (11.7× at the worst case) absorb it; the 50k × 3 and relics inputs are re-run in the triage pass.
 
 **svm run:** 242 passed, 2 failed, 4 ignored; the 2 failures are by construction: `g08_gathers_in_any_order_equal_the_oracle_and_the_kernel` and `g01_resolve_from_inputs_all_fills` need the `oracle` build, which this run did not build (`PSF_FEATURES="test-beacon"`, to save time; they panic "no Oracle build … PSF_SO_ORACLE unset"). Every other test passed. The run's purpose was the CU log, not a gate; the gate's full svm line is the integrator's.
 
@@ -60,6 +60,7 @@ No line of this unit is `PENDING-OWNER`.
 5. **The playtest budget's "smaller option"** (ProvinceFund for rings ≤ 6, a 2-SOL pool) is a suggestion for the owner; it needs a preset change in `frontier-abi` (not this unit's) and is marked so.
 6. **DECISIONS part A gained a relayed fact row** (the archive completed, the wave-6 split). The integrator may prefer to own that row; it records only what the brief relayed.
 7. **DESIGN keeps revision 3.1's ProveBadSeal/SealVerdict text** as labelled history (struck rows, "superseded" labels) instead of deleting it, as §21 did for wave 1; §0.x, §19 and §20 (revision notes) are unchanged history.
+8. **Commit trailer (recorded by integ-W6r):** both W6-E commits (`3769e9e`, `46a3cfa`) end with `Co-Authored-By: Claude Opus 5.5` although the wave-6 brief's TRAILER OVERRIDE named `Claude Fable 5.1`; they are merged and not rewritten; every follow-up commit uses the overridden trailer.
 
 ## 5. Findings for other units and the owner
 
@@ -77,5 +78,5 @@ None (no manifest, lockfile, toolchain or `.gitignore` change; the scripts use t
 
 ## 6. Pending
 
-- Re-run the model with W6-A's `w6-latency` run directory when it finishes (`w6a-nightly-1` was read: no Reveal), and with `w6-s7` after the main session's 7-day season (commands in `m1/c4-v3/README.md`); update DESIGN §22.2's in-play rows and §22.4's measured R99 then (the triage pass or W7-C).
+- ~~Re-run the model with W6-A's `w6-latency` run directory when it finishes~~ integ-W6r re-ran it over thirteen run directories (416 in-play Reveals, the latency run's 23 included: the Gate W6 latency line writes no `verify` input, so the integ-W6r re-run added an extra `verify` before `report && down`) and on the merged budgets table (DESIGN §22.2–§22.4 updated; `svm-reveal-cu.log` committed). Still to do: `w6-s7` after the main session's 7-day season (commands in `m1/c4-v3/README.md`).
 - Owner confirmations: D18 (keep 20 SOL, caps final), the R99 recommendation, and — separately and only if wanted — O-M1-18 (the playtest), for which the runbook's gaps G1–G8 must close first.

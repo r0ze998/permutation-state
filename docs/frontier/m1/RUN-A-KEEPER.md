@@ -44,7 +44,7 @@ The keeper keeps the dependency order itself: resolve(origin, departure bell) �
 
 ## 3. How it bids
 
-Every rule time comes from the chain's Clock (`GameClock`), never the wall clock. Each write is sent as a series of **versions**, one per slot, each a new signature from a **newly drawn random payer** of the right pool:
+Every rule time comes from the chain's Clock (`GameClock`), never the wall clock. Each write is sent as a series of **versions** — W writes one per slot, D and N writes on the resend cadence below (W6-C) — each a new signature from a **newly drawn random payer** of the right pool:
 
 | Class | Start | Escalation | Cap | Paid from |
 |---|---|---|---|---|
@@ -54,7 +54,8 @@ Every rule time comes from the chain's Clock (`GameClock`), never the wall clock
 
 - **Compute budget on every transaction:** the CU limit and the loaded-data limit `L(kind)` from the budgets table (`frontier-abi/vectors/budgets.json`: e.g. Reveal 26,500 CU and 1,146,880 B). Without `SetLoadedAccountsDataSizeLimit` the runtime would count 64 MiB and a bid's priority would halve; with a smaller limit than `L(kind)` the transaction fails and still pays its fee (SIMD-0186).
 - **Priority is in cost units:** `priority = (priority fee + 2,500) / (CU limit + 720·signatures + 300·write locks + 8·⌈L/32 KiB⌉)`; the keeper converts the target priority to a CU price. A Reveal at `tip_min` (14,668 lamports) is 0.433.
-- **Contested detection:** a W or D write not landed within `contested_slots` (2) at a bid ≥ `p_tip` marks its (bell, region) contested: W writes there start at `p_tip`, anchor fallbacks go every slot, and an alert is journalled.
+- **Resend cadence (W6-C, contract §8.2 A1):** W writes (Reveals) get a new version every slot. A D or N write whose earlier version is still in flight (sent, status unknown, blockhash valid) gets its next version `d_resend_slots` (2) slots after the last while its bid still rises, and every `cap_resend_slots` (16) slots once the bid is at the class cap (P_delay for D, the fixed bid for N: a version at the same bid only buys a fresh payer); a version whose failure is known is followed at once. The cadence counts from the chain slot the version went out at, and the bids still follow the slots since the first version, so a D write reaches P_delay at the same slot as before. A 24-slot hold leaves ≤ 3 losing versions (was 23).
+- **Contested detection:** a W or D write not landed within `contested_slots` (2) at a bid ≥ `p_tip` marks its (bell, region) contested: W writes there start at `p_tip`, anchor fallbacks go every slot, and an alert is journalled. It runs every slot whether or not a version went out.
 - **Retry ladder (I-50):** `ComputeBudgetExceeded` → resend at 2× the limit, then 1,400,000 CU; a heap fault → resend with a 256-KiB heap frame. Each retry is an alert (`retry-ladder`): a budget miss is a bug to report, not a stuck province.
 - **Expiry:** a write whose every version's blockhash expired (151 slots) at its version or spend cap ends with `write-expired` and is re-planned with a fresh escalation, so a long hold only delays.
 - **Done codes:** `AlreadyDone`, `NoTicket` (SettleTicket), `TransitState` (settles) and `OutOfOrder` (resolves, skips) end a write as done: another keeper or version got there first.
@@ -72,7 +73,7 @@ An attacker can hold a *known* account by listing it writable in its own fillers
 
 ### 4.3 The band (I-49)
 
-Each reveal payer fronts, per reveal, the ArrivalSlot rent (1,463,040 lamports), the ArrivalDay rent on a first reveal (1,137,920) and the fee at P_def (≈ 54,300); the rent comes back when the slot and the day close. The keeper keeps every reveal payer between a floor and 2 × floor:
+Each reveal payer fronts, per reveal, the ArrivalSlot rent (1,463,040 lamports), the ArrivalDay rent on a first reveal (1,137,920) and the fee at P_def (54,300: the keeper prices it at the Reveal it requests — the budgets table's 26,500 CU and `L` 1,146,880 B with a first reveal's 3 write locks — integ-W6r); the rent comes back when the slot and the day close. The keeper keeps every reveal payer between a floor and 2 × floor:
 
 `F_r = 3 × ⌈R99 / N⌉ × (rent(slot) + rent(day) + fee(P_def, Reveal))`
 
@@ -86,7 +87,7 @@ where R99 is the p99 number of reveals per bell one fleet makes (`r99_reveals`) 
 
 The default of 4,000 stays in the code until the owner accepts the recommendation; set `r99_reveals` (or `reveal_floor` in lamports) in `keeper.toml`. Delay payers have a flat floor, `delay_floor` (default 0.5 SOL).
 
-**Effective N** is the number of reveal payers above the floor. Below 150 the keeper alerts and tops the pool up at once from the funders (drawn at random, batched at rest and before any bell marked contested, never inside a critical transaction); **it never stops sending reveals** — stopping would be exactly the exclusion the design guards against. The top-up cadence is `care_every_slots` (150 slots, one minute at 400-ms slots). The stack's reports gate effective N ≥ 150 in every bell (E5 criterion 4).
+**Effective N** is the number of reveal payers above the floor. Below 150 the keeper alerts and tops the pool up at once from the funders (drawn at random, batched at rest and before any bell marked contested, never inside a critical transaction); **it never stops sending reveals** — stopping would be exactly the exclusion the design guards against. Payer care runs every `care_every_slots` (150 slots, one minute at 400-ms slots) **or** `care_every_game_secs` (300 game seconds), whichever comes first (W6-C: at 100× a slot is 40 game seconds, so the slot cadence alone ran every 10 bells and a pool starved), and 2 slots after a care that planned top-ups while a pool is below its minimum effective N; never while care transfers are still pending. The stack's reports gate effective N ≥ 150 in every bell (E5 criterion 4).
 
 ### 4.4 Funding
 
@@ -126,6 +127,9 @@ beneficiary_key_file = "beneficiary.key" # needed for the `claims` role
 # nonce_switch_slots = 2
 # fallback_lag_slots = 1                 # peacetime lag of per-region anchor fallbacks
 # care_every_slots = 150
+# care_every_game_secs = 300             # payer care also every 300 game s, whichever comes first (W6-C)
+# d_resend_slots = 2                     # D/N writes: next version 2 slots after the last while the bid rises (W6-C)
+# cap_resend_slots = 16                  # ... and every 16 slots once the bid is at the class cap
 # rescan_bells = 288
 # land_scan_slots = 8
 # stranded_scan_slots = 450
@@ -149,7 +153,7 @@ frontier-node/target/release/frontier-keeper --config keeper.toml               
 - `GET /metrics`: the same as Prometheus text.
 - `GET /v1/track/{id}` for a reveal submitted through `POST /v1/reveal`; `POST /v1/nudge {province: [P, Q], bell}` asks the keeper to prioritise a province (the relay forwards players' nudges).
 - **Alerts** (journalled, counted in the status): `contested` (a region-bell is being held), `write-expired` (a write ran out of versions and was re-planned), `anchor-missing` (a bell was left behind without its anchor), `retry-ladder` (a CU or heap budget was exceeded: report it), `payer-care` (a pool was topped up or could not be), `failed` / `dead` (a write refused for good).
-- What the M1 runs look like when healthy (test-key nightly, 100 bots, one game day at 100×): round → anchor p99 ≈ 3 slots, S → first seed cache ≈ 2.5 slots, every reveal inside its window, close → resolve 6 slots, a median of 6 SkipQuiet transactions per idle province-day, reveal effective N 150 throughout (at 100× a slot is 40 game seconds) ([`W5-B-NOTES.md`](W5-B-NOTES.md) §2; W6-A's runs update these).
+- What the M1 runs look like when healthy (test-key nightly on the merged wave-6 tree, 100 eager bots, one game day at 100×, `m1/runs/integ-w6-nightly-3`): round → anchor p99 2 slots (2.98 from the publication instant), S → first seed cache 2 slots, every reveal inside its window (anchor → last valid reveal 0 slots), S → resolve 4 slots (close → resolve 6), SkipQuiet per idle province-day p50 1 / p99 6 (a churned day is a catch-up: up to 125, reported), 4 `SkipQuiet: OutOfOrder` per run, reveal effective N 150 throughout (at 100× a slot is 40 game seconds) ([`integ-W6-NOTES.md`](integ-W6-NOTES.md) §4–§5; before wave 6: [`W5-B-NOTES.md`](W5-B-NOTES.md) §2).
 
 ## 8. What it costs and what it earns
 

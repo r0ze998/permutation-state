@@ -10,8 +10,10 @@ Successor of W1-D's `c4_model_v3.py` (lab c4-v3) and `d18_model.py` (lab d18). W
   2. The cost of a Reveal counted as the runtime counts it: 1 signature, 2 write locks (fee payer, slot),
      **3 on the first reveal of a province-bell in its day** (the ArrivalDay is written), `8·⌈L/32 KiB⌉`.
   3. The D18 table priced at the **CU limits, write locks and `L(kind)` of the budgets table** (the
-     numbers a keeper actually requests), with ResolveFromInputs at the Phase A limit and at Phase B's
-     (W6-B commits Phase B; W5-A measured RFI max 274,007 CU → limit 288,000).
+     numbers a keeper actually requests). integ-W6 review: the table is the merged one (Phase B
+     committed by W6-B: ResolveFromInputs gate 290,000, limit 285,500; CloseClashInputs 8,000), so the
+     Phase A column of the W6-E run (RFI 344,000 → 345,900 cost units) is gone; the W6-E base output
+     is in git history (`46a3cfa`).
   4. The defence refund per Reveal by the program's formula (`fees::defence_refund`, §5.12):
      `min(fee(P_def), P_def·cost − 2,500) − (tip_min − 2,500)`.
   5. Value inputs from `frontier-sim c4` re-run at the W6-E base (falls back to W1-D's JSON).
@@ -191,8 +193,8 @@ print('## 6. D18: defence-pool spend per attacked bell (CL-30 / CL-31a), at the 
 def kcost(name, limit=None):
     b = B[name]; return cost(limit or b['cu_limit'], b['write_locks_worst'], b['loaded_limit'])
 C = {k: kcost(k) for k in ('GatherClash', 'ResolveFromInputs', 'SettleTransit', 'SettleDeparture', 'PostAnchor', 'PostSeed')}
-C_RFI_B = kcost('ResolveFromInputs', 288_000)
-print('Costs per write (limit + locks + L): ' + ', '.join(f'{k} {v:,}' for k, v in C.items()) + f'; RFI with Phase B {C_RFI_B:,}')
+print('Costs per write (limit + locks + L): ' + ', '.join(f'{k} {v:,}' for k, v in C.items())
+      + f" (ResolveFromInputs at the table's limit {B['ResolveFromInputs']['cu_limit']:,}, gate {B['ResolveFromInputs']['cu_budget']:,})")
 SUB = refund(COST3)
 print(f'Pool pays only Reveal (class W): refund ≤ {SUB:,} lamports per defended Reveal (first-of-bell cost, the larger).')
 def per_bell(w, b, rfi_cost):
@@ -202,22 +204,21 @@ def per_bell(w, b, rfi_cost):
                 + st * (fee(p, C['SettleTransit']) + fee(p, C['SettleDeparture']))
                 + 16 * (fee(p, C['PostAnchor']) + fee(p, C['PostSeed'])))
     return r * SUB + delay(P_DEF), r * SUB, delay(P_DELAY), r
-print('\n| wallets | reveals per bell p50 / p99 / max | (A) every critical write at 2.0: p99 SOL | (B) Reveal only: p50 / p99 / max SOL | 20 SOL covers (B, p99 bells) | keepers\' own spend in (B), p99 SOL: Phase A / Phase B RFI |')
+print('\n| wallets | reveals per bell p50 / p99 / max | (A) every critical write at 2.0: p99 SOL | (B) Reveal only: p50 / p99 / max SOL | 20 SOL covers (B, p99 bells) | keepers\' own spend in (B), p99 SOL |')
 print('|---|---|---|---|---|---|')
 rec = []
 for label, js in (('10,000', small), ('50,000', base)):
     if not js: continue
-    A, Bp, K, KB, R = [], [], [], [], []
+    A, Bp, K, R = [], [], [], []
     for sd in js['seeds']:
         w = sd['writes']
         for b in range(w['bells']):
             a, bp, k, r = per_bell(w, b, C['ResolveFromInputs'])
-            _, _, kb, _ = per_bell(w, b, C_RFI_B)
-            A.append(a); Bp.append(bp); K.append(k); KB.append(kb); R.append(r)
+            A.append(a); Bp.append(bp); K.append(k); R.append(r)
     p99 = q(Bp, .99)
     rec.append((label, p99))
     print(f'| {label} | {q(R,.5)} / {q(R,.99)} / {max(R)} | {q(A,.99)/LAM:.3f} | {q(Bp,.5)/LAM:.4f} / {p99/LAM:.4f} / {max(Bp)/LAM:.4f} | '
-          f'{20*LAM/p99:,.0f} | {q(K,.99)/LAM:.3f} / {q(KB,.99)/LAM:.3f} |')
+          f'{20*LAM/p99:,.0f} | {q(K,.99)/LAM:.3f} |')
 print()
 for label, p99 in rec:
     print(f'- {label}: 100 p99 attacked bells need {100*p99/LAM:.2f} SOL → ' + ('**keep 20 SOL**' if 20*LAM/p99 >= 100 else f'size to {math.ceil(100*p99/LAM)} SOL'))

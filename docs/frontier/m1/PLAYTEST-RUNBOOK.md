@@ -136,7 +136,7 @@ At 5,080 lamports per byte (mainnet since SIMD-0437); **devnet's rate is unverif
 
 | Item | M1_PLAYTEST as it stands | Smaller option (a preset change, owner's choice) | Kind |
 |---|---|---|---|
-| Program ProgramData (`max_len` 1,093,632 B for the 874,120-B release `.so`) | ≈ 5.6 SOL | same | float (until the program is closed) |
+| Program ProgramData (`max_len` from the release build record, `round_up(1.25 × .so, 4 KiB)`: 1,097,728 B for the merged Phase B release `.so` of 875,768 B; 1,093,632 B for the W6-base 874,120 B) | ≈ 5.6 SOL (5.58 at 1,097,728 B) | same | float (until the program is closed) |
 | Creation bond | 1 SOL | 1 SOL | returned after a normal season |
 | ProvinceFunds (`pfund_initial`, all 817 provinces within ring 16) | 18 SOL | ≈ 2.7 SOL (rings ≤ 6: 127 provinces × 0.0215 SOL) | float |
 | DefencePool (`dpool_initial`) | 20 SOL | 2 SOL (at 200 players the model's p99 attacked bell costs < 0.002 SOL, §22.3) | returned if unspent |

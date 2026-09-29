@@ -1,0 +1,26 @@
+frontier-stack: 5000 viewers (4000 polling, 1000 WS) for 1 game hours = 36 s of wall time at 100x
+{
+  "error_rate": 0.0,
+  "error_rate_ok": true,
+  "error_rate_target": 0.001,
+  "errors": 0.0,
+  "ingest_lag_p99_s": 6.800000000000001,
+  "ingest_lag_samples": 44,
+  "ingest_measure": "ws-stamp",
+  "ingest_note": "ws-stamp: the WS message's ingest stamp t to its receipt; fold-lag (fallback): newest program tx slot - last folded slot, x 0.4 s, sampled each second",
+  "ingest_ok": true,
+  "ingest_p99_s": 0.622592,
+  "ingest_target_s": 2.0,
+  "misses": [],
+  "not_found": 260,
+  "not_found_note": "404 for a per-bell file of a bell without a change: the contract's answer (§8.4), not an error",
+  "p99_file_ms": 73.728,
+  "p99_file_ok": true,
+  "p99_file_target_ms": 250.0,
+  "pass": true,
+  "requests": 28854.0,
+  "summary": "p99 file 73.7 ms, ingest->WS p99 0.62 s (ws-stamp), error rate 0.00000, gaps 0, 404 260",
+  "ws_gaps": 0,
+  "ws_gaps_ok": true,
+  "ws_timed": 868936.0
+}

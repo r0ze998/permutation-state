@@ -4,13 +4,13 @@
 
 - Budgets table (`budgets.json` 1, release `.so` placeholder length 884,736 B, programdata 1,105,920 B):
   Reveal gate 26,000 CU; **CU limit requested 26,500** (G1 worst + 5 %); **L(reveal) = 1,146,880 B** (35 pages of 32 KiB → +280 cost units); tx worst 928 B
-- In play (nightly-20260928, w5-smoke, w6a-real1): program CU n 18, p50 19,772, p99 21,418, max 21,418; whole-tx units n 18, p50 20,222, p99 21,868, max 21,868; first reveal of the province-bell (ArrivalDay written): 18 of 18
+- In play (integ-w6-nightly-2, integ-w6-nightly-3, integ-w6r-nightly-2, integ-w6r-nightly-3, nightly-20260928, nightly-20260929, w5-smoke, w6-latency, w6a-nightly-2, w6a-nightly-3, w6a-real1): program CU n 416, p50 18,743, p99 22,207, max 22,355; whole-tx units n 416, p50 19,193, p99 22,657, max 22,805; first reveal of the province-bell (ArrivalDay written): 411 of 416
 - svm suite, Release build: whole-tx units n 10, p50 24,300, p99 25,155, max 25,155 (every landed single-Reveal transaction of the suite)
 - svm suite, TestBeacon build: whole-tx units n 116, p50 19,694, p99 20,873, max 22,922 (every landed single-Reveal transaction of the suite)
 
 Cost of a Reveal (§10.1): 28,100 cost units (2 write locks) / **28,400 (3, first of a province-bell)**; `tip_min` = 14,668 lamports (presets 14,668 / 22,002 / 29,336).
 Keeper priority when it spends exactly `tip_min`: 0.4330 (2 locks) / **0.4285** (3 locks). A bid at P_def 2.0 costs a priority fee of 53,700 / 54,300 lamports; defence refund per Reveal 41,532 / 42,132 lamports. Relic tip priority 3.47.
-Sensitivity (not adopted): a keeper that requested the in-play maximum + 5 % (22,500) instead of 26,500 would reach priority 0.505 at `tip_min` (+17 %); a Reveal above its request fails and re-sends at the ladder (I-50), so the season keeps the G1 limit.
+Sensitivity (not adopted): a keeper that requested the in-play maximum + 5 % (23,500) instead of 26,500 would reach priority 0.485 at `tip_min` (+12 %); a Reveal above its request fails and re-sends at the ladder (I-50), so the season keeps the G1 limit.
 
 ## 2. Value of one bell, valuation (a) (N2) [sim]
 
@@ -48,19 +48,19 @@ Ratio range: the lowest capacity case against the largest value case (max bell +
 Per reveal a payer fronts slot rent 1,463,040 + day rent 1,137,920 + the fee at P_def 54,300 = 2,655,260 lamports.
 - R99 10k [sim] = 50 → F_r = 3 × ⌈50/150⌉ × 2,655,260 = 0.0080 SOL per payer; 150 payers hold 1.19 – 2.39 SOL (floor – ceiling 2 F_r)
 - R99 50k [sim] = 246 → F_r = 3 × ⌈246/150⌉ × 2,655,260 = 0.0159 SOL per payer; 150 payers hold 2.39 – 4.78 SOL (floor – ceiling 2 F_r)
-- R99 in play, stack runs [measured] = 1 → F_r = 3 × ⌈1/150⌉ × 2,655,260 = 0.0080 SOL per payer; 150 payers hold 1.19 – 2.39 SOL (floor – ceiling 2 F_r)
+- R99 in play, stack runs [measured] = 3 → F_r = 3 × ⌈3/150⌉ × 2,655,260 = 0.0080 SOL per payer; 150 payers hold 1.19 – 2.39 SOL (floor – ceiling 2 F_r)
 - R99 contract default (fclient R99_DEFAULT) = 4,000 → F_r = 3 × ⌈4,000/150⌉ × 2,655,260 = 0.2151 SOL per payer; 150 payers hold 32.26 – 64.52 SOL (floor – ceiling 2 F_r)
 - F_r is flat for every R99 ≤ 150 (0.0080 SOL) and steps by 0.0080 SOL per further 150 reveals per bell.
 
 ## 6. D18: defence-pool spend per attacked bell (CL-30 / CL-31a), at the budgets table [model on sim counts]
 
-Costs per write (limit + locks + L): GatherClash 53,600, ResolveFromInputs 345,900, SettleTransit 70,800, SettleDeparture 47,092, PostAnchor 358,100, PostSeed 358,092; RFI with Phase B 289,900
+Costs per write (limit + locks + L): GatherClash 53,600, ResolveFromInputs 287,400, SettleTransit 70,800, SettleDeparture 47,092, PostAnchor 358,100, PostSeed 358,092 (ResolveFromInputs at the table's limit 285,500, gate 290,000)
 Pool pays only Reveal (class W): refund ≤ 42,132 lamports per defended Reveal (first-of-bell cost, the larger).
 
-| wallets | reveals per bell p50 / p99 / max | (A) every critical write at 2.0: p99 SOL | (B) Reveal only: p50 / p99 / max SOL | 20 SOL covers (B, p99 bells) | keepers' own spend in (B), p99 SOL: Phase A / Phase B RFI |
+| wallets | reveals per bell p50 / p99 / max | (A) every critical write at 2.0: p99 SOL | (B) Reveal only: p50 / p99 / max SOL | 20 SOL covers (B, p99 bells) | keepers' own spend in (B), p99 SOL |
 |---|---|---|---|---|---|
-| 10,000 | 2 / 49 / 75 | 0.175 | 0.0001 / 0.0021 / 0.0032 | 9,688 | 0.043 / 0.038 |
-| 50,000 | 9 / 243 / 323 | 0.835 | 0.0004 / 0.0102 / 0.0136 | 1,953 | 0.204 / 0.176 |
+| 10,000 | 2 / 49 / 75 | 0.153 | 0.0001 / 0.0021 / 0.0032 | 9,688 | 0.037 |
+| 50,000 | 9 / 243 / 323 | 0.717 | 0.0004 / 0.0102 / 0.0136 | 1,953 | 0.175 |
 
 - 10,000: 100 p99 attacked bells need 0.21 SOL → **keep 20 SOL**
 - 50,000: 100 p99 attacked bells need 1.02 SOL → **keep 20 SOL**
