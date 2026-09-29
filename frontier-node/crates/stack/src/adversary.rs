@@ -221,24 +221,45 @@ pub struct Pending {
     pub held: Vec<(i16, i16)>,
 }
 
-/// The marches sealed to arrive at `bell`, by destination, most first
-/// (W6T-4): the `ev: "sealed"` lines of the bots' marchbook JSONL.
+/// The marches sealed to arrive at `bell` whose Depart the fleet sent, by
+/// destination, most first (W6T-4): a march `(host, depart_bell)` of an
+/// `ev: "sealed"` line counts once, and only with a `sent` line and no
+/// `failed` line (the U4 R5 run's first planned province had only failed
+/// Departs, so its slots were held for nothing).
 pub fn planned_from_marchbook(text: &str, bell: u32) -> Vec<((i16, i16), usize)> {
-    let mut n: std::collections::BTreeMap<(i16, i16), usize> = std::collections::BTreeMap::new();
+    use std::collections::{BTreeMap, BTreeSet};
+    let mut sealed: BTreeMap<(String, u64), (i16, i16)> = BTreeMap::new();
+    type March = (String, u64);
+    let mut sent: BTreeSet<March> = BTreeSet::new();
+    let mut failed: BTreeSet<March> = BTreeSet::new();
     for l in text.lines() {
-        if !l.contains("\"sealed\"") {
-            continue;
-        }
         let Ok(v) = serde_json::from_str::<Value>(l) else {
             continue;
         };
-        if v["ev"] != "sealed" || v["arrive_bell"].as_u64() != Some(bell as u64) {
-            continue;
-        }
-        let (Some(p), Some(q)) = (v["dest"][0].as_i64(), v["dest"][1].as_i64()) else {
+        let (Some(h), Some(d)) = (v["host"].as_str(), v["depart_bell"].as_u64()) else {
             continue;
         };
-        *n.entry((p as i16, q as i16)).or_default() += 1;
+        let key = (h.to_string(), d);
+        match v["ev"].as_str() {
+            Some("sealed") if v["arrive_bell"].as_u64() == Some(bell as u64) => {
+                if let (Some(p), Some(q)) = (v["dest"][0].as_i64(), v["dest"][1].as_i64()) {
+                    sealed.insert(key, (p as i16, q as i16));
+                }
+            }
+            Some("sent") => {
+                sent.insert(key);
+            }
+            Some("failed") => {
+                failed.insert(key);
+            }
+            _ => {}
+        }
+    }
+    let mut n: BTreeMap<(i16, i16), usize> = BTreeMap::new();
+    for (k, d) in &sealed {
+        if sent.contains(k) && !failed.contains(k) {
+            *n.entry(*d).or_default() += 1;
+        }
     }
     let mut v: Vec<((i16, i16), usize)> = n.into_iter().collect();
     v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
@@ -260,13 +281,7 @@ pub fn planned_arrivals(bots_dir: &std::path::Path, bell: u32) -> Vec<((i16, i16
             }
         }
     }
-    let mut m: std::collections::BTreeMap<(i16, i16), usize> = std::collections::BTreeMap::new();
-    for (k, c) in planned_from_marchbook(&text, bell) {
-        *m.entry(k).or_default() += c;
-    }
-    let mut v: Vec<((i16, i16), usize)> = m.into_iter().collect();
-    v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    v
+    planned_from_marchbook(&text, bell)
 }
 
 /// One transit in flight (a Holding's transit record in state 1 or 2).
@@ -728,13 +743,22 @@ mod tests {
     fn slot_holds_aim_at_planned_arrivals() {
         let book = [
             r#"{"arrive_bell":11,"bot":1,"depart_bell":8,"dest":[1,0],"ev":"sealed","host":"5"}"#,
+            r#"{"arrive_bell":11,"bot":1,"depart_bell":8,"dest":[1,0],"ev":"sealed","host":"5"}"#,
             r#"{"arrive_bell":11,"bot":2,"depart_bell":8,"dest":[1,0],"ev":"sealed","host":"6"}"#,
             r#"{"arrive_bell":11,"bot":3,"depart_bell":9,"dest":[0,0],"ev":"sealed","host":"7"}"#,
             r#"{"arrive_bell":12,"bot":4,"depart_bell":9,"dest":[0,0],"ev":"sealed","host":"8"}"#,
+            r#"{"arrive_bell":11,"bot":9,"depart_bell":9,"dest":[2,2],"ev":"sealed","host":"9"}"#,
+            r#"{"arrive_bell":11,"bot":10,"depart_bell":9,"dest":[3,3],"ev":"sealed","host":"10"}"#,
             r#"{"bot":1,"depart_bell":8,"ev":"sent","host":"5"}"#,
+            r#"{"bot":2,"depart_bell":8,"ev":"sent","host":"6"}"#,
+            r#"{"bot":3,"depart_bell":9,"ev":"sent","host":"7"}"#,
+            r#"{"bot":4,"depart_bell":9,"ev":"sent","host":"8"}"#,
+            r#"{"bot":9,"depart_bell":9,"ev":"failed","host":"9"}"#,
             "not json",
         ]
         .join("\n");
+        // The duplicate sealed line counts once; a failed Depart (host 9)
+        // and one never sent (host 10) do not count.
         let planned = planned_from_marchbook(&book, 11);
         assert_eq!(planned, vec![((1, 0), 2), ((0, 0), 1)]);
         let ad = Addresses::new(Address::new_from_array([7; 32]), 7);
@@ -779,7 +803,8 @@ mod tests {
         std::fs::write(dir.join("marchbook-1-0.jsonl"), &book).unwrap();
         std::fs::write(dir.join("marchbook-2-0.jsonl"), &book).unwrap();
         std::fs::write(dir.join("report.json"), &book).unwrap();
-        assert_eq!(planned_arrivals(&dir, 11), vec![((1, 0), 4), ((0, 0), 2)]);
+        // A march is one (host, depart bell) across the files too.
+        assert_eq!(planned_arrivals(&dir, 11), vec![((1, 0), 2), ((0, 0), 1)]);
         assert!(planned_arrivals(std::path::Path::new("/nonexistent"), 11).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
