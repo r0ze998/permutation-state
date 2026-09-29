@@ -182,7 +182,7 @@ def main() -> int:
     c.ok("## 23. M1 w6-s7 triage amendments" in design, "DESIGN: no §23 listing the triage changes")
 
     # ---- keeper guide -------------------------------------------------------
-    c.has(guide, ["backup_delay_slots", '409 {"code": "Shielded"', '409 {"code": "ArrivalBell"',
+    c.has(guide, ["backup_delay_slots", '409 {"error": "Shielded", "code": "Shielded"', '409 {"error": "ArrivalBell", "code": "ArrivalBell"',
                   "within 1 s", "`duties`", "contract v1.12"], "RUN-A-KEEPER")
     c.ok("The reveal-pool floor is computed at the Reveal budget (26,000 CU)" not in guide,
          "RUN-A-KEEPER §9: the fixed reveal-floor gap is still listed")
