@@ -101,7 +101,9 @@ pub fn run(cx: &mut Ctx) {
                         format!("host {host}"),
                         r.bell,
                         Some(r.tx),
-                        format!("a landed DEPART arriving at bell {arrive}, at or after end_bell {end}"),
+                        format!(
+                            "a landed DEPART arriving at bell {arrive}, at or after end_bell {end}"
+                        ),
                     );
                 }
                 let root = seal::seal_root(&r.p32("commit"), &seal::ct_hash(r.p("seal")));
@@ -303,10 +305,7 @@ pub fn run(cx: &mut Ctx) {
                 // failed attempts are counted per march `(host, arrive)`.
                 if j.code == 0 && !revealed.contains(&d) {
                     let arrive = dr.pu32("arrive_bell");
-                    let attempts = failed
-                        .get(&(host, arrive))
-                        .cloned()
-                        .unwrap_or_default();
+                    let attempts = failed.get(&(host, arrive)).cloned().unwrap_or_default();
                     let reason = if outcome != transit_outcome::ROUTED {
                         Some(reason::BOUNCED)
                     } else {
@@ -332,9 +331,7 @@ pub fn run(cx: &mut Ctx) {
                                     attempts.len()
                                 ),
                             );
-                            cx.liveness
-                                .valid_unrevealed
-                                .push((host, arrive, attempts));
+                            cx.liveness.valid_unrevealed.push((host, arrive, attempts));
                         }
                     }
                 }
@@ -462,8 +459,8 @@ pub fn rule_refusal(cx: &Ctx, dr: &Rec, p: &Plain, settle_tx: usize) -> Option<&
     let mut hx = c;
     let mut seen: Vec<(i32, i32)> = vec![];
     let mut lands: HashMap<(i32, i32), Option<Province>> = HashMap::new();
-    let cav = permutation_rules::frontier::catalog::unit_of(tr.unit)
-        .is_some_and(travel::is_cavalry);
+    let cav =
+        permutation_rules::frontier::catalog::unit_of(tr.unit).is_some_and(travel::is_cavalry);
     let mut secs = 0u64;
     for i in 0..n {
         let d = seal::step(&p.path, i as u8) as usize;
@@ -512,9 +509,7 @@ pub fn rule_refusal(cx: &Ctx, dr: &Rec, p: &Plain, settle_tx: usize) -> Option<&
     // The shield clauses: only a holding site of another faction.
     let dest = lands.get(&(pc.p, pc.q))?.as_ref()?;
     let n_sites = (dest.site_count as usize).min(dest.sites.len());
-    let Some(k) = (0..n_sites).find(|&k| dest.sites[k] == p.dest_tile) else {
-        return None;
-    };
+    let k = (0..n_sites).find(|&k| dest.sites[k] == p.dest_tile)?;
     let site = &dest.site_mirror[k];
     let other = site.state == SM::STATE_HOLDING && site.faction != tr.faction;
     if other && site.shield_until_bell > arrive {

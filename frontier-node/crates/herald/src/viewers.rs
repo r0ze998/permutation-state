@@ -328,12 +328,16 @@ impl KeepAlive {
 
     /// `GET path` → (status, body length). Errors mean the connection is gone.
     pub async fn get(&mut self, path: &str) -> std::io::Result<(u16, usize)> {
-        self.request(path, true, false).await.map(|(st, n, _)| (st, n))
+        self.request(path, true, false)
+            .await
+            .map(|(st, n, _)| (st, n))
     }
 
     /// `GET path` (not gzip) → (status, body): the follower's JSON reads.
     pub async fn get_body(&mut self, path: &str) -> std::io::Result<(u16, Vec<u8>)> {
-        self.request(path, false, true).await.map(|(st, _, b)| (st, b))
+        self.request(path, false, true)
+            .await
+            .map(|(st, _, b)| (st, b))
     }
 
     async fn request(
@@ -345,7 +349,11 @@ impl KeepAlive {
         let req = format!(
             "GET {path} HTTP/1.1\r\nHost: {}\r\n{}\r\n",
             self.host,
-            if gzip { "Accept-Encoding: gzip\r\n" } else { "" }
+            if gzip {
+                "Accept-Encoding: gzip\r\n"
+            } else {
+                ""
+            }
         );
         self.got_bytes = !self.buf.is_empty();
         self.s.write_all(req.as_bytes()).await?;
@@ -522,11 +530,7 @@ async fn poller(id: usize, cfg: Arc<ViewerCfg>, stats: Arc<Stats>, deadline: Ins
     }
 }
 
-async fn ws_connect_within(
-    host: &str,
-    budget: Duration,
-    deadline: Instant,
-) -> Option<ws::Client> {
+async fn ws_connect_within(host: &str, budget: Duration, deadline: Instant) -> Option<ws::Client> {
     let t0 = Instant::now();
     let mut back = Duration::from_millis(50);
     loop {
@@ -567,7 +571,11 @@ async fn ws_viewer(id: usize, cfg: Arc<ViewerCfg>, stats: Arc<Stats>, deadline: 
             }
             tokio::time::sleep(j).await;
         }
-        let budget = if first { Duration::ZERO } else { cfg.retry_budget };
+        let budget = if first {
+            Duration::ZERO
+        } else {
+            cfg.retry_budget
+        };
         let Some(mut c) = ws_connect_within(&cfg.herald, budget, deadline).await else {
             if Instant::now() < deadline {
                 stats.error(&stats.ws_errors);

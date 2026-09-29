@@ -1001,7 +1001,16 @@ fn the_settle_racer_redeparts_only_after_the_arrival() {
 
 /// The FINAL bot's combat host, its holding and every target it could
 /// plan a march to (end bell far), longest path first.
-fn march_setup(o: &Observation) -> (fclient::decode::Holding, (i16, i16), fclient::decode::Entry, Vec<(policy::Target, u32)>) {
+/// `march_setup`'s answer: the holding, the host's province, the host and
+/// its targets.
+type MarchSetup = (
+    fclient::decode::Holding,
+    (i16, i16),
+    fclient::decode::Entry,
+    Vec<(policy::Target, u32)>,
+);
+
+fn march_setup(o: &Observation) -> MarchSetup {
     let (_, h) = o.me.holdings[0].clone();
     let (at, host) = policy::own_hosts(o, &h)
         .into_iter()
@@ -1018,7 +1027,11 @@ fn march_setup(o: &Observation) -> (fclient::decode::Holding, (i16, i16), fclien
 }
 
 fn set_end_bell(o: &mut Observation, end: u32) {
-    o.season.season.as_mut().expect("the Season account").end_bell = end;
+    o.season
+        .season
+        .as_mut()
+        .expect("the Season account")
+        .end_bell = end;
 }
 
 /// Failing first on 7dcacdf (w6-s7 criterion 1: 9 honest marches arrived
@@ -1032,7 +1045,11 @@ fn plan_near_end_never_arrives_at_or_after_end_bell() {
     let dep = o.season.bell_at(o.now + policy::DEPART_SLACK_SECS);
     // The longest path whose earliest arrival is still before `dep + 4`.
     let earliest = |t: policy::Target| {
-        policy::plan_march(&o, &h, at, &host, t, 0, 0, 0).unwrap().1.arrive_bell - 1
+        policy::plan_march(&o, &h, at, &host, t, 0, 0, 0)
+            .unwrap()
+            .1
+            .arrive_bell
+            - 1
     };
     let t = ts
         .iter()
@@ -1041,14 +1058,21 @@ fn plan_near_end_never_arrives_at_or_after_end_bell() {
         .expect("a target arriving at dep + 3 at the earliest");
     // Unclamped, the planned arrival would pass `dep + 3` (7dcacdf).
     assert_eq!(
-        policy::plan_march(&o, &h, at, &host, t, 2, 0, 0).unwrap().1.arrive_bell,
+        policy::plan_march(&o, &h, at, &host, t, 2, 0, 0)
+            .unwrap()
+            .1
+            .arrive_bell,
         dep + 6
     );
     for extra in 0..3 {
         set_end_bell(&mut o, dep + 4);
         let (_, p, _) = policy::plan_march(&o, &h, at, &host, t, extra, 0, 0)
             .expect("a march that can still arrive before the end");
-        assert!(p.arrive_bell <= dep + 3, "extra {extra}: arrive {}", p.arrive_bell);
+        assert!(
+            p.arrive_bell <= dep + 3,
+            "extra {extra}: arrive {}",
+            p.arrive_bell
+        );
         assert!(p.arrive_bell >= dep + 2);
         set_end_bell(&mut o, dep + 2);
         assert!(
@@ -1105,7 +1129,12 @@ fn shielded_holding_offers_no_war_target() {
     // A shield that ends before the arrival bell starts does not refuse.
     let mut lapsing = h.clone();
     lapsing.shield_until = shielded.season.genesis_ts + p.arrive_bell as i64 * 600;
-    assert!(!policy::shield_refuses(&shielded, &lapsing, &war, p.arrive_bell));
+    assert!(!policy::shield_refuses(
+        &shielded,
+        &lapsing,
+        &war,
+        p.arrive_bell
+    ));
     // Over a session day the whole policy never plans a war march.
     let s = spec(FINAL, Arch::VerySkilled, Some(Persona::MinTip));
     let mem = Memory::default();
@@ -1140,7 +1169,10 @@ fn dest_shield_judged_at_arrival() {
         .expect("a war target in view");
     let (_, p, _) = policy::plan_march(&o, &h, at, &host, war, 2, 0, 0).unwrap();
     let arrive = p.arrive_bell;
-    assert!(arrive > fixture::BELL + 4, "the test needs arrive > bell + 4");
+    assert!(
+        arrive > fixture::BELL + 4,
+        "the test needs arrive > bell + 4"
+    );
     let set = |o: &mut Observation, b: u32| {
         let pv = &mut o.provinces.get_mut(&(war.p, war.q)).unwrap().province;
         let k = (0..pv.site_count as usize)
@@ -1217,7 +1249,14 @@ fn muster_skips_full_province() {
     assert_eq!(musters(&pad), 0);
     // No free entry (departed hosts fill the rest).
     let mut full = pad.clone();
-    for e in full.provinces.get_mut(&(h.p, h.q)).unwrap().province.entries.iter_mut() {
+    for e in full
+        .provinces
+        .get_mut(&(h.p, h.q))
+        .unwrap()
+        .province
+        .entries
+        .iter_mut()
+    {
         if e.state == le::STATE_ROSTER && e.faction == 3 {
             e.state = 3;
         }

@@ -298,8 +298,9 @@ fn shielded() -> verify_core::Input {
 /// wherever it lists it (the warning's signatures, or the by-rule count).
 fn attempts_of(j: &serde_json::Value, host: u64, arrive: u32) -> Option<usize> {
     let l = &j["liveness"];
+    let host = host.to_string();
     let hit = |x: &&serde_json::Value| {
-        x["host_id"] == host.to_string() && x["arrive_bell"] == arrive
+        x["host_id"].as_str() == Some(host.as_str()) && x["arrive_bell"] == arrive
     };
     l["valid_unrevealed"]
         .as_array()?
@@ -321,8 +322,18 @@ fn attempts_of(j: &serde_json::Value, host: u64, arrive: u32) -> Option<usize> {
 #[test]
 fn failed_attempts_counted_per_march() {
     let j = verify_core::verify(&shielded()).json();
-    assert_eq!(attempts_of(&j, SHIELDED_HOST, 394), Some(2), "{}", j["liveness"]);
-    assert_eq!(attempts_of(&j, SHIELDED_HOST, 552), Some(3), "{}", j["liveness"]);
+    assert_eq!(
+        attempts_of(&j, SHIELDED_HOST, 394),
+        Some(2),
+        "{}",
+        j["liveness"]
+    );
+    assert_eq!(
+        attempts_of(&j, SHIELDED_HOST, 552),
+        Some(3),
+        "{}",
+        j["liveness"]
+    );
 }
 
 /// A valid seal refused `Shielded` by rule is not a liveness miss: it is
@@ -349,7 +360,10 @@ fn shielded_refused_march_is_unrevealed_by_rule() {
     assert!(!r.findings.iter().any(|f| f.code == "ValidSealUnrevealed"));
     let j = r.json();
     assert_eq!(j["liveness"]["unrevealed_by_reason"]["shielded-own"], 2);
-    assert_eq!(j["liveness"]["unrevealed_by_rule"][0]["reason"], "shielded-own");
+    assert_eq!(
+        j["liveness"]["unrevealed_by_rule"][0]["reason"],
+        "shielded-own"
+    );
 }
 
 /// The check of the check: with the host's own shield lapsed in the
@@ -367,7 +381,8 @@ fn unshielded_rout_stays_a_liveness_warning() {
         for (k, a) in t.post.iter_mut() {
             if k.to_bytes() == hk {
                 if let Some(a) = a.as_mut() {
-                    a.data[H::SHIELD_UNTIL..H::SHIELD_UNTIL + 8].copy_from_slice(&0i64.to_le_bytes());
+                    a.data[H::SHIELD_UNTIL..H::SHIELD_UNTIL + 8]
+                        .copy_from_slice(&0i64.to_le_bytes());
                     n += 1;
                 }
             }
@@ -421,7 +436,9 @@ fn arrival_after_end_is_fail() {
         .filter(|f| f.code == "ArrivalAfterEnd")
         .collect();
     assert_eq!(hits.len(), at_last, "{}", show(&r));
-    assert!(hits.iter().all(|f| f.fail() && f.entity.starts_with("host ")));
+    assert!(hits
+        .iter()
+        .all(|f| f.fail() && f.entity.starts_with("host ")));
     let r = verify_core::verify(&with_end_bell(&inp, last + 1));
     assert!(!r.fails_with("ArrivalAfterEnd"), "{}", show(&r));
     // The recorded season (end_bell far away) has none.

@@ -22,7 +22,12 @@ fn main() {
     let inp = Input::load(std::path::Path::new(&a[1])).expect("load");
     let host: u64 = a[3].parse().expect("host id");
     let only: Vec<u32> = a[4..].iter().map(|s| s.parse().expect("bell")).collect();
-    let w = World::parse(&inp.cfg.program, &inp.txs, inp.finals.clone(), inp.final_slot);
+    let w = World::parse(
+        &inp.cfg.program,
+        &inp.txs,
+        inp.finals.clone(),
+        inp.final_slot,
+    );
     let f = verify_core::facts::Facts::build(&w, &inp.cfg);
     let mut keep = BTreeSet::new();
     keep.extend(f.create_tx);
@@ -80,12 +85,9 @@ fn main() {
             .map(|x| fclient::seal::unpack(&x.plain))
             .find(|p| p.host_id == host && p.arrive_bell == arrive)
             .expect("a Reveal attempt with the plaintext");
-        let mut h = ProvinceCoord::new(
-            dr.pi32("origin_p"),
-            dr.pi32("origin_q"),
-        )
-        .tile(dr.pu8("origin_tile"))
-        .expect("origin");
+        let mut h = ProvinceCoord::new(dr.pi32("origin_p"), dr.pi32("origin_q"))
+            .tile(dr.pu8("origin_tile"))
+            .expect("origin");
         let mut provinces = BTreeSet::new();
         for i in 0..plain.path_len {
             let (dq, dr_) = DIRECTIONS[fclient::seal::step(&plain.path, i) as usize];

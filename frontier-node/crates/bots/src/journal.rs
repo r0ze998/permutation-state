@@ -213,9 +213,7 @@ fn apply(out: &mut BTreeMap<u32, Vec<MarchMemo>>, v: &Value) -> Option<()> {
         "reveal_try" => m.reveal_tries = m.reveal_tries.saturating_add(1),
         "revealed" => m.revealed = true,
         "accepted" => m.accepted = true,
-        "reveal_refused" => {
-            m.last_code = v.get("code").and_then(|c| c.as_str()).map(String::from)
-        }
+        "reveal_refused" => m.last_code = v.get("code").and_then(|c| c.as_str()).map(String::from),
         "late_done" => m.late_done = true,
         "settled" => m.settled = true,
         "redeparted" => m.redeparted = true,

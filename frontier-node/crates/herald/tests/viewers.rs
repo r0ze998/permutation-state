@@ -192,7 +192,10 @@ async fn viewers_ride_out_two_herald_restarts() {
     let rep = run.await.unwrap();
     h.kill();
     println!("{}", serde_json::to_string_pretty(&rep).unwrap());
-    assert!(rep["requests"].as_u64().unwrap() > 3 * pollers as u64, "{rep}");
+    assert!(
+        rep["requests"].as_u64().unwrap() > 3 * pollers as u64,
+        "{rep}"
+    );
     assert_eq!(rep["errors"], 0, "{rep}");
     assert_eq!(rep["ws"]["errors"], 0, "{rep}");
     assert_eq!(rep["ws"]["connected"], wsv as u64, "{rep}");
@@ -241,11 +244,15 @@ async fn viewers_follow_the_live_bell() {
         diffs,
     );
     app.index = Some(cfg.index_path());
-    let l = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let l = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
     let addr = l.local_addr().unwrap();
     tokio::spawn(server::serve(l, Arc::new(app)));
     // The chain's Clock at bell 7 (the runner records it from the RPC).
-    let mut c = viewers::KeepAlive::connect(&addr.to_string()).await.unwrap();
+    let mut c = viewers::KeepAlive::connect(&addr.to_string())
+        .await
+        .unwrap();
     let season: serde_json::Value =
         serde_json::from_slice(&c.get_body("/h/season").await.unwrap().1).unwrap();
     let g = season["genesisTs"].as_i64().unwrap();

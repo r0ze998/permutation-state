@@ -532,7 +532,12 @@ impl Bot {
     /// the host among its ClashInputs arrivals. W6T-3.
     pub fn observe_reveals<H, R, D>(&mut self, sh: &Shared<H, R, D>, obs: &Observation) {
         let mut seen = vec![];
-        for m in self.mem.marches.iter_mut().filter(|m| m.sent && !m.revealed) {
+        for m in self
+            .mem
+            .marches
+            .iter_mut()
+            .filter(|m| m.sent && !m.revealed)
+        {
             let pq = (m.dest.0 as i16, m.dest.1 as i16);
             let (host, arrive) = (m.key.0, m.arrive_bell);
             let views = obs
@@ -546,7 +551,10 @@ impl Bot {
                     .any(|s| s.bell == arrive && s.host_id == host)
                     || v.inputs.as_ref().is_some_and(|ci| {
                         ci.bell == arrive
-                            && ci.arrivals.iter().any(|a| a.present == 1 && a.host_id == host)
+                            && ci
+                                .arrivals
+                                .iter()
+                                .any(|a| a.present == 1 && a.host_id == host)
                     })
             });
             if hit {
@@ -572,25 +580,32 @@ impl Bot {
         let route = if m.reveal_tries == 0 {
             "none"
         } else if self.spec.persona.is_some_and(|p| {
-            matches!(p, Persona::SelfTip | Persona::LateRevealer | Persona::Forger)
+            matches!(
+                p,
+                Persona::SelfTip | Persona::LateRevealer | Persona::Forger
+            )
         }) {
             "direct"
         } else {
             "keeper"
         };
-        sh.report.lock().expect("report").unrevealed.push(crate::report::Unrevealed {
-            bot: self.spec.index,
-            persona: self.spec.persona,
-            kind: m.kind,
-            host: m.key.0,
-            depart_bell: m.key.1,
-            arrive: m.arrive_bell,
-            dest: m.dest,
-            route,
-            accepted: m.accepted,
-            tries: m.reveal_tries,
-            last_code: m.last_code.clone(),
-        });
+        sh.report
+            .lock()
+            .expect("report")
+            .unrevealed
+            .push(crate::report::Unrevealed {
+                bot: self.spec.index,
+                persona: self.spec.persona,
+                kind: m.kind,
+                host: m.key.0,
+                depart_bell: m.key.1,
+                arrive: m.arrive_bell,
+                dest: m.dest,
+                route,
+                accepted: m.accepted,
+                tries: m.reveal_tries,
+                last_code: m.last_code.clone(),
+            });
     }
 
     fn is(&self, p: Persona) -> bool {
@@ -808,7 +823,9 @@ impl Bot {
         code: Option<&str>,
     ) {
         if let Some(j) = &sh.journal {
-            if j.state_with(self.spec.index, key, state, route, code).is_err() {
+            if j.state_with(self.spec.index, key, state, route, code)
+                .is_err()
+            {
                 sh.error("journal write");
             }
         }
@@ -1199,7 +1216,11 @@ impl Bot {
                     ),
                 };
                 sh.record(outcome(self, "reveal", "keeper", &r, tag));
-                (r.ok(), r.code().or_else(|| (!r.ok()).then(|| format!("http_{}", r.status))))
+                (
+                    r.ok(),
+                    r.code()
+                        .or_else(|| (!r.ok()).then(|| format!("http_{}", r.status))),
+                )
             }
             RevealRoute::DirectSelf | RevealRoute::DirectForged => {
                 let Some(args) = args else {

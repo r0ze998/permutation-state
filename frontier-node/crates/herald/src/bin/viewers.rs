@@ -173,7 +173,10 @@ mod tests {
         assert!(parse_rings("3-1").is_err());
         assert!(parse_rings("x").is_err());
         assert_eq!(host_of("http://127.0.0.1:41040"), "127.0.0.1:41040");
-        assert_eq!(host_of("http://127.0.0.1:41040/h/status"), "127.0.0.1:41040");
+        assert_eq!(
+            host_of("http://127.0.0.1:41040/h/status"),
+            "127.0.0.1:41040"
+        );
         assert_eq!(host_of("127.0.0.1:41040"), "127.0.0.1:41040");
     }
 }

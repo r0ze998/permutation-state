@@ -35,7 +35,12 @@ fn main() {
             break;
         };
         match rec {
-            Record::Block { slot, game_ms, scale, txs } => {
+            Record::Block {
+                slot,
+                game_ms,
+                scale,
+                txs,
+            } => {
                 if slot > to {
                     break;
                 }
@@ -59,7 +64,9 @@ fn main() {
                     };
                     if std::env::var("WAL_TXS").is_ok() {
                         for t in &txs {
-                            let Ok(x) = fclient::tx::from_wire(&t.wire) else { continue };
+                            let Ok(x) = fclient::tx::from_wire(&t.wire) else {
+                                continue;
+                            };
                             let m = &x.message;
                             let tags: Vec<String> = m
                                 .instructions
@@ -90,7 +97,12 @@ fn main() {
                 }
                 last_slot = slot;
             }
-            Record::Airdrop { slot, key, lamports, .. } if slot >= from && slot <= to => {
+            Record::Airdrop {
+                slot,
+                key,
+                lamports,
+                ..
+            } if slot >= from && slot <= to => {
                 println!("# airdrop slot {slot} {key} {lamports}");
             }
             Record::SetAccount { key, .. } if last_slot >= from && last_slot <= to => {
