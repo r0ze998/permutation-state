@@ -19,6 +19,7 @@ import { L, onLangChange } from '../../lang.mjs';
 import { locate, ringOf, ringProvinces, hexDistance } from '../fgeo.mjs';
 import { fogLevel, paintProvince, paintTiles, paintVeil, provincePixel, PROVINCE_CIRCUMRADIUS } from './layers.mjs';
 import { createTerrain } from './terrain.mjs';
+import { SpriteArt, terrainLookup } from './sprites.mjs';
 
 /** Fog levels drawn as tiles at tile LOD (a distant province stays a muted cell). */
 export const TILE_FOGS = Object.freeze(['sight', 'known', 'clear']);
@@ -95,7 +96,7 @@ export class FrontierMap {
    * own: [{p,q}], known: Set "p,q", showAll, selected, terrainOf(p,q) →
    * {terrain, sites, names} | null}; `onSelect(hit)`; `onView(view, lod)`.
    */
-  constructor(canvas, { source, onSelect = () => {}, onView = () => {} }) {
+  constructor(canvas, { source, onSelect = () => {}, onView = () => {}, art = false }) {
     this.canvas = canvas;
     this.source = source;
     this.onSelect = onSelect;
@@ -106,6 +107,8 @@ export class FrontierMap {
     this.drag = null;
     this.pointers = new Map();
     this.terrainOf = createTerrain({ onReady: () => this.invalidate() });
+    // Opt-in sprite art at tile LOD (map/sprites.mjs); the vector tiles stay the default.
+    this.art = art ? new SpriteArt({ onLoad: () => this.invalidate() }) : null;
     this.mark();
     this.bind();
     this.mountTools();
@@ -256,6 +259,7 @@ export class FrontierMap {
     for (const ov of src.overviews?.values?.() ?? []) for (const r of ov.provinces) recs.set(`${r.p},${r.q}`, r);
     const terrainOf = src.terrainOf ?? this.terrainOf;
     let wanted = 0, drawn = 0;
+    const artTiles = [];
     for (const pr of visibleProvinces(this.view, { width, height }, maxRing)) {
       const key = `${pr.p},${pr.q}`;
       const fog = fogLevel({ ringOpen: ringOf(pr.p, pr.q) < (src.ringsOpen ?? 1), showAll: src.showAll, known: src.known?.has(key), sightDistance: sightDistance(pr.p, pr.q, src.own ?? []) });
@@ -264,6 +268,7 @@ export class FrontierMap {
       if (this.lod === 'tile' && TILE_FOGS.includes(fog)) {
         wanted++;
         const t = terrainOf?.(pr.p, pr.q);
+        if (t && this.art) { artTiles.push({ ...pr, ...t, rec, fog, selected }); drawn++; continue; }
         if (t) {
           paintTiles(ctx, { ...pr, ...t, rec, selectedTile: selected ? src.selected.idx : null });
           paintVeil(ctx, { ...pr, fog, scale: z, selected });
@@ -272,6 +277,10 @@ export class FrontierMap {
         }
       }
       paintProvince(ctx, { ...pr, rec, fog, selected, scale: z });
+    }
+    if (artTiles.length) {
+      this.art.paint(ctx, artTiles, { zoom: z, dpr, terrainAt: terrainLookup(terrainOf), selected: src.selected });
+      for (const a of artTiles) paintVeil(ctx, { p: a.p, q: a.q, fog: a.fog, scale: z, selected: a.selected });
     }
     this.mark(wanted > 0 && drawn === wanted ? 'ready' : 'pending');
   }

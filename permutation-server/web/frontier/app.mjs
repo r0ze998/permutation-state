@@ -369,6 +369,8 @@ export async function boot() {
         invalidate('map', 'panel');
       },
       onView: (_, lod) => { FS.view.lod = lod; },
+      // Sprite art at tile LOD, opt-in with ?art=1 (docs/frontier/art/tiles/LOD.md).
+      art: new URLSearchParams(globalThis.location?.search ?? '').get('art') === '1',
     });
   }
   invalidate('chip', 'status', 'panel');
