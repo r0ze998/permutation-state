@@ -11,6 +11,7 @@ mod common;
 use frontier_abi::entry::EntryOp;
 use frontier_abi::layout::player::{citizen as C, holding as H, transit as T};
 use frontier_abi::layout::province::{entry as EN, province as P, site as SM};
+use frontier_abi::layout::world::season as S;
 use frontier_abi::log::{EntityKind, Kind};
 use permutation_frontier_svm_tests::chain::{
     assert_code, expect_lands, with_account, Chain, SendResult,
@@ -703,5 +704,65 @@ fn g01_budget_w3b_host() {
             e.host_id(145),
         )],
         &any,
+    );
+}
+
+/// W6T-1 (w6-s7 triage, unsettled transits): §5.11 Depart step 4 bounds
+/// the arrival bell by `[b + 2, b + 72]` **and** `arrive_bell < end_bell`.
+/// Before, a march arriving at or after `end_bell` landed although no
+/// anchor of that bell can ever be posted (PostAnchor refuses `bell >=
+/// end_bell`) and no resolve passes it, so SettleTransit could never run:
+/// w6-s7 ended with 9 such transits stranded (V5 MissingData at bells
+/// 1008-1011, `end_bell` 1008). The last useful Depart bell is now
+/// `end_bell - 3`. Ported from the triage repro
+/// `triage_depart_arrival_at_or_after_end_bell`.
+#[test]
+fn host_depart_arrival_at_or_after_end_bell_refused() {
+    let (mut c, w, e) = setup();
+    let id = w.craft_host(&mut c, &e, &e.province, 0, 0, 0, 900, e.tile);
+    let tip = w.tip_min(&c);
+    let with_end = |c: &Chain, end: u32| {
+        let mut f = c.fork();
+        f.edit(&w.a.season, |d| {
+            d[S::END_BELL..S::END_BELL + 4].copy_from_slice(&end.to_le_bytes())
+        });
+        f
+    };
+    // arrive == end_bell: refused (the season is still Running at B0).
+    let m = march(&w, &mut c, &e, id, 1, B0 + 6);
+    let mut f = with_end(&c, B0 + 6);
+    assert_code(
+        send(&mut f, &e, w.depart_ix(&e, (e.p, e.q), &m, tip)),
+        E::ArrivalBell,
+    );
+    // arrive > end_bell: refused.
+    let mut f = with_end(&c, B0 + 5);
+    assert_code(
+        send(&mut f, &e, w.depart_ix(&e, (e.p, e.q), &m, tip)),
+        E::ArrivalBell,
+    );
+    // arrive == end_bell - 1: lands, and its anchor can be posted.
+    let mut g = with_end(&c, B0 + 7);
+    expect_lands(
+        send(&mut g, &e, w.depart_ix(&e, (e.p, e.q), &m, tip)),
+        "w.depart_ix( arrive = end_bell - 1",
+    );
+    w.to_anchor_time(&mut g, B0 + 6);
+    expect_lands(
+        w.post_anchor(&mut g, B0 + 6, 0),
+        "PostAnchor of the arrival bell",
+    );
+    // The last useful Depart bell is end_bell - 3 (arrive = b + 2 = end_bell - 1);
+    // at end_bell - 2 the earliest arrival (b + 2) is end_bell itself.
+    let near = march(&w, &mut c, &e, id, 2, B0 + 2);
+    let mut g = with_end(&c, B0 + 3);
+    expect_lands(
+        send(&mut g, &e, w.depart_ix(&e, (e.p, e.q), &near, tip)),
+        "w.depart_ix( at end_bell - 3",
+    );
+    let mut f = with_end(&c, B0 + 2);
+    assert_code(
+        send(&mut f, &e, w.depart_ix(&e, (e.p, e.q), &near, tip)),
+        E::ArrivalBell,
     );
 }

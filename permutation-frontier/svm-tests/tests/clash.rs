@@ -24,7 +24,7 @@ use frontier_abi::layout::world::season as S;
 use frontier_abi::log::{EntityKind, Kind};
 use permutation_frontier_svm_tests::budget::{assert_within, ceilings};
 use permutation_frontier_svm_tests::chain::{
-    assert_code, expect_lands, with_account, with_writable, without_signer, Build, Chain,
+    assert_code, expect_lands, with_account, with_writable, without_signer, Build, Chain, Profile,
     SendResult,
 };
 use permutation_frontier_svm_tests::ix::clash::{self as cix, gather_at, resolve_at, skip_at};
@@ -2697,4 +2697,339 @@ fn clash_bounced_resident_leaves_and_returns() {
         .entries(&stranded, f.dest())
         .iter()
         .all(|(_, y)| y.id != fr.id));
+}
+
+// ================================================================ W6T-1: the close budgets (w6-s7)
+
+/// The keeper's compute-budget prefix (frontier-node keeper, as w6-s7's
+/// transactions show): SetComputeUnitLimit, SetComputeUnitPrice (the
+/// keeper always bids a priority fee) and SetLoadedAccountsDataSizeLimit —
+/// three ComputeBudget instructions at 150 CU each, where the G1 log's
+/// `send` profile has two (no price). `cu_limit` `None`: the ladder top.
+fn keeper_profile(c: &Chain, kind: Ix, cu_limit: Option<u32>) -> Profile {
+    let p = Profile::client(kind, c.programdata_len()).with_price(1);
+    match cu_limit {
+        Some(l) => p.with_cu(l),
+        None => p.with_cu(frontier_abi::budgets::CU_LADDER_MAX),
+    }
+}
+
+/// A close sent with the keeper's prefix at the ladder top (its CU, landed
+/// or refused) and again at the budgets table's CU limit: both give `want`
+/// (a refusal keeps its code, it is never CU exhaustion), and the CU stays
+/// within the §5.5 gate (G1). Prints one row of the W6T-1 close CU table
+/// (the transaction's CU and the program's own "consumed" line) and
+/// returns the transaction's CU.
+fn close_row(c: &Chain, w: &World, label: &str, ix: &Instruction, want: Option<E>) -> u64 {
+    let kind = Ix::from_tag(ix.data[0]).expect("a Frontier instruction");
+    let b = frontier_abi::budgets::budget(kind);
+    let ixs = std::slice::from_ref(ix);
+    let r = c
+        .fork()
+        .send_with(&keeper_profile(c, kind, None), ixs, &[&w.keeper]);
+    let (cu, logs) = match &r {
+        Ok(l) => (l.cu, &l.logs),
+        Err(f) => (f.cu, &f.logs),
+    };
+    let program = logs
+        .iter()
+        .rev()
+        .find(|l| l.contains(" consumed ") && !l.contains("ComputeBudget"))
+        .and_then(|l| l.split(" consumed ").nth(1))
+        .and_then(|l| l.split(' ').next())
+        .unwrap_or("?")
+        .to_string();
+    let what = match want {
+        None => "lands".to_string(),
+        Some(e) => e.name().to_string(),
+    };
+    println!(
+        "W6T-1 {} | {label} | {what} | tx {cu} CU | program {program} CU | cu_limit {} | gate {}",
+        kind.name(),
+        b.cu_limit,
+        b.cu_budget
+    );
+    match want {
+        None => {
+            expect_lands(r, label);
+        }
+        Some(e) => {
+            assert_code(r, e);
+        }
+    }
+    let at_limit = c.fork().send_with(
+        &keeper_profile(c, kind, Some(b.cu_limit)),
+        ixs,
+        &[&w.keeper],
+    );
+    let at = format!("{label} at the table's cu_limit {}", b.cu_limit);
+    match want {
+        None => {
+            expect_lands(at_limit, &at);
+        }
+        Some(e) => {
+            assert_code(at_limit, e);
+        }
+    }
+    assert!(
+        cu <= b.cu_budget as u64,
+        "G1: {label}: {cu} CU > the §5.5 gate {}",
+        b.cu_budget
+    );
+    cu
+}
+
+/// The Season of `c` Ended (status as EndSeason leaves it), the Clock
+/// `after` seconds past the start of `end_bell`.
+fn ended(c: &Chain, w: &World, after: i64) -> Chain {
+    let mut e = c.fork();
+    e.edit(&w.a.season, |d| d[S::STATUS] = S::STATUS_ENDED);
+    let end = w.bell_start(u32_at(&e.data(&w.a.season), S::END_BELL));
+    e.set_time(end + after);
+    e
+}
+
+/// The Closed tombstone (the Season's first 128 bytes, status Closed, as
+/// CloseSeason's final part leaves it), 80 h past the end, THE anchor of
+/// bell `B` in `region` gone.
+fn tombstone(c: &Chain, w: &World, region: u8) -> Chain {
+    let mut t = c.fork();
+    let end = w.bell_start(u32_at(&t.data(&w.a.season), S::END_BELL));
+    t.edit(&w.a.season, |d| d[S::STATUS] = S::STATUS_CLOSED);
+    let mut tomb = t.data(&w.a.season);
+    tomb.truncate(S::TOMBSTONE_SIZE);
+    t.set_data(&w.a.season, tomb);
+    t.set_time(end + 80 * 3_600);
+    t.remove(&w.a.anchor(B, region));
+    t
+}
+
+/// The Province of the paths that do not read it: present, closed (never
+/// re-created: absent) or pre-funded (absent, then lamports sent to its
+/// address: a system account with no data).
+#[derive(Clone, Copy, Debug)]
+enum Prov {
+    Present,
+    Absent,
+    PreFunded,
+}
+
+fn with_province(c: &Chain, k: &Address, p: Prov) -> Chain {
+    let mut f = c.fork();
+    match p {
+        Prov::Present => {}
+        Prov::Absent => f.remove(k),
+        Prov::PreFunded => {
+            f.remove(k);
+            f.airdrop(k, 1_000_000);
+        }
+    }
+    f
+}
+
+/// `rent_to` of the paths, stored in the target's `rent_to` field as the
+/// creating instruction would have: the keeper itself (the fee payer: one
+/// account key fewer), a funded account distinct from the payer (as in
+/// w6-s7, where the Revealer that paid the rent is paid back), and a key
+/// that was never created (the close creates it with the rent).
+fn rent_targets(
+    c: &Chain,
+    target: &Address,
+    off: usize,
+    w: &World,
+) -> [(Chain, Address, &'static str); 3] {
+    let key = |tag: &[u8]| {
+        Address::new_from_array(permutation_frontier_svm_tests::sha256(&[
+            tag,
+            target.as_ref(),
+        ]))
+    };
+    let (funded, fresh) = (
+        key(b"W6T-1 funded rent_to"),
+        key(b"W6T-1 never-created rent_to"),
+    );
+    assert!(c.is_absent(&funded) && c.is_absent(&fresh));
+    let with = |k: &Address| {
+        let mut f = c.fork();
+        f.edit(target, |d| d[off..off + 32].copy_from_slice(k.as_ref()));
+        f
+    };
+    let mut distinct = with(&funded);
+    distinct.airdrop(&funded, 1_000_000_000);
+    [
+        (
+            with(&w.keeper.pubkey()),
+            w.keeper.pubkey(),
+            "rent_to the payer",
+        ),
+        (distinct, funded, "rent_to funded"),
+        (with(&fresh), fresh, "rent_to never created"),
+    ]
+}
+
+/// W6T-1 (w6-s7 triage, the 37,042 failed transactions): CloseArrivalDay
+/// landed at 5,979 of its `cu_limit` 6,000 while the Season ran and ran out
+/// of CUs on the Ended path (25,655 failed attempts, 0 landed, in the
+/// drain). Two costs the G1 table did not carry: the keeper's third
+/// ComputeBudget instruction (SetComputeUnitPrice, 150 CU) and a `rent_to`
+/// distinct from the payer (+192 CU, one more account key). Measured with
+/// the keeper's prefix over every path — Running, Ended < 72 h, Ended ≥ 72 h
+/// and the Closed tombstone — with `rent_to` the payer, funded or never
+/// created, and the Province present, closed or pre-funded where the path
+/// does not read it, on the release and the test-beacon builds; the
+/// refusals (`TooEarly`) too, which must keep their code at the table's
+/// limit. Failing first against `cu_limit` 6,000 (Ended, day resolved,
+/// `rent_to` funded: 6,018 CU; Running: 5,979 CU, as w6-s7 logged).
+#[test]
+fn g01_close_arrival_day_ended_paths() {
+    let mut worst = 0u64;
+    for build in [Build::Release, Build::TestBeacon] {
+        let (mut c, w) = world_on(build);
+        let f = resolved_fill(&mut c, &w, 47, 6, 5);
+        let (p, q) = (f.p as i16, f.q as i16);
+        let day = day_of(B);
+        let dk = w.a.arrival_day(f.p, f.q, day);
+        let pk = w.a.province(f.p, f.q);
+        use frontier_abi::layout::clash::arrival_day as AD;
+        for (base, rent_to, rlabel) in rent_targets(&c, &dk, AD::RENT_TO, &w) {
+            let ix = cix::close_arrival_day(&w.a, w.keeper.pubkey(), p, q, day, rent_to);
+            let row = |ch: &Chain, path: &str, want| {
+                close_row(ch, &w, &format!("{build:?} {path}, {rlabel}"), &ix, want)
+            };
+            let mut resolved = base.fork();
+            w.set_resolved_next(&mut resolved, &pk, 144 * (day + 1));
+            // Running
+            worst = worst.max(row(&base, "Running, day open", Some(E::TooEarly)));
+            worst = worst.max(row(&resolved, "Running, day resolved", None));
+            // Ended < 72 h: the day's own rule, the Province read
+            for after in [0, 71 * 3_600] {
+                let path = format!("Ended +{}h", after / 3_600);
+                worst = worst.max(row(
+                    &ended(&base, &w, after),
+                    &format!("{path}, day open"),
+                    Some(E::TooEarly),
+                ));
+                worst = worst.max(row(
+                    &ended(&resolved, &w, after),
+                    &format!("{path}, day resolved"),
+                    None,
+                ));
+            }
+            // Ended ≥ 72 h and the tombstone: the Province is not read
+            for pv in [Prov::Present, Prov::Absent, Prov::PreFunded] {
+                let e = with_province(&ended(&base, &w, 72 * 3_600), &pk, pv);
+                worst = worst.max(row(
+                    &e,
+                    &format!("Ended +72h, day open, Province {pv:?}"),
+                    None,
+                ));
+            }
+            for pv in [Prov::Absent, Prov::PreFunded] {
+                let t = with_province(&tombstone(&base, &w, f.region()), &pk, pv);
+                worst = worst.max(row(&t, &format!("tombstone, Province {pv:?}"), None));
+            }
+        }
+    }
+    println!("W6T-1 CloseArrivalDay worst: {worst} CU");
+}
+
+/// W6T-1: as [`g01_close_arrival_day_ended_paths`] for CloseArrivalSlot
+/// (landed at 6,496 of its `cu_limit` 6,500 before the end; 3,000 failed
+/// attempts in the drain): case (a) claimed, past the claim grace by THE
+/// anchor (read) or by an archived anchor (absent), within the grace
+/// (`TooEarly`, the anchor read), unsettled (`TooEarly`); case (b) Ended
+/// ≥ 72 h and the tombstone, with and without the anchor passed. Failing
+/// first against `cu_limit` 6,500 (Ended, past the grace, `rent_to` funded:
+/// 6,538 CU; Running: 6,496 CU, as w6-s7 logged).
+#[test]
+fn g01_close_arrival_slot_ended_paths() {
+    let mut worst = 0u64;
+    for build in [Build::Release, Build::TestBeacon] {
+        let (mut c, w) = world_on(build);
+        let f = resolved_fill(&mut c, &w, 48, 7, 5);
+        let (p, q) = (f.p as i16, f.q as i16);
+        let (fa, i) = (f.arrivals[0].0, f.arrivals[0].1);
+        let sk = w.a.arrival_slot(f.p, f.q, B, fa, i);
+        let region = f.region();
+        let close = w.close_of(&c, B, region);
+        for (base, rent_to, rlabel) in rent_targets(&c, &sk, AS::RENT_TO, &w) {
+            let ix = |anchor: bool| {
+                cix::close_arrival_slot(&w.a, w.keeper.pubkey(), p, q, B, fa, i, rent_to, anchor)
+            };
+            let (with_a, without_a) = (ix(true), ix(false));
+            let row = |ch: &Chain, path: &str, ix: &Instruction, want| {
+                close_row(ch, &w, &format!("{build:?} {path}, {rlabel}"), ix, want)
+            };
+            let mut settled = base.fork();
+            settled.edit(&sk, |d| d[AS::FLAGS] |= AS::FLAG_SETTLED);
+            let mut claimed = settled.fork();
+            claimed.edit(&sk, |d| d[AS::CLAIMED] = 1);
+            let mut past = settled.fork();
+            past.set_time(close + 6 * 600);
+            let mut archived = settled.fork();
+            archived.remove(&w.a.anchor(B, region));
+            // Running
+            worst = worst.max(row(&base, "Running, unsettled", &with_a, Some(E::TooEarly)));
+            worst = worst.max(row(
+                &settled,
+                "Running, settled within the grace",
+                &with_a,
+                Some(E::TooEarly),
+            ));
+            worst = worst.max(row(&claimed, "Running, claimed", &without_a, None));
+            worst = worst.max(row(
+                &past,
+                "Running, past the grace (anchor read)",
+                &with_a,
+                None,
+            ));
+            worst = worst.max(row(&archived, "Running, anchor archived", &with_a, None));
+            // Ended < 72 h: case (a) only
+            for after in [0, 71 * 3_600] {
+                let path = format!("Ended +{}h", after / 3_600);
+                worst = worst.max(row(
+                    &ended(&base, &w, after),
+                    &format!("{path}, unsettled"),
+                    &with_a,
+                    Some(E::TooEarly),
+                ));
+                worst = worst.max(row(
+                    &ended(&claimed, &w, after),
+                    &format!("{path}, claimed"),
+                    &without_a,
+                    None,
+                ));
+                worst = worst.max(row(
+                    &ended(&settled, &w, after),
+                    &format!("{path}, past the grace (anchor read)"),
+                    &with_a,
+                    None,
+                ));
+                worst = worst.max(row(
+                    &ended(&archived, &w, after),
+                    &format!("{path}, anchor archived"),
+                    &with_a,
+                    None,
+                ));
+            }
+            // Ended ≥ 72 h and the tombstone: case (b), the anchor not read
+            let e72 = ended(&base, &w, 72 * 3_600);
+            worst = worst.max(row(
+                &e72,
+                "Ended +72h, unsettled, anchor passed",
+                &with_a,
+                None,
+            ));
+            worst = worst.max(row(
+                &e72,
+                "Ended +72h, unsettled, no anchor",
+                &without_a,
+                None,
+            ));
+            let t = tombstone(&base, &w, region);
+            worst = worst.max(row(&t, "tombstone, anchor passed (gone)", &with_a, None));
+            worst = worst.max(row(&t, "tombstone, no anchor", &without_a, None));
+        }
+    }
+    println!("W6T-1 CloseArrivalSlot worst: {worst} CU");
 }
