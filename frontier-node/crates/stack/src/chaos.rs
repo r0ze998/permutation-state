@@ -87,6 +87,35 @@ pub fn plan(
     out
 }
 
+/// Forced kills (`--chaos-force component:hours`, W6T-4): each at
+/// `genesis_ts + (viewer_start_hours + hours) × 3,600`, restarted after the
+/// chaos restart maximum (the worst case the viewers' recovery budget must
+/// cover). Sorted by time.
+pub fn forced(
+    genesis_ts: i64,
+    viewer_start_hours: f64,
+    force: &[(String, f64)],
+    restart_max_secs: f64,
+) -> Vec<Kill> {
+    let mut out: Vec<Kill> = force
+        .iter()
+        .map(|(c, h)| Kill {
+            at: genesis_ts + ((viewer_start_hours + h) * 3_600.0).round() as i64,
+            component: c.clone(),
+            restart_after: restart_max_secs,
+        })
+        .collect();
+    out.sort_by_key(|k| k.at);
+    out
+}
+
+/// The plan with the forced kills merged in (sorted by time).
+pub fn merge(mut kills: Vec<Kill>, forced: Vec<Kill>) -> Vec<Kill> {
+    kills.extend(forced);
+    kills.sort_by_key(|k| k.at);
+    kills
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,6 +144,39 @@ mod tests {
             comps.len() >= 5,
             "kills spread over the components: {comps:?}"
         );
+    }
+
+    /// W6T-4: `--chaos-force herald:2 --chaos-force herald:7` puts two
+    /// herald kills 2 and 7 game hours into the viewer window, restarted
+    /// after the chaos maximum, merged in time order with the random plan.
+    #[test]
+    fn forced_herald_kills_fall_in_the_viewer_window() {
+        let g = 1_000_000;
+        let f = forced(
+            g,
+            1.0,
+            &[("herald".into(), 7.0), ("herald".into(), 2.0)],
+            60.0,
+        );
+        assert_eq!(
+            f,
+            vec![
+                Kill {
+                    at: g + 3 * 3_600,
+                    component: "herald".into(),
+                    restart_after: 60.0
+                },
+                Kill {
+                    at: g + 8 * 3_600,
+                    component: "herald".into(),
+                    restart_after: 60.0
+                },
+            ]
+        );
+        let p = plan(1, g, g + 86_400, 2.0, 6.0, 60.0, &t());
+        let m = merge(p.clone(), f);
+        assert_eq!(m.len(), p.len() + 2);
+        assert!(m.windows(2).all(|w| w[0].at <= w[1].at));
     }
 
     #[test]

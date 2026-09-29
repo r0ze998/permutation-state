@@ -186,6 +186,32 @@ pub fn archive_range(dir: &Path) -> Result<ArchiveRange, String> {
     })
 }
 
+/// When the archive must still have rounds: the end of the drain after the
+/// run's actual play end, plus an hour.
+pub fn archive_until(genesis_ts: i64, play_end: i64, drain_bells: u32, bell_secs: i64) -> i64 {
+    let _ = genesis_ts; // play_end already counts from the actual genesis
+    play_end + drain_bells as i64 * bell_secs + 3_600
+}
+
+/// The archive guard after CreateSeason (W6T-4): the archive is checked
+/// again against the season's actual `genesis_ts` (the pre-check only
+/// knows the planned `g0 + LEAD_SECS`), so a setup that overran fails
+/// before the play starts instead of starving the drain of rounds.
+pub fn archive_guard(
+    dir: &Path,
+    g0: i64,
+    genesis_ts: i64,
+    play_end: i64,
+    drain_bells: u32,
+    bell_secs: i64,
+) -> Result<ArchiveRange, Refusal> {
+    check_archive(
+        dir,
+        g0,
+        archive_until(genesis_ts, play_end, drain_bells, bell_secs),
+    )
+}
+
 pub struct Keys {
     pub authority: Keypair,
     pub keeper_a_seed: [u8; 32],
@@ -275,7 +301,26 @@ pub fn keeper_core_roles() -> Vec<&'static str> {
     ]
 }
 
-/// `keeper.toml` for keeper `which` ('a' or 'b').
+/// Whether a `frontier-keeper` binary knows a `keeper.toml` key (its
+/// parser refuses unknown keys, so a key newer than the build would stop
+/// the keeper): the key's name appears in the binary as a string.
+pub fn keeper_accepts(bin: &Path, key: &str) -> bool {
+    std::fs::read(bin)
+        .map(|b| {
+            let k = key.as_bytes();
+            b.windows(k.len()).any(|w| w == k)
+        })
+        .unwrap_or(false)
+}
+
+/// Keeper B's `backup_delay_slots` (W6T-4, plan U2.8): the configured
+/// value when the keeper build knows the key, else `None` (not written).
+pub fn backup_delay_for(which: char, cfg: &StackConfig, keeper_knows: bool) -> Option<u32> {
+    (which == 'b' && keeper_knows).then_some(cfg.keeper_b_backup_delay_slots)
+}
+
+/// `keeper.toml` for keeper `which` ('a' or 'b'); `backup_delay` adds
+/// `backup_delay_slots` (keeper B, W6T-4).
 #[allow(clippy::too_many_arguments)]
 pub fn keeper_toml(
     which: char,
@@ -284,6 +329,7 @@ pub fn keeper_toml(
     program: &Address,
     beneficiary: &Address,
     dir: &Path,
+    backup_delay: Option<u32>,
 ) -> String {
     let roles: Vec<String> = keeper_roles(which)
         .iter()
@@ -321,7 +367,9 @@ pub fn keeper_toml(
         f = cfg.funders,
         d = dir.display(),
         jitter = if which == 'a' { 0 } else { 2 },
-    )
+    ) + &backup_delay
+        .map(|d| format!("backup_delay_slots = {d}\n"))
+        .unwrap_or_default()
 }
 
 pub struct Stack {
@@ -879,7 +927,14 @@ async fn run_all(st: &mut Stack) -> Result<(), String> {
             st.keys.keeper_b_beneficiary.pubkey()
         };
         let dir = st.run.path(&format!("keeper-{w}"));
-        let t = keeper_toml(w, &st.cfg, &st.ports, &st.program, &ben, &dir);
+        let knows = keeper_accepts(&st.bin.join("frontier-keeper"), "backup_delay_slots");
+        let delay = backup_delay_for(w, &st.cfg, knows);
+        st.state["keepers"][w.to_string()]["backup_delay_slots"] = json!(delay);
+        if w == 'b' && !knows {
+            st.state["keepers"]["b"]["backup_delay_note"] =
+                json!("this frontier-keeper does not know backup_delay_slots (pre-W6T-2 build): not written");
+        }
+        let t = keeper_toml(w, &st.cfg, &st.ports, &st.program, &ben, &dir, delay);
         std::fs::write(dir.join("keeper.toml"), t).map_err(|e| e.to_string())?;
     }
     let specs: BTreeMap<String, Spec> = st
@@ -914,6 +969,7 @@ async fn run_all(st: &mut Stack) -> Result<(), String> {
         &st.addrs,
         &st.keys.authority,
         st.cfg.beacon,
+        st.cfg.season_end_bell(),
         st.cfg.preseason_scale,
         st.cfg.scale,
         &logf,
@@ -927,6 +983,35 @@ async fn run_all(st: &mut Stack) -> Result<(), String> {
     let end = play_end + st.cfg.drain_bells as i64 * bell_secs;
     st.state["play"] = json!({"genesis_ts": genesis_ts, "play_end": play_end, "end": end,
         "play_bells": (play_end - genesis_ts) / bell_secs, "drain_bells": st.cfg.drain_bells});
+    // W6T-4: the archive against the actual genesis (setup may overrun the
+    // planned LEAD_SECS: w6-s7 by 1,452 s), before anything else starts.
+    if st.cfg.beacon == Beacon::Archive {
+        let dir = run::resolve(
+            &st.repo,
+            st.cfg.archive_dir.as_deref().unwrap_or(Path::new("")),
+        );
+        let guard = archive_guard(
+            &dir,
+            st.cfg.g0,
+            genesis_ts,
+            play_end,
+            st.cfg.drain_bells,
+            bell_secs,
+        );
+        let until = archive_until(genesis_ts, play_end, st.cfg.drain_bells, bell_secs);
+        match guard {
+            Ok(r) => {
+                st.state["archive_guard"] = json!({"ok": true, "until": until, "last_round": r.last,
+                    "last_time": r.last_time, "spare_secs": r.last_time - until,
+                    "setup_overrun_secs": genesis_ts - (st.cfg.g0 + setup::LEAD_SECS)});
+                st.run
+                    .event(None, "archive-guard", st.state["archive_guard"].clone());
+            }
+            Err(Refusal::Bad(m) | Refusal::PendingFetch(m) | Refusal::PendingOwner(m)) => {
+                return Err(format!("archive guard after CreateSeason: {m}"));
+            }
+        }
+    }
     log_line(&format!(
         "season {} created (genesis {genesis_ts}); play until {play_end}, drain until {end}",
         st.cfg.season_id
@@ -1018,7 +1103,7 @@ async fn supervise(
         })
         .map(|s| s.to_string())
         .collect();
-    let mut kills: Vec<chaos::Kill> = if st.cfg.chaos {
+    let kills: Vec<chaos::Kill> = if st.cfg.chaos {
         chaos::plan(
             st.cfg.chaos_seed,
             genesis_ts,
@@ -1031,6 +1116,16 @@ async fn supervise(
     } else {
         vec![]
     };
+    // W6T-4: forced kills (`--chaos-force herald:<h>`) inside the viewer
+    // window, applied with or without `--chaos`.
+    let forced = chaos::forced(
+        genesis_ts,
+        st.cfg.viewer_start_hours,
+        &st.cfg.chaos_force,
+        st.cfg.chaos_restart_max_secs,
+    );
+    st.state["chaos_forced"] = json!(forced.iter().map(|k| k.to_json()).collect::<Vec<_>>());
+    let mut kills = chaos::merge(kills, forced);
     st.state["chaos_plan"] = json!(kills.iter().map(|k| k.to_json()).collect::<Vec<_>>());
     let mut holds: Vec<HoldState> = if st.cfg.adversary {
         adversary::plan(genesis_ts, play_end)
@@ -1066,7 +1161,8 @@ async fn supervise(
     let mut viewers_started = false;
     // Wave-5 review: the in-run viewer window is judged — the fold lag is
     // sampled once a second while it runs, as `load` does.
-    let mut inrun_lags: Vec<f64> = vec![];
+    let mut inrun_samples: Vec<crate::load::Sample> = vec![];
+    let mut inrun_window: Option<(u64, u64)> = None;
     let mut inrun_judged = false;
     let mut last_lag = Instant::now();
     let mut crashes = 0u32;
@@ -1208,6 +1304,13 @@ async fn supervise(
             let want_claims = holds
                 .iter()
                 .any(|h| !h.done && now >= h.plan.at && h.plan.kind == "defence-pool");
+            // W6T-4: the lag hold reads the transits in flight.
+            let want_lag = holds
+                .iter()
+                .any(|h| !h.done && now >= h.plan.at && h.plan.kind == "lag");
+            let want_slots = holds.iter().any(|h| {
+                !h.done && now >= h.plan.at && matches!(h.plan.kind, "slots-below" | "slots-above")
+            });
             for h in holds.iter_mut().filter(|h| !h.done && now >= h.plan.at) {
                 if provinces.is_none() {
                     provinces = Some(
@@ -1246,7 +1349,22 @@ async fn supervise(
                         }
                         _ => (None, vec![]),
                     };
+                    let in_flight = if want_lag {
+                        adversary::probe_in_flight(&st.chain, &st.program, st.cfg.season_id).await
+                    } else {
+                        vec![]
+                    };
+                    // W6T-4: where the fleet's sealed marches land next bell
+                    // (only while a slot hold waits).
+                    let planned_next = if want_slots {
+                        adversary::planned_arrivals(&st.run.path("bots"), bell_now + 1)
+                    } else {
+                        vec![]
+                    };
                     pending = Some(adversary::Pending {
+                        planned_next,
+                        held: vec![],
+                        in_flight,
                         arrivals_today: ps
                             .iter()
                             .zip(there.iter())
@@ -1284,6 +1402,17 @@ async fn supervise(
                             "detail": detail, "result": r.as_ref().ok(), "error": r.as_ref().err(),
                         }));
                         h.done = true;
+                        // W6T-4: the other slot hold of this probe takes
+                        // another province.
+                        if let (Some(pd), Some(p), Some(q)) = (
+                            pending.as_mut(),
+                            detail["province"][0].as_i64(),
+                            detail["province"][1].as_i64(),
+                        ) {
+                            if h.plan.kind.starts_with("slots-") {
+                                pd.held.push((p as i16, q as i16));
+                            }
+                        }
                     }
                     None if now > h.plan.deadline => {
                         st.run.event(
@@ -1310,18 +1439,39 @@ async fn supervise(
         {
             viewers_started = true;
             let game = (st.cfg.viewer_window_hours * 3_600.0).min((play_end - now).max(60) as f64);
+            // W6T-4: the recovery budget, the think time, the live bell,
+            // the opened provinces and every ring.
+            let ps = st
+                .chain
+                .provinces(&st.program, st.cfg.season_id)
+                .await
+                .unwrap_or_default();
+            let plan = crate::load::viewer_plan(
+                st.cfg.viewer_retry_budget_ms(),
+                st.cfg.viewer_think_ms,
+                st.cfg.viewer_follow_status,
+                st.ports.herald,
+                &ps,
+            );
+            let spawn_ms = run::wall_ms();
             match crate::load::spawn_viewers(
                 st,
                 st.cfg.viewers,
                 game / scale,
                 bell.max(0) as u32,
                 "in-run",
+                &plan,
             ) {
                 Ok(c) => {
+                    inrun_window = Some((
+                        spawn_ms,
+                        spawn_ms + ((game / scale).ceil().max(1.0) as u64) * 1_000,
+                    ));
                     st.run.event(
                         Some(now),
                         "viewers",
-                        json!({"viewers": st.cfg.viewers, "game_secs": game, "pid": c.id()}),
+                        json!({"viewers": st.cfg.viewers, "game_secs": game, "pid": c.id(),
+                               "plan": crate::load::plan_json(&plan)}),
                     );
                     viewers = Some(c);
                 }
@@ -1330,9 +1480,13 @@ async fn supervise(
         }
         if viewers.is_some() && last_lag.elapsed() >= Duration::from_secs(1) {
             last_lag = Instant::now();
-            if let Some(l) = crate::load::fold_lag(&st.chain, &st.program, st.ports.herald).await {
-                inrun_lags.push(l);
-            }
+            // W6T-4: the herald's open WS count and the generator's
+            // counters with the fold lag, once a second (criterion 6's WS
+            // coverage and the recovery checks).
+            let smp =
+                crate::load::probe(st.ports.herald, st.ports.viewers, &st.chain, &st.program).await;
+            append(&st.run.path("load/in-run.samples.jsonl"), &smp.to_json());
+            inrun_samples.push(smp);
         }
         if let Some(c) = viewers.as_mut() {
             if let Ok(Some(s)) = c.try_wait() {
@@ -1341,7 +1495,7 @@ async fn supervise(
                 viewers = None;
                 if !inrun_judged {
                     inrun_judged = true;
-                    judge_in_run(st, &inrun_lags, now, s.code());
+                    judge_in_run(st, &inrun_samples, inrun_window, now, s.code());
                 }
             }
         }
@@ -1434,7 +1588,7 @@ async fn supervise(
             if let Some(mut c) = viewers.take() {
                 let code = c.wait().ok().and_then(|s| s.code());
                 if !inrun_judged {
-                    judge_in_run(st, &inrun_lags, now, code);
+                    judge_in_run(st, &inrun_samples, inrun_window, now, code);
                 }
             }
             if let Some(t) = end_season_task.take() {
@@ -1501,12 +1655,29 @@ async fn end_season_until_done(
 /// The in-run viewer window's verdict (§13.4 criterion 6): the generator's
 /// `load/in-run.json` judged with the fold lag sampled meanwhile, written
 /// to `load/in-run.verdict.json` (the report's criterion-6 evidence).
-fn judge_in_run(st: &Stack, lags: &[f64], now: i64, exit: Option<i32>) {
+fn judge_in_run(
+    st: &Stack,
+    samples: &[crate::load::Sample],
+    window: Option<(u64, u64)>,
+    now: i64,
+    exit: Option<i32>,
+) {
     let rep: Value = std::fs::read_to_string(st.run.path("load/in-run.json"))
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or(Value::Null);
-    let verdict = crate::load::judge(&rep, lags);
+    let lags: Vec<f64> = samples.iter().filter_map(|s| s.lag_s).collect();
+    let cov = crate::load::Coverage {
+        ws_viewers: (st.cfg.viewers / 5) as u64,
+        samples: samples.to_vec(),
+        outages: crate::load::outage_windows(
+            &st.run.events(),
+            st.cfg.viewer_retry_budget_ms(),
+            st.cfg.viewer_think_ms,
+        ),
+        window,
+    };
+    let verdict = crate::load::judge(&rep, &lags, Some(&cov));
     let out = json!({"tag": "in-run", "window": "in-run", "criterion6_evidence": true,
         "viewers": st.cfg.viewers, "game_hours": st.cfg.viewer_window_hours, "scale": st.cfg.scale,
         "exit": exit, "generator": rep, "verdict": verdict});
@@ -1530,19 +1701,43 @@ async fn sample(st: &Stack, s: chain::Status, bell: i64) {
         }
         let url = format!("http://127.0.0.1:{port}/v1/status");
         let auth = format!("Bearer {tok}");
-        if let Ok(Ok(r)) = tokio::time::timeout(
+        // W6T-4: an unanswered sample is written too (`status` null with
+        // the reason), so the report counts keeper-status timeouts.
+        let t0 = Instant::now();
+        let got = tokio::time::timeout(
             Duration::from_secs(5),
             fclient::http::get_with_headers(&url, &[("authorization", &auth)]),
         )
-        .await
-        {
-            if r.status == 200 {
-                if let Ok(v) = serde_json::from_slice::<Value>(&r.body) {
-                    let line = json!({"bell": bell, "slot": s.slot, "game": s.now, "status": v});
-                    append(&st.run.path(&format!("metrics/keeper-{w}.jsonl")), &line);
+        .await;
+        let ms = t0.elapsed().as_millis() as u64;
+        let line = match got {
+            Ok(Ok(r)) if r.status == 200 => match serde_json::from_slice::<Value>(&r.body) {
+                Ok(v) => {
+                    json!({"bell": bell, "slot": s.slot, "game": s.now, "ms": ms, "status": v})
                 }
+                Err(e) => {
+                    json!({"bell": bell, "slot": s.slot, "game": s.now, "ms": ms, "status": null, "error": format!("body: {e}")})
+                }
+            },
+            Ok(Ok(r)) => {
+                json!({"bell": bell, "slot": s.slot, "game": s.now, "ms": ms, "status": null, "error": format!("http {}", r.status)})
             }
-        }
+            Ok(Err(e)) => {
+                json!({"bell": bell, "slot": s.slot, "game": s.now, "ms": ms, "status": null, "error": e.to_string()})
+            }
+            Err(_) => {
+                json!({"bell": bell, "slot": s.slot, "game": s.now, "ms": ms, "status": null, "error": "timeout 5 s"})
+            }
+        };
+        append(&st.run.path(&format!("metrics/keeper-{w}.jsonl")), &line);
+    }
+    // W6T-4: the machine's load average once a bell (the machine is shared;
+    // every latency figure is read next to it).
+    if let Some((l1, l5, l15)) = loadavg() {
+        append(
+            &st.run.path("metrics/loadavg.jsonl"),
+            &json!({"bell": bell, "slot": s.slot, "game": s.now, "wall_ms": run::wall_ms(), "load1": l1, "load5": l5, "load15": l15}),
+        );
     }
     let url = format!("{}/h/status", st.ports.herald_url());
     let newest = st
@@ -1566,6 +1761,29 @@ async fn sample(st: &Stack, s: chain::Status, bell: i64) {
             );
         }
     }
+}
+
+/// The 1-, 5- and 15-minute load averages (`/proc/loadavg`, else `sysctl
+/// -n vm.loadavg` on macOS).
+pub fn loadavg() -> Option<(f64, f64, f64)> {
+    let text = std::fs::read_to_string("/proc/loadavg").ok().or_else(|| {
+        std::process::Command::new("sysctl")
+            .args(["-n", "vm.loadavg"])
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+    })?;
+    parse_loadavg(&text)
+}
+
+/// `{ 3.17 3.34 3.80 }` (macOS) or `3.17 3.34 3.80 2/512 1234` (Linux).
+pub fn parse_loadavg(text: &str) -> Option<(f64, f64, f64)> {
+    let v: Vec<f64> = text
+        .split_whitespace()
+        .filter_map(|w| w.parse::<f64>().ok())
+        .take(3)
+        .collect();
+    (v.len() == 3).then(|| (v[0], v[1], v[2]))
 }
 
 pub fn append(p: &Path, v: &Value) {
@@ -1741,7 +1959,15 @@ mod tests {
         let p = cfg.ports().unwrap();
         let ben = Address::new_from_array([3; 32]);
         for w in ['a', 'b'] {
-            let t = keeper_toml(w, &cfg, &p, &program_id("x"), &ben, Path::new("/tmp/k"));
+            let t = keeper_toml(
+                w,
+                &cfg,
+                &p,
+                &program_id("x"),
+                &ben,
+                Path::new("/tmp/k"),
+                None,
+            );
             let k = keeper_core::config::KeeperConfig::from_toml(&t)
                 .unwrap_or_else(|e| panic!("{e}\n{t}"));
             assert_eq!(k.program, program_id("x"));
@@ -1759,6 +1985,112 @@ mod tests {
             assert_eq!(k.race_jitter_slots, if w == 'a' { 0 } else { 2 });
             assert!(!k.dev, "the contract's pool minimums");
         }
+    }
+
+    /// W6T-4 (plan U2.8/U4.6): keeper B gets `backup_delay_slots = 8`
+    /// when its build knows the key (keeper A never); the keeper's own
+    /// parser reads it once the W6T-2 keeper is in the tree.
+    #[test]
+    fn keeper_b_gets_backup_delay_slots() {
+        let cfg = StackConfig::default();
+        assert_eq!(cfg.keeper_b_backup_delay_slots, 8);
+        assert_eq!(backup_delay_for('b', &cfg, true), Some(8));
+        assert_eq!(backup_delay_for('a', &cfg, true), None);
+        assert_eq!(
+            backup_delay_for('b', &cfg, false),
+            None,
+            "an older keeper would refuse it"
+        );
+        let p = cfg.ports().unwrap();
+        let ben = Address::new_from_array([3; 32]);
+        let t = keeper_toml(
+            'b',
+            &cfg,
+            &p,
+            &program_id("x"),
+            &ben,
+            Path::new("/tmp/k"),
+            Some(8),
+        );
+        assert!(
+            t.lines().any(|l| l.trim() == "backup_delay_slots = 8"),
+            "{t}"
+        );
+        let a = keeper_toml(
+            'a',
+            &cfg,
+            &p,
+            &program_id("x"),
+            &ben,
+            Path::new("/tmp/k"),
+            None,
+        );
+        assert!(!a.contains("backup_delay_slots"), "{a}");
+        // The keeper source of this tree decides whether its parser is
+        // asked to read the key.
+        let keeper_knows =
+            include_str!("../../keeper/src/config.rs").contains("\"backup_delay_slots\"");
+        if keeper_knows {
+            let k = keeper_core::config::KeeperConfig::from_toml(&t)
+                .unwrap_or_else(|e| panic!("{e}\n{t}"));
+            assert_eq!(
+                k.roles,
+                keeper_roles('b')
+                    .iter()
+                    .map(|r| r.to_string())
+                    .collect::<Vec<_>>()
+            );
+        }
+        // The binary probe.
+        let d = std::env::temp_dir().join(format!("psf-keeper-bin-{}", run::wall_ms()));
+        std::fs::write(&d, b"\x7fELF..race_jitter_slots..backup_delay_slots..").unwrap();
+        assert!(keeper_accepts(&d, "backup_delay_slots"));
+        std::fs::write(&d, b"\x7fELF..race_jitter_slots..").unwrap();
+        assert!(!keeper_accepts(&d, "backup_delay_slots"));
+        assert!(!keeper_accepts(
+            Path::new("/nonexistent/frontier-keeper"),
+            "backup_delay_slots"
+        ));
+        let _ = std::fs::remove_file(&d);
+    }
+
+    /// W6T-4: after CreateSeason the archive is re-checked against the
+    /// actual genesis (w6-s7's setup overran `LEAD_SECS` by 1,452 s), not
+    /// only the planned one.
+    #[test]
+    fn archive_guard_uses_actual_genesis() {
+        let d = std::env::temp_dir().join(format!("psf-arch-guard-{}", run::wall_ms()));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(
+            d.join("info.json"),
+            r#"{"genesis_time": 1692803367, "period": 3}"#,
+        )
+        .unwrap();
+        let g0: i64 = 1_788_998_400;
+        // The planned need of a one-day run with a 26-bell drain, exactly.
+        let planned_genesis = g0 + setup::LEAD_SECS;
+        let need = planned_genesis + 86_400 + 26 * 600 + 3_600;
+        let first = 32_065_012u64;
+        let count = ((need - g0) / 3 + 1) as u64;
+        std::fs::write(
+            d.join("manifest.json"),
+            format!(r#"{{"segments": [{{"file": "r.bin", "first": {first}, "count": {count}}}]}}"#),
+        )
+        .unwrap();
+        assert!(check_archive(&d, g0, need).is_ok(), "the pre-check passes");
+        // As planned: fine.
+        assert!(archive_guard(&d, g0, planned_genesis, planned_genesis + 86_400, 26, 600).is_ok());
+        // Setup overran by 1,452 s: the rounds the drain needs are missing.
+        let late = planned_genesis + 1_452;
+        match archive_guard(&d, g0, late, late + 86_400, 26, 600) {
+            Err(Refusal::Bad(m)) => assert!(m.contains("before the run needs"), "{m}"),
+            other => panic!("the guard must refuse: {:?}", other.map(|r| r.last)),
+        }
+        assert_eq!(
+            archive_until(late, late + 86_400, 26, 600),
+            late + 86_400 + 15_600 + 3_600
+        );
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

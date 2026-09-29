@@ -20,15 +20,25 @@
 //! defence claim (a late Reveal's refund inside its grace:
 //! `fclient::play::open_claim`, the keeper's own rule) whose grace outlasts
 //! the hold by a bell, so claims wait and none is lost. Both are armed over
-//! the whole play window like the ticket hold.
+//! the whole play window like the ticket hold. W6T-4: `slots-below` and
+//! `lag` are armed to the end of play as well (w6-s7 skipped both after
+//! their one-hour deadline, and `defence-pool` for want of the claim a
+//! below-cap slot hold creates): `slots-below` from the first hour (by 60%
+//! of play at the latest), `lag` on the origin of a transit in flight (a
+//! Holding transit in state 1-2; a Province entry in state 3 lasts only
+//! until its SettleDeparture). `slots-above` is armed to the end of play
+//! too, and both slot holds aim at a province the fleet sealed marches to
+//! for the held bell (the bots' marchbooks; a seal hides the destination on
+//! chain), falling back to a province with arrivals today. A
+//! `hold-skipped` hold makes the run not exit-grade (report row E).
 //!
 //! | kind | keys | price (milli) | length | expected |
 //! |---|---|---|---|---|
-//! | `slots-below` | one province-bell's ArrivalSlots + ArrivalDay | 1,500 (< P_def 2.0) | through the close | reveals land (keepers escalate past it) |
+//! | `slots-below` | one province-bell's ArrivalSlots + ArrivalDay (armed over play) | 1,500 (< P_def 2.0) | through the close | reveals land (keepers escalate past it; a late one opens a claim) |
 //! | `slots-above` | the same, another bell | 3,000 (> P_def) | through the close | reveals wait; late ones routed and flagged |
 //! | `anchor` | one region's next BellAnchor | 1,000 (> P_delay 0.5) | ⅓ bell | the window stays open longer (delay only) |
 //! | `keeper-payers` | 20 of keeper A's reveal payers | 3,000 | 1 bell | the keeper draws other payers (effective N ≥ 150 − 20) |
-//! | `lag` | an origin Province + its region's next anchor | 1,000 | 2 bells | the destination's result is unchanged (G7 in play) |
+//! | `lag` | the origin Province of transits in flight + its region's next anchor (armed over play) | 1,000 | 2 bells | the destination's result is unchanged (G7 in play) |
 //! | `ticket` | a Province with an open ticket cohort | 1,000 | 2 bells | finality waits for the cohort; the higher score still wins |
 //! | `frontier-fund` | Frontier + the ProvinceFund of the wedge a ring opening draws on (during the opening) | 1,000 | 1 bell | ring openings and folds wait (delay) |
 //! | `defence-pool` | the DefencePool, while a defence claim is open (≥ 4 bells of its grace left) | 1,000 | 3 bells (half the claim grace) | claims and sweeps wait; none lost inside the grace |
@@ -88,11 +98,21 @@ pub fn plan(start: i64, end: i64) -> Vec<Planned> {
             // is armed from the first bell and fires at the first open
             // cohort it sees. W6-C: the ring-opening and claim-grace holds
             // are armed likewise (from the first hour) and fire when their
-            // situation arises.
-            let armed = matches!(*k, "ticket" | "frontier-fund" | "defence-pool");
+            // situation arises. W6T-4: `slots-below` and `lag` are armed to
+            // the end of play too (w6-s7 skipped both after one game hour
+            // with nothing pending), and `slots-below` starts by 60% of play
+            // so the escalation past it can open a claim `defence-pool`
+            // holds. `slots-above` needs arrivals as well and is armed the
+            // same way (the U4 R3 run skipped it after its one hour, bell 16:
+            // the 300-bot fleet's first arrivals came at bell 76).
+            let armed = matches!(
+                *k,
+                "ticket" | "frontier-fund" | "defence-pool" | "slots-below" | "slots-above" | "lag"
+            );
             let at = match *k {
                 "ticket" => start + 600,
                 "frontier-fund" | "defence-pool" => start + 3_600,
+                "slots-below" => start + 3_600.min((end - start) * 6 / 10),
                 _ => start + 3_600 + span * i as i64 / n,
             };
             let deadline = if armed { end } else { at + 3_600 };
@@ -188,6 +208,88 @@ pub struct Pending {
     pub ring_opening: Option<fclient::land::RingOpening>,
     /// Open defence claims: `(ArrivalSlot, grace end)` (W6-C).
     pub open_claims: Vec<(Address, i64)>,
+    /// Transits in flight (W6T-4): each Holding transit in state 1 (DEPART
+    /// seen) or 2 (departure settled), not yet settled at its destination.
+    pub in_flight: Vec<InFlight>,
+    /// Marches the fleet sealed to arrive at the next bell, by destination
+    /// (W6T-4, from the bots' marchbooks: a seal hides the destination on
+    /// chain, so only the harness knows where a Reveal will land):
+    /// `((P, Q), count)`, most first.
+    pub planned_next: Vec<((i16, i16), usize)>,
+    /// Provinces a slot hold of this probe already holds (W6T-4: the other
+    /// slot hold takes another one, so a 3.0 hold never masks the 1.5 one).
+    pub held: Vec<(i16, i16)>,
+}
+
+/// The marches sealed to arrive at `bell` whose Depart the fleet sent, by
+/// destination, most first (W6T-4): a march `(host, depart_bell)` of an
+/// `ev: "sealed"` line counts once, and only with a `sent` line and no
+/// `failed` line (the U4 R5 run's first planned province had only failed
+/// Departs, so its slots were held for nothing).
+pub fn planned_from_marchbook(text: &str, bell: u32) -> Vec<((i16, i16), usize)> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let mut sealed: BTreeMap<(String, u64), (i16, i16)> = BTreeMap::new();
+    type March = (String, u64);
+    let mut sent: BTreeSet<March> = BTreeSet::new();
+    let mut failed: BTreeSet<March> = BTreeSet::new();
+    for l in text.lines() {
+        let Ok(v) = serde_json::from_str::<Value>(l) else {
+            continue;
+        };
+        let (Some(h), Some(d)) = (v["host"].as_str(), v["depart_bell"].as_u64()) else {
+            continue;
+        };
+        let key = (h.to_string(), d);
+        match v["ev"].as_str() {
+            Some("sealed") if v["arrive_bell"].as_u64() == Some(bell as u64) => {
+                if let (Some(p), Some(q)) = (v["dest"][0].as_i64(), v["dest"][1].as_i64()) {
+                    sealed.insert(key, (p as i16, q as i16));
+                }
+            }
+            Some("sent") => {
+                sent.insert(key);
+            }
+            Some("failed") => {
+                failed.insert(key);
+            }
+            _ => {}
+        }
+    }
+    let mut n: BTreeMap<(i16, i16), usize> = BTreeMap::new();
+    for (k, d) in &sealed {
+        if sent.contains(k) && !failed.contains(k) {
+            *n.entry(*d).or_default() += 1;
+        }
+    }
+    let mut v: Vec<((i16, i16), usize)> = n.into_iter().collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    v
+}
+
+/// [`planned_from_marchbook`] over every `marchbook-*.jsonl` of a bots
+/// directory.
+pub fn planned_arrivals(bots_dir: &std::path::Path, bell: u32) -> Vec<((i16, i16), usize)> {
+    let mut text = String::new();
+    if let Ok(rd) = std::fs::read_dir(bots_dir) {
+        for e in rd.flatten() {
+            let n = e.file_name().to_string_lossy().into_owned();
+            if n.starts_with("marchbook-") && n.ends_with(".jsonl") {
+                if let Ok(t) = std::fs::read_to_string(e.path()) {
+                    text.push_str(&t);
+                    text.push('\n');
+                }
+            }
+        }
+    }
+    planned_from_marchbook(&text, bell)
+}
+
+/// One transit in flight (a Holding's transit record in state 1 or 2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InFlight {
+    pub origin: (i16, i16),
+    pub arrive_bell: u32,
+    pub state: u8,
 }
 
 /// Length of the `defence-pool` hold, game seconds (half the claim grace).
@@ -276,12 +378,72 @@ pub async fn probe_land_and_claims(
     (ring, claims)
 }
 
+/// The transits in flight of the season (W6T-4, only while a `lag` hold
+/// waits): every Holding's transit records in state 1 or 2.
+pub async fn probe_in_flight(
+    chain: &crate::chain::Chain,
+    program: &Address,
+    season_id: u64,
+) -> Vec<InFlight> {
+    let v = chain
+        .call(
+            "getProgramAccounts",
+            json!([program.to_string(), {"encoding": "base64",
+                "filters": [{"dataSize": fclient::abi::size::HOLDING}]}]),
+        )
+        .await
+        .unwrap_or(Value::Null);
+    let rows = v
+        .as_array()
+        .or_else(|| v.get("value").and_then(|x| x.as_array()))
+        .cloned()
+        .unwrap_or_default();
+    let mut out = vec![];
+    for r in rows {
+        if let Ok(Some(acc)) = fclient::rpc::parse_account(&r["account"]) {
+            if acc.owner != *program {
+                continue;
+            }
+            if let Ok(h) = fclient::decode::Holding::decode(&acc.data) {
+                if h.h.season_id == season_id {
+                    out.extend(in_flight_of(&h.transit));
+                }
+            }
+        }
+    }
+    out
+}
+
 /// The origin of a march in flight: the Province with the most departed
 /// entries awaiting their settle (state 3).
 pub fn march_origin(ps: &[Province]) -> Option<&Province> {
     ps.iter()
         .filter(|p| p.entries.iter().any(|e| e.state == 3))
         .max_by_key(|p| p.entries.iter().filter(|e| e.state == 3).count())
+}
+
+/// The transits in flight among Holding transit records (state 1 or 2).
+pub fn in_flight_of(ts: &[fclient::decode::Transit]) -> Vec<InFlight> {
+    ts.iter()
+        .filter(|t| matches!(t.state, 1 | 2))
+        .map(|t| InFlight {
+            origin: (t.origin_p, t.origin_q),
+            arrive_bell: t.arrive_bell,
+            state: t.state,
+        })
+        .collect()
+}
+
+/// The origin Province with the most transits in flight (W6T-4; ties: the
+/// lower coordinates), among the opened Provinces.
+pub fn origin_in_flight<'a>(ps: &'a [Province], fl: &[InFlight]) -> Option<(&'a Province, usize)> {
+    let mut n: std::collections::BTreeMap<(i16, i16), usize> = std::collections::BTreeMap::new();
+    for f in fl {
+        *n.entry(f.origin).or_default() += 1;
+    }
+    n.iter()
+        .filter_map(|(o, c)| ps.iter().find(|p| (p.p, p.q) == *o).map(|p| (p, *c)))
+        .max_by_key(|(p, c)| (*c, -(p.p as i32), -(p.q as i32)))
 }
 
 /// [`keys_for`] against the chain's pending work.
@@ -299,15 +461,32 @@ pub fn keys_for_pending(
     let next = bell_now + 1;
     match kind {
         "slots-below" | "slots-above" => {
+            // W6T-4: a province the fleet sealed marches to for the next
+            // bell (its Reveals will need these slots), else the old guess.
+            let free = |pq: &(i16, i16)| !pending.held.contains(pq);
+            let planned = pending
+                .planned_next
+                .iter()
+                .filter(|(d, _)| free(d))
+                .find_map(|(d, n)| ps.iter().find(|p| (p.p, p.q) == *d).map(|p| (p, *n)));
+            if let Some((p, n)) = planned {
+                return Some((
+                    slot_keys(a, p, next, transit_slots),
+                    json!({"province": [p.p, p.q], "bell": next, "planned_arrivals": n,
+                        "why": "marches sealed to arrive there at this bell (bots' marchbook)"}),
+                ));
+            }
             let p = if pending.require {
                 let with: Vec<Province> = ps
                     .iter()
-                    .filter(|p| pending.arrivals_today.contains(&(p.p, p.q)))
+                    .filter(|p| pending.arrivals_today.contains(&(p.p, p.q)) && free(&(p.p, p.q)))
                     .cloned()
                     .collect();
                 busiest(&with).cloned()?
             } else {
-                busiest(ps)?.clone()
+                let with: Vec<Province> =
+                    ps.iter().filter(|p| free(&(p.p, p.q))).cloned().collect();
+                busiest(&with)?.clone()
             };
             Some((
                 slot_keys(a, &p, next, transit_slots),
@@ -328,15 +507,18 @@ pub fn keys_for_pending(
             )
         }),
         "lag" => {
-            let p = if pending.require {
-                march_origin(ps)?
-            } else {
-                march_origin(ps).or_else(|| busiest(ps))?
+            // W6T-4: the origin of transits in flight (Holding transit state
+            // 1-2); Province entries in state 3 last only until the
+            // SettleDeparture a few slots later.
+            let (p, n) = match origin_in_flight(ps, &pending.in_flight) {
+                Some(x) => x,
+                None if pending.require => return None,
+                None => (march_origin(ps).or_else(|| busiest(ps))?, 0),
             };
             Some((
                 vec![a.province(p.p as i32, p.q as i32), a.anchor(next, p.region)],
-                json!({"province": [p.p, p.q], "region": p.region, "bell": next,
-                    "why": "the origin of a march in flight (departed entries await their settle)"}),
+                json!({"province": [p.p, p.q], "region": p.region, "bell": next, "in_flight": n,
+                    "why": "the origin of transits in flight (DEPART seen, not settled)"}),
             ))
         }
         "ticket" => {
@@ -464,6 +646,169 @@ mod tests {
         assert!(above_cap("anchor", 1_000), "above the D cap 0.5");
     }
 
+    /// W6T-4: `slots-below` and `lag` are armed over the whole play window
+    /// (w6-s7 skipped both: armed for one game hour); `slots-below` starts
+    /// by 60% of play, so the keeper escalation it causes can open a claim
+    /// that `defence-pool` holds later.
+    #[test]
+    fn plan_arms_every_hold_over_play() {
+        for (start, end) in [(1_000, 1_000 + 86_400), (5_000, 5_000 + 7 * 86_400)] {
+            let p = plan(start, end);
+            for k in [
+                "slots-below",
+                "slots-above",
+                "lag",
+                "ticket",
+                "frontier-fund",
+                "defence-pool",
+            ] {
+                let h = p.iter().find(|x| x.kind == k).unwrap();
+                assert_eq!(h.deadline, end, "{k}: armed to the end of play");
+                assert!(h.at < end, "{k}");
+            }
+            let sb = p.iter().find(|x| x.kind == "slots-below").unwrap();
+            assert!(
+                sb.at <= start + (end - start) * 6 / 10,
+                "slots-below by 60% of play"
+            );
+            let dp = p.iter().find(|x| x.kind == "defence-pool").unwrap();
+            assert!(sb.at <= dp.deadline);
+        }
+    }
+
+    /// W6T-4: the lag hold's origin is a transit in flight (state 1-2), not
+    /// a Province entry in state 3 (SettleDeparture clears those within
+    /// slots, so w6-s7 never saw one at a probe).
+    #[test]
+    fn lag_uses_transits_in_flight() {
+        let ad = Addresses::new(Address::new_from_array([7; 32]), 7);
+        let mut a = empty_province(0, 0);
+        let mut b = empty_province(1, 0);
+        a.region = 3;
+        b.region = 5;
+        a.entries[0].state = 1;
+        let ps = vec![a, b];
+        let none = Pending {
+            require: true,
+            ..Pending::default()
+        };
+        assert!(keys_for_pending("lag", &ad, &ps, &none, 10, 4, &[], &[]).is_none());
+        let fl = |p: i16, q: i16, arrive: u32, state: u8| InFlight {
+            origin: (p, q),
+            arrive_bell: arrive,
+            state,
+        };
+        let pending = Pending {
+            require: true,
+            in_flight: vec![
+                fl(1, 0, 14, 1),
+                fl(1, 0, 15, 2),
+                fl(0, 0, 13, 2),
+                fl(9, 9, 16, 1),
+            ],
+            ..Pending::default()
+        };
+        let (k, d) = keys_for_pending("lag", &ad, &ps, &pending, 10, 4, &[], &[]).unwrap();
+        assert_eq!(k, vec![ad.province(1, 0), ad.anchor(11, 5)]);
+        assert_eq!(d["province"], json!([1, 0]));
+        assert_eq!(d["in_flight"], 2);
+        // An origin that is not an opened Province is never picked.
+        let only_unknown = Pending {
+            require: true,
+            in_flight: vec![fl(9, 9, 16, 1)],
+            ..Pending::default()
+        };
+        assert!(keys_for_pending("lag", &ad, &ps, &only_unknown, 10, 4, &[], &[]).is_none());
+        // Holding transits: states 1 and 2 are in flight, 0 and 3 are not.
+        let mut t = fclient::decode::Transit::decode(&[0u8; 96]);
+        t.origin_p = 2;
+        t.origin_q = -1;
+        t.arrive_bell = 30;
+        let got: Vec<InFlight> = [0u8, 1, 2, 3]
+            .iter()
+            .flat_map(|s| {
+                let mut x = t;
+                x.state = *s;
+                in_flight_of(&[x])
+            })
+            .collect();
+        assert_eq!(got, vec![fl(2, -1, 30, 1), fl(2, -1, 30, 2)]);
+    }
+
+    /// W6T-4: the slot holds aim at a province the fleet sealed marches to
+    /// for the held bell (the U4 nightlies held slots no Reveal needed:
+    /// 0 writes inside or after the `slots-below` window), and fall back
+    /// to the ArrivalDay guess without a marchbook.
+    #[test]
+    fn slot_holds_aim_at_planned_arrivals() {
+        let book = [
+            r#"{"arrive_bell":11,"bot":1,"depart_bell":8,"dest":[1,0],"ev":"sealed","host":"5"}"#,
+            r#"{"arrive_bell":11,"bot":1,"depart_bell":8,"dest":[1,0],"ev":"sealed","host":"5"}"#,
+            r#"{"arrive_bell":11,"bot":2,"depart_bell":8,"dest":[1,0],"ev":"sealed","host":"6"}"#,
+            r#"{"arrive_bell":11,"bot":3,"depart_bell":9,"dest":[0,0],"ev":"sealed","host":"7"}"#,
+            r#"{"arrive_bell":12,"bot":4,"depart_bell":9,"dest":[0,0],"ev":"sealed","host":"8"}"#,
+            r#"{"arrive_bell":11,"bot":9,"depart_bell":9,"dest":[2,2],"ev":"sealed","host":"9"}"#,
+            r#"{"arrive_bell":11,"bot":10,"depart_bell":9,"dest":[3,3],"ev":"sealed","host":"10"}"#,
+            r#"{"bot":1,"depart_bell":8,"ev":"sent","host":"5"}"#,
+            r#"{"bot":2,"depart_bell":8,"ev":"sent","host":"6"}"#,
+            r#"{"bot":3,"depart_bell":9,"ev":"sent","host":"7"}"#,
+            r#"{"bot":4,"depart_bell":9,"ev":"sent","host":"8"}"#,
+            r#"{"bot":9,"depart_bell":9,"ev":"failed","host":"9"}"#,
+            "not json",
+        ]
+        .join("\n");
+        // The duplicate sealed line counts once; a failed Depart (host 9)
+        // and one never sent (host 10) do not count.
+        let planned = planned_from_marchbook(&book, 11);
+        assert_eq!(planned, vec![((1, 0), 2), ((0, 0), 1)]);
+        let ad = Addresses::new(Address::new_from_array([7; 32]), 7);
+        let mut a = empty_province(0, 0);
+        a.entries[0].state = 1;
+        a.entries[1].state = 1;
+        let ps = vec![a, empty_province(1, 0)];
+        let pending = Pending {
+            require: true,
+            arrivals_today: vec![(0, 0)],
+            planned_next: planned,
+            ..Pending::default()
+        };
+        let (k, d) = keys_for_pending("slots-below", &ad, &ps, &pending, 10, 4, &[], &[]).unwrap();
+        assert_eq!(k, slot_keys(&ad, &ps[1], 11, 4));
+        assert_eq!(d["planned_arrivals"], 2);
+        // Without a marchbook: the old guess (arrivals today, busiest).
+        let guess = Pending {
+            planned_next: vec![],
+            ..pending.clone()
+        };
+        let (_, d) = keys_for_pending("slots-below", &ad, &ps, &guess, 10, 4, &[], &[]).unwrap();
+        assert_eq!(d["province"], json!([0, 0]));
+        // The other slot hold of the same probe takes another province.
+        let taken = Pending {
+            held: vec![(1, 0)],
+            ..pending.clone()
+        };
+        let (_, d) = keys_for_pending("slots-above", &ad, &ps, &taken, 10, 4, &[], &[]).unwrap();
+        assert_eq!(d["province"], json!([0, 0]), "{d}");
+        assert_eq!(d["planned_arrivals"], 1);
+        // A planned destination that is not an opened Province is skipped.
+        let off = Pending {
+            planned_next: vec![((9, 9), 5)],
+            ..guess
+        };
+        let (_, d) = keys_for_pending("slots-above", &ad, &ps, &off, 10, 4, &[], &[]).unwrap();
+        assert_eq!(d["province"], json!([0, 0]));
+        // The marchbook files of a bots directory.
+        let dir = std::env::temp_dir().join(format!("psf-marchbook-{}", crate::run::wall_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("marchbook-1-0.jsonl"), &book).unwrap();
+        std::fs::write(dir.join("marchbook-2-0.jsonl"), &book).unwrap();
+        std::fs::write(dir.join("report.json"), &book).unwrap();
+        // A march is one (host, depart bell) across the files too.
+        assert_eq!(planned_arrivals(&dir, 11), vec![((1, 0), 2), ((0, 0), 1)]);
+        assert!(planned_arrivals(std::path::Path::new("/nonexistent"), 11).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn slot_counts() {
         assert_eq!(slots_for(600, 100.0), 15);
@@ -537,8 +882,13 @@ mod tests {
         assert!(keys_for_pending("lag", &ad, &ps, &need, 10, 4, &[], &[]).is_none());
         let mut ps2 = ps.clone();
         ps2[1].entries[3].state = 3;
-        let (k, _) = keys_for_pending("lag", &ad, &ps2, &need, 10, 4, &[], &[]).unwrap();
-        assert_eq!(k[0], ad.province(1, 0), "the origin of the march in flight");
+        // W6T-4: a state-3 entry alone is no longer the lag hold's
+        // situation (it lasts only until the SettleDeparture); a transit in
+        // flight is (`lag_uses_transits_in_flight`). Unrequired, the
+        // state-3 origin is still the fallback.
+        assert!(keys_for_pending("lag", &ad, &ps2, &need, 10, 4, &[], &[]).is_none());
+        let (k, _) = keys_for("lag", &ad, &ps2, 10, 4, &[], &[]).unwrap();
+        assert_eq!(k[0], ad.province(1, 0), "the fallback origin");
         let (_, d) = keys_for("ticket", &ad, &ps2, 10, 4, &[], &[]).unwrap();
         assert_eq!(d["until_bell"], 24, "through the cohort's 24 bells");
         // W6-C: the ring-opening and claim-grace holds wait for their

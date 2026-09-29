@@ -30,18 +30,43 @@ pub fn params(beacon: Beacon) -> SeasonParams {
     p
 }
 
+/// `join_close_bell` for a season ending at `end_bell`: the preset's
+/// 756/1,008 share, kept in `1..end_bell` (§5.7: `join_close_bell <
+/// end_bell`).
+pub fn join_close_for(end_bell: u32) -> u32 {
+    let p = frontier_abi::presets::M1_LOCAL_7D;
+    let scaled = end_bell as u64 * p.join_close_bell as u64 / p.end_bell as u64;
+    (scaled as u32).clamp(1, end_bell.saturating_sub(1).max(1))
+}
+
+/// The run's CreateSeason parameters: [`params`], with `end_bell` (and the
+/// scaled `join_close_bell`) when the season ends at the end of play
+/// (`--season-end-at-play-end`, W6T-4).
+pub fn season_params(beacon: Beacon, end_bell: Option<u32>) -> SeasonParams {
+    let mut p = params(beacon);
+    if let Some(e) = end_bell {
+        p.end_bell = e;
+        p.join_close_bell = join_close_for(e);
+    }
+    p
+}
+
 /// Runs the operator steps; returns what the report needs.
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     chain: &Chain,
     addrs: &Addresses,
     authority: &Keypair,
     beacon: Beacon,
+    end_bell: Option<u32>,
     preseason_scale: f64,
     scale: f64,
     log: &dyn Fn(&str, Value),
 ) -> Result<Value, String> {
     let land = Duration::from_secs(60);
-    let p = params(beacon);
+    let p = season_params(beacon, end_bell);
+    p.validate()
+        .map_err(|e| format!("season params refused before AnnounceSeason: {e} (§5.7)"))?;
     let sp = p.to_bytes();
     let payout = permutation_rules::frontier::payout::PayoutParams::REV3.to_borsh();
     let ph = frontier_abi::presets::params_hash(&sp, &payout);
@@ -123,6 +148,7 @@ pub async fn run(
         "genesis_ts": s.genesis_ts, "genesis_round": s.genesis_round, "end_bell": s.end_bell,
         "join_close_bell": s.join_close_bell, "bell_secs": s.bell_secs,
         "quicknet_pk_hash": hex::encode(s.quicknet_pk_hash), "params_hash": hex::encode(ph),
+        "season_end_at_play_end": end_bell.is_some(),
     });
     log("created", v.clone());
     Ok(v)
@@ -131,6 +157,43 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// W6T-4: `--days 1 --season-end-at-play-end` creates a 144-bell
+    /// season whose params pass the §5.7 validation; 7 days gives the
+    /// preset itself (the same params hash).
+    #[test]
+    fn short_season_params_validate() {
+        let mut c = crate::config::StackConfig::default();
+        let f = crate::config::split_flags(&["--season-end-at-play-end".into()]).unwrap();
+        crate::config::apply_flags(&mut c, &f).unwrap();
+        assert_eq!(c.season_end_bell(), Some(144));
+        for beacon in [Beacon::TestKey, Beacon::Archive] {
+            let p = season_params(beacon, c.season_end_bell());
+            assert_eq!((p.end_bell, p.join_close_bell), (144, 108));
+            assert_eq!(p.validate(), Ok(()));
+            assert_eq!(p.quicknet_pk_hash, params(beacon).quicknet_pk_hash);
+        }
+        // Two days, six hours, and the edges.
+        assert_eq!(
+            season_params(Beacon::Archive, Some(288)).join_close_bell,
+            216
+        );
+        assert_eq!(season_params(Beacon::Archive, Some(36)).join_close_bell, 27);
+        assert_eq!(join_close_for(2), 1);
+        assert!(season_params(Beacon::Archive, Some(2)).validate().is_ok());
+        // Seven days: exactly the preset (unchanged params hash).
+        let p7 = season_params(Beacon::Archive, Some(1_008));
+        assert_eq!(p7.to_bytes(), params(Beacon::Archive).to_bytes());
+        assert_eq!(
+            season_params(Beacon::Archive, None).to_bytes(),
+            p7.to_bytes()
+        );
+        // Without the flag the preset stands.
+        assert_eq!(
+            crate::config::StackConfig::default().season_end_bell(),
+            None
+        );
+    }
 
     #[test]
     fn the_test_key_build_gets_the_test_key_hash() {

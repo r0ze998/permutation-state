@@ -18,7 +18,13 @@
 //! can decide from those (stuck province-bells, unsettled transits,
 //! cohorts, effective N, personas, bad seals, herald), chaos kills,
 //! restarts and crashes, adversary holds, and the verify, tamper and load
-//! verdicts.
+//! verdicts. W6T-4: idle province-days exclude days with a GATHER or
+//! CLASH (§13.4 A1); criterion 4 lists V5's by-rule reasons and an honest
+//! march refused by rule is a criterion-5 violation (A2); failed
+//! transactions by class (expected / redundancy / waste); the keeper
+//! status from the last answered sample with its unanswered bells; the
+//! per-bell load average; stalls of ≥ 20 slots after a bell start; and row
+//! E, the §13.4 environment (not exit-grade when a hold was skipped).
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -157,6 +163,75 @@ pub fn failures(txs: &[TxRecord], program: &Address) -> Value {
         *m.entry(format!("{kind}: {err}")).or_default() += 1;
     }
     json!(m)
+}
+
+/// The class of a failed transaction by (kind, error) (W6T-4, from the
+/// w6-s7 triage's table): `expected` (a persona, adversary, race or drain
+/// refusal the run plans for), `redundancy` (another sender landed the same
+/// work first: A/B races, duplicates) or `waste` (work that could never
+/// land: keeper, bot-policy or bot bugs); anything else `unclassified`.
+/// Returns `(class, cause)`. Reported, not gating.
+pub fn classify_failure(kind: &str, err: &str) -> (&'static str, &'static str) {
+    // Error names come from `failures` (the program's code name, else the
+    // transaction error JSON).
+    let pftc = err.contains("ProgramFailedToComplete") || err.contains("exceeded CUs meter");
+    match (kind, err) {
+        // Keeper waste: CU exhaustion of the closes (w6-s7: re-planned ~270
+        // times each in the drain) and anchors for bells ≥ end_bell.
+        ("CloseArrivalDay" | "CloseArrivalSlot" | "CloseClashInputs", _) if pftc => {
+            ("waste", "keeper")
+        }
+        (_, _) if pftc => ("waste", "keeper"),
+        ("PostAnchor" | "PostAnchorMulti", "BadData") => ("waste", "keeper"),
+        // Another sender landed the same work first.
+        ("SettleDeparture" | "SettleTransit" | "Reveal", "AlreadyDone") => {
+            ("redundancy", "a/b race")
+        }
+        ("SettleTransit" | "SettleDeparture", "TransitState") => ("redundancy", "a/b race"),
+        (_, "AlreadyDone") => ("redundancy", "duplicate"),
+        // Bot bugs (W6T-3 fixes them): a war target while shielded, an
+        // arrival at or after end_bell.
+        ("Reveal", "Shielded" | "WrongStatus") => ("waste", "bot-bug"),
+        ("Depart" | "Reveal", "ArrivalBell") => ("waste", "bot-bug"),
+        // Bot policy: acting on a stale view.
+        (_, "NotResident" | "ProvinceFull" | "QueueFull" | "Insufficient") => {
+            ("waste", "bot-policy")
+        }
+        // Persona and adversary traffic, races the program settles, drain.
+        ("Depart", "TipTooLow" | "TipNotPreset") => ("expected", "persona"),
+        ("Reveal", "WindowClosed") => ("expected", "persona"),
+        ("Reveal", "BadAddress") => ("expected", "adversary"),
+        (_, "HostInTransit") => ("expected", "persona"),
+        ("SettleTicket", "NoTicket") => ("expected", "race"),
+        ("ResolveFromInputs" | "SkipQuiet", "OutOfOrder") => ("expected", "bounded duplicate"),
+        ("SkipQuiet", "NotQuiet") => ("expected", "race"),
+        ("FoldOccupancy", "FoldStale") => ("expected", "race"),
+        _ => ("unclassified", ""),
+    }
+}
+
+/// Failed transactions by (kind, error) with their class, and the totals
+/// per class.
+pub fn failure_classes(failures: &Value) -> Value {
+    let mut rows = vec![];
+    let mut by_class: BTreeMap<&str, u64> = BTreeMap::new();
+    let mut by_cause: BTreeMap<String, u64> = BTreeMap::new();
+    let mut total = 0u64;
+    for (k, n) in failures.as_object().into_iter().flatten() {
+        let n = n.as_u64().unwrap_or(0);
+        let (kind, err) = k.split_once(": ").unwrap_or((k.as_str(), ""));
+        let (class, cause) = classify_failure(kind, err);
+        total += n;
+        *by_class.entry(class).or_default() += n;
+        if !cause.is_empty() {
+            *by_cause.entry(cause.to_string()).or_default() += n;
+        }
+        rows.push(json!({"kind": kind, "error": err, "n": n, "class": class, "cause": cause}));
+    }
+    rows.sort_by(|a, b| b["n"].as_u64().cmp(&a["n"].as_u64()));
+    json!({"total": total, "by_class": by_class, "by_cause": by_cause,
+        "unclassified": by_class.get("unclassified").copied().unwrap_or(0), "rows": rows,
+        "note": "reported, not gating: expected = persona/adversary/race/drain refusals; redundancy = another sender landed the work first; waste = could never land (keeper, bot-policy, bot-bug)"})
 }
 
 /// The chain's slot → Clock map, from the landing slots and Clock times of
@@ -348,6 +423,7 @@ pub fn catch_up(txs: &[TxRecord], program: &Address, genesis_ts: i64, bell_secs:
     let mut epoch: HashMap<(i32, i32), u32> = HashMap::new();
     let mut churned: BTreeSet<(i32, i32, u32)> = BTreeSet::new();
     let mut skips: BTreeMap<(i32, i32, u32), u64> = BTreeMap::new();
+    let mut active: BTreeSet<(i32, i32, u32)> = BTreeSet::new();
     let mut with_post = 0usize;
     let mut order: Vec<&TxRecord> = txs.iter().filter(|t| t.err.is_none()).collect();
     order.sort_by_key(|t| t.seq);
@@ -362,6 +438,11 @@ pub fn catch_up(txs: &[TxRecord], program: &Address, genesis_ts: i64, bell_secs:
                 let (p, q, b0) = (le_i32(kp, 0), le_i32(kp, 4), le_u32(kp, 8));
                 *skips.entry((p, q, b0 / 144)).or_default() += 1;
                 skip_day.insert((p, q), b0 / 144);
+            } else if r.kind == Kind::GATHER as u8 || r.kind == Kind::CLASH as u8 {
+                // §13.4 A1: a day with a GATHER or CLASH is not idle.
+                let kp = &r.key_payload;
+                let (p, q, bell) = (le_i32(kp, 0), le_i32(kp, 4), le_u32(kp, 8));
+                active.insert((p, q, bell / 144));
             }
         }
         let landing_day = ((t.block_time - genesis_ts).max(0) / bell_secs.max(1) / 144) as u32;
@@ -383,16 +464,39 @@ pub fn catch_up(txs: &[TxRecord], program: &Address, genesis_ts: i64, bell_secs:
         }
     }
     let seen: BTreeSet<(i32, i32)> = epoch.keys().copied().collect();
-    let (mut idle, mut churn, mut unknown) = (vec![], vec![], 0usize);
+    let mut v = classify_days(&skips, &churned, &active, &seen);
+    v["province_post_states"] = json!(with_post);
+    v
+}
+
+/// Province-days by class for criterion 3's catch-up (W6T-4, §13.4 A1):
+/// **churned** (the roster epoch moved), **active** (roster unchanged but
+/// the province had a GATHER or CLASH that day: each resolved bell needs its
+/// own SkipQuiet split, so such a day cannot be judged against 6), else
+/// **idle** (judged: ≤ 6); a province never seen in a post-state is not
+/// judged.
+pub fn classify_days(
+    skips: &BTreeMap<(i32, i32, u32), u64>,
+    churned: &std::collections::BTreeSet<(i32, i32, u32)>,
+    active: &std::collections::BTreeSet<(i32, i32, u32)>,
+    seen: &std::collections::BTreeSet<(i32, i32)>,
+) -> Value {
+    let (mut idle, mut churn, mut act, mut unknown) = (vec![], vec![], vec![], 0usize);
     let mut idle_over: Vec<String> = vec![];
     let mut churn_over: Vec<String> = vec![];
-    for ((p, q, d), n) in &skips {
+    let mut act_over: Vec<String> = vec![];
+    for ((p, q, d), n) in skips {
         if !seen.contains(&(*p, *q)) {
             unknown += 1;
         } else if churned.contains(&(*p, *q, *d)) {
             churn.push(*n as f64);
             if *n > 6 {
                 churn_over.push(format!("({p},{q}) day {d}: {n}"));
+            }
+        } else if active.contains(&(*p, *q, *d)) {
+            act.push(*n as f64);
+            if *n > 6 {
+                act_over.push(format!("({p},{q}) day {d}: {n}"));
             }
         } else {
             idle.push(*n as f64);
@@ -406,11 +510,12 @@ pub fn catch_up(txs: &[TxRecord], program: &Address, genesis_ts: i64, bell_secs:
         "skip_txs_per_province_day": stats(&all),
         "skip_txs_per_idle_province_day": stats(&idle),
         "skip_txs_per_churned_province_day": stats(&churn),
+        "skip_txs_per_active_province_day": stats(&act),
         "idle_province_days_over_6": idle_over,
         "churned_province_days_over_6": churn_over,
+        "active_province_days_over_6": act_over,
         "province_days_not_judged": unknown,
-        "province_post_states": with_post,
-        "definition": "idle = the Province's roster_epoch unchanged over the day (post-states); a SkipQuiet's change counts for its b0's day",
+        "definition": "idle = the Province's roster_epoch unchanged over the day (post-states) and no GATHER or CLASH of the province that day (§13.4 A1); active = roster unchanged with a GATHER/CLASH (reported); churned = roster moved (reported); a SkipQuiet's change counts for its b0's day",
     })
 }
 
@@ -625,13 +730,230 @@ pub fn keeper_summary(samples: &[Value], play_from: i64, play_to: i64) -> Value 
         })
         .filter_map(|s| s["bell"].as_i64())
         .collect();
-    let last = samples.last().map(|s| &s["status"]);
+    // W6T-4: the last answered sample (w6-s7's last one was null, so every
+    // field read null), and the unanswered ones counted.
+    let last = samples
+        .iter()
+        .rev()
+        .map(|s| &s["status"])
+        .find(|s| s.is_object());
+    let unanswered: Vec<&Value> = samples
+        .iter()
+        .filter(|s| !s["status"].is_object())
+        .collect();
+    let timeouts = unanswered
+        .iter()
+        .filter(|s| s["error"].as_str().is_some_and(|e| e.contains("timeout")))
+        .count();
+    let ms: Vec<f64> = samples.iter().filter_map(|s| s["ms"].as_f64()).collect();
     json!({"samples": samples.len(), "min_reveal_effective_n_in_play": min_n,
         "effective_n_ok": min_n.is_some_and(|n| n >= 150), "bells_below_150": low_bells,
+        "status_unanswered": unanswered.len(), "status_timeouts": timeouts,
+        "status_unanswered_bells": unanswered.iter().filter_map(|s| s["bell"].as_i64()).collect::<Vec<_>>(),
+        "status_ms": stats(&ms),
         "last": last.map(|l| json!({"bell": l["bell"], "alerts": l["alerts"], "spend_by_day": l["spend_by_day"],
             "pools": l["pools"], "anchor_latency_slots_p99": l["duties"]["anchor_latency_slots_p99"],
             "seed_latency_slots_p99": l["duties"]["seed_latency_slots_p99"], "provinces_opened": l["duties"]["provinces_opened"],
-            "archived_bells": l["duties"]["archived_bells"]}))})
+            "archived_bells": l["duties"]["archived_bells"], "rings_complete": l["duties"]["rings_complete"],
+            "tickets_open": l["duties"]["tickets_open"], "sweeps_sent": l["duties"]["sweeps_sent"],
+            "contested_bells": l["duties"]["contested_bells"].as_array().map(|a| a.len())}))})
+}
+
+/// The per-bell load average (`metrics/loadavg.jsonl`, W6T-4): the
+/// distribution of the 1-minute figure over the bells, its maximum per game
+/// day, and the series itself.
+pub fn loadavg_summary(samples: &[Value]) -> Value {
+    let l1: Vec<f64> = samples.iter().filter_map(|s| s["load1"].as_f64()).collect();
+    let mut by_day: BTreeMap<i64, f64> = BTreeMap::new();
+    let mut worst: Option<(f64, i64)> = None;
+    for s in samples {
+        let (Some(b), Some(x)) = (s["bell"].as_i64(), s["load1"].as_f64()) else {
+            continue;
+        };
+        let e = by_day.entry(b.div_euclid(144)).or_insert(x);
+        *e = e.max(x);
+        if worst.is_none_or(|(w, _)| x > w) {
+            worst = Some((x, b));
+        }
+    }
+    json!({"bells": l1.len(), "load1": stats(&l1),
+        "load5": stats(&samples.iter().filter_map(|s| s["load5"].as_f64()).collect::<Vec<_>>()),
+        "max_by_day": by_day.values().collect::<Vec<_>>(), "worst_bell": worst.map(|w| w.1),
+        "series": samples.iter().map(|s| json!([s["bell"], s["load1"]])).collect::<Vec<_>>()})
+}
+
+/// Windows of at least `min_slots` consecutive slots in which no
+/// transaction landed **after a bell started** (W6T-4; w6-s7 had one of 202
+/// slots, bells 8-10): every bell start owes 16 anchors within slots, so
+/// no landing for `min_slots` slots after one is a stall, while a quiet
+/// stretch inside a bell is normal (counted, not listed). From the verify
+/// input's landed transactions after genesis, each with the chaos kills or
+/// crashes of the chain inside it (a killed localnet makes no slots, so a
+/// gap there has its reason). Bells from `end_bell` on owe no anchor (the
+/// drain), so their starts are not stalls (counted separately).
+#[allow(clippy::too_many_arguments)]
+pub fn no_landing_windows(
+    txs: &[TxRecord],
+    genesis_ts: i64,
+    bell_secs: i64,
+    slot_secs: f64,
+    min_slots: u64,
+    end_bell: i64,
+    events: &[Value],
+) -> Value {
+    let mut pts: Vec<(u64, i64)> = txs
+        .iter()
+        .filter(|t| t.err.is_none() && t.block_time >= genesis_ts)
+        .map(|t| (t.slot, t.block_time))
+        .collect();
+    pts.sort_unstable();
+    pts.dedup_by_key(|p| p.0);
+    let bs = bell_secs.max(1);
+    let bell = |t: i64| (t - genesis_ts).max(0) / bs;
+    let mut out = vec![];
+    let (mut quiet, mut drain) = (0usize, 0usize);
+    for w in pts.windows(2) {
+        let ((s0, t0), (s1, t1)) = (w[0], w[1]);
+        let empty = s1 - s0 - 1;
+        if empty < min_slots {
+            continue;
+        }
+        // The first bell start inside the window, and the slots from it to
+        // the next landing.
+        let k = (t0 - genesis_ts).div_euclid(bs) + 1;
+        let start = genesis_ts + k * bs;
+        let after = if start <= t1 {
+            ((t1 - start) as f64 / slot_secs.max(1e-9)).floor() as u64
+        } else {
+            0
+        };
+        if after < min_slots {
+            quiet += 1;
+            continue;
+        }
+        if k >= end_bell {
+            drain += 1;
+            continue;
+        }
+        let why: Vec<String> = events
+            .iter()
+            .filter(|e| {
+                (e["event"] == "chaos-kill" || e["event"] == "crash")
+                    && e["detail"]["component"] == "localnet"
+                    && e["game"].as_i64().is_some_and(|g| g >= t0 && g <= t1)
+            })
+            .map(|e| format!("{} localnet", f(&e["event"])))
+            .collect();
+        out.push(json!({"from_slot": s0 + 1, "to_slot": s1 - 1, "slots": empty,
+            "slots_after_bell_start": after, "bell_started": k,
+            "from_bell": bell(t0), "to_bell": bell(t1), "game_from": t0, "game_to": t1, "explained_by": why}));
+    }
+    json!({"min_slots": min_slots, "windows": out, "quiet_windows_inside_a_bell": quiet,
+        "drain_windows_after_end_bell": drain})
+}
+
+/// Whether the run is exit-grade as an environment (W6T-4, §13.4): every
+/// adversary hold fired (a `hold-skipped` hold means the schedule was not
+/// exercised), the release `.so` pinned, real rounds.
+pub fn exit_grade(events: &[Value], config: &Value) -> Value {
+    let mut reasons: Vec<String> = vec![];
+    if config["adversary"] == true {
+        for e in events.iter().filter(|e| e["event"] == "hold-skipped") {
+            reasons.push(format!(
+                "hold-skipped {} ({})",
+                f(&e["detail"]["kind"]),
+                f(&e["detail"]["why"])
+            ));
+        }
+    } else {
+        reasons.push("no adversary schedule".into());
+    }
+    if !config["expect_so_sha256"].is_string() {
+        reasons.push("no release .so pin (--expect-so-sha256)".into());
+    }
+    if config["beacon"] != "archive" {
+        reasons.push(format!("beacon {} (not real rounds)", f(&config["beacon"])));
+    }
+    json!({"exit_grade": reasons.is_empty(), "reasons": reasons})
+}
+
+/// The by-rule unrevealed marches (verify V5 `unrevealed_by_rule`) by
+/// reason (W6T-4, §13.4 A2).
+pub fn by_rule_reasons(by_rule: &Value) -> BTreeMap<String, u64> {
+    let mut m: BTreeMap<String, u64> = BTreeMap::new();
+    for x in by_rule.as_array().into_iter().flatten() {
+        let r =
+            x["reason"]
+                .as_str()
+                .map(String::from)
+                .unwrap_or_else(|| match x["outcome"].as_u64() {
+                    Some(o) => format!("outcome {o} (no reason: pre-W6T-3 verifier)"),
+                    None => "unknown".into(),
+                });
+        *m.entry(r).or_default() += 1;
+    }
+    m
+}
+
+/// The §5.11 step-6 reasons (a Reveal refused by rule); `bounced` is a
+/// settlement outcome, not a refusal.
+pub const STEP6_REASONS: &[&str] = &["shielded-own", "shielded-dest", "path", "arrival-bell"];
+
+/// By-rule refusals of honest marches (§13.4 A2: each is a criterion-5
+/// persona violation): a step-6 reason whose march the bots' report lists
+/// with an honest persona (none, `honest`, or an archetype `arch:*`), or
+/// that it does not list at all (the fleet is honest but for its
+/// personas).
+pub fn honest_rule_refusals(by_rule: &Value, bots_unrevealed: &Value) -> Vec<String> {
+    let host = |v: &Value| -> Option<u64> {
+        match v {
+            Value::Number(n) => n.as_u64(),
+            Value::String(s) => match s.strip_prefix("0x") {
+                Some(h) => u64::from_str_radix(h, 16).ok(),
+                None => s.parse().ok(),
+            },
+            _ => None,
+        }
+    };
+    let persona_of: HashMap<(u64, u64), String> = bots_unrevealed
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|b| {
+            Some((
+                (host(&b["host"])?, b["arrive"].as_u64()?),
+                // A garbage or bad-plaintext seal is persona traffic even
+                // without a persona name (W6T-3's `seal` field).
+                match b["seal"].as_str() {
+                    Some(s) if s != "honest" => format!("seal:{s}"),
+                    _ => b["persona"].as_str().unwrap_or("").to_string(),
+                },
+            ))
+        })
+        .collect();
+    let honest = |p: &str| p.is_empty() || p == "honest" || p.starts_with("arch:");
+    let mut out = vec![];
+    for x in by_rule.as_array().into_iter().flatten() {
+        let reason = x["reason"].as_str().unwrap_or("");
+        if !STEP6_REASONS.contains(&reason) {
+            continue;
+        }
+        let (Some(h), Some(a)) = (host(&x["host_id"]), x["arrive_bell"].as_u64()) else {
+            continue;
+        };
+        let p = persona_of.get(&(h, a)).map(String::as_str).unwrap_or("");
+        if honest(p) {
+            out.push(format!(
+                "{h}@{a} {reason}{}",
+                if persona_of.contains_key(&(h, a)) {
+                    format!(" ({})", if p.is_empty() { "honest" } else { p })
+                } else {
+                    " (not in the bots' list)".into()
+                }
+            ));
+        }
+    }
+    out
 }
 
 pub fn herald_summary(samples: &[Value]) -> Value {
@@ -938,6 +1260,19 @@ pub fn decide(facts: &Value) -> Vec<Value> {
             .and_then(|a| a.iter().find(|p| p["persona"] == name))
             .map(|p| p["verdict"].as_str().unwrap_or("").to_string())
     };
+    // W6T-4 (§13.4 A2): valid seals whose Reveal the program refuses by
+    // rule are listed by reason, not as liveness misses.
+    let reasons = by_rule_reasons(&facts["unrevealed_by_rule"]);
+    if !reasons.is_empty() {
+        notes.push(format!(
+            "unrevealed by rule: {}",
+            reasons
+                .iter()
+                .map(|(r, n)| format!("{r} {n}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
     match persona("min_tip").as_deref() {
         Some("violated") => bad.push("min_tip persona not fully revealed".into()),
         None => notes.push("no min_tip verdict".into()),
@@ -969,14 +1304,31 @@ pub fn decide(facts: &Value) -> Vec<Value> {
     } else {
         verdict("4", "pass", notes.join("; "))
     });
-    // 5 — personas.
+    // 5 — personas; W6T-4 (§13.4 A2): a by-rule refusal of an honest
+    // march is a persona violation.
     let violated = len(&facts["violated"]);
-    v.push(if facts["personas"].is_null() {
+    let honest = honest_rule_refusals(&facts["unrevealed_by_rule"], &facts["bots_unrevealed"]);
+    v.push(if facts["personas"].is_null() && honest.is_empty() {
         verdict("5", "n.a.", "no bots report")
-    } else if violated > 0 {
-        verdict("5", "fail", format!("violated: {}", facts["violated"]))
+    } else if violated > 0 || !honest.is_empty() {
+        let mut why = vec![];
+        if violated > 0 {
+            why.push(format!("violated: {}", facts["violated"]));
+        }
+        if !honest.is_empty() {
+            why.push(format!(
+                "{} honest marches refused by rule (§13.4 A2): {}",
+                honest.len(),
+                honest.join(", ")
+            ));
+        }
+        verdict("5", "fail", why.join("; "))
     } else {
-        verdict("5", "pass", "no persona violated")
+        verdict(
+            "5",
+            "pass",
+            "no persona violated; no honest march refused by rule",
+        )
     });
     // 6 — the herald under the in-run viewer window.
     let inrun = facts["loads"]
@@ -1017,6 +1369,20 @@ pub fn decide(facts: &Value) -> Vec<Value> {
         verdict("9", "fail", "ticket_holder kept a site it did not win")
     } else {
         verdict("9", "pass", "every cohort closed within 24 bells")
+    });
+    // E — the §13.4 environment (W6T-4): not a criterion, never an exit
+    // failure by itself; a skipped hold makes the run not exit-grade.
+    let eg = &facts["exit_grade"];
+    v.push(if eg.is_null() {
+        verdict("E", "n.a.", "environment not read")
+    } else if eg["exit_grade"] == true {
+        verdict(
+            "E",
+            "exit-grade",
+            "every adversary hold fired; release .so pinned; real rounds",
+        )
+    } else {
+        verdict("E", "not exit-grade", f(&eg["reasons"]))
     });
     v
 }
@@ -1151,6 +1517,20 @@ pub async fn report(rd: &RunDir) -> i32 {
         "9_tickets": {"cohorts_open_past_24_bells": pc["cohorts_open_past_24_bells"]},
     });
     let verify_report = read_json(&rd.path("verify/report.json"));
+    let events = rd.events();
+    let eg = exit_grade(&events, &st["config"]);
+    let fails = failures(&inp.txs, &program);
+    let fclasses = failure_classes(&fails);
+    let load_avg = loadavg_summary(&read_jsonl(&rd.path("metrics/loadavg.jsonl")));
+    let no_landing = no_landing_windows(
+        &inp.txs,
+        genesis,
+        bell_secs,
+        0.4 * scale,
+        20,
+        st["season"]["end_bell"].as_i64().unwrap_or(i64::MAX),
+        &events,
+    );
     let above_cap: Vec<Value> = rd
         .events()
         .iter()
@@ -1167,6 +1547,8 @@ pub async fn report(rd: &RunDir) -> i32 {
         "personas": pers["personas"], "violated": pers["violated"],
         "keeper_a": ka, "keeper_b": if st["config"]["keeper_b"] == false { Value::Null } else { kb.clone() },
         "loads": loads, "bad_seal_survived": bad_seal_survived, "verify_verdict": verify["verdict"],
+        "unrevealed_by_rule": verify_report["liveness"]["unrevealed_by_rule"],
+        "bots_unrevealed": bots["unrevealed"], "exit_grade": eg,
     });
     let decided = decide(&facts);
     let holds = hold_effects(&inp.txs, &rd.events());
@@ -1175,7 +1557,9 @@ pub async fn report(rd: &RunDir) -> i32 {
         "decided": decided,
         "run_id": st["run_id"], "phase": st["phase"], "config": st["config"], "so": st["so"], "program": st["program"],
         "season": st["season"], "play": st["play"], "source": source, "txs": inp.txs.len(), "last_bell": last_bell,
-        "cu": cu, "reveal_cu": stats(&reveal), "failures": failures(&inp.txs, &program),
+        "cu": cu, "reveal_cu": stats(&reveal), "failures": fails, "failure_classes": fclasses,
+        "loadavg": load_avg, "no_landing_windows": no_landing, "exit_grade": eg,
+        "unrevealed_by_rule": by_rule_reasons(&verify_report["liveness"]["unrevealed_by_rule"]),
         "outcomes": out, "provinces": pc, "keepers": {"a": ka, "b": kb}, "herald": herald,
         "events": ev, "bots": {"personas": pers, "errors": bots["errors"], "bots": bots["bots"]},
         "verify": verify, "tamper": {"ok": tamper["ok"], "total": tamper["total"], "on_run": tamper["on_run"], "secs": tamper["secs"]},
@@ -1219,6 +1603,30 @@ pub fn markdown(r: &Value) -> String {
         f(&r["play"]["play_bells"]), f(&r["play"]["drain_bells"]), f(&r["program"]), f(&r["so"]["sha256"]),
         f(&r["so"]["len"]), f(&r["source"]), f(&r["txs"]), f(&r["last_bell"])
     );
+    let eg = &r["exit_grade"];
+    if !eg.is_null() {
+        m.push_str(&format!(
+            "- **{}**{}\n",
+            if eg["exit_grade"] == true {
+                "exit-grade environment"
+            } else {
+                "NOT exit-grade"
+            },
+            if eg["exit_grade"] == true {
+                String::new()
+            } else {
+                format!(": {}", f(&eg["reasons"]))
+            }
+        ));
+    }
+    let la = &r["loadavg"];
+    if la["bells"].as_u64().unwrap_or(0) > 0 {
+        m.push_str(&format!(
+            "- machine load average (1 min, sampled each bell; the machine is shared): p50 {}, p99 {}, max {} at bell {}; max per game day {}\n",
+            f(&la["load1"]["p50"]), f(&la["load1"]["p99"]), f(&la["load1"]["max"]), f(&la["worst_bell"]), la["max_by_day"]
+        ));
+    }
+    m.push('\n');
     m.push_str("## §13.4 criteria decided\n\n| criterion | status | why |\n|---|---|---|\n");
     for c in r["decided"].as_array().cloned().unwrap_or_default() {
         m.push_str(&format!(
@@ -1239,9 +1647,15 @@ pub fn markdown(r: &Value) -> String {
     for l in r["loads"].as_array().cloned().unwrap_or_default() {
         let v = &l["verdict"];
         m.push_str(&format!(
-            "- load {} ({}, {} viewers, {} game h): p99 file {} ms, error rate {}, ingest → WS p99 {} s ({}; fold lag p99 {} s) → **{}**\n",
+            "- load {} ({}, {} viewers, {} game h): p99 file {} ms, error rate {} ({} errors / {} requests + WS sessions), ingest → WS p99 {} s ({}; fold lag p99 {} s), WS coverage {} outside {} outage windows, stale retries {} / WS reconnects {} (outside outages {} / {}), unavailable {} ({} ms), generator recovery {} → **{}**{}\n",
             f(&l["tag"]), f(&l["window"]), f(&l["viewers"]), f(&l["game_hours"]), f(&v["p99_file_ms"]), f(&v["error_rate"]),
-            f(&v["ingest_p99_s"]), f(&v["ingest_measure"]), f(&v["ingest_lag_p99_s"]), if v["pass"] == true { "pass" } else { "fail" }
+            f(&v["errors"]), f(&v["denominator"]),
+            f(&v["ingest_p99_s"]), f(&v["ingest_measure"]), f(&v["ingest_lag_p99_s"]),
+            f(&v["ws_coverage"]), v["coverage"]["outage_windows"].as_array().map_or(0, |a| a.len()),
+            f(&v["stale_retries"]), f(&v["ws_reconnects"]), f(&v["stale_retries_outside"]), f(&v["ws_reconnects_outside"]),
+            f(&v["unavailable"]), f(&v["unavailable_ms"]), f(&v["generator_recovery"]),
+            if v["pass"] == true { "pass" } else { "fail" },
+            if v["misses"].as_array().is_some_and(|a| !a.is_empty()) { format!(" ({})", v["misses"]) } else { String::new() }
         ));
     }
     m.push_str("\n## CU per instruction kind (whole-transaction units)\n\n| kind | landed | failed | p50 | p99 | max | budget | over | max bytes |\n|---|---|---|---|---|---|---|---|---|\n");
@@ -1341,6 +1755,11 @@ pub fn markdown(r: &Value) -> String {
             "skip_txs_per_churned_province_day",
             "churned_province_days_over_6",
         ),
+        (
+            "active (GATHER/CLASH, reported)",
+            "skip_txs_per_active_province_day",
+            "active_province_days_over_6",
+        ),
         ("all", "skip_txs_per_province_day", ""),
     ] {
         let s = &c[k];
@@ -1372,6 +1791,57 @@ pub fn markdown(r: &Value) -> String {
         o["records"], o["transits"], f(&o["departs"]), f(&o["departs_due"]),
         o["unsettled_due"].as_array().map_or(0, |a| a.len()), o["bad_seal_codes"], r["failures"]
     ));
+    let fc = &r["failure_classes"];
+    if fc.is_object() {
+        m.push_str(&format!(
+            "\n### Failed transactions by class (reported, not gating)\n\n{} failed: {} (by cause {}); unclassified {}.\n\n| kind | error | n | class | cause |\n|---|---|---|---|---|\n",
+            f(&fc["total"]), fc["by_class"], fc["by_cause"], f(&fc["unclassified"])
+        ));
+        for row in fc["rows"].as_array().cloned().unwrap_or_default() {
+            m.push_str(&format!(
+                "| {} | {} | {} | {} | {} |\n",
+                f(&row["kind"]),
+                f(&row["error"]).replace('|', "\\|"),
+                f(&row["n"]),
+                f(&row["class"]),
+                f(&row["cause"])
+            ));
+        }
+        m.push('\n');
+    }
+    let nl = r["no_landing_windows"]["windows"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    m.push_str(&format!(
+        "- no landed transaction for ≥ 20 slots after a bell started: {} windows ({} quiet stretches inside a bell and {} drain gaps after end_bell not listed)\n",
+        nl.len(),
+        f(&r["no_landing_windows"]["quiet_windows_inside_a_bell"]),
+        f(&r["no_landing_windows"]["drain_windows_after_end_bell"])
+    ));
+    for w in nl.iter().take(20) {
+        m.push_str(&format!(
+            "  - slots {}–{} ({} slots, {} after bell {} started; bells {}–{}){}\n",
+            f(&w["from_slot"]),
+            f(&w["to_slot"]),
+            f(&w["slots"]),
+            f(&w["slots_after_bell_start"]),
+            f(&w["bell_started"]),
+            f(&w["from_bell"]),
+            f(&w["to_bell"]),
+            if w["explained_by"].as_array().is_some_and(|a| !a.is_empty()) {
+                format!(": {}", w["explained_by"])
+            } else {
+                ": **unexplained**".into()
+            }
+        ));
+    }
+    if !r["unrevealed_by_rule"].is_null() {
+        m.push_str(&format!(
+            "- valid seals unrevealed by rule (verify V5, §13.4 A2) by reason: {}\n",
+            r["unrevealed_by_rule"]
+        ));
+    }
     let p = &r["provinces"];
     m.push_str(&format!(
         "- provinces {}; stuck province-bells: {}; cohorts open past 24 bells: {}\n",
@@ -1383,9 +1853,11 @@ pub fn markdown(r: &Value) -> String {
     ));
     let k = &r["keepers"];
     m.push_str(&format!(
-        "\n## Keepers, herald, bots\n\n- keeper A: min reveal effective N in play {} (≥ 150: {}), last status {}\n- keeper B: min reveal effective N in play {}\n- herald: fold lag slots p99 {}, alarms {}\n- personas violated: {}\n",
-        f(&k["a"]["min_reveal_effective_n_in_play"]), f(&k["a"]["effective_n_ok"]), k["a"]["last"],
-        f(&k["b"]["min_reveal_effective_n_in_play"]), f(&r["herald"]["fold_lag_slots"]["p99"]),
+        "\n## Keepers, herald, bots\n\n- keeper A: min reveal effective N in play {} (≥ 150: {}); status unanswered in {} of {} bells ({} timeouts; answer ms p99 {}); last answered status {}\n- keeper B: min reveal effective N in play {}; status unanswered in {} of {} bells ({} timeouts); last answered status {}\n- herald: fold lag slots p99 {}, alarms {}\n- personas violated: {}\n",
+        f(&k["a"]["min_reveal_effective_n_in_play"]), f(&k["a"]["effective_n_ok"]),
+        f(&k["a"]["status_unanswered"]), f(&k["a"]["samples"]), f(&k["a"]["status_timeouts"]), f(&k["a"]["status_ms"]["p99"]), k["a"]["last"],
+        f(&k["b"]["min_reveal_effective_n_in_play"]), f(&k["b"]["status_unanswered"]), f(&k["b"]["samples"]), f(&k["b"]["status_timeouts"]), k["b"]["last"],
+        f(&r["herald"]["fold_lag_slots"]["p99"]),
         f(&r["herald"]["alarms_total"]), r["bots"]["personas"]["violated"]
     ));
     let e = &r["events"];
@@ -1744,5 +2216,279 @@ mod tests {
             &json!({"personas": [{"persona": "min_tip", "verdict": "observed"}, {"persona": "forger", "verdict": "violated"}]}),
         );
         assert_eq!(p["violated"], json!(["forger"]));
+    }
+
+    /// W6T-4 (§13.4 A1): a province-day with a GATHER or CLASH is not idle
+    /// (w6-s7: 13 of the 36 "idle" days over 6 had 7-15 resolved bells).
+    #[test]
+    fn day_with_clash_is_not_idle() {
+        use std::collections::BTreeSet;
+        let skips: BTreeMap<(i32, i32, u32), u64> =
+            [((-4, -2, 5), 15), ((1, 1, 2), 9), ((2, 2, 0), 3)]
+                .into_iter()
+                .collect();
+        let seen: BTreeSet<(i32, i32)> = [(-4, -2), (1, 1), (2, 2)].into_iter().collect();
+        let active: BTreeSet<(i32, i32, u32)> = [(-4, -2, 5)].into_iter().collect();
+        let v = classify_days(&skips, &BTreeSet::new(), &active, &seen);
+        assert_eq!(
+            v["idle_province_days_over_6"],
+            json!(["(1,1) day 2: 9"]),
+            "{v}"
+        );
+        assert_eq!(
+            v["active_province_days_over_6"],
+            json!(["(-4,-2) day 5: 15"]),
+            "{v}"
+        );
+        assert_eq!(v["skip_txs_per_active_province_day"]["n"], 1);
+        assert_eq!(v["skip_txs_per_idle_province_day"]["n"], 2);
+        // Churned wins over active.
+        let churned: BTreeSet<(i32, i32, u32)> = [(-4, -2, 5)].into_iter().collect();
+        let v = classify_days(&skips, &churned, &active, &seen);
+        assert_eq!(
+            v["churned_province_days_over_6"],
+            json!(["(-4,-2) day 5: 15"])
+        );
+        assert_eq!(v["skip_txs_per_active_province_day"]["n"], 0);
+        // Criterion 3 judges idle days only.
+        let mut f = good_facts();
+        f["catch_up"]["active_province_days_over_6"] = json!(["(-4,-2) day 5: 15"]);
+        assert_eq!(decide(&f)[2]["status"], "pass");
+    }
+
+    /// W6T-4 (§13.4 A2): a by-rule refusal of an honest march fails
+    /// criterion 5; persona marches and `bounced` do not.
+    #[test]
+    fn honest_rule_refusal_is_persona_violation() {
+        let by_rule = json!([
+            {"host_id": "1231457318076419", "arrive_bell": 366, "outcome": 6, "reason": "shielded-own"},
+            {"host_id": "357345573994498", "arrive_bell": 135, "outcome": 6, "reason": "bounced"},
+            {"host_id": "77", "arrive_bell": 400, "outcome": 6, "reason": "path"},
+        ]);
+        let bots = json!([
+            {"bot": 936, "persona": "honest", "host": "1231457318076419", "arrive": 366, "route": "keeper", "last_code": "Shielded"},
+            {"bot": 12, "persona": "garbage_seal", "host": 77, "arrive": 400, "route": "self", "last_code": "Path"},
+        ]);
+        let h = honest_rule_refusals(&by_rule, &bots);
+        assert_eq!(h.len(), 1, "{h:?}");
+        assert!(
+            h[0].contains("1231457318076419@366") && h[0].contains("shielded-own"),
+            "{h:?}"
+        );
+        let mut f = good_facts();
+        f["unrevealed_by_rule"] = by_rule.clone();
+        f["bots_unrevealed"] = bots;
+        let d = decide(&f);
+        let c = |id: &str| d.iter().find(|c| c["criterion"] == id).unwrap().clone();
+        assert_eq!(c("5")["status"], "fail", "{d:?}");
+        assert!(c("5")["why"].as_str().unwrap().contains("§13.4 A2"));
+        assert_eq!(
+            c("4")["status"],
+            "pass",
+            "by rule, not a liveness miss: {d:?}"
+        );
+        assert!(
+            c("4")["why"].as_str().unwrap().contains("shielded-own 1"),
+            "{d:?}"
+        );
+        // No bots list: an unlisted march counts as honest.
+        f["bots_unrevealed"] = Value::Null;
+        assert_eq!(
+            honest_rule_refusals(&f["unrevealed_by_rule"], &Value::Null).len(),
+            2
+        );
+        // Only bounced: nothing to blame.
+        let only_bounced = json!([{"host_id": "5", "arrive_bell": 9, "reason": "bounced"}]);
+        assert!(honest_rule_refusals(&only_bounced, &Value::Null).is_empty());
+        // Hex and decimal host ids match.
+        // W6T-3's format: persona null for the fleet, `seal`, host as a
+        // decimal string.
+        let u3 = json!([{"bot": 5, "persona": null, "seal": "honest", "host": "1231457318076419", "arrive": 366},
+                        {"bot": 6, "persona": null, "seal": "garbage", "host": "77", "arrive": 400}]);
+        assert_eq!(honest_rule_refusals(&by_rule, &u3).len(), 1);
+        let hx = json!([{"host_id": "255", "arrive_bell": 9, "reason": "path"}]);
+        let bx = json!([{"persona": "zero_tip", "host": "0xff", "arrive": 9}]);
+        assert!(honest_rule_refusals(&hx, &bx).is_empty());
+    }
+
+    /// W6T-4: every (kind, error) of the w6-s7 run has its class, with the
+    /// triage's totals (keeper waste 32,873; A/B redundancy 3,570 + the
+    /// other duplicates; bot waste 248).
+    #[test]
+    fn failed_tx_classes_follow_the_triage() {
+        let w6s7 = json!({
+            "Build: QueueFull": 2,
+            "CloseArrivalDay: {\"InstructionError\":[3,\"ProgramFailedToComplete\"]}": 12874,
+            "CloseArrivalDay: {\"InstructionError\":[4,\"ProgramFailedToComplete\"]}": 12781,
+            "CloseArrivalSlot: {\"InstructionError\":[3,\"ProgramFailedToComplete\"]}": 1500,
+            "CloseArrivalSlot: {\"InstructionError\":[4,\"ProgramFailedToComplete\"]}": 1500,
+            "Depart: NotResident": 19, "Depart: TipTooLow": 21, "Explore: NotResident": 14,
+            "FoldOccupancy: FoldStale": 1, "Join: AlreadyDone": 10, "Muster: NotResident": 14,
+            "Muster: ProvinceFull": 111, "OpenProvince: AlreadyDone": 20, "PostAnchor: BadData": 3552,
+            "PostAnchorMulti: BadData": 666, "PostBeacon: AlreadyDone": 208, "ResolveFromInputs: OutOfOrder": 19,
+            "Reveal: AlreadyDone": 350, "Reveal: BadAddress": 8, "Reveal: Shielded": 61, "Reveal: WindowClosed": 30,
+            "Reveal: WrongStatus": 27, "SettleDeparture: AlreadyDone": 1716, "SettleTicket: AlreadyDone": 1,
+            "SettleTicket: NoTicket": 31, "SettleTransit: TransitState": 1504, "SkipQuiet: NotQuiet": 2
+        });
+        let c = failure_classes(&w6s7);
+        assert_eq!(c["total"], 37_042, "{c}");
+        assert_eq!(c["unclassified"], 0, "{c}");
+        assert_eq!(c["by_class"]["waste"], 32_873 + 160 + 88, "{c}");
+        assert_eq!(c["by_cause"]["keeper"], 32_873, "{c}");
+        assert_eq!(c["by_cause"]["bot-policy"], 160, "{c}");
+        assert_eq!(c["by_cause"]["bot-bug"], 88, "{c}");
+        assert_eq!(c["by_cause"]["a/b race"], 3_570, "{c}");
+        assert_eq!(
+            c["by_class"]["redundancy"].as_u64().unwrap(),
+            3_570 + 208 + 20 + 10 + 1,
+            "{c}"
+        );
+        assert_eq!(
+            c["by_class"]["expected"].as_u64().unwrap(),
+            21 + 8 + 30 + 31 + 19 + 2 + 1,
+            "{c}"
+        );
+        assert_eq!(
+            classify_failure(
+                "CloseArrivalDay",
+                "{\"InstructionError\":[3,\"ProgramFailedToComplete\"]}"
+            )
+            .0,
+            "waste"
+        );
+        assert_eq!(classify_failure("Reveal", "Shielded"), ("waste", "bot-bug"));
+        assert_eq!(
+            classify_failure("Depart", "ArrivalBell"),
+            ("waste", "bot-bug")
+        );
+        assert_eq!(
+            classify_failure("SettleTransit", "HostInTransit").0,
+            "expected"
+        );
+        assert_eq!(classify_failure("Nope", "Whatever").0, "unclassified");
+        // Seen in the U4 R3 run.
+        assert_eq!(classify_failure("SkipQuiet", "OutOfOrder").0, "expected");
+        assert_eq!(
+            classify_failure("Train", "Insufficient"),
+            ("waste", "bot-policy")
+        );
+    }
+
+    /// W6T-4: the keeper status comes from the last answered sample and
+    /// its nested `duties`; unanswered samples are counted.
+    #[test]
+    fn keeper_status_from_last_non_null_sample() {
+        let ks = vec![
+            json!({"bell": 1, "status": {"bell": 1, "alerts": 0, "pools": {"reveal": {"effective_n": 150}},
+                   "duties": {"anchor_latency_slots_p99": 4, "seed_latency_slots_p99": 5, "provinces_opened": 169, "archived_bells": 448}}}),
+            json!({"bell": 2, "status": null}),
+            json!({"bell": 3, "status": null, "error": "timeout 5 s"}),
+        ];
+        let k = keeper_summary(&ks, 0, 144);
+        assert_eq!(k["last"]["bell"], 1, "{k}");
+        assert_eq!(k["last"]["anchor_latency_slots_p99"], 4);
+        assert_eq!(k["last"]["provinces_opened"], 169);
+        assert_eq!(k["status_unanswered"], 2);
+        assert_eq!(k["status_timeouts"], 1);
+        assert_eq!(k["status_unanswered_bells"], json!([2, 3]));
+    }
+
+    /// W6T-4: the per-bell load average is summarised.
+    #[test]
+    fn loadavg_per_bell() {
+        let v: Vec<Value> = (0..300)
+            .map(|b| json!({"bell": b, "load1": if b == 150 { 22.0 } else { 4.0 }, "load5": 4.0, "load15": 4.0}))
+            .collect();
+        let s = loadavg_summary(&v);
+        assert_eq!(s["bells"], 300);
+        assert_eq!(s["load1"]["max"], 22.0);
+        assert_eq!(s["load1"]["p50"], 4.0);
+        assert_eq!(s["max_by_day"], json!([4.0, 22.0, 4.0]));
+        assert_eq!(s["worst_bell"], 150);
+        assert!(loadavg_summary(&[])["bells"] == 0);
+        assert_eq!(
+            crate::up::parse_loadavg("{ 3.17 3.34 3.80 }"),
+            Some((3.17, 3.34, 3.80))
+        );
+        assert_eq!(
+            crate::up::parse_loadavg("0.5 0.6 0.7 1/200 42"),
+            Some((0.5, 0.6, 0.7))
+        );
+    }
+
+    /// W6T-4: slots with no landing (w6-s7: 827-1028) are found and a
+    /// chain kill inside one is named.
+    #[test]
+    fn no_landing_window_detected() {
+        let tx = |slot: u64, t: i64, ok: bool| TxRecord {
+            seq: slot,
+            slot,
+            signature: Default::default(),
+            block_time: t,
+            tx: vec![],
+            logs: vec![],
+            err: (!ok).then(|| "x".to_string()),
+            code: None,
+            units: 0,
+            fee: 0,
+            post: vec![],
+        };
+        let g = 10_000;
+        let mut txs: Vec<TxRecord> = (100..=826)
+            .map(|s| tx(s, g + (s as i64 - 100) * 8, true))
+            .collect();
+        txs.push(tx(900, g + 800 * 8, false)); // a failure does not land
+        txs.extend((1029..1100).map(|s| tx(s, g + (s as i64 - 100) * 8, true)));
+        txs.push(tx(1200, g + 1100 * 8, true));
+        // A quiet stretch inside a bell (24 slots, ending on a bell start's
+        // landing) is not a stall.
+        txs.push(tx(1225, g + 1125 * 8, true));
+        txs.push(tx(5, g - 100, true)); // before genesis: ignored
+        let ev = vec![
+            json!({"event": "chaos-kill", "game": g + 1_050 * 8, "detail": {"component": "localnet"}}),
+        ];
+        let w = no_landing_windows(&txs, g, 600, 8.0, 20, i64::MAX, &ev);
+        assert_eq!(w["quiet_windows_inside_a_bell"], 1, "{w}");
+        let a = w["windows"].as_array().unwrap();
+        assert_eq!(a.len(), 2, "{w}");
+        assert_eq!(a[0]["bell_started"], 10);
+        assert_eq!(a[0]["slots_after_bell_start"], (7_432 - 6_000) / 8);
+        assert_eq!(
+            (a[0]["from_slot"].as_u64(), a[0]["to_slot"].as_u64()),
+            (Some(827), Some(1028))
+        );
+        assert_eq!(a[0]["slots"], 202);
+        assert_eq!(a[0]["from_bell"], (726 * 8 + 8) / 600);
+        assert_eq!(a[0]["explained_by"], json!([]));
+        assert_eq!(a[1]["slots"], 100);
+        assert_eq!(a[1]["explained_by"], json!(["chaos-kill localnet"]));
+        // From end_bell on (the drain) a bell start owes no anchor (U4 R5:
+        // five 80-slot drain gaps were listed).
+        let w = no_landing_windows(&txs, g, 600, 8.0, 20, 13, &ev);
+        assert_eq!(w["windows"].as_array().unwrap().len(), 1, "{w}");
+        assert_eq!(w["drain_windows_after_end_bell"], 1);
+    }
+
+    /// W6T-4: a skipped hold makes the run not exit-grade (reported as
+    /// row E, not an exit failure).
+    #[test]
+    fn hold_skipped_is_not_exit_grade() {
+        let cfg = json!({"adversary": true, "beacon": "archive", "expect_so_sha256": "ab"});
+        let ev = vec![
+            json!({"event": "hold", "detail": {"kind": "ticket"}}),
+            json!({"event": "hold-skipped", "detail": {"kind": "lag", "why": "nothing to hold before the deadline"}}),
+        ];
+        let e = exit_grade(&ev, &cfg);
+        assert_eq!(e["exit_grade"], false, "{e}");
+        assert!(e["reasons"].to_string().contains("lag"), "{e}");
+        assert_eq!(exit_grade(&ev[..1], &cfg)["exit_grade"], true);
+        let test_key = json!({"adversary": true, "beacon": "test-key", "expect_so_sha256": null});
+        assert_eq!(exit_grade(&ev[..1], &test_key)["exit_grade"], false);
+        let mut f = good_facts();
+        f["exit_grade"] = e;
+        let d = decide(&f);
+        let row = d.iter().find(|c| c["criterion"] == "E").unwrap();
+        assert_eq!(row["status"], "not exit-grade");
+        assert_eq!(criteria_exit(&d), 0, "reported, not an exit failure");
     }
 }
