@@ -19,6 +19,9 @@ bots = 1000
 bot_seed = 7
 season_id = 7
 base_port = 41000
+# W6T-4: keeper B is a delayed backup for the settles (plan U2.8; written
+# only to a keeper build that knows the key).
+keeper_b_backup_delay_slots = 8
 g0 = 1788998400
 
 [paths]
@@ -37,3 +40,9 @@ enabled = true
 count = 5000
 start_hours = 24              # day 1 (every bot has joined by then)
 window_hours = 24
+# W6T-4 (§13.4 A3): the viewers' recovery budget defaults to the chaos
+# restart maximum at the run's scale + 2 s (5,000 ms at 20x); they follow
+# the live bell from the herald's /h/status over the opened provinces and
+# every ring (frontier-stack passes those at spawn).
+think_ms = 5000
+follow_status = true

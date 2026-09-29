@@ -6,7 +6,8 @@
 //!                   [--scale S] [--days D | --game-hours H] [--bots N] [--run-id ID]
 //!                   [--base-port P] [--chaos] [--adversary] [--viewers N]
 //!                   [--viewer-window-hours H] [--archive DIR] [--g0 UNIX] [--so PATH]
-//!                   [--seed N] [--drain-scale S] [--expect-so-sha256 HEX] [--[no-]eager-bots] [--keep-running] ...
+//!                   [--seed N] [--drain-scale S] [--expect-so-sha256 HEX] [--[no-]eager-bots] [--keep-running]
+//!                   [--season-end-at-play-end] [--chaos-force herald:H ...] [--viewer-think-ms MS] ...
 //! frontier-stack verify --run-id ID
 //! frontier-stack tamper --run-id ID [--strict]
 //! frontier-stack load   --run-id ID [--viewers 5000] [--game-hours 1]
@@ -29,7 +30,7 @@ fn usage() -> ! {
         include_str!("main.rs")
             .lines()
             .skip(3)
-            .take(13)
+            .take(14)
             .map(|l| l.trim_start_matches("//! "))
             .collect::<Vec<_>>()
             .join("\n")

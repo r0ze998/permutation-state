@@ -189,8 +189,8 @@ pub fn archive_range(dir: &Path) -> Result<ArchiveRange, String> {
 /// When the archive must still have rounds: the end of the drain after the
 /// run's actual play end, plus an hour.
 pub fn archive_until(genesis_ts: i64, play_end: i64, drain_bells: u32, bell_secs: i64) -> i64 {
-    let _ = (genesis_ts, play_end, drain_bells, bell_secs);
-    0 // W6T-4 failing-first stub
+    let _ = genesis_ts; // play_end already counts from the actual genesis
+    play_end + drain_bells as i64 * bell_secs + 3_600
 }
 
 /// The archive guard after CreateSeason (W6T-4): the archive is checked
@@ -205,10 +205,11 @@ pub fn archive_guard(
     drain_bells: u32,
     bell_secs: i64,
 ) -> Result<ArchiveRange, Refusal> {
-    // W6T-4 failing-first stub: the planned need (the pre-check's).
-    let planned =
-        g0 + setup::LEAD_SECS + (play_end - genesis_ts) + drain_bells as i64 * bell_secs + 3_600;
-    check_archive(dir, g0, planned)
+    check_archive(
+        dir,
+        g0,
+        archive_until(genesis_ts, play_end, drain_bells, bell_secs),
+    )
 }
 
 pub struct Keys {
@@ -330,7 +331,6 @@ pub fn keeper_toml(
     dir: &Path,
     backup_delay: Option<u32>,
 ) -> String {
-    let _ = backup_delay; // W6T-4 failing-first stub
     let roles: Vec<String> = keeper_roles(which)
         .iter()
         .map(|r| format!("\"{r}\""))
@@ -367,7 +367,9 @@ pub fn keeper_toml(
         f = cfg.funders,
         d = dir.display(),
         jitter = if which == 'a' { 0 } else { 2 },
-    )
+    ) + &backup_delay
+        .map(|d| format!("backup_delay_slots = {d}\n"))
+        .unwrap_or_default()
 }
 
 pub struct Stack {

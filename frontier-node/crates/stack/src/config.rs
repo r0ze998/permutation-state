@@ -982,6 +982,59 @@ mod tests {
             .is_err());
     }
 
+    /// W6T-4: the season-end, viewer, keeper-B and forced-kill keys and flags.
+    #[test]
+    fn w6t4_keys_and_flags() {
+        let c = StackConfig::from_toml(
+            "season_end_at_play_end = true\nkeeper_b_backup_delay_slots = 12\n[viewers]\nthink_ms = 3000\nfollow_status = false\nretry_budget_ms = 7000\n[chaos]\nforce = \"herald:2, herald:7.5\"\n",
+        )
+        .unwrap();
+        assert!(c.season_end_at_play_end);
+        assert_eq!(c.season_end_bell(), Some(144));
+        assert_eq!(c.keeper_b_backup_delay_slots, 12);
+        assert_eq!((c.viewer_think_ms, c.viewer_follow_status), (3_000, false));
+        assert_eq!(c.viewer_retry_budget_ms(), 7_000);
+        assert_eq!(
+            c.chaos_force,
+            vec![("herald".to_string(), 2.0), ("herald".to_string(), 7.5)]
+        );
+        let mut d = StackConfig::default();
+        let f = split_flags(&[
+            "--season-end-at-play-end".into(),
+            "--days".into(),
+            "2".into(),
+            "--chaos-force".into(),
+            "herald:2".into(),
+            "--chaos-force".into(),
+            "herald:7".into(),
+            "--viewer-think-ms".into(),
+            "4000".into(),
+            "--no-viewer-follow-status".into(),
+        ])
+        .unwrap();
+        apply_flags(&mut d, &f).unwrap();
+        assert_eq!(d.season_end_bell(), Some(288));
+        assert_eq!(d.chaos_force.len(), 2);
+        assert_eq!(d.viewer_think_ms, 4_000);
+        assert!(!d.viewer_follow_status);
+        assert_eq!(d.to_json()["season_end_bell"], 288);
+        // Refusals: an unknown component, a negative hour, a season past
+        // §5.7's 4,032 bells.
+        for bad in [
+            ["--chaos-force", "nobody:1"],
+            ["--chaos-force", "herald:-1"],
+            ["--days", "30"],
+        ] {
+            let mut e = StackConfig {
+                season_end_at_play_end: true,
+                ..Default::default()
+            };
+            let f = split_flags(&[bad[0].into(), bad[1].into()]).unwrap();
+            assert!(apply_flags(&mut e, &f).is_err(), "{bad:?}");
+        }
+        assert!(StackConfig::from_toml("[viewers]\nthink_ms = 0\n").is_err());
+    }
+
     #[test]
     fn refusals() {
         assert!(StackConfig::from_toml("typo = 1").is_err());

@@ -18,7 +18,13 @@
 //! can decide from those (stuck province-bells, unsettled transits,
 //! cohorts, effective N, personas, bad seals, herald), chaos kills,
 //! restarts and crashes, adversary holds, and the verify, tamper and load
-//! verdicts.
+//! verdicts. W6T-4: idle province-days exclude days with a GATHER or
+//! CLASH (§13.4 A1); criterion 4 lists V5's by-rule reasons and an honest
+//! march refused by rule is a criterion-5 violation (A2); failed
+//! transactions by class (expected / redundancy / waste); the keeper
+//! status from the last answered sample with its unanswered bells; the
+//! per-bell load average; stalls of ≥ 20 slots after a bell start; and row
+//! E, the §13.4 environment (not exit-grade when a hold was skipped).
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -166,15 +172,64 @@ pub fn failures(txs: &[TxRecord], program: &Address) -> Value {
 /// land: keeper, bot-policy or bot bugs); anything else `unclassified`.
 /// Returns `(class, cause)`. Reported, not gating.
 pub fn classify_failure(kind: &str, err: &str) -> (&'static str, &'static str) {
-    let _ = (kind, err);
-    ("unclassified", "") // W6T-4 failing-first stub
+    // Error names come from `failures` (the program's code name, else the
+    // transaction error JSON).
+    let pftc = err.contains("ProgramFailedToComplete") || err.contains("exceeded CUs meter");
+    match (kind, err) {
+        // Keeper waste: CU exhaustion of the closes (w6-s7: re-planned ~270
+        // times each in the drain) and anchors for bells ≥ end_bell.
+        ("CloseArrivalDay" | "CloseArrivalSlot" | "CloseClashInputs", _) if pftc => {
+            ("waste", "keeper")
+        }
+        (_, _) if pftc => ("waste", "keeper"),
+        ("PostAnchor" | "PostAnchorMulti", "BadData") => ("waste", "keeper"),
+        // Another sender landed the same work first.
+        ("SettleDeparture" | "SettleTransit" | "Reveal", "AlreadyDone") => {
+            ("redundancy", "a/b race")
+        }
+        ("SettleTransit" | "SettleDeparture", "TransitState") => ("redundancy", "a/b race"),
+        (_, "AlreadyDone") => ("redundancy", "duplicate"),
+        // Bot bugs (W6T-3 fixes them): a war target while shielded, an
+        // arrival at or after end_bell.
+        ("Reveal", "Shielded" | "WrongStatus") => ("waste", "bot-bug"),
+        ("Depart" | "Reveal", "ArrivalBell") => ("waste", "bot-bug"),
+        // Bot policy: acting on a stale view.
+        (_, "NotResident" | "ProvinceFull" | "QueueFull") => ("waste", "bot-policy"),
+        // Persona and adversary traffic, races the program settles, drain.
+        ("Depart", "TipTooLow" | "TipNotPreset") => ("expected", "persona"),
+        ("Reveal", "WindowClosed") => ("expected", "persona"),
+        ("Reveal", "BadAddress") => ("expected", "adversary"),
+        (_, "HostInTransit") => ("expected", "persona"),
+        ("SettleTicket", "NoTicket") => ("expected", "race"),
+        ("ResolveFromInputs", "OutOfOrder") => ("expected", "bounded duplicate"),
+        ("SkipQuiet", "NotQuiet") => ("expected", "race"),
+        ("FoldOccupancy", "FoldStale") => ("expected", "race"),
+        _ => ("unclassified", ""),
+    }
 }
 
 /// Failed transactions by (kind, error) with their class, and the totals
 /// per class.
 pub fn failure_classes(failures: &Value) -> Value {
-    let _ = failures;
-    Value::Null // W6T-4 failing-first stub
+    let mut rows = vec![];
+    let mut by_class: BTreeMap<&str, u64> = BTreeMap::new();
+    let mut by_cause: BTreeMap<String, u64> = BTreeMap::new();
+    let mut total = 0u64;
+    for (k, n) in failures.as_object().into_iter().flatten() {
+        let n = n.as_u64().unwrap_or(0);
+        let (kind, err) = k.split_once(": ").unwrap_or((k.as_str(), ""));
+        let (class, cause) = classify_failure(kind, err);
+        total += n;
+        *by_class.entry(class).or_default() += n;
+        if !cause.is_empty() {
+            *by_cause.entry(cause.to_string()).or_default() += n;
+        }
+        rows.push(json!({"kind": kind, "error": err, "n": n, "class": class, "cause": cause}));
+    }
+    rows.sort_by(|a, b| b["n"].as_u64().cmp(&a["n"].as_u64()));
+    json!({"total": total, "by_class": by_class, "by_cause": by_cause,
+        "unclassified": by_class.get("unclassified").copied().unwrap_or(0), "rows": rows,
+        "note": "reported, not gating: expected = persona/adversary/race/drain refusals; redundancy = another sender landed the work first; waste = could never land (keeper, bot-policy, bot-bug)"})
 }
 
 /// The chain's slot → Clock map, from the landing slots and Clock times of
@@ -424,10 +479,10 @@ pub fn classify_days(
     active: &std::collections::BTreeSet<(i32, i32, u32)>,
     seen: &std::collections::BTreeSet<(i32, i32)>,
 ) -> Value {
-    let _ = active; // W6T-4 failing-first stub: GATHER/CLASH days not split out
-    let (mut idle, mut churn, mut unknown) = (vec![], vec![], 0usize);
+    let (mut idle, mut churn, mut act, mut unknown) = (vec![], vec![], vec![], 0usize);
     let mut idle_over: Vec<String> = vec![];
     let mut churn_over: Vec<String> = vec![];
+    let mut act_over: Vec<String> = vec![];
     for ((p, q, d), n) in skips {
         if !seen.contains(&(*p, *q)) {
             unknown += 1;
@@ -435,6 +490,11 @@ pub fn classify_days(
             churn.push(*n as f64);
             if *n > 6 {
                 churn_over.push(format!("({p},{q}) day {d}: {n}"));
+            }
+        } else if active.contains(&(*p, *q, *d)) {
+            act.push(*n as f64);
+            if *n > 6 {
+                act_over.push(format!("({p},{q}) day {d}: {n}"));
             }
         } else {
             idle.push(*n as f64);
@@ -448,10 +508,12 @@ pub fn classify_days(
         "skip_txs_per_province_day": stats(&all),
         "skip_txs_per_idle_province_day": stats(&idle),
         "skip_txs_per_churned_province_day": stats(&churn),
+        "skip_txs_per_active_province_day": stats(&act),
         "idle_province_days_over_6": idle_over,
         "churned_province_days_over_6": churn_over,
+        "active_province_days_over_6": act_over,
         "province_days_not_judged": unknown,
-        "definition": "idle = the Province's roster_epoch unchanged over the day (post-states); a SkipQuiet's change counts for its b0's day",
+        "definition": "idle = the Province's roster_epoch unchanged over the day (post-states) and no GATHER or CLASH of the province that day (§13.4 A1); active = roster unchanged with a GATHER/CLASH (reported); churned = roster moved (reported); a SkipQuiet's change counts for its b0's day",
     })
 }
 
@@ -666,45 +728,143 @@ pub fn keeper_summary(samples: &[Value], play_from: i64, play_to: i64) -> Value 
         })
         .filter_map(|s| s["bell"].as_i64())
         .collect();
-    let last = samples.last().map(|s| &s["status"]);
+    // W6T-4: the last answered sample (w6-s7's last one was null, so every
+    // field read null), and the unanswered ones counted.
+    let last = samples
+        .iter()
+        .rev()
+        .map(|s| &s["status"])
+        .find(|s| s.is_object());
+    let unanswered: Vec<&Value> = samples
+        .iter()
+        .filter(|s| !s["status"].is_object())
+        .collect();
+    let timeouts = unanswered
+        .iter()
+        .filter(|s| s["error"].as_str().is_some_and(|e| e.contains("timeout")))
+        .count();
+    let ms: Vec<f64> = samples.iter().filter_map(|s| s["ms"].as_f64()).collect();
     json!({"samples": samples.len(), "min_reveal_effective_n_in_play": min_n,
         "effective_n_ok": min_n.is_some_and(|n| n >= 150), "bells_below_150": low_bells,
+        "status_unanswered": unanswered.len(), "status_timeouts": timeouts,
+        "status_unanswered_bells": unanswered.iter().filter_map(|s| s["bell"].as_i64()).collect::<Vec<_>>(),
+        "status_ms": stats(&ms),
         "last": last.map(|l| json!({"bell": l["bell"], "alerts": l["alerts"], "spend_by_day": l["spend_by_day"],
             "pools": l["pools"], "anchor_latency_slots_p99": l["duties"]["anchor_latency_slots_p99"],
             "seed_latency_slots_p99": l["duties"]["seed_latency_slots_p99"], "provinces_opened": l["duties"]["provinces_opened"],
-            "archived_bells": l["duties"]["archived_bells"]}))})
+            "archived_bells": l["duties"]["archived_bells"], "rings_complete": l["duties"]["rings_complete"],
+            "tickets_open": l["duties"]["tickets_open"], "sweeps_sent": l["duties"]["sweeps_sent"],
+            "contested_bells": l["duties"]["contested_bells"].as_array().map(|a| a.len())}))})
 }
 
 /// The per-bell load average (`metrics/loadavg.jsonl`, W6T-4): the
 /// distribution of the 1-minute figure over the bells, its maximum per game
 /// day, and the series itself.
 pub fn loadavg_summary(samples: &[Value]) -> Value {
-    let _ = samples;
-    Value::Null // W6T-4 failing-first stub
+    let l1: Vec<f64> = samples.iter().filter_map(|s| s["load1"].as_f64()).collect();
+    let mut by_day: BTreeMap<i64, f64> = BTreeMap::new();
+    let mut worst: Option<(f64, i64)> = None;
+    for s in samples {
+        let (Some(b), Some(x)) = (s["bell"].as_i64(), s["load1"].as_f64()) else {
+            continue;
+        };
+        let e = by_day.entry(b.div_euclid(144)).or_insert(x);
+        *e = e.max(x);
+        if worst.is_none_or(|(w, _)| x > w) {
+            worst = Some((x, b));
+        }
+    }
+    json!({"bells": l1.len(), "load1": stats(&l1),
+        "load5": stats(&samples.iter().filter_map(|s| s["load5"].as_f64()).collect::<Vec<_>>()),
+        "max_by_day": by_day.values().collect::<Vec<_>>(), "worst_bell": worst.map(|w| w.1),
+        "series": samples.iter().map(|s| json!([s["bell"], s["load1"]])).collect::<Vec<_>>()})
 }
 
 /// Windows of at least `min_slots` consecutive slots in which no
-/// transaction landed (W6T-4; w6-s7 had one of 202 slots, bells 8-10),
-/// from the verify input's landed transactions after genesis, each with
-/// the chaos kills of the chain inside it (a killed localnet makes no
-/// slots, so a gap there has its reason).
+/// transaction landed **after a bell started** (W6T-4; w6-s7 had one of 202
+/// slots, bells 8-10): every bell start owes 16 anchors within slots, so
+/// no landing for `min_slots` slots after one is a stall, while a quiet
+/// stretch inside a bell is normal (counted, not listed). From the verify
+/// input's landed transactions after genesis, each with the chaos kills or
+/// crashes of the chain inside it (a killed localnet makes no slots, so a
+/// gap there has its reason).
 pub fn no_landing_windows(
     txs: &[TxRecord],
     genesis_ts: i64,
     bell_secs: i64,
+    slot_secs: f64,
     min_slots: u64,
     events: &[Value],
 ) -> Value {
-    let _ = (txs, genesis_ts, bell_secs, min_slots, events);
-    json!([]) // W6T-4 failing-first stub
+    let mut pts: Vec<(u64, i64)> = txs
+        .iter()
+        .filter(|t| t.err.is_none() && t.block_time >= genesis_ts)
+        .map(|t| (t.slot, t.block_time))
+        .collect();
+    pts.sort_unstable();
+    pts.dedup_by_key(|p| p.0);
+    let bs = bell_secs.max(1);
+    let bell = |t: i64| (t - genesis_ts).max(0) / bs;
+    let mut out = vec![];
+    let mut quiet = 0usize;
+    for w in pts.windows(2) {
+        let ((s0, t0), (s1, t1)) = (w[0], w[1]);
+        let empty = s1 - s0 - 1;
+        if empty < min_slots {
+            continue;
+        }
+        // The first bell start inside the window, and the slots from it to
+        // the next landing.
+        let k = (t0 - genesis_ts).div_euclid(bs) + 1;
+        let start = genesis_ts + k * bs;
+        let after = if start <= t1 {
+            ((t1 - start) as f64 / slot_secs.max(1e-9)).floor() as u64
+        } else {
+            0
+        };
+        if after < min_slots {
+            quiet += 1;
+            continue;
+        }
+        let why: Vec<String> = events
+            .iter()
+            .filter(|e| {
+                (e["event"] == "chaos-kill" || e["event"] == "crash")
+                    && e["detail"]["component"] == "localnet"
+                    && e["game"].as_i64().is_some_and(|g| g >= t0 && g <= t1)
+            })
+            .map(|e| format!("{} localnet", f(&e["event"])))
+            .collect();
+        out.push(json!({"from_slot": s0 + 1, "to_slot": s1 - 1, "slots": empty,
+            "slots_after_bell_start": after, "bell_started": k,
+            "from_bell": bell(t0), "to_bell": bell(t1), "game_from": t0, "game_to": t1, "explained_by": why}));
+    }
+    json!({"min_slots": min_slots, "windows": out, "quiet_windows_inside_a_bell": quiet})
 }
 
 /// Whether the run is exit-grade as an environment (W6T-4, §13.4): every
 /// adversary hold fired (a `hold-skipped` hold means the schedule was not
 /// exercised), the release `.so` pinned, real rounds.
 pub fn exit_grade(events: &[Value], config: &Value) -> Value {
-    let _ = (events, config);
-    json!({"exit_grade": true, "reasons": []}) // W6T-4 failing-first stub
+    let mut reasons: Vec<String> = vec![];
+    if config["adversary"] == true {
+        for e in events.iter().filter(|e| e["event"] == "hold-skipped") {
+            reasons.push(format!(
+                "hold-skipped {} ({})",
+                f(&e["detail"]["kind"]),
+                f(&e["detail"]["why"])
+            ));
+        }
+    } else {
+        reasons.push("no adversary schedule".into());
+    }
+    if !config["expect_so_sha256"].is_string() {
+        reasons.push("no release .so pin (--expect-so-sha256)".into());
+    }
+    if config["beacon"] != "archive" {
+        reasons.push(format!("beacon {} (not real rounds)", f(&config["beacon"])));
+    }
+    json!({"exit_grade": reasons.is_empty(), "reasons": reasons})
 }
 
 /// The by-rule unrevealed marches (verify V5 `unrevealed_by_rule`) by
@@ -735,8 +895,50 @@ pub const STEP6_REASONS: &[&str] = &["shielded-own", "shielded-dest", "path", "a
 /// that it does not list at all (the fleet is honest but for its
 /// personas).
 pub fn honest_rule_refusals(by_rule: &Value, bots_unrevealed: &Value) -> Vec<String> {
-    let _ = (by_rule, bots_unrevealed);
-    vec![] // W6T-4 failing-first stub
+    let host = |v: &Value| -> Option<u64> {
+        match v {
+            Value::Number(n) => n.as_u64(),
+            Value::String(s) => match s.strip_prefix("0x") {
+                Some(h) => u64::from_str_radix(h, 16).ok(),
+                None => s.parse().ok(),
+            },
+            _ => None,
+        }
+    };
+    let persona_of: HashMap<(u64, u64), String> = bots_unrevealed
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|b| {
+            Some((
+                (host(&b["host"])?, b["arrive"].as_u64()?),
+                b["persona"].as_str().unwrap_or("").to_string(),
+            ))
+        })
+        .collect();
+    let honest = |p: &str| p.is_empty() || p == "honest" || p.starts_with("arch:");
+    let mut out = vec![];
+    for x in by_rule.as_array().into_iter().flatten() {
+        let reason = x["reason"].as_str().unwrap_or("");
+        if !STEP6_REASONS.contains(&reason) {
+            continue;
+        }
+        let (Some(h), Some(a)) = (host(&x["host_id"]), x["arrive_bell"].as_u64()) else {
+            continue;
+        };
+        let p = persona_of.get(&(h, a)).map(String::as_str).unwrap_or("");
+        if honest(p) {
+            out.push(format!(
+                "{h}@{a} {reason}{}",
+                if persona_of.contains_key(&(h, a)) {
+                    format!(" ({})", if p.is_empty() { "honest" } else { p })
+                } else {
+                    " (not in the bots' list)".into()
+                }
+            ));
+        }
+    }
+    out
 }
 
 pub fn herald_summary(samples: &[Value]) -> Value {
@@ -1305,7 +1507,7 @@ pub async fn report(rd: &RunDir) -> i32 {
     let fails = failures(&inp.txs, &program);
     let fclasses = failure_classes(&fails);
     let load_avg = loadavg_summary(&read_jsonl(&rd.path("metrics/loadavg.jsonl")));
-    let no_landing = no_landing_windows(&inp.txs, genesis, bell_secs, 20, &events);
+    let no_landing = no_landing_windows(&inp.txs, genesis, bell_secs, 0.4 * scale, 20, &events);
     let above_cap: Vec<Value> = rd
         .events()
         .iter()
@@ -1378,6 +1580,30 @@ pub fn markdown(r: &Value) -> String {
         f(&r["play"]["play_bells"]), f(&r["play"]["drain_bells"]), f(&r["program"]), f(&r["so"]["sha256"]),
         f(&r["so"]["len"]), f(&r["source"]), f(&r["txs"]), f(&r["last_bell"])
     );
+    let eg = &r["exit_grade"];
+    if !eg.is_null() {
+        m.push_str(&format!(
+            "- **{}**{}\n",
+            if eg["exit_grade"] == true {
+                "exit-grade environment"
+            } else {
+                "NOT exit-grade"
+            },
+            if eg["exit_grade"] == true {
+                String::new()
+            } else {
+                format!(": {}", f(&eg["reasons"]))
+            }
+        ));
+    }
+    let la = &r["loadavg"];
+    if la["bells"].as_u64().unwrap_or(0) > 0 {
+        m.push_str(&format!(
+            "- machine load average (1 min, sampled each bell; the machine is shared): p50 {}, p99 {}, max {} at bell {}; max per game day {}\n",
+            f(&la["load1"]["p50"]), f(&la["load1"]["p99"]), f(&la["load1"]["max"]), f(&la["worst_bell"]), la["max_by_day"]
+        ));
+    }
+    m.push('\n');
     m.push_str("## §13.4 criteria decided\n\n| criterion | status | why |\n|---|---|---|\n");
     for c in r["decided"].as_array().cloned().unwrap_or_default() {
         m.push_str(&format!(
@@ -1398,9 +1624,15 @@ pub fn markdown(r: &Value) -> String {
     for l in r["loads"].as_array().cloned().unwrap_or_default() {
         let v = &l["verdict"];
         m.push_str(&format!(
-            "- load {} ({}, {} viewers, {} game h): p99 file {} ms, error rate {}, ingest → WS p99 {} s ({}; fold lag p99 {} s) → **{}**\n",
+            "- load {} ({}, {} viewers, {} game h): p99 file {} ms, error rate {} ({} errors / {} requests + WS sessions), ingest → WS p99 {} s ({}; fold lag p99 {} s), WS coverage {} outside {} outage windows, stale retries {} / WS reconnects {} (outside outages {} / {}), unavailable {} ({} ms), generator recovery {} → **{}**{}\n",
             f(&l["tag"]), f(&l["window"]), f(&l["viewers"]), f(&l["game_hours"]), f(&v["p99_file_ms"]), f(&v["error_rate"]),
-            f(&v["ingest_p99_s"]), f(&v["ingest_measure"]), f(&v["ingest_lag_p99_s"]), if v["pass"] == true { "pass" } else { "fail" }
+            f(&v["errors"]), f(&v["denominator"]),
+            f(&v["ingest_p99_s"]), f(&v["ingest_measure"]), f(&v["ingest_lag_p99_s"]),
+            f(&v["ws_coverage"]), v["coverage"]["outage_windows"].as_array().map_or(0, |a| a.len()),
+            f(&v["stale_retries"]), f(&v["ws_reconnects"]), f(&v["stale_retries_outside"]), f(&v["ws_reconnects_outside"]),
+            f(&v["unavailable"]), f(&v["unavailable_ms"]), f(&v["generator_recovery"]),
+            if v["pass"] == true { "pass" } else { "fail" },
+            if v["misses"].as_array().is_some_and(|a| !a.is_empty()) { format!(" ({})", v["misses"]) } else { String::new() }
         ));
     }
     m.push_str("\n## CU per instruction kind (whole-transaction units)\n\n| kind | landed | failed | p50 | p99 | max | budget | over | max bytes |\n|---|---|---|---|---|---|---|---|---|\n");
@@ -1500,6 +1732,11 @@ pub fn markdown(r: &Value) -> String {
             "skip_txs_per_churned_province_day",
             "churned_province_days_over_6",
         ),
+        (
+            "active (GATHER/CLASH, reported)",
+            "skip_txs_per_active_province_day",
+            "active_province_days_over_6",
+        ),
         ("all", "skip_txs_per_province_day", ""),
     ] {
         let s = &c[k];
@@ -1531,6 +1768,56 @@ pub fn markdown(r: &Value) -> String {
         o["records"], o["transits"], f(&o["departs"]), f(&o["departs_due"]),
         o["unsettled_due"].as_array().map_or(0, |a| a.len()), o["bad_seal_codes"], r["failures"]
     ));
+    let fc = &r["failure_classes"];
+    if fc.is_object() {
+        m.push_str(&format!(
+            "\n### Failed transactions by class (reported, not gating)\n\n{} failed: {} (by cause {}); unclassified {}.\n\n| kind | error | n | class | cause |\n|---|---|---|---|---|\n",
+            f(&fc["total"]), fc["by_class"], fc["by_cause"], f(&fc["unclassified"])
+        ));
+        for row in fc["rows"].as_array().cloned().unwrap_or_default() {
+            m.push_str(&format!(
+                "| {} | {} | {} | {} | {} |\n",
+                f(&row["kind"]),
+                f(&row["error"]).replace('|', "\\|"),
+                f(&row["n"]),
+                f(&row["class"]),
+                f(&row["cause"])
+            ));
+        }
+        m.push('\n');
+    }
+    let nl = r["no_landing_windows"]["windows"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    m.push_str(&format!(
+        "- no landed transaction for ≥ 20 slots after a bell started: {} windows ({} quiet stretches inside a bell not listed)\n",
+        nl.len(),
+        f(&r["no_landing_windows"]["quiet_windows_inside_a_bell"])
+    ));
+    for w in nl.iter().take(20) {
+        m.push_str(&format!(
+            "  - slots {}–{} ({} slots, {} after bell {} started; bells {}–{}){}\n",
+            f(&w["from_slot"]),
+            f(&w["to_slot"]),
+            f(&w["slots"]),
+            f(&w["slots_after_bell_start"]),
+            f(&w["bell_started"]),
+            f(&w["from_bell"]),
+            f(&w["to_bell"]),
+            if w["explained_by"].as_array().is_some_and(|a| !a.is_empty()) {
+                format!(": {}", w["explained_by"])
+            } else {
+                ": **unexplained**".into()
+            }
+        ));
+    }
+    if !r["unrevealed_by_rule"].is_null() {
+        m.push_str(&format!(
+            "- valid seals unrevealed by rule (verify V5, §13.4 A2) by reason: {}\n",
+            r["unrevealed_by_rule"]
+        ));
+    }
     let p = &r["provinces"];
     m.push_str(&format!(
         "- provinces {}; stuck province-bells: {}; cohorts open past 24 bells: {}\n",
@@ -1542,9 +1829,11 @@ pub fn markdown(r: &Value) -> String {
     ));
     let k = &r["keepers"];
     m.push_str(&format!(
-        "\n## Keepers, herald, bots\n\n- keeper A: min reveal effective N in play {} (≥ 150: {}), last status {}\n- keeper B: min reveal effective N in play {}\n- herald: fold lag slots p99 {}, alarms {}\n- personas violated: {}\n",
-        f(&k["a"]["min_reveal_effective_n_in_play"]), f(&k["a"]["effective_n_ok"]), k["a"]["last"],
-        f(&k["b"]["min_reveal_effective_n_in_play"]), f(&r["herald"]["fold_lag_slots"]["p99"]),
+        "\n## Keepers, herald, bots\n\n- keeper A: min reveal effective N in play {} (≥ 150: {}); status unanswered in {} of {} bells ({} timeouts; answer ms p99 {}); last answered status {}\n- keeper B: min reveal effective N in play {}; status unanswered in {} of {} bells ({} timeouts); last answered status {}\n- herald: fold lag slots p99 {}, alarms {}\n- personas violated: {}\n",
+        f(&k["a"]["min_reveal_effective_n_in_play"]), f(&k["a"]["effective_n_ok"]),
+        f(&k["a"]["status_unanswered"]), f(&k["a"]["samples"]), f(&k["a"]["status_timeouts"]), f(&k["a"]["status_ms"]["p99"]), k["a"]["last"],
+        f(&k["b"]["min_reveal_effective_n_in_play"]), f(&k["b"]["status_unanswered"]), f(&k["b"]["samples"]), f(&k["b"]["status_timeouts"]), k["b"]["last"],
+        f(&r["herald"]["fold_lag_slots"]["p99"]),
         f(&r["herald"]["alarms_total"]), r["bots"]["personas"]["violated"]
     ));
     let e = &r["events"];
@@ -2116,13 +2405,19 @@ mod tests {
         txs.push(tx(900, g + 800 * 8, false)); // a failure does not land
         txs.extend((1029..1100).map(|s| tx(s, g + (s as i64 - 100) * 8, true)));
         txs.push(tx(1200, g + 1100 * 8, true));
+        // A quiet stretch inside a bell (24 slots, ending on a bell start's
+        // landing) is not a stall.
+        txs.push(tx(1225, g + 1125 * 8, true));
         txs.push(tx(5, g - 100, true)); // before genesis: ignored
         let ev = vec![
             json!({"event": "chaos-kill", "game": g + 1_050 * 8, "detail": {"component": "localnet"}}),
         ];
-        let w = no_landing_windows(&txs, g, 600, 20, &ev);
-        let a = w.as_array().unwrap();
+        let w = no_landing_windows(&txs, g, 600, 8.0, 20, &ev);
+        assert_eq!(w["quiet_windows_inside_a_bell"], 1, "{w}");
+        let a = w["windows"].as_array().unwrap();
         assert_eq!(a.len(), 2, "{w}");
+        assert_eq!(a[0]["bell_started"], 10);
+        assert_eq!(a[0]["slots_after_bell_start"], (7_432 - 6_000) / 8);
         assert_eq!(
             (a[0]["from_slot"].as_u64(), a[0]["to_slot"].as_u64()),
             (Some(827), Some(1028))

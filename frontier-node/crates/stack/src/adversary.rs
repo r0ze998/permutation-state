@@ -20,15 +20,22 @@
 //! defence claim (a late Reveal's refund inside its grace:
 //! `fclient::play::open_claim`, the keeper's own rule) whose grace outlasts
 //! the hold by a bell, so claims wait and none is lost. Both are armed over
-//! the whole play window like the ticket hold.
+//! the whole play window like the ticket hold. W6T-4: `slots-below` and
+//! `lag` are armed to the end of play as well (w6-s7 skipped both after
+//! their one-hour deadline, and `defence-pool` for want of the claim a
+//! below-cap slot hold creates): `slots-below` from the first hour (by 60%
+//! of play at the latest), `lag` on the origin of a transit in flight (a
+//! Holding transit in state 1-2; a Province entry in state 3 lasts only
+//! until its SettleDeparture). A `hold-skipped` hold makes the run not
+//! exit-grade (report row E).
 //!
 //! | kind | keys | price (milli) | length | expected |
 //! |---|---|---|---|---|
-//! | `slots-below` | one province-bell's ArrivalSlots + ArrivalDay | 1,500 (< P_def 2.0) | through the close | reveals land (keepers escalate past it) |
+//! | `slots-below` | one province-bell's ArrivalSlots + ArrivalDay (armed over play) | 1,500 (< P_def 2.0) | through the close | reveals land (keepers escalate past it; a late one opens a claim) |
 //! | `slots-above` | the same, another bell | 3,000 (> P_def) | through the close | reveals wait; late ones routed and flagged |
 //! | `anchor` | one region's next BellAnchor | 1,000 (> P_delay 0.5) | ⅓ bell | the window stays open longer (delay only) |
 //! | `keeper-payers` | 20 of keeper A's reveal payers | 3,000 | 1 bell | the keeper draws other payers (effective N ≥ 150 − 20) |
-//! | `lag` | an origin Province + its region's next anchor | 1,000 | 2 bells | the destination's result is unchanged (G7 in play) |
+//! | `lag` | the origin Province of transits in flight + its region's next anchor (armed over play) | 1,000 | 2 bells | the destination's result is unchanged (G7 in play) |
 //! | `ticket` | a Province with an open ticket cohort | 1,000 | 2 bells | finality waits for the cohort; the higher score still wins |
 //! | `frontier-fund` | Frontier + the ProvinceFund of the wedge a ring opening draws on (during the opening) | 1,000 | 1 bell | ring openings and folds wait (delay) |
 //! | `defence-pool` | the DefencePool, while a defence claim is open (≥ 4 bells of its grace left) | 1,000 | 3 bells (half the claim grace) | claims and sweeps wait; none lost inside the grace |
@@ -88,11 +95,19 @@ pub fn plan(start: i64, end: i64) -> Vec<Planned> {
             // is armed from the first bell and fires at the first open
             // cohort it sees. W6-C: the ring-opening and claim-grace holds
             // are armed likewise (from the first hour) and fire when their
-            // situation arises.
-            let armed = matches!(*k, "ticket" | "frontier-fund" | "defence-pool");
+            // situation arises. W6T-4: `slots-below` and `lag` are armed to
+            // the end of play too (w6-s7 skipped both after one game hour
+            // with nothing pending), and `slots-below` starts by 60% of play
+            // so the escalation past it can open a claim `defence-pool`
+            // holds.
+            let armed = matches!(
+                *k,
+                "ticket" | "frontier-fund" | "defence-pool" | "slots-below" | "lag"
+            );
             let at = match *k {
                 "ticket" => start + 600,
                 "frontier-fund" | "defence-pool" => start + 3_600,
+                "slots-below" => start + 3_600.min((end - start) * 6 / 10),
                 _ => start + 3_600 + span * i as i64 / n,
             };
             let deadline = if armed { end } else { at + 3_600 };
@@ -333,8 +348,26 @@ pub fn march_origin(ps: &[Province]) -> Option<&Province> {
 
 /// The transits in flight among Holding transit records (state 1 or 2).
 pub fn in_flight_of(ts: &[fclient::decode::Transit]) -> Vec<InFlight> {
-    let _ = ts;
-    vec![] // W6T-4 failing-first stub
+    ts.iter()
+        .filter(|t| matches!(t.state, 1 | 2))
+        .map(|t| InFlight {
+            origin: (t.origin_p, t.origin_q),
+            arrive_bell: t.arrive_bell,
+            state: t.state,
+        })
+        .collect()
+}
+
+/// The origin Province with the most transits in flight (W6T-4; ties: the
+/// lower coordinates), among the opened Provinces.
+pub fn origin_in_flight<'a>(ps: &'a [Province], fl: &[InFlight]) -> Option<(&'a Province, usize)> {
+    let mut n: std::collections::BTreeMap<(i16, i16), usize> = std::collections::BTreeMap::new();
+    for f in fl {
+        *n.entry(f.origin).or_default() += 1;
+    }
+    n.iter()
+        .filter_map(|(o, c)| ps.iter().find(|p| (p.p, p.q) == *o).map(|p| (p, *c)))
+        .max_by_key(|(p, c)| (*c, -(p.p as i32), -(p.q as i32)))
 }
 
 /// [`keys_for`] against the chain's pending work.
@@ -381,15 +414,18 @@ pub fn keys_for_pending(
             )
         }),
         "lag" => {
-            let p = if pending.require {
-                march_origin(ps)?
-            } else {
-                march_origin(ps).or_else(|| busiest(ps))?
+            // W6T-4: the origin of transits in flight (Holding transit state
+            // 1-2); Province entries in state 3 last only until the
+            // SettleDeparture a few slots later.
+            let (p, n) = match origin_in_flight(ps, &pending.in_flight) {
+                Some(x) => x,
+                None if pending.require => return None,
+                None => (march_origin(ps).or_else(|| busiest(ps))?, 0),
             };
             Some((
                 vec![a.province(p.p as i32, p.q as i32), a.anchor(next, p.region)],
-                json!({"province": [p.p, p.q], "region": p.region, "bell": next,
-                    "why": "the origin of a march in flight (departed entries await their settle)"}),
+                json!({"province": [p.p, p.q], "region": p.region, "bell": next, "in_flight": n,
+                    "why": "the origin of transits in flight (DEPART seen, not settled)"}),
             ))
         }
         "ticket" => {
@@ -678,8 +714,13 @@ mod tests {
         assert!(keys_for_pending("lag", &ad, &ps, &need, 10, 4, &[], &[]).is_none());
         let mut ps2 = ps.clone();
         ps2[1].entries[3].state = 3;
-        let (k, _) = keys_for_pending("lag", &ad, &ps2, &need, 10, 4, &[], &[]).unwrap();
-        assert_eq!(k[0], ad.province(1, 0), "the origin of the march in flight");
+        // W6T-4: a state-3 entry alone is no longer the lag hold's
+        // situation (it lasts only until the SettleDeparture); a transit in
+        // flight is (`lag_uses_transits_in_flight`). Unrequired, the
+        // state-3 origin is still the fallback.
+        assert!(keys_for_pending("lag", &ad, &ps2, &need, 10, 4, &[], &[]).is_none());
+        let (k, _) = keys_for("lag", &ad, &ps2, 10, 4, &[], &[]).unwrap();
+        assert_eq!(k[0], ad.province(1, 0), "the fallback origin");
         let (_, d) = keys_for("ticket", &ad, &ps2, 10, 4, &[], &[]).unwrap();
         assert_eq!(d["until_bell"], 24, "through the cohort's 24 bells");
         // W6-C: the ring-opening and claim-grace holds wait for their

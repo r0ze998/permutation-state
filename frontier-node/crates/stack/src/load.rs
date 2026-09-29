@@ -10,6 +10,15 @@
 //! lag** (the program's newest transaction slot − the herald's last
 //! folded slot, × 0.4 s of wall per slot), sampled once a second: the WS fan-out after the fold is not in
 //! it (reported as such).
+//!
+//! W6T-4 (§13.4 A3): the generator gets the recovery budget (chaos restart
+//! maximum at the run's scale + 2 s), the think time, the herald to follow
+//! for the live bell, the opened provinces and every ring; the error rate
+//! is over requests + WS sessions; every second the herald's open WS count
+//! and the generator's counters are sampled, and criterion 6 fails when WS
+//! viewers are connected < 99% of the window outside the herald outage
+//! windows (chaos kills in `events.jsonl`) or when stale retries or WS
+//! reconnects happen outside them.
 
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -22,6 +31,8 @@ use crate::run::RunDir;
 pub const P99_FILE_MS: f64 = 250.0;
 pub const INGEST_P99_S: f64 = 2.0;
 pub const ERROR_RATE: f64 = 0.001;
+/// WS viewers connected over the window outside the outages (§13.4 A3).
+pub const WS_COVERAGE: f64 = 0.99;
 
 /// Spawns `frontier-viewers` for `wall_secs`; stdout (its JSON report) to
 /// `load/<tag>.json`.
@@ -71,10 +82,9 @@ pub fn viewer_args(
     bell: u32,
     plan: &ViewerPlan,
 ) -> Vec<String> {
-    let _ = plan; // W6T-4 failing-first stub: the w6-s7 arguments
     let ws = viewers / 5;
     let polling = viewers - ws;
-    vec![
+    let mut a: Vec<String> = vec![
         "--herald".into(),
         format!("127.0.0.1:{herald}"),
         "--viewers".into(),
@@ -87,7 +97,39 @@ pub fn viewer_args(
         bell.max(1).to_string(),
         "--stats".into(),
         format!("127.0.0.1:{stats}"),
-    ]
+        // W6T-4 (§13.4 A3): the client's standard recovery budget and the
+        // think time; the load follows the live bell over the opened
+        // provinces and every ring.
+        "--retry-budget-ms".into(),
+        plan.retry_budget_ms.to_string(),
+        "--think-ms".into(),
+        plan.think_ms.to_string(),
+    ];
+    if let Some(u) = &plan.follow_status {
+        a.push("--follow-status".into());
+        a.push(u.clone());
+    }
+    if !plan.provinces.is_empty() {
+        a.push("--provinces".into());
+        a.push(
+            plan.provinces
+                .iter()
+                .map(|(p, q)| format!("{p},{q}"))
+                .collect::<Vec<_>>()
+                .join(";"),
+        );
+    }
+    if !plan.rings.is_empty() {
+        a.push("--rings".into());
+        a.push(
+            plan.rings
+                .iter()
+                .map(|r| r.to_string())
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+    }
+    a
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -192,8 +234,91 @@ pub struct Coverage {
 /// next request on its stale connection, and a second of slack). A kill
 /// without a restart is open to the end.
 pub fn outage_windows(events: &[Value], retry_budget_ms: u64, think_ms: u64) -> Vec<(u64, u64)> {
-    let _ = (events, retry_budget_ms, think_ms);
-    vec![] // W6T-4 failing-first stub
+    let is_herald = |e: &Value| e["detail"]["component"] == "herald";
+    let grace = retry_budget_ms + think_ms * 3 / 2 + 1_000;
+    let mut out = vec![];
+    for (i, e) in events.iter().enumerate() {
+        if e["event"] != "chaos-kill" || !is_herald(e) {
+            continue;
+        }
+        let Some(k) = e["wall_ms"].as_u64() else {
+            continue;
+        };
+        let back = events[i + 1..]
+            .iter()
+            .find(|x| x["event"] == "restart" && is_herald(x))
+            .and_then(|x| x["wall_ms"].as_u64());
+        out.push((k, back.map_or(u64::MAX, |r| r.saturating_add(grace))));
+    }
+    out
+}
+
+/// The coverage and recovery checks of a viewer window (W6T-4, §13.4 A3):
+/// - **WS coverage**: the herald's open WS count over the WS viewers,
+///   averaged over the samples outside the outage windows (the first 5 s
+///   and last 3 s of the window are the generator's ramp and wind-down and
+///   are left out); ≥ 99% required;
+/// - **recovery outside the outages**: stale keep-alive retries and WS
+///   reconnects the generator counted at a sample outside every outage
+///   window mean the herald dropped connections by itself: flagged, and
+///   criterion 6 fails.
+pub fn coverage_check(cov: &Coverage) -> Value {
+    let inside = |t: u64| cov.outages.iter().any(|(a, b)| t >= *a && t <= *b);
+    let first = cov.samples.iter().map(|s| s.wall_ms).min().unwrap_or(0);
+    let last = cov.samples.iter().map(|s| s.wall_ms).max().unwrap_or(0);
+    let w = cov.ws_viewers;
+    let (mut n, mut sum, mut in_outage, mut unanswered) = (0u64, 0f64, 0u64, 0u64);
+    for s in &cov.samples {
+        if s.wall_ms < first + 5_000 || s.wall_ms + 3_000 > last {
+            continue;
+        }
+        if inside(s.wall_ms) {
+            in_outage += 1;
+            continue;
+        }
+        match s.ws_open {
+            Some(o) => {
+                n += 1;
+                sum += if w == 0 {
+                    1.0
+                } else {
+                    o.min(w) as f64 / w as f64
+                };
+            }
+            None => unanswered += 1,
+        }
+    }
+    let coverage = (n > 0).then(|| sum / n as f64);
+    let coverage_ok = w == 0 || coverage.is_some_and(|c| c >= WS_COVERAGE);
+    let deltas = |get: &dyn Fn(&Sample) -> Option<u64>| {
+        let (mut prev, mut ins, mut out) = (0u64, 0u64, 0u64);
+        let mut when: Vec<u64> = vec![];
+        for s in &cov.samples {
+            if let Some(x) = get(s) {
+                let d = x.saturating_sub(prev);
+                if d > 0 {
+                    if inside(s.wall_ms) {
+                        ins += d;
+                    } else {
+                        out += d;
+                        when.push(s.wall_ms);
+                    }
+                }
+                prev = x;
+            }
+        }
+        (ins, out, when)
+    };
+    let (stale_in, stale_out, stale_when) = deltas(&|s| s.stale_retries);
+    let (rec_in, rec_out, rec_when) = deltas(&|s| s.ws_reconnects);
+    json!({
+        "ws_viewers": w, "ws_coverage": coverage, "ws_coverage_target": WS_COVERAGE, "ws_coverage_ok": coverage_ok,
+        "coverage_samples": n, "samples_in_outages": in_outage, "samples_unanswered": unanswered,
+        "outage_windows": cov.outages.iter().map(|(a, b)| json!([a, if *b == u64::MAX { Value::Null } else { json!(b) }])).collect::<Vec<_>>(),
+        "stale_retries_inside": stale_in, "stale_retries_outside": stale_out,
+        "ws_reconnects_inside": rec_in, "ws_reconnects_outside": rec_out,
+        "recovery_outside_at_wall_ms": stale_when.iter().chain(rec_when.iter()).take(20).collect::<Vec<_>>(),
+    })
 }
 
 /// A `/stats` or `/h/status` probe of the running window.
@@ -254,10 +379,14 @@ pub fn quantile(v: &[f64], q: f64) -> Option<f64> {
 ///   only for such bells, so a 404 there is the contract's answer, counted
 ///   and reported, not an error.
 pub fn judge(rep: &Value, lag_secs: &[f64], cov: Option<&Coverage>) -> Value {
-    let _ = cov; // W6T-4 failing-first stub
     let req = rep["requests"].as_f64().unwrap_or(0.0);
-    let errs = rep["errors"].as_f64().unwrap_or(0.0) + rep["ws"]["errors"].as_f64().unwrap_or(0.0);
-    let rate = if req > 0.0 { errs / req } else { 1.0 };
+    let ws_errs = rep["ws"]["errors"].as_f64().unwrap_or(0.0);
+    let errs = rep["errors"].as_f64().unwrap_or(0.0) + ws_errs;
+    // W6T-4 (§13.4 A3): the generator's denominator, every request and
+    // every WS session (connected or failed).
+    let sessions = rep["ws"]["connected"].as_f64().unwrap_or(0.0) + ws_errs;
+    let denom = req + sessions;
+    let rate = if denom > 0.0 { errs / denom } else { 1.0 };
     let p99 = rep["p99_upper_ms"]
         .as_f64()
         .or_else(|| rep["p99_ms"].as_f64())
@@ -279,6 +408,15 @@ pub fn judge(rep: &Value, lag_secs: &[f64], cov: Option<&Coverage>) -> Value {
     let ok_err = req > 0.0 && rate < ERROR_RATE;
     let ok_ingest = ingest.is_some_and(|x| x <= INGEST_P99_S);
     let ok_gaps = gaps == 0;
+    let cc = cov.map(coverage_check);
+    let ok_cov = cc.as_ref().is_none_or(|c| c["ws_coverage_ok"] == true);
+    let (stale_out, rec_out) = cc.as_ref().map_or((0, 0), |c| {
+        (
+            c["stale_retries_outside"].as_u64().unwrap_or(0),
+            c["ws_reconnects_outside"].as_u64().unwrap_or(0),
+        )
+    });
+    let ok_recovery = stale_out == 0 && rec_out == 0;
     let mut misses = vec![];
     if !ok_file {
         misses.push(format!("file p99 {p99} ms > {P99_FILE_MS} ms"));
@@ -294,18 +432,48 @@ pub fn judge(rep: &Value, lag_secs: &[f64], cov: Option<&Coverage>) -> Value {
     if !ok_gaps {
         misses.push(format!("{gaps} WS gaps"));
     }
+    if let Some(c) = &cc {
+        if !ok_cov {
+            misses.push(match c["ws_coverage"].as_f64() {
+                Some(x) => format!(
+                    "WS coverage {:.1}% < {:.0}% outside the herald outage windows",
+                    x * 100.0,
+                    WS_COVERAGE * 100.0
+                ),
+                None => {
+                    "WS coverage not measured (no herald ws.open sample outside the outages)".into()
+                }
+            });
+        }
+        if !ok_recovery {
+            misses.push(format!(
+                "{stale_out} stale-connection retries and {rec_out} WS reconnects outside the herald outage windows (the herald dropped connections by itself)"
+            ));
+        }
+    }
+    let recovery = rep.get("staleRetries").is_some();
     json!({
         "p99_file_ms": p99, "p99_file_target_ms": P99_FILE_MS, "p99_file_ok": ok_file,
-        "requests": req, "errors": errs, "error_rate": rate, "error_rate_target": ERROR_RATE, "error_rate_ok": ok_err,
+        "requests": req, "ws_sessions": sessions, "denominator": denom,
+        "errors": errs, "error_rate": rate, "error_rate_target": ERROR_RATE, "error_rate_ok": ok_err,
+        "generator_recovery": recovery,
+        "generator_recovery_note": if recovery { "the generator retries stale keep-alive connections and reconnects WS within its budget (§13.4 A3)" } else { "this frontier-viewers has no recovery (pre-W6T-3 build): a herald kill is counted as errors and drops its WS viewers" },
+        "stale_retries": rep["staleRetries"], "unavailable": rep["unavailable"], "unavailable_ms": rep["unavailable_ms"],
+        "ws_reconnects": rep["ws"]["reconnects"],
+        "coverage": cc, "ws_coverage": cc.as_ref().map(|c| c["ws_coverage"].clone()), "ws_coverage_ok": ok_cov,
+        "stale_retries_outside": stale_out, "ws_reconnects_outside": rec_out, "recovery_ok": ok_recovery,
         "ingest_p99_s": ingest, "ingest_measure": how, "ingest_target_s": INGEST_P99_S, "ingest_ok": ok_ingest,
         "ingest_lag_p99_s": fold, "ingest_lag_samples": lag_secs.len(),
         "ws_timed": timed, "ws_gaps": gaps, "ws_gaps_ok": ok_gaps,
         "not_found": not_found,
         "not_found_note": "404 for a per-bell file of a bell without a change: the contract's answer (§8.4), not an error",
         "ingest_note": "ws-stamp: the WS message's ingest stamp t to its receipt; fold-lag (fallback): newest program tx slot - last folded slot, x 0.4 s, sampled each second",
-        "summary": format!("p99 file {p99:.1} ms, ingest->WS p99 {} s ({how}), error rate {rate:.5}, gaps {gaps}, 404 {not_found}", ingest.map_or("-".into(), |x| format!("{x:.2}"))),
+        "summary": format!("p99 file {p99:.1} ms, ingest->WS p99 {} s ({how}), error rate {rate:.5}, gaps {gaps}, 404 {not_found}, WS coverage {}, recovery outside outages {}",
+            ingest.map_or("-".into(), |x| format!("{x:.2}")),
+            cc.as_ref().and_then(|c| c["ws_coverage"].as_f64()).map_or("-".into(), |x| format!("{:.1}%", x * 100.0)),
+            stale_out + rec_out),
         "misses": misses,
-        "pass": ok_file && ok_err && ok_ingest && ok_gaps,
+        "pass": ok_file && ok_err && ok_ingest && ok_gaps && ok_cov && ok_recovery,
     })
 }
 
@@ -740,8 +908,10 @@ mod tests {
             .any(|x| x == "--follow-status" || x == "--provinces" || x == "--rings"));
         assert!(a.iter().any(|x| x == "--retry-budget-ms"));
         // The w6-s7 budget: 60 game s of restart at 20x + 2 s.
-        let mut c = crate::config::StackConfig::default();
-        c.scale = 20.0;
+        let mut c = crate::config::StackConfig {
+            scale: 20.0,
+            ..Default::default()
+        };
         assert_eq!(c.viewer_retry_budget_ms(), 5_000);
         c.scale = 100.0;
         assert_eq!(c.viewer_retry_budget_ms(), 2_600);

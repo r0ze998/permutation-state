@@ -34,19 +34,25 @@ pub fn params(beacon: Beacon) -> SeasonParams {
 /// 756/1,008 share, kept in `1..end_bell` (§5.7: `join_close_bell <
 /// end_bell`).
 pub fn join_close_for(end_bell: u32) -> u32 {
-    let _ = end_bell;
-    frontier_abi::presets::M1_LOCAL_7D.join_close_bell // W6T-4 failing-first stub
+    let p = frontier_abi::presets::M1_LOCAL_7D;
+    let scaled = end_bell as u64 * p.join_close_bell as u64 / p.end_bell as u64;
+    (scaled as u32).clamp(1, end_bell.saturating_sub(1).max(1))
 }
 
 /// The run's CreateSeason parameters: [`params`], with `end_bell` (and the
 /// scaled `join_close_bell`) when the season ends at the end of play
 /// (`--season-end-at-play-end`, W6T-4).
 pub fn season_params(beacon: Beacon, end_bell: Option<u32>) -> SeasonParams {
-    let _ = end_bell;
-    params(beacon) // W6T-4 failing-first stub
+    let mut p = params(beacon);
+    if let Some(e) = end_bell {
+        p.end_bell = e;
+        p.join_close_bell = join_close_for(e);
+    }
+    p
 }
 
 /// Runs the operator steps; returns what the report needs.
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     chain: &Chain,
     addrs: &Addresses,

@@ -97,8 +97,16 @@ pub fn forced(
     force: &[(String, f64)],
     restart_max_secs: f64,
 ) -> Vec<Kill> {
-    let _ = (genesis_ts, viewer_start_hours, force, restart_max_secs);
-    vec![] // W6T-4 failing-first stub
+    let mut out: Vec<Kill> = force
+        .iter()
+        .map(|(c, h)| Kill {
+            at: genesis_ts + ((viewer_start_hours + h) * 3_600.0).round() as i64,
+            component: c.clone(),
+            restart_after: restart_max_secs,
+        })
+        .collect();
+    out.sort_by_key(|k| k.at);
+    out
 }
 
 /// The plan with the forced kills merged in (sorted by time).
