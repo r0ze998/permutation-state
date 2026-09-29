@@ -259,7 +259,7 @@ export class FrontierMap {
     for (const ov of src.overviews?.values?.() ?? []) for (const r of ov.provinces) recs.set(`${r.p},${r.q}`, r);
     const terrainOf = src.terrainOf ?? this.terrainOf;
     let wanted = 0, drawn = 0;
-    const artTiles = [];
+    const artTiles = [], artCells = [], artVoid = [];
     for (const pr of visibleProvinces(this.view, { width, height }, maxRing)) {
       const key = `${pr.p},${pr.q}`;
       const fog = fogLevel({ ringOpen: ringOf(pr.p, pr.q) < (src.ringsOpen ?? 1), showAll: src.showAll, known: src.known?.has(key), sightDistance: sightDistance(pr.p, pr.q, src.own ?? []) });
@@ -276,12 +276,16 @@ export class FrontierMap {
           continue;
         }
       }
+      if (this.art && fog === 'unopened') { artVoid.push(pr); continue; }
+      if (this.art && fog !== 'unopened') {
+        const t = terrainOf?.(pr.p, pr.q);
+        if (t) { artCells.push({ ...pr, t, rec, fog, selected }); continue; }
+      }
       paintProvince(ctx, { ...pr, rec, fog, selected, scale: z });
     }
-    if (artTiles.length) {
-      this.art.paint(ctx, artTiles, { zoom: z, dpr, terrainAt: terrainLookup(terrainOf), selected: src.selected });
-      for (const a of artTiles) paintVeil(ctx, { p: a.p, q: a.q, fog: a.fog, scale: z, selected: a.selected });
-    }
+    if (artVoid.length) this.art.paintUnopened(ctx, artVoid, { zoom: z });
+    if (artCells.length) this.art.paintStrategic(ctx, artCells, { zoom: z, dpr });
+    if (artTiles.length) this.art.paint(ctx, artTiles, { zoom: z, dpr, terrainAt: terrainLookup(terrainOf), selected: src.selected });
     this.mark(wanted > 0 && drawn === wanted ? 'ready' : 'pending');
   }
 
