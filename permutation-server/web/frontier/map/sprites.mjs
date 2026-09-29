@@ -12,7 +12,7 @@
 // in muted terrain colours with small marks, under a translucent owner tint, the tile-edge
 // boundary, the sigil and the clash ring. A province without terrain yet uses the vector cell.
 import { COLORS, FLATTEN, RADIUS, hexPoints, polygon, project, shade } from '../../map.mjs';
-import { PROVINCE_TILES, locate, tileHex } from '../fgeo.mjs';
+import { PROVINCE_TILES, locate, provinceCentre, ringOf, tileHex, wedgeOf } from '../fgeo.mjs';
 import { FACTION_COLORS } from '../fi18n.mjs';
 import { majorityOwner } from '../herald.mjs';
 import { BOUNDARY_HALO, BOUNDARY_INK, FOG, UNOPENED_FILL, paintSigil, provincePixel, PROVINCE_CIRCUMRADIUS } from './layers.mjs';
@@ -49,6 +49,10 @@ export const HOST_FIGURE_MIN_R = 35;
 /** Stance by its plaintext byte (0..3, rules stance.rs); fates 3 bounced, 4 retreated, 5 destroyed read as disarray. */
 export const ART_STANCES = Object.freeze(['hold', 'assault', 'flank', 'brace']);
 const BROKEN_FATES = new Set([3, 4, 5]);
+/** Ring-open moment: 8 dissolve frames of 90 ms, the gold edge glow levels per frame (fog.py). */
+const OPEN_FRAME_MS = 90;
+const OPEN_GLOW = [null, 0, 1, 2, 2, 3, 3, 3, 2, 1, 0];
+const now = () => (globalThis.performance?.now?.() ?? Date.now());
 const roadBit = (mask, i) => { try { return mask !== undefined && mask !== null && ((BigInt(mask) >> BigInt(i)) & 1n) === 1n; } catch { return false; } };
 
 /** Axial hexes from a to b inclusive (cube lerp). */
@@ -218,8 +222,22 @@ export class SpriteArt {
    * Tile LOD: the tiles of every entry {p, q, terrain, names, sites, rec, fog, selected} together.
    * An entry with fog 'unopened' (no terrain) is drawn as cloud sea.
    */
-  paint(ctx, entries, { zoom, dpr = 1, terrainAt = () => null, fogAt = () => null, selected = null, viewerFaction = null, demoRoads = false }) {
+  paint(ctx, entries, { zoom, dpr = 1, terrainAt = () => null, fogAt = () => null, selected = null, viewerFaction = null, demoRoads = false,
+    ringsOpen = null, replayRing = null, replayEvery = 6000, engineStage = 0 }) {
     const s = artSize(RADIUS * zoom * dpr);
+    // the ring-open moment starts when the open ring count grows (or, in the preview, on a timer)
+    const t0 = now();
+    if (ringsOpen !== null && this.lastRings !== undefined && ringsOpen > this.lastRings) this.opening = { ring: ringsOpen - 1, at: t0 };
+    if (ringsOpen !== null) this.lastRings = ringsOpen;
+    if (replayRing !== null && (!this.opening || t0 - this.opening.at > replayEvery)) this.opening = { ring: replayRing, at: t0 };
+    // preload every frame of the moment for this size so none is skipped on the first play
+    if (this.opening && this.opening.preloaded !== s.key) {
+      for (let f = 0; f < 8; f++) this.image('fog', s.key, `cloud_1_open_${f}`);
+      for (let k = 0; k < 6; k++) for (let l = 0; l < 4; l++) this.image('fog', s.key, `ringglow_${k}_${l}`);
+      this.opening.preloaded = s.key;
+    }
+    const openFrame = this.opening ? Math.floor((t0 - this.opening.at) / OPEN_FRAME_MS) : Infinity;
+    const opening = this.opening && openFrame < OPEN_GLOW.length ? this.opening.ring : null;
     const k = RADIUS / s.r;
     const tiles = [];
     const byHex = new Map();
@@ -240,6 +258,9 @@ export class SpriteArt {
           camp: !!(e.prov?.camp?.state === 1 && e.prov.camp.tile === i && j === undefined),
           shield: !!(m && m.shieldUntilBell > 0 && m.shieldUntilBell !== 0xffffffff && m.shieldUntilBell >= (e.prov?.resolvedNext ?? 0)) };
         t.road = !cloud && SITE_LAND.has(name) && roadBit(e.prov?.roadMask, i);
+        t.ring = ringOf(e.p, e.q);
+        const pc = provinceCentre(e.p, e.q);
+        t.centre = h.q === pc.q && h.r === pc.r;
         tiles.push(t);
         byHex.set(keyOf(h.q, h.r), t);
       }
@@ -271,6 +292,7 @@ export class SpriteArt {
     }
     const ownerAt = (q, r) => owner.get(keyOf(q, r))?.f;
     const draw = (img, t) => ctx.drawImage(img, t.x - s.ax * k, t.y - s.ay * k + TOP_LIFT, s.w * k, s.h * k);
+    const nearCentre = (t) => { const pc = provinceCentre(t.p, t.pq); return Math.max(Math.abs(t.q - pc.q), Math.abs(t.r - pc.r), Math.abs(t.q + t.r - pc.q - pc.r)) <= 1; };
     const siteGround = (t) => t.site !== undefined && SITE_LAND.has(t.name);
     // pass 1: ground and flat overlays
     for (const t of tiles) {
@@ -278,6 +300,7 @@ export class SpriteArt {
       const g = this.image(siteGround(t) ? 'sites' : 'terrain', s.key, `${t.name}_${t.v}`);
       if (!g) { polygon(ctx, hexPoints(t.x, t.y, 0), FLAT[t.name][0], null); continue; }
       draw(g, t);
+      if (t.ring === 0 && t.name !== 'water' && t.name !== 'mountain') { const pv = this.image('specials', s.key, 'concord_paving'); if (pv) draw(pv, t); }
       EDGE_DIRS.forEach(([dq, dr], e) => {
         const nb = nameAt(t.q + dq, t.r + dr);
         if (!nb || nb === 'cloud') return;
@@ -318,8 +341,28 @@ export class SpriteArt {
         });
         continue;
       }
-      const pr = this.image(siteGround(t) ? 'sites_props' : 'props', s.key, `${t.name}_${t.v}`);
+      const paved = t.ring === 0 && t.name !== 'water' && t.name !== 'mountain';
+      // the Permutation Engine stands over the Concord's centre and its six neighbours
+      if (t.centre && t.ring === 0) {
+        const es = ART_SIZES[Math.min(ART_SIZES.length - 1, ART_SIZES.indexOf(s) + 1)], kk = RADIUS / es.r, m = 2.4;
+        const en = this.image('specials', es.key, `engine_${Math.max(0, Math.min(5, engineStage | 0))}`);
+        if (en) ctx.drawImage(en, t.x - es.ax * kk * m, t.y - es.ay * kk * m + TOP_LIFT * m, es.w * kk * m, es.h * kk * m);
+        continue;
+      }
+      if (t.ring === 0 && nearCentre(t)) continue;
+      // a Seat's camp spreads over its province's centre and six neighbours
+      if (t.centre && t.ring === 1) {
+        const es = ART_SIZES[Math.min(ART_SIZES.length - 1, ART_SIZES.indexOf(s) + 1)], kk = RADIUS / es.r, m = 1.8;
+        const st = this.image('specials', es.key, `seat_${ART_FACTIONS[wedgeOf(t.p, t.pq)] ?? 'ember'}`);
+        if (st) ctx.drawImage(st, t.x - es.ax * kk * m, t.y - es.ay * kk * m + TOP_LIFT * m, es.w * kk * m, es.h * kk * m);
+        continue;
+      }
+      if (t.ring === 1 && nearCentre(t)) continue;
+      const decor = ((t.q * 5 + t.r * 11) % 3 + 3) % 3 === 0;
+      const pr = paved ? (t.site === undefined && decor ? this.image('specials', s.key, `concord_plaza_${1 + (t.v % 2)}`) : null)
+        : this.image(siteGround(t) ? 'sites_props' : 'props', s.key, `${t.name}_${t.v}`);
       if (pr) draw(pr, t);
+      if (opening !== null && t.ring === opening && openFrame < 8) { const c = this.image('fog', s.key, `cloud_1_open_${openFrame}`); if (c) draw(c, t); }
       if (t.camp) { const c = this.image('specials', s.key, 'barbarian_1'); if (c) draw(c, t); }
       if (t.site === undefined) continue;
       let img = null;
@@ -419,6 +462,18 @@ export class SpriteArt {
       if (far) for (const t of tiles) if (t.p === e.p && t.pq === e.q) { const m = this.image('fog', s.key, `mist_${t.v}`); if (m) draw(m, t); }
     }
     for (const e of entries) if (e.fog !== 'unopened') this.frame(ctx, { p: e.p, q: e.q, fog: 'clear', selected: e.selected, zoom });
+    if (opening !== null) {
+      const lvl = OPEN_GLOW[openFrame];
+      if (lvl !== null && lvl !== undefined) for (const t of tiles) {
+        if (t.ring !== opening || t.cloud) continue;
+        EDGE_DIRS.forEach(([dq, dr], e) => {
+          const at = locate(t.q + dq, t.r + dr);
+          if (ringOf(at.p, at.q) >= opening) return;
+          const gl = this.image('fog', s.key, `ringglow_${e}_${lvl}`); if (gl) draw(gl, t);
+        });
+      }
+      this.onLoad();   // keep frames coming until the moment is over
+    }
     if (selected) {
       const t = tiles.find((u) => u.p === selected.p && u.pq === selected.q && u.idx === selected.idx);
       if (t) polygon(ctx, hexPoints(t.x, t.y, 2), null, '#1b2e28', 3 / zoom);

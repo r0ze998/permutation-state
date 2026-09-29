@@ -51,6 +51,10 @@ function artClashOf(p, q) {
   })();
   return null;
 }
+// ?art=1&ringopen=1 replays the ring-open moment on the outermost open ring; &engine=N previews an Engine stage (presentation only).
+const ART_Q = new URLSearchParams(globalThis.location?.search ?? '');
+const ART_RINGOPEN = ART_PREVIEW && ART_Q.get('ringopen') === '1';
+const ART_ENGINE = ART_PREVIEW ? Math.max(0, Math.min(5, Number(ART_Q.get('engine') ?? 0) | 0)) : 0;
 // ?art=1&fog=1 previews the fog as if the viewer held province (2,0) (presentation only).
 const ART_FOG = ART_PREVIEW && new URLSearchParams(globalThis.location?.search ?? '').get('fog') === '1';
 import * as joinScreen from './screens/join.mjs';
@@ -393,6 +397,8 @@ export async function boot() {
           // art mode: the decoded Province (holdings' tiers, hosts on tiles, camp), loaded on demand
           viewerFaction: ART_FOG ? 0 : FS.citizen?.faction ?? null,
           demoRoads: ART_ROADS,
+          engineStage: ART_ENGINE,
+          artReplayRing: ART_RINGOPEN ? Math.max(0, (FS.record?.rings?.length ?? 1) - 1) : null,
           clashOf: ART_PREVIEW ? artClashOf : undefined,
           pendingOf: ART_PREVIEW ? (p, q) => FS.provinces.get(`${p},${q}`)?.inputs ?? null : undefined,
           provinceOf: ART_PREVIEW ? (p, q) => { const env = FS.provinces.get(`${p},${q}`); if (!env) wantProvince(p, q, () => map?.invalidate()); return env?.province ?? null; } : undefined };
@@ -407,8 +413,10 @@ export async function boot() {
       art: ART_PREVIEW,
     });
     // The art preview opens on the tiles with everything shown (presentation only).
+    if (ART_RINGOPEN) setInterval(() => map?.invalidate(), 6000);
     if (ART_PREVIEW) {
-      const c = provincePixel(2, 0);
+      const [ap, aq] = (ART_Q.get('at') ?? '2,0').split(',').map(Number);
+      const c = provincePixel(Number.isInteger(ap) ? ap : 2, Number.isInteger(aq) ? aq : 0);
       map.setView({ x: c.x, y: c.y, zoom: 0.8 });
     }
   }
