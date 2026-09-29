@@ -154,6 +154,11 @@ pub const DEPART: &[Cover] = &[
             Err(E::NotFinal),
         ],
     ),
+    // W6T-1 (w6-s7 triage): step 4 refuses an arrival at or after end_bell.
+    Cover::Test(
+        "host::host_depart_arrival_at_or_after_end_bell_refused",
+        &[Err(E::ArrivalBell), Lands("w.depart_ix(")],
+    ),
     Cover::Test(
         "g13_complete::g13_depart_and_settle_departure",
         &[Loaded, Lands("Depart")],
