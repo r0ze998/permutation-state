@@ -2931,6 +2931,13 @@ fn g01_close_arrival_day_ended_paths() {
         }
     }
     println!("W6T-1 CloseArrivalDay worst: {worst} CU");
+    // The limit is the gate (frontier_abi::budgets::limit_at_gate); it must
+    // keep at least 5 % over the worst path.
+    let gate = frontier_abi::budgets::budget(Ix::CloseArrivalDay).cu_budget as u64;
+    assert!(
+        worst * 100 <= gate * 95,
+        "worst {worst} CU > 95 % of the gate {gate}"
+    );
 }
 
 /// W6T-1: as [`g01_close_arrival_day_ended_paths`] for CloseArrivalSlot
@@ -3032,4 +3039,11 @@ fn g01_close_arrival_slot_ended_paths() {
         }
     }
     println!("W6T-1 CloseArrivalSlot worst: {worst} CU");
+    // The limit is the gate (frontier_abi::budgets::limit_at_gate); it must
+    // keep at least 5 % over the worst path.
+    let gate = frontier_abi::budgets::budget(Ix::CloseArrivalSlot).cu_budget as u64;
+    assert!(
+        worst * 100 <= gate * 95,
+        "worst {worst} CU > 95 % of the gate {gate}"
+    );
 }
