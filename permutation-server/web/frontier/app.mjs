@@ -54,6 +54,8 @@ function artClashOf(p, q) {
 // ?art=1&ringopen=1 replays the ring-open moment on the outermost open ring; &engine=N previews an Engine stage (presentation only).
 const ART_Q = new URLSearchParams(globalThis.location?.search ?? '');
 const ART_RINGOPEN = ART_PREVIEW && ART_Q.get('ringopen') === '1';
+// ?art=1&relics=1 places sample Relic Sites and Waystones (M3 features, no accounts in M1; presentation only).
+const ART_RELICS = ART_PREVIEW && ART_Q.get('relics') === '1';
 const ART_ENGINE = ART_PREVIEW ? Math.max(0, Math.min(5, Number(ART_Q.get('engine') ?? 0) | 0)) : 0;
 // ?art=1&fog=1 previews the fog as if the viewer held province (2,0) (presentation only).
 const ART_FOG = ART_PREVIEW && new URLSearchParams(globalThis.location?.search ?? '').get('fog') === '1';
@@ -398,6 +400,7 @@ export async function boot() {
           viewerFaction: ART_FOG ? 0 : FS.citizen?.faction ?? null,
           demoRoads: ART_ROADS,
           engineStage: ART_ENGINE,
+          demoSpecials: ART_RELICS,
           artReplayRing: ART_RINGOPEN ? Math.max(0, (FS.record?.rings?.length ?? 1) - 1) : null,
           clashOf: ART_PREVIEW ? artClashOf : undefined,
           pendingOf: ART_PREVIEW ? (p, q) => FS.provinces.get(`${p},${q}`)?.inputs ?? null : undefined,

@@ -12,7 +12,7 @@
 // in muted terrain colours with small marks, under a translucent owner tint, the tile-edge
 // boundary, the sigil and the clash ring. A province without terrain yet uses the vector cell.
 import { COLORS, FLATTEN, RADIUS, hexPoints, polygon, project, shade } from '../../map.mjs';
-import { PROVINCE_TILES, locate, provinceCentre, ringOf, tileHex, wedgeOf } from '../fgeo.mjs';
+import { PROVINCE_TILES, locate, provinceCentre, ringOf, ringProvinces, tileHex, wedgeOf } from '../fgeo.mjs';
 import { FACTION_COLORS } from '../fi18n.mjs';
 import { majorityOwner } from '../herald.mjs';
 import { BOUNDARY_HALO, BOUNDARY_INK, FOG, UNOPENED_FILL, paintSigil, provincePixel, PROVINCE_CIRCUMRADIUS } from './layers.mjs';
@@ -223,7 +223,8 @@ export class SpriteArt {
    * An entry with fog 'unopened' (no terrain) is drawn as cloud sea.
    */
   paint(ctx, entries, { zoom, dpr = 1, terrainAt = () => null, fogAt = () => null, selected = null, viewerFaction = null, demoRoads = false,
-    ringsOpen = null, replayRing = null, replayEvery = 6000, engineStage = 0 }) {
+    ringsOpen = null, replayRing = null, replayEvery = 6000, engineStage = 0,
+    relics = [], waystones = [], demoSpecials = false }) {
     const s = artSize(RADIUS * zoom * dpr);
     // the ring-open moment starts when the open ring count grows (or, in the preview, on a timer)
     const t0 = now();
@@ -272,6 +273,34 @@ export class SpriteArt {
       for (const a of mine.filter((t) => t.state === 1)) {
         const b = mine.filter((t) => t !== a).sort((u, v) => Math.hypot(u.x - a.x, u.y - a.y) - Math.hypot(v.x - a.x, v.y - a.y))[0];
         if (b) for (const h of hexLine(a, b)) { const t = byHex.get(keyOf(h.q, h.r)); if (t && SITE_LAND.has(t.name)) t.road = true; }
+      }
+    }
+    // Relic Sites and Waystones: from the page ({p, q, tile, holder|faction}); none in M1, so the
+    // preview (?relics=1) places samples: one Relic Site per wedge on the outermost open ring, and a
+    // Waystone next to every town-or-larger holding.
+    const at = (p, q, idx) => tiles.find((u) => u.p === p && u.pq === q && u.idx === idx);
+    for (const r of relics) { const t = at(r.p, r.q, r.tile); if (t) t.relic = { holder: r.holder ?? null }; }
+    for (const w of waystones) { const t = at(w.p, w.q, w.tile); if (t) t.waystone = { faction: w.faction }; }
+    if (demoSpecials) {
+      // the same province each time: per wedge, the first province of the outermost open ring
+      const outer = Math.max(1, (ringsOpen ?? 2) - 1);
+      const pick = new Map();
+      for (const pr of ringProvinces(outer)) { const w = wedgeOf(pr.p, pr.q); if (w !== null && !pick.has(w)) pick.set(w, `${pr.p},${pr.q}`); }
+      for (const e of entries) {
+        const w = wedgeOf(e.p, e.q);
+        if (e.fog === 'unopened' || w === null || pick.get(w) !== `${e.p},${e.q}`) continue;
+        const pc = provinceCentre(e.p, e.q);
+        const cand = tiles.filter((u) => u.p === e.p && u.pq === e.q && u.site === undefined && SITE_LAND.has(u.name) && !u.centre)
+          .sort((a, b) => Math.hypot(a.q - pc.q - 2, a.r - pc.r + 1) - Math.hypot(b.q - pc.q - 2, b.r - pc.r + 1))[0];
+        if (!cand) continue;
+        cand.relic = { holder: w % 2 ? w : null };
+      }
+      for (const t of tiles) {
+        if (t.state !== 1 || !(t.owner < 6) || (t.tier ?? 0) < 1) continue;
+        for (const [dq, dr] of [EDGE_DIRS[3], EDGE_DIRS[4], EDGE_DIRS[2], EDGE_DIRS[5], EDGE_DIRS[1], EDGE_DIRS[0]]) {
+          const n = byHex.get(keyOf(t.q + dq, t.r + dr));
+          if (n && n.site === undefined && SITE_LAND.has(n.name) && !n.relic) { n.waystone = { faction: t.owner }; break; }
+        }
       }
     }
     tiles.sort((a, b) => a.y - b.y || a.x - b.x);
@@ -358,6 +387,13 @@ export class SpriteArt {
         continue;
       }
       if (t.ring === 1 && nearCentre(t)) continue;
+      if (t.relic) {
+        const f = t.relic.holder;
+        const img = this.image('specials', s.key, f === null || f === undefined ? 'relic_open' : `relic_${ART_FACTIONS[f]}`);
+        if (img) draw(img, t);
+        continue;
+      }
+      if (t.waystone) { const img = this.image('specials', s.key, `waystone_${ART_FACTIONS[t.waystone.faction] ?? 'ember'}`); if (img) draw(img, t); continue; }
       const decor = ((t.q * 5 + t.r * 11) % 3 + 3) % 3 === 0;
       const pr = paved ? (t.site === undefined && decor ? this.image('specials', s.key, `concord_plaza_${1 + (t.v % 2)}`) : null)
         : this.image(siteGround(t) ? 'sites_props' : 'props', s.key, `${t.name}_${t.v}`);
