@@ -517,6 +517,15 @@ test('refile offer (W6-D): not while the herald has not shown the ticket just fi
   assert.equal(land.refileOffer(joined, last, { seen: false }), null, 'filed, not yet folded: no "your ticket ended"');
   assert.equal(land.refileOffer(joined, last, { seen: true }).why, 'ended');
   assert.equal(land.refileOffer(joined, last).why, 'ended', 'default: seen (records from before W6-D)');
+  // integ-W6 review: a ticket that ended between two polls was never seen open;
+  // TICKET_SEEN_BELLS after the filing bell it counts as seen anyway.
+  assert.equal(land.TICKET_SEEN_BELLS, 3);
+  assert.equal(land.refileOffer(joined, last, { seen: false, filedBell: 40, nowBell: 42 }), null, 'filed at 40, now 42: could still be folding');
+  assert.equal(land.refileOffer(joined, last, { seen: false, filedBell: 40, nowBell: 43 }).why, 'ended', 'filed at 40, now 43: ended unseen');
+  assert.equal(land.refileOffer(joined, last, { seen: false, filedBell: 40, nowBell: 43, hadHolding: true }).why, 'displaced');
+  assert.equal(land.refileOffer({ stage: 'ticket' }, last, { seen: false, filedBell: 40, nowBell: 99 }), null, 'still open (lag): no offer whatever the bell');
+  assert.equal(land.refileOffer(joined, last, { seen: false, filedBell: null, nowBell: 99 }), null, 'no filing bell recorded (records from before this fix): the sticky flag decides');
+  assert.equal(land.refileOffer(joined, last, { seen: false, filedBell: 40, nowBell: null }), null, 'no bell yet');
 });
 
 test('ps-fui: season-scoped preferences, defaults for anything damaged, the last ticket for a refile', () => {
@@ -525,12 +534,15 @@ test('ps-fui: season-scoped preferences, defaults for anything damaged, the last
   assert.equal(key, 'ps-fui:localnet:P:1');
   assert.deepEqual(fui.loadUi(s, key), { ...fui.DEFAULTS, dismissed: [] });
   fui.saveUi(s, key, { fog: false, tab: 'marches', lastTicket: [{ p: 3, q: 0, site: 2 }] });
-  assert.deepEqual(fui.loadUi(s, key), { v: 1, fog: false, lod: 'world', tab: 'marches', dismissed: [], lastTicket: [{ p: 3, q: 0, site: 2 }], ticketSeen: true });
-  s.set(key, JSON.stringify({ v: 1, fog: 'no', tab: 'evil', lod: 'x', lastTicket: [{ p: 1, q: 0, site: 99 }], dismissed: [1, 'a'], ticketSeen: 'x' }));
-  assert.deepEqual(fui.loadUi(s, key), { v: 1, fog: true, lod: 'world', tab: 'map', dismissed: ['a'], lastTicket: null, ticketSeen: true });
-  // W6-D: a ticket filed but not yet shown by the herald is not "ended".
-  fui.saveUi(s, key, { lastTicket: [{ p: 3, q: 0, site: 2 }], ticketSeen: false });
+  assert.deepEqual(fui.loadUi(s, key), { v: 1, fog: false, lod: 'world', tab: 'marches', dismissed: [], lastTicket: [{ p: 3, q: 0, site: 2 }], ticketSeen: true, lastTicketBell: null });
+  s.set(key, JSON.stringify({ v: 1, fog: 'no', tab: 'evil', lod: 'x', lastTicket: [{ p: 1, q: 0, site: 99 }], dismissed: [1, 'a'], ticketSeen: 'x', lastTicketBell: -3 }));
+  assert.deepEqual(fui.loadUi(s, key), { v: 1, fog: true, lod: 'world', tab: 'map', dismissed: ['a'], lastTicket: null, ticketSeen: true, lastTicketBell: null });
+  // W6-D: a ticket filed but not yet shown by the herald is not "ended"; the
+  // filing bell is kept with it (integ-W6 review).
+  fui.saveUi(s, key, { lastTicket: [{ p: 3, q: 0, site: 2 }], ticketSeen: false, lastTicketBell: 40 });
   assert.equal(fui.loadUi(s, key).ticketSeen, false);
+  assert.equal(fui.loadUi(s, key).lastTicketBell, 40);
+  assert.equal(fui.saveUi(s, key, { lastTicketBell: 7.5 }).lastTicketBell, null, 'a damaged bell reads as none');
   s.set(key, '{not json');
   assert.equal(fui.loadUi(s, key).fog, true);
 });

@@ -201,9 +201,18 @@ for (const lang of LANGS) {
   });
 }
 
-/** A 404 the page expects and handles (an absent optional file: e.g. a province envelope not yet written). */
-function expected404(r) {
-  return r.status() === 404 && /\/h\//.test(r.url());
+/**
+ * A 404 the page expects and handles: the two "not yet" shapes of the herald
+ * (a bell-region record before the bell is anchored, a province envelope
+ * before the province is written; W6-D F8). Every other 4xx/5xx under `/h/`
+ * (`/h/me`, `/h/clash`, `/h/season`, …) is a problem with its URL
+ * (integ-W6 review), not a wait.
+ */
+const NOT_YET = [/^\/h\/bell\/\d+\/region\/\d+$/, /^\/h\/province\/-?\d+,-?\d+\/\d+$/];
+export function expected404(r) {
+  if (r.status() !== 404) return false;
+  const path = new URL(r.url()).pathname;
+  return NOT_YET.some(re => re.test(path));
 }
 
 async function click(page, sel, timeout = WAIT_MS) {
@@ -288,6 +297,10 @@ async function shot(page, lang, id, problems) {
   const lay = await page.evaluate(layout, true);
   const where = `${lang} ${id}`;
   if (lay.overflow.scrollWidth > lay.overflow.innerWidth) problems.push(`${where}: horizontal overflow ${lay.overflow.scrollWidth} > ${lay.overflow.innerWidth}`);
+  // The same judgement as the screen matrix (frontier.screen.mjs; §13.6): cut-off content, the three landmarks, the bell chip.
+  for (const c of lay.clipped) problems.push(`${where}: cut off at the side (${c.left}..${c.right} of ${VP.width}): <${c.tag}${c.id ? `#${c.id}` : ''} class="${c.cls}"> "${c.text}"`);
+  for (const [k, ok] of Object.entries(lay.landmarks)) if (!ok) problems.push(`${where}: landmark ${k} not visible`);
+  if (!lay.bellChip.visible || !/\d/.test(lay.bellChip.text)) problems.push(`${where}: bell chip "${lay.bellChip.text}" (visible ${lay.bellChip.visible})`);
   for (const s of lay.small) problems.push(`${where}: target ${s.w}×${s.h} < 44: <${s.tag}${s.id ? `#${s.id}` : ''}${s.act ? ` data-act=${s.act}` : ''}> "${s.text}"`);
   for (const v of await axe(page)) problems.push(`${where}: axe ${v.impact} ${v.id}: ${v.nodes.join(' | ')}`);
   if (lang === 'en') for (const j of await page.evaluate(japanese)) problems.push(`${where}: Japanese in English at ${j.where}: "${j.text}"`);

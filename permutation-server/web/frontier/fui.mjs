@@ -9,7 +9,10 @@ export const UI_PREFIX = 'ps-fui:';
 export const TABS = Object.freeze(['map', 'holding', 'hosts', 'marches', 'more']);
 // `ticketSeen`: the herald has shown the last ticket on chain (W6-D: until then a
 // Citizen still at "joined" is a ticket not yet folded, not one that ended).
-export const DEFAULTS = Object.freeze({ v: 1, fog: true, lod: 'world', tab: 'map', dismissed: [], lastTicket: null, ticketSeen: true });
+// `lastTicketBell`: the bell the last ticket was filed at (integ-W6 review: a
+// ticket can end between two polls without the page seeing it open, so the
+// offer also counts it as seen `TICKET_SEEN_BELLS` after the filing bell).
+export const DEFAULTS = Object.freeze({ v: 1, fog: true, lod: 'world', tab: 'map', dismissed: [], lastTicket: null, ticketSeen: true, lastTicketBell: null });
 
 /** `ps-fui:<cluster>:<program>:<season>`. */
 export const uiKey = ({ cluster, programId, seasonId }) => `${UI_PREFIX}${cluster}:${programId}:${seasonId}`;
@@ -43,6 +46,7 @@ export function loadUi(storage, key) {
     lastTicket: Array.isArray(v.lastTicket) && v.lastTicket.length >= 1 && v.lastTicket.length <= 3 && v.lastTicket.every(isSite)
       ? v.lastTicket.map(({ p, q, site }) => ({ p, q, site })) : null,
     ticketSeen: typeof v.ticketSeen === 'boolean' ? v.ticketSeen : DEFAULTS.ticketSeen,
+    lastTicketBell: Number.isInteger(v.lastTicketBell) && v.lastTicketBell >= 0 ? v.lastTicketBell : null,
   };
 }
 

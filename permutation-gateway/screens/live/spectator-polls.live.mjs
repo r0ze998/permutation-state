@@ -26,13 +26,14 @@ test(`spectator: ${HOURS} wall hours of polls (fake clock, ${HOURS * 120} polls)
   mkdirSync(ARTIFACTS, { recursive: true });
   const srv = await startServer();
   const browser = await chromium.launch();
-  const out = { hours: HOURS, maxGrowthMb: MAX_GROWTH_MB, samples: [], errors: [], requests: 0 };
+  const out = { hours: HOURS, maxGrowthMb: MAX_GROWTH_MB, samples: [], errors: [], requests: 0, byPath: {} };
   try {
     const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, locale: 'ja-JP', timezoneId: 'UTC' });
     const page = await context.newPage();
     page.on('pageerror', e => out.errors.push(`page error: ${e.message}`));
     page.on('console', m => { if (m.type() === 'error') out.errors.push(`console error: ${m.text()}`); });
-    page.on('request', r => { if (r.url().includes('/h/')) out.requests++; });
+    // Per path shape too (integ-W6 review: the rate per bell per viewer against web design §4.2).
+    page.on('request', r => { if (r.url().includes('/h/')) { out.requests++; const k = new URL(r.url()).pathname.replace(/\d+/g, 'N'); out.byPath[k] = (out.byPath[k] ?? 0) + 1; } });
     await page.clock.install({ time: new Date(LATEST_UNIX * 1000 + 500) });
     const cdp = await context.newCDPSession(page);
     await cdp.send('Performance.enable');

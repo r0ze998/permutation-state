@@ -578,7 +578,7 @@ function hostRow(id) {
 
 async function fileTicket(sites) {
   if (!sites.length) return undefined;
-  saveUiPatch({ lastTicket: sites, ticketSeen: false });
+  saveUiPatch({ lastTicket: sites, ticketSeen: false, lastTicketBell: nowBell() });
   FS.hadHolding = false;
   return act('FileTicket', { v: { sites }, fields: { sites } });
 }

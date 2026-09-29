@@ -151,12 +151,24 @@ export function ticketTimes(clock, ticketBell) {
  * `why`: 'displaced' when it had held a provisional holding (the
  * displacement ended its ticket), else 'ended' (taken or expired).
  */
-export function refileOffer(state, lastTicket, { hadHolding = false, seen = true } = {}) {
+export function refileOffer(state, lastTicket, { hadHolding = false, seen = true, filedBell = null, nowBell = null } = {}) {
   // `seen` false: the ticket was filed but the herald has not shown it yet (W6-D:
-  // the onboarding run met "your ticket ended" right after filing).
-  if (!lastTicket?.length || state.stage !== 'joined' || !seen) return null;
+  // the onboarding run met "your ticket ended" right after filing). A page that
+  // never saw the ticket open (it ended between two polls, integ-W6 review)
+  // still counts it as seen once `TICKET_SEEN_BELLS` have passed since the
+  // filing bell: by then the ticket has been drawn and settled, or is still
+  // open, in which case the stage is 'ticket' and there is no offer anyway.
+  const ended = seen || (Number.isInteger(filedBell) && Number.isInteger(nowBell) && nowBell >= filedBell + TICKET_SEEN_BELLS);
+  if (!lastTicket?.length || state.stage !== 'joined' || !ended) return null;
   return { sites: lastTicket, why: hadHolding ? 'displaced' : 'ended' };
 }
+/**
+ * Bells after the filing bell from which the last ticket counts as seen
+ * without the page having watched it: the result is drawn at
+ * `bellEnd(ticket_bell) + W + margin` ≈ 2.1 bells after the filing bell
+ * (`ticketTimes`), and a ticket lasts 11–21 game minutes (O-M1-13).
+ */
+export const TICKET_SEEN_BELLS = 3;
 
 // ------------------------------------------------------------------ the holding
 const HOUR = 3600;

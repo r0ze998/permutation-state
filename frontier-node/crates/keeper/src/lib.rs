@@ -267,7 +267,6 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
         master: &[u8; 32],
         journal: Option<Journal>,
     ) -> Result<Keeper<P, D>, String> {
-        let payers = Payers::new(master, &cfg).map_err(|e| format!("{e:?}"))?;
         let budgets = match &cfg.budgets_file {
             Some(p) => Budgets::from_json(
                 &serde_json::from_slice(&std::fs::read(p).map_err(|e| e.to_string())?)
@@ -277,6 +276,9 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
                 &serde_json::from_str(CANONICAL_BUDGETS).map_err(|e| e.to_string())?,
             )?,
         };
+        // The reveal floor is priced at the Reveal this table requests
+        // (integ-W6 review, W6-E F1).
+        let payers = Payers::with_budgets(master, &cfg, &budgets).map_err(|e| format!("{e:?}"))?;
         let params = EngineParams {
             d_start_milli: cfg.p_low_milli,
             p_low_milli: cfg.p_low_milli,

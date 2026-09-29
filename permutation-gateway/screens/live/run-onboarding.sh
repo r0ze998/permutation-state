@@ -11,7 +11,12 @@
 #      report → verify in this browser green), shots and summary in
 #      screens/artifacts/live/;
 #   4. with --spectator, keeps the spectator page open for 24 game hours
-#      (live/spectator-memory.live.mjs; 72 wall minutes at 20×);
+#      (live/spectator-memory.live.mjs; 72 wall minutes at 20×). The stack
+#      then runs 2 game days (`--days 2`): the two onboarding runs take
+#      ≈ 23 bells at 20× and the spectator needs 144 more while the chain
+#      still advances; a 1-day stack pauses at bell 170 (144 play + 26
+#      drain), under a minute of margin (integ-W6 review). Wall ≈ 90 min;
+#      the runner stops the stack when the check ends;
 #   5. `frontier-stack down` (always, also on failure).
 #
 #   permutation-gateway/screens/live/run-onboarding.sh [--base-port P] [--scale S]
@@ -30,6 +35,7 @@ export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
 S="${FRONTIER_STACK:-$ROOT/frontier-node/target/release/frontier-stack}"
 BASE=41000
 SCALE=20
+DAYS=1
 RUN_ID="w6d-onboarding-$(date -u +%Y%m%d%H%M%S)"
 SPECTATOR=0
 RECORD=""
@@ -43,6 +49,8 @@ while [ $# -gt 0 ]; do
     *) echo "unknown argument $1" >&2; exit 2 ;;
   esac
 done
+# The spectator check needs the chain alive for 24 game hours after the onboarding runs (see the header).
+[ $SPECTATOR -eq 1 ] && DAYS=2
 HERALD="http://127.0.0.1:$((BASE + 40))"
 LOGDIR="$HERE/../artifacts/live"
 mkdir -p "$LOGDIR"
@@ -51,7 +59,7 @@ cd "$ROOT" || exit 2
 "$S" check-ports --config frontier-node/configs/w5-smoke.toml --base-port "$BASE" || exit 1
 SO_ARGS=()
 [ -n "${SO:-}" ] && SO_ARGS=(--so "$SO")
-"$S" up --mode accel --beacon test-key --scale "$SCALE" --days 1 --bots 20 --run-id "$RUN_ID" \
+"$S" up --mode accel --beacon test-key --scale "$SCALE" --days "$DAYS" --bots 20 --run-id "$RUN_ID" \
   --base-port "$BASE" ${SO_ARGS[@]+"${SO_ARGS[@]}"} > "$LOGDIR/stack-up.log" 2>&1 &
 UP_PID=$!
 cleanup() {
@@ -78,7 +86,7 @@ until curl -sf "$HERALD/h/season" | node -e 'let s="";process.stdin.on("data",d=
   fi
   sleep 2
 done
-echo "stack $RUN_ID up: herald $HERALD"
+echo "stack $RUN_ID up: herald $HERALD ($DAYS game day(s) at ${SCALE}x)"
 
 cd "$HERE/.." || exit 2
 code=0
