@@ -225,6 +225,8 @@ async fn herald_5000_viewers_meet_criterion_6() {
         provinces,
         bells: bell,
         seed: 11,
+        retry_budget: Duration::from_secs(5),
+        follow: None,
     };
     let run = tokio::spawn(viewers::run(vc, stats.clone()));
     // The viewers ramp over one think time; the chain starts with them.
