@@ -545,9 +545,16 @@ fn free_passable_tile(pv: &Province, avoid_sites: bool) -> Option<u8> {
 }
 
 /// Targets in view: camps (the sim's `camp_raid`), other factions'
-/// unshielded holdings (the sim's `war`), and, for a "stays" march, a free
-/// tile of an observed province without a camp or another faction's host.
-pub fn targets(obs: &Observation, faction: u8, arrive_hint: u32) -> Vec<Target> {
+/// holdings (the sim's `war`), and, for a "stays" march, a free tile of an
+/// observed province without a camp or another faction's host.
+///
+/// `arrive_max` is the latest arrival bell a march planned now could name:
+/// a holding still shielded then can never be a target. W6T-3 (w6-s7): the
+/// shields are judged against the march's real arrival bell once
+/// [`plan_march`] has fixed it ([`shield_refuses`], §5.11 step 6); the old
+/// filter judged the destination's shield at `bell + 4` and ignored the
+/// attacker's own shield, and 27 honest marches were refused `Shielded`.
+pub fn targets(obs: &Observation, faction: u8, arrive_max: u32) -> Vec<Target> {
     let mut out = vec![];
     for (&(p, q), v) in &obs.provinces {
         let pv = &v.province;
@@ -563,7 +570,7 @@ pub fn targets(obs: &Observation, faction: u8, arrive_hint: u32) -> Vec<Target> 
             let m = &pv.site_mirror[s];
             if m.state == ls::STATE_HOLDING
                 && m.faction != faction
-                && m.shield_until_bell < arrive_hint
+                && m.shield_until_bell <= arrive_max
                 && pv.passable_mask >> pv.sites[s] & 1 == 1
             {
                 out.push(Target {
@@ -618,7 +625,11 @@ pub fn stay_targets(obs: &Observation, faction: u8, near: (i16, i16)) -> Vec<Tar
 /// The Depart plan for `host` at `at` to `t`: path over the observed
 /// provinces, arrival bell = the earliest possible (leaving
 /// `DEPART_SLACK_SECS` from now) plus `extra` bells, at most 72 bells after
-/// the departure bell. None when no path or no free transit slot.
+/// the departure bell and at most `end_bell − 1` (W6T-3, §5.11 Depart step
+/// 4 v1.12: no anchor, gather, resolve or settlement exists at or after
+/// the season end; w6-s7 left 9 honest marches unsettled). None when no
+/// path, no free transit slot, or the earliest arrival is at or after
+/// `end_bell`.
 #[allow(clippy::too_many_arguments)]
 pub fn plan_march(
     obs: &Observation,
@@ -647,7 +658,13 @@ pub fn plan_march(
     let depart_ts = obs.now + DEPART_SLACK_SECS;
     let dep_bell = obs.season.bell_at(depart_ts);
     let earliest = path::earliest_arrival(obs.season.genesis_ts, depart_ts, path.secs);
-    let arrive = (earliest + 1 + extra).min(dep_bell + 72);
+    let end_bell = obs.season.end_bell();
+    if earliest >= end_bell {
+        return None;
+    }
+    let arrive = (earliest + 1 + extra)
+        .min(dep_bell + 72)
+        .min(end_bell.saturating_sub(1));
     if arrive < earliest {
         return None;
     }
@@ -665,6 +682,76 @@ pub fn plan_march(
         reserved: [0; 3],
     };
     Some((path, plain, transit_slot))
+}
+
+/// The first candidate with a march plan whose Reveal the rules allow:
+/// the shields are judged at the planned arrival bell ([`shield_refuses`],
+/// §5.11 step 6; W6T-3).
+#[allow(clippy::too_many_arguments)]
+pub fn first_plan(
+    obs: &Observation,
+    h: &Holding,
+    at: (i16, i16),
+    host: &Entry,
+    cands: impl IntoIterator<Item = Target>,
+    extra: u32,
+    stance: u8,
+    retreat: u16,
+) -> Option<(Target, (Path, Plain, u8))> {
+    cands.into_iter().find_map(|t| {
+        plan_march(obs, h, at, host, t, extra, stance, retreat)
+            .filter(|(_, p, _)| !shield_refuses(obs, h, &t, p.arrive_bell))
+            .map(|x| (t, x))
+    })
+}
+
+/// §5.11 step 6's shield clauses for a march of a host of `h` to `t`
+/// arriving at `arrive` (true: the program refuses its Reveal `Shielded`
+/// and the valid seal can only settle ROUTED). They apply only to a
+/// destination that is another faction's holding site: that site's shield
+/// is judged at the arrival bell (`shield_until_bell > arrive`), the
+/// attacker's own at the arrival bell's start (`shield_until >
+/// bell_start(arrive)`, not dormant). W6T-3.
+pub fn shield_refuses(obs: &Observation, h: &Holding, t: &Target, arrive: u32) -> bool {
+    let Some(pv) = obs.province(t.p, t.q) else {
+        return false;
+    };
+    let n = (pv.site_count as usize).min(pv.sites.len());
+    let Some(k) = (0..n).find(|&k| pv.sites[k] == t.tile) else {
+        return false;
+    };
+    let m = &pv.site_mirror[k];
+    if m.state != ls::STATE_HOLDING || m.faction == h.faction {
+        return false;
+    }
+    if m.shield_until_bell > arrive {
+        return true;
+    }
+    let dormant = h.flags & lh::FLAG_DORMANT_CACHE != 0;
+    let start = obs.season.genesis_ts + arrive as i64 * 600;
+    !dormant && h.shield_until > start
+}
+
+/// Whether the province has room for one more Muster of `faction` (the
+/// program's rule, `ProvinceFull` otherwise: fewer than 48 entries in
+/// states 1–2, fewer than 8 of the faction, and a free entry). W6T-3: the
+/// bots counted only their own faction and mustered into full provinces
+/// (111 `ProvinceFull` in w6-s7). Returns how many Musters fit.
+pub fn muster_room(pv: &Province, faction: u8) -> usize {
+    use permutation_rules::frontier::host::{FACTION_RESIDENT_CAP, PROVINCE_HOST_CAP};
+    let (mut total, mut own, mut free) = (0usize, 0usize, 0usize);
+    for e in &pv.entries {
+        match e.state {
+            le::STATE_FREE => free += 1,
+            le::STATE_ROSTER | le::STATE_MUSTER_PENDING => {
+                total += 1;
+                own += (e.faction == faction) as usize;
+            }
+            _ => {}
+        }
+    }
+    free.min(PROVINCE_HOST_CAP.saturating_sub(total))
+        .min(FACTION_RESIDENT_CAP.saturating_sub(own))
 }
 
 /// Everything a bot wants to do now.
@@ -1230,9 +1317,13 @@ fn economy(
                 .count()
         })
         .unwrap_or(0);
-    let room = pending_here < permutation_rules::frontier::host::FACTION_RESIDENT_CAP;
+    // W6T-3: the program's caps and a free entry, not only the faction's.
+    let mut room = own_pv.map(|p| muster_room(p, h.faction)).unwrap_or(0);
+    if pending_here >= permutation_rules::frontier::host::FACTION_RESIDENT_CAP {
+        room = 0;
+    }
     let avail = h.reserve[unit as usize];
-    if room && combat.len() < want_hosts && avail >= MIN_HOST {
+    if room > 0 && combat.len() < want_hosts && avail >= MIN_HOST {
         let troops = if persona == Some(Persona::Squatter) {
             MIN_HOST
         } else {
@@ -1245,9 +1336,10 @@ fn economy(
             tile: h.tile,
         });
         used += 1;
+        room -= 1;
     }
     let savail = h.reserve[SCOUT as usize];
-    if room && scouts.is_empty() && savail >= MIN_HOST {
+    if room > 0 && scouts.is_empty() && savail >= MIN_HOST {
         out.push(Intent::Muster {
             h: r,
             unit: SCOUT,
@@ -1353,7 +1445,7 @@ fn military(
         v.extend(stay_targets(obs, faction, at));
         v
     } else {
-        let ts = targets(obs, faction, bell + 4);
+        let ts = targets(obs, faction, bell + 73);
         let camps: Vec<Target> = ts.iter().copied().filter(|t| t.why == "camp").collect();
         let mut pool = if !camps.is_empty() && (rng.chance(0.6) || ts.len() == camps.len()) {
             camps
@@ -1376,9 +1468,8 @@ fn military(
     let stance = pick_stance(faction, prof.q, rng);
     let retreat = pick_retreat(prof.q, rng);
     let extra = rng.below(2) as u32;
-    let Some((t, (path, plain, slot))) = cands
-        .into_iter()
-        .find_map(|t| plan_march(obs, h, at, &host, t, extra, stance, retreat).map(|x| (t, x)))
+    let Some((t, (path, plain, slot))) =
+        first_plan(obs, h, at, &host, cands, extra, stance, retreat)
     else {
         return;
     };
