@@ -26,8 +26,11 @@
 //! below-cap slot hold creates): `slots-below` from the first hour (by 60%
 //! of play at the latest), `lag` on the origin of a transit in flight (a
 //! Holding transit in state 1-2; a Province entry in state 3 lasts only
-//! until its SettleDeparture). A `hold-skipped` hold makes the run not
-//! exit-grade (report row E).
+//! until its SettleDeparture). `slots-above` is armed to the end of play
+//! too, and both slot holds aim at a province the fleet sealed marches to
+//! for the held bell (the bots' marchbooks; a seal hides the destination on
+//! chain), falling back to a province with arrivals today. A
+//! `hold-skipped` hold makes the run not exit-grade (report row E).
 //!
 //! | kind | keys | price (milli) | length | expected |
 //! |---|---|---|---|---|
@@ -99,10 +102,12 @@ pub fn plan(start: i64, end: i64) -> Vec<Planned> {
             // the end of play too (w6-s7 skipped both after one game hour
             // with nothing pending), and `slots-below` starts by 60% of play
             // so the escalation past it can open a claim `defence-pool`
-            // holds.
+            // holds. `slots-above` needs arrivals as well and is armed the
+            // same way (the U4 R3 run skipped it after its one hour, bell 16:
+            // the 300-bot fleet's first arrivals came at bell 76).
             let armed = matches!(
                 *k,
-                "ticket" | "frontier-fund" | "defence-pool" | "slots-below" | "lag"
+                "ticket" | "frontier-fund" | "defence-pool" | "slots-below" | "slots-above" | "lag"
             );
             let at = match *k {
                 "ticket" => start + 600,
@@ -206,6 +211,59 @@ pub struct Pending {
     /// Transits in flight (W6T-4): each Holding transit in state 1 (DEPART
     /// seen) or 2 (departure settled), not yet settled at its destination.
     pub in_flight: Vec<InFlight>,
+    /// Marches the fleet sealed to arrive at the next bell, by destination
+    /// (W6T-4, from the bots' marchbooks: a seal hides the destination on
+    /// chain, so only the harness knows where a Reveal will land):
+    /// `((P, Q), count)`, most first.
+    pub planned_next: Vec<((i16, i16), usize)>,
+}
+
+/// The marches sealed to arrive at `bell`, by destination, most first
+/// (W6T-4): the `ev: "sealed"` lines of the bots' marchbook JSONL.
+pub fn planned_from_marchbook(text: &str, bell: u32) -> Vec<((i16, i16), usize)> {
+    let mut n: std::collections::BTreeMap<(i16, i16), usize> = std::collections::BTreeMap::new();
+    for l in text.lines() {
+        if !l.contains("\"sealed\"") {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(l) else {
+            continue;
+        };
+        if v["ev"] != "sealed" || v["arrive_bell"].as_u64() != Some(bell as u64) {
+            continue;
+        }
+        let (Some(p), Some(q)) = (v["dest"][0].as_i64(), v["dest"][1].as_i64()) else {
+            continue;
+        };
+        *n.entry((p as i16, q as i16)).or_default() += 1;
+    }
+    let mut v: Vec<((i16, i16), usize)> = n.into_iter().collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    v
+}
+
+/// [`planned_from_marchbook`] over every `marchbook-*.jsonl` of a bots
+/// directory.
+pub fn planned_arrivals(bots_dir: &std::path::Path, bell: u32) -> Vec<((i16, i16), usize)> {
+    let mut text = String::new();
+    if let Ok(rd) = std::fs::read_dir(bots_dir) {
+        for e in rd.flatten() {
+            let n = e.file_name().to_string_lossy().into_owned();
+            if n.starts_with("marchbook-") && n.ends_with(".jsonl") {
+                if let Ok(t) = std::fs::read_to_string(e.path()) {
+                    text.push_str(&t);
+                    text.push('\n');
+                }
+            }
+        }
+    }
+    let mut m: std::collections::BTreeMap<(i16, i16), usize> = std::collections::BTreeMap::new();
+    for (k, c) in planned_from_marchbook(&text, bell) {
+        *m.entry(k).or_default() += c;
+    }
+    let mut v: Vec<((i16, i16), usize)> = m.into_iter().collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    v
 }
 
 /// One transit in flight (a Holding's transit record in state 1 or 2).
@@ -385,6 +443,19 @@ pub fn keys_for_pending(
     let next = bell_now + 1;
     match kind {
         "slots-below" | "slots-above" => {
+            // W6T-4: a province the fleet sealed marches to for the next
+            // bell (its Reveals will need these slots), else the old guess.
+            let planned = pending
+                .planned_next
+                .iter()
+                .find_map(|(d, n)| ps.iter().find(|p| (p.p, p.q) == *d).map(|p| (p, *n)));
+            if let Some((p, n)) = planned {
+                return Some((
+                    slot_keys(a, p, next, transit_slots),
+                    json!({"province": [p.p, p.q], "bell": next, "planned_arrivals": n,
+                        "why": "marches sealed to arrive there at this bell (bots' marchbook)"}),
+                ));
+            }
             let p = if pending.require {
                 let with: Vec<Province> = ps
                     .iter()
@@ -563,6 +634,7 @@ mod tests {
             let p = plan(start, end);
             for k in [
                 "slots-below",
+                "slots-above",
                 "lag",
                 "ticket",
                 "frontier-fund",
@@ -639,6 +711,62 @@ mod tests {
             })
             .collect();
         assert_eq!(got, vec![fl(2, -1, 30, 1), fl(2, -1, 30, 2)]);
+    }
+
+    /// W6T-4: the slot holds aim at a province the fleet sealed marches to
+    /// for the held bell (the U4 nightlies held slots no Reveal needed:
+    /// 0 writes inside or after the `slots-below` window), and fall back
+    /// to the ArrivalDay guess without a marchbook.
+    #[test]
+    fn slot_holds_aim_at_planned_arrivals() {
+        let book = [
+            r#"{"arrive_bell":11,"bot":1,"depart_bell":8,"dest":[1,0],"ev":"sealed","host":"5"}"#,
+            r#"{"arrive_bell":11,"bot":2,"depart_bell":8,"dest":[1,0],"ev":"sealed","host":"6"}"#,
+            r#"{"arrive_bell":11,"bot":3,"depart_bell":9,"dest":[0,0],"ev":"sealed","host":"7"}"#,
+            r#"{"arrive_bell":12,"bot":4,"depart_bell":9,"dest":[0,0],"ev":"sealed","host":"8"}"#,
+            r#"{"bot":1,"depart_bell":8,"ev":"sent","host":"5"}"#,
+            "not json",
+        ]
+        .join("\n");
+        let planned = planned_from_marchbook(&book, 11);
+        assert_eq!(planned, vec![((1, 0), 2), ((0, 0), 1)]);
+        let ad = Addresses::new(Address::new_from_array([7; 32]), 7);
+        let mut a = empty_province(0, 0);
+        a.entries[0].state = 1;
+        a.entries[1].state = 1;
+        let ps = vec![a, empty_province(1, 0)];
+        let pending = Pending {
+            require: true,
+            arrivals_today: vec![(0, 0)],
+            planned_next: planned,
+            ..Pending::default()
+        };
+        let (k, d) = keys_for_pending("slots-below", &ad, &ps, &pending, 10, 4, &[], &[]).unwrap();
+        assert_eq!(k, slot_keys(&ad, &ps[1], 11, 4));
+        assert_eq!(d["planned_arrivals"], 2);
+        // Without a marchbook: the old guess (arrivals today, busiest).
+        let guess = Pending {
+            planned_next: vec![],
+            ..pending.clone()
+        };
+        let (_, d) = keys_for_pending("slots-below", &ad, &ps, &guess, 10, 4, &[], &[]).unwrap();
+        assert_eq!(d["province"], json!([0, 0]));
+        // A planned destination that is not an opened Province is skipped.
+        let off = Pending {
+            planned_next: vec![((9, 9), 5)],
+            ..guess
+        };
+        let (_, d) = keys_for_pending("slots-above", &ad, &ps, &off, 10, 4, &[], &[]).unwrap();
+        assert_eq!(d["province"], json!([0, 0]));
+        // The marchbook files of a bots directory.
+        let dir = std::env::temp_dir().join(format!("psf-marchbook-{}", crate::run::wall_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("marchbook-1-0.jsonl"), &book).unwrap();
+        std::fs::write(dir.join("marchbook-2-0.jsonl"), &book).unwrap();
+        std::fs::write(dir.join("report.json"), &book).unwrap();
+        assert_eq!(planned_arrivals(&dir, 11), vec![((1, 0), 4), ((0, 0), 2)]);
+        assert!(planned_arrivals(std::path::Path::new("/nonexistent"), 11).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

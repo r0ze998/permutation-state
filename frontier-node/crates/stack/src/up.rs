@@ -1308,6 +1308,9 @@ async fn supervise(
             let want_lag = holds
                 .iter()
                 .any(|h| !h.done && now >= h.plan.at && h.plan.kind == "lag");
+            let want_slots = holds.iter().any(|h| {
+                !h.done && now >= h.plan.at && matches!(h.plan.kind, "slots-below" | "slots-above")
+            });
             for h in holds.iter_mut().filter(|h| !h.done && now >= h.plan.at) {
                 if provinces.is_none() {
                     provinces = Some(
@@ -1351,7 +1354,15 @@ async fn supervise(
                     } else {
                         vec![]
                     };
+                    // W6T-4: where the fleet's sealed marches land next bell
+                    // (only while a slot hold waits).
+                    let planned_next = if want_slots {
+                        adversary::planned_arrivals(&st.run.path("bots"), bell_now + 1)
+                    } else {
+                        vec![]
+                    };
                     pending = Some(adversary::Pending {
+                        planned_next,
                         in_flight,
                         arrivals_today: ps
                             .iter()
