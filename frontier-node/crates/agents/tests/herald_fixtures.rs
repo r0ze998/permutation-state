@@ -442,6 +442,8 @@ fn memo(o: &Observation, persona: Persona, arrive: u32) -> MarchMemo {
         sent: true,
         reveal_tries: 0,
         revealed: false,
+        accepted: false,
+        last_code: None,
         late_done: false,
         settled: false,
         redeparted: false,

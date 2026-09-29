@@ -245,10 +245,26 @@ pub struct MarchMemo {
     /// The Depart landed (the relay answered ok).
     pub sent: bool,
     pub reveal_tries: u8,
+    /// A REVEAL of the march was observed (its ArrivalSlot or its
+    /// ClashInputs record at the destination, from the herald; W6T-3: not
+    /// the relay's 2xx, which only queues the material at the keepers).
     pub revealed: bool,
+    /// The relay (or the chain, for a direct Reveal) accepted the material
+    /// (W6T-3: journalled `accepted`).
+    pub accepted: bool,
+    /// The last refusal code of a Reveal attempt (report only).
+    pub last_code: Option<String>,
     pub late_done: bool,
     pub settled: bool,
     pub redeparted: bool,
+}
+
+impl MarchMemo {
+    /// Whether the owner's reveal is done: observed, or accepted (the
+    /// keepers hold the material; a second POST would only repeat it).
+    pub fn reveal_done(&self) -> bool {
+        self.revealed || self.accepted
+    }
 }
 
 /// A bot's memory between decisions (updated by the runner).
@@ -949,7 +965,7 @@ fn duties(obs: &Observation, cx: &Ctx, prof: &Profile, rng: &mut Rng, out: &mut 
                     }
                 }
             }
-            Some(Persona::SelfTip) if in_bell && !m.revealed && m.reveal_tries < 2 => {
+            Some(Persona::SelfTip) if in_bell && !m.reveal_done() && m.reveal_tries < 2 => {
                 if cx.direct {
                     if let Some(a) = reveal_args(obs, cx, m, RevealRoute::DirectSelf) {
                         out.push(Intent::Reveal {
@@ -963,12 +979,12 @@ fn duties(obs: &Observation, cx: &Ctx, prof: &Profile, rng: &mut Rng, out: &mut 
                     out.push(keeper_reveal(m));
                 }
             }
-            Some(Persona::GarbageSeal) if in_bell && !m.revealed && m.reveal_tries < 1 => {
+            Some(Persona::GarbageSeal) if in_bell && !m.reveal_done() && m.reveal_tries < 1 => {
                 if favourable(obs, cx, m) {
                     out.push(keeper_reveal(m));
                 }
             }
-            Some(Persona::Forger) if in_bell && !m.revealed && m.reveal_tries < 1 => {
+            Some(Persona::Forger) if in_bell && !m.reveal_done() && m.reveal_tries < 1 => {
                 if cx.direct {
                     if let Some(a) = reveal_args(obs, cx, m, RevealRoute::DirectForged) {
                         out.push(Intent::Reveal {
@@ -981,7 +997,7 @@ fn duties(obs: &Observation, cx: &Ctx, prof: &Profile, rng: &mut Rng, out: &mut 
                 }
                 out.push(keeper_reveal(m));
             }
-            _ if in_bell && !m.revealed && m.reveal_tries < 2 && wants => {
+            _ if in_bell && !m.reveal_done() && m.reveal_tries < 2 && wants => {
                 out.push(keeper_reveal(m));
             }
             _ => {}

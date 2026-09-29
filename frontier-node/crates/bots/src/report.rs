@@ -8,6 +8,7 @@
 
 use std::collections::BTreeMap;
 
+use frontier_agents::policy::SealKind;
 use frontier_agents::{Arch, Persona};
 use serde_json::{json, Value};
 
@@ -68,6 +69,49 @@ impl Verdict {
     }
 }
 
+/// A march that settled with no REVEAL observed (W6T-3, w6-s7 R4: the
+/// bots journalled `revealed` on the relay's 202 and never learnt that 27
+/// honest Reveals were refused `Shielded`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unrevealed {
+    pub bot: u32,
+    pub persona: Option<Persona>,
+    pub kind: SealKind,
+    pub host: u64,
+    pub depart_bell: u32,
+    pub arrive: u32,
+    pub dest: (i32, i32),
+    /// How the owner revealed: `keeper` (`/f/reveal`), `direct`, or `none`.
+    pub route: &'static str,
+    /// The relay (or the chain) accepted the material.
+    pub accepted: bool,
+    pub tries: u8,
+    /// The last refusal code of a Reveal attempt (e.g. `Shielded`).
+    pub last_code: Option<String>,
+}
+
+impl Unrevealed {
+    pub fn to_json(&self) -> Value {
+        json!({
+            "bot": self.bot,
+            "persona": self.persona.map(|p| p.name()),
+            "seal": match self.kind {
+                SealKind::Honest => "honest",
+                SealKind::Garbage => "garbage",
+                SealKind::BadPlaintext => "bad_plaintext",
+            },
+            "host": self.host.to_string(),
+            "depart_bell": self.depart_bell,
+            "arrive": self.arrive,
+            "dest": [self.dest.0, self.dest.1],
+            "route": self.route,
+            "accepted": self.accepted,
+            "tries": self.tries,
+            "last_code": self.last_code,
+        })
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Report {
     /// (group, action, result) → count.
@@ -79,6 +123,8 @@ pub struct Report {
     pub bots: u64,
     /// `/f/nudge` requests by result (`sent`, `failed`; integ-W4 review).
     pub nudges: BTreeMap<&'static str, u64>,
+    /// Marches settled with no REVEAL observed (W6T-3).
+    pub unrevealed: Vec<Unrevealed>,
 }
 
 fn refused_as(o: &Outcome, codes: &[&str]) -> bool {
@@ -178,6 +224,7 @@ impl Report {
         }
         self.steps += other.steps;
         self.bots += other.bots;
+        self.unrevealed.extend(other.unrevealed);
     }
 
     pub fn to_json(&self) -> Value {
@@ -222,6 +269,8 @@ impl Report {
             "personas": personas,
             "errors": self.errors,
             "nudges": self.nudges,
+            "unrevealed": self.unrevealed.iter().map(Unrevealed::to_json).collect::<Vec<_>>(),
+            "unrevealed_honest": self.unrevealed.iter().filter(|u| u.kind == SealKind::Honest).count(),
         })
     }
 }

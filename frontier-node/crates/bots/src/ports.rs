@@ -40,11 +40,19 @@ impl Answer {
         (200..300).contains(&self.status) && self.body.get("ok") != Some(&Value::Bool(false))
     }
 
-    /// The machine-readable refusal code (`code`), if any.
+    /// The machine-readable refusal code (`code`), if any; else an `error`
+    /// that is one identifier (the keeper's `409 {"error":"Shielded"}`,
+    /// which the relay passes through; W6T-3).
     pub fn code(&self) -> Option<String> {
         self.body
             .get("code")
             .and_then(|c| c.as_str())
+            .or_else(|| {
+                self.body
+                    .get("error")
+                    .and_then(|c| c.as_str())
+                    .filter(|e| !e.is_empty() && e.chars().all(|c| c.is_ascii_alphanumeric()))
+            })
             .map(String::from)
     }
 
