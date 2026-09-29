@@ -32,8 +32,9 @@
 #   5. copies report.md, s7.json and so.sha256 to docs/frontier/m1/runs/<run-id>/
 #      (not committed by this script).
 # W6T-4: the pinned .so sha256 is printed against the release build the
-# W6T-1 program fix recorded (the first 64-hex `file_sha256` in
-# docs/frontier/m1/W6T-1-NOTES.md, or --recorded-sha256 HEX / the
+# W6T-1 program fix recorded (docs/frontier/m1/W6T-1-NOTES.md: the first
+# `file_sha256 <hex>`, else the first 64-hex sha on a line naming the
+# release build; or --recorded-sha256 HEX / the
 # S7_RECORDED_SO_SHA256 environment variable): "match", "MISMATCH" or "no
 # record"; s7.json carries both. A mismatch is reported, not fatal (the
 # script pins what it builds, as before).
@@ -63,7 +64,7 @@ while [ $# -gt 0 ]; do
     --recorded-sha256=*) RECORDED="${1#--recorded-sha256=}" ;;
     --base-port|--base-port=*|--beacon|--beacon=*|--scale|--scale=*|--days|--days=*|--so|--so=*|--expect-so-sha256|--expect-so-sha256=*)
       echo "$1 is fixed by the Gate W6 line; not accepted here" >&2; exit 2 ;;
-    -h|--help) sed -n '2,43p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,44p' "$0"; exit 0 ;;
     *) EXTRA+=("$1") ;;
   esac
   shift
@@ -80,7 +81,10 @@ SO_SHA=""
 STARTED="$(date -u +%FT%TZ)"
 NOTES_U1="$ROOT/docs/frontier/m1/W6T-1-NOTES.md"
 if [ -z "$RECORDED" ] && [ -f "$NOTES_U1" ]; then
+  # `file_sha256 <hex>` (build-frontier.sh's line), else the first line that
+  # names the release build with a 64-hex sha (W6T-1's build table).
   RECORDED="$(grep -o 'file_sha256[^0-9a-f]*[0-9a-f]\{64\}' "$NOTES_U1" | head -1 | grep -o '[0-9a-f]\{64\}$')"
+  [ -n "$RECORDED" ] || RECORDED="$(grep -i 'release' "$NOTES_U1" | grep -v -i 'test-beacon' | grep -o '[0-9a-f]\{64\}' | head -1)"
 fi
 RECORDED="$(printf '%s' "$RECORDED" | tr 'A-F' 'a-f')"
 SHA_CHECK="no record"
