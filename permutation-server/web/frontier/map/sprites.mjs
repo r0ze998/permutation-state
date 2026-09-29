@@ -53,6 +53,8 @@ const BROKEN_FATES = new Set([3, 4, 5]);
 const OPEN_FRAME_MS = 90;
 const OPEN_GLOW = [null, 0, 1, 2, 2, 3, 3, 3, 2, 1, 0];
 const now = () => (globalThis.performance?.now?.() ?? Date.now());
+/** Relations (clash.rs): bit a*8+b set = a and b are not hostile (peace, NAP or alliance). */
+const peaceful = (rel, a, b) => { try { return ((BigInt(rel ?? 0) >> BigInt((a % 8) * 8 + (b % 8))) & 1n) === 1n; } catch { return false; } };
 const roadBit = (mask, i) => { try { return mask !== undefined && mask !== null && ((BigInt(mask) >> BigInt(i)) & 1n) === 1n; } catch { return false; } };
 
 /** Axial hexes from a to b inclusive (cube lerp). */
@@ -224,7 +226,9 @@ export class SpriteArt {
    */
   paint(ctx, entries, { zoom, dpr = 1, terrainAt = () => null, fogAt = () => null, selected = null, viewerFaction = null, demoRoads = false,
     ringsOpen = null, replayRing = null, replayEvery = 6000, engineStage = 0,
-    relics = [], waystones = [], demoSpecials = false }) {
+    relics = [], waystones = [], demoSpecials = false, rivers = [], demoRivers = false, alliedPairs = [] }) {
+    const allied = new Set(alliedPairs.map(([a, b]) => `${Math.min(a, b)}-${Math.max(a, b)}`));
+    const calm = (rel, a, b) => peaceful(rel, a, b) || allied.has(`${Math.min(a, b)}-${Math.max(a, b)}`);
     const s = artSize(RADIUS * zoom * dpr);
     // the ring-open moment starts when the open ring count grows (or, in the preview, on a timer)
     const t0 = now();
@@ -260,6 +264,7 @@ export class SpriteArt {
           shield: !!(m && m.shieldUntilBell > 0 && m.shieldUntilBell !== 0xffffffff && m.shieldUntilBell >= (e.prov?.resolvedNext ?? 0)) };
         t.road = !cloud && SITE_LAND.has(name) && roadBit(e.prov?.roadMask, i);
         t.ring = ringOf(e.p, e.q);
+        t.rel = e.prov?.relations ?? 0;
         const pc = provinceCentre(e.p, e.q);
         t.centre = h.q === pc.q && h.r === pc.r;
         tiles.push(t);
@@ -303,6 +308,36 @@ export class SpriteArt {
         }
       }
     }
+    // Rivers: tiles from the page ({p, q, tile}; none in M1), or preview samples (?rivers=1): in each
+    // province with water, from its first hills/mountain tile to the nearest water, avoiding sites.
+    const river = new Set();
+    for (const r of rivers) { const t = at(r.p, r.q, r.tile); if (t && SITE_LAND.has(t.name) && t.site === undefined) river.add(t); }
+    if (demoRivers) for (const e of entries) {
+      if (e.fog === 'unopened') continue;
+      const mine = tiles.filter((u) => u.p === e.p && u.pq === e.q);
+      const seas = mine.filter((u) => u.name === 'water');
+      if (!seas.length) continue;
+      const rank = { mountain: 0, hills: 1, forest: 2, grassland: 3, plains: 3 };
+      const starts = mine.filter((u) => u.name !== 'water').sort((a, b) => (rank[a.name] - rank[b.name]) || (a.idx - b.idx));
+      for (const src of starts.slice(0, 12)) {
+        const sea = seas.slice().sort((a, b) => Math.hypot(a.x - src.x, a.y - src.y) - Math.hypot(b.x - src.x, b.y - src.y))[0];
+        const path = hexLine(src, sea).map((h) => byHex.get(keyOf(h.q, h.r))).filter(Boolean);
+        const land = path.filter((u) => SITE_LAND.has(u.name));
+        if (land.length < 3 || path.some((u) => u.site !== undefined || u.camp || u.centre)) continue;
+        for (const u of land) river.add(u);
+        break;
+      }
+    }
+    for (const t of river) {
+      let mask = 0;
+      EDGE_DIRS.forEach(([dq, dr], k) => { const n = byHex.get(keyOf(t.q + dq, t.r + dr)); if (n && river.has(n)) mask |= 1 << k; });
+      // a river end next to water flows into it (one mouth)
+      if ([0, 1, 2, 3, 4, 5].filter((k) => mask >> k & 1).length <= 1) {
+        const k = EDGE_DIRS.findIndex(([dq, dr]) => byHex.get(keyOf(t.q + dq, t.r + dr))?.name === 'water');
+        if (k >= 0) { mask |= 1 << k; t.mouth = k; }
+      }
+      if (mask) t.river = mask;
+    }
     tiles.sort((a, b) => a.y - b.y || a.x - b.x);
     const nameAt = (q, r) => byHex.get(keyOf(q, r))?.name ?? terrainAt(q, r);
     // territory: a held site owns itself and its ring-1 tiles (a hamlet's worked radius); nearer site wins
@@ -320,23 +355,36 @@ export class SpriteArt {
       }
     }
     const ownerAt = (q, r) => owner.get(keyOf(q, r))?.f;
+    const war = new Set();
+    for (const e of entries) {
+      const fs = new Set((e.clash?.arrivals ?? []).filter((a) => a.present && a.faction < 6).map((a) => a.faction));
+      if (!fs.size) continue;
+      for (const t of tiles) if (t.p === e.p && t.pq === e.q && t.state === 1 && t.owner < 6) fs.add(t.owner);
+      const list = [...fs];
+      for (const a of list) for (const b of list) if (a < b && !calm(e.prov?.relations, a, b)) war.add(`${e.p},${e.q}:${a}-${b}`);
+    }
     const draw = (img, t) => ctx.drawImage(img, t.x - s.ax * k, t.y - s.ay * k + TOP_LIFT, s.w * k, s.h * k);
     const nearCentre = (t) => { const pc = provinceCentre(t.p, t.pq); return Math.max(Math.abs(t.q - pc.q), Math.abs(t.r - pc.r), Math.abs(t.q + t.r - pc.q - pc.r)) <= 1; };
     const siteGround = (t) => t.site !== undefined && SITE_LAND.has(t.name);
     // pass 1: ground and flat overlays
     for (const t of tiles) {
       if (t.cloud) continue;
-      const g = this.image(siteGround(t) ? 'sites' : 'terrain', s.key, `${t.name}_${t.v}`);
+      const g = t.river ? this.image('rivers', s.key, `${t.name}_${String(t.river).padStart(2, '0')}`)
+        : this.image(siteGround(t) ? 'sites' : 'terrain', s.key, `${t.name}_${t.v}`);
       if (!g) { polygon(ctx, hexPoints(t.x, t.y, 0), FLAT[t.name][0], null); continue; }
       draw(g, t);
       if (t.ring === 0 && t.name !== 'water' && t.name !== 'mountain') { const pv = this.image('specials', s.key, 'concord_paving'); if (pv) draw(pv, t); }
       EDGE_DIRS.forEach(([dq, dr], e) => {
         const nb = nameAt(t.q + dq, t.r + dr);
         if (!nb || nb === 'cloud') return;
-        if (t.name === 'water' && nb !== 'water') { const o = this.image('overlays', s.key, `shore_${e}`); if (o) draw(o, t); }
+        if (t.name === 'water' && nb !== 'water') {
+          const o = this.image('overlays', s.key, `shore_${e}`); if (o) draw(o, t);
+          const rt = byHex.get(keyOf(t.q + dq, t.r + dr));
+          if (rt?.river && (rt.river >> ((e + 3) % 6) & 1)) { const m = this.image('overlays', s.key, `mouth_${e}`); if (m) draw(m, t); }
+        }
         else if (t.name !== 'water' && nb === 'water') { const o = this.image('overlays', s.key, `beach_${e}`); if (o) draw(o, t); }
       });
-      if (t.road) {
+      if (t.road && !t.river) {
         const pre = `${t.name}_${t.v}`;
         EDGE_DIRS.forEach(([dq, dr], e) => {
           const nb = byHex.get(keyOf(t.q + dq, t.r + dr));
@@ -348,8 +396,10 @@ export class SpriteArt {
       if (f !== undefined) {
         const o = this.image('factions', s.key, `wash_${ART_FACTIONS[f]}`); if (o) draw(o, t);
         EDGE_DIRS.forEach(([dq, dr], e) => {
-          if (ownerAt(t.q + dq, t.r + dr) === f) return;
-          const b = this.image('factions', s.key, `border_${ART_FACTIONS[f]}_${e}_own`); if (b) draw(b, t);
+          const g2 = ownerAt(t.q + dq, t.r + dr);
+          if (g2 === f) return;
+          const style = g2 === undefined ? 'own' : calm(t.rel, f, g2) ? 'ally' : war.has(`${t.p},${t.pq}:${Math.min(f, g2)}-${Math.max(f, g2)}`) ? 'war' : 'own';
+          const b = this.image('factions', s.key, `border_${ART_FACTIONS[f]}_${e}_${style}`); if (b) draw(b, t);
         });
       }
     }
@@ -396,6 +446,7 @@ export class SpriteArt {
       if (t.waystone) { const img = this.image('specials', s.key, `waystone_${ART_FACTIONS[t.waystone.faction] ?? 'ember'}`); if (img) draw(img, t); continue; }
       const decor = ((t.q * 5 + t.r * 11) % 3 + 3) % 3 === 0;
       const pr = paved ? (t.site === undefined && decor ? this.image('specials', s.key, `concord_plaza_${1 + (t.v % 2)}`) : null)
+        : t.river ? this.image('rivers_props', s.key, `${t.name}_${String(t.river).padStart(2, '0')}`)
         : this.image(siteGround(t) ? 'sites_props' : 'props', s.key, `${t.name}_${t.v}`);
       if (pr) draw(pr, t);
       if (opening !== null && t.ring === opening && openFrame < 8) { const c = this.image('fog', s.key, `cloud_1_open_${openFrame}`); if (c) draw(c, t); }

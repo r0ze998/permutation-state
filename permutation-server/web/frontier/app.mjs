@@ -56,6 +56,10 @@ const ART_Q = new URLSearchParams(globalThis.location?.search ?? '');
 const ART_RINGOPEN = ART_PREVIEW && ART_Q.get('ringopen') === '1';
 // ?art=1&relics=1 places sample Relic Sites and Waystones (M3 features, no accounts in M1; presentation only).
 const ART_RELICS = ART_PREVIEW && ART_Q.get('relics') === '1';
+// ?art=1&rivers=1 draws sample rivers (no river data in the Frontier; presentation only).
+const ART_RIVERS = ART_PREVIEW && ART_Q.get('rivers') === '1';
+// ?art=1&ally=0-1,2-4 shows those faction pairs as allied (presentation only; real relations come from the Province).
+const ART_ALLY = ART_PREVIEW ? (ART_Q.get('ally') ?? '').split(',').map(x => x.split('-').map(Number)).filter(x => x.length === 2 && x.every(Number.isInteger)) : [];
 const ART_ENGINE = ART_PREVIEW ? Math.max(0, Math.min(5, Number(ART_Q.get('engine') ?? 0) | 0)) : 0;
 // ?art=1&fog=1 previews the fog as if the viewer held province (2,0) (presentation only).
 const ART_FOG = ART_PREVIEW && new URLSearchParams(globalThis.location?.search ?? '').get('fog') === '1';
@@ -401,6 +405,8 @@ export async function boot() {
           demoRoads: ART_ROADS,
           engineStage: ART_ENGINE,
           demoSpecials: ART_RELICS,
+          demoRivers: ART_RIVERS,
+          alliedPairs: ART_ALLY,
           artReplayRing: ART_RINGOPEN ? Math.max(0, (FS.record?.rings?.length ?? 1) - 1) : null,
           clashOf: ART_PREVIEW ? artClashOf : undefined,
           pendingOf: ART_PREVIEW ? (p, q) => FS.provinces.get(`${p},${q}`)?.inputs ?? null : undefined,
