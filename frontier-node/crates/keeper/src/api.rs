@@ -415,4 +415,67 @@ mod tests {
         );
         r.stop();
     }
+
+    /// W6T-2: a refusal names its code as `error` (the relay passes the
+    /// body through: `409 {"error":"Shielded"}`, `{"error":"ArrivalBell"}`).
+    #[tokio::test]
+    async fn refusal_bodies_name_the_error() {
+        struct Refuse;
+        impl RevealGate for Refuse {
+            fn check<'a>(
+                &'a self,
+                _: &'a RevealReq,
+            ) -> std::pin::Pin<
+                Box<
+                    dyn std::future::Future<
+                            Output = Result<
+                                crate::reveal_accept::Accepted,
+                                crate::reveal_accept::Refusal,
+                            >,
+                        > + Send
+                        + 'a,
+                >,
+            > {
+                Box::pin(async {
+                    Err(crate::reveal_accept::Refusal {
+                        http: 409,
+                        code: "Shielded",
+                        detail: "own holding shielded".into(),
+                    })
+                })
+            }
+        }
+        let shared: Arc<Mutex<Shared>> = Default::default();
+        let tok = "t".repeat(32);
+        let mut running = None;
+        for port in 41_101..41_150u16 {
+            let a: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+            if let Ok(r) = serve_with(a, shared.clone(), tok.clone(), Some(Arc::new(Refuse))).await
+            {
+                running = Some(r);
+                break;
+            }
+        }
+        let r = running.expect("a free port in 41101-41149");
+        let p = fclient::seal::Plain {
+            version: 1,
+            host_id: 42,
+            arrive_bell: 9,
+            stance: 1,
+            ..Default::default()
+        };
+        let body = json!({
+            "holding": solana_address::Address::new_from_array([3; 32]).to_string(),
+            "transit_slot": 1,
+            "plain_b64": B64.encode(fclient::seal::pack(&p)),
+            "salt_b64": B64.encode([1u8; 32]),
+            "ct_hash_b64": B64.encode([2u8; 32]),
+        });
+        let (c, v) = call(r.addr, "POST", "/v1/reveal", Some(&tok), Some(body)).await;
+        assert_eq!(c, 409);
+        assert_eq!(v["error"], "Shielded", "{v}");
+        assert_eq!(v["code"], "Shielded", "the W3-C field stays");
+        assert!(lock(&shared).reveals.is_empty(), "not queued");
+        r.stop();
+    }
 }

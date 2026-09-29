@@ -292,6 +292,11 @@ impl Engine {
         self.pending.get(key).and_then(|p| p.first_slot)
     }
 
+    /// What the transaction feed says of a failed version: the compute
+    /// units it consumed and whether its logs say the CU meter ran out
+    /// (W6T-2; the error JSON of a status alone cannot tell).
+    pub fn note_tx_meta(&mut self, _sig: Signature, _units: u64, _meter: bool) {}
+
     pub fn pending_len(&self) -> usize {
         self.pending.len()
     }
@@ -1311,6 +1316,63 @@ mod tests {
             vec![0, 1, 2],
             "the ladder's next rung goes out at once"
         );
+    }
+
+    /// W6T-2 (w6-s7: 25,655 CloseArrivalDay and 3,000 CloseArrivalSlot
+    /// versions failed in the drain): the localnet reports running out of
+    /// compute as `ProgramFailedToComplete` ("exceeded CUs meter", units
+    /// consumed = the limit). That is CU exhaustion: the next version climbs
+    /// the CU ladder. Before, it took the heap rung (more CU spent, never
+    /// enough) and then ended Dead. A fault below the limit with no meter
+    /// log is still the heap rung.
+    #[tokio::test]
+    async fn cu_meter_pftc_climbs_cu_not_heap() {
+        let budgets =
+            Budgets::from_json(&serde_json::from_str(crate::CANONICAL_BUDGETS).unwrap()).unwrap();
+        let limit = budgets.get(abi::tag::CLOSE_ARRIVAL_DAY).cu_limit;
+        for ((units, meter), want) in [
+            ((limit as u64, false), (Budgets::retry_cu(limit), None)),
+            ((limit as u64 - 450, true), (Budgets::retry_cu(limit), None)),
+            ((1_200, false), (limit, Some(abi::HEAP_FRAME_RETRY))),
+        ] {
+            let port = Script::default();
+            let n = Arc::new(std::sync::atomic::AtomicU64::new(0));
+            let n2 = n.clone();
+            *port.answer.lock().unwrap() = Box::new(move |_| {
+                let k = n2.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Some(Status {
+                    slot: 1 + k,
+                    err: (k == 0)
+                        .then(|| r#"{"InstructionError":[3,"ProgramFailedToComplete"]}"#.into()),
+                    code: None,
+                })
+            });
+            let mut payers = payers();
+            payers.refresh(&port, 0).await.unwrap();
+            let mut e = Engine::new(budgets.clone(), EngineParams::default());
+            e.ensure(
+                spec("close:day:1,2:6", Class::N, abi::tag::CLOSE_ARRIVAL_DAY),
+                0,
+            );
+            e.step(&port, &mut payers, None, 0).await;
+            let sig = tx::signature(&port.sent.lock().unwrap()[0]);
+            e.note_tx_meta(sig, units, meter);
+            let mut landed = false;
+            for s in 1..4 {
+                for (_, o) in e.step(&port, &mut payers, None, s).await.outcomes {
+                    landed |= matches!(o, Outcome::Landed { .. });
+                }
+            }
+            let sent = port.sent.lock().unwrap().clone();
+            assert!(sent.len() >= 2, "a second version");
+            let b = tx::parse_budget(&sent[1].message);
+            assert_eq!(
+                (b.cu_limit, b.heap),
+                (Some(want.0), want.1),
+                "units {units}, meter log {meter}"
+            );
+            assert!(landed);
+        }
     }
 
     /// AlreadyDone (52) is success; WindowClosed and NotImplemented end the

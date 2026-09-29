@@ -2202,3 +2202,498 @@ mod review_tests {
         }
     }
 }
+
+/// W6T-2 (w6-s7 triage, U2): the play duties' reads, the end of the
+/// season, dead closes, the backup delay and the skip batches. Each test
+/// runs the duty through [`PlayDuty::plan`] over a fake chain.
+#[cfg(test)]
+mod w6t_tests {
+    use super::*;
+    use crate::config::KeeperConfig;
+    use crate::engine::{EngineParams, StepReport};
+    use crate::pools::Payers;
+    use crate::testkit::{self, FakeDrand, FakePort};
+    use base64::Engine as _;
+    use fclient::addr::Addresses;
+    use fclient::budgets::Budgets;
+    use fclient::clock::SeasonClock;
+    use fclient::decode::Season;
+
+    const G: i64 = 1_800_000_000;
+
+    fn program() -> Address {
+        Address::new_from_array([0x5F; 32])
+    }
+
+    struct Env {
+        port: FakePort,
+        drand: FakeDrand,
+        season: Season,
+        addrs: Addresses,
+        cfg: KeeperConfig,
+        engine: Engine,
+        rounds: Rounds,
+        seeds: SeedFinder,
+        shared: Shared,
+        beacon: BTreeMap<(u32, u8), AnchorInfo>,
+    }
+
+    fn env(roles: &[&str], end_bell: u32) -> Env {
+        let drand = FakeDrand::new();
+        let season = testkit::season(G, end_bell, &drand.key.info());
+        let mut cfg = KeeperConfig::new(program(), 7, Address::new_from_array([0xBE; 32]));
+        cfg.roles = roles.iter().map(|r| r.to_string()).collect();
+        let budgets =
+            Budgets::from_json(&serde_json::from_str(crate::CANONICAL_BUDGETS).unwrap()).unwrap();
+        Env {
+            port: FakePort::default(),
+            rounds: Rounds::new(drand.key.pk96),
+            drand,
+            season,
+            addrs: Addresses::new(program(), 7),
+            cfg,
+            engine: Engine::new(budgets, EngineParams::default()),
+            seeds: SeedFinder::default(),
+            shared: Shared::default(),
+            beacon: BTreeMap::new(),
+        }
+    }
+
+    impl Env {
+        async fn plan(
+            &mut self,
+            d: &mut PlayDuty,
+            slot: u64,
+            now: i64,
+            journal: Option<&Journal>,
+            opened: &[(i32, i32)],
+        ) {
+            self.port.set_clock(slot, now);
+            let t = Tick {
+                slot,
+                now,
+                season: &self.season,
+                clock: SeasonClock::from_season(&self.season),
+                addrs: &self.addrs,
+                cfg: &self.cfg,
+            };
+            d.plan(
+                &t,
+                &self.port,
+                &self.drand,
+                &mut self.rounds,
+                &mut self.engine,
+                &self.beacon,
+                &mut self.seeds,
+                &mut self.shared,
+                journal,
+                opened,
+            )
+            .await
+            .unwrap();
+        }
+        fn anchor(&mut self, bell: u32, region: u8) {
+            self.beacon.insert(
+                (bell, region),
+                AnchorInfo {
+                    a: G + (bell as i64 + 1) * BELL_SECS + 5,
+                    slot: 1,
+                    round: 1,
+                    rent_to: Address::new_from_array([1; 32]),
+                    cache: None,
+                    archived: false,
+                },
+            );
+        }
+    }
+
+    fn depart(host: u64, origin: (i16, i16), tile: u8, dep: u32, arrive: u32) -> DepartRec {
+        DepartRec {
+            host,
+            origin,
+            origin_tile: tile,
+            depart_bell: dep,
+            arrive,
+            dep_mass: 10,
+            tip: 0,
+            seal_root: [0; 32],
+            commit: [0; 32],
+            seal: [0; 165],
+            slot: 1,
+        }
+    }
+
+    /// A march that stays in its origin tile (no path step): the plaintext,
+    /// salt and ct_hash, and the seal root they open.
+    fn march(host: u64, arrive: u32, dest: (i16, i16), tile: u8) -> ([u8; 37], [u8; 32], [u8; 32]) {
+        let p = seal::Plain {
+            version: 1,
+            host_id: host,
+            arrive_bell: arrive,
+            dest_p: dest.0,
+            dest_q: dest.1,
+            dest_tile: tile,
+            stance: 1,
+            ..Default::default()
+        };
+        (seal::pack(&p), [host as u8; 32], [7; 32])
+    }
+
+    fn owner_item(holding: Address, m: &([u8; 37], [u8; 32], [u8; 32])) -> Value {
+        let b = base64::engine::general_purpose::STANDARD;
+        json!({
+            "holding": holding.to_string(), "transit_slot": 0,
+            "plain_b64": b.encode(m.0), "salt_b64": b.encode(m.1), "ct_hash_b64": b.encode(m.2),
+        })
+    }
+
+    /// Cause A (w6-s7 criterion 3): every 4th slot the closes duty read
+    /// each open ClashInputs (and each ArrivalSlot) with its own RPC; with
+    /// a 1,008-bell close grace none closes in the season, the list only
+    /// grows (≈ 15,000 reads, 1.4 s a closes tick at the end of w6-s7).
+    /// Now: one getMultipleAccounts per 100, and a key inside its grace is
+    /// not read again before the grace ends.
+    #[tokio::test]
+    async fn closes_do_not_reread_inputs_inside_grace() {
+        let mut e = env(&["close"], 1_008);
+        let mut d = PlayDuty::default();
+        let bell = 100u32;
+        let mut n_inputs = 0;
+        'outer: for p in -40i16..40 {
+            for q in -40i16..40 {
+                if n_inputs == 5_000 {
+                    break 'outer;
+                }
+                d.index.inputs.insert((p, q, bell));
+                e.port.put(
+                    e.addrs.clash_inputs(p as i32, q as i32, bell),
+                    testkit::acct(program(), testkit::clash_inputs(60_600)),
+                );
+                n_inputs += 1;
+            }
+        }
+        // 1,000 ArrivalSlots settled, inside their claim grace.
+        for i in 0..1_000u32 {
+            let (p, q) = ((i % 40) as i16 - 20, (i / 40) as i16 - 20);
+            let sk = (p, q, bell, 0u8, 0u8);
+            let host = 1_000 + i as u64;
+            d.index.slots.insert(
+                sk,
+                crate::playindex::RevealRec {
+                    dest: (p, q),
+                    arrive: bell,
+                    faction: 0,
+                    i: 0,
+                    host,
+                    displaced: None,
+                    beneficiary: Address::new_from_array([0; 32]),
+                    slot: 1,
+                    created_day: false,
+                },
+            );
+            e.anchor(bell, ix::region_of(p as i32, q as i32));
+            e.port.put(
+                e.addrs.arrival_slot(p as i32, q as i32, bell, 0, 0),
+                testkit::acct(program(), testkit::arrival_slot(host, true)),
+            );
+        }
+        let now0 = G + 102 * BELL_SECS;
+        let mut per_pass = vec![];
+        for k in 1..=10u64 {
+            e.port.take_calls();
+            e.plan(&mut d, 4 * k, now0 + 32 * k as i64, None, &[]).await;
+            let calls = e.port.take_calls();
+            assert!(
+                calls.iter().all(|c| c.len() <= 100),
+                "pass {k}: a read of more than 100 keys"
+            );
+            per_pass.push(calls.len());
+        }
+        assert_eq!(e.engine.pending_len(), 0, "nothing is closable yet");
+        assert!(
+            per_pass[0] <= 60,
+            "the first pass reads in batches of 100: {per_pass:?}"
+        );
+        assert!(
+            per_pass[1..].iter().all(|&n| n <= 2),
+            "inside the grace nothing is read again: {per_pass:?}"
+        );
+    }
+
+    /// End of season (w6-s7 failure 1, U2): an arrival at or after
+    /// `end_bell` can never be anchored, revealed or settled (the program's
+    /// Reveal refuses `WrongStatus` once Ended; 27 failed Reveals in w6-s7).
+    /// The keeper does not send them; an arrival before the end still goes.
+    #[tokio::test]
+    async fn reveals_skip_arrivals_at_or_after_end_bell() {
+        let end = 300u32;
+        let mut e = env(&["reveal"], end);
+        let mut d = PlayDuty::default();
+        let origin = (2i16, 0i16);
+        let mut keys = vec![];
+        for (site, arrive) in [(1u8, end - 1), (2, end), (3, end + 2)] {
+            let host = fclient::addr::host_id(2, 0, site, 1, 5).unwrap();
+            let m = march(host, arrive, origin, 5);
+            let root = seal::seal_root(&seal::commit(&m.0, &m.1), &m.2);
+            let dep = arrive - 3;
+            d.index
+                .departs
+                .insert((host, dep), depart(host, origin, 5, dep, arrive));
+            let h = e.addrs.holding(2, 0, site);
+            e.port.put(
+                h,
+                testkit::acct(
+                    program(),
+                    testkit::holding(1, 0, (1, host, dep, arrive, root)),
+                ),
+            );
+            e.shared
+                .reveals
+                .push((format!("r{site}"), owner_item(h, &m)));
+            keys.push((arrive, format!("reveal:{host}:{dep}")));
+        }
+        let now = G + (end as i64 - 1) * BELL_SECS + 30;
+        e.plan(&mut d, 50, now, None, &[]).await;
+        for (arrive, k) in keys {
+            assert_eq!(
+                e.engine.is_pending(&k),
+                arrive < end,
+                "arrive {arrive} (end_bell {end}): {k}"
+            );
+        }
+    }
+
+    /// Close waste (w6-s7: 28,655 failed CloseArrivalDay/Slot in the
+    /// drain, ≈ 270 per key): a close that ended Dead was planned again at
+    /// the next closes tick. Now a Dead close key waits until its account
+    /// changes.
+    #[tokio::test]
+    async fn dead_close_key_not_replanned() {
+        let mut e = env(&["close"], 1_008);
+        let mut d = PlayDuty::default();
+        let pq = (3i16, 0i16);
+        e.port.put(
+            e.addrs.province(3, 0),
+            testkit::acct(program(), testkit::province(300, &[])),
+        );
+        d.index.days.insert((3, 0, 1));
+        let day_addr = e.addrs.arrival_day(3, 0, 1);
+        e.port
+            .put(day_addr, testkit::acct(program(), testkit::arrival_day()));
+        let key = "close:day:3,0:1".to_string();
+        let now0 = G + 400 * BELL_SECS;
+        e.plan(&mut d, 4, now0, None, &[(3, 0)]).await;
+        assert!(e.engine.is_pending(&key), "planned once");
+        assert!(d.provinces.contains_key(&pq));
+        // Every rung failed: the engine ends it Dead.
+        e.engine.cancel(&key);
+        d.on_outcome(
+            &key,
+            &Outcome::Dead {
+                reason: "fails with a heap frame".into(),
+                code: None,
+            },
+        );
+        // Unchanged account: never planned again (a bell and more of passes).
+        for k in 2..=40u64 {
+            e.plan(&mut d, 4 * k, now0 + 32 * k as i64, None, &[(3, 0)])
+                .await;
+            assert!(!e.engine.is_pending(&key), "re-planned at pass {k}");
+        }
+        // The account changed (lamports): planned again.
+        let mut a = e.port.accounts.lock().unwrap()[&day_addr].clone();
+        a.lamports += 1;
+        e.port.put(day_addr, a);
+        let mut again = false;
+        for k in 41..=80u64 {
+            e.plan(&mut d, 4 * k, now0 + 32 * k as i64, None, &[(3, 0)])
+                .await;
+            again |= e.engine.is_pending(&key);
+        }
+        assert!(again, "a changed account is planned again");
+    }
+
+    /// Redundancy (w6-s7: 1,716 SettleDeparture AlreadyDone and 1,504
+    /// SettleTransit TransitState between keepers A and B): with
+    /// `backup_delay_slots` a settle waits that many slots after it became
+    /// eligible, then re-reads the transit before it is planned.
+    #[tokio::test]
+    async fn backup_delay_rereads_before_settle() {
+        let mut e = env(&["settle-departure"], 1_008);
+        e.cfg.backup_delay_slots = 9;
+        let mut d = PlayDuty::default();
+        e.port.put(
+            e.addrs.province(2, 0),
+            testkit::acct(program(), testkit::province(101, &[])),
+        );
+        let mut hs = vec![];
+        for site in [1u8, 2] {
+            let host = fclient::addr::host_id(2, 0, site, 1, 5).unwrap();
+            d.index
+                .departs
+                .insert((host, 100), depart(host, (2, 0), 5, 100, 104));
+            let h = e.addrs.holding(2, 0, site);
+            e.port.put(
+                h,
+                testkit::acct(
+                    program(),
+                    testkit::holding(1, 0, (1, host, 100, 104, [0; 32])),
+                ),
+            );
+            hs.push((host, h));
+        }
+        let key = |host: u64| format!("sdep:{host}:100:2,0");
+        let now0 = G + 101 * BELL_SECS + 10;
+        for s in 100..109u64 {
+            e.plan(&mut d, s, now0 + 8 * (s as i64 - 100), None, &[(2, 0)])
+                .await;
+            for (host, _) in &hs {
+                assert!(!e.engine.is_pending(&key(*host)), "slot {s}: sent early");
+            }
+        }
+        // The other keeper settles host 2 just before our delay ends: the
+        // re-read sees it and nothing is sent for it.
+        let (h2, a2) = hs[1];
+        e.port.put(
+            a2,
+            testkit::acct(
+                program(),
+                testkit::holding(1, 0, (2, h2, 100, 104, [0; 32])),
+            ),
+        );
+        e.port.take_calls();
+        e.plan(&mut d, 109, now0 + 72, None, &[(2, 0)]).await;
+        assert!(e.port.reads_of(&hs[0].1) >= 1, "re-read before planning");
+        assert!(
+            e.engine.is_pending(&key(hs[0].0)),
+            "planned after the delay"
+        );
+        assert!(
+            !e.engine.is_pending(&key(h2)),
+            "settled by the other keeper meanwhile"
+        );
+    }
+
+    /// Keeper A had its reveal material twice (the seal it opened and the
+    /// owner's submission) and a tick that ran late sent the next version
+    /// into the slot its first version went out in: two Reveals of one
+    /// march in one slot, one `AlreadyDone` (203 in w6-s7). One write per
+    /// `(host, arrive)`, one version per chain slot.
+    #[tokio::test]
+    async fn reveal_sources_deduped_by_host_arrive() {
+        let mut e = env(&["reveal"], 1_008);
+        let mut d = PlayDuty::default();
+        let j = Journal::open(std::path::Path::new(":memory:")).unwrap();
+        let host = fclient::addr::host_id(2, 0, 1, 1, 5).unwrap();
+        let (arrive, dep) = (200u32, 197u32);
+        let m = march(host, arrive, (2, 0), 5);
+        let commit = seal::commit(&m.0, &m.1);
+        let root = seal::seal_root(&commit, &m.2);
+        let mut dr = depart(host, (2, 0), 5, dep, arrive);
+        dr.commit = commit;
+        d.index.departs.insert((host, dep), dr);
+        let h = e.addrs.holding(2, 0, 1);
+        e.port.put(
+            h,
+            testkit::acct(
+                program(),
+                testkit::holding(1, 0, (1, host, dep, arrive, root)),
+            ),
+        );
+        // Both sources: the journalled opened seal and the owner material.
+        j.save_plaintext(host, arrive, &m.0, &m.1).unwrap();
+        e.shared.reveals.push(("r1".into(), owner_item(h, &m)));
+        let mut c = e.cfg.clone();
+        c.delay_floor = 1;
+        c.reveal_floor = Some(1);
+        let mut payers = Payers::new(&[9u8; 32], &c).unwrap();
+        for a in payers.all_addresses() {
+            e.port.put(
+                a,
+                Account {
+                    lamports: 10_000_000_000,
+                    data: vec![],
+                    owner: fclient::addr::system_program(),
+                    executable: false,
+                },
+            );
+        }
+        payers.refresh(&e.port, 0).await.unwrap();
+        let now0 = G + arrive as i64 * BELL_SECS + 30;
+        let mut by_chain_slot: BTreeMap<u64, usize> = BTreeMap::new();
+        for s in 50..54u64 {
+            // Every tick runs late: its sends go out in the next slot, and
+            // the next tick starts in that slot.
+            e.plan(&mut d, s, now0 + 8 * (s as i64 - 50), Some(&j), &[])
+                .await;
+            e.port
+                .send_slot
+                .store(s + 1, std::sync::atomic::Ordering::SeqCst);
+            let before = e.port.sent.lock().unwrap().len();
+            let mut r = StepReport::default();
+            e.engine.send(&e.port, &mut payers, None, s, &mut r).await;
+            let n = e.port.sent.lock().unwrap().len() - before;
+            *by_chain_slot.entry(s + 1).or_default() += n;
+            // The late tick of slot s + 1 reads the same chain slot.
+            if s % 2 == 0 {
+                e.port.set_clock(s + 1, now0 + 8 * (s as i64 - 49));
+                let before = e.port.sent.lock().unwrap().len();
+                let mut r = StepReport::default();
+                e.engine
+                    .send(&e.port, &mut payers, None, s + 1, &mut r)
+                    .await;
+                let n = e.port.sent.lock().unwrap().len() - before;
+                *by_chain_slot.entry(s + 1).or_default() += n;
+            }
+        }
+        assert_eq!(
+            e.engine.pending_keys(),
+            vec![format!("reveal:{host}:{dep}")],
+            "one write for the march"
+        );
+        assert!(
+            by_chain_slot.values().all(|&n| n <= 1),
+            "at most one Reveal of the march per slot: {by_chain_slot:?}"
+        );
+    }
+
+    /// Idle days (w6-s7 criterion 3: 23 days with no arrival at 7-9
+    /// SkipQuiet): a pending resident change split the day's batches at its
+    /// bell. It rides a whole 24-bell batch (SkipQuiet applies it at its
+    /// bell); only a nudge, an arrival or a departure to settle split.
+    #[test]
+    fn idle_day_with_pending_ops_is_one_batch_per_24_bells() {
+        let d = PlayDuty::default();
+        let pq = (1, 0);
+        let end = 1_008;
+        let day0 = 144 * 3;
+        let mut s = ProvState {
+            region: 0,
+            rn: day0,
+            read_slot: 1,
+            pending_bells: [day0 + 5, day0 + 30, day0 + 31, day0 + 77, day0 + 100]
+                .into_iter()
+                .collect(),
+            active: true,
+            leaves: vec![],
+            last_digest: [0; 32],
+            contested: false,
+        };
+        let mut batches = vec![];
+        // Bells close one by one; a skip goes out when the scheduler says
+        // (into the next day, so the day's last batch is complete).
+        for closed_through in day0..day0 + 144 + 48 {
+            loop {
+                let n = (closed_through + 1 - s.rn).min(SKIP_MAX);
+                if n == 0 || !d.skip_now(end, pq, &s, s.rn, n) {
+                    break;
+                }
+                batches.push((s.rn, n));
+                s.rn += n;
+                s.pending_bells.retain(|&b| b >= s.rn);
+            }
+        }
+        let day: Vec<_> = batches.iter().filter(|b| b.0 < day0 + 144).collect();
+        assert_eq!(day.len(), 6, "one SkipQuiet per 24 bells: {day:?}");
+    }
+}

@@ -19,6 +19,7 @@
 //! master_seed_file = "keeper.seed"
 //! journal = "keeper.journal.sqlite"
 //! beneficiary_key_file = "beneficiary.key"   # W4-C: ClaimDefence signer (= beneficiary)
+//! backup_delay_slots = 0                      # W6T-2: a backup keeper's settle delay
 //! ```
 //!
 //! The parser reads the flat subset of TOML the file uses (`key = value`
@@ -244,6 +245,12 @@ pub struct KeeperConfig {
     /// design §6.5, several keepers racing); 0 (off) for the operator's
     /// keeper, whose latency the exit criteria measure.
     pub race_jitter_slots: u64,
+    /// W6T-2 (w6-s7 triage): a backup keeper's delay. SettleDeparture and
+    /// SettleTransit wait this many slots after they first become eligible,
+    /// then re-read the transit before they are planned, so a backup pays
+    /// only for what the primary left undone. 0 (the default) for the
+    /// operator's keeper.
+    pub backup_delay_slots: u32,
 }
 
 impl KeeperConfig {
@@ -288,6 +295,7 @@ impl KeeperConfig {
             beneficiary_key_file: None,
             claim_key: None,
             race_jitter_slots: 0,
+            backup_delay_slots: 0,
         }
     }
 
@@ -377,6 +385,7 @@ impl KeeperConfig {
         num!("land_scan_slots", land_scan_slots, u64);
         num!("stranded_scan_slots", stranded_scan_slots, u64);
         num!("race_jitter_slots", race_jitter_slots, u64);
+        num!("backup_delay_slots", backup_delay_slots, u32);
         if let Some(v) = take("reveal_floor") {
             c.reveal_floor = Some(int(v, "reveal_floor")?);
         }
@@ -455,6 +464,7 @@ mod tests {
             beneficiary = "{b}"
             api = "127.0.0.1:41050"
             token_file = "k.token"  # loopback bearer token
+            backup_delay_slots = 8
             "#
         );
         let c = KeeperConfig::from_toml(&text).unwrap();
@@ -464,6 +474,12 @@ mod tests {
         assert_eq!(c.daily_budget_lamports, 2_500_000_000);
         assert_eq!(c.peace_start, Some(0.25));
         assert_eq!(c.api.unwrap().port(), 41_050);
+        assert_eq!(c.backup_delay_slots, 8);
+        assert_eq!(
+            KeeperConfig::new(p, 1, b).backup_delay_slots,
+            0,
+            "no delay by default"
+        );
         assert!(c.has_role("archive") && !c.has_role("reveal"));
         assert!(KeeperConfig::from_toml(&text.replace("regions", "regoins")).is_err());
         assert!(

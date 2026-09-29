@@ -548,3 +548,58 @@ impl BeaconDuty {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::KeeperConfig;
+    use crate::engine::EngineParams;
+    use crate::testkit::{self, FakeDrand, FakePort};
+    use fclient::addr::Addresses;
+    use fclient::budgets::Budgets;
+    use fclient::clock::SeasonClock;
+
+    /// End of season (w6-s7: 3,552 PostAnchor and 666 PostAnchorMulti
+    /// failed `BadData` in the drain): the program refuses an anchor of a
+    /// bell ≥ `end_bell`, so the beacon duty never plans one.
+    #[tokio::test]
+    async fn anchors_plan_stops_at_end_bell() {
+        let drand = FakeDrand::new();
+        let info = drand.key.info();
+        let g = info.genesis_time + 3_000;
+        let end = 20u32;
+        let season = testkit::season(g, end, &info);
+        let program = Address::new_from_array([0x5F; 32]);
+        let cfg = KeeperConfig::new(program, 7, Address::new_from_array([0xBE; 32]));
+        let addrs = Addresses::new(program, 7);
+        let port = FakePort::default();
+        let now = g + (end as i64 + 5) * 600 + 100;
+        drand.now.store(now, std::sync::atomic::Ordering::SeqCst);
+        let mut rounds = Rounds::new(drand.key.pk96);
+        let mut engine = Engine::new(Budgets::placeholder(), EngineParams::default());
+        let mut duty = BeaconDuty::new(cfg.regions.clone());
+        let t = Tick {
+            slot: 5_000,
+            now,
+            season: &season,
+            clock: SeasonClock::from_season(&season),
+            addrs: &addrs,
+            cfg: &cfg,
+        };
+        duty.plan(&t, &port, &drand, &mut rounds, &mut engine, None)
+            .await
+            .unwrap();
+        let bells: Vec<u32> = engine
+            .pending_keys()
+            .iter()
+            .filter(|k| k.starts_with("anchor"))
+            .filter_map(|k| k.split(':').nth(1)?.parse().ok())
+            .collect();
+        assert!(bells.contains(&(end - 1)), "the last bell is anchored");
+        let past: Vec<u32> = bells.iter().copied().filter(|&b| b >= end).collect();
+        assert!(
+            past.is_empty(),
+            "anchors planned at or after end_bell {end}: {past:?}"
+        );
+    }
+}

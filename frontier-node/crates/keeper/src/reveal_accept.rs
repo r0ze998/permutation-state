@@ -483,4 +483,108 @@ mod tests {
         r10.holding = None;
         assert_eq!(judge(&req, &r10, now).unwrap_err().code, "WindowClosed");
     }
+
+    fn set_holding(r: &mut Reads, f: impl FnOnce(&mut Vec<u8>)) {
+        let mut d = r.holding.clone().unwrap().data;
+        f(&mut d);
+        r.holding = acct(d);
+    }
+
+    /// §5.11 step 6 (w6-s7 criterion 4: 27 honest marches refused
+    /// `Shielded` at every Reveal and routed, their owners told 202): the
+    /// accept path answers 409 `Shielded` when the host's own Holding is
+    /// shielded at `bell_start(arrive)` (not dormant) and the destination
+    /// tile is another faction's holding site, or when that site is itself
+    /// shielded past the arrival bell.
+    #[test]
+    fn reveal_accept_refuses_own_shield_war_target() {
+        use l::site as sm;
+        let (req, mut r, now) = fixture();
+        let start = 1_000_000 + 40 * 600;
+        let war = |shield_bell: u32| {
+            acct(crate::testkit::province(
+                0,
+                &[
+                    (5, sm::STATE_HOLDING, 1, shield_bell),
+                    (9, sm::STATE_HOLDING, 2, 0),
+                ],
+            ))
+        };
+        let faction = |r: &mut Reads, f: u8| set_holding(r, |d| d[l::holding::FACTION] = f);
+        faction(&mut r, 2);
+        r.dest_province = war(0);
+        assert!(
+            judge(&req, &r, now).is_ok(),
+            "no shield: a war target is open"
+        );
+        // Our holding shielded past the arrival bell's start.
+        let shield = |r: &mut Reads, until: i64| {
+            set_holding(r, |d| {
+                d[l::holding::SHIELD_UNTIL..l::holding::SHIELD_UNTIL + 8]
+                    .copy_from_slice(&until.to_le_bytes())
+            })
+        };
+        shield(&mut r, start + 1);
+        let e = judge(&req, &r, now).unwrap_err();
+        assert_eq!((e.http, e.code), (409, "Shielded"), "{}", e.detail);
+        // Dormant: the shield does not hold.
+        set_holding(&mut r, |d| d[l::holding::FLAGS] |= 1);
+        assert!(judge(&req, &r, now).is_ok(), "dormant");
+        set_holding(&mut r, |d| d[l::holding::FLAGS] &= !1);
+        // A shield that ends at the bell's start does not hold.
+        shield(&mut r, start);
+        assert!(judge(&req, &r, now).is_ok(), "shield over at bell_start");
+        shield(&mut r, start + 1);
+        // Our own faction's holding site, a free site, a tile with no site.
+        for (tile, state, f) in [
+            (5u8, sm::STATE_HOLDING, 2u8),
+            (5, sm::STATE_FREE, 1),
+            (6, sm::STATE_HOLDING, 1),
+        ] {
+            r.dest_province = acct(crate::testkit::province(0, &[(tile, state, f, 0)]));
+            assert!(
+                judge(&req, &r, now).is_ok(),
+                "tile {tile} state {state} faction {f}"
+            );
+        }
+        // The destination holding shielded past the arrival bell.
+        shield(&mut r, 0);
+        r.dest_province = war(41);
+        let e = judge(&req, &r, now).unwrap_err();
+        assert_eq!((e.http, e.code), (409, "Shielded"), "{}", e.detail);
+        r.dest_province = war(40);
+        assert!(
+            judge(&req, &r, now).is_ok(),
+            "shield until the arrival bell"
+        );
+    }
+
+    /// An arrival at or after `end_bell` can never be revealed (no anchor
+    /// of that bell exists; Reveal refuses `WrongStatus` once Ended): 409
+    /// `ArrivalBell` whatever the season status, before the relay queues
+    /// it (w6-s7: 9 such marches, 27 failed Reveals).
+    #[test]
+    fn reveal_accept_refuses_arrival_at_end_bell() {
+        let (req, r, now) = fixture();
+        for st in [status::RUNNING, status::ENDED] {
+            for (end, ok) in [(40u32, false), (39, false), (41, true)] {
+                let mut r2 = r.clone();
+                let mut sd = r2.season.clone().unwrap().data;
+                sd[l::season::STATUS] = st;
+                put(&mut sd, l::season::END_BELL, &end.to_le_bytes());
+                r2.season = acct(sd);
+                match judge(&req, &r2, now) {
+                    Ok(_) => assert!(ok, "status {st} end {end}: accepted"),
+                    Err(e) => {
+                        assert!(!ok, "status {st} end {end}: {e:?}");
+                        assert_eq!(
+                            (e.http, e.code),
+                            (409, "ArrivalBell"),
+                            "status {st} end {end}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 }

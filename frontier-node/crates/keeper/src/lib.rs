@@ -50,6 +50,8 @@ pub mod reveal_accept;
 pub mod rings;
 pub mod rounds;
 pub mod seeds;
+#[cfg(test)]
+pub(crate) mod testkit;
 pub mod tickets;
 
 use std::collections::{BTreeMap, BTreeSet};
