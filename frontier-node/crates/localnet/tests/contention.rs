@@ -214,3 +214,63 @@ async fn frontier_hold_over_rpc_delays_a_low_bid_until_the_hold_ends() {
         .is_err());
     node.stop();
 }
+
+/// W6T-3 (the w6-s7 no-landing window, slots 827–1028): each hold's filler
+/// takes its key's 40M **and the same CU of the 100M block** (the design's
+/// model: every hold is an attacker stream paying p × 40M per block,
+/// DESIGN §8.6). So three concurrent single-key holds on unrelated keys —
+/// in w6-s7 the adversary's ticket hold at 1.0 and two `ticket_holder`
+/// persona holds at 0.5 (the D cap: keepers tie and lose) — leave no room:
+/// nothing at or below their priorities lands anywhere. When one ends, 20M
+/// is left: the ledger shows ≈ 56 keeper anchors (357k each, 19.99M) per
+/// slot from slot 1029. This pins the mechanism the triage found; it is
+/// the emulator working as specified, not a fault.
+#[test]
+fn three_concurrent_single_key_holds_fill_the_block() {
+    let mut c = Chain::new(Config::default());
+    let held: Vec<Address> = (0..3u8)
+        .map(|i| Address::new_from_array([0xA0 + i; 32]))
+        .collect();
+    c.hold(vec![held[0]], 1_000, 40).unwrap();
+    c.hold(vec![held[1]], 500, 40).unwrap();
+    let third = c.hold(vec![held[2]], 500, 2).unwrap();
+    // 80 unrelated anchor-sized transactions at a low bid (none writes a
+    // held key).
+    let ps: Vec<Keypair> = (0..80).map(|i| funded(&mut c, 20 + i)).collect();
+    let (bh, _) = c.latest_blockhash();
+    let mut cost = 0;
+    for (i, p) in ps.iter().enumerate() {
+        let t = tx::build(
+            &[tx::transfer(
+                p.pubkey(),
+                Address::new_from_array([i as u8 + 1; 32]),
+                1_000_000,
+            )],
+            &tx::TxBudget {
+                cu_limit: 356_500,
+                cu_price: 0,
+                loaded_limit: 65_536,
+                heap: None,
+            },
+            &[p],
+            &bh,
+        )
+        .unwrap();
+        assert!(prio(&t) < 500);
+        cost = tx::priority(&t.message).1;
+        c.submit(&tx::wire(&t)).unwrap();
+    }
+    // Three holds: 3 × 40M ≥ 100M, the block is full before any of them.
+    for _ in 0..2 {
+        let r = c.produce_block();
+        assert_eq!((r.landed, r.deferred), (0, 80), "{r:?}");
+        assert_eq!(r.cu, BLOCK_CU);
+    }
+    assert_eq!(third.until_slot, c.slot());
+    // The third hold is over: 100M − 2 × 40M = 20M of room.
+    let r = c.produce_block();
+    let fit = (BLOCK_CU - 2 * ACCOUNT_CU) / cost;
+    assert_eq!(r.landed as u64, fit, "{r:?}");
+    assert!(r.landed as u64 * cost <= 20_000_000);
+    assert_eq!(r.hold_cu, 2 * ACCOUNT_CU);
+}

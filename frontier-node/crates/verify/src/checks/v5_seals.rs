@@ -20,13 +20,23 @@
 //! bell before the archive does (W5-D, the integ-W4 review).
 //!
 //! Warnings (liveness, E5 gates them): a valid seal never revealed that
-//! settled `ROUTED` (`ValidSealUnrevealed`, with the signatures of failed
-//! Reveal attempts; one that settled with another outcome, bounced by rule,
-//! is listed in `unrevealed_by_rule`, W6-C),
-//! a bad seal still unsettled at the end (`BadSealUnsettled`).
+//! settled `ROUTED` (`ValidSealUnrevealed`, with the signatures of the
+//! failed Reveal attempts of that march, `(host, arrive)`; W6T-3: not every
+//! failed Reveal of the host), a bad seal still unsettled at the end
+//! (`BadSealUnsettled`). A valid seal never revealed that the rules explain
+//! is listed in `liveness.unrevealed_by_rule` with its reason instead:
+//! settled with another outcome (`bounced`, W6-C), or settled `ROUTED`
+//! because §5.11 Reveal step 6 refuses it (`path`, `arrival-bell`,
+//! `shielded-dest`, `shielded-own`), judged on the archived post-states and
+//! never from the refusals' codes ([`rule_refusal`], W6T-3: w6-s7's 27).
+//!
+//! W6T-3 (w6-s7 criterion 1): a landed DEPART whose arrival bell is at or
+//! after `end_bell` is a FAIL (`ArrivalAfterEnd`, §5.11 Depart step 4
+//! v1.12): no anchor, gather, resolve or settlement exists for it.
 //!
 //! Codes: `RevealCommitMismatch`, `VerdictDisagreesWithTlock`,
-//! `BadSealSurvived`; warn `ValidSealUnrevealed`, `BadSealUnsettled`.
+//! `BadSealSurvived`, `ArrivalAfterEnd`; warn `ValidSealUnrevealed`,
+//! `BadSealUnsettled`.
 
 use std::collections::{HashMap, HashSet};
 
