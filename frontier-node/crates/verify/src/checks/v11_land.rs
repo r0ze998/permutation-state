@@ -161,9 +161,19 @@ pub fn run(cx: &mut Ctx) {
     // first resolve or skip of a day, drawn from `sha256("PSF-CAMP-v1" ‖
     // province[TERRAIN ..= SITE_COUNT])` with `has_holding` of the Province
     // then (the program's `camp_check`, `fclient::clash_model::camp_at`);
-    // or a clear (`troops = 0`: the camp present before, gone after).
+    // or a clear (`troops = 0`: the camp present at the clash, gone
+    // after). The camp present at the clash is the Province's before the
+    // transaction, or the one this transaction's day check spawned:
+    // ResolveFromInputs logs CAMP (spawn), CAMP (clear), CLASH in one
+    // transaction (`emit_camps`; W6T-3, the w6-s7 triage: V11 judged such a
+    // clear against the pre-transaction camp, state 0).
     // Integ-W4 review: V11 read every CAMP as a ring-seed spawn.
-    for r in w.recs.iter().filter(|r| r.kind == Kind::CAMP) {
+    for (n, r) in w
+        .recs
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.kind == Kind::CAMP)
+    {
         let (p, q) = r.pq();
         let what = format!("camp ({p}, {q})");
         let pk = f.ctx.province(p, q);
@@ -184,18 +194,38 @@ pub fn run(cx: &mut Ctx) {
                 .map(|pv| pv.camp.state)
         };
         if got.1 == 0 {
+            // A spawn counts only if it is an earlier CAMP record of the
+            // same (P, Q) in this transaction and its day is the day of the
+            // bell this transaction's CLASH resolved (the day check runs at
+            // the first resolve of a day).
+            let recs = &w.txs[r.tx].recs;
+            let clash_day = recs
+                .iter()
+                .map(|&m| &w.recs[m])
+                .find(|x| x.kind == Kind::CLASH && x.pq() == (p, q))
+                .map(|x| x.ku32("bell") / 144);
+            let spawned_here = recs.iter().any(|&m| {
+                let x = &w.recs[m];
+                m < n
+                    && x.kind == Kind::CAMP
+                    && x.pq() == (p, q)
+                    && x.pu32("troops") > 0
+                    && Some(x.pu32("day")) == clash_day
+            });
+            let at_clash = if spawned_here {
+                Some(1)
+            } else {
+                camp_state(before)
+            };
             let after = w.txs[r.tx].post_data(&pk).and_then(camp_state);
-            if camp_state(before) != Some(1) || after != Some(0) {
+            if at_clash != Some(1) || after != Some(0) {
                 cx.fail(
                     V,
                     CAMP_MISMATCH,
                     what,
                     r.bell,
                     Some(r.tx),
-                    format!(
-                        "a clear (troops 0) of a camp in state {:?} → {after:?}",
-                        camp_state(before)
-                    ),
+                    format!("a clear (troops 0) of a camp in state {at_clash:?} → {after:?}"),
                 );
             }
             continue;
