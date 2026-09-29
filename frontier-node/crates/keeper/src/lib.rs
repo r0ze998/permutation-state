@@ -355,7 +355,11 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
             seeds: SeedFinder::default(),
             play: PlayDuty::default(),
             unsupported_roles: BTreeSet::new(),
-            shared: Arc::new(Mutex::new(Shared::default())),
+            // Never `null` (W6T-2): the API answers from the process start.
+            shared: Arc::new(Mutex::new(Shared {
+                status: json!({"starting": true}),
+                ..Shared::default()
+            })),
             last_slot: None,
             alerts: vec![],
             effective_n: vec![],
@@ -397,6 +401,9 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
     /// landing ends the write, and read the payers' balances.
     pub async fn start(&mut self) -> Result<usize, String> {
         let clock = self.port.clock().await.map_err(|e| e.to_string())?;
+        // A status from the first moment (a restarted keeper answered
+        // `null` until its first tick ended; W6T-2, R2).
+        self.publish(clock.slot, clock.unix_timestamp, None);
         let mut adopted = 0;
         if let Some(j) = &self.journal {
             let inflight = j.in_flight()?;

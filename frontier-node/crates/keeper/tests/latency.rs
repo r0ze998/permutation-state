@@ -10,7 +10,8 @@
 //!   slot, which made round → anchor p50 exactly 2 slots).
 //! - `status_answers_during_a_long_tick`: `/v1/status` answers within 1 s
 //!   with the last tick's status while a tick runs long (322 of 1,035
-//!   keeper status samples were null in w6-s7).
+//!   keeper status samples were null in w6-s7), and a restarted keeper
+//!   answers with a status before its first tick.
 
 mod common;
 mod model;
@@ -262,4 +263,18 @@ async fn status_answers_during_a_long_tick() {
         bad.len(),
         samples.len()
     );
+    // A restarted keeper answers with a status before its first tick (R2:
+    // one `null` sample right after the kill -9).
+    let mut k2 = Keeper::new(
+        keeper_config(&w),
+        w.ip.clone(),
+        w.drand.clone(),
+        &[0x44; 32],
+        None,
+    )
+    .unwrap();
+    assert!(!k2.shared.lock().unwrap().status.is_null(), "before start");
+    k2.start().await.unwrap();
+    let st = k2.shared.lock().unwrap().status.clone();
+    assert_eq!(st["slot"].as_u64(), Some(w.slot()), "after start: {st}");
 }
