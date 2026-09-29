@@ -674,7 +674,28 @@ impl Engine {
         slot: u64,
         report: &mut StepReport,
     ) {
-        let keys: Vec<String> = self.pending.keys().cloned().collect();
+        self.send_kinds(port, payers, journal, slot, report, None)
+            .await
+    }
+
+    /// [`Self::send`] for the writes of `kinds` only (`None`: every write).
+    /// The keeper sends the beacon duty's anchors and seed caches as soon as
+    /// they are planned (W6T-2).
+    pub async fn send_kinds<P: ChainPort>(
+        &mut self,
+        port: &P,
+        payers: &mut Payers,
+        journal: Option<&Journal>,
+        slot: u64,
+        report: &mut StepReport,
+        kinds: Option<&[&str]>,
+    ) {
+        let keys: Vec<String> = self
+            .pending
+            .iter()
+            .filter(|(_, p)| kinds.is_none_or(|ks| ks.contains(&p.spec.kind)))
+            .map(|(k, _)| k.clone())
+            .collect();
         let mut blockhash: Option<Hash> = None;
         let mut chain_slot: Option<u64> = None;
         for k in keys {

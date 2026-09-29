@@ -119,6 +119,10 @@ fn role_of_key(key: &str) -> Option<&'static str> {
     }
 }
 
+/// The beacon duty's latency-critical write kinds: sent as soon as they
+/// are planned, and on the idle ticks of a slot (W6T-2).
+const BEACON_KINDS: [&str; 3] = ["anchor", "anchor-multi", "seed"];
+
 /// P_def = 2.0, P_delay = 0.5 (milli-units, §8.2).
 pub const P_DEF_MILLI: u64 = 2_000;
 pub const P_DELAY_MILLI: u64 = 500;
@@ -481,12 +485,13 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
                         .map_err(|e| e.to_string())?;
                     let mut r = crate::engine::StepReport::default();
                     self.engine
-                        .send(
+                        .send_kinds(
                             &self.port,
                             &mut self.payers,
                             self.journal.as_ref(),
                             slot,
                             &mut r,
+                            Some(&BEACON_KINDS),
                         )
                         .await;
                     rep.sent = r.sent;
@@ -663,6 +668,24 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
             self.archive
                 .plan(&t, &self.beacon.anchors, &mut self.engine);
             phase(&mut rep, "beacon", 0);
+            // The anchors and seed caches go out at once (W6T-2, R2): the
+            // land and play duties first pull the feed (≈ 0.4 s a tick while
+            // a restarted keeper re-reads it), and an anchor planned in its
+            // publication slot but sent after them landed a slot late.
+            self.engine
+                .send_kinds(
+                    &self.port,
+                    &mut self.payers,
+                    self.journal.as_ref(),
+                    slot,
+                    &mut r,
+                    Some(&BEACON_KINDS),
+                )
+                .await;
+            if r.sent > 0 {
+                rep.chain_at_send = self.engine.last_send_chain_slot;
+            }
+            phase(&mut rep, "send0", 0);
             // Land (W3-C).
             if LAND_ROLES.iter().any(|r| t.cfg.has_role(r)) {
                 self.index
@@ -807,7 +830,9 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
                 &mut r,
             )
             .await;
-        rep.chain_at_send = self.engine.last_send_chain_slot.filter(|_| r.sent > 0);
+        if rep.chain_at_send.is_none() && r.sent > 0 {
+            rep.chain_at_send = self.engine.last_send_chain_slot;
+        }
         phase(&mut rep, "send", 0);
         // Housekeeping after the send (W6T-2): closes (class N) and claims
         // plan once the latency-critical versions of this slot are out, and
