@@ -38,6 +38,14 @@ export const FLAT = Object.freeze({
   hills: ['#8e9a5c', '#737d49'], mountain: ['#8a847a', '#6c675f'], water: ['#467f8c', '#3a6c78'],
 });
 const GRID_INK = 'rgba(24,34,26,0.32)';
+/** Holding tiers by the account's TIER byte (0..3). */
+export const ART_TIERS = Object.freeze(['hamlet', 'town', 'city', 'stronghold']);
+/** Host sprites (1x: 32 x 34, anchor 16,22 on the ground plane) and the six slots around a hex centre (hosts.py). */
+const HOST_SIZES = { '@1x': { w: 32, h: 34, ax: 16, ay: 22 }, '@2x': { w: 64, h: 68, ax: 32, ay: 44 } };
+const SLOT_ANG = [270, 210, 330, 150, 30, 90].map((d) => (d * Math.PI) / 180);
+const SLOT_R = 0.46;
+/** Below this on-screen tile radius hosts are chips, not figures (LOD.md, tile S). */
+export const HOST_FIGURE_MIN_R = 35;
 
 export function artSize(r) {
   return ART_SIZES.find((s) => s.r >= r) ?? ART_SIZES[ART_SIZES.length - 1];
@@ -180,7 +188,7 @@ export class SpriteArt {
    * Tile LOD: the tiles of every entry {p, q, terrain, names, sites, rec, fog, selected} together.
    * An entry with fog 'unopened' (no terrain) is drawn as cloud sea.
    */
-  paint(ctx, entries, { zoom, dpr = 1, terrainAt = () => null, fogAt = () => null, selected = null }) {
+  paint(ctx, entries, { zoom, dpr = 1, terrainAt = () => null, fogAt = () => null, selected = null, viewerFaction = null }) {
     const s = artSize(RADIUS * zoom * dpr);
     const k = RADIUS / s.r;
     const tiles = [];
@@ -194,8 +202,13 @@ export class SpriteArt {
         const cloud = e.fog === 'unopened';
         const name = cloud ? 'cloud' : TERRAIN_KEY[e.names?.[e.terrain[i]]] ?? 'plains';
         const j = siteOf.get(i);
+        const m = j === undefined ? null : e.prov?.siteMirror?.[j] ?? null;
         const t = { q: h.q, r: h.r, x, y, name, cloud, fog: e.fog, v: artVariant(h.q, h.r), p: e.p, pq: e.q, idx: i, site: j,
-          state: j === undefined ? undefined : e.rec?.sites?.[j], owner: j === undefined ? undefined : e.rec?.owners?.[j] };
+          state: j === undefined ? undefined : m ? (m.state === 3 ? 5 : m.state === 4 ? 0 : m.state) : e.rec?.sites?.[j],
+          owner: j === undefined ? undefined : m ? m.faction : e.rec?.owners?.[j],
+          tier: m && m.state === 1 ? m.tier : 0, walls: !!(m && m.wallsCommitted > 0),
+          camp: !!(e.prov?.camp?.state === 1 && e.prov.camp.tile === i && j === undefined),
+          shield: !!(m && m.shieldUntilBell > 0 && m.shieldUntilBell !== 0xffffffff && m.shieldUntilBell >= (e.prov?.resolvedNext ?? 0)) };
         tiles.push(t);
         byHex.set(keyOf(h.q, h.r), t);
       }
@@ -206,11 +219,14 @@ export class SpriteArt {
     const owner = new Map();
     for (const t of tiles) {
       if (t.cloud || t.state !== 1 || !(t.owner < 6)) continue;
-      owner.set(keyOf(t.q, t.r), { f: t.owner, d: 0 });
-      for (const [dq, dr] of EDGE_DIRS) {
+      const rad = [1, 2, 2, 3][t.tier] ?? 1;
+      for (let dq = -rad; dq <= rad; dq++) for (let dr = Math.max(-rad, -dq - rad); dr <= Math.min(rad, -dq + rad); dr++) {
+        const d = Math.max(Math.abs(dq), Math.abs(dr), Math.abs(dq + dr));
         const key = keyOf(t.q + dq, t.r + dr);
         const nb = byHex.get(key);
-        if (nb && !nb.cloud && nb.name !== 'water' && !(owner.get(key)?.d === 0)) owner.set(key, { f: t.owner, d: 1 });
+        if (!nb || nb.cloud || (d > 0 && nb.name === 'water')) continue;
+        const cur = owner.get(key);
+        if (!cur || d < cur.d) owner.set(key, { f: t.owner, d });
       }
     }
     const ownerAt = (q, r) => owner.get(keyOf(q, r))?.f;
@@ -256,12 +272,63 @@ export class SpriteArt {
       }
       const pr = this.image(siteGround(t) ? 'sites_props' : 'props', s.key, `${t.name}_${t.v}`);
       if (pr) draw(pr, t);
+      if (t.camp) { const c = this.image('specials', s.key, 'barbarian_1'); if (c) draw(c, t); }
       if (t.site === undefined) continue;
       let img = null;
-      if (t.state === 1 && t.owner < 6) img = this.image('holdings', s.key, `hamlet_o_${ART_FACTIONS[t.owner]}`);
-      else if (t.state === 2) img = this.image('specials', s.key, 'barbarian_1');
+      if (t.state === 1 && t.owner < 6) {
+        const tier = ART_TIERS[t.tier] ?? 'hamlet';
+        img = this.image('holdings', s.key, `${tier}_${tier === 'stronghold' || t.walls ? 'w' : 'o'}_${ART_FACTIONS[t.owner]}`);
+      } else if (t.state === 2) img = this.image('specials', s.key, 'barbarian_1');
+      else if (t.state === 5) img = this.image('specials', s.key, 'freecity_town');
       else if (SITE_LAND.has(t.name)) img = this.image('holdings', s.key, 'site');
       if (img) draw(img, t);
+      if (t.shield) { const d = this.image('holdings', s.key, 'shield'); if (d) draw(d, t); }
+    }
+    // pass 2b: hosts on their tiles, back to front (hidden under fog unless the viewer's own)
+    const hosts = [];
+    for (const e of entries) {
+      if (!e.prov?.entries || e.fog === 'unopened') continue;
+      const byTile = new Map();
+      for (const h of e.prov.entries) {
+        if (h.state !== 1 && h.state !== 2) continue;
+        if ((e.fog === 'known' || e.fog === 'distant') && h.faction !== viewerFaction) continue;
+        if (!byTile.has(h.tile)) byTile.set(h.tile, []);
+        byTile.get(h.tile).push(h);
+      }
+      for (const [idx, list] of byTile) {
+        const hx = tileHex(e.p, e.q, idx);
+        const c = project(hx.q, hx.r);
+        list.slice(0, 6).forEach((h, n) => {
+          const x = c.x + SLOT_R * Math.cos(SLOT_ANG[n]) * RADIUS, y = c.y - SLOT_R * Math.sin(SLOT_ANG[n]) * FLATTEN * RADIUS;
+          hosts.push({ x, y, h, cx: c.x, cy: c.y, n, count: list.length });
+        });
+      }
+    }
+    hosts.sort((a, b) => a.y - b.y || a.x - b.x);
+    if (RADIUS * zoom >= HOST_FIGURE_MIN_R) {
+      const hk = s.key === '@2x' ? '@2x' : '@1x';
+      const hs = HOST_SIZES[hk];
+      const kk = RADIUS / (hk === '@2x' ? 88 : 44);
+      for (const o of hosts) {
+        const img = this.image('hosts', hk, `${ART_FACTIONS[o.h.faction] ?? 'ember'}_hold`);
+        if (img) ctx.drawImage(img, o.x - hs.ax * kk, o.y - hs.ay * kk + TOP_LIFT, hs.w * kk, hs.h * kk);
+      }
+    } else {
+      // chips: one per faction per hex, with the host count (screen-sized)
+      const seen = new Set();
+      for (const o of hosts) {
+        const key = `${o.cx},${o.cy},${o.h.faction}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const n = hosts.filter((u) => u.cx === o.cx && u.cy === o.cy && u.h.faction === o.h.faction).length;
+        const f = [...seen].filter((k2) => k2.startsWith(`${o.cx},${o.cy},`)).length - 1;
+        const w = 30 / zoom, hgt = 16 / zoom, x = o.cx - w / 2 + f * (w + 3 / zoom), y = o.cy + 4 / zoom;
+        ctx.beginPath(); ctx.roundRect?.(x - 1.5 / zoom, y - 1.5 / zoom, w + 3 / zoom, hgt + 3 / zoom, 9.5 / zoom); ctx.fillStyle = '#1a1d22'; ctx.fill();
+        ctx.beginPath(); ctx.roundRect?.(x, y, w, hgt, 8 / zoom); ctx.fillStyle = FACTION_COLORS[o.h.faction] ?? '#8a8f86'; ctx.fill();
+        ctx.fillStyle = '#f6f1e2'; ctx.font = `700 ${12 / zoom}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(`⚔${n}`, x + w / 2, y + hgt / 2 + 0.5 / zoom);
+      }
+      ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
     }
     // pass 3: fog over known / distant provinces (desaturate, haze, and mist when distant)
     for (const e of entries) {

@@ -22,7 +22,7 @@ import { SEASON_STATUS_TEXT, clientText } from './fi18n.mjs';
 import { L, fmtNum, mountLangToggle } from '../lang.mjs';
 import { toHex } from '../sdk/bytes.mjs';
 import { html, setHtml } from '../util.mjs';
-import { ACTIONS, FORMS, bind, startPlay } from './controller.mjs';
+import { ACTIONS, FORMS, bind, startPlay, wantProvince } from './controller.mjs';
 import { renderTabs, renderNotice, factionChip, quotaChip, mountSheet } from './screens/shell.mjs';
 import { createTerrain } from './map/terrain.mjs';
 import { provincePixel } from './map/layers.mjs';
@@ -366,7 +366,10 @@ export async function boot() {
     map = new FrontierMap(canvas, {
       source: () => {
         const own = ART_FOG ? [{ p: 2, q: 0 }] : (FS.holdings ?? []).map(h => ({ p: h.p, q: h.q }));
-        return { overviews: FS.overviews, ringsOpen: FS.record?.rings?.length ?? 1, own, known: new Set([...own.map(o => `${o.p},${o.q}`), ...(ART_FOG ? ['-1,0', '-1,1', '0,-2', '-2,1'] : [])]), showAll: (ART_PREVIEW && !ART_FOG) || !FS.view.fog, selected: FS.selected, terrainOf };
+        return { overviews: FS.overviews, ringsOpen: FS.record?.rings?.length ?? 1, own, known: new Set([...own.map(o => `${o.p},${o.q}`), ...(ART_FOG ? ['-1,0', '-1,1', '0,-2', '-2,1'] : [])]), showAll: (ART_PREVIEW && !ART_FOG) || !FS.view.fog, selected: FS.selected, terrainOf,
+          // art mode: the decoded Province (holdings' tiers, hosts on tiles, camp), loaded on demand
+          viewerFaction: ART_FOG ? 0 : FS.citizen?.faction ?? null,
+          provinceOf: ART_PREVIEW ? (p, q) => { const env = FS.provinces.get(`${p},${q}`); if (!env) wantProvince(p, q, () => map?.invalidate()); return env?.province ?? null; } : undefined };
       },
       onSelect: hit => {
         FS.selected = hit;

@@ -291,6 +291,18 @@ async function refreshChronicle() {
 /** The herald client this controller reads (startPlay sets it; tests pass a fake). */
 export function useHerald(h) { herald = h; cursor = 0; }
 
+/**
+ * Art mode (?art=1): load the latest envelope of a province drawn at tile LOD,
+ * once, at most 12 in flight (herald.wantedProvinces' limit); `onLoad` redraws.
+ */
+const artWanted = new Set();
+export function wantProvince(p, q, onLoad = () => {}) {
+  const key = `${p},${q}`;
+  if (!herald || FS.provinces.has(key) || artWanted.has(key) || artWanted.size >= 12) return;
+  artWanted.add(key);
+  loadEnvelope(p, q).catch(() => null).finally(onLoad);
+}
+
 /** Refresh the viewer's accounts, provinces, marches, chronicle and quota. */
 export async function refresh() {
   if (!herald || !FS.clock) return;
