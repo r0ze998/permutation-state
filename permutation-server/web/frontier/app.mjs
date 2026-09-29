@@ -28,6 +28,8 @@ import { createTerrain } from './map/terrain.mjs';
 import { provincePixel } from './map/layers.mjs';
 
 const ART_PREVIEW = new URLSearchParams(globalThis.location?.search ?? '').get('art') === '1';
+// ?art=1&fog=1 previews the fog as if the viewer held province (2,0) (presentation only).
+const ART_FOG = ART_PREVIEW && new URLSearchParams(globalThis.location?.search ?? '').get('fog') === '1';
 import * as joinScreen from './screens/join.mjs';
 import * as holdingScreen from './screens/holding.mjs';
 import * as hostScreen from './screens/host.mjs';
@@ -363,8 +365,8 @@ export async function boot() {
     const terrainOf = createTerrain({ onReady: () => map?.invalidate() });
     map = new FrontierMap(canvas, {
       source: () => {
-        const own = (FS.holdings ?? []).map(h => ({ p: h.p, q: h.q }));
-        return { overviews: FS.overviews, ringsOpen: FS.record?.rings?.length ?? 1, own, known: new Set(own.map(o => `${o.p},${o.q}`)), showAll: ART_PREVIEW || !FS.view.fog, selected: FS.selected, terrainOf };
+        const own = ART_FOG ? [{ p: 2, q: 0 }] : (FS.holdings ?? []).map(h => ({ p: h.p, q: h.q }));
+        return { overviews: FS.overviews, ringsOpen: FS.record?.rings?.length ?? 1, own, known: new Set([...own.map(o => `${o.p},${o.q}`), ...(ART_FOG ? ['-1,0', '-1,1', '0,-2', '-2,1'] : [])]), showAll: (ART_PREVIEW && !ART_FOG) || !FS.view.fog, selected: FS.selected, terrainOf };
       },
       onSelect: hit => {
         FS.selected = hit;

@@ -265,10 +265,18 @@ export class FrontierMap {
       const fog = fogLevel({ ringOpen: ringOf(pr.p, pr.q) < (src.ringsOpen ?? 1), showAll: src.showAll, known: src.known?.has(key), sightDistance: sightDistance(pr.p, pr.q, src.own ?? []) });
       const selected = !!src.selected && src.selected.p === pr.p && src.selected.q === pr.q;
       const rec = recs.get(key);
+      if (this.lod === 'tile' && this.art) {
+        // Art: every fog level is drawn as tiles (distant muted, unopened as cloud sea; LOD.md).
+        if (fog === 'unopened') { artTiles.push({ ...pr, fog, selected }); continue; }
+        const t = terrainOf?.(pr.p, pr.q);
+        if (TILE_FOGS.includes(fog)) wanted++;
+        if (t) { artTiles.push({ ...pr, ...t, rec, fog, selected }); if (TILE_FOGS.includes(fog)) drawn++; continue; }
+        paintProvince(ctx, { ...pr, rec, fog, selected, scale: z });
+        continue;
+      }
       if (this.lod === 'tile' && TILE_FOGS.includes(fog)) {
         wanted++;
         const t = terrainOf?.(pr.p, pr.q);
-        if (t && this.art) { artTiles.push({ ...pr, ...t, rec, fog, selected }); drawn++; continue; }
         if (t) {
           paintTiles(ctx, { ...pr, ...t, rec, selectedTile: selected ? src.selected.idx : null });
           paintVeil(ctx, { ...pr, fog, scale: z, selected });
@@ -285,7 +293,10 @@ export class FrontierMap {
     }
     if (artVoid.length) this.art.paintUnopened(ctx, artVoid, { zoom: z });
     if (artCells.length) this.art.paintStrategic(ctx, artCells, { zoom: z, dpr });
-    if (artTiles.length) this.art.paint(ctx, artTiles, { zoom: z, dpr, terrainAt: terrainLookup(terrainOf), selected: src.selected });
+    if (artTiles.length) {
+      const fogAt = (q, r) => { const at = locate(q, r); return fogLevel({ ringOpen: ringOf(at.p, at.q) < (src.ringsOpen ?? 1), showAll: src.showAll, known: src.known?.has(`${at.p},${at.q}`), sightDistance: sightDistance(at.p, at.q, src.own ?? []) }); };
+      this.art.paint(ctx, artTiles, { zoom: z, dpr, terrainAt: terrainLookup(terrainOf), fogAt, selected: src.selected });
+    }
     this.mark(wanted > 0 && drawn === wanted ? 'ready' : 'pending');
   }
 

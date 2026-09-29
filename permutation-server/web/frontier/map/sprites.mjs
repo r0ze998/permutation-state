@@ -176,8 +176,11 @@ export class SpriteArt {
     }
   }
 
-  /** Tile LOD: the tiles of every entry {p, q, terrain, names, sites, rec, fog, selected} together. */
-  paint(ctx, entries, { zoom, dpr = 1, terrainAt = () => null, selected = null }) {
+  /**
+   * Tile LOD: the tiles of every entry {p, q, terrain, names, sites, rec, fog, selected} together.
+   * An entry with fog 'unopened' (no terrain) is drawn as cloud sea.
+   */
+  paint(ctx, entries, { zoom, dpr = 1, terrainAt = () => null, fogAt = () => null, selected = null }) {
     const s = artSize(RADIUS * zoom * dpr);
     const k = RADIUS / s.r;
     const tiles = [];
@@ -188,9 +191,10 @@ export class SpriteArt {
       for (let i = 0; i < PROVINCE_TILES; i++) {
         const h = tileHex(e.p, e.q, i);
         const { x, y } = project(h.q, h.r);
-        const name = TERRAIN_KEY[e.names?.[e.terrain[i]]] ?? 'plains';
+        const cloud = e.fog === 'unopened';
+        const name = cloud ? 'cloud' : TERRAIN_KEY[e.names?.[e.terrain[i]]] ?? 'plains';
         const j = siteOf.get(i);
-        const t = { q: h.q, r: h.r, x, y, name, v: artVariant(h.q, h.r), p: e.p, pq: e.q, idx: i, site: j,
+        const t = { q: h.q, r: h.r, x, y, name, cloud, fog: e.fog, v: artVariant(h.q, h.r), p: e.p, pq: e.q, idx: i, site: j,
           state: j === undefined ? undefined : e.rec?.sites?.[j], owner: j === undefined ? undefined : e.rec?.owners?.[j] };
         tiles.push(t);
         byHex.set(keyOf(h.q, h.r), t);
@@ -198,34 +202,58 @@ export class SpriteArt {
     }
     tiles.sort((a, b) => a.y - b.y || a.x - b.x);
     const nameAt = (q, r) => byHex.get(keyOf(q, r))?.name ?? terrainAt(q, r);
-    const wash = new Map();
+    // territory: a held site owns itself and its ring-1 tiles (a hamlet's worked radius); nearer site wins
+    const owner = new Map();
     for (const t of tiles) {
-      if (t.state !== 1 || !(t.owner < 6)) continue;
-      wash.set(keyOf(t.q, t.r), t.owner);
-      for (const [dq, dr] of EDGE_DIRS) if (!wash.has(keyOf(t.q + dq, t.r + dr))) wash.set(keyOf(t.q + dq, t.r + dr), t.owner);
+      if (t.cloud || t.state !== 1 || !(t.owner < 6)) continue;
+      owner.set(keyOf(t.q, t.r), { f: t.owner, d: 0 });
+      for (const [dq, dr] of EDGE_DIRS) {
+        const key = keyOf(t.q + dq, t.r + dr);
+        const nb = byHex.get(key);
+        if (nb && !nb.cloud && nb.name !== 'water' && !(owner.get(key)?.d === 0)) owner.set(key, { f: t.owner, d: 1 });
+      }
     }
+    const ownerAt = (q, r) => owner.get(keyOf(q, r))?.f;
     const draw = (img, t) => ctx.drawImage(img, t.x - s.ax * k, t.y - s.ay * k + TOP_LIFT, s.w * k, s.h * k);
     const siteGround = (t) => t.site !== undefined && SITE_LAND.has(t.name);
     // pass 1: ground and flat overlays
     for (const t of tiles) {
+      if (t.cloud) continue;
       const g = this.image(siteGround(t) ? 'sites' : 'terrain', s.key, `${t.name}_${t.v}`);
       if (!g) { polygon(ctx, hexPoints(t.x, t.y, 0), FLAT[t.name][0], null); continue; }
       draw(g, t);
       EDGE_DIRS.forEach(([dq, dr], e) => {
         const nb = nameAt(t.q + dq, t.r + dr);
-        if (!nb) return;
+        if (!nb || nb === 'cloud') return;
         if (t.name === 'water' && nb !== 'water') { const o = this.image('overlays', s.key, `shore_${e}`); if (o) draw(o, t); }
         else if (t.name !== 'water' && nb === 'water') { const o = this.image('overlays', s.key, `beach_${e}`); if (o) draw(o, t); }
       });
-      const f = wash.get(keyOf(t.q, t.r));
-      if (f !== undefined && t.name !== 'water') { const o = this.image('factions', s.key, `wash_${ART_FACTIONS[f]}`); if (o) draw(o, t); }
+      const f = ownerAt(t.q, t.r);
+      if (f !== undefined) {
+        const o = this.image('factions', s.key, `wash_${ART_FACTIONS[f]}`); if (o) draw(o, t);
+        EDGE_DIRS.forEach(([dq, dr], e) => {
+          if (ownerAt(t.q + dq, t.r + dr) === f) return;
+          const b = this.image('factions', s.key, `border_${ART_FACTIONS[f]}_${e}_own`); if (b) draw(b, t);
+        });
+      }
     }
     // the hex grid, exactly on the game's hexes, under the props
     ctx.beginPath();
-    for (const t of tiles) hexPoints(t.x, t.y, 0).forEach(([px, py], j) => (j ? ctx.lineTo(px, py) : ctx.moveTo(px, py)));
+    for (const t of tiles) if (!t.cloud) hexPoints(t.x, t.y, 0).forEach(([px, py], j) => (j ? ctx.lineTo(px, py) : ctx.moveTo(px, py)));
     ctx.strokeStyle = GRID_INK; ctx.lineWidth = 1 / zoom; ctx.stroke();
-    // pass 2: props and holdings
+    // pass 2: props, holdings, cloud sea
     for (const t of tiles) {
+      if (t.cloud) {
+        const c = this.image('fog', s.key, `cloud_${t.v}`);
+        if (c) draw(c, t);
+        EDGE_DIRS.forEach(([dq, dr], e) => {
+          const nb = byHex.get(keyOf(t.q + dq, t.r + dr));
+          const open = nb ? !nb.cloud : fogAt(t.q + dq, t.r + dr) !== 'unopened';
+          if (!open) return;
+          const b = this.image('fog', s.key, `bank_${e}`); if (b) draw(b, t);
+        });
+        continue;
+      }
       const pr = this.image(siteGround(t) ? 'sites_props' : 'props', s.key, `${t.name}_${t.v}`);
       if (pr) draw(pr, t);
       if (t.site === undefined) continue;
@@ -235,7 +263,21 @@ export class SpriteArt {
       else if (SITE_LAND.has(t.name)) img = this.image('holdings', s.key, 'site');
       if (img) draw(img, t);
     }
-    for (const e of entries) this.frame(ctx, { p: e.p, q: e.q, fog: e.fog, selected: e.selected, zoom });
+    // pass 3: fog over known / distant provinces (desaturate, haze, and mist when distant)
+    for (const e of entries) {
+      if (e.fog !== 'known' && e.fog !== 'distant') continue;
+      const o = this.outline(e.p, e.q);
+      if (!o.fill) continue;
+      const far = e.fog === 'distant';
+      ctx.save();
+      ctx.globalCompositeOperation = 'saturation';
+      ctx.globalAlpha = far ? 0.8 : 0.45;
+      ctx.fillStyle = '#808080'; ctx.fill(o.fill);
+      ctx.restore();
+      ctx.fillStyle = far ? 'rgba(217,223,231,0.5)' : 'rgba(223,230,238,0.26)'; ctx.fill(o.fill);
+      if (far) for (const t of tiles) if (t.p === e.p && t.pq === e.q) { const m = this.image('fog', s.key, `mist_${t.v}`); if (m) draw(m, t); }
+    }
+    for (const e of entries) if (e.fog !== 'unopened') this.frame(ctx, { p: e.p, q: e.q, fog: 'clear', selected: e.selected, zoom });
     if (selected) {
       const t = tiles.find((u) => u.p === selected.p && u.pq === selected.q && u.idx === selected.idx);
       if (t) polygon(ctx, hexPoints(t.x, t.y, 2), null, '#1b2e28', 3 / zoom);
