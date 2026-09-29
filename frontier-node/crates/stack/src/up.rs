@@ -1363,6 +1363,7 @@ async fn supervise(
                     };
                     pending = Some(adversary::Pending {
                         planned_next,
+                        held: vec![],
                         in_flight,
                         arrivals_today: ps
                             .iter()
@@ -1401,6 +1402,17 @@ async fn supervise(
                             "detail": detail, "result": r.as_ref().ok(), "error": r.as_ref().err(),
                         }));
                         h.done = true;
+                        // W6T-4: the other slot hold of this probe takes
+                        // another province.
+                        if let (Some(pd), Some(p), Some(q)) = (
+                            pending.as_mut(),
+                            detail["province"][0].as_i64(),
+                            detail["province"][1].as_i64(),
+                        ) {
+                            if h.plan.kind.starts_with("slots-") {
+                                pd.held.push((p as i16, q as i16));
+                            }
+                        }
                     }
                     None if now > h.plan.deadline => {
                         st.run.event(

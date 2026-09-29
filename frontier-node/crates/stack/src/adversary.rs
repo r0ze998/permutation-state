@@ -216,6 +216,9 @@ pub struct Pending {
     /// chain, so only the harness knows where a Reveal will land):
     /// `((P, Q), count)`, most first.
     pub planned_next: Vec<((i16, i16), usize)>,
+    /// Provinces a slot hold of this probe already holds (W6T-4: the other
+    /// slot hold takes another one, so a 3.0 hold never masks the 1.5 one).
+    pub held: Vec<(i16, i16)>,
 }
 
 /// The marches sealed to arrive at `bell`, by destination, most first
@@ -445,9 +448,11 @@ pub fn keys_for_pending(
         "slots-below" | "slots-above" => {
             // W6T-4: a province the fleet sealed marches to for the next
             // bell (its Reveals will need these slots), else the old guess.
+            let free = |pq: &(i16, i16)| !pending.held.contains(pq);
             let planned = pending
                 .planned_next
                 .iter()
+                .filter(|(d, _)| free(d))
                 .find_map(|(d, n)| ps.iter().find(|p| (p.p, p.q) == *d).map(|p| (p, *n)));
             if let Some((p, n)) = planned {
                 return Some((
@@ -459,12 +464,14 @@ pub fn keys_for_pending(
             let p = if pending.require {
                 let with: Vec<Province> = ps
                     .iter()
-                    .filter(|p| pending.arrivals_today.contains(&(p.p, p.q)))
+                    .filter(|p| pending.arrivals_today.contains(&(p.p, p.q)) && free(&(p.p, p.q)))
                     .cloned()
                     .collect();
                 busiest(&with).cloned()?
             } else {
-                busiest(ps)?.clone()
+                let with: Vec<Province> =
+                    ps.iter().filter(|p| free(&(p.p, p.q))).cloned().collect();
+                busiest(&with)?.clone()
             };
             Some((
                 slot_keys(a, &p, next, transit_slots),
@@ -751,6 +758,14 @@ mod tests {
         };
         let (_, d) = keys_for_pending("slots-below", &ad, &ps, &guess, 10, 4, &[], &[]).unwrap();
         assert_eq!(d["province"], json!([0, 0]));
+        // The other slot hold of the same probe takes another province.
+        let taken = Pending {
+            held: vec![(1, 0)],
+            ..pending.clone()
+        };
+        let (_, d) = keys_for_pending("slots-above", &ad, &ps, &taken, 10, 4, &[], &[]).unwrap();
+        assert_eq!(d["province"], json!([0, 0]), "{d}");
+        assert_eq!(d["planned_arrivals"], 1);
         // A planned destination that is not an opened Province is skipped.
         let off = Pending {
             planned_next: vec![((9, 9), 5)],
