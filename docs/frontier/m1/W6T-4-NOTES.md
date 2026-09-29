@@ -173,7 +173,7 @@ When the runs started, the integration tree had not merged U1–U3. So the first
 
 By the end of this session U1–U3 had their fixes on their branches: U1 `3676f1a`, U2 `30e791c`, U3 `176138c`. So R3 and R5 also ran on a **preview of the merged tree**: a scratch worktree `m1-w6t-U4-preview`, with each unit's changed files checked out over U4. The units' paths are disjoint and no manifest changed, so the overlay equals the merge. It is uncommitted and has no branch. It is **not** the integrator's merge; the main session's R3/R5 on `frontier/m1-integ` remain the Gate W6 record.
 
-Every record is under `docs/frontier/m1/runs/<id>/` (`report.md`, plus `run.md` or `nightly.json`, and `tamper.md` for the preview runs).
+Every record is under `docs/frontier/m1/runs/<id>/` (`report.md`, plus `run.md` or `nightly.json`, and `tamper.md` for the preview runs). The preview worktree was removed after the runs. Its run directories (verify inputs, events, metrics) and the overlay's file list are kept in the session scratchpad under `u4/preview-runs/`. The U4-tree run directories stay in this worktree's `frontier-node/.local/frontier/`. The gateway's `node_modules` in this worktree is a symlink to `m1-integ`'s (same lockfile; nothing was installed), excluded by `.git/info/exclude`.
 
 | id | tree | line | result | load avg (1 min) |
 |---|---|---|---|---|
