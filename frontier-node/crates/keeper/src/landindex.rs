@@ -28,7 +28,8 @@ use fclient::ports::{ChainPort, Cursor, PortResult};
 use frontier_abi::log::{self as plog, Kind};
 
 /// Pages read per tick at most (catch-up after a restart spreads over ticks).
-const PAGES_PER_TICK: usize = 8;
+/// Feed pages one tick reads (a restart re-reads the feed from cursor 0).
+pub const PAGES_PER_TICK: usize = 8;
 
 /// An open ticket as its TICKET record announced it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -119,23 +120,34 @@ impl LandIndex {
         let mut n = 0;
         for _ in 0..PAGES_PER_TICK {
             let page = port.feed(self.cursor).await?;
-            let Some(last) = page.last() else { break };
-            self.cursor = Cursor(last.seq);
-            for tx in &page {
-                if tx.err.is_some() {
-                    continue;
-                }
-                let Ok(bodies) = fclient::log::bodies_from_logs(&tx.logs, &addrs.program) else {
-                    self.bad += 1;
-                    continue;
-                };
-                for b in bodies {
-                    self.ingest(&b, tx.slot, addrs);
-                    n += 1;
-                }
+            if page.is_empty() {
+                break;
             }
+            n += self.ingest_page(&page, addrs);
         }
         Ok(n)
+    }
+
+    /// Ingests one feed page read at this index's cursor (the keeper reads
+    /// a page once for both indexes when their cursors agree, W6T-2).
+    pub fn ingest_page(&mut self, page: &[fclient::ports::TxRecord], addrs: &Addresses) -> usize {
+        let mut n = 0;
+        let Some(last) = page.last() else { return 0 };
+        self.cursor = Cursor(last.seq);
+        for tx in page {
+            if tx.err.is_some() {
+                continue;
+            }
+            let Ok(bodies) = fclient::log::bodies_from_logs(&tx.logs, &addrs.program) else {
+                self.bad += 1;
+                continue;
+            };
+            for b in bodies {
+                self.ingest(&b, tx.slot, addrs);
+                n += 1;
+            }
+        }
+        n
     }
 
     /// Ingests one PS2 body.

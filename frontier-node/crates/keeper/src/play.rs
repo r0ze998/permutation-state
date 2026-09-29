@@ -189,6 +189,9 @@ pub struct PlayDuty {
     dead_closes: BTreeMap<String, Option<(u64, [u8; 32])>>,
     /// `accounts()` calls of the closes duty (the tick log, W6T-2).
     pub closes_reads: u64,
+    /// The keeper already read this tick's feed pages into the index (one
+    /// read for the land and play indexes, W6T-2); reset by the plan.
+    pub feed_read: bool,
     /// Liveness findings `(slot, detail)`.
     pub findings: Vec<(u64, String)>,
 }
@@ -780,7 +783,9 @@ impl PlayDuty {
         if !(eff == status::RUNNING || eff == status::ENDED) {
             return Ok(());
         }
-        self.index.pull(port, t.addrs).await?;
+        if !std::mem::take(&mut self.feed_read) {
+            self.index.pull(port, t.addrs).await?;
+        }
         self.read_provinces(t, port, opened).await?;
         self.read_holdings(t, port).await?;
         if t.cfg.has_role("reveal") || t.cfg.has_role("settle") {

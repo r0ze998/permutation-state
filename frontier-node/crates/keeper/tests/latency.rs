@@ -190,8 +190,13 @@ async fn status_answers_during_a_long_tick() {
         inner: w.ip.clone(),
         ms: Arc::new(AtomicU64::new(0)),
     };
+    // The operator's keeper: every role (land and play read one feed).
     let mut cfg = keeper_config(&w);
-    cfg.roles.extend(PLAY_ROLES.iter().map(|r| r.to_string()));
+    cfg.roles = keeper_core::config::ROLES
+        .iter()
+        .map(|r| r.to_string())
+        .collect();
+    assert!(PLAY_ROLES.iter().all(|r| cfg.has_role(r)));
     let mut k = Keeper::new(cfg, slow.clone(), w.drand.clone(), &[0x43; 32], None).unwrap();
     fund(&w, &k.payers);
     k.start().await.unwrap();
@@ -201,6 +206,9 @@ async fn status_answers_during_a_long_tick() {
         w.step();
     }
     assert_eq!(w.season().effective_status(w.now()), status::RUNNING);
+    // One feed read for the land and play indexes: their cursors agree.
+    assert!(k.index.cursor.0 > 0);
+    assert_eq!(k.index.cursor, k.play.index.cursor);
     // The API on a port of this unit's range (41100-41999).
     let token = "s".repeat(32);
     let mut running = None;

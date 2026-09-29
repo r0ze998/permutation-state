@@ -686,12 +686,44 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
                 rep.chain_at_send = self.engine.last_send_chain_slot;
             }
             phase(&mut rep, "send0", 0);
+            // One feed read for both indexes (W6T-2): while their cursors
+            // agree (always, from a start), a page is read once and ingested
+            // by the land and the play index. A restarted keeper re-reads
+            // the whole feed; two readers made its catch-up ticks ≈ 0.45 s,
+            // longer than a 20× slot (R2).
+            let play_pulls = PLAY_ROLES.iter().any(|r| t.cfg.has_role(r))
+                && matches!(
+                    season.effective_status(now),
+                    status::RUNNING | status::ENDED
+                );
+            let shared_read = LAND_ROLES.iter().any(|r| t.cfg.has_role(r))
+                && play_pulls
+                && self.index.cursor == self.play.index.cursor;
+            if shared_read {
+                for _ in 0..crate::landindex::PAGES_PER_TICK {
+                    let page = self
+                        .port
+                        .feed(self.index.cursor)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    if page.is_empty() {
+                        break;
+                    }
+                    self.index.ingest_page(&page, &self.addrs);
+                    self.play.index.ingest_page(&page, &self.addrs);
+                }
+            }
+            // The play duty's own read is skipped this tick (the cursors
+            // stay together).
+            self.play.feed_read = shared_read;
             // Land (W3-C).
             if LAND_ROLES.iter().any(|r| t.cfg.has_role(r)) {
-                self.index
-                    .pull(&self.port, &self.addrs)
-                    .await
-                    .map_err(|e| e.to_string())?;
+                if !shared_read {
+                    self.index
+                        .pull(&self.port, &self.addrs)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                }
                 self.fold
                     .plan(&t, &self.port, &mut self.engine)
                     .await
