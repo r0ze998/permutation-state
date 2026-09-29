@@ -960,18 +960,32 @@ pub fn t16(land: &Input) -> Made {
 pub fn t17(march: &Input) -> Made {
     let mut inp = march.clone();
     let (w, _) = world(&inp);
-    let reveals: Vec<(i32, i32, u32)> = w
-        .of(Kind::REVEAL)
-        .map(|r| (r.pq().0, r.pq().1, r.ku32("arrive")))
-        .collect();
-    let (t, i) = *find(&inp, Kind::SKIP)
+    // (P, Q, arrive) → the record index of its first REVEAL.
+    let mut reveals: std::collections::BTreeMap<(i32, i32, u32), usize> = Default::default();
+    for (n, r) in w.recs.iter().enumerate() {
+        if r.kind == Kind::REVEAL {
+            reveals
+                .entry((r.pq().0, r.pq().1, r.ku32("arrive")))
+                .or_insert(n);
+        }
+    }
+    // A skip that ends at a revealed arrival bell. integ-W6t: prefer one
+    // the Reveal precedes (the run then shows the arrival before the
+    // forged skip covers its bell, as W4-D built the class); with the
+    // triage keeper's early skips the Reveal usually comes after the skip,
+    // and V7 judges that ordering too (SkipOverArrival over every Reveal
+    // of the run).
+    let skips = find(&inp, Kind::SKIP);
+    let before_end = |(t, i): &(usize, usize)| {
+        let n = rec_at(&w, *t, *i);
+        let r = &w.recs[n];
+        let end = r.pu32("b0") + r.pu8("n") as u32;
+        reveals.get(&(r.pq().0, r.pq().1, end)).map(|&rv| rv < n)
+    };
+    let (t, i) = *skips
         .iter()
-        .find(|(t, i)| {
-            let r = &w.recs[rec_at(&w, *t, *i)];
-            let end = r.pu32("b0") + r.pu8("n") as u32;
-            reveals.contains(&(r.pq().0, r.pq().1, end))
-                && reveals.iter().any(|x| *x == (r.pq().0, r.pq().1, end))
-        })
+        .find(|x| before_end(x) == Some(true))
+        .or_else(|| skips.iter().find(|x| before_end(x).is_some()))
         .need("a skip just before an arrival bell")?;
     let (on, _) = field(Kind::SKIP, "n");
     edit_payload(&mut inp, t, i, |p| p[on] += 1);

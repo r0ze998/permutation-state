@@ -251,16 +251,24 @@ fn clashes_and_skips(cx: &mut Ctx) {
     let f = cx.f;
     let builder = ContractBuilder;
     let mut next: HashMap<(i32, i32), u32> = HashMap::new();
+    // Every REVEAL of the run, first record per ArrivalSlot (integ-W6t: a
+    // pre-pass, not only the reveals before the SKIP). The program refuses
+    // a Reveal once the Province is resolved past its arrival bell
+    // (§5.11 Reveal step 6, `LatchClosed`), so a skip over a bell whose
+    // arrival is revealed at any point of the run is wrong, whichever of
+    // the two records comes first.
     let mut revealed: BTreeMap<(i32, i32, u32), usize> = BTreeMap::new();
+    for (n, r) in w.recs.iter().enumerate() {
+        if r.kind == Kind::REVEAL {
+            let (p, q) = r.pq();
+            revealed.entry((p, q, r.ku32("arrive"))).or_insert(n);
+        }
+    }
     for (n, r) in w.recs.iter().enumerate() {
         match r.kind {
             Kind::PROVINCE_OPEN => {
                 let b = if r.bell == plog::NO_BELL { 0 } else { r.bell };
                 next.insert(r.pq(), b);
-            }
-            Kind::REVEAL => {
-                let (p, q) = r.pq();
-                revealed.entry((p, q, r.ku32("arrive"))).or_insert(n);
             }
             Kind::CLASH => {
                 let (p, q) = r.pq();
@@ -397,16 +405,18 @@ fn clashes_and_skips(cx: &mut Ctx) {
                 next.insert((p, q), b0 + k);
                 for b in b0..b0 + k {
                     if let Some(&rv) = revealed.get(&(p, q, b)) {
-                        if rv < n {
-                            cx.fail(
-                                V,
-                                SKIP_OVER_ARRIVAL,
-                                what.clone(),
-                                b,
-                                Some(r.tx),
-                                format!("bell {b} has a revealed arrival"),
-                            );
-                        }
+                        cx.fail(
+                            V,
+                            SKIP_OVER_ARRIVAL,
+                            what.clone(),
+                            b,
+                            Some(r.tx),
+                            if rv < n {
+                                format!("bell {b} has a revealed arrival")
+                            } else {
+                                format!("bell {b} has an arrival revealed after the skip")
+                            },
+                        );
                     }
                 }
                 let Some(pv) = w.state_before(&f.ctx.province(p, q), r.tx) else {
