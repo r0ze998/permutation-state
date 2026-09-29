@@ -442,6 +442,8 @@ fn memo(o: &Observation, persona: Persona, arrive: u32) -> MarchMemo {
         sent: true,
         reveal_tries: 0,
         revealed: false,
+        accepted: false,
+        last_code: None,
         late_done: false,
         settled: false,
         redeparted: false,
@@ -993,4 +995,240 @@ fn the_settle_racer_redeparts_only_after_the_arrival() {
         .province
         .resolved_next = fixture::IN_TRANSIT_ARRIVE;
     assert_eq!(redeparts(&early), 0);
+}
+
+// ------------------------------------------------------ W6T-3 (w6-s7)
+
+/// The FINAL bot's combat host, its holding and every target it could
+/// plan a march to (end bell far), longest path first.
+fn march_setup(o: &Observation) -> (fclient::decode::Holding, (i16, i16), fclient::decode::Entry, Vec<(policy::Target, u32)>) {
+    let (_, h) = o.me.holdings[0].clone();
+    let (at, host) = policy::own_hosts(o, &h)
+        .into_iter()
+        .find(|(_, e)| e.unit != 6)
+        .expect("a combat host");
+    let mut ts: Vec<(policy::Target, u32)> = policy::targets(o, 0, u32::MAX)
+        .into_iter()
+        .filter_map(|t| {
+            policy::plan_march(o, &h, at, &host, t, 0, 0, 0).map(|(p, _, _)| (t, p.secs))
+        })
+        .collect();
+    ts.sort_by_key(|x| std::cmp::Reverse(x.1));
+    (h, at, host, ts)
+}
+
+fn set_end_bell(o: &mut Observation, end: u32) {
+    o.season.season.as_mut().expect("the Season account").end_bell = end;
+}
+
+/// Failing first on 7dcacdf (w6-s7 criterion 1: 9 honest marches arrived
+/// at 1008–1011 with `end_bell` 1008): the arrival is clamped to
+/// `end_bell − 1`, and there is no Depart when the earliest arrival is at
+/// or after `end_bell`.
+#[test]
+fn plan_near_end_never_arrives_at_or_after_end_bell() {
+    let mut o = observe(FINAL);
+    let (h, at, host, ts) = march_setup(&o);
+    let dep = o.season.bell_at(o.now + policy::DEPART_SLACK_SECS);
+    // The longest path whose earliest arrival is still before `dep + 4`.
+    let earliest = |t: policy::Target| {
+        policy::plan_march(&o, &h, at, &host, t, 0, 0, 0).unwrap().1.arrive_bell - 1
+    };
+    let t = ts
+        .iter()
+        .map(|x| x.0)
+        .find(|&t| earliest(t) == dep + 3)
+        .expect("a target arriving at dep + 3 at the earliest");
+    // Unclamped, the planned arrival would pass `dep + 3` (7dcacdf).
+    assert_eq!(
+        policy::plan_march(&o, &h, at, &host, t, 2, 0, 0).unwrap().1.arrive_bell,
+        dep + 6
+    );
+    for extra in 0..3 {
+        set_end_bell(&mut o, dep + 4);
+        let (_, p, _) = policy::plan_march(&o, &h, at, &host, t, extra, 0, 0)
+            .expect("a march that can still arrive before the end");
+        assert!(p.arrive_bell <= dep + 3, "extra {extra}: arrive {}", p.arrive_bell);
+        assert!(p.arrive_bell >= dep + 2);
+        set_end_bell(&mut o, dep + 2);
+        assert!(
+            policy::plan_march(&o, &h, at, &host, t, extra, 0, 0).is_none(),
+            "earliest ≥ end_bell: no Depart"
+        );
+    }
+    // And the whole policy near the end: every march it plans arrives
+    // before the end.
+    let s = spec(FINAL, Arch::VerySkilled, Some(Persona::MinTip));
+    let mem = Memory::default();
+    for k in 0..6 {
+        let mut ok = o.clone();
+        ok.now = fixture::NOW + k * 600;
+        let dep = ok.season.bell_at(ok.now + policy::DEPART_SLACK_SECS);
+        set_end_bell(&mut ok, dep + 3);
+        for d in departs(&decide(&ok, &ctx(&s, &mem, false))) {
+            assert!(d.plain.arrive_bell < dep + 3, "{d:?}");
+        }
+    }
+}
+
+/// w6-s7 criterion 4 (27 honest marches refused `Shielded`, routed): while
+/// the bot's own holding is shielded at the arrival bell's start, no war
+/// march is planned; once the shield lapses, war marches come back.
+#[test]
+fn shielded_holding_offers_no_war_target() {
+    let o = observe(FINAL);
+    let (h0, at, host, ts) = march_setup(&o);
+    let war = ts
+        .iter()
+        .map(|x| x.0)
+        .find(|t| t.why == "war")
+        .expect("a war target in view");
+    let camp = ts
+        .iter()
+        .map(|x| x.0)
+        .find(|t| t.why == "camp")
+        .expect("a camp in view");
+    let pick = |o: &Observation, h: &fclient::decode::Holding, c: Vec<policy::Target>| {
+        policy::first_plan(o, h, at, &host, c, 0, 0, 0).map(|x| x.0)
+    };
+    // The control: an unshielded holding marches to war.
+    assert_eq!(pick(&o, &h0, vec![war, camp]), Some(war));
+    let mut shielded = o.clone();
+    for (_, h) in shielded.me.holdings.iter_mut() {
+        h.shield_until = fixture::NOW + 7 * 86_400;
+    }
+    let h = shielded.me.holdings[0].1.clone();
+    assert_eq!(pick(&shielded, &h, vec![war]), None);
+    assert_eq!(pick(&shielded, &h, vec![war, camp]), Some(camp));
+    let (_, p, _) = policy::plan_march(&shielded, &h, at, &host, war, 0, 0, 0).unwrap();
+    assert!(policy::shield_refuses(&shielded, &h, &war, p.arrive_bell));
+    // A shield that ends before the arrival bell starts does not refuse.
+    let mut lapsing = h.clone();
+    lapsing.shield_until = shielded.season.genesis_ts + p.arrive_bell as i64 * 600;
+    assert!(!policy::shield_refuses(&shielded, &lapsing, &war, p.arrive_bell));
+    // Over a session day the whole policy never plans a war march.
+    let s = spec(FINAL, Arch::VerySkilled, Some(Persona::MinTip));
+    let mem = Memory::default();
+    for k in 0..48 {
+        let mut ok = shielded.clone();
+        ok.now = fixture::NOW + k * 600;
+        for d in departs(&decide(&ok, &ctx(&s, &mem, false))) {
+            assert_ne!(d.why, "war", "{d:?}");
+        }
+    }
+    // A dormant holding's shield does not count (§5.11 step 6).
+    let mut hd = h.clone();
+    hd.flags |= fclient::abi::layout::holding::FLAG_DORMANT_CACHE;
+    assert!(!policy::shield_refuses(&shielded, &hd, &war, p.arrive_bell));
+    // Camps are not holding sites: never refused by the shield rule.
+    for (t, _) in ts.iter().filter(|x| x.0.why == "camp") {
+        assert!(!policy::shield_refuses(&shielded, &h, t, p.arrive_bell));
+    }
+}
+
+/// The destination's shield is judged at the planned arrival bell (the
+/// program's `shield_until_bell > arrive`), not at `bell + 4`: a site
+/// whose shield ends between the two is a legal target.
+#[test]
+fn dest_shield_judged_at_arrival() {
+    let mut o = observe(FINAL);
+    let (h, at, host, ts) = march_setup(&o);
+    let war = ts
+        .iter()
+        .map(|x| x.0)
+        .find(|t| t.why == "war")
+        .expect("a war target in view");
+    let (_, p, _) = policy::plan_march(&o, &h, at, &host, war, 2, 0, 0).unwrap();
+    let arrive = p.arrive_bell;
+    assert!(arrive > fixture::BELL + 4, "the test needs arrive > bell + 4");
+    let set = |o: &mut Observation, b: u32| {
+        let pv = &mut o.provinces.get_mut(&(war.p, war.q)).unwrap().province;
+        let k = (0..pv.site_count as usize)
+            .find(|&k| pv.sites[k] == war.tile)
+            .unwrap();
+        pv.site_mirror[k].shield_until_bell = b;
+    };
+    set(&mut o, arrive);
+    assert!(
+        policy::targets(&o, 0, fixture::BELL + 73).contains(&war),
+        "a shield ending at the arrival keeps the target"
+    );
+    assert!(!policy::shield_refuses(&o, &h, &war, arrive));
+    set(&mut o, arrive + 1);
+    assert!(policy::shield_refuses(&o, &h, &war, arrive));
+    set(&mut o, fixture::BELL + 74);
+    assert!(!policy::targets(&o, 0, fixture::BELL + 73).contains(&war));
+}
+
+/// w6-s7: 111 Musters refused `ProvinceFull`. With the home province's
+/// roster at 48 (other factions' hosts), or no free entry, the bot does
+/// not muster; the control musters.
+#[test]
+fn muster_skips_full_province() {
+    let s = spec(FINAL, Arch::VerySkilled, None);
+    let mem = Memory::default();
+    let musters = |o: &Observation| -> usize {
+        (0..24)
+            .map(|k| {
+                let mut ok = o.clone();
+                ok.now = fixture::NOW + k * 600;
+                decide(&ok, &ctx(&s, &mem, false))
+                    .iter()
+                    .filter(|i| matches!(i, Intent::Muster { .. }))
+                    .count()
+            })
+            .sum()
+    };
+    let mut o = observe(FINAL);
+    // Drop the combat host so the bot wants one (as the reserve test).
+    let (_, h) = o.me.holdings[0].clone();
+    o.provinces
+        .get_mut(&(h.p, h.q))
+        .unwrap()
+        .province
+        .entries
+        .retain(|e| e.unit == 6);
+    let mut pad = o.clone();
+    let pv = &mut o.provinces.get_mut(&(h.p, h.q)).unwrap().province;
+    while pv.entries.len() < fclient::abi::ENTRIES {
+        pv.entries.push(Default::default());
+    }
+    assert!(musters(&o) > 0, "the control musters");
+    assert!(policy::muster_room(pv_of(&o, h.p, h.q), h.faction) > 0);
+    // 48 other-faction hosts on the roster.
+    let pv = &mut pad.provinces.get_mut(&(h.p, h.q)).unwrap().province;
+    pv.entries.resize(fclient::abi::ENTRIES, Default::default());
+    let mut n = pv
+        .entries
+        .iter()
+        .filter(|e| e.state == le::STATE_ROSTER || e.state == le::STATE_MUSTER_PENDING)
+        .count();
+    for e in pv.entries.iter_mut() {
+        if n >= 48 {
+            break;
+        }
+        if e.state == le::STATE_FREE {
+            e.state = le::STATE_ROSTER;
+            e.faction = 3;
+            n += 1;
+        }
+    }
+    assert_eq!(policy::muster_room(pv_of(&pad, h.p, h.q), h.faction), 0);
+    assert_eq!(musters(&pad), 0);
+    // No free entry (departed hosts fill the rest).
+    let mut full = pad.clone();
+    for e in full.provinces.get_mut(&(h.p, h.q)).unwrap().province.entries.iter_mut() {
+        if e.state == le::STATE_ROSTER && e.faction == 3 {
+            e.state = 3;
+        }
+        if e.state == le::STATE_FREE {
+            e.state = 3;
+        }
+    }
+    assert_eq!(policy::muster_room(pv_of(&full, h.p, h.q), h.faction), 0);
+    assert_eq!(musters(&full), 0);
+}
+
+fn pv_of(o: &Observation, p: i16, q: i16) -> &fclient::decode::Province {
+    o.province(p, q).expect("province")
 }

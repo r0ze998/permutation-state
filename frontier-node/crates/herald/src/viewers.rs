@@ -13,6 +13,18 @@
 //! p50/p99/max latency, the request rate, the WS latency quantiles and the
 //! §13.4 criterion-6 verdict ([`targets`]: file p99 ≤ 250 ms, ingest → WS
 //! p99 ≤ 2 s, error rate < 0.1%).
+//!
+//! W6T-3 (w6-s7 criterion 6: 9,000 errors, all from two herald chaos kills
+//! meeting a client with no recovery): with a nonzero `retry_budget` the
+//! viewers recover as a browser does. A GET that fails on a reused
+//! keep-alive connection before any byte of its answer is sent once more
+//! on a fresh connection (`staleRetries`, RFC 9110 §9.2.2); a refused
+//! connect is retried with backoff within the budget (`unavailable`,
+//! `unavailable_ms`: the wait is in the request's latency); a WS viewer
+//! whose socket the herald closed reconnects after 0–500 ms of jitter,
+//! re-subscribes and restarts its sequence (`ws.reconnects`). Only a
+//! failure after that recovery is an error; `errorSeconds` maps each
+//! second of the window to its errors, for the chaos log.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -38,6 +50,17 @@ pub struct ViewerCfg {
     /// Immutable per-bell files are drawn from bells `0..bells`.
     pub bells: u32,
     pub seed: u64,
+    /// How long a viewer keeps retrying a refused connect (or a WS
+    /// reconnect) before the request counts as an error. Zero: the old
+    /// behaviour (the first failure is an error, WS viewers never return).
+    pub retry_budget: Duration,
+    /// W6T-3: follow the live bell. `Some(host:port)`: a background task
+    /// reads the herald's `/h/season` (genesis, bell length) and polls
+    /// `/h/status` (`live`: the chain's newest slot and Clock) once a
+    /// second, and the per-bell requests go to the live bell and the two
+    /// before it instead of `0..bells` (w6-s7's per-bell requests went to
+    /// bells 0–5 for 24 game hours). `None`: `0..bells` as before.
+    pub follow: Option<String>,
 }
 
 /// Latency histogram: 16 buckets per power of two of microseconds.
@@ -125,6 +148,23 @@ pub struct Stats {
     pub ws_messages: AtomicU64,
     pub ws_gaps: AtomicU64,
     pub ws_errors: AtomicU64,
+    /// GETs retried once on a fresh connection after a reused keep-alive
+    /// connection failed before any response byte (RFC 9110 §9.2.2).
+    pub stale_retries: AtomicU64,
+    /// Requests that waited for a refused connect to succeed (within the
+    /// retry budget), and the total time they waited.
+    pub unavailable: AtomicU64,
+    pub unavailable_us: AtomicU64,
+    /// WS sessions re-established after the herald closed them.
+    pub ws_reconnects: AtomicU64,
+    /// Errors per second of the window (offset → count), so a cluster can
+    /// be matched against the chaos log.
+    pub error_secs: std::sync::Mutex<std::collections::BTreeMap<u64, u64>>,
+    pub t0: std::sync::OnceLock<Instant>,
+    /// The live bell `--follow-status` last read (`u32::MAX`: not yet).
+    pub live_bell: std::sync::atomic::AtomicU32,
+    /// `/h/status` or `/h/season` reads of the follower that failed.
+    pub follow_errors: AtomicU64,
     /// Ingest → WS latency of every diff message that carried `t`.
     pub ws_lat: Histogram,
     pub ws_lat_max_us: AtomicU64,
@@ -181,6 +221,13 @@ pub fn targets(rep: &Value) -> Vec<String> {
 }
 
 impl Stats {
+    fn error(&self, n: &AtomicU64) {
+        n.fetch_add(1, Ordering::Relaxed);
+        let t = self.t0.get().map_or(0, |t| t.elapsed().as_secs());
+        if let Ok(mut m) = self.error_secs.lock() {
+            *m.entry(t).or_default() += 1;
+        }
+    }
     pub fn report(&self, elapsed: Duration) -> Value {
         let n = self.requests.load(Ordering::SeqCst);
         let errors = self.errors.load(Ordering::SeqCst);
@@ -189,6 +236,11 @@ impl Stats {
         // Failed requests and failed or dropped WS sessions over every
         // request and WS session.
         let attempts = n + ws_connected + ws_errors;
+        let error_secs: serde_json::Map<String, Value> = self
+            .error_secs
+            .lock()
+            .map(|m| m.iter().map(|(k, v)| (k.to_string(), json!(v))).collect())
+            .unwrap_or_default();
         let rate = if attempts == 0 {
             0.0
         } else {
@@ -205,11 +257,23 @@ impl Stats {
             "max_ms": self.max_us.load(Ordering::SeqCst) as f64 / 1_000.0,
             "rps": n as f64 / elapsed.as_secs_f64().max(1e-9),
             "elapsed_s": elapsed.as_secs_f64(),
+            "staleRetries": self.stale_retries.load(Ordering::SeqCst),
+            "unavailable": self.unavailable.load(Ordering::SeqCst),
+            "unavailable_ms": self.unavailable_us.load(Ordering::SeqCst) as f64 / 1_000.0,
+            "errorSeconds": error_secs,
+            "follow": {
+                "liveBell": match self.live_bell.load(Ordering::SeqCst) {
+                    u32::MAX => Value::Null,
+                    b => json!(b),
+                },
+                "errors": self.follow_errors.load(Ordering::SeqCst),
+            },
             "ws": {
                 "connected": self.ws_connected.load(Ordering::SeqCst),
                 "messages": self.ws_messages.load(Ordering::SeqCst),
                 "gaps": self.ws_gaps.load(Ordering::SeqCst),
                 "errors": ws_errors,
+                "reconnects": self.ws_reconnects.load(Ordering::SeqCst),
                 "timed": self.ws_lat.count(),
                 "ingest_p50_ms": self.ws_lat.quantile_ms(0.50),
                 "ingest_p99_ms": self.ws_lat.quantile_ms(0.99),
@@ -243,6 +307,10 @@ pub struct KeepAlive {
     s: TcpStream,
     host: String,
     buf: Vec<u8>,
+    /// Answers read on this connection (a reused one when > 0).
+    pub answered: u64,
+    /// The last `get` read at least one byte of its answer.
+    pub got_bytes: bool,
 }
 
 impl KeepAlive {
@@ -253,15 +321,33 @@ impl KeepAlive {
             s,
             host: host.into(),
             buf: Vec::with_capacity(16 * 1024),
+            answered: 0,
+            got_bytes: false,
         })
     }
 
     /// `GET path` → (status, body length). Errors mean the connection is gone.
     pub async fn get(&mut self, path: &str) -> std::io::Result<(u16, usize)> {
+        self.request(path, true, false).await.map(|(st, n, _)| (st, n))
+    }
+
+    /// `GET path` (not gzip) → (status, body): the follower's JSON reads.
+    pub async fn get_body(&mut self, path: &str) -> std::io::Result<(u16, Vec<u8>)> {
+        self.request(path, false, true).await.map(|(st, _, b)| (st, b))
+    }
+
+    async fn request(
+        &mut self,
+        path: &str,
+        gzip: bool,
+        keep_body: bool,
+    ) -> std::io::Result<(u16, usize, Vec<u8>)> {
         let req = format!(
-            "GET {path} HTTP/1.1\r\nHost: {}\r\nAccept-Encoding: gzip\r\n\r\n",
-            self.host
+            "GET {path} HTTP/1.1\r\nHost: {}\r\n{}\r\n",
+            self.host,
+            if gzip { "Accept-Encoding: gzip\r\n" } else { "" }
         );
+        self.got_bytes = !self.buf.is_empty();
         self.s.write_all(req.as_bytes()).await?;
         // Head.
         let end = loop {
@@ -273,6 +359,7 @@ impl KeepAlive {
             if n == 0 {
                 return Err(std::io::Error::other("closed"));
             }
+            self.got_bytes = true;
             self.buf.extend_from_slice(&chunk[..n]);
         };
         let head = String::from_utf8_lossy(&self.buf[..end]).to_string();
@@ -305,16 +392,49 @@ impl KeepAlive {
             }
             self.buf.extend_from_slice(&chunk[..n]);
         }
+        let body = if keep_body {
+            self.buf[end + 4..need].to_vec()
+        } else {
+            vec![]
+        };
         self.buf.drain(..need);
+        self.answered += 1;
         if close {
             return Err(std::io::Error::other("server closed"));
         }
-        Ok((status, len))
+        Ok((status, len, body))
     }
 }
 
-fn pick(cfg: &ViewerCfg, r: &mut Rng) -> String {
-    let bell = r.below(cfg.bells.max(1) as u64);
+/// Connects, retrying a refused or failed connect with a doubling backoff
+/// (25 ms … 400 ms) until `budget` has passed. Returns the connection and
+/// whether it had to wait.
+async fn connect_within(host: &str, budget: Duration) -> (Option<KeepAlive>, bool) {
+    let t0 = Instant::now();
+    let mut back = Duration::from_millis(25);
+    let mut waited = false;
+    loop {
+        if let Ok(c) = KeepAlive::connect(host).await {
+            return (Some(c), waited);
+        }
+        if t0.elapsed() + back > budget {
+            return (None, waited);
+        }
+        waited = true;
+        tokio::time::sleep(back).await;
+        back = (back * 2).min(Duration::from_millis(400));
+    }
+}
+
+/// Bells behind the live one a following viewer also reads (the live
+/// bell and the two before it: the web client's bell strip).
+pub const FOLLOW_BACK: u64 = 3;
+
+fn pick(cfg: &ViewerCfg, r: &mut Rng, live: Option<u32>) -> String {
+    let bell = match live {
+        Some(l) => l as u64 - r.below(FOLLOW_BACK.min(l as u64 + 1)),
+        None => r.below(cfg.bells.max(1) as u64),
+    };
     let roll = r.below(100);
     // No rings or provinces named (a season before genesis): the season
     // record only, instead of a panic in every viewer (W5-C).
@@ -342,16 +462,43 @@ async fn poller(id: usize, cfg: Arc<ViewerCfg>, stats: Arc<Stats>, deadline: Ins
     let start = cfg.think.mul_f64(r.below(1_000) as f64 / 1_000.0);
     tokio::time::sleep(start).await;
     while Instant::now() < deadline {
-        let path = pick(&cfg, &mut r);
+        let path = pick(&cfg, &mut r, live(&cfg, &stats));
         let t0 = Instant::now();
+        let mut waited = false;
         if conn.is_none() {
-            conn = KeepAlive::connect(&cfg.herald).await.ok();
+            let (c, w) = connect_within(&cfg.herald, cfg.retry_budget).await;
+            conn = c;
+            waited = w;
         }
-        let res = match conn.as_mut() {
+        let mut res = match conn.as_mut() {
             Some(c) => c.get(&path).await,
             None => Err(std::io::Error::other("connect")),
         };
+        // A reused keep-alive connection the server closed (a restart, an
+        // idle timeout) fails before any byte of the answer: retry the GET
+        // once on a fresh connection, as browsers and HTTP clients do.
+        if !cfg.retry_budget.is_zero()
+            && res.is_err()
+            && conn
+                .as_ref()
+                .is_some_and(|c| c.answered > 0 && !c.got_bytes)
+        {
+            stats.stale_retries.fetch_add(1, Ordering::Relaxed);
+            let (c, w) = connect_within(&cfg.herald, cfg.retry_budget).await;
+            conn = c;
+            waited |= w;
+            res = match conn.as_mut() {
+                Some(c) => c.get(&path).await,
+                None => Err(std::io::Error::other("connect")),
+            };
+        }
         let dt = t0.elapsed();
+        if waited {
+            stats.unavailable.fetch_add(1, Ordering::Relaxed);
+            stats
+                .unavailable_us
+                .fetch_add(dt.as_micros() as u64, Ordering::Relaxed);
+        }
         stats.requests.fetch_add(1, Ordering::Relaxed);
         stats.hist.record(dt);
         stats
@@ -363,10 +510,10 @@ async fn poller(id: usize, cfg: Arc<ViewerCfg>, stats: Arc<Stats>, deadline: Ins
                 stats.not_found.fetch_add(1, Ordering::Relaxed);
             }
             Ok(_) => {
-                stats.errors.fetch_add(1, Ordering::Relaxed);
+                stats.error(&stats.errors);
             }
             Err(_) => {
-                stats.errors.fetch_add(1, Ordering::Relaxed);
+                stats.error(&stats.errors);
                 conn = None;
             }
         }
@@ -375,13 +522,27 @@ async fn poller(id: usize, cfg: Arc<ViewerCfg>, stats: Arc<Stats>, deadline: Ins
     }
 }
 
+async fn ws_connect_within(
+    host: &str,
+    budget: Duration,
+    deadline: Instant,
+) -> Option<ws::Client> {
+    let t0 = Instant::now();
+    let mut back = Duration::from_millis(50);
+    loop {
+        if let Ok(c) = ws::Client::connect(host, "/h/ws").await {
+            return Some(c);
+        }
+        if t0.elapsed() + back > budget || Instant::now() + back >= deadline {
+            return None;
+        }
+        tokio::time::sleep(back).await;
+        back = (back * 2).min(Duration::from_millis(800));
+    }
+}
+
 async fn ws_viewer(id: usize, cfg: Arc<ViewerCfg>, stats: Arc<Stats>, deadline: Instant) {
     let mut r = Rng(cfg.seed ^ (id as u64 + 7).wrapping_mul(0xD1B5_4A32_D192_ED03) | 1);
-    let Ok(mut c) = ws::Client::connect(&cfg.herald, "/h/ws").await else {
-        stats.ws_errors.fetch_add(1, Ordering::Relaxed);
-        return;
-    };
-    stats.ws_connected.fetch_add(1, Ordering::Relaxed);
     let n = (1 + r.below(12)) as usize;
     let provs: Vec<Value> = (0..n)
         .filter_map(|_| {
@@ -392,49 +553,149 @@ async fn ws_viewer(id: usize, cfg: Arc<ViewerCfg>, stats: Arc<Stats>, deadline: 
         })
         .collect();
     let sub = json!({"op": "sub", "provinces": provs, "rings": cfg.rings, "bells": true});
-    if c.send_text(&sub.to_string()).await.is_err() {
-        stats.ws_errors.fetch_add(1, Ordering::Relaxed);
-        return;
-    }
-    let mut last: Option<u64> = None;
-    loop {
-        let left = deadline.saturating_duration_since(Instant::now());
-        if left.is_zero() {
-            break;
+    let mut first = true;
+    'session: loop {
+        if !first {
+            if cfg.retry_budget.is_zero() {
+                return;
+            }
+            // A dropped socket reconnects (§8.4: the client resyncs from the
+            // files); jitter spreads a thousand reconnects after a restart.
+            let j = Duration::from_millis(r.below(500));
+            if Instant::now() + j >= deadline {
+                return;
+            }
+            tokio::time::sleep(j).await;
         }
-        match tokio::time::timeout(left, c.next_text()).await {
-            Ok(Some(t)) => {
-                let Ok(v) = serde_json::from_str::<Value>(&t) else {
-                    continue;
-                };
-                if let Some(seq) = v.get("seq").and_then(|s| s.as_u64()) {
-                    stats.ws_messages.fetch_add(1, Ordering::Relaxed);
-                    if let Some(t) = v.get("t").and_then(|t| t.as_u64()).filter(|t| *t > 0) {
-                        let us = crate::runner::unix_ms().saturating_sub(t) * 1_000;
-                        stats.ws_lat.record(Duration::from_micros(us));
-                        stats.ws_lat_max_us.fetch_max(us, Ordering::Relaxed);
+        let budget = if first { Duration::ZERO } else { cfg.retry_budget };
+        let Some(mut c) = ws_connect_within(&cfg.herald, budget, deadline).await else {
+            if Instant::now() < deadline {
+                stats.error(&stats.ws_errors);
+            }
+            return;
+        };
+        if first {
+            stats.ws_connected.fetch_add(1, Ordering::Relaxed);
+        } else {
+            stats.ws_reconnects.fetch_add(1, Ordering::Relaxed);
+        }
+        first = false;
+        if c.send_text(&sub.to_string()).await.is_err() {
+            if cfg.retry_budget.is_zero() {
+                stats.error(&stats.ws_errors);
+                return;
+            }
+            continue 'session;
+        }
+        // Sequence numbers are per connection (ws.rs): a new session starts over.
+        let mut last: Option<u64> = None;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return;
+            }
+            match tokio::time::timeout(left, c.next_text()).await {
+                Ok(Some(t)) => {
+                    let Ok(v) = serde_json::from_str::<Value>(&t) else {
+                        continue;
+                    };
+                    if let Some(seq) = v.get("seq").and_then(|s| s.as_u64()) {
+                        stats.ws_messages.fetch_add(1, Ordering::Relaxed);
+                        if let Some(t) = v.get("t").and_then(|t| t.as_u64()).filter(|t| *t > 0) {
+                            let us = crate::runner::unix_ms().saturating_sub(t) * 1_000;
+                            stats.ws_lat.record(Duration::from_micros(us));
+                            stats.ws_lat_max_us.fetch_max(us, Ordering::Relaxed);
+                        }
+                        if last.is_some_and(|l| seq != l + 1) {
+                            stats.ws_gaps.fetch_add(1, Ordering::Relaxed);
+                        }
+                        last = Some(seq);
                     }
-                    if last.is_some_and(|l| seq != l + 1) {
-                        stats.ws_gaps.fetch_add(1, Ordering::Relaxed);
+                }
+                Ok(None) => {
+                    if cfg.retry_budget.is_zero() {
+                        stats.error(&stats.ws_errors);
+                        return;
                     }
-                    last = Some(seq);
+                    continue 'session;
+                }
+                Err(_) => return,
+            }
+        }
+    }
+}
+
+/// The live bell when following (`None`: not following, or not read yet:
+/// then `0..bells`).
+fn live(cfg: &ViewerCfg, stats: &Stats) -> Option<u32> {
+    cfg.follow.as_ref()?;
+    match stats.live_bell.load(Ordering::Relaxed) {
+        u32::MAX => None,
+        b => Some(b),
+    }
+}
+
+/// `--follow-status`: reads `/h/season` (genesis, bell length) and then
+/// `/h/status` once a second until `deadline`, storing the live bell
+/// (`live` = [slot, Clock] of the chain's newest slot). Its requests are
+/// not viewer requests (not counted, not errors of the load).
+async fn follower(host: String, stats: Arc<Stats>, deadline: Instant) {
+    let mut conn: Option<KeepAlive> = None;
+    let mut season: Option<(i64, i64)> = None;
+    while Instant::now() < deadline {
+        if conn.is_none() {
+            conn = KeepAlive::connect(&host).await.ok();
+        }
+        let json_of = |b: &[u8]| serde_json::from_slice::<Value>(b).ok();
+        let ok = match conn.as_mut() {
+            None => false,
+            Some(c) => {
+                if season.is_none() {
+                    season = match c.get_body("/h/season").await {
+                        Ok((200, b)) => json_of(&b).and_then(|v| {
+                            Some((v.get("genesisTs")?.as_i64()?, v.get("bellSecs")?.as_i64()?))
+                        }),
+                        _ => None,
+                    };
+                }
+                match (season, c.get_body("/h/status").await) {
+                    (Some((g, secs)), Ok((200, b))) => {
+                        let ts = json_of(&b).and_then(|v| v.get("live")?.get(1)?.as_i64());
+                        if let Some(ts) = ts.filter(|&t| t >= g && secs > 0) {
+                            let bell = ((ts - g) / secs).min(u32::MAX as i64 - 1) as u32;
+                            stats.live_bell.store(bell, Ordering::Relaxed);
+                        }
+                        true
+                    }
+                    _ => false,
                 }
             }
-            Ok(None) => {
-                stats.ws_errors.fetch_add(1, Ordering::Relaxed);
-                break;
-            }
-            Err(_) => break,
+        };
+        if !ok {
+            stats.follow_errors.fetch_add(1, Ordering::Relaxed);
+            conn = None;
         }
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
 }
 
 /// Runs the load for `cfg.duration` and reports.
 pub async fn run(cfg: ViewerCfg, stats: Arc<Stats>) -> Value {
     let t0 = Instant::now();
+    let _ = stats.t0.set(t0);
+    stats.live_bell.store(u32::MAX, Ordering::SeqCst);
     let deadline = t0 + cfg.duration;
     let cfg = Arc::new(cfg);
     let mut tasks = vec![];
+    if let Some(h) = cfg.follow.clone() {
+        // The first live bell before the viewers start.
+        let f = tokio::spawn(follower(h, stats.clone(), deadline));
+        let wait = Instant::now() + Duration::from_secs(2);
+        while stats.live_bell.load(Ordering::Relaxed) == u32::MAX && Instant::now() < wait {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        tasks.push(f);
+    }
     for i in 0..cfg.viewers {
         tasks.push(tokio::spawn(poller(
             i,

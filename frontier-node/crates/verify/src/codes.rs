@@ -30,6 +30,9 @@ pub const BAD_SEAL_SURVIVED: &str = "BadSealSurvived";
 pub const VALID_SEAL_UNREVEALED: &str = "ValidSealUnrevealed";
 pub const REVEAL_NEAR_CLOSE: &str = "RevealNearClose";
 pub const BAD_SEAL_UNSETTLED: &str = "BadSealUnsettled";
+/// W6T-3: a landed DEPART whose arrival bell is at or after `end_bell`
+/// (§5.11 Depart step 4, v1.12).
+pub const ARRIVAL_AFTER_END: &str = "ArrivalAfterEnd";
 // V6 quotas
 pub const QUOTA_SET_MISMATCH: &str = "QuotaSetMismatch";
 pub const TRANSIT_MASS_MISMATCH: &str = "TransitMassMismatch";
@@ -79,6 +82,7 @@ pub const FAIL_CODES: &[&str] = &[
     REVEAL_COMMIT_MISMATCH,
     VERDICT_DISAGREES_WITH_TLOCK,
     BAD_SEAL_SURVIVED,
+    ARRIVAL_AFTER_END,
     QUOTA_SET_MISMATCH,
     TRANSIT_MASS_MISMATCH,
     CLASH_REPLAY_MISMATCH,
