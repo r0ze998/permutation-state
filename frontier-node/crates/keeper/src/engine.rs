@@ -18,6 +18,20 @@
 //! complete (the heap access fault of a fill past 32 KiB) → the next
 //! version adds `RequestHeapFrame(262,144)`. Each rung is journalled and
 //! alerted: a breach is a gate failure to fix, never a stuck province.
+//! **W6T-2:** the local chain reports running out of compute as
+//! `ProgramFailedToComplete` too (log "exceeded CUs meter", units consumed
+//! = the limit; 28,655 closes in the w6-s7 drain took the heap rung, then
+//! ended Dead, and were planned again ≈ 270 times each). A failed version's
+//! units and logs come from the transaction feed ([`Engine::note_tx_meta`]);
+//! when the keeper reads the feed ([`Engine::expect_tx_meta`]) a
+//! `ProgramFailedToComplete` waits up to [`META_WAIT_SLOTS`] for them, and
+//! one that used its whole limit or logged the meter climbs the CU ladder.
+//!
+//! **One version per chain slot (W6T-2):** a W write gets a new version
+//! every slot, but never a second one in the chain slot its last version
+//! went out in (a tick that ran late sent its version in the next slot,
+//! where the next tick's version joined it: two Reveals of one march in
+//! one block, one `AlreadyDone`; 203 in w6-s7).
 //!
 //! **Contested:** a write not landed `contested_slots` (2) slots after a
 //! version at a bid ≥ `p_tip` marks its `(bell, region)` contested; the
@@ -249,7 +263,20 @@ pub struct Engine {
     pub budgets: Budgets,
     pub params: EngineParams,
     pub stats: BTreeMap<&'static str, KindStats>,
+    /// The keeper reads the transaction feed, which gives a failed
+    /// version's units and logs (W6T-2).
+    pub expect_tx_meta: bool,
+    /// Failed versions: `(units consumed, "exceeded CUs meter" logged)`.
+    tx_meta: HashMap<Signature, (u64, bool)>,
+    /// `ProgramFailedToComplete` statuses waiting for their meta: first slot seen.
+    meta_wait: HashMap<Signature, u64>,
+    /// The chain's slot at the last `send` that sent a version.
+    pub last_send_chain_slot: Option<u64>,
 }
+
+/// Slots a `ProgramFailedToComplete` waits for the feed's meta before it
+/// is judged a heap fault (W6T-2).
+pub const META_WAIT_SLOTS: u64 = 3;
 
 /// `ComputationalBudgetExceeded` in any of its spellings.
 pub fn is_cu_exceeded(e: &str) -> bool {
@@ -280,6 +307,10 @@ impl Engine {
             budgets,
             params,
             stats: BTreeMap::new(),
+            expect_tx_meta: false,
+            tx_meta: HashMap::new(),
+            meta_wait: HashMap::new(),
+            last_send_chain_slot: None,
         }
     }
 
@@ -295,7 +326,24 @@ impl Engine {
     /// What the transaction feed says of a failed version: the compute
     /// units it consumed and whether its logs say the CU meter ran out
     /// (W6T-2; the error JSON of a status alone cannot tell).
-    pub fn note_tx_meta(&mut self, _sig: Signature, _units: u64, _meter: bool) {}
+    pub fn note_tx_meta(&mut self, sig: Signature, units: u64, meter: bool) {
+        if self.tx_meta.len() >= 50_000 {
+            // Bounded: the feed names every keeper's failures.
+            self.tx_meta.clear();
+        }
+        self.tx_meta.insert(sig, (units, meter));
+    }
+
+    /// Whether a failed version ran out of compute: the error says so, or
+    /// a `ProgramFailedToComplete` used its whole limit or logged the meter.
+    fn cu_meter(&self, e: &str, v: &Version) -> bool {
+        is_cu_exceeded(e)
+            || (is_heap_fault(e)
+                && self
+                    .tx_meta
+                    .get(&v.sig)
+                    .is_some_and(|&(units, meter)| meter || units >= v.cu_limit as u64))
+    }
 
     pub fn pending_len(&self) -> usize {
         self.pending.len()
@@ -392,8 +440,11 @@ impl Engine {
         journal: Option<&Journal>,
         report: &mut StepReport,
     ) -> Option<Outcome> {
-        let p = self.pending.get_mut(key)?;
         let e = st.err.clone().unwrap_or_default();
+        let cu_meter = self.cu_meter(&e, v);
+        self.tx_meta.remove(&v.sig);
+        self.meta_wait.remove(&v.sig);
+        let p = self.pending.get_mut(key)?;
         let s = self.stats.entry(p.spec.kind).or_default();
         s.fees_charged += v.fee;
         let status = |x: &str| {
@@ -414,7 +465,7 @@ impl Engine {
             });
         }
         status("failed");
-        if is_cu_exceeded(&e) && p.spec.tag == abi::tag::SKIP_QUIET {
+        if cu_meter && p.spec.tag == abi::tag::SKIP_QUIET {
             // v1.7 (wave-4 review): SkipQuiet within its gate formula
             // always finishes a quiet run (G1 rows, the kernel quiet test
             // included); running out means the first bell is not quiet
@@ -433,7 +484,7 @@ impl Engine {
                 slot: st.slot,
             });
         }
-        if is_cu_exceeded(&e) {
+        if cu_meter {
             if v.cu_limit >= p.cu_limit && p.cu_limit < abi::CU_MAX {
                 p.cu_limit = Budgets::retry_cu(p.cu_limit);
                 report.ladder.push((key.into(), p.cu_limit, p.heap));
@@ -441,10 +492,7 @@ impl Engine {
                     let _ = j.alert(
                         st.slot,
                         "cu-retry",
-                        &format!(
-                            "{key}: ComputationalBudgetExceeded, next limit {}",
-                            p.cu_limit
-                        ),
+                        &format!("{key}: out of compute ({e}), next limit {}", p.cu_limit),
                     );
                 }
             }
@@ -526,6 +574,20 @@ impl Engine {
         let mut resolved: Vec<Signature> = vec![];
         for ((k, v), st) in sigs.iter().zip(sts.iter()) {
             let Some(st) = st else { continue };
+            // A ProgramFailedToComplete waits a little for the feed to say
+            // whether it ran out of compute (W6T-2).
+            if self.expect_tx_meta
+                && st
+                    .err
+                    .as_deref()
+                    .is_some_and(|e| is_heap_fault(e) && !is_cu_exceeded(e))
+                && !self.tx_meta.contains_key(&v.sig)
+            {
+                let first = *self.meta_wait.entry(v.sig).or_insert(slot);
+                if slot < first + META_WAIT_SLOTS {
+                    continue;
+                }
+            }
             resolved.push(v.sig);
             if let Some(p) = self.pending.get_mut(k) {
                 p.settled.insert(v.sig);
@@ -679,6 +741,19 @@ impl Engine {
                 ));
                 continue;
             }
+            // One version per chain slot: a W write whose last version went
+            // out in the chain's current slot (a late tick) waits (W6T-2).
+            if p.spec.class == Class::W && !p.versions.is_empty() {
+                if chain_slot.is_none() {
+                    chain_slot = port.clock().await.ok().map(|c| c.slot);
+                }
+                if let (Some(c), Some(last)) = (chain_slot, p.versions.last()) {
+                    if last.chain_slot >= c.max(slot) {
+                        self.mark_contested(&k, slot, journal, report);
+                        continue;
+                    }
+                }
+            }
             let fees_out: u64 = p.versions.iter().map(|v| v.fee).sum();
             if p.versions.len() as u32 >= self.params.max_versions {
                 self.mark_contested(&k, slot, journal, report);
@@ -718,7 +793,9 @@ impl Engine {
             if blockhash.is_none() {
                 // The chain's slot now (a late tick sends in a later slot
                 // than it read at its start).
-                chain_slot = port.clock().await.ok().map(|c| c.slot);
+                if chain_slot.is_none() {
+                    chain_slot = port.clock().await.ok().map(|c| c.slot);
+                }
                 match port.blockhash().await {
                     Ok((h, _)) => blockhash = Some(h),
                     Err(e) => {
@@ -796,6 +873,7 @@ impl Engine {
                 });
             }
             p.versions.push(v);
+            self.last_send_chain_slot = Some(chain_slot.unwrap_or(slot).max(slot));
             self.stats.entry(p.spec.kind).or_default().versions += 1;
             report.sent += 1;
             self.mark_contested(&k, slot, journal, report);

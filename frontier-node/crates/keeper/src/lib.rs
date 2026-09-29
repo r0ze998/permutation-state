@@ -154,8 +154,16 @@ pub struct Tick<'a> {
 }
 
 /// State the loopback API reads and writes (updated every tick).
+///
+/// W6T-2: a tick never takes `status`, `metrics`, `tracks` or
+/// `reveal_keys` out of it; the play duty takes only the queued `reveals`
+/// and `nudges` and merges its track updates back. Before, the whole
+/// struct was taken for the play duty's plan, and `/v1/status` answered
+/// `null` for as long as the plan ran (322 of 1,035 bells in w6-s7), a
+/// track answered 404 and the same material could be queued twice.
 #[derive(Default)]
 pub struct Shared {
+    /// The status snapshot of the last tick (published after its sends).
     pub status: Value,
     pub metrics: String,
     /// Owner reveal material queued by `/v1/reveal` (W3-C accepts, W4-C sends).
@@ -178,6 +186,28 @@ pub struct TickReport {
     pub sent: usize,
     pub outcomes: Vec<(String, Outcome)>,
     pub contested: Vec<(Option<u32>, Option<u8>, String)>,
+    /// The chain's slot when the first version went out (`None`: nothing
+    /// sent), and per phase `(name, wall ms, chain reads)` (W6T-2; logged
+    /// with `FRONTIER_KEEPER_TICK_LOG=1`).
+    pub chain_at_send: Option<u64>,
+    pub phases: Vec<(&'static str, u64, u64)>,
+}
+
+impl TickReport {
+    /// One line per tick: `TICK slot=… chain_at_send=… sent=… total=…ms
+    /// <phase>=<ms>ms/<reads>r …`.
+    pub fn line(&self, total_ms: u64) -> String {
+        let mut l = format!(
+            "TICK slot={} chain_at_send={} sent={} total={total_ms}ms",
+            self.slot,
+            self.chain_at_send.map_or(-1, |s| s as i64),
+            self.sent
+        );
+        for (n, ms, r) in &self.phases {
+            l.push_str(&format!(" {n}={ms}ms/{r}r"));
+        }
+        l
+    }
 }
 
 /// `(p99, p50)`-style quantile of a sample (nearest rank).
@@ -419,10 +449,63 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
             ..Default::default()
         };
         if self.last_slot == Some(slot) {
+            // W6T-2 (cause B): a drand round this slot asked for and did
+            // not get is asked again within the slot, and its anchor or
+            // seed cache goes out at once (beacon duty and send only). The
+            // round is public from its time; waiting for the next slot cost
+            // one of criterion 3's two slots (W6-A F-A3).
+            if let Some(season) = self.season.clone() {
+                if self.cfg.has_role("beacon")
+                    && season.status >= status::SEEDED
+                    && self.rounds.pk_hash() == season.quicknet_pk_hash
+                    && self.rounds.take_missed(slot)
+                {
+                    let t = Tick {
+                        slot,
+                        now,
+                        season: &season,
+                        clock: SeasonClock::from_season(&season),
+                        addrs: &self.addrs,
+                        cfg: &self.cfg,
+                    };
+                    self.beacon
+                        .plan(
+                            &t,
+                            &self.port,
+                            &self.drand,
+                            &mut self.rounds,
+                            &mut self.engine,
+                            self.journal.as_ref(),
+                        )
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    let mut r = crate::engine::StepReport::default();
+                    self.engine
+                        .send(
+                            &self.port,
+                            &mut self.payers,
+                            self.journal.as_ref(),
+                            slot,
+                            &mut r,
+                        )
+                        .await;
+                    rep.sent = r.sent;
+                    rep.chain_at_send = self.engine.last_send_chain_slot.filter(|_| r.sent > 0);
+                    self.note_step(slot, &r);
+                    rep.outcomes = r.outcomes;
+                    rep.contested = r.contested;
+                }
+            }
             rep.idle = true;
             return Ok(rep);
         }
         self.last_slot = Some(slot);
+        let mut t_phase = std::time::Instant::now();
+        let mut phase = |rep: &mut TickReport, name: &'static str, reads: u64| {
+            rep.phases
+                .push((name, t_phase.elapsed().as_millis() as u64, reads));
+            t_phase = std::time::Instant::now();
+        };
         // The season: every slot until it runs, then every 16 slots.
         let stale = self.season.as_ref().is_none_or(|s| {
             s.effective_status(now) != status::RUNNING
@@ -486,6 +569,7 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
                 }
             }
         }
+        phase(&mut rep, "season+care", 0);
         // Poll first: a write that landed is an outcome before the duties
         // re-read the chain.
         let mut r = self
@@ -508,6 +592,7 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
                 }
             }
         }
+        phase(&mut rep, "poll", 0);
         // Duties.
         if let Some(season) = self.season.clone() {
             let sclock = SeasonClock::from_season(&season);
@@ -577,6 +662,7 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
             }
             self.archive
                 .plan(&t, &self.beacon.anchors, &mut self.engine);
+            phase(&mut rep, "beacon", 0);
             // Land (W3-C).
             if LAND_ROLES.iter().any(|r| t.cfg.has_role(r)) {
                 self.index
@@ -627,14 +713,18 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
                     .await
                     .map_err(|e| e.to_string())?;
             }
+            phase(&mut rep, "land", 0);
         }
         // Play (W4-C).
+        let play_on = PLAY_ROLES.iter().any(|r| self.cfg.has_role(r))
+            && !PLAY_ROLES
+                .iter()
+                .all(|r| self.unsupported_roles.contains(r));
+        // The CU-meter test of a failed version reads the feed's meta,
+        // which the play index pulls (W6T-2).
+        self.engine.expect_tx_meta = play_on;
         if let Some(season) = self.season.clone() {
-            if PLAY_ROLES.iter().any(|r| self.cfg.has_role(r))
-                && !PLAY_ROLES
-                    .iter()
-                    .all(|r| self.unsupported_roles.contains(r))
-            {
+            if play_on {
                 let cfg_eff;
                 let cfg = if self.unsupported_roles.is_empty() {
                     &self.cfg
@@ -660,11 +750,19 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
                         .iter()
                         .map(|&(p, q)| (p as i32, q as i32)),
                 );
-                let mut shared =
-                    std::mem::take(&mut *self.shared.lock().unwrap_or_else(|p| p.into_inner()));
+                // Only the queued material and nudges leave the API's state
+                // (W6T-2): the status, tracks and dedupe keys stay served.
+                let mut shared = {
+                    let mut s = self.shared.lock().unwrap_or_else(|p| p.into_inner());
+                    Shared {
+                        reveals: std::mem::take(&mut s.reveals),
+                        nudges: std::mem::take(&mut s.nudges),
+                        ..Shared::default()
+                    }
+                };
                 let r2 = self
                     .play
-                    .plan(
+                    .plan_core(
                         &t,
                         &self.port,
                         &self.drand,
@@ -678,25 +776,27 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
                     )
                     .await;
                 self.play.guard_reveals(&t, &mut self.engine);
-                shared.blocking = self.play.blocking(&t, &self.engine);
+                let blocking = self.play.blocking(&t, &self.engine);
                 {
-                    // Merge back: the API may have queued more meanwhile.
+                    // Merge back: material the play duty could not take
+                    // yet stays queued ahead of what the API queued since.
                     let mut s = self.shared.lock().unwrap_or_else(|p| p.into_inner());
                     let newer_reveals = std::mem::take(&mut s.reveals);
                     let newer_nudges = std::mem::take(&mut s.nudges);
-                    let newer_tracks = std::mem::take(&mut s.tracks);
-                    let newer_keys = std::mem::take(&mut s.reveal_keys);
-                    let next = s.next_track.max(shared.next_track);
-                    *s = shared;
+                    s.reveals = std::mem::take(&mut shared.reveals);
                     s.reveals.extend(newer_reveals);
+                    s.nudges = std::mem::take(&mut shared.nudges);
                     s.nudges.extend(newer_nudges);
-                    s.tracks.extend(newer_tracks);
-                    s.reveal_keys.extend(newer_keys);
-                    s.next_track = next;
+                    s.tracks.extend(std::mem::take(&mut shared.tracks));
+                    s.blocking = blocking;
+                }
+                for (sig, units, meter) in self.play.index.failed_meta.drain(..) {
+                    self.engine.note_tx_meta(sig, units, meter);
                 }
                 r2.map_err(|e| e.to_string())?;
             }
         }
+        phase(&mut rep, "play", 0);
         // Send the next versions.
         self.engine
             .send(
@@ -707,10 +807,62 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
                 &mut r,
             )
             .await;
+        rep.chain_at_send = self.engine.last_send_chain_slot.filter(|_| r.sent > 0);
+        phase(&mut rep, "send", 0);
+        // Housekeeping after the send (W6T-2): closes (class N) and claims
+        // plan once the latency-critical versions of this slot are out, and
+        // go out in a second send.
+        if play_on {
+            if let Some(season) = self.season.clone() {
+                let mut cfg_eff = self.cfg.clone();
+                cfg_eff
+                    .roles
+                    .retain(|r| !self.unsupported_roles.contains(r.as_str()));
+                let t = Tick {
+                    slot,
+                    now,
+                    season: &season,
+                    clock: SeasonClock::from_season(&season),
+                    addrs: &self.addrs,
+                    cfg: &cfg_eff,
+                };
+                let before = self.play.closes_reads;
+                self.play
+                    .housekeeping(&t, &self.port, &mut self.engine, &self.beacon.anchors)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let reads = self.play.closes_reads - before;
+                phase(&mut rep, "closes", reads);
+                let sent = r.sent;
+                self.engine
+                    .send(
+                        &self.port,
+                        &mut self.payers,
+                        self.journal.as_ref(),
+                        slot,
+                        &mut r,
+                    )
+                    .await;
+                if rep.chain_at_send.is_none() && r.sent > sent {
+                    rep.chain_at_send = self.engine.last_send_chain_slot;
+                }
+                phase(&mut rep, "send2", 0);
+            }
+        }
         rep.sent = r.sent;
         let day = bell.map_or(0, |b| b / abi::BELLS_PER_DAY);
         let fees_now: u64 = self.engine.stats.values().map(|s| s.fees_charged).sum();
         self.spend_by_day.insert(day, fees_now);
+        self.note_step(slot, &r);
+        rep.outcomes = r.outcomes;
+        rep.contested = r.contested;
+        self.publish(slot, now, bell);
+        Ok(rep)
+    }
+
+    /// Alerts and duty reactions for what a step reported: dead and
+    /// failed writes, contested bells, retry-ladder rungs.
+    fn note_step(&mut self, slot: u64, r: &crate::engine::StepReport) {
         for (k, o) in &r.outcomes {
             match o {
                 Outcome::Dead { code, reason } => {
@@ -771,10 +923,6 @@ impl<P: ChainPort, D: DrandPort> Keeper<P, D> {
         for (k, cu, heap) in &r.ladder {
             self.alert(slot, "retry-ladder", format!("{k}: cu {cu}, heap {heap:?}"));
         }
-        rep.outcomes = r.outcomes;
-        rep.contested = r.contested;
-        self.publish(slot, now, bell);
-        Ok(rep)
     }
 
     /// Top-ups and sweeps as class N transfers signed by their source.

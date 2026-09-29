@@ -83,6 +83,10 @@ pub struct PlayIndex {
     /// DEFENCE_CLAIM records `(beneficiary, day, amount)`.
     pub claims: Vec<(Address, u32, u64)>,
     pub bad: u64,
+    /// Failed transactions whose program did not complete: `(signature,
+    /// units consumed, "exceeded CUs meter" logged)`, for the engine's
+    /// CU-meter test (W6T-2); the keeper drains it every tick.
+    pub failed_meta: Vec<(fclient::ports::Signature, u64, bool)>,
 }
 
 fn fld<'a>(r: &plog::Record<'a>, name: &str) -> Option<&'a [u8]> {
@@ -113,7 +117,11 @@ impl PlayIndex {
             let Some(last) = page.last() else { break };
             self.cursor = Cursor(last.seq);
             for tx in &page {
-                if tx.err.is_some() {
+                if let Some(e) = &tx.err {
+                    if e.contains("ProgramFailedToComplete") && self.failed_meta.len() < 10_000 {
+                        let meter = tx.logs.iter().any(|l| l.contains("exceeded CUs meter"));
+                        self.failed_meta.push((tx.signature, tx.units, meter));
+                    }
                     continue;
                 }
                 let Ok(bodies) = fclient::log::bodies_from_logs(&tx.logs, &addrs.program) else {

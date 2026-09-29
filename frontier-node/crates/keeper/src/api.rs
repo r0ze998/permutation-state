@@ -6,9 +6,9 @@
 //!
 //! | route | W2-F |
 //! |---|---|
-//! | `GET /v1/status` | duties, pools, spend, latencies (live) |
+//! | `GET /v1/status` | duties, pools, spend, latencies: the snapshot of the last tick, published after its sends (W6T-2: never taken away while a tick runs) |
 //! | `GET /metrics` | Prometheus text (live) |
-//! | `POST /v1/reveal` | shape checks (`400`), plaintext rules (`422 BadPlaintext`), then (W3-C) the accept path against chain ([`crate::reveal_accept`]: `409 CommitMismatch` / `TransitState`, `410 WindowClosed`, `422 BadPlaintext` against the transit), then queued with a track id (`202`; the same material again answers the same track). W4-C's pipeline ([`crate::play`]) sends it from the bell start and moves the track: `sent`, `landed` (signature, slot), `refused` (`QuotaRefused`), `expired` (`WindowClosed`) |
+//! | `POST /v1/reveal` | shape checks (`400`), plaintext rules (`422 BadPlaintext`), then (W3-C) the accept path against chain ([`crate::reveal_accept`]: `409 CommitMismatch` / `TransitState` / `ArrivalBell` / `Shielded` (W6T-2), `410 WindowClosed`, `422 BadPlaintext` against the transit; every refusal body is `{error, code, detail}`), then queued with a track id (`202`; the same material again answers the same track). W4-C's pipeline ([`crate::play`]) sends it from the bell start and moves the track: `sent`, `landed` (signature, slot), `refused` (`QuotaRefused`), `expired` (`WindowClosed`) |
 //! | `POST /v1/nudge` | queued; the province is caught up at once (W4-C); `blocking` lists what holds it now (`[{kind, key}]`: its lag, writes in flight on it, departures waiting for its resolve), as of the last tick |
 //! | `GET /v1/track/{id}` | the track's state |
 
@@ -55,8 +55,14 @@ fn authorized(st: &ApiState, h: &HeaderMap) -> bool {
         })
 }
 
+/// A refusal body: `{"error": name, "code": name, "detail": …}` (`error`
+/// is the relay's field, W6T-2; `code` the W2-F one).
 fn err(code: StatusCode, name: &str, detail: &str) -> Response {
-    (code, Json(json!({"code": name, "detail": detail}))).into_response()
+    (
+        code,
+        Json(json!({"error": name, "code": name, "detail": detail})),
+    )
+        .into_response()
 }
 
 async fn status(State(st): State<ApiState>, h: HeaderMap) -> Response {

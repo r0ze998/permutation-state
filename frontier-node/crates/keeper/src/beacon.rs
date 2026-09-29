@@ -20,6 +20,8 @@
 //!   is behind the latest round. Class N.
 //!
 //! Every rule time comes from the chain's Clock (the `now` of the tick).
+//! No anchor is planned for a bell at or after the season's `end_bell`
+//! (the program refuses it; W6T-2).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -183,10 +185,12 @@ impl BeaconDuty {
         rounds: &mut Rounds,
         engine: &mut Engine,
     ) -> PortResult<()> {
-        if b_now == 0 {
+        if b_now == 0 || t.season.end_bell == 0 {
             return Ok(()); // bell 0 has not ended
         }
-        let last = b_now - 1;
+        // The last bell with an anchor: the program refuses one at or after
+        // `end_bell` (`BadData`; 4,218 refused in the w6-s7 drain, W6T-2).
+        let last = (b_now - 1).min(t.season.end_bell - 1);
         let mut start = *self
             .next_bell
             .get_or_insert(b_now.saturating_sub(t.cfg.rescan_bells));

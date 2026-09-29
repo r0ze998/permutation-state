@@ -232,13 +232,41 @@ impl Journal {
         sql(rows.collect())
     }
 
-    /// Distinct object keys starting with `prefix`.
+    /// Distinct object keys starting with `prefix`: a range on the
+    /// `attempts_object` index, `prefix ≤ key < succ(prefix)` (W6T-2; the
+    /// `substr` form scanned the whole table, 4.5 ms a call at 112k
+    /// attempts, 18-21 s for the 288 × 16 calls of a restart's first tick).
+    /// SQLite compares TEXT bytewise and UTF-8 keeps code-point order, so
+    /// the successor is the prefix with its last character incremented.
     pub fn object_keys_with_prefix(&self, prefix: &str) -> Result<Vec<String>, String> {
-        let mut st = sql(self.conn.prepare(
-            "SELECT DISTINCT object_key FROM attempts WHERE substr(object_key, 1, length(?1)) = ?1",
-        ))?;
-        let rows = sql(st.query_map(params![prefix], |r| r.get::<_, String>(0)))?;
-        sql(rows.collect())
+        let succ = {
+            let mut s = prefix.to_string();
+            s.pop().and_then(|c| {
+                // The next code point (skipping the surrogate gap).
+                let n = (c as u32 + 1..=char::MAX as u32).find_map(char::from_u32)?;
+                s.push(n);
+                Some(s)
+            })
+        };
+        let rows: Vec<String> = match succ {
+            Some(end) => {
+                let mut st = sql(self.conn.prepare(
+                    "SELECT DISTINCT object_key FROM attempts WHERE object_key >= ?1 AND object_key < ?2",
+                ))?;
+                let rows = sql(st.query_map(params![prefix, end], |r| r.get::<_, String>(0)))?;
+                sql(rows.collect())?
+            }
+            // The empty prefix (every key), or one ending in char::MAX.
+            None => {
+                let mut st = sql(self
+                    .conn
+                    .prepare("SELECT DISTINCT object_key FROM attempts WHERE object_key >= ?1"))?;
+                let rows = sql(st.query_map(params![prefix], |r| r.get::<_, String>(0)))?;
+                let all: Vec<String> = sql(rows.collect())?;
+                all.into_iter().filter(|k| k.starts_with(prefix)).collect()
+            }
+        };
+        Ok(rows)
     }
 
     /// `(status, count)` over all attempts.
