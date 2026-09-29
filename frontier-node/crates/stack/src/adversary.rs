@@ -188,6 +188,17 @@ pub struct Pending {
     pub ring_opening: Option<fclient::land::RingOpening>,
     /// Open defence claims: `(ArrivalSlot, grace end)` (W6-C).
     pub open_claims: Vec<(Address, i64)>,
+    /// Transits in flight (W6T-4): each Holding transit in state 1 (DEPART
+    /// seen) or 2 (departure settled), not yet settled at its destination.
+    pub in_flight: Vec<InFlight>,
+}
+
+/// One transit in flight (a Holding's transit record in state 1 or 2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InFlight {
+    pub origin: (i16, i16),
+    pub arrive_bell: u32,
+    pub state: u8,
 }
 
 /// Length of the `defence-pool` hold, game seconds (half the claim grace).
@@ -276,12 +287,54 @@ pub async fn probe_land_and_claims(
     (ring, claims)
 }
 
+/// The transits in flight of the season (W6T-4, only while a `lag` hold
+/// waits): every Holding's transit records in state 1 or 2.
+pub async fn probe_in_flight(
+    chain: &crate::chain::Chain,
+    program: &Address,
+    season_id: u64,
+) -> Vec<InFlight> {
+    let v = chain
+        .call(
+            "getProgramAccounts",
+            json!([program.to_string(), {"encoding": "base64",
+                "filters": [{"dataSize": fclient::abi::size::HOLDING}]}]),
+        )
+        .await
+        .unwrap_or(Value::Null);
+    let rows = v
+        .as_array()
+        .or_else(|| v.get("value").and_then(|x| x.as_array()))
+        .cloned()
+        .unwrap_or_default();
+    let mut out = vec![];
+    for r in rows {
+        if let Ok(Some(acc)) = fclient::rpc::parse_account(&r["account"]) {
+            if acc.owner != *program {
+                continue;
+            }
+            if let Ok(h) = fclient::decode::Holding::decode(&acc.data) {
+                if h.h.season_id == season_id {
+                    out.extend(in_flight_of(&h.transit));
+                }
+            }
+        }
+    }
+    out
+}
+
 /// The origin of a march in flight: the Province with the most departed
 /// entries awaiting their settle (state 3).
 pub fn march_origin(ps: &[Province]) -> Option<&Province> {
     ps.iter()
         .filter(|p| p.entries.iter().any(|e| e.state == 3))
         .max_by_key(|p| p.entries.iter().filter(|e| e.state == 3).count())
+}
+
+/// The transits in flight among Holding transit records (state 1 or 2).
+pub fn in_flight_of(ts: &[fclient::decode::Transit]) -> Vec<InFlight> {
+    let _ = ts;
+    vec![] // W6T-4 failing-first stub
 }
 
 /// [`keys_for`] against the chain's pending work.
@@ -462,6 +515,94 @@ mod tests {
         assert!(!above_cap("slots-below", 1_500), "below the W cap 2.0");
         assert!(above_cap("slots-above", 3_000));
         assert!(above_cap("anchor", 1_000), "above the D cap 0.5");
+    }
+
+    /// W6T-4: `slots-below` and `lag` are armed over the whole play window
+    /// (w6-s7 skipped both: armed for one game hour); `slots-below` starts
+    /// by 60% of play, so the keeper escalation it causes can open a claim
+    /// that `defence-pool` holds later.
+    #[test]
+    fn plan_arms_every_hold_over_play() {
+        for (start, end) in [(1_000, 1_000 + 86_400), (5_000, 5_000 + 7 * 86_400)] {
+            let p = plan(start, end);
+            for k in [
+                "slots-below",
+                "lag",
+                "ticket",
+                "frontier-fund",
+                "defence-pool",
+            ] {
+                let h = p.iter().find(|x| x.kind == k).unwrap();
+                assert_eq!(h.deadline, end, "{k}: armed to the end of play");
+                assert!(h.at < end, "{k}");
+            }
+            let sb = p.iter().find(|x| x.kind == "slots-below").unwrap();
+            assert!(
+                sb.at <= start + (end - start) * 6 / 10,
+                "slots-below by 60% of play"
+            );
+            let dp = p.iter().find(|x| x.kind == "defence-pool").unwrap();
+            assert!(sb.at <= dp.deadline);
+        }
+    }
+
+    /// W6T-4: the lag hold's origin is a transit in flight (state 1-2), not
+    /// a Province entry in state 3 (SettleDeparture clears those within
+    /// slots, so w6-s7 never saw one at a probe).
+    #[test]
+    fn lag_uses_transits_in_flight() {
+        let ad = Addresses::new(Address::new_from_array([7; 32]), 7);
+        let mut a = empty_province(0, 0);
+        let mut b = empty_province(1, 0);
+        a.region = 3;
+        b.region = 5;
+        a.entries[0].state = 1;
+        let ps = vec![a, b];
+        let none = Pending {
+            require: true,
+            ..Pending::default()
+        };
+        assert!(keys_for_pending("lag", &ad, &ps, &none, 10, 4, &[], &[]).is_none());
+        let fl = |p: i16, q: i16, arrive: u32, state: u8| InFlight {
+            origin: (p, q),
+            arrive_bell: arrive,
+            state,
+        };
+        let pending = Pending {
+            require: true,
+            in_flight: vec![
+                fl(1, 0, 14, 1),
+                fl(1, 0, 15, 2),
+                fl(0, 0, 13, 2),
+                fl(9, 9, 16, 1),
+            ],
+            ..Pending::default()
+        };
+        let (k, d) = keys_for_pending("lag", &ad, &ps, &pending, 10, 4, &[], &[]).unwrap();
+        assert_eq!(k, vec![ad.province(1, 0), ad.anchor(11, 5)]);
+        assert_eq!(d["province"], json!([1, 0]));
+        assert_eq!(d["in_flight"], 2);
+        // An origin that is not an opened Province is never picked.
+        let only_unknown = Pending {
+            require: true,
+            in_flight: vec![fl(9, 9, 16, 1)],
+            ..Pending::default()
+        };
+        assert!(keys_for_pending("lag", &ad, &ps, &only_unknown, 10, 4, &[], &[]).is_none());
+        // Holding transits: states 1 and 2 are in flight, 0 and 3 are not.
+        let mut t = fclient::decode::Transit::decode(&[0u8; 96]);
+        t.origin_p = 2;
+        t.origin_q = -1;
+        t.arrive_bell = 30;
+        let got: Vec<InFlight> = [0u8, 1, 2, 3]
+            .iter()
+            .flat_map(|s| {
+                let mut x = t;
+                x.state = *s;
+                in_flight_of(&[x])
+            })
+            .collect();
+        assert_eq!(got, vec![fl(2, -1, 30, 1), fl(2, -1, 30, 2)]);
     }
 
     #[test]
