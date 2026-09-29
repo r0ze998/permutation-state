@@ -912,7 +912,12 @@ pub fn honest_rule_refusals(by_rule: &Value, bots_unrevealed: &Value) -> Vec<Str
         .filter_map(|b| {
             Some((
                 (host(&b["host"])?, b["arrive"].as_u64()?),
-                b["persona"].as_str().unwrap_or("").to_string(),
+                // A garbage or bad-plaintext seal is persona traffic even
+                // without a persona name (W6T-3's `seal` field).
+                match b["seal"].as_str() {
+                    Some(s) if s != "honest" => format!("seal:{s}"),
+                    _ => b["persona"].as_str().unwrap_or("").to_string(),
+                },
             ))
         })
         .collect();
@@ -2277,6 +2282,11 @@ mod tests {
         let only_bounced = json!([{"host_id": "5", "arrive_bell": 9, "reason": "bounced"}]);
         assert!(honest_rule_refusals(&only_bounced, &Value::Null).is_empty());
         // Hex and decimal host ids match.
+        // W6T-3's format: persona null for the fleet, `seal`, host as a
+        // decimal string.
+        let u3 = json!([{"bot": 5, "persona": null, "seal": "honest", "host": "1231457318076419", "arrive": 366},
+                        {"bot": 6, "persona": null, "seal": "garbage", "host": "77", "arrive": 400}]);
+        assert_eq!(honest_rule_refusals(&by_rule, &u3).len(), 1);
         let hx = json!([{"host_id": "255", "arrive_bell": 9, "reason": "path"}]);
         let bx = json!([{"persona": "zero_tip", "host": "0xff", "arrive": 9}]);
         assert!(honest_rule_refusals(&hx, &bx).is_empty());

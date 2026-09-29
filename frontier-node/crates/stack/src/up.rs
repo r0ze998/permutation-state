@@ -1162,6 +1162,7 @@ async fn supervise(
     // Wave-5 review: the in-run viewer window is judged — the fold lag is
     // sampled once a second while it runs, as `load` does.
     let mut inrun_samples: Vec<crate::load::Sample> = vec![];
+    let mut inrun_window: Option<(u64, u64)> = None;
     let mut inrun_judged = false;
     let mut last_lag = Instant::now();
     let mut crashes = 0u32;
@@ -1429,6 +1430,7 @@ async fn supervise(
                 st.ports.herald,
                 &ps,
             );
+            let spawn_ms = run::wall_ms();
             match crate::load::spawn_viewers(
                 st,
                 st.cfg.viewers,
@@ -1438,6 +1440,10 @@ async fn supervise(
                 &plan,
             ) {
                 Ok(c) => {
+                    inrun_window = Some((
+                        spawn_ms,
+                        spawn_ms + ((game / scale).ceil().max(1.0) as u64) * 1_000,
+                    ));
                     st.run.event(
                         Some(now),
                         "viewers",
@@ -1466,7 +1472,7 @@ async fn supervise(
                 viewers = None;
                 if !inrun_judged {
                     inrun_judged = true;
-                    judge_in_run(st, &inrun_samples, now, s.code());
+                    judge_in_run(st, &inrun_samples, inrun_window, now, s.code());
                 }
             }
         }
@@ -1559,7 +1565,7 @@ async fn supervise(
             if let Some(mut c) = viewers.take() {
                 let code = c.wait().ok().and_then(|s| s.code());
                 if !inrun_judged {
-                    judge_in_run(st, &inrun_samples, now, code);
+                    judge_in_run(st, &inrun_samples, inrun_window, now, code);
                 }
             }
             if let Some(t) = end_season_task.take() {
@@ -1626,7 +1632,13 @@ async fn end_season_until_done(
 /// The in-run viewer window's verdict (§13.4 criterion 6): the generator's
 /// `load/in-run.json` judged with the fold lag sampled meanwhile, written
 /// to `load/in-run.verdict.json` (the report's criterion-6 evidence).
-fn judge_in_run(st: &Stack, samples: &[crate::load::Sample], now: i64, exit: Option<i32>) {
+fn judge_in_run(
+    st: &Stack,
+    samples: &[crate::load::Sample],
+    window: Option<(u64, u64)>,
+    now: i64,
+    exit: Option<i32>,
+) {
     let rep: Value = std::fs::read_to_string(st.run.path("load/in-run.json"))
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
@@ -1640,6 +1652,7 @@ fn judge_in_run(st: &Stack, samples: &[crate::load::Sample], now: i64, exit: Opt
             st.cfg.viewer_retry_budget_ms(),
             st.cfg.viewer_think_ms,
         ),
+        window,
     };
     let verdict = crate::load::judge(&rep, &lags, Some(&cov));
     let out = json!({"tag": "in-run", "window": "in-run", "criterion6_evidence": true,

@@ -226,6 +226,10 @@ pub struct Coverage {
     pub ws_viewers: u64,
     pub samples: Vec<Sample>,
     pub outages: Vec<(u64, u64)>,
+    /// The generator's run (wall ms): its start and start + `--seconds`
+    /// (its WS viewers close at the end while the pollers finish their
+    /// last think); `None`: the first and last sample.
+    pub window: Option<(u64, u64)>,
 }
 
 /// The herald outage windows of a run (wall ms), from `events.jsonl`: each
@@ -264,8 +268,12 @@ pub fn outage_windows(events: &[Value], retry_budget_ms: u64, think_ms: u64) -> 
 ///   criterion 6 fails.
 pub fn coverage_check(cov: &Coverage) -> Value {
     let inside = |t: u64| cov.outages.iter().any(|(a, b)| t >= *a && t <= *b);
-    let first = cov.samples.iter().map(|s| s.wall_ms).min().unwrap_or(0);
-    let last = cov.samples.iter().map(|s| s.wall_ms).max().unwrap_or(0);
+    let (first, last) = cov.window.unwrap_or_else(|| {
+        (
+            cov.samples.iter().map(|s| s.wall_ms).min().unwrap_or(0),
+            cov.samples.iter().map(|s| s.wall_ms).max().unwrap_or(0),
+        )
+    });
     let w = cov.ws_viewers;
     let (mut n, mut sum, mut in_outage, mut unanswered) = (0u64, 0f64, 0u64, 0u64);
     for s in &cov.samples {
@@ -567,6 +575,7 @@ pub async fn load(rd: &RunDir, viewers: usize, game_hours: f64) -> i32 {
     let think = c["viewer_flags"]["think_ms"].as_u64().unwrap_or(5_000);
     let follow = c["viewer_flags"]["follow_status"].as_bool().unwrap_or(true);
     let plan = viewer_plan(budget, think, follow, herald, &ps);
+    let spawn_ms = crate::run::wall_ms();
     let mut child = match spawn_with(&bin, rd, herald, stats, viewers, wall, bell, &tag, &plan) {
         Ok(c) => c,
         Err(e) => {
@@ -610,6 +619,7 @@ pub async fn load(rd: &RunDir, viewers: usize, game_hours: f64) -> i32 {
         ws_viewers: (viewers / 5) as u64,
         samples,
         outages: outage_windows(&rd.events(), budget, think),
+        window: Some((spawn_ms, spawn_ms + (wall.ceil().max(1.0) as u64) * 1_000)),
     };
     let verdict = judge(&rep, &lags, Some(&cov));
     // Wave-5 review: a load after `up` completed runs against a chain whose
@@ -754,6 +764,7 @@ mod tests {
             ws_viewers: 1_000,
             samples: s,
             outages: vec![],
+            window: None,
         };
         let v = judge(&clean(), &[0.4], Some(&cov));
         assert_eq!(v["pass"], false, "{v}");
@@ -765,6 +776,7 @@ mod tests {
             ws_viewers: 1_000,
             samples: samples(100, 1_000, |_| 0, |_| 0),
             outages: vec![],
+            window: None,
         };
         let v = judge(&clean(), &[0.4], Some(&cov));
         assert_eq!(v["pass"], true, "{v}");
@@ -778,8 +790,22 @@ mod tests {
             ws_viewers: 1_000,
             samples: s,
             outages: vec![(1_039_500, 1_045_500)],
+            window: None,
         };
         assert_eq!(judge(&clean(), &[0.4], Some(&cov))["ws_coverage_ok"], true);
+        // The generator's WS viewers close at its --seconds while its
+        // pollers finish: samples after the window end do not count.
+        let mut s = samples(44, 1_000, |_| 0, |_| 0);
+        for x in s.iter_mut().skip(37) {
+            x.ws_open = Some(0);
+        }
+        let cov = Coverage {
+            ws_viewers: 1_000,
+            samples: s,
+            outages: vec![],
+            window: Some((1_000_000, 1_036_000)),
+        };
+        assert_eq!(judge(&clean(), &[0.4], Some(&cov))["ws_coverage"], 1.0);
         // Sampled but never answered: not measured, not a pass.
         let mut s = samples(30, 1_000, |_| 0, |_| 0);
         for x in s.iter_mut() {
@@ -789,6 +815,7 @@ mod tests {
             ws_viewers: 1_000,
             samples: s,
             outages: vec![],
+            window: None,
         };
         assert_eq!(judge(&clean(), &[0.4], Some(&cov))["pass"], false);
     }
@@ -810,6 +837,7 @@ mod tests {
             ws_viewers: 1_000,
             samples: s,
             outages: vec![(1_049_000, 1_060_000)],
+            window: None,
         };
         let v = judge(&rep, &[0.4], Some(&cov));
         assert_eq!(v["pass"], true, "{v}");
@@ -835,6 +863,7 @@ mod tests {
             ws_viewers: 1_000,
             samples: s,
             outages: vec![(1_010_000, 1_020_000)],
+            window: None,
         };
         let v = judge(&rep, &[0.4], Some(&cov));
         assert_eq!(v["pass"], false, "{v}");
