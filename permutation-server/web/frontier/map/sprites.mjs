@@ -46,6 +46,36 @@ const SLOT_ANG = [270, 210, 330, 150, 30, 90].map((d) => (d * Math.PI) / 180);
 const SLOT_R = 0.46;
 /** Below this on-screen tile radius hosts are chips, not figures (LOD.md, tile S). */
 export const HOST_FIGURE_MIN_R = 35;
+/** Stance by its plaintext byte (0..3, rules stance.rs); fates 3 bounced, 4 retreated, 5 destroyed read as disarray. */
+export const ART_STANCES = Object.freeze(['hold', 'assault', 'flank', 'brace']);
+const BROKEN_FATES = new Set([3, 4, 5]);
+const roadBit = (mask, i) => { try { return mask !== undefined && mask !== null && ((BigInt(mask) >> BigInt(i)) & 1n) === 1n; } catch { return false; } };
+
+/** Axial hexes from a to b inclusive (cube lerp). */
+function hexLine(a, b) {
+  const n = Math.max(Math.abs(a.q - b.q), Math.abs(a.r - b.r), Math.abs(a.q + a.r - b.q - b.r));
+  const out = [];
+  for (let i = 0; i <= n; i++) {
+    const t = n ? i / n : 0;
+    const x = a.q + (b.q - a.q) * t + 1e-6, z = a.r + (b.r - a.r) * t + 1e-6, y = -x - z;
+    let rx = Math.round(x), rz = Math.round(z), ry = Math.round(y);
+    const dx = Math.abs(rx - x), dz = Math.abs(rz - z), dy = Math.abs(ry - y);
+    if (dx > dz && dx > dy) rx = -rz - ry; else if (dz > dy) rz = -rx - ry;
+    out.push({ q: rx, r: rz });
+  }
+  return out;
+}
+
+/** The edge (0..5) whose direction from (x, y) points closest to (tx, ty). */
+function edgeToward(x, y, tx, ty) {
+  let best = 3, dot = -Infinity;
+  EDGE_DIRS.forEach(([dq, dr], k) => {
+    const o = project(dq, dr);
+    const d = (o.x * (tx - x) + o.y * (ty - y)) / Math.hypot(o.x, o.y);
+    if (d > dot) { dot = d; best = k; }
+  });
+  return best;
+}
 
 export function artSize(r) {
   return ART_SIZES.find((s) => s.r >= r) ?? ART_SIZES[ART_SIZES.length - 1];
@@ -188,7 +218,7 @@ export class SpriteArt {
    * Tile LOD: the tiles of every entry {p, q, terrain, names, sites, rec, fog, selected} together.
    * An entry with fog 'unopened' (no terrain) is drawn as cloud sea.
    */
-  paint(ctx, entries, { zoom, dpr = 1, terrainAt = () => null, fogAt = () => null, selected = null, viewerFaction = null }) {
+  paint(ctx, entries, { zoom, dpr = 1, terrainAt = () => null, fogAt = () => null, selected = null, viewerFaction = null, demoRoads = false }) {
     const s = artSize(RADIUS * zoom * dpr);
     const k = RADIUS / s.r;
     const tiles = [];
@@ -209,8 +239,18 @@ export class SpriteArt {
           tier: m && m.state === 1 ? m.tier : 0, walls: !!(m && m.wallsCommitted > 0),
           camp: !!(e.prov?.camp?.state === 1 && e.prov.camp.tile === i && j === undefined),
           shield: !!(m && m.shieldUntilBell > 0 && m.shieldUntilBell !== 0xffffffff && m.shieldUntilBell >= (e.prov?.resolvedNext ?? 0)) };
+        t.road = !cloud && SITE_LAND.has(name) && roadBit(e.prov?.roadMask, i);
         tiles.push(t);
         byHex.set(keyOf(h.q, h.r), t);
+      }
+    }
+    // preview only (?roads=1): a sample road from every held site to its nearest other site, when the account has none
+    if (demoRoads) for (const e of entries) {
+      if (!e.prov || BigInt(e.prov.roadMask ?? 0) !== 0n) continue;
+      const mine = tiles.filter((t) => t.p === e.p && t.pq === e.q && t.site !== undefined);
+      for (const a of mine.filter((t) => t.state === 1)) {
+        const b = mine.filter((t) => t !== a).sort((u, v) => Math.hypot(u.x - a.x, u.y - a.y) - Math.hypot(v.x - a.x, v.y - a.y))[0];
+        if (b) for (const h of hexLine(a, b)) { const t = byHex.get(keyOf(h.q, h.r)); if (t && SITE_LAND.has(t.name)) t.road = true; }
       }
     }
     tiles.sort((a, b) => a.y - b.y || a.x - b.x);
@@ -244,6 +284,14 @@ export class SpriteArt {
         if (t.name === 'water' && nb !== 'water') { const o = this.image('overlays', s.key, `shore_${e}`); if (o) draw(o, t); }
         else if (t.name !== 'water' && nb === 'water') { const o = this.image('overlays', s.key, `beach_${e}`); if (o) draw(o, t); }
       });
+      if (t.road) {
+        const pre = `${t.name}_${t.v}`;
+        EDGE_DIRS.forEach(([dq, dr], e) => {
+          const nb = byHex.get(keyOf(t.q + dq, t.r + dr));
+          if (nb?.road) { const o = this.image('roads', s.key, `${pre}_${e}`); if (o) draw(o, t); }
+        });
+        const c = this.image('roads', s.key, `${pre}_c`); if (c) draw(c, t);
+      }
       const f = ownerAt(t.q, t.r);
       if (f !== undefined) {
         const o = this.image('factions', s.key, `wash_${ART_FACTIONS[f]}`); if (o) draw(o, t);
@@ -289,18 +337,43 @@ export class SpriteArt {
     for (const e of entries) {
       if (!e.prov?.entries || e.fog === 'unopened') continue;
       const byTile = new Map();
+      const hidden = (f) => (e.fog === 'known' || e.fog === 'distant') && f !== viewerFaction;
+      const push = (tile, h) => { if (!byTile.has(tile)) byTile.set(tile, []); byTile.get(tile).push(h); };
+      // the last resolved clash: survivors keep the stance they fought in, broken arrivals show as disarray
+      const last = new Map();
+      for (const a of e.clash?.arrivals ?? []) if (a.present) last.set(String(a.hostId), a);
+      const resident = new Set();
       for (const h of e.prov.entries) {
         if (h.state !== 1 && h.state !== 2) continue;
-        if ((e.fog === 'known' || e.fog === 'distant') && h.faction !== viewerFaction) continue;
-        if (!byTile.has(h.tile)) byTile.set(h.tile, []);
-        byTile.get(h.tile).push(h);
+        if (hidden(h.faction)) continue;
+        const a = last.get(String(h.id));
+        resident.add(String(h.id));
+        push(h.tile, { faction: h.faction, stance: a ? ART_STANCES[a.stance] ?? 'hold' : 'hold' });
+      }
+      for (const a of last.values()) {
+        if (resident.has(String(a.hostId)) || !BROKEN_FATES.has(a.fate) || hidden(a.faction)) continue;
+        push(a.tile, { faction: a.faction, stance: 'disarray' });
+      }
+      // arrivals of the latest bell that are not resolved yet: their revealed stance
+      const pend = e.pending;
+      if (pend && !pend.resolvedTs) for (const a of pend.arrivals ?? []) {
+        if (!a.present || hidden(a.faction) || resident.has(String(a.hostId))) continue;
+        push(a.tile, { faction: a.faction, stance: ART_STANCES[a.stance] ?? 'hold', arriving: true });
       }
       for (const [idx, list] of byTile) {
         const hx = tileHex(e.p, e.q, idx);
         const c = project(hx.q, hx.r);
+        // assault and flank face the nearest hex held by another faction (else the province centre)
+        const foes = tiles.filter((u) => u.p === e.p && u.pq === e.q && u.state === 1 && u.owner < 6);
         list.slice(0, 6).forEach((h, n) => {
           const x = c.x + SLOT_R * Math.cos(SLOT_ANG[n]) * RADIUS, y = c.y - SLOT_R * Math.sin(SLOT_ANG[n]) * FLATTEN * RADIUS;
-          hosts.push({ x, y, h, cx: c.x, cy: c.y, n, count: list.length });
+          let facing = null;
+          if (h.stance === 'assault' || h.stance === 'flank') {
+            const f = foes.filter((u) => u.owner !== h.faction).sort((u, v) => Math.hypot(u.x - c.x, u.y - c.y) - Math.hypot(v.x - c.x, v.y - c.y))[0];
+            const pc = provincePixel(e.p, e.q);
+            facing = f && (f.x !== c.x || f.y !== c.y) ? edgeToward(c.x, c.y, f.x, f.y) : edgeToward(c.x, c.y, pc.x, pc.y);
+          }
+          hosts.push({ x, y, h, cx: c.x, cy: c.y, n, count: list.length, facing });
         });
       }
     }
@@ -310,7 +383,8 @@ export class SpriteArt {
       const hs = HOST_SIZES[hk];
       const kk = RADIUS / (hk === '@2x' ? 88 : 44);
       for (const o of hosts) {
-        const img = this.image('hosts', hk, `${ART_FACTIONS[o.h.faction] ?? 'ember'}_hold`);
+        const st = o.h.stance ?? 'hold';
+        const img = this.image('hosts', hk, `${ART_FACTIONS[o.h.faction] ?? 'ember'}_${st}${o.facing === null || o.facing === undefined ? '' : `_${o.facing}`}`);
         if (img) ctx.drawImage(img, o.x - hs.ax * kk, o.y - hs.ay * kk + TOP_LIFT, hs.w * kk, hs.h * kk);
       }
     } else {

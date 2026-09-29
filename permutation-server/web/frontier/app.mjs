@@ -28,6 +28,29 @@ import { createTerrain } from './map/terrain.mjs';
 import { provincePixel } from './map/layers.mjs';
 
 const ART_PREVIEW = new URLSearchParams(globalThis.location?.search ?? '').get('art') === '1';
+// ?art=1&roads=1 adds sample roads between sites where the account has none (presentation only).
+const ART_ROADS = ART_PREVIEW && new URLSearchParams(globalThis.location?.search ?? '').get('roads') === '1';
+/**
+ * Art mode: the ClashInputs of each province's last resolved clash (its /h/clash report), loaded once:
+ * the resolve summary's bell, else the three bells before the envelope's.
+ */
+const artClash = new Map();
+function artClashOf(p, q) {
+  const env = FS.provinces.get(`${p},${q}`);
+  if (!env || !heraldRef) return null;
+  const key = `${p},${q}`;
+  if (artClash.has(key)) return artClash.get(key);
+  artClash.set(key, null);
+  const rb = env.province?.resolveSummary?.bell;
+  const bells = rb ? [rb] : [env.bell - 1, env.bell - 2, env.bell - 3].filter(b => b > 0);
+  (async () => {
+    for (const b of bells) {
+      const r = await heraldRef.clash(p, q, b).catch(() => null);
+      if (r?.ok && r.inputs) { artClash.set(key, r.inputs); map?.invalidate(); return; }
+    }
+  })();
+  return null;
+}
 // ?art=1&fog=1 previews the fog as if the viewer held province (2,0) (presentation only).
 const ART_FOG = ART_PREVIEW && new URLSearchParams(globalThis.location?.search ?? '').get('fog') === '1';
 import * as joinScreen from './screens/join.mjs';
@@ -369,6 +392,9 @@ export async function boot() {
         return { overviews: FS.overviews, ringsOpen: FS.record?.rings?.length ?? 1, own, known: new Set([...own.map(o => `${o.p},${o.q}`), ...(ART_FOG ? ['-1,0', '-1,1', '0,-2', '-2,1'] : [])]), showAll: (ART_PREVIEW && !ART_FOG) || !FS.view.fog, selected: FS.selected, terrainOf,
           // art mode: the decoded Province (holdings' tiers, hosts on tiles, camp), loaded on demand
           viewerFaction: ART_FOG ? 0 : FS.citizen?.faction ?? null,
+          demoRoads: ART_ROADS,
+          clashOf: ART_PREVIEW ? artClashOf : undefined,
+          pendingOf: ART_PREVIEW ? (p, q) => FS.provinces.get(`${p},${q}`)?.inputs ?? null : undefined,
           provinceOf: ART_PREVIEW ? (p, q) => { const env = FS.provinces.get(`${p},${q}`); if (!env) wantProvince(p, q, () => map?.invalidate()); return env?.province ?? null; } : undefined };
       },
       onSelect: hit => {
