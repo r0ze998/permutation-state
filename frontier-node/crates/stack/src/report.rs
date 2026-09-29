@@ -789,13 +789,16 @@ pub fn loadavg_summary(samples: &[Value]) -> Value {
 /// stretch inside a bell is normal (counted, not listed). From the verify
 /// input's landed transactions after genesis, each with the chaos kills or
 /// crashes of the chain inside it (a killed localnet makes no slots, so a
-/// gap there has its reason).
+/// gap there has its reason). Bells from `end_bell` on owe no anchor (the
+/// drain), so their starts are not stalls (counted separately).
+#[allow(clippy::too_many_arguments)]
 pub fn no_landing_windows(
     txs: &[TxRecord],
     genesis_ts: i64,
     bell_secs: i64,
     slot_secs: f64,
     min_slots: u64,
+    end_bell: i64,
     events: &[Value],
 ) -> Value {
     let mut pts: Vec<(u64, i64)> = txs
@@ -808,7 +811,7 @@ pub fn no_landing_windows(
     let bs = bell_secs.max(1);
     let bell = |t: i64| (t - genesis_ts).max(0) / bs;
     let mut out = vec![];
-    let mut quiet = 0usize;
+    let (mut quiet, mut drain) = (0usize, 0usize);
     for w in pts.windows(2) {
         let ((s0, t0), (s1, t1)) = (w[0], w[1]);
         let empty = s1 - s0 - 1;
@@ -828,6 +831,10 @@ pub fn no_landing_windows(
             quiet += 1;
             continue;
         }
+        if k >= end_bell {
+            drain += 1;
+            continue;
+        }
         let why: Vec<String> = events
             .iter()
             .filter(|e| {
@@ -841,7 +848,8 @@ pub fn no_landing_windows(
             "slots_after_bell_start": after, "bell_started": k,
             "from_bell": bell(t0), "to_bell": bell(t1), "game_from": t0, "game_to": t1, "explained_by": why}));
     }
-    json!({"min_slots": min_slots, "windows": out, "quiet_windows_inside_a_bell": quiet})
+    json!({"min_slots": min_slots, "windows": out, "quiet_windows_inside_a_bell": quiet,
+        "drain_windows_after_end_bell": drain})
 }
 
 /// Whether the run is exit-grade as an environment (W6T-4, §13.4): every
@@ -1514,7 +1522,15 @@ pub async fn report(rd: &RunDir) -> i32 {
     let fails = failures(&inp.txs, &program);
     let fclasses = failure_classes(&fails);
     let load_avg = loadavg_summary(&read_jsonl(&rd.path("metrics/loadavg.jsonl")));
-    let no_landing = no_landing_windows(&inp.txs, genesis, bell_secs, 0.4 * scale, 20, &events);
+    let no_landing = no_landing_windows(
+        &inp.txs,
+        genesis,
+        bell_secs,
+        0.4 * scale,
+        20,
+        st["season"]["end_bell"].as_i64().unwrap_or(i64::MAX),
+        &events,
+    );
     let above_cap: Vec<Value> = rd
         .events()
         .iter()
@@ -1798,9 +1814,10 @@ pub fn markdown(r: &Value) -> String {
         .cloned()
         .unwrap_or_default();
     m.push_str(&format!(
-        "- no landed transaction for ≥ 20 slots after a bell started: {} windows ({} quiet stretches inside a bell not listed)\n",
+        "- no landed transaction for ≥ 20 slots after a bell started: {} windows ({} quiet stretches inside a bell and {} drain gaps after end_bell not listed)\n",
         nl.len(),
-        f(&r["no_landing_windows"]["quiet_windows_inside_a_bell"])
+        f(&r["no_landing_windows"]["quiet_windows_inside_a_bell"]),
+        f(&r["no_landing_windows"]["drain_windows_after_end_bell"])
     ));
     for w in nl.iter().take(20) {
         m.push_str(&format!(
@@ -2430,7 +2447,7 @@ mod tests {
         let ev = vec![
             json!({"event": "chaos-kill", "game": g + 1_050 * 8, "detail": {"component": "localnet"}}),
         ];
-        let w = no_landing_windows(&txs, g, 600, 8.0, 20, &ev);
+        let w = no_landing_windows(&txs, g, 600, 8.0, 20, i64::MAX, &ev);
         assert_eq!(w["quiet_windows_inside_a_bell"], 1, "{w}");
         let a = w["windows"].as_array().unwrap();
         assert_eq!(a.len(), 2, "{w}");
@@ -2445,6 +2462,11 @@ mod tests {
         assert_eq!(a[0]["explained_by"], json!([]));
         assert_eq!(a[1]["slots"], 100);
         assert_eq!(a[1]["explained_by"], json!(["chaos-kill localnet"]));
+        // From end_bell on (the drain) a bell start owes no anchor (U4 R5:
+        // five 80-slot drain gaps were listed).
+        let w = no_landing_windows(&txs, g, 600, 8.0, 20, 13, &ev);
+        assert_eq!(w["windows"].as_array().unwrap().len(), 1, "{w}");
+        assert_eq!(w["drain_windows_after_end_bell"], 1);
     }
 
     /// W6T-4: a skipped hold makes the run not exit-grade (reported as
