@@ -1,4 +1,4 @@
-//! Tamper classes T1–T22 (contract §8.5): each builds a tampered copy of a
+//! Tamper classes T1–T22 and T24 (contract §8.5; T24 W6T-3): each builds a tampered copy of a
 //! recorded fixture that **must FAIL with the named code**, and — built
 //! with the `mutate-<check>` feature that disables the check it targets —
 //! must then PASS (the checks of the checks; `tests/tamper.rs`,
@@ -1193,6 +1193,65 @@ pub fn t01b(land: &Input) -> Made {
     })
 }
 
+/// T24 (W6T-3, the w6-s7 triage): a DEPART arriving at `end_bell`. The
+/// consistent forger of a season whose program let a march arrive at the
+/// season end (§5.11 Depart step 4, v1.12): CreateSeason's `end_bell` is
+/// lowered to the latest landed DEPART's arrival bell, and the announce
+/// and created params hashes, the Season account's `END_BELL` and
+/// `PARAMS_HASH` in every post-state and final follow (re-chained), so
+/// only V5's `ArrivalAfterEnd` sees it.
+pub fn t24(run: &Input) -> Made {
+    use frontier_abi::layout::world::season as SE;
+    use frontier_abi::presets::{self, SEASON_PARAMS_LEN};
+    let mut inp = run.clone();
+    let (w, f) = world(&inp);
+    let ct = f.create_tx.need("a CreateSeason")?;
+    let mut params = f.params.need("a CreateSeason with parameters")?;
+    let arrive = w
+        .of(Kind::DEPART)
+        .map(|r| r.pu32("arrive_bell"))
+        .max()
+        .need("a Depart")?;
+    params.end_bell = arrive;
+    let raw: [u8; SEASON_PARAMS_LEN] = params.to_bytes();
+    let h = presets::params_hash(&raw, &f.payout);
+    edit_ix(&mut inp, ct, Ix::CreateSeason, |d| {
+        d[1..1 + SEASON_PARAMS_LEN].copy_from_slice(&raw)
+    });
+    for kind in [Kind::ANNOUNCE, Kind::SEASON_CREATED] {
+        let (t, i) = *find(&inp, kind).first().need(kind.name())?;
+        let (o, n) = field(kind, "params_hash");
+        edit_payload(&mut inp, t, i, |p| p[o..o + n].copy_from_slice(&h));
+    }
+    let sk = f.ctx.season;
+    let patch = |d: &mut Vec<u8>| {
+        if d.len() >= SE::SIZE {
+            d[SE::END_BELL..SE::END_BELL + 4].copy_from_slice(&arrive.to_le_bytes());
+            d[SE::PARAMS_HASH..SE::PARAMS_HASH + 32].copy_from_slice(&h);
+        }
+    };
+    for t in inp.txs.iter_mut() {
+        for (k, a) in t.post.iter_mut() {
+            if k.to_bytes() == sk {
+                if let Some(a) = a.as_mut() {
+                    patch(&mut a.data);
+                }
+            }
+        }
+    }
+    if let Some(Some(a)) = inp.finals.get_mut(&sk) {
+        patch(&mut a.data);
+    }
+    rechain(&mut inp);
+    Ok(Case {
+        class: "T24",
+        what: "DEPART arriving at end_bell",
+        feature: Some("mutate-v5"),
+        codes: &[ARRIVAL_AFTER_END],
+        input: inp,
+    })
+}
+
 /// T23 (integ-W4 review, W4-D major): a resolve's **write-back** forged —
 /// +25,000 milli-troops written to a resident in the last CLASH's Province
 /// post-state (and every later state of it, and the final). The digests,
@@ -1661,7 +1720,7 @@ pub struct Class {
     pub tries: Vec<(&'static str, Builder)>,
 }
 
-/// T1–T22 (§8.5, required) and the extra checks of the checks (T1b, T6b,
+/// T1–T22 and T24 (§8.5, required) and the extra checks of the checks (T1b, T6b,
 /// T23, T23b, H1, V9a) over **one** run — a stack run, a nightly, a
 /// recorded fixture.
 pub fn classes() -> Vec<Class> {
@@ -1721,6 +1780,7 @@ pub fn classes() -> Vec<Class> {
         ),
         c("T21", true, vec![("explore find", t21)]),
         c("T22", true, vec![("bad seal logged as surviving", t22)]),
+        c("T24", true, vec![("DEPART arriving at end_bell", t24)]),
         c("T1b", false, vec![("drop an unchained transaction", t01b)]),
         c("T6b", false, vec![("rogue write between resolves", t06b)]),
         c("T23", false, vec![("forged clash write-back", t23)]),
@@ -2118,6 +2178,7 @@ pub fn all(land: &Input, march: &Input, program: &Input) -> Vec<Case> {
         (march, t20),
         (march, t21),
         (march, t22),
+        (program, t24),
         (land, v9a),
     ];
     tries

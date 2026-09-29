@@ -1,4 +1,4 @@
-//! Tamper classes T1–T22 (contract §8.5): each MUST FAIL with its code on
+//! Tamper classes T1–T22 and T24 (contract §8.5; T24 W6T-3): each MUST FAIL with its code on
 //! the recorded fixtures; built with the `mutate-<check>` feature of the
 //! check it targets it must PASS instead (the checks of the checks,
 //! `mutate.sh` builds each feature and runs these tests).
@@ -153,12 +153,13 @@ tamper_test!(tamper_t19_tampered_terrain_digest, t19, land);
 tamper_test!(tamper_t20_defence_claim_above_the_formula, t20, march);
 tamper_test!(tamper_t21_tampered_explore_find, t21, march);
 tamper_test!(tamper_t22_bad_seal_logged_as_surviving, t22, march);
+tamper_test!(tamper_t24_depart_arriving_at_end_bell, t24, march);
 
 /// Every class of §8.5 has a case, each with a `mutate-` feature.
 #[test]
 fn tamper_classes_are_complete() {
     let cases = tamper::all(&land(), &march(), &march_program());
-    for n in 1..=22 {
+    for n in (1..=22).chain([24]) {
         let c = format!("T{n}");
         assert!(cases.iter().any(|x| x.class == c), "{c} missing");
     }
@@ -284,9 +285,14 @@ tamper_test!(
     march_program
 );
 tamper_test!(tamper_program_v9a_non_canonical_address, v9a, march_program);
+tamper_test!(
+    tamper_program_t24_depart_arriving_at_end_bell,
+    t24,
+    march_program
+);
 
 /// The suite over one run (`frontier-verify tamper`, the stack's `tamper`;
-/// W5-D): on the program's recording every required class T1–T22 is
+/// W5-D): on the program's recording every required class T1–T22, T24 is
 /// built (fallbacks where the run lacks the fixture's selection) and
 /// FAILS with its code. In a `mutate-<check>` build, exactly the classes
 /// of the disabled check are missed. `VERIFY_RUN=<fixture>` runs it over
@@ -345,7 +351,9 @@ fn suite_on(run: &verify_core::Input) {
         );
     }
     let required = rep.outcomes.iter().filter(|o| o.required).count();
-    assert_eq!(required, 22);
+    // T1–T22 and T24 (W6T-3); with the 7 extra classes, 30 in all.
+    assert_eq!(required, 23);
+    assert_eq!(rep.outcomes.len(), 30);
     if !MUTATED {
         assert!(rep.all_detected());
         assert_eq!(rep.exit_code(), verify_core::EXIT_PASS);

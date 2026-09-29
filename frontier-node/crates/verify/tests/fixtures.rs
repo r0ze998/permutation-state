@@ -173,25 +173,31 @@ fn march_synth_passes() {
         outcomes.iter().any(|x| x.1 == 5),
         "the bad plaintext's code 5"
     );
-    // W6-C (W5-C F4): only the rout is a liveness warning; the refused
-    // arrival settled bounced-unranked (no loss by rule) is listed apart.
-    assert_eq!(r.liveness.valid_unrevealed.len(), 1, "the rout");
+    // W6-C (W5-C F4): the refused arrival settled bounced-unranked (no
+    // loss by rule) is listed apart. W6T-3: V5 now judges §5.11 step 6 on
+    // the post-states, and the synthetic generator's plaintexts carry a
+    // one-step placeholder path (its model program never checked step 6),
+    // so the low-tip rout is a march the real program could never have
+    // revealed (`path`), not a liveness miss. The liveness warning of a
+    // rout the rules allowed is `march_program_passes`' (the program's own
+    // recording) and `unshielded_rout_stays_a_liveness_warning`'s.
+    assert!(r.liveness.valid_unrevealed.is_empty(), "{:?}", r.liveness);
     assert_eq!(
         r.liveness
             .unrevealed_by_rule
             .iter()
-            .map(|x| x.2)
+            .map(|x| (x.outcome, x.reason))
             .collect::<Vec<_>>(),
-        vec![o::BOUNCED_UNRANKED],
-        "the refused arrival, bounced by rule"
+        vec![(o::ROUTED, "path"), (o::BOUNCED_UNRANKED, "bounced")],
+        "the low-tip rout (placeholder path) and the refused arrival, bounced by rule"
     );
     assert_eq!(
         r.findings
             .iter()
             .filter(|f| f.code == "ValidSealUnrevealed")
             .count(),
-        1,
-        "one warning"
+        0,
+        "no warning"
     );
     assert!(
         w.txs.iter().any(|t| !t.ok && t.code == Some(34)),
@@ -271,4 +277,153 @@ fn cli_exit_codes() {
     );
     assert_eq!(run(&["--fixture", "/nonexistent/fixture.json"]), Some(2));
     let _ = std::fs::remove_dir_all(&out);
+}
+
+// ------------------------------------------------ W6T-3: rule refusals
+
+/// The w6-s7 slice of host 1909855992414208 (bot 987, `honest`): two valid
+/// seals, arrivals 394 and 552, whose every Reveal the program refused
+/// `Shielded` (§5.11 step 6: the host's own holding was inside its 48-h
+/// founding shield and the destination was another faction's holding
+/// site), both settled ROUTED. Cut by `examples/march_slice.rs` from
+/// `w6-s7/verify/input.json.gz` with all of the host's failed Reveals (six,
+/// one of another march of the host).
+const SHIELDED_HOST: u64 = 1_909_855_992_414_208;
+
+fn shielded() -> verify_core::Input {
+    fixture("w6s7-shielded-march.json.gz")
+}
+
+/// The failed Reveal attempts the report gives the march `(host, arrive)`,
+/// wherever it lists it (the warning's signatures, or the by-rule count).
+fn attempts_of(j: &serde_json::Value, host: u64, arrive: u32) -> Option<usize> {
+    let l = &j["liveness"];
+    let hit = |x: &&serde_json::Value| {
+        x["host_id"] == host.to_string() && x["arrive_bell"] == arrive
+    };
+    l["valid_unrevealed"]
+        .as_array()?
+        .iter()
+        .find(hit)
+        .and_then(|x| x["attempts"].as_array().map(|a| a.len()))
+        .or_else(|| {
+            l["unrevealed_by_rule"]
+                .as_array()?
+                .iter()
+                .find(hit)
+                .and_then(|x| x["failed_attempts"].as_u64().map(|n| n as usize))
+        })
+}
+
+/// Failing first on 7dcacdf: the attempts were counted per host (6 for
+/// each march of the host), not per march (2 and 3: keeper A once or
+/// twice in one slot, keeper B about 75 slots later).
+#[test]
+fn failed_attempts_counted_per_march() {
+    let j = verify_core::verify(&shielded()).json();
+    assert_eq!(attempts_of(&j, SHIELDED_HOST, 394), Some(2), "{}", j["liveness"]);
+    assert_eq!(attempts_of(&j, SHIELDED_HOST, 552), Some(3), "{}", j["liveness"]);
+}
+
+/// A valid seal refused `Shielded` by rule is not a liveness miss: it is
+/// listed in `unrevealed_by_rule` with the reason judged from the
+/// post-states, and no `ValidSealUnrevealed` is raised.
+#[test]
+fn shielded_refused_march_is_unrevealed_by_rule() {
+    use frontier_abi::log::transit_outcome as o;
+    let r = verify_core::verify(&shielded());
+    assert!(r.liveness.valid_unrevealed.is_empty(), "{:?}", r.liveness);
+    let got: Vec<_> = r
+        .liveness
+        .unrevealed_by_rule
+        .iter()
+        .map(|x| (x.host, x.arrive, x.outcome, x.reason, x.failed_attempts))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            (SHIELDED_HOST, 394, o::ROUTED, "shielded-own", 2),
+            (SHIELDED_HOST, 552, o::ROUTED, "shielded-own", 3),
+        ]
+    );
+    assert!(!r.findings.iter().any(|f| f.code == "ValidSealUnrevealed"));
+    let j = r.json();
+    assert_eq!(j["liveness"]["unrevealed_by_reason"]["shielded-own"], 2);
+    assert_eq!(j["liveness"]["unrevealed_by_rule"][0]["reason"], "shielded-own");
+}
+
+/// The check of the check: with the host's own shield lapsed in the
+/// archived Holding (and the destination unshielded), nothing refuses the
+/// Reveals by rule, so both routs are liveness warnings again.
+#[test]
+fn unshielded_rout_stays_a_liveness_warning() {
+    use frontier_abi::layout::player::holding as H;
+    let mut inp = shielded();
+    let w = verify_core::world::World::parse(&inp.cfg.program, &inp.txs, Default::default(), 0);
+    let f = verify_core::facts::Facts::build(&w, &inp.cfg);
+    let hk = f.ctx.holding_of_host(SHIELDED_HOST).expect("host id");
+    let mut n = 0;
+    for t in inp.txs.iter_mut() {
+        for (k, a) in t.post.iter_mut() {
+            if k.to_bytes() == hk {
+                if let Some(a) = a.as_mut() {
+                    a.data[H::SHIELD_UNTIL..H::SHIELD_UNTIL + 8].copy_from_slice(&0i64.to_le_bytes());
+                    n += 1;
+                }
+            }
+        }
+    }
+    assert!(n > 0, "the Holding's writers are in the slice");
+    let r = verify_core::verify(&inp);
+    assert!(r.liveness.unrevealed_by_rule.is_empty(), "{:?}", r.liveness);
+    assert_eq!(
+        r.findings
+            .iter()
+            .filter(|f| f.code == "ValidSealUnrevealed")
+            .count(),
+        2
+    );
+}
+
+/// Sets the synthetic season's `end_bell` in CreateSeason's data only (the
+/// announce hash then disagrees too; this test reads V5's code alone).
+fn with_end_bell(inp: &verify_core::Input, end: u32) -> verify_core::Input {
+    use frontier_abi::presets::SEASON_PARAMS_LEN;
+    use frontier_abi::tags::Ix;
+    let mut inp = inp.clone();
+    let w = verify_core::world::World::parse(&inp.cfg.program, &inp.txs, Default::default(), 0);
+    let f = verify_core::facts::Facts::build(&w, &inp.cfg);
+    let mut p = f.params.expect("CreateSeason");
+    p.end_bell = end;
+    let raw = p.to_bytes();
+    verify_core::tamper::edit_ix(&mut inp, f.create_tx.unwrap(), Ix::CreateSeason, |d| {
+        d[1..1 + SEASON_PARAMS_LEN].copy_from_slice(&raw)
+    });
+    inp
+}
+
+/// W6T-3 (w6-s7 criterion 1): a landed DEPART whose arrival bell is at or
+/// after `end_bell` is a FAIL (`ArrivalAfterEnd`, §5.11 Depart step 4
+/// v1.12), one finding per such DEPART; an arrival at `end_bell − 1` is
+/// not.
+#[test]
+fn arrival_after_end_is_fail() {
+    let inp = march();
+    let w = verify_core::world::World::parse(&inp.cfg.program, &inp.txs, Default::default(), 0);
+    let arrivals: Vec<u32> = w.of(Kind::DEPART).map(|r| r.pu32("arrive_bell")).collect();
+    let last = *arrivals.iter().max().expect("departures");
+    let at_last = arrivals.iter().filter(|&&a| a == last).count();
+    let r = verify_core::verify(&with_end_bell(&inp, last));
+    assert_eq!(r.verdict, Verdict::Fail);
+    let hits: Vec<_> = r
+        .findings
+        .iter()
+        .filter(|f| f.code == "ArrivalAfterEnd")
+        .collect();
+    assert_eq!(hits.len(), at_last, "{}", show(&r));
+    assert!(hits.iter().all(|f| f.fail() && f.entity.starts_with("host ")));
+    let r = verify_core::verify(&with_end_bell(&inp, last + 1));
+    assert!(!r.fails_with("ArrivalAfterEnd"), "{}", show(&r));
+    // The recorded season (end_bell far away) has none.
+    assert!(!verify_core::verify(&inp).fails_with("ArrivalAfterEnd"));
 }
