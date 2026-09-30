@@ -34,8 +34,8 @@ Machine load average (1 min, sampled each bell): p50 4.73, p99 8.76, max 11.24 (
 | scale, days, bots | 20×, 7 game days (1,008 bells + 26 drain), 1,000 bots with the 13 personas (5 bots each) |
 | keepers A and B, ≥ 150 reveal payers, ≥ 32 delay payers, ≥ 4 funders | both: reveal effective N 150 (floor 215,076,060 lamports), delay 32, funders 4; keeper B with `backup_delay_slots = 8` |
 | chaos: `kill -9` a random component every 2–6 game hours, restart after 0–60 game seconds | 43 kills, 43 restarts, 0 crashes: keeper-b 10, localnet 8, bots 6, herald 6, keeper-a 6, relay 4, drand-replay 3 |
-| every adversary hold fires (v1.12) | all 9 kinds fired (14 windows): ticket, frontier-fund, slots-below ×6 (1,900 milli; 5 re-arms before a claim opened), defence-pool, slots-above, anchor, keeper-payers, lag, relay-payers; none `hold-skipped` |
-| 5,000 viewers (4,000 polling, 1,000 WS) for 24 game hours | from game hour 1 to 25; 2 herald kills inside the window (2 outage windows) |
+| every adversary hold fires (v1.12) | all 9 kinds fired (14 windows): ticket, frontier-fund, slots-below ×6 (1,900 milli; 5 re-arms before a claim opened), defence-pool, slots-above, anchor, keeper-payers, lag, relay-payers; none `hold-skipped`. `slots-above` and `anchor` found no pending write (0 writes of their keys inside or after the window; `criteria.md` note 2, F-A6), so they fired but held nothing observable |
+| 5,000 viewers (4,000 polling, 1,000 WS) for 24 game hours | simulated by the `frontier-viewers` load generator (not people or browsers); from game hour 1 to 25 (≈ 1 h 12 min real); 2 herald kills inside the window (2 outage windows) |
 | ports 41000–41999 | 41000–41099 (localnet 41010/41011, drand-replay 41020, relay 41030/41033, herald 41040, keepers 41050/41051, bots 41070, viewers 41075) |
 
 ## §13.4 criteria
@@ -57,7 +57,7 @@ The table the report decided (`criteria.md` has it with the numbers; the full re
 
 ## Personas (criterion 5; the fleet's 7 lifetimes merged)
 
-Observed locally: forger, late_revealer, settle_racer, spammer, zero_tip. Judged by the chain (verify and criteria 4, 8, 9), each exercised: bad_plaintext (9 Departs, 18 `BadPlaintext` Reveal refusals, 9 transits settled bad-seal code 5), double_arrival (14 Departs), garbage_seal (4 Departs), min_tip (17 Departs), prefunder, self_tip, squatter, ticket_holder. Violated: none. No honest march refused by rule.
+Observed locally: forger, late_revealer, settle_racer, spammer, zero_tip. Judged by the chain (verify and criteria 4, 8, 9), each exercised: bad_plaintext (9 Departs, 18 `BadPlaintext` Reveal refusals, 9 transits settled bad-seal code 5), double_arrival (14 Departs), garbage_seal (4 Departs), min_tip (17 Departs; all 17 revealed by the keepers and settled, `criteria.md` note 1), prefunder, self_tip, squatter, ticket_holder. Violated: none. No honest march refused by rule.
 
 ## Reported, not gating
 
