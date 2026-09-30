@@ -1,0 +1,18 @@
+# m1-exit: the §13.4 criteria table
+
+As `frontier-stack report --run-id m1-exit` decided them (`report.md` §"§13.4 criteria decided" and its JSON block), with the figures each decision rests on. Contract v1.13 §13.4 as amended (A1–A3, O-M1-26; v1.13 A1 and criteria 5/8 rules), judged as written (O-M1-28 (a), O-M1-29 unchanged: DECISIONS T4, T5).
+
+| # | criterion (short) | status | figures |
+|---|---|---|---|
+| 1 | season reaches `end_bell`, EndSeason lands, nothing stuck or unsettled within 2 game hours | **pass** | EndSeason landed (1 attempt); stuck province-bells 0; due transits 1,712, unsettled 0, each settled exactly once; ClashInputs 21,674 open, all closable after grace, 0 pending, 0 blocked |
+| 2 | max CU per kind in play ≤ its §5.5 budget; Reveal distribution reported | **pass** | no kind over budget (35 kinds landed); Reveal n 1,694, whole-transaction p50 19,389 / p90 21,688 / p99 22,951 / max 24,050 (budget 26,000; limit 26,500); ResolveFromInputs max 50,984 (gate 290,000); SkipQuiet max 67,141 |
+| 3 | keeper latencies at 20× in slots; catch-up ≤ 6 SkipQuiet per idle province-day | **pass** | round → anchor p99 **1** (target 2; n 16,128; max 154); S → first cache p99 **1** (2; max 145); anchor → last valid reveal p99 **1** (4; n 1,665; max 4); S → resolve p99 **3** (8; n 21,674; max 1,720); close → resolve p99 11 reported; idle province-days 122, SkipQuiet p99 **6**, max 6, **0 over 6**; churned 847 (p99 28), active 16 (max 13), resident 17 (max 9), all reported |
+| 4 | liveness: no valid seal unrevealed outside above-cap holds; min_tip revealed; reveal-pool effective N ≥ 150 every bell | **pass** | `ValidSealUnrevealed` 0; 0 unrevealed inside the 8 above-cap hold windows; unrevealed by rule: bounced 9 (none shielded, path or arrival-bell); keeper A min effective N 150 in play |
+| 5 | every persona's expected outcome observed or exercised; no honest march refused by rule | **pass** | violated none; observed forger, late_revealer, settle_racer, spammer, zero_tip; the chain-judged personas exercised (verify, criteria 4, 8, 9); 7 fleet lifetimes merged |
+| 6 | herald at 5,000 viewers for 24 game hours: file p99 ≤ 250 ms, ingest → WS p99 ≤ 2 s, errors < 0.1 %, WS coverage ≥ 99 % | **pass** | file p99 **8.7 ms** (answered only 9.7 ms); ingest → WS p99 **0.75 s** (herald share 0.69 s, delivery 0.05 s; 24.6 M messages); errors **0** of 3,457,085 requests + WS sessions; WS coverage 100 % outside 2 outage windows (the herald kills); stale retries 8,000 and WS reconnects 2,000, all inside the outage windows |
+| 7 | bots' outcome statistics within an order of magnitude of `frontier-sim` | **n.a.** | reported, not gating (§13.4); the stack report does not compute it |
+| 8 | bad seals: `BadSealSurvived` 0; every due garbage / bad-plaintext transit settled bad-seal with the stock code | **pass** | `BadSealSurvived` false; 15 garbage (code 2) and 9 bad-plaintext (code 5) transits sent and due, each settled `BAD_SEAL`; none settled otherwise |
+| 9 | tickets: every cohort closed within 24 bells; `ticket_holder` never keeps a site it did not win | **pass** | cohorts open past 24 bells: none; 1,006 tickets, 1,055 settles |
+| E | exit-grade environment | **exit-grade** | every adversary hold fired (none `hold-skipped`); release `.so` pinned and matched; real rounds |
+
+Verdicts beside the criteria: verify **PASS** (only the informational V9 `PrefundedAddress` warning: 5 accounts above rent, pre-funded or escrow), 144,300 transactions in 11 s (E6's < 10 min); tamper base PASS and 30/30 classes FAIL with their codes (23 required: T1–T22, T24; 7 extra), all built from the run.

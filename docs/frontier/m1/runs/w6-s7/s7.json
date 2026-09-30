@@ -1,0 +1,1 @@
+{"run_id": "w6-s7", "started": "2026-09-29T06:08:49Z", "finished": "2026-09-29T14:49:12Z", "git_head": "7dcacdf0bbbdaad8da8205614034e9b83ac27ef4", "so_sha256": "072b1205f92a16131d4c29753807de5720344e38a99ec24bb83e04a5409da98b", "check-ports": 0, "up": 0, "verify": 1, "tamper": 1, "report": 1, "pass": false}

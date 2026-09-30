@@ -1,0 +1,12 @@
+{
+  "accounts": 59147,
+  "chain_was_paused": true,
+  "fail_codes": [
+    "PrefundedAddress"
+  ],
+  "final_slot": 77751,
+  "read_secs": 4.5594435,
+  "txs": 144300,
+  "verdict": "PASS",
+  "verify_secs": 6.380307709
+}
