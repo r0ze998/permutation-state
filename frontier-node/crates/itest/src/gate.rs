@@ -5,10 +5,7 @@
 use crate::checks::Cond;
 use crate::day::DayOut;
 
-/// The largest share of resident actions (per action) the relay may refuse
-/// `NotResident` in the gate day (a herald view a bell old, a nudge still
-/// in flight).
-pub const NOT_RESIDENT_MAX_PCT: u64 = 25;
+pub use crate::checks::NOT_RESIDENT_MAX_PCT;
 
 pub fn count(o: &DayOut, kind: &str) -> u64 {
     o.facts.records.get(kind).copied().unwrap_or(0)
@@ -251,26 +248,9 @@ pub fn day_conditions(o: &DayOut) -> Vec<(&'static str, Cond)> {
     ));
     // Resident liveness (integ-W4 review, W4-F): resident actions the relay
     // refused `NotResident` against the ones it sent.
-    let ratio = crate::checks::not_resident_ratio(&o.relay.by);
-    let over: Vec<&(String, u64, u64)> = ratio
-        .iter()
-        .filter(|(_, refused, sent)| refused * 100 > (refused + sent) * NOT_RESIDENT_MAX_PCT)
-        .collect();
     v.push((
         "resident-liveness",
-        if over.is_empty() {
-            Cond::Pass(format!(
-                "NotResident / (sent + NotResident) ≤ {NOT_RESIDENT_MAX_PCT}% per action: {ratio:?}; nudges {:?}",
-                o.bots.nudges
-            ))
-        } else if stubs {
-            Cond::Pending(format!("{ratio:?}"))
-        } else {
-            Cond::Fail(format!(
-                "over {NOT_RESIDENT_MAX_PCT}%: {over:?}; nudges {:?}",
-                o.bots.nudges
-            ))
-        },
+        crate::checks::resident_liveness_cond(&o.relay.by, &o.bots, stubs),
     ));
     let alarm = |k: &str| o.herald[k].as_u64().unwrap_or(u64::MAX);
     let alarms: u64 = [
