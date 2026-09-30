@@ -36,7 +36,8 @@ pub fn json(r: &Report) -> Value {
         "findings": r.findings.iter().map(finding_json).collect::<Vec<_>>(),
         "liveness": {
             "valid_unrevealed": l.valid_unrevealed.iter().map(|(h, b, sigs)| json!({"host_id": h.to_string(), "arrive_bell": b, "attempts": sigs})).collect::<Vec<_>>(),
-            "unrevealed_by_rule": l.unrevealed_by_rule.iter().map(|(h, b, o)| json!({"host_id": h.to_string(), "arrive_bell": b, "outcome": o})).collect::<Vec<_>>(),
+            "unrevealed_by_rule": l.unrevealed_by_rule.iter().map(|x| json!({"host_id": x.host.to_string(), "arrive_bell": x.arrive, "outcome": x.outcome, "reason": x.reason, "failed_attempts": x.failed_attempts})).collect::<Vec<_>>(),
+            "unrevealed_by_reason": crate::checks::v5_seals::reason::ALL.iter().map(|&k| (k.to_string(), json!(l.unrevealed_by_rule.iter().filter(|x| x.reason == k).count()))).collect::<serde_json::Map<_, _>>(),
             "reveals_near_close": l.reveals_near_close,
             "max_anchor_delay_s": l.max_anchor_delay_s,
             "contested_bells": l.contested_bells.iter().map(|(p, q, b)| json!([p, q, b])).collect::<Vec<_>>(),
@@ -73,9 +74,14 @@ pub fn markdown(r: &Report) -> String {
     ));
     let l = &r.liveness;
     s.push_str(&format!(
-        "- Liveness: {} valid seals unrevealed and routed ({} more unrevealed but bounced by rule), {} reveals near the close, largest anchor delay {:.1} s, {} contested province-bells\n\n",
+        "- Liveness: {} valid seals unrevealed and routed ({} more unrevealed by rule: {}), {} reveals near the close, largest anchor delay {:.1} s, {} contested province-bells\n\n",
         l.valid_unrevealed.len(),
         l.unrevealed_by_rule.len(),
+        crate::checks::v5_seals::reason::ALL
+            .iter()
+            .map(|&k| format!("{k} {}", l.unrevealed_by_rule.iter().filter(|x| x.reason == k).count()))
+            .collect::<Vec<_>>()
+            .join(", "),
         l.reveals_near_close,
         l.max_anchor_delay_s,
         l.contested_bells.len()

@@ -47,6 +47,9 @@ pub struct IngestCfg {
     /// checkpoint commits first, so a checkpoint never covers records the
     /// archive could lose.
     pub archive_commit: Duration,
+    /// Test hook: a pause inside every checkpoint save (integ-W6t review:
+    /// proves the ingest does not wait for the save). Zero in service.
+    pub checkpoint_pause: Duration,
 }
 
 impl IngestCfg {
@@ -60,6 +63,7 @@ impl IngestCfg {
             checkpoint_slots: 150,
             segment_bytes: findex::archive::SEGMENT_BYTES,
             archive_commit: Duration::from_secs(1),
+            checkpoint_pause: Duration::ZERO,
         }
     }
     pub fn findex_dir(&self) -> PathBuf {
@@ -82,6 +86,10 @@ pub struct Ingest {
     pub fold: Arc<RwLock<Fold>>,
     pub diffs: broadcast::Sender<Arc<Diff>>,
     last_ckpt_slot: u64,
+    /// The checkpoint saving in the background (integ-W6t review: the
+    /// awaited save every 150 slots held the fold 20–25 s three times in
+    /// R5, `Ingest::step`).
+    ckpt: Option<tokio::task::JoinHandle<Result<(), String>>>,
 }
 
 /// Unix milliseconds now (the ingest stamp of the WS diffs).
@@ -147,6 +155,7 @@ impl Ingest {
             fold: Arc::new(RwLock::new(fold)),
             diffs,
             last_ckpt_slot: last,
+            ckpt: None,
         };
         ing.checkpoint()?;
         Ok(ing)
@@ -162,6 +171,9 @@ impl Ingest {
     }
 
     fn save(cfg: &IngestCfg, st: &crate::fold::State, dirty: &[PathBuf]) -> Result<(), String> {
+        if !cfg.checkpoint_pause.is_zero() {
+            std::thread::sleep(cfg.checkpoint_pause);
+        }
         // Files first: the checkpoint may only cover durable files.
         crate::files::sync_paths(dirty).map_err(|e| e.to_string())?;
         checkpoint::save(
@@ -184,11 +196,50 @@ impl Ingest {
     /// [`Ingest::checkpoint`] off the runtime's workers (the syncs take
     /// ≈ 10 ms per file on APFS), without holding the fold lock.
     pub async fn checkpoint_async(&mut self) -> Result<(), String> {
+        self.checkpoint_settled().await;
         let (st, dirty) = self.snapshot()?;
         let cfg = self.cfg.clone();
         tokio::task::spawn_blocking(move || Self::save(&cfg, &st, &dirty))
             .await
             .map_err(|e| e.to_string())?
+    }
+
+    /// Waits for the background checkpoint, if one is saving.
+    pub async fn checkpoint_settled(&mut self) {
+        if let Some(h) = self.ckpt.take() {
+            if let Ok(Err(e)) = h.await {
+                eprintln!("herald: checkpoint: {e}");
+            }
+        }
+    }
+
+    /// Whether a background checkpoint is still saving.
+    pub fn checkpoint_in_flight(&self) -> bool {
+        self.ckpt.as_ref().is_some_and(|h| !h.is_finished())
+    }
+
+    /// Starts a checkpoint on a blocking worker and returns at once
+    /// (integ-W6t review); `false` while the previous one still saves (the
+    /// next step tries again). The state and its dirty files are taken
+    /// together under the lock, as before; the fold goes on meanwhile.
+    fn checkpoint_background(&mut self) -> Result<bool, String> {
+        if self.checkpoint_in_flight() {
+            return Ok(false);
+        }
+        if let Some(h) = self.ckpt.take() {
+            // Finished: a failed save was already reported by the worker.
+            drop(h);
+        }
+        let (st, dirty) = self.snapshot()?;
+        let cfg = self.cfg.clone();
+        self.ckpt = Some(tokio::task::spawn_blocking(move || {
+            let r = Self::save(&cfg, &st, &dirty);
+            if let Err(e) = &r {
+                eprintln!("herald: checkpoint: {e}");
+            }
+            r
+        }));
+        Ok(true)
     }
 
     /// One pull of `src`: archive, index, fold, publish; returns the number
@@ -213,8 +264,8 @@ impl Ingest {
             >= self
                 .last_ckpt_slot
                 .saturating_add(self.cfg.checkpoint_slots)
+            && self.checkpoint_background()?
         {
-            self.checkpoint_async().await?;
             self.last_ckpt_slot = slot;
         }
         Ok(got.len())

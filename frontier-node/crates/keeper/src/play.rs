@@ -48,6 +48,9 @@ pub const SLOT_MOVED_RETRIES: u8 = 4;
 const PROVINCE_READ_SLOTS: u64 = 8;
 /// Bells per SkipQuiet at most.
 const SKIP_MAX: u32 = 24;
+/// Bells of taken nudges the status lists (two game days: the stack
+/// samples the status once a bell and keeps the union).
+pub const NUDGE_LOG_BELLS: u32 = 288;
 /// Claim grace (§5.12, I-52), bells.
 pub const CLAIM_GRACE_BELLS: i64 = fclient::play::CLAIM_GRACE_BELLS;
 const BELL_SECS: i64 = 600;
@@ -98,6 +101,10 @@ pub struct ProvState {
     pub rn: u32,
     pub read_slot: u64,
     pub pending_bells: BTreeSet<u32>,
+    /// The bells of pending ops a settlement waits on: a departure's spend
+    /// and a `Leave` (its §21 return), W6T-2. The other pending resident
+    /// changes ride whole skip batches.
+    pub settle_bells: BTreeSet<u32>,
     pub active: bool,
     /// `Leave` entries `(entry index, host, pend_bell)` (§21 returns).
     pub leaves: Vec<(u8, u64, u32)>,
@@ -162,6 +169,11 @@ pub struct PlayDuty {
     pub not_quiet: BTreeSet<(i16, i16, u32)>,
     /// Nudged provinces → the bell a player wants to act at (§8.2 `/v1/nudge`).
     nudged: BTreeMap<(i16, i16), u32>,
+    /// Nudges taken `(P, Q, bell)` over the last [`NUDGE_LOG_BELLS`]
+    /// (integ-W6t review: published in `/v1/status` `play.nudges_recent`,
+    /// so the stack report can tell a nudged province-day from an idle one,
+    /// §13.4 A1 as amended in v1.13).
+    nudge_log: BTreeSet<(i16, i16, u32)>,
     /// Estimated game seconds per slot (from the Clock samples).
     pub slot_secs: f64,
     last_clock: Option<(u64, i64)>,
@@ -173,6 +185,21 @@ pub struct PlayDuty {
     /// Slots of refused claims, released at the next claims plan.
     unclaim: Vec<(i32, i32, u32, u8, u8)>,
     closed_sent: BTreeSet<String>,
+    /// Settle write key → the slot it first became eligible (the backup
+    /// delay, W6T-2).
+    eligible: BTreeMap<String, u64>,
+    /// Close key → the Clock time before which it is not read again (a
+    /// ClashInputs or ArrivalSlot inside its grace: the grace end, else one
+    /// bell later; W6T-2).
+    close_recheck: BTreeMap<String, i64>,
+    /// Close keys that ended Dead → the account as it was then
+    /// `(lamports, sha256(data))`; not planned again until it changes.
+    dead_closes: BTreeMap<String, Option<(u64, [u8; 32])>>,
+    /// `accounts()` calls of the closes duty (the tick log, W6T-2).
+    pub closes_reads: u64,
+    /// The keeper already read this tick's feed pages into the index (one
+    /// read for the land and play indexes, W6T-2); reset by the plan.
+    pub feed_read: bool,
     /// Liveness findings `(slot, detail)`.
     pub findings: Vec<(u64, String)>,
 }
@@ -228,8 +255,16 @@ impl PlayDuty {
         // The owner material and latency are keyed by the arrival bell.
         let ok = k.and_then(|k| self.index.departs.get(&k).map(|d| (d.host, d.arrive)));
         if kind == "close" {
-            if let Outcome::Landed { .. } = o {
-                self.closed_sent.insert(key.to_string());
+            match o {
+                Outcome::Landed { .. } => {
+                    self.closed_sent.insert(key.to_string());
+                    self.dead_closes.remove(key);
+                }
+                // Not planned again until its account changes (W6T-2).
+                Outcome::Dead { .. } => {
+                    self.dead_closes.insert(key.to_string(), None);
+                }
+                Outcome::Failed { .. } => {}
             }
         }
         match (kind, o) {
@@ -397,6 +432,7 @@ impl PlayDuty {
                 if let (Some(p), Some(q)) = (a[0].as_i64(), a[1].as_i64()) {
                     let e = self.nudged.entry((p as i16, q as i16)).or_insert(0);
                     *e = (*e).max(bell);
+                    self.log_nudge((p as i16, q as i16), bell);
                 }
             }
         }
@@ -550,6 +586,7 @@ impl PlayDuty {
                     rn: 0,
                     read_slot: 0,
                     pending_bells: BTreeSet::new(),
+                    settle_bells: BTreeSet::new(),
                     active: false,
                     leaves: vec![],
                     last_digest: [0; 32],
@@ -562,6 +599,7 @@ impl PlayDuty {
                 rn: 0,
                 read_slot: 0,
                 pending_bells: BTreeSet::new(),
+                settle_bells: BTreeSet::new(),
                 active: false,
                 leaves: vec![],
                 last_digest: [0; 32],
@@ -605,6 +643,20 @@ impl PlayDuty {
                             .filter(|e| e.state == 2)
                             .map(|e| e.from_bell.saturating_sub(1)),
                     )
+                    .collect();
+                s.settle_bells = pv
+                    .entries
+                    .iter()
+                    .filter(|e| {
+                        e.state != 0
+                            && e.state != 3
+                            && matches!(
+                                e.pend_op,
+                                frontier_abi::layout::province::entry::OP_SPEND
+                                    | frontier_abi::layout::province::entry::OP_LEAVE
+                            )
+                    })
+                    .map(|e| e.pend_bell)
                     .collect();
                 s.active = pv.entries.iter().any(|e| e.state != 0);
                 let mut fs: Vec<u8> = pv
@@ -695,9 +747,33 @@ impl PlayDuty {
         Ok(())
     }
 
-    /// One tick of every play duty.
+    /// One tick of every play duty: [`Self::plan_core`], then
+    /// [`Self::housekeeping`].
     #[allow(clippy::too_many_arguments)]
     pub async fn plan<P: ChainPort, D: DrandPort>(
+        &mut self,
+        t: &Tick<'_>,
+        port: &P,
+        drand: &D,
+        rounds: &mut Rounds,
+        engine: &mut Engine,
+        beacon: &BTreeMap<(u32, u8), AnchorInfo>,
+        seeds: &mut SeedFinder,
+        shared: &mut Shared,
+        journal: Option<&Journal>,
+        opened: &[(i32, i32)],
+    ) -> PortResult<()> {
+        self.plan_core(
+            t, port, drand, rounds, engine, beacon, seeds, shared, journal, opened,
+        )
+        .await?;
+        self.housekeeping(t, port, engine, beacon).await
+    }
+
+    /// The duties a bell's latency waits on: decrypt, reveals, departures
+    /// and returns, gathers, resolves and skips, settlements.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn plan_core<P: ChainPort, D: DrandPort>(
         &mut self,
         t: &Tick<'_>,
         port: &P,
@@ -716,7 +792,9 @@ impl PlayDuty {
         if !(eff == status::RUNNING || eff == status::ENDED) {
             return Ok(());
         }
-        self.index.pull(port, t.addrs).await?;
+        if !std::mem::take(&mut self.feed_read) {
+            self.index.pull(port, t.addrs).await?;
+        }
         self.read_provinces(t, port, opened).await?;
         self.read_holdings(t, port).await?;
         if t.cfg.has_role("reveal") || t.cfg.has_role("settle") {
@@ -726,7 +804,7 @@ impl PlayDuty {
             self.reveals(t, port, engine, beacon, shared).await?;
         }
         if t.cfg.has_role("settle-departure") {
-            self.settle_departures(t, engine);
+            self.settle_departures(t, port, engine).await?;
             self.returns(t, engine);
         }
         if t.cfg.has_role("gather") || t.cfg.has_role("resolve") || t.cfg.has_role("skip") {
@@ -734,6 +812,23 @@ impl PlayDuty {
         }
         if t.cfg.has_role("settle") {
             self.settles(t, port, engine, beacon).await?;
+        }
+        Ok(())
+    }
+
+    /// Class-N housekeeping and claims: closes and ClaimDefence. The
+    /// keeper plans them after the tick's latency-critical versions went
+    /// out (W6T-2).
+    pub async fn housekeeping<P: ChainPort>(
+        &mut self,
+        t: &Tick<'_>,
+        port: &P,
+        engine: &mut Engine,
+        beacon: &BTreeMap<(u32, u8), AnchorInfo>,
+    ) -> PortResult<()> {
+        let eff = t.season.effective_status(t.now);
+        if !(eff == status::RUNNING || eff == status::ENDED) {
+            return Ok(());
         }
         if t.cfg.has_role("close") {
             self.closes(t, port, engine, beacon).await?;
@@ -828,8 +923,17 @@ impl PlayDuty {
         // Groups of revealable arrivals.
         type G = (i16, i16, u32, u8);
         let mut groups: BTreeMap<G, Vec<(u64, u32)>> = BTreeMap::new();
+        // One Reveal write per march `(host, arrive)`, whichever source
+        // (opened seal, owner material) holds its plaintext (W6T-2).
+        let mut marches: BTreeSet<(u64, u32)> = BTreeSet::new();
         for (k, d) in &self.index.departs {
             if self.index.settled.contains_key(k) {
+                continue;
+            }
+            // No anchor exists at or after the season's end: such an
+            // arrival can never be revealed (W6T-2; 27 Reveals refused
+            // `WrongStatus` in the w6-s7 drain).
+            if d.arrive >= t.season.end_bell {
                 continue;
             }
             let Some(st) = self.transits.get(k) else {
@@ -849,6 +953,9 @@ impl PlayDuty {
                 .values()
                 .any(|r| r.host == d.host && r.arrive == d.arrive)
             {
+                continue;
+            }
+            if !marches.insert((d.host, d.arrive)) {
                 continue;
             }
             groups
@@ -1107,7 +1214,21 @@ impl PlayDuty {
 
     // ------------------------------------------------------------ departures and returns
 
-    fn settle_departures(&mut self, t: &Tick<'_>, engine: &mut Engine) {
+    /// SettleDeparture of every transit whose origin resolved past its
+    /// departure bell. With `backup_delay_slots` (a backup keeper, W6T-2)
+    /// a settle waits that many slots after it became eligible, then its
+    /// Holding is read again and only a transit still departed is planned.
+    async fn settle_departures<P: ChainPort>(
+        &mut self,
+        t: &Tick<'_>,
+        port: &P,
+        engine: &mut Engine,
+    ) -> PortResult<()> {
+        let delay = t.cfg.backup_delay_slots as u64;
+        /// (transit, write key, origin, transit slot, holding)
+        type Due = ((u64, u32), String, (i16, i16), u8, HoldingRef);
+        let mut due: Vec<Due> = vec![];
+        let mut eligible: BTreeSet<String> = BTreeSet::new();
         for (k, d) in &self.index.departs {
             if self.index.departure_settled.contains(k) || self.index.settled.contains_key(k) {
                 continue;
@@ -1127,21 +1248,43 @@ impl PlayDuty {
             let Ok((hp, hq, hs, _, _)) = fclient::addr::host_parts(d.host) else {
                 continue;
             };
-            let a = t.addrs.clone();
-            let origin = d.origin;
-            let ts = st.transit_slot.unwrap_or(0);
+            let key = format!("sdep:{}:{},{}", rkey(*k), d.origin.0, d.origin.1);
+            if delay > 0 {
+                eligible.insert(key.clone());
+                if engine.is_pending(&key) {
+                    continue;
+                }
+                let first = *self.eligible.entry(key.clone()).or_insert(t.slot);
+                if t.slot < first + delay {
+                    continue;
+                }
+            }
             let href = HoldingRef {
                 p: hp as i16,
                 q: hq as i16,
                 site: hs,
             };
-            engine.ensure(
+            due.push((*k, key, d.origin, st.transit_slot.unwrap_or(0), href));
+        }
+        if delay > 0 {
+            self.eligible
+                .retain(|k, _| !k.starts_with("sdep:") || eligible.contains(k));
+            // The re-read: the primary keeper may have settled it meanwhile.
+            let still = self
+                .reread_transits(t, port, due.iter().map(|x| x.0).collect(), |s| s == 1)
+                .await?;
+            due.retain(|x| still.contains(&x.0));
+        }
+        for (k, key, origin, ts, href) in due {
+            let a = t.addrs.clone();
+            let bell = self.index.departs.get(&k).map(|d| d.depart_bell);
+            if engine.ensure(
                 WriteSpec {
-                    key: format!("sdep:{}:{},{}", rkey(*k), origin.0, origin.1),
+                    key: key.clone(),
                     kind: "settle-departure",
                     tag: tag::SETTLE_DEPARTURE,
                     class: Class::D,
-                    bell: Some(d.depart_bell),
+                    bell,
                     region: Some(ix::region_of(origin.0 as i32, origin.1 as i32)),
                     build: Arc::new(move |c: &BuildCtx| {
                         vec![ix::settle_departure(&a, c.payer, origin, href, ts)]
@@ -1151,8 +1294,52 @@ impl PlayDuty {
                     fixed_payer: None,
                 },
                 t.slot,
-            );
+            ) {
+                self.eligible.remove(&key);
+            }
         }
+        Ok(())
+    }
+
+    /// Reads the Holdings of `transits` again (batched) and returns the
+    /// ones whose transit record still passes `ok(state)`; the others get
+    /// their new state (W6T-2, the backup delay's re-read).
+    async fn reread_transits<P: ChainPort>(
+        &mut self,
+        t: &Tick<'_>,
+        port: &P,
+        transits: Vec<(u64, u32)>,
+        ok: impl Fn(u8) -> bool,
+    ) -> PortResult<BTreeSet<(u64, u32)>> {
+        let mut out = BTreeSet::new();
+        let want: Vec<((u64, u32), Address)> = transits
+            .into_iter()
+            .filter_map(|k| t.addrs.holding_of_host(k.0).ok().map(|h| (k, h)))
+            .collect();
+        for chunk in want.chunks(100) {
+            let keys: Vec<Address> = chunk.iter().map(|x| x.1).collect();
+            let got = port.accounts(&keys, 0).await?;
+            for ((k, _), a) in chunk.iter().zip(got) {
+                let state = a
+                    .filter(|a| a.owner == t.addrs.program)
+                    .and_then(|a| Holding::decode(&a.data).ok())
+                    .and_then(|h| {
+                        h.transit
+                            .iter()
+                            .find(|x| x.state != 0 && x.host_id == k.0 && x.depart_bell == k.1)
+                            .map(|x| x.state)
+                    })
+                    .unwrap_or(0);
+                if let Some(st) = self.transits.get_mut(k) {
+                    st.tstate = state;
+                    st.holding_read_slot = t.slot.max(1);
+                }
+                if ok(state) {
+                    out.insert(*k);
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// The §21 return settle: one SettleDeparture with `transit_slot =
@@ -1209,8 +1396,11 @@ impl PlayDuty {
     /// work made the province "urgent" and every bell was skipped alone as
     /// it closed (13–40 SkipQuiet per province-day p99 in the W5 runs).
     ///
+    /// Only what a settlement or a player waits on splits a batch (W6T-2):
+    ///
     /// - a nudge (a player acting there now): the next bell (at once);
-    /// - a pending resident change or a `Leave` entry: its bell;
+    /// - a pending departure spend or `Leave`, and a `Leave` entry (its §21
+    ///   return settle): its bell;
     /// - a departure from here to settle: its departure bell;
     /// - an arrival here ahead: the bell before it (so the arrival bell is
     ///   next when its window closes: close → resolve stays short); an
@@ -1218,13 +1408,27 @@ impl PlayDuty {
     ///   settlement judged against this province (a bad seal nobody
     ///   revealed is settled against its origin): that bell.
     ///
-    /// The season's end is `end_flush` in [`Self::clashes`].
+    /// A pending resident change (a muster, a join) rides a whole 24-bell
+    /// batch: SkipQuiet applies it at its own bell, and a player who wants
+    /// it sooner nudges (w6-s7: 7,037 of 10,740 SkipQuiet were cut short,
+    /// and 23 idle province-days took 7-9). An arrival whose destination
+    /// this keeper does not know yet targets nothing (it targeted its
+    /// origin before). The season's end is `end_flush` in
+    /// [`Self::clashes`].
+    /// Keeps a taken nudge for the status (the last
+    /// [`NUDGE_LOG_BELLS`] bells of nudges).
+    fn log_nudge(&mut self, pq: (i16, i16), bell: u32) {
+        self.nudge_log.insert((pq.0, pq.1, bell));
+        let floor = bell.saturating_sub(NUDGE_LOG_BELLS);
+        self.nudge_log.retain(|x| x.2 >= floor);
+    }
+
     fn skip_target(&self, pq: (i16, i16), s: &ProvState) -> Option<u32> {
         if self.nudged.contains_key(&pq) {
             return Some(s.rn);
         }
         let own = s
-            .pending_bells
+            .settle_bells
             .iter()
             .copied()
             .chain(s.leaves.iter().map(|l| l.2));
@@ -1236,7 +1440,16 @@ impl PlayDuty {
                 && !self.index.departure_settled.contains(k)
                 && d.depart_bell >= s.rn)
                 .then_some(d.depart_bell);
-            let to_here = (self.dest_of(k, d).unwrap_or(d.origin) == pq && s.rn <= d.arrive)
+            // A bad seal nobody revealed settles against its origin.
+            let judged_bad = self
+                .transits
+                .get(k)
+                .and_then(|s| s.opened)
+                .is_some_and(|o| !o.valid());
+            let dest = self
+                .dest_of(k, d)
+                .or_else(|| judged_bad.then_some(d.origin));
+            let to_here = (dest == Some(pq) && s.rn <= d.arrive)
                 .then(|| d.arrive.saturating_sub(1).max(s.rn));
             match (from_here, to_here) {
                 (Some(a), Some(b)) => Some(a.min(b)),
@@ -1574,9 +1787,12 @@ impl PlayDuty {
             .copied()
             .filter(|k| !self.index.settled.contains_key(k))
             .collect();
+        let delay = t.cfg.backup_delay_slots as u64;
+        let mut eligible: BTreeSet<String> = BTreeSet::new();
         for k in keys {
             let key = format!("settle:{}", rkey(k));
             if engine.is_pending(&key) {
+                eligible.insert(key);
                 continue;
             }
             let d = self.index.departs[&k].clone();
@@ -1628,13 +1844,48 @@ impl PlayDuty {
             if t.now < t.clock.settle_after(d.arrive, an.a) {
                 continue;
             }
+            // A backup keeper waits `backup_delay_slots`, then re-reads
+            // the transit with the settle's other reads (W6T-2).
+            let holding = t.addrs.holding_of_host(d.host).ok();
+            let reread = delay > 0 && holding.is_some();
+            if reread {
+                eligible.insert(key.clone());
+                let first = *self.eligible.entry(key.clone()).or_insert(t.slot);
+                if t.slot < first + delay {
+                    continue;
+                }
+            }
             let (dp, dq) = (dest.0 as i32, dest.1 as i32);
             let mut keys: Vec<Address> = (0..4u8)
                 .map(|i| t.addrs.arrival_slot(dp, dq, d.arrive, st.faction, i))
                 .collect();
             keys.push(t.addrs.clash_inputs(dp, dq, d.arrive));
             keys.push(t.addrs.anchor(d.arrive, region));
+            if let (true, Some(h)) = (reread, holding) {
+                keys.push(h);
+            }
             let got = port.accounts(&keys, 0).await?;
+            if reread {
+                let state = got[6]
+                    .as_ref()
+                    .filter(|a| a.owner == t.addrs.program)
+                    .and_then(|a| Holding::decode(&a.data).ok())
+                    .and_then(|h| {
+                        h.transit
+                            .iter()
+                            .find(|x| x.state != 0 && x.host_id == d.host && x.depart_bell == k.1)
+                            .map(|x| x.state)
+                    })
+                    .unwrap_or(0);
+                if !matches!(state, 2 | 3) {
+                    // Settled (or freed) by another keeper meanwhile.
+                    if let Some(s) = self.transits.get_mut(&k) {
+                        s.tstate = state;
+                        s.holding_read_slot = t.slot.max(1);
+                    }
+                    continue;
+                }
+            }
             let mut slot_i = 0u8;
             let mut slot_ben = t.cfg.beneficiary;
             for (i, a) in got[..4].iter().enumerate() {
@@ -1691,9 +1942,9 @@ impl PlayDuty {
                 camp_citizen,
             };
             let a = t.addrs.clone();
-            engine.ensure(
+            if engine.ensure(
                 WriteSpec {
-                    key,
+                    key: key.clone(),
                     kind: "settle-transit",
                     tag: tag::SETTLE_TRANSIT,
                     class: Class::D,
@@ -1707,13 +1958,80 @@ impl PlayDuty {
                     fixed_payer: None,
                 },
                 t.slot,
-            );
+            ) {
+                self.eligible.remove(&key);
+            }
+        }
+        if delay > 0 {
+            self.eligible
+                .retain(|k, _| !k.starts_with("settle:") || eligible.contains(k));
         }
         Ok(())
     }
 
     // ------------------------------------------------------------ closes
 
+    /// Whether a close key is left alone this pass: closed, in flight, or
+    /// not due for a read yet.
+    fn close_waits(&self, key: &str, t: &Tick<'_>, engine: &Engine) -> bool {
+        self.closed_sent.contains(key)
+            || engine.is_pending(key)
+            || self.close_recheck.get(key).is_some_and(|&w| t.now < w)
+    }
+
+    /// Reads `keys` with one `getMultipleAccounts` per 100.
+    async fn read_batched<P: ChainPort>(
+        &mut self,
+        port: &P,
+        keys: &[Address],
+    ) -> PortResult<Vec<Option<Account>>> {
+        let mut out = Vec::with_capacity(keys.len());
+        for c in keys.chunks(100) {
+            self.closes_reads += 1;
+            out.extend(port.accounts(c, 0).await?);
+        }
+        Ok(out)
+    }
+
+    /// A close that ended Dead is planned again only once its account
+    /// changed (W6T-2: the w6-s7 drain re-planned each failing close
+    /// ≈ 270 times). Records the account the first time it is read after
+    /// the death; `true` while it is unchanged.
+    fn dead_unchanged(&mut self, key: &str, a: &Option<Account>, t: &Tick<'_>) -> bool {
+        let Some(seen) = self.dead_closes.get_mut(key) else {
+            return false;
+        };
+        let fp = a.as_ref().map(|a| {
+            use sha2::Digest as _;
+            (a.lamports, <[u8; 32]>::from(sha2::Sha256::digest(&a.data)))
+        });
+        let Some(fp) = fp else {
+            // Gone: nothing to close.
+            self.dead_closes.remove(key);
+            return false;
+        };
+        match seen {
+            None => *seen = Some(fp),
+            Some(old) if *old == fp => {}
+            Some(_) => {
+                self.dead_closes.remove(key);
+                return false;
+            }
+        }
+        self.close_recheck
+            .insert(key.to_string(), t.now + BELL_SECS);
+        true
+    }
+
+    /// CloseArrivalSlot, CloseArrivalDay and CloseClashInputs (every 4th
+    /// slot). W6T-2 (cause A of w6-s7 criterion 3): the accounts are read
+    /// with one `getMultipleAccounts` per 100, and a key inside its grace
+    /// is not read again before the grace ends (a settled slot: its claim
+    /// grace; resolved and settled inputs: `resolved_ts +
+    /// clash_close_grace`; anything else one bell later). Before, every
+    /// open ClashInputs was read with its own RPC every 4th slot; with a
+    /// 1,008-bell grace none closes in the season and the reads reached
+    /// ≈ 15,000 (1.4 s) a closes tick.
     async fn closes<P: ChainPort>(
         &mut self,
         t: &Tick<'_>,
@@ -1725,10 +2043,12 @@ impl PlayDuty {
             return Ok(());
         }
         // Slots.
-        let slots: Vec<(i16, i16, u32, u8, u8)> = self.index.slots.keys().copied().collect();
+        type SlotKey = (i16, i16, u32, u8, u8);
+        let slots: Vec<SlotKey> = self.index.slots.keys().copied().collect();
+        let mut want: Vec<(SlotKey, String, i64)> = vec![];
         for sk in slots {
             let key = format!("close:slot:{},{}:{}:{}:{}", sk.0, sk.1, sk.2, sk.3, sk.4);
-            if self.closed_sent.contains(&key) || engine.is_pending(&key) {
+            if self.close_waits(&key, t, engine) {
                 continue;
             }
             let region = ix::region_of(sk.0 as i32, sk.1 as i32);
@@ -1736,11 +2056,21 @@ impl PlayDuty {
                 continue;
             };
             let grace_end = t.clock.reveal_close(sk.2, an.a) + CLAIM_GRACE_BELLS * BELL_SECS;
-            let addr = t
-                .addrs
-                .arrival_slot(sk.0 as i32, sk.1 as i32, sk.2, sk.3, sk.4);
-            let got = port.accounts(&[addr], 0).await?;
-            let Some(sl) = got[0]
+            want.push((sk, key, grace_end));
+        }
+        let addrs: Vec<Address> = want
+            .iter()
+            .map(|(sk, _, _)| {
+                t.addrs
+                    .arrival_slot(sk.0 as i32, sk.1 as i32, sk.2, sk.3, sk.4)
+            })
+            .collect();
+        let got = self.read_batched(port, &addrs).await?;
+        for ((sk, key, grace_end), a) in want.into_iter().zip(got) {
+            if self.dead_unchanged(&key, &a, t) {
+                continue;
+            }
+            let Some(sl) = a
                 .as_ref()
                 .filter(|a| a.owner == t.addrs.program)
                 .and_then(|a| ArrivalSlot::decode(&a.data).ok())
@@ -1748,9 +2078,15 @@ impl PlayDuty {
                 self.closed_sent.insert(key);
                 continue;
             };
-            if sl.flags & 1 == 0 || (sl.claimed == 0 && t.now < grace_end) {
+            if sl.flags & 1 == 0 {
+                self.close_recheck.insert(key, t.now + BELL_SECS);
                 continue;
             }
+            if sl.claimed == 0 && t.now < grace_end {
+                self.close_recheck.insert(key, grace_end);
+                continue;
+            }
+            let region = ix::region_of(sk.0 as i32, sk.1 as i32);
             let a = t.addrs.clone();
             let rent_to = sl.rent_to;
             engine.ensure(
@@ -1773,11 +2109,12 @@ impl PlayDuty {
                 t.slot,
             );
         }
-        // ArrivalDays.
+        // ArrivalDays (read once their province resolved past the day).
         let days: Vec<(i16, i16, u32)> = self.index.days.iter().copied().collect();
+        let mut want: Vec<((i16, i16, u32), String)> = vec![];
         for dk in days {
             let key = format!("close:day:{},{}:{}", dk.0, dk.1, dk.2);
-            if self.closed_sent.contains(&key) || engine.is_pending(&key) {
+            if self.close_waits(&key, t, engine) {
                 continue;
             }
             let Some(ps) = self.provinces.get(&(dk.0, dk.1)) else {
@@ -1786,10 +2123,18 @@ impl PlayDuty {
             if ps.rn < abi::BELLS_PER_DAY * (dk.2 + 1) {
                 continue;
             }
-            let got = port
-                .accounts(&[t.addrs.arrival_day(dk.0 as i32, dk.1 as i32, dk.2)], 0)
-                .await?;
-            let Some(ad) = got[0]
+            want.push((dk, key));
+        }
+        let addrs: Vec<Address> = want
+            .iter()
+            .map(|(dk, _)| t.addrs.arrival_day(dk.0 as i32, dk.1 as i32, dk.2))
+            .collect();
+        let got = self.read_batched(port, &addrs).await?;
+        for ((dk, key), a) in want.into_iter().zip(got) {
+            if self.dead_unchanged(&key, &a, t) {
+                continue;
+            }
+            let Some(ad) = a
                 .as_ref()
                 .filter(|a| a.owner == t.addrs.program)
                 .and_then(|a| ArrivalDay::decode(&a.data).ok())
@@ -1821,16 +2166,27 @@ impl PlayDuty {
         }
         // ClashInputs.
         let grace = t.season.clash_close_grace as i64 * BELL_SECS;
-        let inputs: Vec<(i16, i16, u32)> = self.index.inputs.iter().copied().collect();
-        for ik in inputs {
+        let inputs: Vec<(i16, i16, u32)> = self
+            .index
+            .inputs
+            .iter()
+            .copied()
+            .filter(|ik| {
+                let key = format!("close:inputs:{},{}:{}", ik.0, ik.1, ik.2);
+                !self.close_waits(&key, t, engine)
+            })
+            .collect();
+        let addrs: Vec<Address> = inputs
+            .iter()
+            .map(|ik| t.addrs.clash_inputs(ik.0 as i32, ik.1 as i32, ik.2))
+            .collect();
+        let got = self.read_batched(port, &addrs).await?;
+        for (ik, acct) in inputs.into_iter().zip(got) {
             let key = format!("close:inputs:{},{}:{}", ik.0, ik.1, ik.2);
-            if self.closed_sent.contains(&key) || engine.is_pending(&key) {
+            if self.dead_unchanged(&key, &acct, t) {
                 continue;
             }
-            let got = port
-                .accounts(&[t.addrs.clash_inputs(ik.0 as i32, ik.1 as i32, ik.2)], 0)
-                .await?;
-            let Some(ci) = got[0]
+            let Some(ci) = acct
                 .as_ref()
                 .filter(|a| a.owner == t.addrs.program)
                 .and_then(|a| ClashInputs::decode(&a.data).ok())
@@ -1840,8 +2196,14 @@ impl PlayDuty {
             };
             let all =
                 (0..24).all(|k| ci.arrivals[k].present != 1 || ci.settled_mask & (1 << k) != 0);
-            if !ci.resolved() || !all || ci.resolved_ts as i64 + grace > t.now - t.clock.genesis_ts
-            {
+            let grace_end = t.clock.genesis_ts + ci.resolved_ts as i64 + grace;
+            if !ci.resolved() || !all || t.now < grace_end {
+                let w = if ci.resolved() && all {
+                    grace_end
+                } else {
+                    t.now + BELL_SECS
+                };
+                self.close_recheck.insert(key, w);
                 continue;
             }
             let a = t.addrs.clone();
@@ -1865,6 +2227,11 @@ impl PlayDuty {
                 },
                 t.slot,
             );
+        }
+        // Keys closed or gone need no recheck time (now and then).
+        if t.slot.is_multiple_of(512) {
+            self.close_recheck
+                .retain(|k, _| !self.closed_sent.contains(k));
         }
         Ok(())
     }
@@ -2020,6 +2387,7 @@ impl PlayDuty {
             "claims": s.claims, "returns": s.returns,
             "provinces_tracked": self.provinces.len(),
             "findings": self.findings.len(),
+            "nudges_recent": self.nudge_log.iter().map(|(p, q, b)| json!([p, q, b])).collect::<Vec<_>>(),
         })
     }
 }
@@ -2089,6 +2457,7 @@ mod review_tests {
             rn,
             read_slot: 1,
             pending_bells: BTreeSet::new(),
+            settle_bells: BTreeSet::new(),
             active: true,
             leaves: vec![],
             last_digest: [0; 32],
@@ -2127,14 +2496,14 @@ mod review_tests {
         assert!(!d.skip_now(end, pq, &s, 100, 23));
         assert!(d.skip_now(end, pq, &s, 100, 24));
         assert!(d.skip_now(110, pq, &s, 100, 10), "reaches the end");
-        // A resident change pending at bell 110: nothing before it closes,
-        // then one skip through it (before W6-C: a skip per bell).
+        // A resident change pending at bell 110 rides a whole batch
+        // (W6T-2; before: a skip through its bell, and before W6-C a skip
+        // per bell).
         let mut s = prov(100);
         s.pending_bells.insert(110);
-        assert_eq!(d.skip_target(pq, &s), Some(110));
-        assert!(!d.skip_now(end, pq, &s, 100, 1));
-        assert!(!d.skip_now(end, pq, &s, 100, 10));
-        assert!(d.skip_now(end, pq, &s, 100, 11));
+        assert_eq!(d.skip_target(pq, &s), None);
+        assert!(!d.skip_now(end, pq, &s, 100, 11));
+        assert!(d.skip_now(end, pq, &s, 100, 24));
         // A Leave entry's bell likewise.
         let mut s = prov(100);
         s.leaves.push((3, 9, 104));
@@ -2171,7 +2540,15 @@ mod review_tests {
         d.index.departs.insert((8, 105), depart(8, dest, 105, 120));
         d.index.departure_settled.insert((8, 105));
         d.transits.insert((8, 105), TransitState::default());
-        // The destination is unknown to this keeper: judged at the origin.
+        // The destination is unknown to this keeper: no target (W6T-2;
+        // it targeted the origin before) ...
+        assert_eq!(d.skip_target(dest, &prov(100)), None);
+        // ... until the seal is judged bad: settled against its origin.
+        d.transits.get_mut(&(8, 105)).unwrap().opened = Some(Opened {
+            code: abi::seal_code::FO_FAILED,
+            plain: None,
+            salt: None,
+        });
         assert_eq!(d.skip_target(dest, &prov(100)), Some(119));
         assert_eq!(d.skip_target(dest, &prov(120)), Some(120));
         assert_eq!(d.skip_target(dest, &prov(121)), None);
@@ -2179,6 +2556,24 @@ mod review_tests {
         d.nudged.insert(pq, 130);
         assert_eq!(d.skip_target(pq, &prov(100)), Some(100));
         assert!(d.skip_now(end, pq, &prov(100), 100, 1));
+    }
+
+    /// integ-W6t review (§13.4 A1 as amended): every nudge taken is listed
+    /// in the status for the stack report, the last two days' only.
+    #[test]
+    fn nudges_taken_are_published_for_two_days() {
+        let mut d = PlayDuty::default();
+        d.log_nudge((1, -2), 10);
+        d.log_nudge((3, 4), 200);
+        assert_eq!(
+            d.status()["nudges_recent"],
+            json!([[1, -2, 10], [3, 4, 200]])
+        );
+        d.log_nudge((3, 4), 10 + NUDGE_LOG_BELLS + 1);
+        assert_eq!(
+            d.status()["nudges_recent"],
+            json!([[3, 4, 200], [3, 4, 10 + NUDGE_LOG_BELLS + 1]])
+        );
     }
 
     #[test]
@@ -2200,5 +2595,501 @@ mod review_tests {
         ] {
             assert!(!reveal_transient(c), "{c}");
         }
+    }
+}
+
+/// W6T-2 (w6-s7 triage, U2): the play duties' reads, the end of the
+/// season, dead closes, the backup delay and the skip batches. Each test
+/// runs the duty through [`PlayDuty::plan`] over a fake chain.
+#[cfg(test)]
+mod w6t_tests {
+    use super::*;
+    use crate::config::KeeperConfig;
+    use crate::engine::{EngineParams, StepReport};
+    use crate::pools::Payers;
+    use crate::testkit::{self, FakeDrand, FakePort};
+    use base64::Engine as _;
+    use fclient::addr::Addresses;
+    use fclient::budgets::Budgets;
+    use fclient::clock::SeasonClock;
+    use fclient::decode::Season;
+
+    const G: i64 = 1_800_000_000;
+
+    fn program() -> Address {
+        Address::new_from_array([0x5F; 32])
+    }
+
+    struct Env {
+        port: FakePort,
+        drand: FakeDrand,
+        season: Season,
+        addrs: Addresses,
+        cfg: KeeperConfig,
+        engine: Engine,
+        rounds: Rounds,
+        seeds: SeedFinder,
+        shared: Shared,
+        beacon: BTreeMap<(u32, u8), AnchorInfo>,
+    }
+
+    fn env(roles: &[&str], end_bell: u32) -> Env {
+        let drand = FakeDrand::new();
+        let season = testkit::season(G, end_bell, &drand.key.info());
+        let mut cfg = KeeperConfig::new(program(), 7, Address::new_from_array([0xBE; 32]));
+        cfg.roles = roles.iter().map(|r| r.to_string()).collect();
+        let budgets =
+            Budgets::from_json(&serde_json::from_str(crate::CANONICAL_BUDGETS).unwrap()).unwrap();
+        Env {
+            port: FakePort::default(),
+            rounds: Rounds::new(drand.key.pk96),
+            drand,
+            season,
+            addrs: Addresses::new(program(), 7),
+            cfg,
+            engine: Engine::new(budgets, EngineParams::default()),
+            seeds: SeedFinder::default(),
+            shared: Shared::default(),
+            beacon: BTreeMap::new(),
+        }
+    }
+
+    impl Env {
+        async fn plan(
+            &mut self,
+            d: &mut PlayDuty,
+            slot: u64,
+            now: i64,
+            journal: Option<&Journal>,
+            opened: &[(i32, i32)],
+        ) {
+            self.port.set_clock(slot, now);
+            let t = Tick {
+                slot,
+                now,
+                season: &self.season,
+                clock: SeasonClock::from_season(&self.season),
+                addrs: &self.addrs,
+                cfg: &self.cfg,
+            };
+            d.plan(
+                &t,
+                &self.port,
+                &self.drand,
+                &mut self.rounds,
+                &mut self.engine,
+                &self.beacon,
+                &mut self.seeds,
+                &mut self.shared,
+                journal,
+                opened,
+            )
+            .await
+            .unwrap();
+        }
+        fn anchor(&mut self, bell: u32, region: u8) {
+            self.beacon.insert(
+                (bell, region),
+                AnchorInfo {
+                    a: G + (bell as i64 + 1) * BELL_SECS + 5,
+                    slot: 1,
+                    round: 1,
+                    rent_to: Address::new_from_array([1; 32]),
+                    cache: None,
+                    archived: false,
+                },
+            );
+        }
+    }
+
+    fn depart(host: u64, origin: (i16, i16), tile: u8, dep: u32, arrive: u32) -> DepartRec {
+        DepartRec {
+            host,
+            origin,
+            origin_tile: tile,
+            depart_bell: dep,
+            arrive,
+            dep_mass: 10,
+            tip: 0,
+            seal_root: [0; 32],
+            commit: [0; 32],
+            seal: [0; 165],
+            slot: 1,
+        }
+    }
+
+    /// A march that stays in its origin tile (no path step): the plaintext,
+    /// salt and ct_hash, and the seal root they open.
+    fn march(host: u64, arrive: u32, dest: (i16, i16), tile: u8) -> ([u8; 37], [u8; 32], [u8; 32]) {
+        let p = seal::Plain {
+            version: 1,
+            host_id: host,
+            arrive_bell: arrive,
+            dest_p: dest.0,
+            dest_q: dest.1,
+            dest_tile: tile,
+            stance: 1,
+            ..Default::default()
+        };
+        (seal::pack(&p), [host as u8; 32], [7; 32])
+    }
+
+    fn owner_item(holding: Address, m: &([u8; 37], [u8; 32], [u8; 32])) -> Value {
+        let b = base64::engine::general_purpose::STANDARD;
+        json!({
+            "holding": holding.to_string(), "transit_slot": 0,
+            "plain_b64": b.encode(m.0), "salt_b64": b.encode(m.1), "ct_hash_b64": b.encode(m.2),
+        })
+    }
+
+    /// Cause A (w6-s7 criterion 3): every 4th slot the closes duty read
+    /// each open ClashInputs (and each ArrivalSlot) with its own RPC; with
+    /// a 1,008-bell close grace none closes in the season, the list only
+    /// grows (≈ 15,000 reads, 1.4 s a closes tick at the end of w6-s7).
+    /// Now: one getMultipleAccounts per 100, and a key inside its grace is
+    /// not read again before the grace ends.
+    #[tokio::test]
+    async fn closes_do_not_reread_inputs_inside_grace() {
+        let mut e = env(&["close"], 1_008);
+        let mut d = PlayDuty::default();
+        let bell = 100u32;
+        let mut n_inputs = 0;
+        'outer: for p in -40i16..40 {
+            for q in -40i16..40 {
+                if n_inputs == 5_000 {
+                    break 'outer;
+                }
+                d.index.inputs.insert((p, q, bell));
+                e.port.put(
+                    e.addrs.clash_inputs(p as i32, q as i32, bell),
+                    testkit::acct(program(), testkit::clash_inputs(60_600)),
+                );
+                n_inputs += 1;
+            }
+        }
+        // 1,000 ArrivalSlots settled, inside their claim grace.
+        for i in 0..1_000u32 {
+            let (p, q) = ((i % 40) as i16 - 20, (i / 40) as i16 - 20);
+            let sk = (p, q, bell, 0u8, 0u8);
+            let host = 1_000 + i as u64;
+            d.index.slots.insert(
+                sk,
+                crate::playindex::RevealRec {
+                    dest: (p, q),
+                    arrive: bell,
+                    faction: 0,
+                    i: 0,
+                    host,
+                    displaced: None,
+                    beneficiary: Address::new_from_array([0; 32]),
+                    slot: 1,
+                    created_day: false,
+                },
+            );
+            e.anchor(bell, ix::region_of(p as i32, q as i32));
+            e.port.put(
+                e.addrs.arrival_slot(p as i32, q as i32, bell, 0, 0),
+                testkit::acct(program(), testkit::arrival_slot(host, true)),
+            );
+        }
+        let now0 = G + 102 * BELL_SECS;
+        let mut per_pass = vec![];
+        for k in 1..=10u64 {
+            e.port.take_calls();
+            e.plan(&mut d, 4 * k, now0 + 32 * k as i64, None, &[]).await;
+            let calls = e.port.take_calls();
+            assert!(
+                calls.iter().all(|c| c.len() <= 100),
+                "pass {k}: a read of more than 100 keys"
+            );
+            per_pass.push(calls.len());
+        }
+        assert_eq!(e.engine.pending_len(), 0, "nothing is closable yet");
+        assert!(
+            per_pass[0] <= 60,
+            "the first pass reads in batches of 100: {per_pass:?}"
+        );
+        assert!(
+            per_pass[1..].iter().all(|&n| n <= 2),
+            "inside the grace nothing is read again: {per_pass:?}"
+        );
+    }
+
+    /// End of season (w6-s7 failure 1, U2): an arrival at or after
+    /// `end_bell` can never be anchored, revealed or settled (the program's
+    /// Reveal refuses `WrongStatus` once Ended; 27 failed Reveals in w6-s7).
+    /// The keeper does not send them; an arrival before the end still goes.
+    #[tokio::test]
+    async fn reveals_skip_arrivals_at_or_after_end_bell() {
+        let end = 300u32;
+        let mut e = env(&["reveal"], end);
+        let mut d = PlayDuty::default();
+        let origin = (2i16, 0i16);
+        let mut keys = vec![];
+        for (site, arrive) in [(1u8, end - 1), (2, end), (3, end + 2)] {
+            let host = fclient::addr::host_id(2, 0, site, 1, 5).unwrap();
+            let m = march(host, arrive, origin, 5);
+            let root = seal::seal_root(&seal::commit(&m.0, &m.1), &m.2);
+            let dep = arrive - 3;
+            d.index
+                .departs
+                .insert((host, dep), depart(host, origin, 5, dep, arrive));
+            let h = e.addrs.holding(2, 0, site);
+            e.port.put(
+                h,
+                testkit::acct(
+                    program(),
+                    testkit::holding(1, 0, (1, host, dep, arrive, root)),
+                ),
+            );
+            e.shared
+                .reveals
+                .push((format!("r{site}"), owner_item(h, &m)));
+            keys.push((arrive, format!("reveal:{host}:{dep}")));
+        }
+        let now = G + (end as i64 - 1) * BELL_SECS + 30;
+        e.plan(&mut d, 50, now, None, &[]).await;
+        for (arrive, k) in keys {
+            assert_eq!(
+                e.engine.is_pending(&k),
+                arrive < end,
+                "arrive {arrive} (end_bell {end}): {k}"
+            );
+        }
+    }
+
+    /// Close waste (w6-s7: 28,655 failed CloseArrivalDay/Slot in the
+    /// drain, ≈ 270 per key): a close that ended Dead was planned again at
+    /// the next closes tick. Now a Dead close key waits until its account
+    /// changes.
+    #[tokio::test]
+    async fn dead_close_key_not_replanned() {
+        let mut e = env(&["close"], 1_008);
+        let mut d = PlayDuty::default();
+        let pq = (3i16, 0i16);
+        e.port.put(
+            e.addrs.province(3, 0),
+            testkit::acct(program(), testkit::province(300, &[])),
+        );
+        d.index.days.insert((3, 0, 1));
+        let day_addr = e.addrs.arrival_day(3, 0, 1);
+        e.port
+            .put(day_addr, testkit::acct(program(), testkit::arrival_day()));
+        let key = "close:day:3,0:1".to_string();
+        let now0 = G + 400 * BELL_SECS;
+        e.plan(&mut d, 4, now0, None, &[(3, 0)]).await;
+        assert!(e.engine.is_pending(&key), "planned once");
+        assert!(d.provinces.contains_key(&pq));
+        // Every rung failed: the engine ends it Dead.
+        e.engine.cancel(&key);
+        d.on_outcome(
+            &key,
+            &Outcome::Dead {
+                reason: "fails with a heap frame".into(),
+                code: None,
+            },
+        );
+        // Unchanged account: never planned again (a bell and more of passes).
+        for k in 2..=40u64 {
+            e.plan(&mut d, 4 * k, now0 + 32 * k as i64, None, &[(3, 0)])
+                .await;
+            assert!(!e.engine.is_pending(&key), "re-planned at pass {k}");
+        }
+        // The account changed (lamports): planned again.
+        let mut a = e.port.accounts.lock().unwrap()[&day_addr].clone();
+        a.lamports += 1;
+        e.port.put(day_addr, a);
+        let mut again = false;
+        for k in 41..=80u64 {
+            e.plan(&mut d, 4 * k, now0 + 32 * k as i64, None, &[(3, 0)])
+                .await;
+            again |= e.engine.is_pending(&key);
+        }
+        assert!(again, "a changed account is planned again");
+    }
+
+    /// Redundancy (w6-s7: 1,716 SettleDeparture AlreadyDone and 1,504
+    /// SettleTransit TransitState between keepers A and B): with
+    /// `backup_delay_slots` a settle waits that many slots after it became
+    /// eligible, then re-reads the transit before it is planned.
+    #[tokio::test]
+    async fn backup_delay_rereads_before_settle() {
+        let mut e = env(&["settle-departure"], 1_008);
+        e.cfg.backup_delay_slots = 9;
+        let mut d = PlayDuty::default();
+        e.port.put(
+            e.addrs.province(2, 0),
+            testkit::acct(program(), testkit::province(101, &[])),
+        );
+        let mut hs = vec![];
+        for site in [1u8, 2] {
+            let host = fclient::addr::host_id(2, 0, site, 1, 5).unwrap();
+            d.index
+                .departs
+                .insert((host, 100), depart(host, (2, 0), 5, 100, 104));
+            let h = e.addrs.holding(2, 0, site);
+            e.port.put(
+                h,
+                testkit::acct(
+                    program(),
+                    testkit::holding(1, 0, (1, host, 100, 104, [0; 32])),
+                ),
+            );
+            hs.push((host, h));
+        }
+        let key = |host: u64| format!("sdep:{host}:100:2,0");
+        let now0 = G + 101 * BELL_SECS + 10;
+        for s in 100..109u64 {
+            e.plan(&mut d, s, now0 + 8 * (s as i64 - 100), None, &[(2, 0)])
+                .await;
+            for (host, _) in &hs {
+                assert!(!e.engine.is_pending(&key(*host)), "slot {s}: sent early");
+            }
+        }
+        // The other keeper settles host 2 just before our delay ends: the
+        // re-read sees it and nothing is sent for it.
+        let (h2, a2) = hs[1];
+        e.port.put(
+            a2,
+            testkit::acct(
+                program(),
+                testkit::holding(1, 0, (2, h2, 100, 104, [0; 32])),
+            ),
+        );
+        e.port.take_calls();
+        e.plan(&mut d, 109, now0 + 72, None, &[(2, 0)]).await;
+        assert!(e.port.reads_of(&hs[0].1) >= 1, "re-read before planning");
+        assert!(
+            e.engine.is_pending(&key(hs[0].0)),
+            "planned after the delay"
+        );
+        assert!(
+            !e.engine.is_pending(&key(h2)),
+            "settled by the other keeper meanwhile"
+        );
+    }
+
+    /// Keeper A had its reveal material twice (the seal it opened and the
+    /// owner's submission) and a tick that ran late sent the next version
+    /// into the slot its first version went out in: two Reveals of one
+    /// march in one slot, one `AlreadyDone` (203 in w6-s7). One write per
+    /// `(host, arrive)`, one version per chain slot.
+    #[tokio::test]
+    async fn reveal_sources_deduped_by_host_arrive() {
+        let mut e = env(&["reveal"], 1_008);
+        let mut d = PlayDuty::default();
+        let j = Journal::open(std::path::Path::new(":memory:")).unwrap();
+        let host = fclient::addr::host_id(2, 0, 1, 1, 5).unwrap();
+        let (arrive, dep) = (200u32, 197u32);
+        let m = march(host, arrive, (2, 0), 5);
+        let commit = seal::commit(&m.0, &m.1);
+        let root = seal::seal_root(&commit, &m.2);
+        let mut dr = depart(host, (2, 0), 5, dep, arrive);
+        dr.commit = commit;
+        d.index.departs.insert((host, dep), dr);
+        let h = e.addrs.holding(2, 0, 1);
+        e.port.put(
+            h,
+            testkit::acct(
+                program(),
+                testkit::holding(1, 0, (1, host, dep, arrive, root)),
+            ),
+        );
+        // Both sources: the journalled opened seal and the owner material.
+        j.save_plaintext(host, arrive, &m.0, &m.1).unwrap();
+        e.shared.reveals.push(("r1".into(), owner_item(h, &m)));
+        let mut c = e.cfg.clone();
+        c.delay_floor = 1;
+        c.reveal_floor = Some(1);
+        let mut payers = Payers::new(&[9u8; 32], &c).unwrap();
+        for a in payers.all_addresses() {
+            e.port.put(
+                a,
+                Account {
+                    lamports: 10_000_000_000,
+                    data: vec![],
+                    owner: fclient::addr::system_program(),
+                    executable: false,
+                },
+            );
+        }
+        payers.refresh(&e.port, 0).await.unwrap();
+        let now0 = G + arrive as i64 * BELL_SECS + 30;
+        let mut by_chain_slot: BTreeMap<u64, usize> = BTreeMap::new();
+        for s in 50..54u64 {
+            // Every tick runs late: its sends go out in the next slot, and
+            // the next tick starts in that slot.
+            e.plan(&mut d, s, now0 + 8 * (s as i64 - 50), Some(&j), &[])
+                .await;
+            e.port
+                .send_slot
+                .store(s + 1, std::sync::atomic::Ordering::SeqCst);
+            let before = e.port.sent.lock().unwrap().len();
+            let mut r = StepReport::default();
+            e.engine.send(&e.port, &mut payers, None, s, &mut r).await;
+            let n = e.port.sent.lock().unwrap().len() - before;
+            *by_chain_slot.entry(s + 1).or_default() += n;
+            // The late tick of slot s + 1 reads the same chain slot.
+            if s % 2 == 0 {
+                e.port.set_clock(s + 1, now0 + 8 * (s as i64 - 49));
+                let before = e.port.sent.lock().unwrap().len();
+                let mut r = StepReport::default();
+                e.engine
+                    .send(&e.port, &mut payers, None, s + 1, &mut r)
+                    .await;
+                let n = e.port.sent.lock().unwrap().len() - before;
+                *by_chain_slot.entry(s + 1).or_default() += n;
+            }
+        }
+        assert_eq!(
+            e.engine.pending_keys(),
+            vec![format!("reveal:{host}:{dep}")],
+            "one write for the march"
+        );
+        assert!(
+            by_chain_slot.values().all(|&n| n <= 1),
+            "at most one Reveal of the march per slot: {by_chain_slot:?}"
+        );
+    }
+
+    /// Idle days (w6-s7 criterion 3: 23 days with no arrival at 7-9
+    /// SkipQuiet): a pending resident change split the day's batches at its
+    /// bell. It rides a whole 24-bell batch (SkipQuiet applies it at its
+    /// bell); only a nudge, an arrival or a departure to settle split.
+    #[test]
+    fn idle_day_with_pending_ops_is_one_batch_per_24_bells() {
+        let d = PlayDuty::default();
+        let pq = (1, 0);
+        let end = 1_008;
+        let day0 = 144 * 3;
+        let mut s = ProvState {
+            region: 0,
+            rn: day0,
+            read_slot: 1,
+            pending_bells: [day0 + 5, day0 + 30, day0 + 31, day0 + 77, day0 + 100]
+                .into_iter()
+                .collect(),
+            settle_bells: BTreeSet::new(),
+            active: true,
+            leaves: vec![],
+            last_digest: [0; 32],
+            contested: false,
+        };
+        let mut batches = vec![];
+        // Bells close one by one; a skip goes out when the scheduler says
+        // (into the next day, so the day's last batch is complete).
+        for closed_through in day0..day0 + 144 + 48 {
+            loop {
+                let n = (closed_through + 1 - s.rn).min(SKIP_MAX);
+                if n == 0 || !d.skip_now(end, pq, &s, s.rn, n) {
+                    break;
+                }
+                batches.push((s.rn, n));
+                s.rn += n;
+                s.pending_bells.retain(|&b| b >= s.rn);
+            }
+        }
+        let day: Vec<_> = batches.iter().filter(|b| b.0 < day0 + 144).collect();
+        assert_eq!(day.len(), 6, "one SkipQuiet per 24 bells: {day:?}");
     }
 }

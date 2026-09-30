@@ -8,6 +8,7 @@
 
 use std::collections::BTreeMap;
 
+use frontier_agents::policy::SealKind;
 use frontier_agents::{Arch, Persona};
 use serde_json::{json, Value};
 
@@ -68,6 +69,49 @@ impl Verdict {
     }
 }
 
+/// A march that settled with no REVEAL observed (W6T-3, w6-s7 R4: the
+/// bots journalled `revealed` on the relay's 202 and never learnt that 27
+/// honest Reveals were refused `Shielded`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unrevealed {
+    pub bot: u32,
+    pub persona: Option<Persona>,
+    pub kind: SealKind,
+    pub host: u64,
+    pub depart_bell: u32,
+    pub arrive: u32,
+    pub dest: (i32, i32),
+    /// How the owner revealed: `keeper` (`/f/reveal`), `direct`, or `none`.
+    pub route: &'static str,
+    /// The relay (or the chain) accepted the material.
+    pub accepted: bool,
+    pub tries: u8,
+    /// The last refusal code of a Reveal attempt (e.g. `Shielded`).
+    pub last_code: Option<String>,
+}
+
+impl Unrevealed {
+    pub fn to_json(&self) -> Value {
+        json!({
+            "bot": self.bot,
+            "persona": self.persona.map(|p| p.name()),
+            "seal": match self.kind {
+                SealKind::Honest => "honest",
+                SealKind::Garbage => "garbage",
+                SealKind::BadPlaintext => "bad_plaintext",
+            },
+            "host": self.host.to_string(),
+            "depart_bell": self.depart_bell,
+            "arrive": self.arrive,
+            "dest": [self.dest.0, self.dest.1],
+            "route": self.route,
+            "accepted": self.accepted,
+            "tries": self.tries,
+            "last_code": self.last_code,
+        })
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Report {
     /// (group, action, result) → count.
@@ -79,6 +123,8 @@ pub struct Report {
     pub bots: u64,
     /// `/f/nudge` requests by result (`sent`, `failed`; integ-W4 review).
     pub nudges: BTreeMap<&'static str, u64>,
+    /// Marches settled with no REVEAL observed (W6T-3).
+    pub unrevealed: Vec<Unrevealed>,
 }
 
 fn refused_as(o: &Outcome, codes: &[&str]) -> bool {
@@ -127,22 +173,46 @@ impl Report {
             }
         };
         match p {
-            Persona::SettleRacer => judge(tagged("redepart"), &["HostInTransit"]),
+            // integ-W6t review: the racer tries from its arrival bell on;
+            // a try before the resolve (`NotResident`, `HostBusy`) tests
+            // nothing and is left out.
+            Persona::SettleRacer => judge(
+                tagged("redepart")
+                    .into_iter()
+                    .filter(|o| !refused_as(o, &["NotResident", "HostBusy", "RateLimited"]))
+                    .collect(),
+                &["HostInTransit"],
+            ),
             // integ-W6 (W6-C F1): the keeper's `202` on `/f/reveal` means
             // "queued" (§8.2, `/v1/reveal`: the keeper's pipeline never
             // sends at or after `A + W − 2 slots` and expires the track), not
             // a Reveal the program took, so it is not evidence either way.
             // A late Reveal the program accepts shows as the direct route's
             // `ok`, which still reads `violated`.
+            // integ-W6t review: a late try that found the march already
+            // revealed (`AlreadyDone`, w6-s7), settled (`TransitState`) or
+            // its host gone on a new march (`CommitMismatch`, the 20× racer
+            // check) never reached the window check; it is left out.
             Persona::LateRevealer => judge(
                 tagged("late")
                     .into_iter()
                     .filter(|o| !(o.route == "keeper" && o.ok))
+                    .filter(|o| !refused_as(o, &["AlreadyDone", "TransitState", "CommitMismatch"]))
                     .collect(),
                 &["WindowClosed", "LatchClosed", "Archived", "TooLate"],
             ),
+            // integ-W6t review: a forged SettleTransit that finds the
+            // transit already settled (`TransitState`, `AlreadyDone`: a
+            // keeper settled first) or not yet settleable (`TooEarly`)
+            // never reached the account check; it
+            // tests nothing either way, so it is left out (the rehearsal's
+            // nightly 2: 7 forged Reveals refused `BadAddress`, 2 forged
+            // settles `TransitState`, read `needs-chain`).
             Persona::Forger => judge(
-                tagged("forged"),
+                tagged("forged")
+                    .into_iter()
+                    .filter(|o| !refused_as(o, &["TransitState", "AlreadyDone", "TooEarly"]))
+                    .collect(),
                 &[
                     "BadAccount",
                     "BadAddress",
@@ -178,6 +248,7 @@ impl Report {
         }
         self.steps += other.steps;
         self.bots += other.bots;
+        self.unrevealed.extend(other.unrevealed);
     }
 
     pub fn to_json(&self) -> Value {
@@ -222,6 +293,8 @@ impl Report {
             "personas": personas,
             "errors": self.errors,
             "nudges": self.nudges,
+            "unrevealed": self.unrevealed.iter().map(Unrevealed::to_json).collect::<Vec<_>>(),
+            "unrevealed_honest": self.unrevealed.iter().filter(|u| u.kind == SealKind::Honest).count(),
         })
     }
 }
@@ -243,6 +316,60 @@ mod tests {
             signature: None,
             tag: Some(tag),
         }
+    }
+
+    /// integ-W6t review: a late Reveal refused because the march was
+    /// already revealed or settled is the expected refusal.
+    #[test]
+    fn a_settle_racer_try_before_the_resolve_is_no_evidence() {
+        let mut r = Report::default();
+        r.record(o(Persona::SettleRacer, "redepart", false, "NotResident", 0));
+        r.record(o(Persona::SettleRacer, "redepart", false, "HostBusy", 0));
+        r.record(o(
+            Persona::SettleRacer,
+            "redepart",
+            false,
+            "RateLimited",
+            429,
+        ));
+        assert_eq!(r.verdict(Persona::SettleRacer), Verdict::Pending);
+        r.record(o(
+            Persona::SettleRacer,
+            "redepart",
+            false,
+            "HostInTransit",
+            0,
+        ));
+        assert_eq!(r.verdict(Persona::SettleRacer), Verdict::Observed);
+        r.record(o(Persona::SettleRacer, "redepart", true, "", 0));
+        assert_eq!(r.verdict(Persona::SettleRacer), Verdict::Violated);
+    }
+
+    #[test]
+    fn a_forged_settle_that_came_too_late_is_no_evidence() {
+        let mut r = Report::default();
+        r.record(o(Persona::Forger, "forged", false, "TransitState", 0));
+        r.record(o(Persona::Forger, "forged", false, "TooEarly", 0));
+        assert_eq!(r.verdict(Persona::Forger), Verdict::Pending);
+        r.record(o(Persona::Forger, "forged", false, "BadAddress", 0));
+        assert_eq!(r.verdict(Persona::Forger), Verdict::Observed);
+        r.record(o(Persona::Forger, "forged", false, "Shielded", 0));
+        assert_eq!(r.verdict(Persona::Forger), Verdict::NeedsChain);
+        r.record(o(Persona::Forger, "forged", true, "", 0));
+        assert_eq!(r.verdict(Persona::Forger), Verdict::Violated);
+    }
+
+    #[test]
+    fn late_reveal_refused_after_reveal_or_settle_is_observed() {
+        let mut r = Report::default();
+        r.record(o(Persona::LateRevealer, "late", false, "TransitState", 0));
+        r.record(o(Persona::LateRevealer, "late", false, "AlreadyDone", 0));
+        r.record(o(Persona::LateRevealer, "late", false, "CommitMismatch", 0));
+        assert_eq!(r.verdict(Persona::LateRevealer), Verdict::Pending);
+        r.record(o(Persona::LateRevealer, "late", false, "WindowClosed", 0));
+        assert_eq!(r.verdict(Persona::LateRevealer), Verdict::Observed);
+        r.record(o(Persona::LateRevealer, "late", true, "", 0));
+        assert_eq!(r.verdict(Persona::LateRevealer), Verdict::Violated);
     }
 
     #[test]
@@ -284,6 +411,9 @@ mod tests {
             "NotResident",
             400,
         ));
+        // integ-W6t review: a try before the resolve is no evidence.
+        assert_eq!(r.verdict(Persona::SettleRacer), Verdict::Pending);
+        r.record(o(Persona::SettleRacer, "redepart", false, "Shielded", 400));
         assert_eq!(r.verdict(Persona::SettleRacer), Verdict::NeedsChain);
         assert_eq!(r.verdict(Persona::MinTip), Verdict::NeedsChain);
         let j = r.to_json();

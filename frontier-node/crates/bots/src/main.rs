@@ -174,6 +174,25 @@ fn is_loopback_url(u: &str) -> bool {
         && port.parse::<u16>().is_ok()
 }
 
+/// Keeps the report of an earlier fleet lifetime (a restart after a chaos
+/// kill) as `report-life-<n>.json` beside `report.json`, so this lifetime's
+/// report does not overwrite what the killed one saw (integ-W6t review:
+/// `w6-s7`'s report covered only the last lifetime; the stack report
+/// merges them). Returns the kept path.
+pub fn keep_previous_report(path: &Option<PathBuf>) -> Option<PathBuf> {
+    let p = path.as_ref()?;
+    if !p.exists() {
+        return None;
+    }
+    let dir = p.parent()?;
+    let n = (1..)
+        .find(|n| !dir.join(format!("report-life-{n}.json")).exists())
+        .unwrap_or(1);
+    let to = dir.join(format!("report-life-{n}.json"));
+    std::fs::rename(p, &to).ok()?;
+    Some(to)
+}
+
 fn write_report(path: &Option<PathBuf>, v: &serde_json::Value) {
     if let Some(p) = path {
         let tmp = p.with_extension("tmp");
@@ -301,6 +320,12 @@ async fn go<D: frontier_bots::ports::DirectPort + 'static>(a: Args, direct: Opti
         a.eager_personas,
         r.iter().filter(|s| s.join_day == 0).count()
     );
+    if let Some(k) = keep_previous_report(&a.report) {
+        eprintln!(
+            "frontier-bots: the previous lifetime's report kept as {}",
+            k.display()
+        );
+    }
     let sh = fleet.shared.clone();
     let rp = a.report.clone();
     let stop = Arc::new(AtomicBool::new(false));
@@ -381,7 +406,34 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_loopback_url, parse_from};
+    use super::{is_loopback_url, keep_previous_report, parse_from};
+
+    /// integ-W6t review: a restarted fleet keeps the killed lifetime's
+    /// report (`report-life-<n>.json`) instead of overwriting it.
+    #[test]
+    fn a_restart_keeps_the_previous_report() {
+        let dir = std::env::temp_dir().join(format!("bots-life-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = Some(dir.join("report.json"));
+        assert_eq!(keep_previous_report(&p), None);
+        std::fs::write(dir.join("report.json"), "{\"steps\": 1}").unwrap();
+        assert_eq!(
+            keep_previous_report(&p),
+            Some(dir.join("report-life-1.json"))
+        );
+        assert!(!dir.join("report.json").exists());
+        std::fs::write(dir.join("report.json"), "{\"steps\": 2}").unwrap();
+        assert_eq!(
+            keep_previous_report(&p),
+            Some(dir.join("report-life-2.json"))
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("report-life-1.json")).unwrap(),
+            "{\"steps\": 1}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// W6-C (W5-B R3): the stack passes `--day0-share` and
     /// `--eager-personas` through `bots_args`.

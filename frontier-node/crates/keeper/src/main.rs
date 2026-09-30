@@ -7,6 +7,10 @@
 //! W1-F request R4). The loopback API serves when `api` is set, with the
 //! `/v1/reveal` accept path reading the same RPC (W3-C).
 //! `--init-seed` writes a fresh 32-byte master seed (mode 0600) and exits.
+//! With `FRONTIER_KEEPER_TICK_LOG=1` every tick prints one `TICK` line to
+//! stderr (slot, the chain's slot at the first send, versions sent, wall
+//! ms per phase; W6T-2), and an idle tick that sent (the in-slot drand
+//! retry) an `IDLE` line.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -210,13 +214,22 @@ async fn main() {
             std::process::exit(1)
         }
     }
+    let tick_log = std::env::var("FRONTIER_KEEPER_TICK_LOG").is_ok_and(|v| v == "1");
     let mut iv = tokio::time::interval(Duration::from_millis(100));
     iv.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             _ = iv.tick() => {
-                if let Err(e) = k.tick().await {
-                    eprintln!("tick: {e}");
+                let t0 = std::time::Instant::now();
+                match k.tick().await {
+                    Ok(r) if tick_log && !r.idle => {
+                        eprintln!("{}", r.line(t0.elapsed().as_millis() as u64));
+                    }
+                    Ok(r) if tick_log && r.sent > 0 => {
+                        eprintln!("IDLE{}", &r.line(t0.elapsed().as_millis() as u64)[4..]);
+                    }
+                    Ok(_) => {}
+                    Err(e) => eprintln!("tick: {e}"),
                 }
             }
             _ = tokio::signal::ctrl_c() => break,

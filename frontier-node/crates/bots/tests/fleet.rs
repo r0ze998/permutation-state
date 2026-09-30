@@ -48,6 +48,9 @@ struct MockRelay {
     quota: u32,
     /// Reveals refused as after the window (410 WindowClosed).
     window_closed: bool,
+    /// Reveals refused as the keeper's §5.11 step-6 check does (409
+    /// `{"error":"Shielded"}`, passed through; W6T-3).
+    shielded: bool,
     journal: Option<std::path::PathBuf>,
     log: Mutex<RelayLog>,
 }
@@ -59,6 +62,7 @@ impl MockRelay {
             presets,
             quota: 40,
             window_closed: false,
+            shielded: false,
             journal: None,
             log: Mutex::new(RelayLog::default()),
         }
@@ -190,6 +194,8 @@ impl RelayPort for MockRelay {
                 self.log.lock().unwrap().reveals.push(b.clone());
                 Ok(if self.window_closed {
                     Self::refuse(410, "WindowClosed")
+                } else if self.shielded {
+                    Answer::new(409, json!({"error": "Shielded"}))
                 } else {
                     Answer::new(202, json!({"accepted": true, "track": "t1"}))
                 })
@@ -437,6 +443,8 @@ fn memo_for(arrive: u32, kind: SealKind, landed_host: bool) -> MarchMemo {
         sent: true,
         reveal_tries: 0,
         revealed: false,
+        accepted: false,
+        last_code: None,
         late_done: false,
         settled: false,
         redeparted: false,
@@ -472,7 +480,9 @@ async fn owners_reveal_through_the_keeper_link() {
         b64(r["ct_hash_b64"].as_str().unwrap()).unwrap(),
         m.ct_hash.to_vec()
     );
-    assert!(m.revealed, "202 accepted marks the march revealed");
+    // W6T-3: a 202 queues the material at the keepers; only an observed
+    // REVEAL marks the march revealed (`revealed_only_on_observed_reveal`).
+    assert!(m.accepted && !m.revealed, "202 is accepted, not revealed");
     // Nothing else during a duty wake-up.
     assert!(log.posts.is_empty());
 }
@@ -722,6 +732,30 @@ async fn a_march_settled_by_someone_else_is_reconciled() {
     assert_eq!(settled, vec![true, true, false]);
 }
 
+/// integ-W6t review: a settle racer polls between its arrival and the
+/// settlement (its window is a few slots, mid-bell); other bots and a racer
+/// that already re-departed do not.
+#[test]
+fn the_settle_racer_polls_through_its_race() {
+    use frontier_bots::fleet::settle_racer_polls;
+    let a = fixture::IN_TRANSIT_ARRIVE;
+    let mut bot = Bot::new(spec(FINAL, Arch::Bot, Some(Persona::SettleRacer)), SEED);
+    bot.mem.marches.push(memo_for(a, SealKind::Garbage, false));
+    assert!(!settle_racer_polls(&bot, a - 1), "before its arrival");
+    assert!(
+        !settle_racer_polls(&bot, a),
+        "the resolve comes after the close"
+    );
+    assert!(settle_racer_polls(&bot, a + 1));
+    assert!(settle_racer_polls(&bot, a + 4));
+    assert!(!settle_racer_polls(&bot, a + 5), "the race is long over");
+    bot.mem.marches[0].redeparted = true;
+    assert!(!settle_racer_polls(&bot, a + 1));
+    let mut other = Bot::new(spec(FINAL, Arch::Bot, Some(Persona::LateRevealer)), SEED);
+    other.mem.marches.push(memo_for(a, SealKind::Honest, false));
+    assert!(!settle_racer_polls(&other, a + 1));
+}
+
 #[tokio::test]
 async fn the_settle_racer_redeparts_then_settles_at_the_first_instant() {
     let sh = shared::<NoDirect>(MockRelay::new(presets()), None);
@@ -798,4 +832,93 @@ async fn the_settle_racer_redeparts_then_settles_at_the_first_instant() {
         fclient::Address::new_from_array(fixture::SLOT_BENEFICIARY)
     );
     assert_eq!(key(9), fclient::Address::new_from_array(fixture::RESOLVER));
+}
+
+/// W6T-3 (w6-s7 R4): the marchbook said `revealed` for 27 marches whose
+/// every Reveal the program refused (`Shielded`), because the relay's 202
+/// was taken for a landing. Now a 2xx journals `accepted`; `revealed` only
+/// when the herald shows the march's REVEAL (its ArrivalSlot or ClashInputs
+/// record); a march settled without one is in `report.json`'s
+/// `unrevealed` with its route and last refusal code.
+#[tokio::test]
+async fn revealed_only_on_observed_reveal() {
+    let dir = tmp("revealed-observed");
+    let jp = dir.join("marchbook.jsonl");
+    let mut sh = shared::<NoDirect>(MockRelay::new(presets()), None);
+    sh.journal = Some(Journal::open(&jp).unwrap());
+    let states = |jp: &std::path::Path| -> Vec<(String, u32)> {
+        std::fs::read_to_string(jp)
+            .unwrap()
+            .lines()
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+            .map(|v| {
+                (
+                    v["ev"].as_str().unwrap().to_string(),
+                    v["depart_bell"].as_u64().unwrap() as u32,
+                )
+            })
+            .collect()
+    };
+    // (a) In its arrival bell: the owner's POST is answered 202.
+    let mut bot = Bot::new(spec(FINAL, Arch::Daily, None), SEED);
+    let mut a = memo_for(fixture::BELL, SealKind::Honest, false);
+    a.key.1 = 31;
+    bot.mem.marches.push(a);
+    bot.step(&sh, false).await;
+    let m = bot.mem.march((bot.mem.marches[0].key.0, 31)).unwrap();
+    assert!(m.accepted && !m.revealed);
+    let st = states(&jp);
+    assert!(st.contains(&("accepted".into(), 31)), "{st:?}");
+    assert!(!st.contains(&("revealed".into(), 31)), "{st:?}");
+    // (b) The herald shows the REVEAL of the march arriving at 38 (its
+    // ArrivalSlot in the bell-38 envelope): now it is revealed.
+    let mut bot = Bot::new(spec(FINAL, Arch::Daily, None), SEED);
+    let mut b = memo_for(fixture::IN_TRANSIT_ARRIVE, SealKind::Honest, false);
+    b.key.1 = 32;
+    b.accepted = true;
+    bot.mem.marches.push(b);
+    bot.step(&sh, false).await;
+    assert!(bot.mem.marches[0].revealed);
+    assert!(states(&jp).contains(&("revealed".into(), 32)));
+    // (c) Refused (the keeper's 409 passed through by the relay) and
+    // settled by someone else with no REVEAL seen: listed unrevealed.
+    let mut relay = MockRelay::new(presets());
+    relay.shielded = true;
+    let mut sh2 = shared::<NoDirect>(relay, None);
+    sh2.journal = Some(Journal::open(&jp).unwrap());
+    let mut bot = Bot::new(spec(FINAL, Arch::Daily, None), SEED);
+    let mut c = memo_for(fixture::BELL, SealKind::Honest, false);
+    c.key.1 = 33;
+    bot.mem.marches.push(c);
+    bot.step(&sh2, false).await;
+    let m = &bot.mem.marches[0];
+    assert!(!m.accepted && !m.revealed);
+    assert_eq!(m.last_code.as_deref(), Some("Shielded"));
+    // Journalled with its code (the fold is `journal::tests`').
+    let refused = std::fs::read_to_string(&jp)
+        .unwrap()
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .find(|v| v["ev"] == "reveal_refused" && v["depart_bell"] == 33)
+        .expect("reveal_refused line");
+    assert_eq!(refused["code"], "Shielded");
+    assert_eq!(refused["route"], "keeper");
+    assert!(!states(&jp).contains(&("revealed".into(), 33)));
+    // Settled at bell 30 with no transit left and no REVEAL seen.
+    let mut bot = Bot::new(spec(FINAL, Arch::Daily, None), SEED);
+    let mut d = memo_for(30, SealKind::Honest, true);
+    d.reveal_tries = 2;
+    d.last_code = Some("Shielded".into());
+    bot.mem.marches.push(d);
+    bot.step(&sh2, false).await;
+    assert!(bot.mem.marches[0].settled);
+    let rep = sh2.report.lock().unwrap().to_json();
+    let u = rep["unrevealed"].as_array().unwrap();
+    assert_eq!(u.len(), 1, "{rep}");
+    assert_eq!(u[0]["arrive"], 30);
+    assert_eq!(u[0]["route"], "keeper");
+    assert_eq!(u[0]["last_code"], "Shielded");
+    assert_eq!(u[0]["seal"], "honest");
+    assert_eq!(rep["unrevealed_honest"], 1);
+    let _ = std::fs::remove_dir_all(&dir);
 }

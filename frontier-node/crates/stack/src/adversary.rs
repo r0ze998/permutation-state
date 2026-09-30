@@ -20,15 +20,25 @@
 //! defence claim (a late Reveal's refund inside its grace:
 //! `fclient::play::open_claim`, the keeper's own rule) whose grace outlasts
 //! the hold by a bell, so claims wait and none is lost. Both are armed over
-//! the whole play window like the ticket hold.
+//! the whole play window like the ticket hold. W6T-4: `slots-below` and
+//! `lag` are armed to the end of play as well (w6-s7 skipped both after
+//! their one-hour deadline, and `defence-pool` for want of the claim a
+//! below-cap slot hold creates): `slots-below` from the first hour (by 60%
+//! of play at the latest), `lag` on the origin of a transit in flight (a
+//! Holding transit in state 1-2; a Province entry in state 3 lasts only
+//! until its SettleDeparture). `slots-above` is armed to the end of play
+//! too, and both slot holds aim at a province the fleet sealed marches to
+//! for the held bell (the bots' marchbooks; a seal hides the destination on
+//! chain), falling back to a province with arrivals today. A
+//! `hold-skipped` hold makes the run not exit-grade (report row E).
 //!
 //! | kind | keys | price (milli) | length | expected |
 //! |---|---|---|---|---|
-//! | `slots-below` | one province-bell's ArrivalSlots + ArrivalDay | 1,500 (< P_def 2.0) | through the close | reveals land (keepers escalate past it) |
+//! | `slots-below` | one province-bell's ArrivalSlots + ArrivalDay (armed over play) | 1,900 (< P_def 2.0; integ-W6t review: above the keepers' third Reveal bid 1,732) | through the close | reveals land on the keepers' fourth version, ≥ `lateness_slots` after the anchor, so each opens a defence claim |
 //! | `slots-above` | the same, another bell | 3,000 (> P_def) | through the close | reveals wait; late ones routed and flagged |
 //! | `anchor` | one region's next BellAnchor | 1,000 (> P_delay 0.5) | ⅓ bell | the window stays open longer (delay only) |
 //! | `keeper-payers` | 20 of keeper A's reveal payers | 3,000 | 1 bell | the keeper draws other payers (effective N ≥ 150 − 20) |
-//! | `lag` | an origin Province + its region's next anchor | 1,000 | 2 bells | the destination's result is unchanged (G7 in play) |
+//! | `lag` | the origin Province of transits in flight + its region's next anchor (armed over play) | 1,000 | 2 bells | the destination's result is unchanged (G7 in play) |
 //! | `ticket` | a Province with an open ticket cohort | 1,000 | 2 bells | finality waits for the cohort; the higher score still wins |
 //! | `frontier-fund` | Frontier + the ProvinceFund of the wedge a ring opening draws on (during the opening) | 1,000 | 1 bell | ring openings and folds wait (delay) |
 //! | `defence-pool` | the DefencePool, while a defence claim is open (≥ 4 bells of its grace left) | 1,000 | 3 bells (half the claim grace) | claims and sweeps wait; none lost inside the grace |
@@ -74,7 +84,7 @@ pub fn plan(start: i64, end: i64) -> Vec<Planned> {
         .enumerate()
         .map(|(i, k)| {
             let (prio, secs) = match *k {
-                "slots-below" => (1_500, 1_500),
+                "slots-below" => (SLOTS_BELOW_MILLI, 1_500),
                 "slots-above" => (3_000, 1_500),
                 "anchor" => (1_000, 200),
                 "keeper-payers" => (3_000, 600),
@@ -88,11 +98,21 @@ pub fn plan(start: i64, end: i64) -> Vec<Planned> {
             // is armed from the first bell and fires at the first open
             // cohort it sees. W6-C: the ring-opening and claim-grace holds
             // are armed likewise (from the first hour) and fire when their
-            // situation arises.
-            let armed = matches!(*k, "ticket" | "frontier-fund" | "defence-pool");
+            // situation arises. W6T-4: `slots-below` and `lag` are armed to
+            // the end of play too (w6-s7 skipped both after one game hour
+            // with nothing pending), and `slots-below` starts by 60% of play
+            // so the escalation past it can open a claim `defence-pool`
+            // holds. `slots-above` needs arrivals as well and is armed the
+            // same way (the U4 R3 run skipped it after its one hour, bell 16:
+            // the 300-bot fleet's first arrivals came at bell 76).
+            let armed = matches!(
+                *k,
+                "ticket" | "frontier-fund" | "defence-pool" | "slots-below" | "slots-above" | "lag"
+            );
             let at = match *k {
                 "ticket" => start + 600,
                 "frontier-fund" | "defence-pool" => start + 3_600,
+                "slots-below" => start + 3_600.min((end - start) * 6 / 10),
                 _ => start + 3_600 + span * i as i64 / n,
             };
             let deadline = if armed { end } else { at + 3_600 };
@@ -106,6 +126,18 @@ pub fn plan(start: i64, end: i64) -> Vec<Planned> {
         })
         .collect()
 }
+
+/// The `slots-below` price (integ-W6t review). Keepers bid a Reveal
+/// 433, 866, 1,732, then 2,000 (P_def) milli-lamports per CU in the slots
+/// after their first version (`keeper::engine::EngineParams::bid`), and the
+/// first version goes out a slot after the anchor lands at the earliest.
+/// At 1,500 the third version won and the Reveal landed 3 slots after the
+/// anchor, one short of `lateness_slots` (4): a claim opened only when a
+/// keeper happened to start late, so `defence-pool` was skipped in 2 of 5
+/// merged-tree runs and a 3-day rehearsal re-armed 12 windows without one.
+/// At 1,900 the fourth version (2,000, still the keepers' cap) wins: the
+/// Reveal lands ≥ 4 slots after the anchor and opens a claim.
+pub const SLOTS_BELOW_MILLI: u64 = 1_900;
 
 /// Slots for `game_secs` at `scale` (a slot is 0.4 × scale game seconds).
 pub fn slots_for(game_secs: i64, scale: f64) -> u64 {
@@ -188,6 +220,88 @@ pub struct Pending {
     pub ring_opening: Option<fclient::land::RingOpening>,
     /// Open defence claims: `(ArrivalSlot, grace end)` (W6-C).
     pub open_claims: Vec<(Address, i64)>,
+    /// Transits in flight (W6T-4): each Holding transit in state 1 (DEPART
+    /// seen) or 2 (departure settled), not yet settled at its destination.
+    pub in_flight: Vec<InFlight>,
+    /// Marches the fleet sealed to arrive at the next bell, by destination
+    /// (W6T-4, from the bots' marchbooks: a seal hides the destination on
+    /// chain, so only the harness knows where a Reveal will land):
+    /// `((P, Q), count)`, most first.
+    pub planned_next: Vec<((i16, i16), usize)>,
+    /// Provinces a slot hold of this probe already holds (W6T-4: the other
+    /// slot hold takes another one, so a 3.0 hold never masks the 1.5 one).
+    pub held: Vec<(i16, i16)>,
+}
+
+/// The marches sealed to arrive at `bell` whose Depart the fleet sent, by
+/// destination, most first (W6T-4): a march `(host, depart_bell)` of an
+/// `ev: "sealed"` line counts once, and only with a `sent` line and no
+/// `failed` line (the U4 R5 run's first planned province had only failed
+/// Departs, so its slots were held for nothing).
+pub fn planned_from_marchbook(text: &str, bell: u32) -> Vec<((i16, i16), usize)> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let mut sealed: BTreeMap<(String, u64), (i16, i16)> = BTreeMap::new();
+    type March = (String, u64);
+    let mut sent: BTreeSet<March> = BTreeSet::new();
+    let mut failed: BTreeSet<March> = BTreeSet::new();
+    for l in text.lines() {
+        let Ok(v) = serde_json::from_str::<Value>(l) else {
+            continue;
+        };
+        let (Some(h), Some(d)) = (v["host"].as_str(), v["depart_bell"].as_u64()) else {
+            continue;
+        };
+        let key = (h.to_string(), d);
+        match v["ev"].as_str() {
+            Some("sealed") if v["arrive_bell"].as_u64() == Some(bell as u64) => {
+                if let (Some(p), Some(q)) = (v["dest"][0].as_i64(), v["dest"][1].as_i64()) {
+                    sealed.insert(key, (p as i16, q as i16));
+                }
+            }
+            Some("sent") => {
+                sent.insert(key);
+            }
+            Some("failed") => {
+                failed.insert(key);
+            }
+            _ => {}
+        }
+    }
+    let mut n: BTreeMap<(i16, i16), usize> = BTreeMap::new();
+    for (k, d) in &sealed {
+        if sent.contains(k) && !failed.contains(k) {
+            *n.entry(*d).or_default() += 1;
+        }
+    }
+    let mut v: Vec<((i16, i16), usize)> = n.into_iter().collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    v
+}
+
+/// [`planned_from_marchbook`] over every `marchbook-*.jsonl` of a bots
+/// directory.
+pub fn planned_arrivals(bots_dir: &std::path::Path, bell: u32) -> Vec<((i16, i16), usize)> {
+    let mut text = String::new();
+    if let Ok(rd) = std::fs::read_dir(bots_dir) {
+        for e in rd.flatten() {
+            let n = e.file_name().to_string_lossy().into_owned();
+            if n.starts_with("marchbook-") && n.ends_with(".jsonl") {
+                if let Ok(t) = std::fs::read_to_string(e.path()) {
+                    text.push_str(&t);
+                    text.push('\n');
+                }
+            }
+        }
+    }
+    planned_from_marchbook(&text, bell)
+}
+
+/// One transit in flight (a Holding's transit record in state 1 or 2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InFlight {
+    pub origin: (i16, i16),
+    pub arrive_bell: u32,
+    pub state: u8,
 }
 
 /// Length of the `defence-pool` hold, game seconds (half the claim grace).
@@ -276,12 +390,72 @@ pub async fn probe_land_and_claims(
     (ring, claims)
 }
 
+/// The transits in flight of the season (W6T-4, only while a `lag` hold
+/// waits): every Holding's transit records in state 1 or 2.
+pub async fn probe_in_flight(
+    chain: &crate::chain::Chain,
+    program: &Address,
+    season_id: u64,
+) -> Vec<InFlight> {
+    let v = chain
+        .call(
+            "getProgramAccounts",
+            json!([program.to_string(), {"encoding": "base64",
+                "filters": [{"dataSize": fclient::abi::size::HOLDING}]}]),
+        )
+        .await
+        .unwrap_or(Value::Null);
+    let rows = v
+        .as_array()
+        .or_else(|| v.get("value").and_then(|x| x.as_array()))
+        .cloned()
+        .unwrap_or_default();
+    let mut out = vec![];
+    for r in rows {
+        if let Ok(Some(acc)) = fclient::rpc::parse_account(&r["account"]) {
+            if acc.owner != *program {
+                continue;
+            }
+            if let Ok(h) = fclient::decode::Holding::decode(&acc.data) {
+                if h.h.season_id == season_id {
+                    out.extend(in_flight_of(&h.transit));
+                }
+            }
+        }
+    }
+    out
+}
+
 /// The origin of a march in flight: the Province with the most departed
 /// entries awaiting their settle (state 3).
 pub fn march_origin(ps: &[Province]) -> Option<&Province> {
     ps.iter()
         .filter(|p| p.entries.iter().any(|e| e.state == 3))
         .max_by_key(|p| p.entries.iter().filter(|e| e.state == 3).count())
+}
+
+/// The transits in flight among Holding transit records (state 1 or 2).
+pub fn in_flight_of(ts: &[fclient::decode::Transit]) -> Vec<InFlight> {
+    ts.iter()
+        .filter(|t| matches!(t.state, 1 | 2))
+        .map(|t| InFlight {
+            origin: (t.origin_p, t.origin_q),
+            arrive_bell: t.arrive_bell,
+            state: t.state,
+        })
+        .collect()
+}
+
+/// The origin Province with the most transits in flight (W6T-4; ties: the
+/// lower coordinates), among the opened Provinces.
+pub fn origin_in_flight<'a>(ps: &'a [Province], fl: &[InFlight]) -> Option<(&'a Province, usize)> {
+    let mut n: std::collections::BTreeMap<(i16, i16), usize> = std::collections::BTreeMap::new();
+    for f in fl {
+        *n.entry(f.origin).or_default() += 1;
+    }
+    n.iter()
+        .filter_map(|(o, c)| ps.iter().find(|p| (p.p, p.q) == *o).map(|p| (p, *c)))
+        .max_by_key(|(p, c)| (*c, -(p.p as i32), -(p.q as i32)))
 }
 
 /// [`keys_for`] against the chain's pending work.
@@ -299,15 +473,32 @@ pub fn keys_for_pending(
     let next = bell_now + 1;
     match kind {
         "slots-below" | "slots-above" => {
+            // W6T-4: a province the fleet sealed marches to for the next
+            // bell (its Reveals will need these slots), else the old guess.
+            let free = |pq: &(i16, i16)| !pending.held.contains(pq);
+            let planned = pending
+                .planned_next
+                .iter()
+                .filter(|(d, _)| free(d))
+                .find_map(|(d, n)| ps.iter().find(|p| (p.p, p.q) == *d).map(|p| (p, *n)));
+            if let Some((p, n)) = planned {
+                return Some((
+                    slot_keys(a, p, next, transit_slots),
+                    json!({"province": [p.p, p.q], "bell": next, "planned_arrivals": n,
+                        "why": "marches sealed to arrive there at this bell (bots' marchbook)"}),
+                ));
+            }
             let p = if pending.require {
                 let with: Vec<Province> = ps
                     .iter()
-                    .filter(|p| pending.arrivals_today.contains(&(p.p, p.q)))
+                    .filter(|p| pending.arrivals_today.contains(&(p.p, p.q)) && free(&(p.p, p.q)))
                     .cloned()
                     .collect();
                 busiest(&with).cloned()?
             } else {
-                busiest(ps)?.clone()
+                let with: Vec<Province> =
+                    ps.iter().filter(|p| free(&(p.p, p.q))).cloned().collect();
+                busiest(&with)?.clone()
             };
             Some((
                 slot_keys(a, &p, next, transit_slots),
@@ -328,15 +519,18 @@ pub fn keys_for_pending(
             )
         }),
         "lag" => {
-            let p = if pending.require {
-                march_origin(ps)?
-            } else {
-                march_origin(ps).or_else(|| busiest(ps))?
+            // W6T-4: the origin of transits in flight (Holding transit state
+            // 1-2); Province entries in state 3 last only until the
+            // SettleDeparture a few slots later.
+            let (p, n) = match origin_in_flight(ps, &pending.in_flight) {
+                Some(x) => x,
+                None if pending.require => return None,
+                None => (march_origin(ps).or_else(|| busiest(ps))?, 0),
             };
             Some((
                 vec![a.province(p.p as i32, p.q as i32), a.anchor(next, p.region)],
-                json!({"province": [p.p, p.q], "region": p.region, "bell": next,
-                    "why": "the origin of a march in flight (departed entries await their settle)"}),
+                json!({"province": [p.p, p.q], "region": p.region, "bell": next, "in_flight": n,
+                    "why": "the origin of transits in flight (DEPART seen, not settled)"}),
             ))
         }
         "ticket" => {
@@ -415,6 +609,190 @@ pub fn keys_for_pending(
     }
 }
 
+/// One hold of the run's schedule and where it stands.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HoldState {
+    pub plan: Planned,
+    pub done: bool,
+    /// Game time its window ends, once fired.
+    pub ends: Option<i64>,
+    /// A re-armed `slots-below` (integ-W6t review): the kind has fired
+    /// already, so expiring unused is not a `hold-skipped`.
+    pub rearm: bool,
+}
+
+impl HoldState {
+    pub fn new(plan: Planned) -> HoldState {
+        HoldState {
+            plan,
+            done: false,
+            ends: None,
+            rearm: false,
+        }
+    }
+}
+
+/// What the supervisor does for the holds at one probe.
+#[derive(Clone, Debug, PartialEq)]
+pub enum HoldAction {
+    /// Place `frontier_hold` on `keys` for `game_secs` (hold `i`).
+    Fire {
+        i: usize,
+        keys: Vec<Address>,
+        detail: Value,
+        game_secs: i64,
+    },
+    /// Hold `i` found nothing to hold before its deadline (`hold-skipped`:
+    /// the run is not exit-grade).
+    Skip { i: usize },
+    /// A re-armed `slots-below` found nothing before its deadline (the kind
+    /// fired earlier; reported, not a skip).
+    RearmExpired { i: usize },
+    /// A new `slots-below` was armed (hold `i`).
+    Rearm {
+        i: usize,
+        attempt: usize,
+        why: Value,
+    },
+}
+
+/// Re-arms of `slots-below` at most (integ-W6t review): one per
+/// `slots-below` window that opened no defence claim, until `defence-pool`
+/// has one.
+pub const SLOTS_BELOW_REARMS: usize = 12;
+
+/// The holds' decisions at one probe (the supervisor places the fired ones
+/// and writes the events). `pending.now` is the game time of the probe.
+///
+/// integ-W6t review (the R3 and nightly-3 runs of integ-W6t skipped
+/// `defence-pool`: its claim comes only from a Reveal the below-cap
+/// `slots-below` hold delays past `lateness_slots`, and one window may
+/// delay none): while `defence-pool` waits and no live claim is open, a
+/// `slots-below` whose window ended a bell ago without opening one is
+/// re-armed on the next planned arrivals, up to [`SLOTS_BELOW_REARMS`]
+/// times and only while the new window, a claim and the defence hold still
+/// fit before the end of play.
+#[allow(clippy::too_many_arguments)]
+pub fn decide_holds(
+    holds: &mut Vec<HoldState>,
+    pending: &mut Pending,
+    a: &Addresses,
+    ps: &[Province],
+    bell_now: u32,
+    transit_slots: u8,
+    keeper_reveal_payers: &[Address],
+    relay_payers: &[Address],
+    genesis_ts: i64,
+    bell_secs: i64,
+    play_end: i64,
+) -> Vec<HoldAction> {
+    let now = pending.now;
+    let mut out = vec![];
+    for (i, h) in holds.iter_mut().enumerate() {
+        if h.done || now < h.plan.at {
+            continue;
+        }
+        match keys_for_pending(
+            h.plan.kind,
+            a,
+            ps,
+            pending,
+            bell_now,
+            transit_slots,
+            keeper_reveal_payers,
+            relay_payers,
+        ) {
+            // A re-armed `slots-below` holds only a bell the fleet sealed
+            // a march to (the marchbook), not the "arrivals today" guess: a
+            // window without a Reveal in it cannot open a claim.
+            Some((_, detail))
+                if h.rearm && detail.get("planned_arrivals").is_none() && now > h.plan.deadline =>
+            {
+                h.done = true;
+                out.push(HoldAction::RearmExpired { i });
+            }
+            Some((_, detail)) if h.rearm && detail.get("planned_arrivals").is_none() => {}
+            Some((keys, detail)) => {
+                // The ticket hold lasts through its cohort's bells.
+                let game_secs = match detail["until_bell"].as_i64() {
+                    Some(u) => (genesis_ts + u * bell_secs - now).max(bell_secs),
+                    None => h.plan.game_secs,
+                };
+                h.done = true;
+                h.ends = Some(now + game_secs);
+                // W6T-4: the other slot hold of this probe takes another
+                // province.
+                if let (Some(p), Some(q)) = (
+                    detail["province"][0].as_i64(),
+                    detail["province"][1].as_i64(),
+                ) {
+                    if h.plan.kind.starts_with("slots-") {
+                        pending.held.push((p as i16, q as i16));
+                    }
+                }
+                out.push(HoldAction::Fire {
+                    i,
+                    keys,
+                    detail,
+                    game_secs,
+                });
+            }
+            None if now > h.plan.deadline => {
+                h.done = true;
+                out.push(if h.rearm {
+                    HoldAction::RearmExpired { i }
+                } else {
+                    HoldAction::Skip { i }
+                });
+            }
+            None => {}
+        }
+    }
+    let defence_waits = holds
+        .iter()
+        .any(|h| h.plan.kind == "defence-pool" && !h.done);
+    let below: Vec<&HoldState> = holds
+        .iter()
+        .filter(|h| h.plan.kind == "slots-below")
+        .collect();
+    let live_claims = pending
+        .open_claims
+        .iter()
+        .filter(|c| c.1 - now >= DEFENCE_HOLD_SECS + 600)
+        .count();
+    let last_end = below.iter().filter_map(|h| h.ends).max();
+    let proto = below.first().map(|h| h.plan.clone());
+    if let (true, Some(end), Some(proto)) = (defence_waits, last_end, proto) {
+        let all_fired = below.iter().all(|h| h.done);
+        let attempts = below.len();
+        let fits = now + proto.game_secs + DEFENCE_HOLD_SECS + 2 * bell_secs <= play_end;
+        if all_fired
+            && live_claims == 0
+            && now >= end + bell_secs
+            && attempts <= SLOTS_BELOW_REARMS
+            && fits
+        {
+            holds.push(HoldState {
+                plan: Planned {
+                    at: now,
+                    deadline: play_end - DEFENCE_HOLD_SECS - bell_secs,
+                    ..proto
+                },
+                done: false,
+                ends: None,
+                rearm: true,
+            });
+            out.push(HoldAction::Rearm {
+                i: holds.len() - 1,
+                attempt: attempts,
+                why: json!({"why": "defence-pool still waits: no live defence claim a bell after the last slots-below window",
+                    "last_window_end": end, "open_claims": pending.open_claims.len()}),
+            });
+        }
+    }
+    out
+}
+
 /// Whether a hold of this kind at this price is above the keeper's cap for
 /// the writes it blocks (so its liveness findings are expected).
 pub fn above_cap(kind: &str, priority_milli: u64) -> bool {
@@ -459,9 +837,175 @@ mod tests {
             .filter(|x| !matches!(x.kind, "ticket" | "frontier-fund" | "defence-pool"))
             .collect();
         assert!(others.windows(2).all(|w| w[0].at < w[1].at));
-        assert!(!above_cap("slots-below", 1_500), "below the W cap 2.0");
+        assert!(
+            !above_cap("slots-below", SLOTS_BELOW_MILLI),
+            "below the W cap 2.0"
+        );
         assert!(above_cap("slots-above", 3_000));
         assert!(above_cap("anchor", 1_000), "above the D cap 0.5");
+    }
+
+    /// W6T-4: `slots-below` and `lag` are armed over the whole play window
+    /// (w6-s7 skipped both: armed for one game hour); `slots-below` starts
+    /// by 60% of play, so the keeper escalation it causes can open a claim
+    /// that `defence-pool` holds later.
+    #[test]
+    fn plan_arms_every_hold_over_play() {
+        for (start, end) in [(1_000, 1_000 + 86_400), (5_000, 5_000 + 7 * 86_400)] {
+            let p = plan(start, end);
+            for k in [
+                "slots-below",
+                "slots-above",
+                "lag",
+                "ticket",
+                "frontier-fund",
+                "defence-pool",
+            ] {
+                let h = p.iter().find(|x| x.kind == k).unwrap();
+                assert_eq!(h.deadline, end, "{k}: armed to the end of play");
+                assert!(h.at < end, "{k}");
+            }
+            let sb = p.iter().find(|x| x.kind == "slots-below").unwrap();
+            assert!(
+                sb.at <= start + (end - start) * 6 / 10,
+                "slots-below by 60% of play"
+            );
+            let dp = p.iter().find(|x| x.kind == "defence-pool").unwrap();
+            assert!(sb.at <= dp.deadline);
+        }
+    }
+
+    /// W6T-4: the lag hold's origin is a transit in flight (state 1-2), not
+    /// a Province entry in state 3 (SettleDeparture clears those within
+    /// slots, so w6-s7 never saw one at a probe).
+    #[test]
+    fn lag_uses_transits_in_flight() {
+        let ad = Addresses::new(Address::new_from_array([7; 32]), 7);
+        let mut a = empty_province(0, 0);
+        let mut b = empty_province(1, 0);
+        a.region = 3;
+        b.region = 5;
+        a.entries[0].state = 1;
+        let ps = vec![a, b];
+        let none = Pending {
+            require: true,
+            ..Pending::default()
+        };
+        assert!(keys_for_pending("lag", &ad, &ps, &none, 10, 4, &[], &[]).is_none());
+        let fl = |p: i16, q: i16, arrive: u32, state: u8| InFlight {
+            origin: (p, q),
+            arrive_bell: arrive,
+            state,
+        };
+        let pending = Pending {
+            require: true,
+            in_flight: vec![
+                fl(1, 0, 14, 1),
+                fl(1, 0, 15, 2),
+                fl(0, 0, 13, 2),
+                fl(9, 9, 16, 1),
+            ],
+            ..Pending::default()
+        };
+        let (k, d) = keys_for_pending("lag", &ad, &ps, &pending, 10, 4, &[], &[]).unwrap();
+        assert_eq!(k, vec![ad.province(1, 0), ad.anchor(11, 5)]);
+        assert_eq!(d["province"], json!([1, 0]));
+        assert_eq!(d["in_flight"], 2);
+        // An origin that is not an opened Province is never picked.
+        let only_unknown = Pending {
+            require: true,
+            in_flight: vec![fl(9, 9, 16, 1)],
+            ..Pending::default()
+        };
+        assert!(keys_for_pending("lag", &ad, &ps, &only_unknown, 10, 4, &[], &[]).is_none());
+        // Holding transits: states 1 and 2 are in flight, 0 and 3 are not.
+        let mut t = fclient::decode::Transit::decode(&[0u8; 96]);
+        t.origin_p = 2;
+        t.origin_q = -1;
+        t.arrive_bell = 30;
+        let got: Vec<InFlight> = [0u8, 1, 2, 3]
+            .iter()
+            .flat_map(|s| {
+                let mut x = t;
+                x.state = *s;
+                in_flight_of(&[x])
+            })
+            .collect();
+        assert_eq!(got, vec![fl(2, -1, 30, 1), fl(2, -1, 30, 2)]);
+    }
+
+    /// W6T-4: the slot holds aim at a province the fleet sealed marches to
+    /// for the held bell (the U4 nightlies held slots no Reveal needed:
+    /// 0 writes inside or after the `slots-below` window), and fall back
+    /// to the ArrivalDay guess without a marchbook.
+    #[test]
+    fn slot_holds_aim_at_planned_arrivals() {
+        let book = [
+            r#"{"arrive_bell":11,"bot":1,"depart_bell":8,"dest":[1,0],"ev":"sealed","host":"5"}"#,
+            r#"{"arrive_bell":11,"bot":1,"depart_bell":8,"dest":[1,0],"ev":"sealed","host":"5"}"#,
+            r#"{"arrive_bell":11,"bot":2,"depart_bell":8,"dest":[1,0],"ev":"sealed","host":"6"}"#,
+            r#"{"arrive_bell":11,"bot":3,"depart_bell":9,"dest":[0,0],"ev":"sealed","host":"7"}"#,
+            r#"{"arrive_bell":12,"bot":4,"depart_bell":9,"dest":[0,0],"ev":"sealed","host":"8"}"#,
+            r#"{"arrive_bell":11,"bot":9,"depart_bell":9,"dest":[2,2],"ev":"sealed","host":"9"}"#,
+            r#"{"arrive_bell":11,"bot":10,"depart_bell":9,"dest":[3,3],"ev":"sealed","host":"10"}"#,
+            r#"{"bot":1,"depart_bell":8,"ev":"sent","host":"5"}"#,
+            r#"{"bot":2,"depart_bell":8,"ev":"sent","host":"6"}"#,
+            r#"{"bot":3,"depart_bell":9,"ev":"sent","host":"7"}"#,
+            r#"{"bot":4,"depart_bell":9,"ev":"sent","host":"8"}"#,
+            r#"{"bot":9,"depart_bell":9,"ev":"failed","host":"9"}"#,
+            "not json",
+        ]
+        .join("\n");
+        // The duplicate sealed line counts once; a failed Depart (host 9)
+        // and one never sent (host 10) do not count.
+        let planned = planned_from_marchbook(&book, 11);
+        assert_eq!(planned, vec![((1, 0), 2), ((0, 0), 1)]);
+        let ad = Addresses::new(Address::new_from_array([7; 32]), 7);
+        let mut a = empty_province(0, 0);
+        a.entries[0].state = 1;
+        a.entries[1].state = 1;
+        let ps = vec![a, empty_province(1, 0)];
+        let pending = Pending {
+            require: true,
+            arrivals_today: vec![(0, 0)],
+            planned_next: planned,
+            ..Pending::default()
+        };
+        let (k, d) = keys_for_pending("slots-below", &ad, &ps, &pending, 10, 4, &[], &[]).unwrap();
+        assert_eq!(k, slot_keys(&ad, &ps[1], 11, 4));
+        assert_eq!(d["planned_arrivals"], 2);
+        // Without a marchbook: the old guess (arrivals today, busiest).
+        let guess = Pending {
+            planned_next: vec![],
+            ..pending.clone()
+        };
+        let (_, d) = keys_for_pending("slots-below", &ad, &ps, &guess, 10, 4, &[], &[]).unwrap();
+        assert_eq!(d["province"], json!([0, 0]));
+        // The other slot hold of the same probe takes another province.
+        let taken = Pending {
+            held: vec![(1, 0)],
+            ..pending.clone()
+        };
+        let (_, d) = keys_for_pending("slots-above", &ad, &ps, &taken, 10, 4, &[], &[]).unwrap();
+        assert_eq!(d["province"], json!([0, 0]), "{d}");
+        assert_eq!(d["planned_arrivals"], 1);
+        // A planned destination that is not an opened Province is skipped.
+        let off = Pending {
+            planned_next: vec![((9, 9), 5)],
+            ..guess
+        };
+        let (_, d) = keys_for_pending("slots-above", &ad, &ps, &off, 10, 4, &[], &[]).unwrap();
+        assert_eq!(d["province"], json!([0, 0]));
+        // The marchbook files of a bots directory.
+        let dir = std::env::temp_dir().join(format!("psf-marchbook-{}", crate::run::wall_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("marchbook-1-0.jsonl"), &book).unwrap();
+        std::fs::write(dir.join("marchbook-2-0.jsonl"), &book).unwrap();
+        std::fs::write(dir.join("report.json"), &book).unwrap();
+        // A march is one (host, depart bell) across the files too.
+        assert_eq!(planned_arrivals(&dir, 11), vec![((1, 0), 2), ((0, 0), 1)]);
+        assert!(planned_arrivals(std::path::Path::new("/nonexistent"), 11).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -537,8 +1081,13 @@ mod tests {
         assert!(keys_for_pending("lag", &ad, &ps, &need, 10, 4, &[], &[]).is_none());
         let mut ps2 = ps.clone();
         ps2[1].entries[3].state = 3;
-        let (k, _) = keys_for_pending("lag", &ad, &ps2, &need, 10, 4, &[], &[]).unwrap();
-        assert_eq!(k[0], ad.province(1, 0), "the origin of the march in flight");
+        // W6T-4: a state-3 entry alone is no longer the lag hold's
+        // situation (it lasts only until the SettleDeparture); a transit in
+        // flight is (`lag_uses_transits_in_flight`). Unrequired, the
+        // state-3 origin is still the fallback.
+        assert!(keys_for_pending("lag", &ad, &ps2, &need, 10, 4, &[], &[]).is_none());
+        let (k, _) = keys_for("lag", &ad, &ps2, 10, 4, &[], &[]).unwrap();
+        assert_eq!(k[0], ad.province(1, 0), "the fallback origin");
         let (_, d) = keys_for("ticket", &ad, &ps2, 10, 4, &[], &[]).unwrap();
         assert_eq!(d["until_bell"], 24, "through the cohort's 24 bells");
         // W6-C: the ring-opening and claim-grace holds wait for their
@@ -581,5 +1130,203 @@ mod tests {
         let (k, d) = keys_for_pending("defence-pool", &ad, &ps, &open, 10, 4, &[], &[]).unwrap();
         assert_eq!(k, vec![ad.defence_pool()]);
         assert_eq!(d["open_claims"], 1);
+    }
+
+    /// integ-W6t review: the `slots-below` price lies between the keepers'
+    /// third and fourth Reveal bids, so the Reveal it delays lands on the
+    /// fourth version: ≥ `lateness_slots` after the anchor (the first
+    /// version goes out a slot after the anchor lands at the earliest), and
+    /// still below the keepers' cap (it lands; criterion 4 is unaffected).
+    #[test]
+    fn slots_below_delays_a_reveal_past_lateness() {
+        let p = keeper_core::engine::EngineParams::default();
+        let w = |s: u64| p.bid(fclient::abi::Class::W, s);
+        let first_win = (0..20).find(|&s| w(s) > SLOTS_BELOW_MILLI).unwrap();
+        let lateness = frontier_abi::presets::M1_LOCAL_7D.lateness_slots as u64;
+        assert!(
+            1 + first_win >= lateness,
+            "lands {} slots after the anchor",
+            1 + first_win
+        );
+        assert!(SLOTS_BELOW_MILLI < p.p_def_milli && w(20) > SLOTS_BELOW_MILLI);
+        assert!(SLOTS_BELOW_MILLI < frontier_abi::presets::M1_LOCAL_7D.defence_cap_milli as u64);
+        // The old price let the third version win: one slot short.
+        let old = (0..20).find(|&s| w(s) > 1_500).unwrap();
+        assert!(1 + old < lateness);
+    }
+
+    /// Runs the hold schedule of a `days`-day play over a world where only
+    /// the `claim_on`-th `slots-below` window delays a Reveal enough to open
+    /// a defence claim (`None`: never). Returns the actions by kind.
+    fn simulate(days: i64, claim_on: Option<usize>) -> (Vec<(String, &'static str)>, usize) {
+        simulate_span(days * 86_400, claim_on)
+    }
+
+    fn simulate_span(
+        play_secs: i64,
+        claim_on: Option<usize>,
+    ) -> (Vec<(String, &'static str)>, usize) {
+        let ad = Addresses::new(Address::new_from_array([7; 32]), 7);
+        let (bell, start) = (600i64, 0i64);
+        let end = start + play_secs;
+        let mut holds: Vec<HoldState> = plan(start, end).into_iter().map(HoldState::new).collect();
+        let mut a = empty_province(0, 0);
+        a.entries[0].state = 1;
+        let ps = vec![a, empty_province(1, 0)];
+        let payers = vec![Address::new_from_array([9; 32])];
+        let mut log: Vec<(String, &'static str)> = vec![];
+        let mut below_windows: Vec<i64> = vec![];
+        let mut t = start;
+        // The supervisor probes past the end of play too (the drain).
+        while t <= end + 2 * bell {
+            let claim = claim_on.and_then(|k| below_windows.get(k - 1).copied());
+            let open_claims = match claim {
+                // The late Reveal's claim is open for 6 bells after its close.
+                Some(e) if t >= e && t < e + 6 * bell => vec![(ad.defence_pool(), e + 6 * bell)],
+                _ => vec![],
+            };
+            let mut pd = Pending {
+                require: true,
+                now: t,
+                // A few sealed marches: one province, every bell.
+                planned_next: vec![((0, 0), 1)],
+                open_claims,
+                ..Pending::default()
+            };
+            let bell_now = ((t - start) / bell) as u32;
+            for act in decide_holds(
+                &mut holds, &mut pd, &ad, &ps, bell_now, 4, &payers, &payers, start, bell, end,
+            ) {
+                let (i, what) = match act {
+                    HoldAction::Fire { i, game_secs, .. } => {
+                        if holds[i].plan.kind == "slots-below" {
+                            below_windows.push(t + game_secs);
+                        }
+                        (i, "fire")
+                    }
+                    HoldAction::Skip { i } => (i, "skip"),
+                    HoldAction::RearmExpired { i } => (i, "rearm-expired"),
+                    HoldAction::Rearm { i, .. } => (i, "rearm"),
+                };
+                log.push((holds[i].plan.kind.to_string(), what));
+            }
+            t += bell;
+        }
+        (log, below_windows.len())
+    }
+
+    /// integ-W6t review: `defence-pool` fires although the first
+    /// `slots-below` windows delay no Reveal (integ-W6t R3 and nightly 3
+    /// skipped it): `slots-below` is re-armed until a claim opens.
+    #[test]
+    fn defence_pool_fires_when_only_a_later_slots_below_opens_a_claim() {
+        for days in [1, 3, 7] {
+            let (log, windows) = simulate(days, Some(3));
+            let n = |k: &str, w: &str| log.iter().filter(|x| x.0 == k && x.1 == w).count();
+            assert_eq!(n("defence-pool", "fire"), 1, "{days} days: {log:?}");
+            assert_eq!(n("defence-pool", "skip"), 0, "{days} days");
+            assert_eq!(windows, 3, "{days} days: re-armed twice, then the claim");
+            assert_eq!(n("slots-below", "rearm"), 2, "{days} days");
+            assert_eq!(
+                n("slots-below", "skip") + n("slots-below", "rearm-expired"),
+                0
+            );
+            // Once defence-pool has fired, slots-below is not re-armed.
+            let last_dp = log.iter().rposition(|x| x.0 == "defence-pool").unwrap();
+            assert!(!log[last_dp..].iter().any(|x| x.1 == "rearm"));
+        }
+        // The first window opens the claim: no re-arm at all.
+        let (log, windows) = simulate(3, Some(1));
+        assert_eq!(windows, 1);
+        assert!(log
+            .iter()
+            .any(|x| x == &("defence-pool".to_string(), "fire")));
+        assert!(!log.iter().any(|x| x.1 == "rearm"));
+    }
+
+    /// integ-W6t review: a re-armed `slots-below` waits for a bell the
+    /// fleet sealed a march to; the "arrivals today" guess (the rehearsal's
+    /// windows that held no Reveal) does not fire it.
+    #[test]
+    fn a_rearmed_slots_below_needs_a_planned_arrival() {
+        let ad = Addresses::new(Address::new_from_array([7; 32]), 7);
+        let mut a = empty_province(0, 0);
+        a.entries[0].state = 1;
+        let ps = vec![a];
+        let proto = plan(0, 86_400)
+            .into_iter()
+            .find(|x| x.kind == "slots-below")
+            .unwrap();
+        let mut holds = vec![HoldState {
+            plan: Planned {
+                at: 0,
+                deadline: 50_000,
+                ..proto
+            },
+            done: false,
+            ends: None,
+            rearm: true,
+        }];
+        let mut pd = Pending {
+            require: true,
+            now: 10_000,
+            arrivals_today: vec![(0, 0)],
+            ..Pending::default()
+        };
+        let act = decide_holds(
+            &mut holds,
+            &mut pd,
+            &ad,
+            &ps,
+            16,
+            4,
+            &[],
+            &[],
+            0,
+            600,
+            86_400,
+        );
+        assert!(act.is_empty(), "{act:?}");
+        pd.planned_next = vec![((0, 0), 1)];
+        let act = decide_holds(
+            &mut holds,
+            &mut pd,
+            &ad,
+            &ps,
+            16,
+            4,
+            &[],
+            &[],
+            0,
+            600,
+            86_400,
+        );
+        assert!(matches!(act[0], HoldAction::Fire { .. }), "{act:?}");
+        assert!(matches!(&act[0], HoldAction::Fire { .. }));
+        let HoldAction::Fire { .. } = &act[0] else {
+            unreachable!()
+        };
+        // The price is the new one.
+        assert_eq!(holds[0].plan.priority_milli, SLOTS_BELOW_MILLI);
+    }
+
+    /// integ-W6t review: without any claim the re-arms stop (cap, or no
+    /// time left for a window, a claim and the defence hold) and
+    /// `defence-pool` is still reported skipped (not exit-grade).
+    #[test]
+    fn slots_below_rearms_are_bounded() {
+        let (log, windows) = simulate(7, None);
+        let n = |k: &str, w: &str| log.iter().filter(|x| x.0 == k && x.1 == w).count();
+        assert_eq!(n("slots-below", "rearm"), SLOTS_BELOW_REARMS, "{log:?}");
+        assert_eq!(windows, SLOTS_BELOW_REARMS + 1);
+        assert_eq!(n("defence-pool", "skip"), 1);
+        assert_eq!(n("slots-below", "skip"), 0);
+        // A short play: the re-arms stop when a window, a claim and the
+        // defence hold no longer fit before its end.
+        let (log, windows) = simulate_span(3 * 3_600 + 3_600, None);
+        let n = |k: &str, w: &str| log.iter().filter(|x| x.0 == k && x.1 == w).count();
+        assert!(n("slots-below", "rearm") < SLOTS_BELOW_REARMS, "{log:?}");
+        assert_eq!(windows, n("slots-below", "rearm") + 1);
+        assert_eq!(n("defence-pool", "skip"), 1);
     }
 }

@@ -4,7 +4,8 @@
 // * the fee payer is one of the relay pool's keys, and the instruction is
 //   for this relay's program and season;
 // * Depart's tip is one of the three presets {tip_min, ⌈1.5 tip_min⌉, 2 tip_min}
-//   (else 400 TipNotPreset);
+//   (else 400 TipNotPreset), and it arrives before the season's end bell
+//   (else 400 ArrivalBell; W6T-3);
 // * the drain guard: simulated with signatures, the fee payer may lose at most
 //   the fee plus the kind's allowance — Join: rent(Citizen); FileTicket: the
 //   Holding-rent escrow shortfall `max(0, rent(1,280) − citizen.ticket_escrow)`;
@@ -39,6 +40,22 @@ export function checkDepartTip(shape, season) {
 }
 
 /**
+ * W6T-3 (w6-s7 criterion 1; contract §5.11 Depart step 4, v1.12): a Depart
+ * whose arrival bell is at or after the season's `end_bell` can never be
+ * anchored, gathered, resolved or settled; the program refuses it
+ * (`ArrivalBell`) from the release after 7dcacdf. The relay refuses it
+ * before the simulation, so it costs the player no quota. A Season with
+ * `END_BELL` 0 (no end recorded) is not judged.
+ */
+export function checkDepartArrival(shape, season) {
+  const end = BigInt(season?.END_BELL ?? 0);
+  const arrive = BigInt(shape.data.arrive_bell);
+  if (end > 0n && arrive >= end) {
+    throw new RouteError(400, `a Depart must arrive before the season's end bell ${end} (arrive_bell ${arrive})`, 'ArrivalBell', { endBell: Number(end) });
+  }
+}
+
+/**
  * Lamports (bigint) the fee payer may move for `shape` beyond the fee:
  * `{season, citizen}` are the decoded Season and (FileTicket) Citizen.
  */
@@ -49,7 +66,9 @@ export function allowanceFor(shape, { season, citizen = null }) {
       const escrow = citizen ? BigInt(citizen.TICKET_ESCROW) : 0n;
       return escrow >= HOLDING_RENT ? 0n : HOLDING_RENT - escrow;
     }
-    case DEPART_TAG: return departEscrow(season, checkDepartTip(shape, season));
+    case DEPART_TAG:
+      checkDepartArrival(shape, season);
+      return departEscrow(season, checkDepartTip(shape, season));
     default: return 0n;
   }
 }

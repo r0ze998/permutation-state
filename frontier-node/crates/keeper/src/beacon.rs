@@ -20,6 +20,8 @@
 //!   is behind the latest round. Class N.
 //!
 //! Every rule time comes from the chain's Clock (the `now` of the tick).
+//! No anchor is planned for a bell at or after the season's `end_bell`
+//! (the program refuses it; W6T-2).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -183,10 +185,12 @@ impl BeaconDuty {
         rounds: &mut Rounds,
         engine: &mut Engine,
     ) -> PortResult<()> {
-        if b_now == 0 {
+        if b_now == 0 || t.season.end_bell == 0 {
             return Ok(()); // bell 0 has not ended
         }
-        let last = b_now - 1;
+        // The last bell with an anchor: the program refuses one at or after
+        // `end_bell` (`BadData`; 4,218 refused in the w6-s7 drain, W6T-2).
+        let last = (b_now - 1).min(t.season.end_bell - 1);
         let mut start = *self
             .next_bell
             .get_or_insert(b_now.saturating_sub(t.cfg.rescan_bells));
@@ -546,5 +550,60 @@ impl BeaconDuty {
         if let Some(b) = bell {
             self.contested_bells.insert(b);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::KeeperConfig;
+    use crate::engine::EngineParams;
+    use crate::testkit::{self, FakeDrand, FakePort};
+    use fclient::addr::Addresses;
+    use fclient::budgets::Budgets;
+    use fclient::clock::SeasonClock;
+
+    /// End of season (w6-s7: 3,552 PostAnchor and 666 PostAnchorMulti
+    /// failed `BadData` in the drain): the program refuses an anchor of a
+    /// bell ≥ `end_bell`, so the beacon duty never plans one.
+    #[tokio::test]
+    async fn anchors_plan_stops_at_end_bell() {
+        let drand = FakeDrand::new();
+        let info = drand.key.info();
+        let g = info.genesis_time + 3_000;
+        let end = 20u32;
+        let season = testkit::season(g, end, &info);
+        let program = Address::new_from_array([0x5F; 32]);
+        let cfg = KeeperConfig::new(program, 7, Address::new_from_array([0xBE; 32]));
+        let addrs = Addresses::new(program, 7);
+        let port = FakePort::default();
+        let now = g + (end as i64 + 5) * 600 + 100;
+        drand.now.store(now, std::sync::atomic::Ordering::SeqCst);
+        let mut rounds = Rounds::new(drand.key.pk96);
+        let mut engine = Engine::new(Budgets::placeholder(), EngineParams::default());
+        let mut duty = BeaconDuty::new(cfg.regions.clone());
+        let t = Tick {
+            slot: 5_000,
+            now,
+            season: &season,
+            clock: SeasonClock::from_season(&season),
+            addrs: &addrs,
+            cfg: &cfg,
+        };
+        duty.plan(&t, &port, &drand, &mut rounds, &mut engine, None)
+            .await
+            .unwrap();
+        let bells: Vec<u32> = engine
+            .pending_keys()
+            .iter()
+            .filter(|k| k.starts_with("anchor"))
+            .filter_map(|k| k.split(':').nth(1)?.parse().ok())
+            .collect();
+        assert!(bells.contains(&(end - 1)), "the last bell is anchored");
+        let past: Vec<u32> = bells.iter().copied().filter(|&b| b >= end).collect();
+        assert!(
+            past.is_empty(),
+            "anchors planned at or after end_bell {end}: {past:?}"
+        );
     }
 }

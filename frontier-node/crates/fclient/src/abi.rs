@@ -743,6 +743,9 @@ pub mod layout {
         pub const STATE_PROVISIONAL: u8 = 1;
         pub const STATE_FINAL: u8 = 2;
         pub const STATE_RELEASED: u8 = 3;
+        /// `FLAGS`: the dormant cache (§5.10; §5.11 Reveal step 6 lifts the
+        /// own-shield clause for a dormant holding). W6T-3.
+        pub const FLAG_DORMANT_CACHE: u8 = 1;
     }
     /// Transit record (96 B) inside the Holding.
     pub mod transit {
@@ -1084,6 +1087,18 @@ mod twin_tests {
     use frontier_abi::error::FrontierError;
     use frontier_abi::layout::AccountKind;
     use frontier_abi::tags::{Class as AbiClass, Ix};
+
+    #[test]
+    fn holding_flags_are_frontier_abis() {
+        assert_eq!(
+            layout::holding::FLAG_DORMANT_CACHE,
+            frontier_abi::layout::player::holding::FLAG_DORMANT_CACHE
+        );
+        assert_eq!(
+            layout::holding::SHIELD_UNTIL,
+            frontier_abi::layout::player::holding::SHIELD_UNTIL
+        );
+    }
 
     #[test]
     fn errors_are_frontier_abis() {

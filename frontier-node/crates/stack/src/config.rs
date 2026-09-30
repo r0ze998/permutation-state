@@ -200,6 +200,25 @@ pub struct StackConfig {
     pub end_season: bool,
     /// Where run directories live (default `frontier-node/.local/frontier`).
     pub runs_dir: Option<PathBuf>,
+    /// W6T-4: CreateSeason gets `end_bell` = the play bells (and
+    /// `join_close_bell` scaled below it), so a 1- or 2-day run reaches
+    /// `end_bell`, EndSeason and the drain (`--season-end-at-play-end`).
+    pub season_end_at_play_end: bool,
+    /// Keeper B's `backup_delay_slots` (W6T-2: settles wait this long and
+    /// re-read before sending); written only to a keeper that knows the key.
+    pub keeper_b_backup_delay_slots: u32,
+    /// The viewers' think time (`frontier-viewers --think-ms`).
+    pub viewer_think_ms: u64,
+    /// The viewers follow the live bell from the herald's `/h/status`
+    /// (`--follow-status`).
+    pub viewer_follow_status: bool,
+    /// The viewers' recovery budget (`--retry-budget-ms`); `None`: the
+    /// chaos restart maximum at the run's scale plus 2 s.
+    pub viewer_retry_budget_ms: Option<u64>,
+    /// Forced chaos kills `(component, game hours after the viewer
+    /// window starts)` (`--chaos-force herald:2`, repeatable; applied even
+    /// without `--chaos`).
+    pub chaos_force: Vec<(String, f64)>,
 }
 
 /// 2026-08-01T00:00:00Z, `frontier-localnet`'s default origin (a past date,
@@ -261,6 +280,12 @@ impl Default for StackConfig {
             pause_at_end: true,
             end_season: true,
             runs_dir: None,
+            season_end_at_play_end: false,
+            keeper_b_backup_delay_slots: 8,
+            viewer_think_ms: 5_000,
+            viewer_follow_status: true,
+            viewer_retry_budget_ms: None,
+            chaos_force: vec![],
         }
     }
 }
@@ -460,6 +485,14 @@ impl StackConfig {
                 .filter(|x| !x.is_empty())
                 .collect();
         }
+        if let Some(v) = s!("chaos.force") {
+            c.chaos_force = v
+                .split(',')
+                .map(str::trim)
+                .filter(|x| !x.is_empty())
+                .map(parse_force)
+                .collect::<Result<_, _>>()?;
+        }
         if let Some(v) = b!("adversary.enabled") {
             c.adversary = v;
         }
@@ -471,6 +504,22 @@ impl StackConfig {
         }
         if let Some(v) = f!("viewers.window_hours") {
             c.viewer_window_hours = pos(v, "viewers.window_hours")?;
+        }
+        if let Some(v) = i!("viewers.think_ms") {
+            c.viewer_think_ms = v as u64;
+        }
+        if let Some(v) = b!("viewers.follow_status") {
+            c.viewer_follow_status = v;
+        }
+        if let Some(v) = i!("viewers.retry_budget_ms") {
+            c.viewer_retry_budget_ms = Some(v as u64);
+        }
+        if let Some(v) = b!("season_end_at_play_end") {
+            c.season_end_at_play_end = v;
+        }
+        if let Some(v) = i!("keeper_b_backup_delay_slots") {
+            c.keeper_b_backup_delay_slots =
+                u32::try_from(v).map_err(|_| "`keeper_b_backup_delay_slots` too large")?;
         }
         if let Some(v) = b!("pause_at_end") {
             c.pause_at_end = v;
@@ -546,6 +595,17 @@ impl StackConfig {
         if !(800..=2_000).contains(&self.drand_delay_ms) {
             return Err("drand_delay_ms in 800..=2000 (quicknet's publication latency)".into());
         }
+        if self.season_end_at_play_end {
+            let b = self.play_bells();
+            if !(2..=4_032).contains(&b) {
+                return Err(format!(
+                    "--season-end-at-play-end: {b} play bells; end_bell must be in 2..=4032 (§5.7)"
+                ));
+            }
+        }
+        if self.viewer_think_ms == 0 {
+            return Err("viewers.think_ms must be > 0".into());
+        }
         if self.beacon == Beacon::Archive && self.archive_dir.is_none() {
             return Err(
                 "--beacon archive needs an archive directory (`paths.archive` or --archive)".into(),
@@ -585,6 +645,26 @@ impl StackConfig {
     /// least 20×.
     pub fn drain_scale(&self) -> f64 {
         self.drain_scale.unwrap_or(self.scale.max(20.0))
+    }
+
+    /// Play length in bells (600-s bells, rounded up).
+    pub fn play_bells(&self) -> u32 {
+        ((self.play_secs().max(0) + 599) / 600) as u32
+    }
+
+    /// The `end_bell` CreateSeason gets: the play bells with
+    /// `season_end_at_play_end`, else the preset's (`None`).
+    pub fn season_end_bell(&self) -> Option<u32> {
+        self.season_end_at_play_end.then(|| self.play_bells())
+    }
+
+    /// The viewers' recovery budget: the configured one, else the chaos
+    /// restart maximum in wall time at the run's scale plus 2 s (a herald
+    /// kill -9 is back within it; §13.4 A3).
+    pub fn viewer_retry_budget_ms(&self) -> u64 {
+        self.viewer_retry_budget_ms.unwrap_or_else(|| {
+            (self.chaos_restart_max_secs / self.scale * 1_000.0).ceil() as u64 + 2_000
+        })
     }
 
     pub fn play_secs(&self) -> i64 {
@@ -635,6 +715,12 @@ impl StackConfig {
             "viewers": {"count": self.viewers, "start_hours": self.viewer_start_hours, "window_hours": self.viewer_window_hours},
             "pause_at_end": self.pause_at_end,
             "end_season": self.end_season,
+            "season_end_at_play_end": self.season_end_at_play_end,
+            "season_end_bell": self.season_end_bell(),
+            "keeper_b_backup_delay_slots": self.keeper_b_backup_delay_slots,
+            "viewer_flags": {"think_ms": self.viewer_think_ms, "follow_status": self.viewer_follow_status,
+                             "retry_budget_ms": self.viewer_retry_budget_ms()},
+            "chaos_force": self.chaos_force.iter().map(|(c, h)| json!({"component": c, "hours_after_viewer_start": h})).collect::<Vec<_>>(),
         })
     }
 }
@@ -645,6 +731,29 @@ pub fn parse_mode(s: &str) -> Result<Mode, String> {
         "realtime" => Ok(Mode::Realtime),
         _ => Err(format!("mode `{s}`: accel or realtime")),
     }
+}
+
+/// `component:hours` of `--chaos-force` (hours after the viewer window
+/// starts).
+pub fn parse_force(s: &str) -> Result<(String, f64), String> {
+    let (c, h) = s
+        .split_once(':')
+        .ok_or(format!("chaos force `{s}`: component:hours"))?;
+    let c = c.trim();
+    if !crate::chaos::TARGETS.contains(&c) {
+        return Err(format!(
+            "chaos force `{s}`: one of {:?}",
+            crate::chaos::TARGETS
+        ));
+    }
+    let h: f64 = h
+        .trim()
+        .parse()
+        .map_err(|_| format!("chaos force `{s}`: hours is not a number"))?;
+    if !(h >= 0.0 && h.is_finite()) {
+        return Err(format!("chaos force `{s}`: hours ≥ 0"));
+    }
+    Ok((c.to_string(), h))
 }
 
 pub fn parse_beacon(s: &str) -> Result<Beacon, String> {
@@ -735,6 +844,16 @@ pub fn apply_flags(c: &mut StackConfig, flags: &[(String, Option<String>)]) -> R
             "no-eager-bots" => c.eager_bots = Some(false),
             "no-keeper-b" => c.keeper_b = false,
             "runs-dir" => c.runs_dir = Some(need(k, v)?.into()),
+            "season-end-at-play-end" => c.season_end_at_play_end = true,
+            "no-season-end-at-play-end" => c.season_end_at_play_end = false,
+            "chaos-force" => c.chaos_force.push(parse_force(&need(k, v)?)?),
+            "viewer-think-ms" => c.viewer_think_ms = count(k, v)?,
+            "viewer-retry-budget-ms" => c.viewer_retry_budget_ms = Some(count(k, v)?),
+            "no-viewer-follow-status" => c.viewer_follow_status = false,
+            "keeper-b-backup-delay-slots" => {
+                c.keeper_b_backup_delay_slots = u32::try_from(count(k, v)?)
+                    .map_err(|_| "--keeper-b-backup-delay-slots too large")?
+            }
             other => return Err(format!("unknown flag --{other}")),
         }
     }
@@ -752,6 +871,9 @@ pub const SWITCHES: &[&str] = &[
     "no-keeper-b",
     "eager-bots",
     "no-eager-bots",
+    "season-end-at-play-end",
+    "no-season-end-at-play-end",
+    "no-viewer-follow-status",
     "json",
     "strict",
     "force",
@@ -858,6 +980,59 @@ mod tests {
         assert!(split_flags(&["--drain-scale".into(), "0".into()])
             .and_then(|f| apply_flags(&mut StackConfig::default(), &f))
             .is_err());
+    }
+
+    /// W6T-4: the season-end, viewer, keeper-B and forced-kill keys and flags.
+    #[test]
+    fn w6t4_keys_and_flags() {
+        let c = StackConfig::from_toml(
+            "season_end_at_play_end = true\nkeeper_b_backup_delay_slots = 12\n[viewers]\nthink_ms = 3000\nfollow_status = false\nretry_budget_ms = 7000\n[chaos]\nforce = \"herald:2, herald:7.5\"\n",
+        )
+        .unwrap();
+        assert!(c.season_end_at_play_end);
+        assert_eq!(c.season_end_bell(), Some(144));
+        assert_eq!(c.keeper_b_backup_delay_slots, 12);
+        assert_eq!((c.viewer_think_ms, c.viewer_follow_status), (3_000, false));
+        assert_eq!(c.viewer_retry_budget_ms(), 7_000);
+        assert_eq!(
+            c.chaos_force,
+            vec![("herald".to_string(), 2.0), ("herald".to_string(), 7.5)]
+        );
+        let mut d = StackConfig::default();
+        let f = split_flags(&[
+            "--season-end-at-play-end".into(),
+            "--days".into(),
+            "2".into(),
+            "--chaos-force".into(),
+            "herald:2".into(),
+            "--chaos-force".into(),
+            "herald:7".into(),
+            "--viewer-think-ms".into(),
+            "4000".into(),
+            "--no-viewer-follow-status".into(),
+        ])
+        .unwrap();
+        apply_flags(&mut d, &f).unwrap();
+        assert_eq!(d.season_end_bell(), Some(288));
+        assert_eq!(d.chaos_force.len(), 2);
+        assert_eq!(d.viewer_think_ms, 4_000);
+        assert!(!d.viewer_follow_status);
+        assert_eq!(d.to_json()["season_end_bell"], 288);
+        // Refusals: an unknown component, a negative hour, a season past
+        // §5.7's 4,032 bells.
+        for bad in [
+            ["--chaos-force", "nobody:1"],
+            ["--chaos-force", "herald:-1"],
+            ["--days", "30"],
+        ] {
+            let mut e = StackConfig {
+                season_end_at_play_end: true,
+                ..Default::default()
+            };
+            let f = split_flags(&[bad[0].into(), bad[1].into()]).unwrap();
+            assert!(apply_flags(&mut e, &f).is_err(), "{bad:?}");
+        }
+        assert!(StackConfig::from_toml("[viewers]\nthink_ms = 0\n").is_err());
     }
 
     #[test]

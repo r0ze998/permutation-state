@@ -96,7 +96,8 @@ pub struct Budget {
     pub cu_budget: u32,
     /// Extra CU per unit of work (SkipQuiet: per recomputed bell).
     pub cu_per_unit: u32,
-    /// CU limit to request (W5-A: the G1 maximum + 5 %, [`MEASURED`]).
+    /// CU limit to request (W5-A: the G1 maximum + 5 %, [`MEASURED`];
+    /// W6T-1: the gate for the kinds of [`limit_at_gate`]).
     pub cu_limit: u32,
     /// Tx byte ceiling as §5.5 lists it. Many rows are below the smallest
     /// real transaction (64-B signatures, blockhash, the three ComputeBudget
@@ -111,7 +112,7 @@ macro_rules! budgets {
             ix: Ix::$ix,
             cu_budget: $cu,
             cu_per_unit: $per,
-            cu_limit: limit_of($cu, $per, $measured),
+            cu_limit: if limit_at_gate(Ix::$ix) { $cu } else { limit_of($cu, $per, $measured) },
             tx_contract: $tx,
         }, )* ];
         /// The G1 maxima the CU limits come from (W5-A), per kind in table
@@ -144,6 +145,20 @@ const fn limit_of(cu: u32, per: u32, measured: u32) -> u32 {
     } else {
         l
     }
+}
+
+/// Kinds whose CU limit is their §5.5 gate rather than the G1 maximum +
+/// 5 % (W6T-1, w6-s7 triage): CloseArrivalDay and CloseArrivalSlot. Their
+/// +5 % (≈ 300 CU) did not cover two fixed costs the G1 log does not carry
+/// — the keeper's third ComputeBudget instruction (SetComputeUnitPrice,
+/// 150 CU) and a `rent_to` distinct from the payer (one more account key,
+/// +192 CU) — so on the Ended path they ran out of CUs (6,018 of 6,000 and
+/// 6,538 of 6,500) and failed 28,655 times in w6-s7's drain. Measured over
+/// every path with the keeper's prefix (`svm-tests`
+/// `g01_close_arrival_{day,slot}_ended_paths`): worst 6,018 and 6,538, so
+/// the gate leaves ≥ 18 % headroom; the gate stays what G1 asserts.
+pub const fn limit_at_gate(ix: Ix) -> bool {
+    matches!(ix, Ix::CloseArrivalDay | Ix::CloseArrivalSlot)
 }
 
 budgets! {
@@ -184,7 +199,7 @@ budgets! {
     Explore: 20_000, 0, 380, 18_865;
     SettleExplore: 15_000, 0, 400, 8_281;
     DisbandStranded: 12_000, 0, 300, 5_439;
-    Depart: 24_500, 0, 800, 23_167;
+    Depart: 24_500, 0, 800, 23_174;
     Reveal: 26_000, 0, 1_100, 25_155;
     SettleDeparture: 48_000, 0, 400, 43_083;
     SettleTransit: 85_000, 0, 1_100, 63_281;
@@ -194,8 +209,8 @@ budgets! {
     ResolveClash: 0, 0, 1_232, 0;
     SkipQuiet: 90_000, 30_000, 1_232, 0;
     CloseClashInputs: 8_000, 0, 300, 7_187;
-    CloseArrivalDay: 8_000, 0, 300, 5_637;
-    CloseArrivalSlot: 8_000, 0, 300, 6_155;
+    CloseArrivalDay: 8_000, 0, 300, 6_018;
+    CloseArrivalSlot: 8_000, 0, 300, 6_538;
     ClaimDefence: 25_500, 0, 1_000, 24_111;
 }
 
@@ -448,6 +463,10 @@ mod tests {
         assert_eq!(budget(Ix::SettleDeparture).cu_limit, 45_500);
         assert_eq!(budget(Ix::SkipQuiet).cu_limit, 90_000 + 24 * 30_000);
         assert_eq!(budget(Ix::ResolveClash).cu_limit, CU_LADDER_MAX);
+        // W6T-1 (w6-s7): the arrival closes request their gate (they ran out
+        // of CUs at 6,000 and 6,500 on the Ended path).
+        assert_eq!(budget(Ix::CloseArrivalDay).cu_limit, 8_000);
+        assert_eq!(budget(Ix::CloseArrivalSlot).cu_limit, 8_000);
         for (ix, m) in MEASURED {
             let b = budget(*ix);
             assert!(
@@ -461,6 +480,14 @@ mod tests {
                     "{}: the G1 maximum is within its gate",
                     ix.name()
                 );
+                if limit_at_gate(*ix) {
+                    // W6T-1: the limit is the gate, which keeps at least
+                    // 5 % over the G1 maximum (measured with the keeper's
+                    // three-instruction prefix).
+                    assert_eq!(b.cu_limit, b.cu_budget, "{}", ix.name());
+                    assert!(*m * 100 <= b.cu_budget * 95, "{}", ix.name());
+                    continue;
+                }
                 assert!(
                     b.cu_limit <= *m + *m / 20 + 501,
                     "{}: +5 %, rounded to 500",

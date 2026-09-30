@@ -616,10 +616,13 @@ pub fn depart(p: &Pubkey, a: &[AccountInfo], d: &[u8]) -> R<()> {
     let mut host = e.to_host().map_err(|_| BAD_ACCOUNT)?;
     host.depart(b, DEPART_STAMINA, rn)
         .map_err(|er| host_err(er, FrontierError::NotResident))?;
-    // 4.
+    // 4. W6T-1 (w6-s7): the arrival must also be a bell of the season
+    // (`< end_bell`): no anchor, resolve or SettleTransit exists at or
+    // after `end_bell`, so such a march could never settle. The last
+    // useful Depart bell is `end_bell - 3`.
     let lo = b.checked_add(2).ok_or(OVERFLOW)?;
     let hi = b.checked_add(72).ok_or(OVERFLOW)?;
-    if x.arrive_bell < lo || x.arrive_bell > hi {
+    if x.arrive_bell < lo || x.arrive_bell > hi || x.arrive_bell >= pl.pc.season.end_bell {
         return Err(FrontierError::ArrivalBell.into());
     }
     // 5.

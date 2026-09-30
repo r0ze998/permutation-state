@@ -499,6 +499,53 @@ test('POST /f/reveal and /f/nudge go to the keeper\'s loopback API with its toke
   assert.equal(res.json.code, 'KeeperUnavailable');
 });
 
+test('W6T-3: the keeper\'s 409 answers of /v1/reveal (Shielded, ArrivalBell) pass through unchanged', async () => {
+  const answers = { 1: { error: 'Shielded' }, 2: { error: 'ArrivalBell' } };
+  const keeper = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', c => { body += c; });
+    req.on('end', () => {
+      const b = JSON.parse(body);
+      res.writeHead(409, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(answers[b.transit_slot]));
+    });
+  });
+  await new Promise(r => keeper.listen(0, '127.0.0.1', r));
+  try {
+    const r = relay({ keeper: new KeeperLink({ url: `http://127.0.0.1:${keeper.address().port}`, token: 'kpr' }) });
+    const pl = pack({ hostId: 1n, arriveBell: 147, destP: 0, destQ: 0, destTile: 0, stance: 0, retreatBps: 0, pathLen: 0, path: new Uint8Array(12) });
+    const body = revealMaterial({ holding: A.holding(...HOLD), transitSlot: 1, plain: pl, salt: new Uint8Array(32).fill(2), seal: new Uint8Array(165).fill(3) });
+    for (const slot of [1, 2]) {
+      const a = await call(r.public, 'POST', '/f/reveal', { body: { ...body, transit_slot: slot }, ip: '203.0.113.9' });
+      assert.equal(a.status, 409);
+      assert.deepEqual(a.json, answers[slot], 'the body is the keeper\'s, nothing added');
+    }
+  } finally {
+    await new Promise(r => keeper.close(r));
+  }
+});
+
+test('W6T-3: a Depart arriving at or after the season\'s end bell is refused ArrivalBell before simulation, nothing charged', async () => {
+  const tipOf = d => Buffer.from(d).readBigUInt64LE(210);
+  // departFields arrive at bell 147.
+  for (const [end, ok] of [[147, false], [100, false], [148, true], [0, true]]) {
+    const c = fakeChain({ debit: tx => (tx.instructions[3].data[0] === 0x50 ? tipOf(tx.instructions[3].data) + MARCH_FEE + SEAL_BOND : 0n) });
+    const r = relay({ chain: c, season: { END_BELL: end } });
+    const fp = await feePayerOf(r);
+    const d = await call(r.public, 'POST', '/f/relay', { body: { tx: playerTx({ name: 'Depart', feePayer: fp, fields: departFields(TIP_MIN) }) }, ip: '203.0.113.9' });
+    assert.equal(d.json.ok === true, ok, `end ${end}: ${JSON.stringify(d.json)}`);
+    if (!ok) {
+      assert.equal(d.status, 400);
+      assert.equal(d.json.code, 'ArrivalBell');
+      assert.equal(d.json.endBell, end);
+      assert.equal(c.simulated, 0, 'refused before the simulation');
+      assert.equal(c.sent.length, 0);
+      const q = r.store.state.quota?.[`citizen:${A.citizen(wallet.publicKey.toBase58())}`];
+      assert.ok(!q || (q.left === 40 && q.lamports === 0), `nothing charged: ${JSON.stringify(q)}`);
+    }
+  }
+});
+
 test('X-Forwarded-For is trusted only from the herald\'s peer; loopback clients skip the address limits, not the quotas', async () => {
   const req = (peer, xff) => ({ socket: { remoteAddress: peer }, headers: xff === undefined ? {} : { 'x-forwarded-for': xff } });
   assert.equal(clientAddress(req('127.0.0.1', '198.51.100.7'), { heraldPeer: '127.0.0.1' }), '198.51.100.7');

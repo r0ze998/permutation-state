@@ -91,13 +91,34 @@ impl Journal {
     }
 
     /// A state change of a march (`sent`, `failed`, `revealed`, `reveal_try`,
-    /// `late_done`, `settled`, `redeparted`).
+    /// `late_done`, `settled`, `redeparted`). W6T-3: `revealed` means a
+    /// REVEAL was observed; the relay's 2xx is `accepted` ([`Journal::state_with`]).
     pub fn state(&self, bot: u32, key: (u64, u32), state: &str) -> std::io::Result<()> {
         self.append(&json!({
             "ev": state,
             "bot": bot,
             "host": key.0.to_string(),
             "depart_bell": key.1,
+        }))
+    }
+
+    /// A state change with the route and the refusal code (W6T-3:
+    /// `accepted`, `reveal_refused`).
+    pub fn state_with(
+        &self,
+        bot: u32,
+        key: (u64, u32),
+        state: &str,
+        route: &str,
+        code: Option<&str>,
+    ) -> std::io::Result<()> {
+        self.append(&json!({
+            "ev": state,
+            "bot": bot,
+            "host": key.0.to_string(),
+            "depart_bell": key.1,
+            "route": route,
+            "code": code,
         }))
     }
 
@@ -173,6 +194,8 @@ fn apply(out: &mut BTreeMap<u32, Vec<MarchMemo>>, v: &Value) -> Option<()> {
             sent: false,
             reveal_tries: 0,
             revealed: false,
+            accepted: false,
+            last_code: None,
             late_done: false,
             settled: false,
             redeparted: false,
@@ -189,6 +212,8 @@ fn apply(out: &mut BTreeMap<u32, Vec<MarchMemo>>, v: &Value) -> Option<()> {
         }
         "reveal_try" => m.reveal_tries = m.reveal_tries.saturating_add(1),
         "revealed" => m.revealed = true,
+        "accepted" => m.accepted = true,
+        "reveal_refused" => m.last_code = v.get("code").and_then(|c| c.as_str()).map(String::from),
         "late_done" => m.late_done = true,
         "settled" => m.settled = true,
         "redeparted" => m.redeparted = true,
@@ -232,6 +257,8 @@ mod tests {
             sent: false,
             reveal_tries: 0,
             revealed: false,
+            accepted: false,
+            last_code: None,
             late_done: false,
             settled: false,
             redeparted: false,
@@ -252,6 +279,9 @@ mod tests {
         assert_eq!(got[&5], vec![m.clone()]);
         j.state(5, m.key, "sent").unwrap();
         j.state(5, m.key, "reveal_try").unwrap();
+        j.state_with(5, m.key, "reveal_refused", "keeper", Some("Shielded"))
+            .unwrap();
+        j.state_with(5, m.key, "accepted", "keeper", None).unwrap();
         j.state(5, m.key, "revealed").unwrap();
         // A second march that failed disappears.
         let mut m2 = m.clone();
@@ -270,6 +300,8 @@ mod tests {
             sent: true,
             reveal_tries: 1,
             revealed: true,
+            accepted: true,
+            last_code: Some("Shielded".into()),
             ..m
         };
         assert_eq!(got[&5], vec![want]);

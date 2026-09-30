@@ -31,6 +31,13 @@
 #      written; the exit code says whether all passed).
 #   5. copies report.md, s7.json and so.sha256 to docs/frontier/m1/runs/<run-id>/
 #      (not committed by this script).
+# W6T-4: the pinned .so sha256 is printed against the release build the
+# W6T-1 program fix recorded (docs/frontier/m1/W6T-1-NOTES.md: the first
+# `file_sha256 <hex>`, else the first 64-hex sha on a line naming the
+# release build; or --recorded-sha256 HEX / the
+# S7_RECORDED_SO_SHA256 environment variable): "match", "MISMATCH" or "no
+# record"; s7.json carries both. A mismatch is reported, not fatal (the
+# script pins what it builds, as before).
 # The services stay up (chain paused) for triage unless --down; stop them
 # later with `frontier-node/target/release/frontier-stack down --run-id w6-s7`.
 # Exit 0 only when every step passed; 4 when the archive is not ready
@@ -45,6 +52,7 @@ BUILD=1
 DOWN=0
 DRY=0
 EXTRA=()
+RECORDED="${S7_RECORDED_SO_SHA256:-}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-build) BUILD=0 ;;
@@ -52,9 +60,11 @@ while [ $# -gt 0 ]; do
     --dry-run) DRY=1 ;;
     --run-id) shift; RUN_ID="${1:-}"; [ -n "$RUN_ID" ] || { echo "--run-id needs a value" >&2; exit 2; } ;;
     --run-id=*) RUN_ID="${1#--run-id=}" ;;
+    --recorded-sha256) shift; RECORDED="${1:-}" ;;
+    --recorded-sha256=*) RECORDED="${1#--recorded-sha256=}" ;;
     --base-port|--base-port=*|--beacon|--beacon=*|--scale|--scale=*|--days|--days=*|--so|--so=*|--expect-so-sha256|--expect-so-sha256=*)
       echo "$1 is fixed by the Gate W6 line; not accepted here" >&2; exit 2 ;;
-    -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,44p' "$0"; exit 0 ;;
     *) EXTRA+=("$1") ;;
   esac
   shift
@@ -69,6 +79,28 @@ mkdir -p "$LOG_DIR"
 RESULTS=""
 SO_SHA=""
 STARTED="$(date -u +%FT%TZ)"
+NOTES_U1="$ROOT/docs/frontier/m1/W6T-1-NOTES.md"
+if [ -z "$RECORDED" ] && [ -f "$NOTES_U1" ]; then
+  # `file_sha256 <hex>` (build-frontier.sh's line), else the first line that
+  # names the release build with a 64-hex sha (W6T-1's build table).
+  RECORDED="$(grep -o 'file_sha256[^0-9a-f]*[0-9a-f]\{64\}' "$NOTES_U1" | head -1 | grep -o '[0-9a-f]\{64\}$')"
+  [ -n "$RECORDED" ] || RECORDED="$(grep -i 'release' "$NOTES_U1" | grep -v -i 'test-beacon' | grep -o '[0-9a-f]\{64\}' | head -1)"
+fi
+RECORDED="$(printf '%s' "$RECORDED" | tr 'A-F' 'a-f')"
+SHA_CHECK="no record"
+
+pin_vs_record() { # prints the pinned sha against the W6T-1 record
+  if [ -z "$RECORDED" ]; then
+    SHA_CHECK="no record"
+  elif [ "$RECORDED" = "$SO_SHA" ]; then
+    SHA_CHECK="match"
+  else
+    SHA_CHECK="MISMATCH"
+  fi
+  echo "== s7: .so pin $SO_SHA; W6T-1 recorded release ${RECORDED:-(none)}: $SHA_CHECK"
+  [ "$SHA_CHECK" = "MISMATCH" ] && echo "== s7: WARNING: the pinned .so is not the release build W6T-1 recorded" >&2
+  return 0
+}
 
 step() { # step NAME CMD...
   local name="$1"; shift
@@ -94,8 +126,8 @@ summary() {
     fi
   done
   mkdir -p "$RUN_DIR"
-  printf '{"run_id": "%s", "started": "%s", "finished": "%s", "git_head": "%s", "so_sha256": "%s", %s"pass": %s}\n' \
-    "$RUN_ID" "$STARTED" "$(date -u +%FT%TZ)" "$(git rev-parse HEAD 2>/dev/null)" "$SO_SHA" "$items" \
+  printf '{"run_id": "%s", "started": "%s", "finished": "%s", "git_head": "%s", "so_sha256": "%s", "so_sha256_recorded": "%s", "so_sha256_vs_record": "%s", %s"pass": %s}\n' \
+    "$RUN_ID" "$STARTED" "$(date -u +%FT%TZ)" "$(git rev-parse HEAD 2>/dev/null)" "$SO_SHA" "$RECORDED" "$SHA_CHECK" "$items" \
     "$([ $all -eq 0 ] && echo true || echo false)" | tee "$RUN_DIR/s7.json"
   local keep="$ROOT/docs/frontier/m1/runs/$RUN_ID"
   mkdir -p "$keep"
@@ -121,6 +153,7 @@ elif [ "$SO_SHA" != "$HAVE" ]; then
   echo "the release .so ($HAVE) is not the one the build recorded ($SO_SHA)" >&2
   RESULTS="$RESULTS so-sha256=1"; summary; exit 1
 fi
+pin_vs_record
 UP=("$S" up --mode accel --beacon archive --scale 20 --days 7 --bots 1000
     --run-id "$RUN_ID" --base-port "$BASE_PORT" --chaos --viewers 5000
     --expect-so-sha256 "$SO_SHA" ${EXTRA[@]+"${EXTRA[@]}"})

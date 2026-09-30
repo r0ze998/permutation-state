@@ -1,0 +1,46 @@
+{
+ "burst": {
+  "fromSlot": 2040,
+  "generator": "aa87235 frontier-viewers (built in scratch)",
+  "input": "frontier-node/.local/frontier/integ-w6t-tri-20x/verify/input.json.gz",
+  "pacedTxs": 247,
+  "prefixTxs": 2276,
+  "slots": 260,
+  "txsIn2075to2076": 72
+ },
+ "elapsed_s": 151.390966708,
+ "errorRate": 0.0,
+ "errors": 0,
+ "follow": {
+  "errors": 0,
+  "liveBell": null
+ },
+ "max_ms": 682.792,
+ "notFound": 16240,
+ "p50_ms": 0.184,
+ "p99_ms": 49.152,
+ "p99_upper_ms": 51.2,
+ "requests": 115116,
+ "rps": 760.3888296851525,
+ "staleRetries": 0,
+ "targetMisses": [
+  "ingest \u2192 WS p99 3276.8 ms > 2000 ms"
+ ],
+ "targetsMet": false,
+ "unavailable": 0,
+ "unavailable_ms": 0.0,
+ "viewers": 4000,
+ "ws": {
+  "connected": 1000,
+  "errors": 0,
+  "gaps": 0,
+  "ingest_max_ms": 3324.0,
+  "ingest_p50_ms": 1376.256,
+  "ingest_p99_ms": 3145.728,
+  "ingest_p99_upper_ms": 3276.8,
+  "messages": 1409055,
+  "reconnects": 0,
+  "timed": 1409055
+ },
+ "wsViewers": 1000
+}

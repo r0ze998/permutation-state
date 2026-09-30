@@ -146,14 +146,28 @@ pub struct Liveness {
     /// Valid seals never revealed: `(host_id, arrive_bell, signatures of
     /// the failed Reveal attempts)`.
     pub valid_unrevealed: Vec<(u64, u32, Vec<String>)>,
-    /// Valid seals never revealed that settled with an outcome other than
-    /// `ROUTED` (no loss by rule: outranked, quota-refused, the citizen's
-    /// second arrival): `(host_id, arrive_bell, outcome)` (W6-C).
-    pub unrevealed_by_rule: Vec<(u64, u32, u8)>,
+    /// Valid seals never revealed that the rules explain (W6-C, W6T-3):
+    /// settled with an outcome other than `ROUTED` (reason `bounced`: no
+    /// loss by rule, outranked, quota-refused, the citizen's second
+    /// arrival), or settled `ROUTED` because §5.11 step 6 refuses their
+    /// Reveal (`shielded-own`, `shielded-dest`, `path`, `arrival-bell`).
+    pub unrevealed_by_rule: Vec<ByRule>,
     pub reveals_near_close: u64,
     pub max_anchor_delay_s: f64,
     /// Province-bells with more than one faction's arrivals or residents.
     pub contested_bells: Vec<(i32, i32, u32)>,
+}
+
+/// One valid seal never revealed that the rules explain (`liveness.
+/// unrevealed_by_rule`, W6T-3): the march, its settlement outcome, the
+/// reason (`checks::v5_seals::reason`) and its failed Reveal attempts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ByRule {
+    pub host: u64,
+    pub arrive: u32,
+    pub outcome: u8,
+    pub reason: &'static str,
+    pub failed_attempts: usize,
 }
 
 /// The result of one verification.

@@ -269,6 +269,9 @@ pub struct Bot {
     pub nudged: bool,
     /// Session retries after a nudge (at most [`NUDGE_RETRIES`]).
     pub nudge_retries: u8,
+    /// The refusal code of the last direct transaction (W6T-3: a Reveal's
+    /// last refusal, for the report's unrevealed marches).
+    last_direct_code: Option<String>,
 }
 
 /// Session retries after a nudge before the bot gives the session up.
@@ -309,6 +312,7 @@ impl Bot {
             spent: 0,
             nudged: false,
             nudge_retries: 0,
+            last_direct_code: None,
         }
     }
 
@@ -496,6 +500,7 @@ impl Bot {
     /// record is gone after its arrival bell was settled (by the keeper or
     /// anyone); settled marches older than two game days are forgotten.
     pub fn reconcile<H, R, D>(&mut self, sh: &Shared<H, R, D>, obs: &Observation) {
+        self.observe_reveals(sh, obs);
         let bell = obs.bell();
         let mut done = vec![];
         for m in self.mem.marches.iter_mut().filter(|m| m.sent && !m.settled) {
@@ -514,10 +519,93 @@ impl Bot {
         }
         for k in done {
             self.journal_state(sh, k, "settled");
+            self.report_unrevealed(sh, k);
         }
         self.mem
             .marches
             .retain(|m| !m.settled || m.arrive_bell + 2 * BELLS_PER_DAY > bell);
+    }
+
+    /// Marks `revealed` (and journals it) every sent march whose REVEAL
+    /// the herald shows: an ArrivalSlot of `(host, arrive)` at the
+    /// destination (the latest envelope, or the arrival bell's own), or
+    /// the host among its ClashInputs arrivals. W6T-3.
+    pub fn observe_reveals<H, R, D>(&mut self, sh: &Shared<H, R, D>, obs: &Observation) {
+        let mut seen = vec![];
+        for m in self
+            .mem
+            .marches
+            .iter_mut()
+            .filter(|m| m.sent && !m.revealed)
+        {
+            let pq = (m.dest.0 as i16, m.dest.1 as i16);
+            let (host, arrive) = (m.key.0, m.arrive_bell);
+            let views = obs
+                .provinces
+                .get(&pq)
+                .into_iter()
+                .chain(obs.province_bells.get(&(pq, arrive)));
+            let hit = views.into_iter().any(|v| {
+                v.slots
+                    .iter()
+                    .any(|s| s.bell == arrive && s.host_id == host)
+                    || v.inputs.as_ref().is_some_and(|ci| {
+                        ci.bell == arrive
+                            && ci
+                                .arrivals
+                                .iter()
+                                .any(|a| a.present == 1 && a.host_id == host)
+                    })
+            });
+            if hit {
+                m.revealed = true;
+                seen.push(m.key);
+            }
+        }
+        for k in seen {
+            self.journal_state(sh, k, "revealed");
+        }
+    }
+
+    /// A march settled with no REVEAL observed goes to the report's
+    /// `unrevealed` list, with the route the owner used and the last
+    /// refusal code (W6T-3).
+    fn report_unrevealed<H, R, D>(&self, sh: &Shared<H, R, D>, key: (u64, u32)) {
+        let Some(m) = self.mem.march(key) else {
+            return;
+        };
+        if m.revealed {
+            return;
+        }
+        let route = if m.reveal_tries == 0 {
+            "none"
+        } else if self.spec.persona.is_some_and(|p| {
+            matches!(
+                p,
+                Persona::SelfTip | Persona::LateRevealer | Persona::Forger
+            )
+        }) {
+            "direct"
+        } else {
+            "keeper"
+        };
+        sh.report
+            .lock()
+            .expect("report")
+            .unrevealed
+            .push(crate::report::Unrevealed {
+                bot: self.spec.index,
+                persona: self.spec.persona,
+                kind: m.kind,
+                host: m.key.0,
+                depart_bell: m.key.1,
+                arrive: m.arrive_bell,
+                dest: m.dest,
+                route,
+                accepted: m.accepted,
+                tries: m.reveal_tries,
+                last_code: m.last_code.clone(),
+            });
     }
 
     fn is(&self, p: Persona) -> bool {
@@ -710,6 +798,7 @@ impl Bot {
             ),
             Err(e) => (false, Some(format!("{e}"))),
         };
+        self.last_direct_code = code.clone();
         sh.record(Outcome {
             bot: self.spec.index,
             arch: self.spec.arch,
@@ -723,6 +812,23 @@ impl Bot {
             tag,
         });
         ok
+    }
+
+    fn journal_code<H, R, D>(
+        &self,
+        sh: &Shared<H, R, D>,
+        key: (u64, u32),
+        state: &str,
+        route: &str,
+        code: Option<&str>,
+    ) {
+        if let Some(j) = &sh.journal {
+            if j.state_with(self.spec.index, key, state, route, code)
+                .is_err()
+            {
+                sh.error("journal write");
+            }
+        }
     }
 
     fn journal_state<H, R, D>(&self, sh: &Shared<H, R, D>, key: (u64, u32), state: &str) {
@@ -863,14 +969,25 @@ impl Bot {
                 };
                 // The host stands at the destination once it arrived.
                 let at = (m.dest.0 as i16, m.dest.1 as i16);
-                self.sponsored(sh, "depart", Some("redepart"), |p| {
-                    ix::depart(&a, p, m.h, at, &args)
-                })
-                .await;
-                if let Some(mm) = self.mem.march_mut(key) {
-                    mm.redeparted = true;
+                let r = self
+                    .sponsored(sh, "depart", Some("redepart"), |p| {
+                        ix::depart(&a, p, m.h, at, &args)
+                    })
+                    .await;
+                // integ-W6t review: a try before the destination resolved
+                // the arrival (`NotResident`, `HostBusy`) or one the relay's
+                // rate limit turned away (`RateLimited`) tests nothing; the
+                // racer tries again at its next poll.
+                let early = matches!(
+                    r.code().as_deref(),
+                    Some("NotResident" | "HostBusy" | "RateLimited")
+                );
+                if !early {
+                    if let Some(mm) = self.mem.march_mut(key) {
+                        mm.redeparted = true;
+                    }
+                    self.journal_state(sh, key, "redeparted");
                 }
-                self.journal_state(sh, key, "redeparted");
                 1
             }
             Intent::Prefund { targets, lamports } => {
@@ -1015,6 +1132,8 @@ impl Bot {
             sent: false,
             reveal_tries: 0,
             revealed: false,
+            accepted: false,
+            last_code: None,
             late_done: false,
             settled: false,
             redeparted: false,
@@ -1108,7 +1227,11 @@ impl Bot {
                     ),
                 };
                 sh.record(outcome(self, "reveal", "keeper", &r, tag));
-                r.ok()
+                (
+                    r.ok(),
+                    r.code()
+                        .or_else(|| (!r.ok()).then(|| format!("http_{}", r.status))),
+                )
             }
             RevealRoute::DirectSelf | RevealRoute::DirectForged => {
                 let Some(args) = args else {
@@ -1131,20 +1254,37 @@ impl Bot {
                     * 2;
                 let cost = fclient::fees::cost(b.cu_limit, 1, 3, b.loaded_limit);
                 let price = fclient::fees::cu_price_for(p_milli, cost, b.cu_limit);
-                self.direct_tx(sh, "reveal", tag, vec![i], price, &[]).await
+                let ok = self.direct_tx(sh, "reveal", tag, vec![i], price, &[]).await;
+                (ok, self.last_direct_code.clone())
             }
         };
+        let (ok, code) = ok;
+        let route_name = match route {
+            RevealRoute::Keeper => "keeper",
+            RevealRoute::DirectSelf => "direct",
+            RevealRoute::DirectForged => "forged",
+        };
+        // W6T-3 (w6-s7 R4): a 2xx from `/f/reveal` only queues the
+        // material at the keepers (and a landed direct Reveal is the bot's
+        // own claim): the march is `accepted`. `revealed` is journalled
+        // only when the herald shows its REVEAL ([`Bot::observe_reveals`]):
+        // the 27 w6-s7 marches the program refused `Shielded` were
+        // journalled `revealed` on the relay's 202.
         if let Some(mm) = self.mem.march_mut(key) {
             mm.reveal_tries = mm.reveal_tries.saturating_add(1);
             if late {
                 mm.late_done = true;
             } else if ok {
-                mm.revealed = true;
+                mm.accepted = true;
+            } else {
+                mm.last_code = code.clone();
             }
         }
         self.journal_state(sh, key, if late { "late_done" } else { "reveal_try" });
         if ok && !late {
-            self.journal_state(sh, key, "revealed");
+            self.journal_code(sh, key, "accepted", route_name, None);
+        } else if !ok && !late {
+            self.journal_code(sh, key, "reveal_refused", route_name, code.as_deref());
         }
         1
     }

@@ -232,13 +232,41 @@ impl Journal {
         sql(rows.collect())
     }
 
-    /// Distinct object keys starting with `prefix`.
+    /// Distinct object keys starting with `prefix`: a range on the
+    /// `attempts_object` index, `prefix ≤ key < succ(prefix)` (W6T-2; the
+    /// `substr` form scanned the whole table, 4.5 ms a call at 112k
+    /// attempts, 18-21 s for the 288 × 16 calls of a restart's first tick).
+    /// SQLite compares TEXT bytewise and UTF-8 keeps code-point order, so
+    /// the successor is the prefix with its last character incremented.
     pub fn object_keys_with_prefix(&self, prefix: &str) -> Result<Vec<String>, String> {
-        let mut st = sql(self.conn.prepare(
-            "SELECT DISTINCT object_key FROM attempts WHERE substr(object_key, 1, length(?1)) = ?1",
-        ))?;
-        let rows = sql(st.query_map(params![prefix], |r| r.get::<_, String>(0)))?;
-        sql(rows.collect())
+        let succ = {
+            let mut s = prefix.to_string();
+            s.pop().and_then(|c| {
+                // The next code point (skipping the surrogate gap).
+                let n = (c as u32 + 1..=char::MAX as u32).find_map(char::from_u32)?;
+                s.push(n);
+                Some(s)
+            })
+        };
+        let rows: Vec<String> = match succ {
+            Some(end) => {
+                let mut st = sql(self.conn.prepare(
+                    "SELECT DISTINCT object_key FROM attempts WHERE object_key >= ?1 AND object_key < ?2",
+                ))?;
+                let rows = sql(st.query_map(params![prefix, end], |r| r.get::<_, String>(0)))?;
+                sql(rows.collect())?
+            }
+            // The empty prefix (every key), or one ending in char::MAX.
+            None => {
+                let mut st = sql(self
+                    .conn
+                    .prepare("SELECT DISTINCT object_key FROM attempts WHERE object_key >= ?1"))?;
+                let rows = sql(st.query_map(params![prefix], |r| r.get::<_, String>(0)))?;
+                let all: Vec<String> = sql(rows.collect())?;
+                all.into_iter().filter(|k| k.starts_with(prefix)).collect()
+            }
+        };
+        Ok(rows)
     }
 
     /// `(status, count)` over all attempts.
@@ -387,5 +415,112 @@ mod tests {
         drop(l1);
         assert!(lock(&p).is_ok(), "released with the file");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod prefix_tests {
+    use super::*;
+
+    /// Cause C (w6-s7 criterion 3): the prefix query scanned the whole
+    /// attempts table (4.5 ms a call at 112k attempts); a restart's first
+    /// tick makes 288 × 16 of them (18-21 s, ≈ 50 slots). It is an index
+    /// range now: the same keys, and the restart's calls in < 1 s at 100k
+    /// rows.
+    #[test]
+    fn object_keys_with_prefix_matches_scan() {
+        let j = Journal::open(Path::new(":memory:")).unwrap();
+        j.conn.execute_batch("BEGIN").unwrap();
+        let mut n = 0u64;
+        let mut add = |key: String, kind: &str| {
+            n += 1;
+            j.record_attempt(&Attempt {
+                sig: format!("s{n}"),
+                kind: kind.into(),
+                object_key: key,
+                bell: None,
+                region: None,
+                class: "D".into(),
+                payer: "P".into(),
+                bid_milli: 100,
+                cu_limit: 1,
+                heap: None,
+                first_valid_slot: 1,
+                sent_slot: 1,
+                landed_slot: None,
+                status: "landed".into(),
+                code: None,
+            })
+            .unwrap();
+        };
+        for b in 0..620u32 {
+            for r in 0..16u8 {
+                for v in 0..8u32 {
+                    add(format!("seed:{b}:{r}:{}", (b * 7 + v) % 256), "seed");
+                }
+                add(format!("anchor:{b}:{r}"), "anchor");
+                add(format!("anchor-multi:{b}:{}", r % 3), "anchor-multi");
+            }
+        }
+        for i in 0..400u32 {
+            add(
+                format!("close:day:{},{}:{}", i % 20, i / 20, i % 7),
+                "close",
+            );
+            add(format!("seed:ü{i}"), "seed");
+        }
+        j.conn.execute_batch("COMMIT").unwrap();
+        let total: i64 = j
+            .conn
+            .query_row("SELECT COUNT(*) FROM attempts", [], |r| r.get(0))
+            .unwrap();
+        assert!(total >= 100_000, "{total} rows");
+        let scan = |p: &str| -> Vec<String> {
+            let mut st = j
+                .conn
+                .prepare("SELECT DISTINCT object_key FROM attempts WHERE substr(object_key, 1, length(?1)) = ?1")
+                .unwrap();
+            let mut v: Vec<String> = st
+                .query_map(params![p], |r| r.get(0))
+                .unwrap()
+                .map(|x| x.unwrap())
+                .collect();
+            v.sort();
+            v
+        };
+        for p in [
+            "seed:5:3:",
+            "seed:5:",
+            "seed:61",
+            "seed:619:15:",
+            "anchor:",
+            "anchor-multi:7:",
+            "close:day:3,",
+            "seed:ü",
+            "seed:ü1",
+            "zzz",
+            "",
+        ] {
+            let mut got = j.object_keys_with_prefix(p).unwrap();
+            got.sort();
+            assert_eq!(got, scan(p), "prefix {p:?}");
+        }
+        // A restart's first tick: every (bell, region) of the rescan window.
+        let t0 = std::time::Instant::now();
+        let mut found = 0;
+        for b in 300..588u32 {
+            for r in 0..16u8 {
+                found += j
+                    .object_keys_with_prefix(&format!("seed:{b}:{r}:"))
+                    .unwrap()
+                    .len();
+            }
+        }
+        let dt = t0.elapsed();
+        assert!(found > 0);
+        assert!(
+            dt < std::time::Duration::from_secs(1),
+            "288 × 16 prefix queries at {total} rows took {dt:?}"
+        );
     }
 }
