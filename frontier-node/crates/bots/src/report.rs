@@ -198,8 +198,17 @@ impl Report {
                     "TransitState",
                 ],
             ),
+            // integ-W6t review: a forged SettleTransit that finds the
+            // transit already settled (`TransitState`, `AlreadyDone`: a
+            // keeper settled first) never reached the account check; it
+            // tests nothing either way, so it is left out (the rehearsal's
+            // nightly 2: 7 forged Reveals refused `BadAddress`, 2 forged
+            // settles `TransitState`, read `needs-chain`).
             Persona::Forger => judge(
-                tagged("forged"),
+                tagged("forged")
+                    .into_iter()
+                    .filter(|o| !refused_as(o, &["TransitState", "AlreadyDone"]))
+                    .collect(),
                 &[
                     "BadAccount",
                     "BadAddress",
@@ -307,6 +316,19 @@ mod tests {
 
     /// integ-W6t review: a late Reveal refused because the march was
     /// already revealed or settled is the expected refusal.
+    #[test]
+    fn a_forged_settle_that_came_too_late_is_no_evidence() {
+        let mut r = Report::default();
+        r.record(o(Persona::Forger, "forged", false, "TransitState", 0));
+        assert_eq!(r.verdict(Persona::Forger), Verdict::Pending);
+        r.record(o(Persona::Forger, "forged", false, "BadAddress", 0));
+        assert_eq!(r.verdict(Persona::Forger), Verdict::Observed);
+        r.record(o(Persona::Forger, "forged", false, "Shielded", 0));
+        assert_eq!(r.verdict(Persona::Forger), Verdict::NeedsChain);
+        r.record(o(Persona::Forger, "forged", true, "", 0));
+        assert_eq!(r.verdict(Persona::Forger), Verdict::Violated);
+    }
+
     #[test]
     fn late_reveal_refused_after_reveal_or_settle_is_observed() {
         let mut r = Report::default();
