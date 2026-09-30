@@ -19,6 +19,7 @@ import { L, onLangChange } from '../../lang.mjs';
 import { locate, ringOf, ringProvinces, hexDistance } from '../fgeo.mjs';
 import { fogLevel, paintProvince, paintTiles, paintVeil, provincePixel, PROVINCE_CIRCUMRADIUS } from './layers.mjs';
 import { createTerrain } from './terrain.mjs';
+import { SpriteArt, terrainLookup } from './sprites.mjs';
 
 /** Fog levels drawn as tiles at tile LOD (a distant province stays a muted cell). */
 export const TILE_FOGS = Object.freeze(['sight', 'known', 'clear']);
@@ -95,7 +96,7 @@ export class FrontierMap {
    * own: [{p,q}], known: Set "p,q", showAll, selected, terrainOf(p,q) →
    * {terrain, sites, names} | null}; `onSelect(hit)`; `onView(view, lod)`.
    */
-  constructor(canvas, { source, onSelect = () => {}, onView = () => {} }) {
+  constructor(canvas, { source, onSelect = () => {}, onView = () => {}, art = false }) {
     this.canvas = canvas;
     this.source = source;
     this.onSelect = onSelect;
@@ -106,6 +107,8 @@ export class FrontierMap {
     this.drag = null;
     this.pointers = new Map();
     this.terrainOf = createTerrain({ onReady: () => this.invalidate() });
+    // Opt-in sprite art at tile LOD (map/sprites.mjs); the vector tiles stay the default.
+    this.art = art ? new SpriteArt({ onLoad: () => this.invalidate() }) : null;
     this.mark();
     this.bind();
     this.mountTools();
@@ -256,11 +259,23 @@ export class FrontierMap {
     for (const ov of src.overviews?.values?.() ?? []) for (const r of ov.provinces) recs.set(`${r.p},${r.q}`, r);
     const terrainOf = src.terrainOf ?? this.terrainOf;
     let wanted = 0, drawn = 0;
+    const artTiles = [], artCells = [], artVoid = [];
     for (const pr of visibleProvinces(this.view, { width, height }, maxRing)) {
       const key = `${pr.p},${pr.q}`;
       const fog = fogLevel({ ringOpen: ringOf(pr.p, pr.q) < (src.ringsOpen ?? 1), showAll: src.showAll, known: src.known?.has(key), sightDistance: sightDistance(pr.p, pr.q, src.own ?? []) });
       const selected = !!src.selected && src.selected.p === pr.p && src.selected.q === pr.q;
       const rec = recs.get(key);
+      if (this.lod === 'tile' && this.art) {
+        // Art: every fog level is drawn as tiles (distant muted, unopened as cloud sea; LOD.md).
+        if (fog === 'unopened') { artTiles.push({ ...pr, fog, selected }); continue; }
+        // a viewer with no holdings (spectator, before joining) sees the land clear: fog is relative to one's own
+        const artFog = (src.own ?? []).length ? fog : 'clear';
+        const t = terrainOf?.(pr.p, pr.q);
+        if (TILE_FOGS.includes(fog)) wanted++;
+        if (t) { artTiles.push({ ...pr, ...t, rec, fog: artFog, selected, prov: src.provinceOf?.(pr.p, pr.q) ?? null, clash: src.clashOf?.(pr.p, pr.q) ?? null, pending: src.pendingOf?.(pr.p, pr.q) ?? null }); if (TILE_FOGS.includes(fog)) drawn++; continue; }
+        paintProvince(ctx, { ...pr, rec, fog, selected, scale: z });
+        continue;
+      }
       if (this.lod === 'tile' && TILE_FOGS.includes(fog)) {
         wanted++;
         const t = terrainOf?.(pr.p, pr.q);
@@ -271,7 +286,18 @@ export class FrontierMap {
           continue;
         }
       }
+      if (this.art && fog === 'unopened') { artVoid.push(pr); continue; }
+      if (this.art && fog !== 'unopened') {
+        const t = terrainOf?.(pr.p, pr.q);
+        if (t) { artCells.push({ ...pr, t, rec, fog, selected }); continue; }
+      }
       paintProvince(ctx, { ...pr, rec, fog, selected, scale: z });
+    }
+    if (artVoid.length) this.art.paintUnopened(ctx, artVoid, { zoom: z });
+    if (artCells.length) this.art.paintStrategic(ctx, artCells, { zoom: z, dpr });
+    if (artTiles.length) {
+      const fogAt = (q, r) => { const at = locate(q, r); return fogLevel({ ringOpen: ringOf(at.p, at.q) < (src.ringsOpen ?? 1), showAll: src.showAll, known: src.known?.has(`${at.p},${at.q}`), sightDistance: sightDistance(at.p, at.q, src.own ?? []) }); };
+      this.art.paint(ctx, artTiles, { zoom: z, dpr, terrainAt: terrainLookup(terrainOf), fogAt, selected: src.selected, viewerFaction: src.viewerFaction ?? null, demoRoads: !!src.demoRoads, ringsOpen: src.ringsOpen ?? null, replayRing: src.artReplayRing ?? null, engineStage: src.engineStage ?? 0, relics: src.relics ?? [], waystones: src.waystones ?? [], demoSpecials: !!src.demoSpecials, rivers: src.rivers ?? [], demoRivers: !!src.demoRivers, alliedPairs: src.alliedPairs ?? [] });
     }
     this.mark(wanted > 0 && drawn === wanted ? 'ready' : 'pending');
   }

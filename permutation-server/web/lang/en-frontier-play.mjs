@@ -5,6 +5,8 @@
 // routing in app.mjs. Japanese is the source language, inline in the
 // modules; a key another dictionary already has keeps the same English.
 // Terms: GLOSSARY.md, section "The Frontier".
+import { plural } from './helpers.mjs';
+
 export default {
   // ---- routing (app.mjs)
   'あなたの衝突の報告': 'Your clash reports',
@@ -154,4 +156,66 @@ export default {
   // ---- the spectator (screens/spectate.mjs)
   'まだ衝突はありません': 'No clash yet',
   'スロット {0} 時点': 'As of slot {0}',
+
+  // ---- the HUD (hud/hud.mjs): bell pill, resource strip, attention, left rail
+  '満杯です（これ以上は貯まりません）': 'Full (no more will accrue)',
+  '満杯まで {0}': 'Full in {0}',
+  '{0}時間{1}分': '{0} h {1} min',
+  '{0}日': n => plural(n, '{0} day', '{0} days'),
+  '毎時 +{0}': '+{0} per hour',
+  '第{0}鐘に州 {1},{2} へ敵が来るかもしれません': 'Enemies may reach province {1},{2} at bell {0}',
+  '州 {0},{1} の進軍を精算できます': 'The march to province {0},{1} can be settled',
+  '編成中の進軍がまだ送られていません': 'The march you are composing is not sent yet',
+  '{0}が満杯です。収穫するか使いましょう': '{0} full: harvest or spend it',
+  '要対応 {0}': 'Needs you {0}',
+  '満杯': 'Full',
+  '拠点と行動': 'Holdings and actions',
+  '記録': 'Log',
+  '観戦中': 'Spectating',
+  'まだ陣営に加わっていません': 'Not in a faction yet',
+  '州 {0},{1} 区画 {2}': 'Province {0},{1} · site {2}',
+  '来襲の恐れ': 'Attack possible',
+  '拠点はまだありません。地図の「参加」から始めます。': 'No holding yet. Start with "Join" on the map.',
+  '拠点はありません': 'No holdings',
+  '次の鐘までに': 'Before the next bell',
+  '次の鐘までにやることはありません': 'Nothing needs you before the next bell',
+
+  // ---- the selection inspector (hud/inspect.mjs)
+  '草原': 'Grassland', '平原': 'Plains', '森': 'Forest', '丘': 'Hills', '山': 'Mountain', '水': 'Water',
+  '空き区画': 'Free site', '蛮族の野営地': 'Barbarian camp', '予約済みの区画': 'Reserved site', '自由都市': 'Free City',
+  'この拠点を開く': 'Open this holding',
+  'ここを進軍の行き先にする': 'March here',
+  '入植希望から外す': 'Remove from the ticket',
+  'この区画を入植希望に加える': 'Add this site to the ticket',
+  'この州の空き区画を見る': 'See this province\'s free sites',
+  '第{0}鐘の衝突の報告': 'Clash report of bell {0}',
+  '選択': 'Selection',
+  '地図のマスを選ぶと、ここに中身が出ます。': 'Choose a tile on the map to see what is on it.',
+  '州 {0},{1} · マス {2}': 'Province {0},{1} · tile {2}',
+  '州 {0},{1}': 'Province {0},{1}',
+  '輪': 'Ring',
+  '第{0}輪': 'Ring {0}',
+  '第{0}輪（まだひらいていません）': 'Ring {0} (not open yet)',
+  '地形': 'Terrain',
+  '拠点を持つ陣営': 'Factions holding land',
+  'あなたとの関係': 'Relation to you',
+  '友好': 'friendly', '敵対': 'hostile',
+  'この鐘': 'This bell', '衝突あり': 'A clash',
+  '{0}（{1}）': '{0} ({1})',
+  'あなたの拠点': 'Yours',
+  '区画': 'Site',
+  '守備隊': 'Garrison',
+  '保護': 'Shield',
+  '保護中（攻撃されません）': 'Shielded (cannot be attacked)',
+  'このマスの軍勢': 'Hosts on this tile',
+  '（次の鐘から）': ' (from the next bell)',
+  '蛮族の野営地（{0} 兵）': 'Barbarian camp ({0} troops)',
+  '州の詳しい中身を読み込んでいます…': 'Loading the province\'s details…',
+  '選択中：州 {0},{1} · マス {2}': 'Selected: province {0},{1} · tile {2}',
+  '選択中：州 {0},{1}': 'Selected: province {0},{1}',
+  '詳細': 'Details',
+
+  '勢力の順位': 'Faction standings',
+  '拠点 {0} · {1} 州': (h, p) => `${plural(h, '{0} holding', '{0} holdings')} · ${plural(p, '{1} province', '{1} provinces')}`,
+  '拠点の数は最新の概観（鐘ごと）から数えています。': 'Counted from the latest overview (one per bell).',
 };

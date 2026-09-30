@@ -78,7 +78,7 @@ test('app hand-overs (W5-E R3): boot mounts the bottom sheet and gives the map i
   assert.match(app, /mountSheet\(\)/, 'boot calls mountSheet');
   assert.doesNotMatch(shell, /^if \(globalThis\.document[^\n]*mountSheet\(\);$/m, 'the sheet no longer mounts itself on import');
   assert.match(app, /createTerrain\(/, 'the app makes the terrain source');
-  assert.match(app, /selected: FS\.selected, terrainOf \}/, 'the map source names terrainOf');
+  assert.match(app, /selected: FS\.selected, terrainOf[,\s}]/, 'the map source names terrainOf');
 });
 
 test('catch-up (W6-D): the page asks the keeper once per bell while the home province lags, and retries a resident action refused NotResident once', () => {

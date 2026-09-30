@@ -22,9 +22,49 @@ import { SEASON_STATUS_TEXT, clientText } from './fi18n.mjs';
 import { L, fmtNum, mountLangToggle } from '../lang.mjs';
 import { toHex } from '../sdk/bytes.mjs';
 import { html, setHtml } from '../util.mjs';
-import { ACTIONS, FORMS, bind, startPlay } from './controller.mjs';
+import { ACTIONS, FORMS, bind, startPlay, wantProvince } from './controller.mjs';
 import { renderTabs, renderNotice, factionChip, quotaChip, mountSheet } from './screens/shell.mjs';
 import { createTerrain } from './map/terrain.mjs';
+import { provincePixel } from './map/layers.mjs';
+
+// Sprite art is on by default (?art=0 turns it off); ?art=1 adds the preview helpers below.
+const ART_ON = new URLSearchParams(globalThis.location?.search ?? '').get('art') !== '0';
+const ART_PREVIEW = new URLSearchParams(globalThis.location?.search ?? '').get('art') === '1';
+// ?art=1&roads=1 adds sample roads between sites where the account has none (presentation only).
+const ART_ROADS = ART_PREVIEW && new URLSearchParams(globalThis.location?.search ?? '').get('roads') === '1';
+/**
+ * Art mode: the ClashInputs of each province's last resolved clash (its /h/clash report), loaded once:
+ * the resolve summary's bell, else the three bells before the envelope's.
+ */
+const artClash = new Map();
+function artClashOf(p, q) {
+  const env = FS.provinces.get(`${p},${q}`);
+  if (!env || !heraldRef) return null;
+  const key = `${p},${q}`;
+  if (artClash.has(key)) return artClash.get(key);
+  artClash.set(key, null);
+  const rb = env.province?.resolveSummary?.bell;
+  const bells = rb ? [rb] : ART_PREVIEW ? [env.bell - 1, env.bell - 2, env.bell - 3].filter(b => b > 0) : [];
+  (async () => {
+    for (const b of bells) {
+      const r = await heraldRef.clash(p, q, b).catch(() => null);
+      if (r?.ok && r.inputs) { artClash.set(key, r.inputs); mapRef?.invalidate(); return; }
+    }
+  })();
+  return null;
+}
+// ?art=1&ringopen=1 replays the ring-open moment on the outermost open ring; &engine=N previews an Engine stage (presentation only).
+const ART_Q = new URLSearchParams(globalThis.location?.search ?? '');
+const ART_RINGOPEN = ART_PREVIEW && ART_Q.get('ringopen') === '1';
+// ?art=1&relics=1 places sample Relic Sites and Waystones (M3 features, no accounts in M1; presentation only).
+const ART_RELICS = ART_PREVIEW && ART_Q.get('relics') === '1';
+// ?art=1&rivers=1 draws sample rivers (no river data in the Frontier; presentation only).
+const ART_RIVERS = ART_PREVIEW && ART_Q.get('rivers') === '1';
+// ?art=1&ally=0-1,2-4 shows those faction pairs as allied (presentation only; real relations come from the Province).
+const ART_ALLY = ART_PREVIEW ? (ART_Q.get('ally') ?? '').split(',').map(x => x.split('-').map(Number)).filter(x => x.length === 2 && x.every(Number.isInteger)) : [];
+const ART_ENGINE = ART_PREVIEW ? Math.max(0, Math.min(5, Number(ART_Q.get('engine') ?? 0) | 0)) : 0;
+// ?art=1&fog=1 previews the fog as if the viewer held province (2,0) (presentation only).
+const ART_FOG = ART_PREVIEW && new URLSearchParams(globalThis.location?.search ?? '').get('fog') === '1';
 import * as joinScreen from './screens/join.mjs';
 import * as holdingScreen from './screens/holding.mjs';
 import * as hostScreen from './screens/host.mjs';
@@ -45,6 +85,8 @@ import { scope } from './fchainio.mjs';
 import { hostParts } from './faddr.mjs';
 import { RETREAT_CHOICES, retreatBps } from './fmarch.mjs';
 import { uiKey, uiStorage, loadUi, saveUi } from './fui.mjs';
+import * as hud from './hud/hud.mjs';
+import * as inspect from './hud/inspect.mjs';
 
 const $ = id => globalThis.document?.getElementById(id);
 const setText = (id, text) => { const el = $(id); if (el && el.textContent !== text) el.textContent = text; };
@@ -60,6 +102,7 @@ export function chipText(chip) {
 function renderChip() {
   const now = FS.chain?.now() ?? null;
   setText('bell-chip', chipText(FS.clock ? bellChip(FS.clock, now) : null));
+  renderHudTick(now);
   FS.stale = staleness({ latestUnix: FS.record?.latestUnix, chainNow: now, behind: FS.chain?.behind() ?? null });
   const banner = $('stale-banner');
   if (banner) {
@@ -104,9 +147,12 @@ export function panelMarkup(FS) {
   const parts = [renderNotice(FS.notice)];
   if (FS.practice) return [...parts, practiceScreen.render(FS.practice, { kernelError: FS.practiceError ?? null, closable: true })];
   if (FS.report) return [...parts, reportScreen.render(FS, mineOf(FS.holdings))];
+  // The selection first on the map tab (the player just chose it), then the guide.
+  if (tab === 'map' && FS.selected) parts.push(inspect.render(FS, terrainRef));
   parts.push(onboardingCard.render(FS, { open: tab === 'map' }));
+  // Another tab keeps one line of the selection (the inspector itself is on the map tab).
+  if (tab !== 'map' && FS.selected) parts.push(html`<p class="sel-line">${Number.isInteger(FS.selected.idx) ? L`選択中：州 ${FS.selected.p},${FS.selected.q} · マス ${FS.selected.idx + 1}` : L`選択中：州 ${FS.selected.p},${FS.selected.q}`} <button type="button" class="btn small" data-act="tab" data-tab="map">${L`詳細`}</button></p>`);
   if (tab === 'map') {
-    if (FS.selected) parts.push(html`<p class="muted">${L`州 ${FS.selected.p},${FS.selected.q} を選びました`}</p>`);
     parts.push(joinScreen.render(FS));
   } else if (tab === 'holding') parts.push(holdingScreen.render(FS));
   else if (tab === 'hosts') parts.push(hostScreen.render(FS), exploreScreen.render(FS));
@@ -123,7 +169,7 @@ export function panelMarkup(FS) {
 /** The panel of the practice and spectator pages. */
 export function modePanel(FS) {
   if (FS.mode === 'practice') return [renderNotice(FS.notice), practiceScreen.render(FS.practice, { kernelError: FS.practiceError ?? null })];
-  return spectateScreen.render(FS);
+  return [FS.selected ? inspect.render(FS, terrainRef) : '', spectateScreen.render(FS)];
 }
 
 function renderPlay() {
@@ -134,12 +180,84 @@ function renderPlay() {
   const title = $('panel-title');
   const sub = FS.practice ? L`練習モード` : FS.report ? L`衝突の報告` : null;
   if (title) setText('panel-title', sub ?? { map: L`地図`, holding: L`拠点`, hosts: L`軍勢`, marches: L`進軍`, more: L`その他` }[FS.tab ?? 'map'] ?? L`シーズン`);
+  renderRail();
 }
 
 function renderMode() {
   const body = $('panel-body');
   if (body) setHtml(body, modePanel(FS));
+  renderRail();
 }
+
+// ------------------------------------------------------------------ the HUD (hud/hud.mjs)
+let mapRef = null;
+let terrainRef = null;
+const lastHtml = new Map();
+/** Put markup in an element only when it changed (a hover title survives the one-second tick). */
+function setHtmlIfChanged(el, markup) {
+  const key = el.id;
+  const text = [markup].flat(Infinity).map(String).join('');
+  if (lastHtml.get(key) === text) return;
+  lastHtml.set(key, text);
+  setHtml(el, markup);
+}
+
+/** Every second: the bell pill's bar and urgency, the resource strip, the attention pill. */
+function renderHudTick(now) {
+  const m = hud.bellModel(FS.clock, now);
+  const pill = $('bell-pill');
+  if (pill) {
+    if (pill.dataset.urgency !== m.urgency) pill.dataset.urgency = m.urgency;
+    $('bell-fill')?.style.setProperty('--f', m.frac.toFixed(3));
+  }
+  // The screen edge warns only while a march is being composed (the bell closes its arrival choice).
+  const body = globalThis.document?.body;
+  const edge = FS.compose && !FS.compose.sending ? m.urgency : 'calm';
+  if (body && body.dataset.urgency !== edge) body.dataset.urgency = edge;
+  const strip = $('res-strip');
+  if (strip) {
+    const tokens = FS.mode === 'play' ? hud.resourceModel(hud.activeHolding(FS), now ?? 0) : [];
+    strip.hidden = !tokens.length;
+    setHtmlIfChanged(strip, hud.renderStrip(tokens));
+  }
+  const attn = $('attn-pill');
+  if (attn) {
+    const text = FS.mode === 'play' ? hud.attentionText(hud.attentionItems(FS)) : null;
+    attn.hidden = !text;
+    if (text && attn.textContent !== text) attn.textContent = text;
+  }
+}
+
+function renderRail() {
+  const el = $('rail');
+  if (el) setHtmlIfChanged(el, hud.renderRail(FS));
+}
+
+/** Move the map to an attention item and open its tab. */
+function goToItem(x) {
+  if (!x) return;
+  mapRef?.focus(x.p, x.q, 0.6);
+  FS.selected = { kind: 'province', p: x.p, q: x.q };
+  if (FS.mode === 'play' && x.tab) FS.tab = x.tab;
+  invalidate('map', 'panel', 'tabs', 'rail');
+}
+
+/** The HUD's actions (data-act): cycle the attention items, jump to one, choose the active holding. */
+export const HUD_ACTIONS = {
+  attn: () => {
+    const items = hud.attentionItems(FS);
+    if (!items.length) return;
+    FS.attnIdx = ((FS.attnIdx ?? -1) + 1) % items.length;
+    goToItem(items[FS.attnIdx]);
+  },
+  'attn-go': d => goToItem(hud.attentionItems(FS)[num(d.i)]),
+  'holding-pick': d => {
+    const i = num(d.i), h = FS.holdings?.[i];
+    if (!h) return;
+    FS.activeHolding = i;
+    goToItem({ p: h.p, q: h.q, tab: 'holding' });
+  },
+};
 
 function renderChips() {
   const f = $('faction-chip');
@@ -259,7 +377,7 @@ export function w4Bind(name, value) {
 function delegate(doc) {
   const play = FS.mode === 'play';
   const run = p => Promise.resolve(p).catch(e => { FS.notice = { ok: false, code: e?.code ?? 'Error', text: String(e?.message ?? e) }; invalidate('panel'); });
-  const action = name => W4_ACTIONS[name] ?? (play ? ACTIONS[name] : undefined);
+  const action = name => HUD_ACTIONS[name] ?? W4_ACTIONS[name] ?? (play ? ACTIONS[name] : undefined);
   doc.addEventListener('click', e => {
     const el = e.target.closest?.('[data-act]');
     const fn = el && !el.disabled ? action(el.dataset.act) : undefined;
@@ -353,23 +471,48 @@ export async function boot() {
     ['status', renderStatus],
     ['map', () => map?.invalidate()],
     ...(FS.mode === 'play' ? [['chips', renderChips], ['tabs', renderPlay], ['panel', renderPlay]] : [['panel', renderMode]]),
+    ['rail', renderRail],
   ]);
   delegate(globalThis.document);
   if (canvas) {
     // Tile-LOD terrain from the season record's ring seeds through the rules module (W5-E R3: passed by the app).
-    const terrainOf = createTerrain({ onReady: () => map?.invalidate() });
+    const terrainOf = createTerrain({ onReady: () => { map?.invalidate(); invalidate('panel'); } });
+    terrainRef = terrainOf;
     map = new FrontierMap(canvas, {
       source: () => {
-        const own = (FS.holdings ?? []).map(h => ({ p: h.p, q: h.q }));
-        return { overviews: FS.overviews, ringsOpen: FS.record?.rings?.length ?? 1, own, known: new Set(own.map(o => `${o.p},${o.q}`)), showAll: !FS.view.fog, selected: FS.selected, terrainOf };
+        const own = ART_FOG ? [{ p: 2, q: 0 }] : (FS.holdings ?? []).map(h => ({ p: h.p, q: h.q }));
+        return { overviews: FS.overviews, ringsOpen: FS.record?.rings?.length ?? 1, own, known: new Set([...own.map(o => `${o.p},${o.q}`), ...(ART_FOG ? ['-1,0', '-1,1', '0,-2', '-2,1'] : [])]), showAll: (ART_PREVIEW && !ART_FOG) || !FS.view.fog, selected: FS.selected, terrainOf,
+          // art mode: the decoded Province (holdings' tiers, hosts on tiles, camp), loaded on demand
+          viewerFaction: ART_FOG ? 0 : FS.citizen?.faction ?? null,
+          demoRoads: ART_ROADS,
+          engineStage: ART_ENGINE,
+          demoSpecials: ART_RELICS,
+          demoRivers: ART_RIVERS,
+          alliedPairs: ART_ALLY,
+          artReplayRing: ART_RINGOPEN ? Math.max(0, (FS.record?.rings?.length ?? 1) - 1) : null,
+          clashOf: ART_ON ? artClashOf : undefined,
+          pendingOf: ART_ON ? (p, q) => FS.provinces.get(`${p},${q}`)?.inputs ?? null : undefined,
+          provinceOf: ART_ON ? (p, q) => { const env = FS.provinces.get(`${p},${q}`); if (!env) wantProvince(p, q, () => map?.invalidate()); return env?.province ?? null; } : undefined };
       },
       onSelect: hit => {
         FS.selected = hit;
         setText('map-summary', L`州 ${hit.p},${hit.q} を選びました`);
+        // The inspector reads the province envelope (loaded once, on demand).
+        if (FS.mode !== 'practice') wantProvince(hit.p, hit.q, () => { map?.invalidate(); invalidate('panel'); });
         invalidate('map', 'panel');
       },
       onView: (_, lod) => { FS.view.lod = lod; },
+      // Sprite art at tile LOD, opt-in with ?art=1 (docs/frontier/art/tiles/LOD.md).
+      art: ART_ON,
     });
+    mapRef = map;
+    // The art preview opens on the tiles with everything shown (presentation only).
+    if (ART_RINGOPEN) setInterval(() => map?.invalidate(), 6000);
+    if (ART_PREVIEW) {
+      const [ap, aq] = (ART_Q.get('at') ?? '2,0').split(',').map(Number);
+      const c = provincePixel(Number.isInteger(ap) ? ap : 2, Number.isInteger(aq) ? aq : 0);
+      map.setView({ x: c.x, y: c.y, zoom: 0.8 });
+    }
   }
   invalidate('chip', 'status', 'panel');
   if (await loadSeason(herald)) {

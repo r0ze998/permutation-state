@@ -15,7 +15,7 @@
   --ink: #1b2e28; --ink-2: #4c5852; --paper: #f4efe0; --land: #e9e5d8; --card: #fffdf6;
   --accent: #1f6f67; --accent-ink: #ffffff; --warn-bg: #f6e7c6; --err-bg: #f3d3cc; --err-ink: #5d1c12; --ok-bg: #e2efe9;
   --line: #8c8672; --line-soft: #d5cfbd; --focus: #1f6f67;
-  --gutter: 16px; --bar: 52px; --tabs: 56px; --target: 44px;
+  --gutter: 16px; --bar: 52px; --tabs: 56px; --target: 44px; --panel-w: 360px; --rail-w: 280px;
   --vvh: 100dvh;
   color-scheme: light;
   font: 15px/1.5 system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
@@ -38,7 +38,22 @@ code, .addr { overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .brand { display: flex; align-items: center; gap: 6px; min-height: var(--target); min-width: var(--target); color: inherit; text-decoration: none; font-weight: 650; }
 .brand-mark { font-size: 20px; line-height: 1; }
 .chip { display: inline-flex; align-items: center; min-height: 32px; padding: 0 9px; border-radius: 16px; background: rgba(255,255,255,.14); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.bell-chip { margin-left: auto; font-weight: 600; }
+.bell-pill { margin-left: auto; position: relative; display: inline-flex; flex-direction: column; border-radius: 16px; }
+.bell-chip { font-weight: 600; }
+/* The ten minutes of the bell: a bar under the pill (Eternum's clock), amber from 120 s, red from 30 s (hud.mjs URGENCY). */
+.bell-bar { position: absolute; left: 10px; right: 10px; bottom: 2px; height: 3px; border-radius: 2px; background: rgba(255,255,255,.22); overflow: hidden; }
+.bell-fill { display: block; height: 100%; width: 100%; transform-origin: left; transform: scaleX(var(--f, 0)); background: #9fd8c9; }
+.bell-pill[data-urgency="warn"] .bell-chip { background: #8a5a12; } .bell-pill[data-urgency="warn"] .bell-fill { background: #f3c567; }
+.bell-pill[data-urgency="crit"] .bell-chip { background: #8f2418; } .bell-pill[data-urgency="crit"] .bell-fill { background: #ff9a86; }
+/* The attention pill (Eternum): what needs the player before the bell; each press moves to the next item. */
+.attn-pill { min-height: var(--target); border: 1px solid #f3c567; background: #6b4a10; color: #fff7e2; font: inherit; font-weight: 650; cursor: pointer; }
+.attn-pill::before { content: "\25CF"; margin-right: 6px; color: #ffb4a4; }
+/* The resource strip: the active holding's stores (desktop header; the Holding tab has the full table). */
+.res-strip { display: flex; gap: 4px; flex-wrap: nowrap; min-width: 0; overflow: hidden; }
+.res { display: inline-flex; align-items: baseline; gap: 3px; min-height: 32px; padding: 6px 8px 0; border-radius: 8px; background: rgba(255,255,255,.1); font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 13px; }
+.res-name { color: #cfe3dc; font-size: 12px; } .res-val { font-weight: 650; } .res-cap { color: #b9ccc5; font-size: 12px; }
+.res-flag { margin-left: 2px; padding: 0 5px; border-radius: 6px; font-size: 12px; background: #f3c567; color: #2c1d00; }
+.res-full { box-shadow: inset 0 0 0 1px #f3c567; } .res-full .res-flag { background: #ffb4a4; color: #3a0c05; }
 .lang-box { display: flex; }
 .lang-box [data-lang-toggle] { min-width: var(--target) !important; min-height: var(--target); padding: 0 10px !important; font-size: 13px !important; border: 1px solid rgba(255,255,255,.55); border-radius: 10px; background: transparent; color: inherit; cursor: pointer; }
 .banner { margin: 0; padding: 8px var(--gutter); background: var(--warn-bg); }
@@ -144,15 +159,18 @@ legend { padding: 0 4px; font-weight: 600; }
   /* No display: contents on the landmark (some engines drop its role): main is a grid of its own. */
   body { grid-template-rows: auto auto auto auto minmax(0, 1fr); }
   .topbar { grid-row: 1; } #stale-banner { grid-row: 2; } #error-line { grid-row: 3; }
-  .tabs { grid-row: 4; border-top: 0; border-bottom: 1px solid var(--line-soft); padding-bottom: 0; }
+  /* The tabs head the right column (Civ / Eternum: the context column owns its tabs); main spans both rows under them. */
+  body { grid-template-columns: minmax(0, 1fr) var(--panel-w); }
+  .topbar, #stale-banner, #error-line { grid-column: 1 / -1; }
+  .tabs { grid-row: 4; grid-column: 2; z-index: 3; border-top: 0; border-bottom: 1px solid var(--line-soft); border-left: 1px solid var(--line-soft); padding-bottom: 0; }
   .tab { min-height: 44px; }
-  main { grid-row: 5; display: grid; grid-template-columns: minmax(0, 1fr) 380px; grid-template-rows: minmax(0, 1fr); }
-  #frontier-map { grid-column: 1; grid-row: 1; min-height: 0; }
-  .map-summary, .map-tools { grid-column: 1; grid-row: 1; }
+  main { grid-row: 4 / 6; grid-column: 1 / -1; display: grid; grid-template-columns: 0 minmax(0, 1fr) var(--panel-w); grid-template-rows: minmax(0, 1fr); }
+  #frontier-map { grid-column: 2; grid-row: 1; min-height: 0; }
+  .map-summary, .map-tools { grid-column: 2; grid-row: 1; }
   .map-summary { position: relative; align-self: start; justify-self: start; margin: 8px var(--gutter); }
   .map-tools { position: relative; align-self: start; justify-self: end; margin: 8px; }
   .map-btn { width: 40px; height: 40px; }
-  .panel { position: static; grid-column: 2; grid-row: 1; max-height: none !important; border-radius: 0; box-shadow: none; border-left: 1px solid var(--line-soft); padding-top: 8px; }
+  .panel { position: static; grid-column: 3; grid-row: 1; max-height: none !important; border-radius: 0; box-shadow: none; border-left: 1px solid var(--line-soft); padding-top: 53px; }
   .sheet-handle { display: none; }
   .btn { min-height: 36px; }
   .btn.small { min-height: 32px; }
@@ -161,6 +179,33 @@ legend { padding: 0 4px; font-weight: 600; }
   details > summary, .callout > summary { min-height: 32px; }
   .panel a { min-height: 24px; min-width: 24px; }
 }
+/* ---- the left rail (Eternum's command column): holdings, action tiles, what needs the player; wide screens only */
+.rail { display: none; }
+@media (min-width: 1100px) {
+  main { grid-template-columns: var(--rail-w) minmax(0, 1fr) var(--panel-w); }
+  .rail { grid-column: 1; grid-row: 1; display: flex; flex-direction: column; gap: 4px; min-height: 0; overflow: auto; padding: 10px 12px; background: var(--paper); border-right: 1px solid var(--line-soft); }
+}
+@media (max-width: 1099px) { .res-strip { display: none !important; } }
+.rail-faction { display: flex; align-items: center; margin: 0 0 4px; font-size: 15px; }
+.rail-h { margin: 10px 0 4px; font-size: 13px; letter-spacing: .02em; color: var(--ink-2); font-weight: 650; }
+.rail-list, .rail-todo { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.rail-holding { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 0 8px; width: 100%; min-height: 44px; padding: 6px 10px; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--card); color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
+.rail-holding[aria-current="true"] { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.rail-tier { font-weight: 700; } .rail-where { font-size: 13px; color: var(--ink-2); }
+.rail-warn { grid-column: 1 / -1; justify-self: start; margin-top: 2px; padding: 0 6px; border-radius: 6px; background: var(--err-bg); color: var(--err-ink); font-size: 12px; font-weight: 650; }
+.rail-tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-top: 8px; }
+.rail-tile { display: grid; justify-items: center; gap: 2px; min-height: 56px; padding: 6px 2px; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--card); color: var(--ink); font: inherit; font-size: 12px; cursor: pointer; }
+.rail-tile[aria-pressed="true"] { border-color: var(--accent); background: var(--ok-bg); font-weight: 650; }
+.rail-glyph { font-size: 20px; line-height: 1; }
+.rail-todo-btn { width: 100%; min-height: 36px; padding: 6px 10px; border: 0; border-left: 4px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.todo-incoming .rail-todo-btn { border-left-color: #b3261e; background: #fbeae7; }
+.todo-settle .rail-todo-btn { border-left-color: #2e7d4f; }
+.todo-draft .rail-todo-btn { border-left-color: #b07a12; background: #fbf1dc; }
+.todo-full .rail-todo-btn { border-left-color: #b07a12; }
+/* The screen edge while composing a march close to the bell (Eternum's end-of-season border). */
+body[data-urgency="warn"] main { box-shadow: inset 0 0 0 3px #d9a23a; }
+body[data-urgency="crit"] main { box-shadow: inset 0 0 0 4px #c8412f; }
+
 @media (max-width: 759px) {
   /* The quota chip waits in "More" on phones (web design §7.1: faction, bell and language in the top bar). */
   #quota-chip { display: none !important; }
@@ -168,3 +213,16 @@ legend { padding: 0 4px; font-weight: 600; }
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
 [hidden] { display: none !important; }
+/* ---- the selection inspector (hud/inspect.mjs) */
+.inspect { margin: 4px 0 10px; padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: 12px; background: var(--card); }
+.inspect h3 { margin-top: 0; }
+.inspect h4 { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.nowrap { white-space: nowrap; }
+.tag { padding: 0 6px; border-radius: 6px; background: var(--ok-bg); font-size: 12px; font-weight: 650; }
+.rel-war { color: #8f2418; font-weight: 650; } .rel-ally { color: #1f6f4a; font-weight: 650; }
+.host-row { display: flex; align-items: center; flex-wrap: wrap; }
+.sel-line { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; font-size: 13px; color: var(--ink-2); }
+.rail-standings { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.rail-standings li { display: grid; grid-template-columns: 20px auto 1fr; align-items: center; gap: 0 6px; padding: 6px 8px; border-radius: 8px; background: var(--card); }
+.rail-standings .muted { grid-column: 3; }
+.rank { font-weight: 700; color: var(--ink-2); font-variant-numeric: tabular-nums; }

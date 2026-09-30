@@ -11,7 +11,9 @@
 <header class="topbar">
   <a class="brand" href="./" aria-label="六重の辺境" data-i18n-attr="aria-label"><span class="brand-mark" aria-hidden="true">✳</span><span data-i18n>六重の辺境</span></a>
   <span class="chip" id="faction-chip" hidden></span>
-  <span class="chip bell-chip" id="bell-chip" aria-live="off">—</span>
+  <span class="res-strip" id="res-strip" hidden></span>
+  <span class="bell-pill" id="bell-pill" data-urgency="calm"><span class="chip bell-chip" id="bell-chip" aria-live="off">—</span><span class="bell-bar" aria-hidden="true"><span class="bell-fill" id="bell-fill"></span></span></span>
+  <button type="button" class="chip attn-pill" id="attn-pill" data-act="attn" hidden></button>
   <span class="chip" id="quota-chip" hidden></span>
   <span class="lang-box" id="lang-box"></span>
 </header>
@@ -19,6 +21,7 @@
 <p class="banner error" id="error-line" role="alert" hidden></p>
 <main id="frontier">
   <h1 class="visually-hidden" data-i18n>辺境の地図</h1>
+  <aside class="rail" id="rail" aria-label="拠点と行動" data-i18n-attr="aria-label"></aside>
   <canvas id="frontier-map" tabindex="0" aria-label="辺境の地図：矢印キーで移動、＋と－で拡大縮小、Enter で中央の州を選択" aria-describedby="map-summary" data-i18n-attr="aria-label"></canvas>
   <p class="map-summary" id="map-summary" aria-live="polite"></p>
   <section class="panel" id="panel" aria-labelledby="panel-title">
