@@ -2,7 +2,7 @@
 
 The open-world redesign of PERMUTATION STATE (owner decisions of 2026-09-27). Paths written as `(session scratch)/…` point to lab files from the working session; they are not in the repository.
 
-- **M1 exit (2026-10-01):** [m1/M1-EXIT-NOTES.md](m1/M1-EXIT-NOTES.md) (the exit report: every §13 item with its evidence, findings, open items before a playtest, owner decisions) and [m1/M1-EXIT.ja.md](m1/M1-EXIT.ja.md) (the owner's summary, in Japanese); the exit season's record is [m1/runs/m1-exit/](m1/runs/m1-exit/).
+- **M1 exit (2026-10-01; formally complete after the same-day close of U3 and U4, report §12):** [m1/M1-EXIT-NOTES.md](m1/M1-EXIT-NOTES.md) (the exit report: every §13 item with its evidence, findings, open items before a playtest, owner decisions) and [m1/M1-EXIT.ja.md](m1/M1-EXIT.ja.md) (the owner's summary, in Japanese); the exit season's record is [m1/runs/m1-exit/](m1/runs/m1-exit/).
 - [DESIGN.md](DESIGN.md): the design, revision 3.1 (English), with the M1 amendments in place (§21 wave 1, §22 wave 6 and the exit sample, §23 the `w6-s7` triage).
 - [SUMMARY.ja.md](SUMMARY.ja.md): the owner's summary, in Japanese.
 - [DECISIONS.md](DECISIONS.md): the decisions log (owner decisions after revision 3.1, N1–N5, D23, the M1 integration decisions I-01…I-58, the owner questions O-M1-01…29 and their answers, and the M1 exit in part U), kept current through M1.
