@@ -390,6 +390,16 @@ The 7-day, 1,000-bot, real-round `w6-s7` season on `7dcacdf` (release `.so` `072
 | S28 (§8.4, §13.4 criterion 6; §15 O-M1-28; integ-W6t review) | **The ingest → WS tail was the generator's.** WS messages carry the herald's send stamp `s`; `frontier-viewers` reads buffered, reads the stamps without parsing the payload, and reports the herald and delivery shares and the answered-only file p99; the herald saves checkpoints off its ingest loop. On R5's burst replayed against a separate generator process: 3.28 s (pre-fix generator) → 0.75 s (herald share 0.69, delivery 0.09). No herald fan-out change and no generator sharding were needed; O-M1-28's default (judged as written) stands, for the owner to confirm before the exit run | architect; O-M1-28 default confirmed by evidence, owner to confirm | `herald/tests/burst.rs`; `integ-W6t-review-NOTES.md` §3 |
 | S29 (§13.4 criteria 5 and 8; integ-W6t review) | **Criteria 5 and 8 are decided only when exercised** (n.a. otherwise), 8 from the marchbooks' bad-seal transits and their settlements; the fleet's reports of every lifetime are merged. R5's pass of 4, 5 and 8 carried no evidence (its limits are in its run record). The persona bots are fixed so their outcomes can be observed at 20×: the settle racer races its settlement (tries every 8 game seconds from the bell after its arrival bell; early tries refused in simulation do not count), a late Reveal refused `TransitState`/`AlreadyDone` is the late_revealer's refusal, and a forged settle a keeper beat is no evidence for the forger | architect | R5 and `w6-s7` re-reported; `integ-W6t-review-NOTES.md` §4 |
 
+## T. Owner answers before the exit run (main session, 2026-09-30)
+
+| # | Decision | Source |
+|---|---|---|
+| T1 | **O-M1-25 decided: yes.** The owner asked for a design in which everything ends with the season (「一旦シーズンで終わる設計にしてくれたらいいよ」). Depart refuses `arrive_bell ≥ end_bell`; nothing in play crosses the season's end. After the end only settlement work remains (claims from M2, escrow and rent returns, account closes), and the next season starts from a fresh map; only the chronicle carries over | owner, 2026-09-30 |
+| T2 | **O-M1-26 decided: yes (A1–A3 as written in v1.12/v1.13).** Decided by the main session as a technical call the owner delegated ("the rest you decide") | main session, 2026-09-30 |
+| T3 | **O-M1-27 decided: keep ROUTED for M1**; the clients prevent the march (bots, keeper/relay `409 Shielded`, the W6-D web follow-up before any playtest) | main session, 2026-09-30 |
+| T4 | **O-M1-28 decided: (a)** — criterion 6's ingest → WS p99 ≤ 2 s is judged over the whole viewer window, as written | main session, 2026-09-30 |
+| T5 | **O-M1-29 decided: unchanged** — criterion 3's slot targets stay as written and are judged on the 7-day exit run; no hold window is excluded | main session, 2026-09-30 |
+
 ## E. Change log
 
 | Version | Date | Change |
@@ -412,3 +422,4 @@ The 7-day, 1,000-bot, real-round `w6-s7` season on `7dcacdf` (release `.so` `072
 | v1.12 (w6-s7 triage, U5) | 2026-09-30 | Part S (the `w6-s7` triage: the Depart arrival bound, the CAMP clear record, the close limits, the keeper's season end, reveal acceptance, CU exhaustion, latency, redundancy and skip splits, V5 rule refusals, `ArrivalAfterEnd` and T24, the bots, criterion amendments A1–A3, hold coverage, report additions, the `.so` pin, the W6-D follow-up, the ROUTED default, records and open items); contract v1.12 (§28); new owner questions O-M1-25..27 |
 | v1.12 (integ-W6t) | 2026-09-30 | The merge of U1–U5: S22 updated; S23 (V7 over every REVEAL, T17's construction), S24 (the merged tree's record against the w6-s7 failures), S25 (owner questions O-M1-28, O-M1-29); contract §28 integ-W6t rows, U1's values filled |
 | v1.13 (integ-W6t review) | 2026-09-30 | The review response: S26 (a nudged province-day is not idle; the season-end flush), S27 (`slots-below` re-armed for `defence-pool`), S28 (the WS tail was the generator's; O-M1-28), S29 (criteria 5 and 8 decided only when exercised; R5's limits); contract v1.13 (§29) |
+| v1.13 (owner answers) | 2026-09-30 | Part T: O-M1-25 yes (everything ends with the season), O-M1-26 yes, O-M1-27 keep ROUTED, O-M1-28 (a), O-M1-29 unchanged |
