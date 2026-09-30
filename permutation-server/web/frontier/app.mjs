@@ -85,6 +85,7 @@ import { scope } from './fchainio.mjs';
 import { hostParts } from './faddr.mjs';
 import { RETREAT_CHOICES, retreatBps } from './fmarch.mjs';
 import { uiKey, uiStorage, loadUi, saveUi } from './fui.mjs';
+import * as hud from './hud/hud.mjs';
 
 const $ = id => globalThis.document?.getElementById(id);
 const setText = (id, text) => { const el = $(id); if (el && el.textContent !== text) el.textContent = text; };
@@ -100,6 +101,7 @@ export function chipText(chip) {
 function renderChip() {
   const now = FS.chain?.now() ?? null;
   setText('bell-chip', chipText(FS.clock ? bellChip(FS.clock, now) : null));
+  renderHudTick(now);
   FS.stale = staleness({ latestUnix: FS.record?.latestUnix, chainNow: now, behind: FS.chain?.behind() ?? null });
   const banner = $('stale-banner');
   if (banner) {
@@ -174,12 +176,83 @@ function renderPlay() {
   const title = $('panel-title');
   const sub = FS.practice ? L`練習モード` : FS.report ? L`衝突の報告` : null;
   if (title) setText('panel-title', sub ?? { map: L`地図`, holding: L`拠点`, hosts: L`軍勢`, marches: L`進軍`, more: L`その他` }[FS.tab ?? 'map'] ?? L`シーズン`);
+  renderRail();
 }
 
 function renderMode() {
   const body = $('panel-body');
   if (body) setHtml(body, modePanel(FS));
+  renderRail();
 }
+
+// ------------------------------------------------------------------ the HUD (hud/hud.mjs)
+let mapRef = null;
+const lastHtml = new Map();
+/** Put markup in an element only when it changed (a hover title survives the one-second tick). */
+function setHtmlIfChanged(el, markup) {
+  const key = el.id;
+  const text = [markup].flat(Infinity).map(String).join('');
+  if (lastHtml.get(key) === text) return;
+  lastHtml.set(key, text);
+  setHtml(el, markup);
+}
+
+/** Every second: the bell pill's bar and urgency, the resource strip, the attention pill. */
+function renderHudTick(now) {
+  const m = hud.bellModel(FS.clock, now);
+  const pill = $('bell-pill');
+  if (pill) {
+    if (pill.dataset.urgency !== m.urgency) pill.dataset.urgency = m.urgency;
+    $('bell-fill')?.style.setProperty('--f', m.frac.toFixed(3));
+  }
+  // The screen edge warns only while a march is being composed (the bell closes its arrival choice).
+  const body = globalThis.document?.body;
+  const edge = FS.compose && !FS.compose.sending ? m.urgency : 'calm';
+  if (body && body.dataset.urgency !== edge) body.dataset.urgency = edge;
+  const strip = $('res-strip');
+  if (strip) {
+    const tokens = FS.mode === 'play' ? hud.resourceModel(hud.activeHolding(FS), now ?? 0) : [];
+    strip.hidden = !tokens.length;
+    setHtmlIfChanged(strip, hud.renderStrip(tokens));
+  }
+  const attn = $('attn-pill');
+  if (attn) {
+    const text = FS.mode === 'play' ? hud.attentionText(hud.attentionItems(FS)) : null;
+    attn.hidden = !text;
+    if (text && attn.textContent !== text) attn.textContent = text;
+  }
+}
+
+function renderRail() {
+  const el = $('rail');
+  if (el) setHtmlIfChanged(el, hud.renderRail(FS));
+}
+
+/** Move the map to an attention item and open its tab. */
+function goToItem(x) {
+  if (!x) return;
+  mapRef?.focus(x.p, x.q, 0.6);
+  FS.selected = { kind: 'province', p: x.p, q: x.q };
+  if (FS.mode === 'play' && x.tab) FS.tab = x.tab;
+  invalidate('map', 'panel', 'tabs', 'rail');
+}
+
+/** The HUD's actions (data-act): cycle the attention items, jump to one, choose the active holding. */
+export const HUD_ACTIONS = {
+  attn: () => {
+    const items = hud.attentionItems(FS);
+    if (!items.length) return;
+    FS.attnIdx = ((FS.attnIdx ?? -1) + 1) % items.length;
+    goToItem(items[FS.attnIdx]);
+  },
+  'attn-go': d => goToItem(hud.attentionItems(FS)[num(d.i)]),
+  'holding-pick': d => {
+    const i = num(d.i), h = FS.holdings?.[i];
+    if (!h) return;
+    FS.activeHolding = i;
+    goToItem({ p: h.p, q: h.q, tab: 'holding' });
+  },
+};
 
 function renderChips() {
   const f = $('faction-chip');
@@ -299,7 +372,7 @@ export function w4Bind(name, value) {
 function delegate(doc) {
   const play = FS.mode === 'play';
   const run = p => Promise.resolve(p).catch(e => { FS.notice = { ok: false, code: e?.code ?? 'Error', text: String(e?.message ?? e) }; invalidate('panel'); });
-  const action = name => W4_ACTIONS[name] ?? (play ? ACTIONS[name] : undefined);
+  const action = name => HUD_ACTIONS[name] ?? W4_ACTIONS[name] ?? (play ? ACTIONS[name] : undefined);
   doc.addEventListener('click', e => {
     const el = e.target.closest?.('[data-act]');
     const fn = el && !el.disabled ? action(el.dataset.act) : undefined;
@@ -393,6 +466,7 @@ export async function boot() {
     ['status', renderStatus],
     ['map', () => map?.invalidate()],
     ...(FS.mode === 'play' ? [['chips', renderChips], ['tabs', renderPlay], ['panel', renderPlay]] : [['panel', renderMode]]),
+    ['rail', renderRail],
   ]);
   delegate(globalThis.document);
   if (canvas) {
@@ -423,6 +497,7 @@ export async function boot() {
       // Sprite art at tile LOD, opt-in with ?art=1 (docs/frontier/art/tiles/LOD.md).
       art: ART_ON,
     });
+    mapRef = map;
     // The art preview opens on the tiles with everything shown (presentation only).
     if (ART_RINGOPEN) setInterval(() => map?.invalidate(), 6000);
     if (ART_PREVIEW) {

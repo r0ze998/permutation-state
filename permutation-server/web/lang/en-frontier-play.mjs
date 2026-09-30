@@ -5,6 +5,8 @@
 // routing in app.mjs. Japanese is the source language, inline in the
 // modules; a key another dictionary already has keeps the same English.
 // Terms: GLOSSARY.md, section "The Frontier".
+import { plural } from './helpers.mjs';
+
 export default {
   // ---- routing (app.mjs)
   'あなたの衝突の報告': 'Your clash reports',
@@ -154,4 +156,27 @@ export default {
   // ---- the spectator (screens/spectate.mjs)
   'まだ衝突はありません': 'No clash yet',
   'スロット {0} 時点': 'As of slot {0}',
+
+  // ---- the HUD (hud/hud.mjs): bell pill, resource strip, attention, left rail
+  '満杯です（これ以上は貯まりません）': 'Full (no more will accrue)',
+  '満杯まで {0}': 'Full in {0}',
+  '{0}時間{1}分': '{0} h {1} min',
+  '{0}日': n => plural(n, '{0} day', '{0} days'),
+  '毎時 +{0}': '+{0} per hour',
+  '第{0}鐘に州 {1},{2} へ敵が来るかもしれません': 'Enemies may reach province {1},{2} at bell {0}',
+  '州 {0},{1} の進軍を精算できます': 'The march to province {0},{1} can be settled',
+  '編成中の進軍がまだ送られていません': 'The march you are composing is not sent yet',
+  '{0}が満杯です。収穫するか使いましょう': '{0} full: harvest or spend it',
+  '要対応 {0}': 'Needs you {0}',
+  '満杯': 'Full',
+  '拠点と行動': 'Holdings and actions',
+  '記録': 'Log',
+  '観戦中': 'Spectating',
+  'まだ陣営に加わっていません': 'Not in a faction yet',
+  '州 {0},{1} 区画 {2}': 'Province {0},{1} · site {2}',
+  '来襲の恐れ': 'Attack possible',
+  '拠点はまだありません。地図の「参加」から始めます。': 'No holding yet. Start with "Join" on the map.',
+  '拠点はありません': 'No holdings',
+  '次の鐘までに': 'Before the next bell',
+  '次の鐘までにやることはありません': 'Nothing needs you before the next bell',
 };
