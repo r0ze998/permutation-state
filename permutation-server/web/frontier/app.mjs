@@ -27,6 +27,8 @@ import { renderTabs, renderNotice, factionChip, quotaChip, mountSheet } from './
 import { createTerrain } from './map/terrain.mjs';
 import { provincePixel } from './map/layers.mjs';
 
+// Sprite art is on by default (?art=0 turns it off); ?art=1 adds the preview helpers below.
+const ART_ON = new URLSearchParams(globalThis.location?.search ?? '').get('art') !== '0';
 const ART_PREVIEW = new URLSearchParams(globalThis.location?.search ?? '').get('art') === '1';
 // ?art=1&roads=1 adds sample roads between sites where the account has none (presentation only).
 const ART_ROADS = ART_PREVIEW && new URLSearchParams(globalThis.location?.search ?? '').get('roads') === '1';
@@ -42,7 +44,7 @@ function artClashOf(p, q) {
   if (artClash.has(key)) return artClash.get(key);
   artClash.set(key, null);
   const rb = env.province?.resolveSummary?.bell;
-  const bells = rb ? [rb] : [env.bell - 1, env.bell - 2, env.bell - 3].filter(b => b > 0);
+  const bells = rb ? [rb] : ART_PREVIEW ? [env.bell - 1, env.bell - 2, env.bell - 3].filter(b => b > 0) : [];
   (async () => {
     for (const b of bells) {
       const r = await heraldRef.clash(p, q, b).catch(() => null);
@@ -408,9 +410,9 @@ export async function boot() {
           demoRivers: ART_RIVERS,
           alliedPairs: ART_ALLY,
           artReplayRing: ART_RINGOPEN ? Math.max(0, (FS.record?.rings?.length ?? 1) - 1) : null,
-          clashOf: ART_PREVIEW ? artClashOf : undefined,
-          pendingOf: ART_PREVIEW ? (p, q) => FS.provinces.get(`${p},${q}`)?.inputs ?? null : undefined,
-          provinceOf: ART_PREVIEW ? (p, q) => { const env = FS.provinces.get(`${p},${q}`); if (!env) wantProvince(p, q, () => map?.invalidate()); return env?.province ?? null; } : undefined };
+          clashOf: ART_ON ? artClashOf : undefined,
+          pendingOf: ART_ON ? (p, q) => FS.provinces.get(`${p},${q}`)?.inputs ?? null : undefined,
+          provinceOf: ART_ON ? (p, q) => { const env = FS.provinces.get(`${p},${q}`); if (!env) wantProvince(p, q, () => map?.invalidate()); return env?.province ?? null; } : undefined };
       },
       onSelect: hit => {
         FS.selected = hit;
@@ -419,7 +421,7 @@ export async function boot() {
       },
       onView: (_, lod) => { FS.view.lod = lod; },
       // Sprite art at tile LOD, opt-in with ?art=1 (docs/frontier/art/tiles/LOD.md).
-      art: ART_PREVIEW,
+      art: ART_ON,
     });
     // The art preview opens on the tiles with everything shown (presentation only).
     if (ART_RINGOPEN) setInterval(() => map?.invalidate(), 6000);

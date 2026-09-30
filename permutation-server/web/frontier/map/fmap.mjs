@@ -268,9 +268,11 @@ export class FrontierMap {
       if (this.lod === 'tile' && this.art) {
         // Art: every fog level is drawn as tiles (distant muted, unopened as cloud sea; LOD.md).
         if (fog === 'unopened') { artTiles.push({ ...pr, fog, selected }); continue; }
+        // a viewer with no holdings (spectator, before joining) sees the land clear: fog is relative to one's own
+        const artFog = (src.own ?? []).length ? fog : 'clear';
         const t = terrainOf?.(pr.p, pr.q);
         if (TILE_FOGS.includes(fog)) wanted++;
-        if (t) { artTiles.push({ ...pr, ...t, rec, fog, selected, prov: src.provinceOf?.(pr.p, pr.q) ?? null, clash: src.clashOf?.(pr.p, pr.q) ?? null, pending: src.pendingOf?.(pr.p, pr.q) ?? null }); if (TILE_FOGS.includes(fog)) drawn++; continue; }
+        if (t) { artTiles.push({ ...pr, ...t, rec, fog: artFog, selected, prov: src.provinceOf?.(pr.p, pr.q) ?? null, clash: src.clashOf?.(pr.p, pr.q) ?? null, pending: src.pendingOf?.(pr.p, pr.q) ?? null }); if (TILE_FOGS.includes(fog)) drawn++; continue; }
         paintProvince(ctx, { ...pr, rec, fog, selected, scale: z });
         continue;
       }

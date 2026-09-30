@@ -542,10 +542,10 @@ export class SpriteArt {
       const far = e.fog === 'distant';
       ctx.save();
       ctx.globalCompositeOperation = 'saturation';
-      ctx.globalAlpha = far ? 0.8 : 0.45;
+      ctx.globalAlpha = far ? 0.55 : 0.3;
       ctx.fillStyle = '#808080'; ctx.fill(o.fill);
       ctx.restore();
-      ctx.fillStyle = far ? 'rgba(217,223,231,0.5)' : 'rgba(223,230,238,0.26)'; ctx.fill(o.fill);
+      ctx.fillStyle = far ? 'rgba(217,223,231,0.32)' : 'rgba(223,230,238,0.16)'; ctx.fill(o.fill);
       if (far) for (const t of tiles) if (t.p === e.p && t.pq === e.q) { const m = this.image('fog', s.key, `mist_${t.v}`); if (m) draw(m, t); }
     }
     for (const e of entries) if (e.fog !== 'unopened') this.frame(ctx, { p: e.p, q: e.q, fog: 'clear', selected: e.selected, zoom });
