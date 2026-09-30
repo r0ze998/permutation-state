@@ -955,8 +955,8 @@ fn building_copies_count_production_items_by_resource() {
     }
 }
 
-/// The settle racer re-departs its host from its arrival bell on, for
-/// `RACE_BELLS` bells, until a try counts (integ-W6t review: it does not wait to see the
+/// The settle racer re-departs its host from the bell after its arrival
+/// bell, for `RACE_BELLS` bells, until a try counts (integ-W6t review: it does not wait to see the
 /// destination's resolve, whose window before the keepers' SettleTransit is
 /// shorter than the herald's lag at 20×; the relay refuses the early tries
 /// `NotResident` in simulation); before the arrival bell a Depart tests
@@ -987,21 +987,24 @@ fn the_settle_racer_redeparts_from_the_arrival_bell() {
             .count()
     };
     let bell = o.bell();
-    assert!((fixture::IN_TRANSIT_ARRIVE..=fixture::IN_TRANSIT_ARRIVE + 2).contains(&bell));
-    // From the arrival bell, whether or not the resolve is seen yet.
-    assert_eq!(redeparts(&o, &m), 1);
+    // From the bell after the arrival bell (the resolve needs the close),
+    // whether or not the resolve is seen yet.
+    let mut racing = m.clone();
+    racing.arrive_bell = bell - 1;
+    assert_eq!(redeparts(&o, &racing), 1);
     let mut early = o.clone();
     early
         .provinces
         .get_mut(&w.enemy_home)
         .expect("destination observed")
         .province
-        .resolved_next = fixture::IN_TRANSIT_ARRIVE;
-    assert_eq!(redeparts(&early, &m), 1);
-    // Before the arrival bell: nothing to race yet.
+        .resolved_next = bell - 1;
+    assert_eq!(redeparts(&early, &racing), 1);
+    // In the arrival bell or before it: nothing to race yet.
     let mut before = m.clone();
-    before.arrive_bell = bell + 1;
+    before.arrive_bell = bell;
     assert_eq!(redeparts(&o, &before), 0);
+    let m = racing;
     // Past the race (`RACE_BELLS`), or once a try counted: done.
     let mut late = o.clone();
     late.now += (policy::RACE_BELLS as i64 + 3) * 600;

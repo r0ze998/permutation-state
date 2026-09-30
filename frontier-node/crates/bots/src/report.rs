@@ -179,7 +179,7 @@ impl Report {
             Persona::SettleRacer => judge(
                 tagged("redepart")
                     .into_iter()
-                    .filter(|o| !refused_as(o, &["NotResident", "HostBusy"]))
+                    .filter(|o| !refused_as(o, &["NotResident", "HostBusy", "RateLimited"]))
                     .collect(),
                 &["HostInTransit"],
             ),
@@ -330,6 +330,13 @@ mod tests {
         let mut r = Report::default();
         r.record(o(Persona::SettleRacer, "redepart", false, "NotResident", 0));
         r.record(o(Persona::SettleRacer, "redepart", false, "HostBusy", 0));
+        r.record(o(
+            Persona::SettleRacer,
+            "redepart",
+            false,
+            "RateLimited",
+            429,
+        ));
         assert_eq!(r.verdict(Persona::SettleRacer), Verdict::Pending);
         r.record(o(
             Persona::SettleRacer,

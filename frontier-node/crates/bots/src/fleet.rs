@@ -187,7 +187,8 @@ impl Times {
 pub const RACER_POLL_SECS: i64 = 8;
 
 /// Whether a settle racer is in its race (integ-W6t review): a march past
-/// its arrival bell (up to `RACE_BELLS` on), not yet re-departed or settled.
+/// its arrival bell (the bells after it, up to `RACE_BELLS`), not yet
+/// re-departed or settled.
 /// Its window is the few slots between the destination's resolve of the
 /// arrival bell (`seed_margin` after the close, ≈ 60–100 game seconds into
 /// the next bell) and the keepers' SettleTransit; duties 0–20 s into each
@@ -199,7 +200,7 @@ pub fn settle_racer_polls(bot: &Bot, bell: u32) -> bool {
         && bot.mem.marches.iter().any(|m| {
             !m.settled
                 && !m.redeparted
-                && bell >= m.arrive_bell
+                && bell > m.arrive_bell
                 && bell <= m.arrive_bell + frontier_agents::policy::RACE_BELLS
         })
 }

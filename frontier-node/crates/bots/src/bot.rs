@@ -975,9 +975,13 @@ impl Bot {
                     })
                     .await;
                 // integ-W6t review: a try before the destination resolved
-                // the arrival (`NotResident`, `HostBusy`) tests nothing; the
+                // the arrival (`NotResident`, `HostBusy`) or one the relay's
+                // rate limit turned away (`RateLimited`) tests nothing; the
                 // racer tries again at its next poll.
-                let early = matches!(r.code().as_deref(), Some("NotResident" | "HostBusy"));
+                let early = matches!(
+                    r.code().as_deref(),
+                    Some("NotResident" | "HostBusy" | "RateLimited")
+                );
                 if !early {
                     if let Some(mm) = self.mem.march_mut(key) {
                         mm.redeparted = true;

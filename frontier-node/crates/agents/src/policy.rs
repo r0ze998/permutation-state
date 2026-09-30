@@ -921,16 +921,18 @@ fn duties(obs: &Observation, cx: &Ctx, prof: &Profile, rng: &mut Rng, out: &mut 
         // (§8.6, G12: `HostInTransit`). integ-W6t review: that window is the
         // few slots between the resolve (mid-bell after the arrival bell)
         // and the keepers' SettleTransit, shorter than the herald's lag at
-        // 20×, so the racer does not wait to see the resolve: from the
-        // arrival bell for five bells it tries at every poll
-        // (`frontier_bots::fleet::settle_racer_polls`); the relay's
-        // simulation refuses the early tries (`NotResident`, `HostBusy`,
-        // nothing sent, nothing charged) and the first one after the
-        // resolve is the `HostInTransit` the persona tests.
+        // 20×, so the racer does not wait to see the resolve: from the bell
+        // after its arrival bell (the resolve needs the close, `A + W`, and
+        // the seed round `seed_margin` after it) for `RACE_BELLS` bells it
+        // tries at every poll (`frontier_bots::fleet::settle_racer_polls`);
+        // the relay's simulation refuses the early tries (`NotResident`,
+        // `HostBusy`: nothing sent, nothing charged; `RateLimited` if it
+        // tries too fast) and the first one after the resolve is the
+        // `HostInTransit` the persona tests.
         if persona == Some(Persona::SettleRacer)
             && !m.redeparted
             && transit.is_some()
-            && bell >= m.arrive_bell
+            && bell > m.arrive_bell
             && bell <= m.arrive_bell + RACE_BELLS
         {
             out.push(Intent::Redepart { key: m.key });

@@ -742,7 +742,11 @@ fn the_settle_racer_polls_through_its_race() {
     let mut bot = Bot::new(spec(FINAL, Arch::Bot, Some(Persona::SettleRacer)), SEED);
     bot.mem.marches.push(memo_for(a, SealKind::Garbage, false));
     assert!(!settle_racer_polls(&bot, a - 1), "before its arrival");
-    assert!(settle_racer_polls(&bot, a));
+    assert!(
+        !settle_racer_polls(&bot, a),
+        "the resolve comes after the close"
+    );
+    assert!(settle_racer_polls(&bot, a + 1));
     assert!(settle_racer_polls(&bot, a + 4));
     assert!(!settle_racer_polls(&bot, a + 5), "the race is long over");
     bot.mem.marches[0].redeparted = true;
