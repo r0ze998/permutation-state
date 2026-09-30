@@ -14,7 +14,7 @@ This guide describes the keeper built in M1 (`frontier-node/crates/keeper`, bina
 | A chain RPC | `frontier-localnet` (the M1 local chain node). The keeper reads the program's transaction feed through `frontier_feed`, a localnet extension; it has no public-RPC feed yet (§9) |
 | drand | `drand-replay` on loopback: `--test-key` for the test-beacon program build, or `--archive <dir>` for real quicknet rounds with the release build. The keeper's HTTP client speaks plain `http://` only (§9) |
 | A master seed | 32 random bytes; every payer and funder key is derived from it (§4). `frontier-keeper --config keeper.toml --init-seed` writes one (mode 0600) and exits |
-| A beneficiary | the address that receives tips, march fees and rewards. To claim defence refunds the keeper also needs the beneficiary's key (`beneficiary_key_file`), because ClaimDefence is signed by the beneficiary |
+| A beneficiary | the address that receives tips, march fees and rewards. To claim defence refunds the keeper also needs the beneficiary's key (`beneficiary_key_file`), because ClaimDefence is signed by the beneficiary. **The beneficiary is also ClaimDefence's fee payer, so it must hold lamports** (M1 exit U4): an unfunded beneficiary's claims are dropped by the chain for want of the fee and expire unlanded. 0.1 SOL covers five claims at the keeper's per-write spend cap (0.02 SOL); a landed claim's refund is paid to the same key. The stack airdrops each beneficiary `pools.beneficiary_lamports` (default 1 SOL) at start |
 | Lamports | enough for the funders to keep 150 reveal payers and 32 delay payers at their floors (§4.3): about 1.2 SOL for a local season with the recommended R99, 32–65 SOL at the contract's default R99 of 4,000 |
 | Ports | the loopback API on a free port in 41000–41999 that is not reserved (4185, 4190, 4191, 4194, 18899, 17799, 28899, 27799, 26699, 5185, 5191 are never used). The stack's keepers use 41050 (A) and 41051 (B) |
 
@@ -92,7 +92,7 @@ The default of 4,000 stays in the code until the owner accepts the recommendatio
 
 ### 4.4 Funding
 
-Fund the **funders**; the keeper funds the payers. The keeper does not yet print its derived addresses (§9): derive them with the formula in §4.1 (any ed25519 library: the 32-byte `sha256` output is the secret seed) from the master seed file (on a local run the stack writes it to `<run>/keeper-a/keeper.seed` and `<run>/keeper-b/keeper.seed`, and airdrops the funders itself). Keep the funders' balance above the sum of the ceilings you configure; the `/v1/status` `pools` object shows each pool's lamports and effective N.
+Fund the **funders**; the keeper funds the payers. The keeper does not yet print its derived addresses (§9): derive them with the formula in §4.1 (any ed25519 library: the 32-byte `sha256` output is the secret seed) from the master seed file (on a local run the stack writes it to `<run>/keeper-a/keeper.seed` and `<run>/keeper-b/keeper.seed`, and airdrops the funders itself). Fund the **beneficiary** too if the keeper has the `claims` role: the funders never pay for it, and ClaimDefence's fee comes from the beneficiary (§1). Keep the funders' balance above the sum of the ceilings you configure; the `/v1/status` `pools` object shows each pool's lamports and effective N.
 
 ## 5. `keeper.toml`
 

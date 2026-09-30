@@ -24,6 +24,12 @@ g0 = 1788998400
 [paths]
 archive = "../../data/drand-archive-quicknet-g0-1788998400"
 
+# M1 exit U4: each keeper's beneficiary signs ClaimDefence and pays its fee
+# (§5.12); the stack airdrops it this much at start (the default, 1 SOL =
+# 50 x the keeper's per-write spend cap). Unfunded, no claim ever landed.
+[pools]
+beneficiary_lamports = 1000000000
+
 [chaos]
 enabled = true
 seed = 11

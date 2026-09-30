@@ -181,6 +181,11 @@ pub struct StackConfig {
     pub delay_pool: usize,
     pub funders: usize,
     pub relay_pool: usize,
+    /// Lamports airdropped at start to each keeper's beneficiary (M1 exit
+    /// U4): the beneficiary signs ClaimDefence and pays its fee (§5.12), and
+    /// `frontier-localnet` drops a transaction whose fee payer cannot pay,
+    /// so an unfunded beneficiary never lands a claim. 0 leaves it unfunded.
+    pub beneficiary_lamports: u64,
     pub chaos: bool,
     pub chaos_min_hours: f64,
     pub chaos_max_hours: f64,
@@ -220,6 +225,12 @@ pub struct StackConfig {
     /// without `--chaos`).
     pub chaos_force: Vec<(String, f64)>,
 }
+
+/// Each keeper beneficiary's airdrop at start (M1 exit U4): 1 SOL, fifty
+/// times the keeper's per-write spend cap (20,000,000 lamports, the most
+/// one ClaimDefence write can spend over all its versions), and a landed
+/// claim's refund goes back to the same key.
+pub const BENEFICIARY_LAMPORTS: u64 = 1_000_000_000;
 
 /// 2026-08-01T00:00:00Z, `frontier-localnet`'s default origin (a past date,
 /// so every test-key round the season needs exists at once).
@@ -267,6 +278,7 @@ impl Default for StackConfig {
             delay_pool: 32,
             funders: 4,
             relay_pool: 150,
+            beneficiary_lamports: BENEFICIARY_LAMPORTS,
             chaos: false,
             chaos_min_hours: 2.0,
             chaos_max_hours: 6.0,
@@ -462,6 +474,10 @@ impl StackConfig {
         }
         if let Some(v) = i!("pools.relay") {
             c.relay_pool = v as usize;
+        }
+        if let Some(v) = i!("pools.beneficiary_lamports") {
+            c.beneficiary_lamports =
+                u64::try_from(v).map_err(|_| "`pools.beneficiary_lamports` must be >= 0")?;
         }
         if let Some(v) = b!("chaos.enabled") {
             c.chaos = v;
@@ -708,7 +724,8 @@ impl StackConfig {
             "archive": self.archive_dir.as_ref().map(|p| p.display().to_string()),
             "drand_delay_ms": self.drand_delay_ms,
             "keeper_b": self.keeper_b,
-            "pools": {"reveal": self.reveal_pool, "delay": self.delay_pool, "funders": self.funders, "relay": self.relay_pool},
+            "pools": {"reveal": self.reveal_pool, "delay": self.delay_pool, "funders": self.funders, "relay": self.relay_pool,
+                      "beneficiary_lamports": self.beneficiary_lamports},
             "chaos": {"enabled": self.chaos, "min_hours": self.chaos_min_hours, "max_hours": self.chaos_max_hours,
                       "restart_max_secs": self.chaos_restart_max_secs, "seed": self.chaos_seed, "targets": self.chaos_targets},
             "adversary": self.adversary,
@@ -926,6 +943,22 @@ mod tests {
         assert_eq!(c.beacon, Beacon::TestKey);
     }
 
+    /// M1 exit U4: the beneficiaries are funded by default and the key
+    /// `pools.beneficiary_lamports` sets (or, at 0, turns off) the airdrop.
+    #[test]
+    fn beneficiary_funding_key() {
+        assert_eq!(
+            StackConfig::default().beneficiary_lamports,
+            BENEFICIARY_LAMPORTS
+        );
+        let c = StackConfig::from_toml("[pools]\nbeneficiary_lamports = 250000000\n").unwrap();
+        assert_eq!(c.beneficiary_lamports, 250_000_000);
+        assert_eq!(c.to_json()["pools"]["beneficiary_lamports"], 250_000_000);
+        let off = StackConfig::from_toml("[pools]\nbeneficiary_lamports = 0\n").unwrap();
+        assert_eq!(off.beneficiary_lamports, 0);
+        assert!(StackConfig::from_toml("[pools]\nbeneficiary_lamports = -1\n").is_err());
+    }
+
     #[test]
     fn a_file_and_flags() {
         let mut c = StackConfig::from_toml(
@@ -1071,6 +1104,14 @@ mod tests {
             if c.beacon == Beacon::Archive {
                 assert_eq!(c.g0, G0_ARCHIVE, "{}: the archive's G0", p.display());
             }
+            // M1 exit U4: every committed run funds the keepers'
+            // beneficiaries, or no ClaimDefence can land in it.
+            assert!(
+                c.beneficiary_lamports >= 20_000_000,
+                "{}: beneficiary_lamports {} below one write's spend cap",
+                p.display(),
+                c.beneficiary_lamports
+            );
             n += 1;
         }
         assert!(n >= 5, "{n} configs");
