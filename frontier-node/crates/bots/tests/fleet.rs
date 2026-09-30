@@ -732,6 +732,26 @@ async fn a_march_settled_by_someone_else_is_reconciled() {
     assert_eq!(settled, vec![true, true, false]);
 }
 
+/// integ-W6t review: a settle racer polls between its arrival and the
+/// settlement (its window is a few slots, mid-bell); other bots and a racer
+/// that already re-departed do not.
+#[test]
+fn the_settle_racer_polls_through_its_race() {
+    use frontier_bots::fleet::settle_racer_polls;
+    let a = fixture::IN_TRANSIT_ARRIVE;
+    let mut bot = Bot::new(spec(FINAL, Arch::Bot, Some(Persona::SettleRacer)), SEED);
+    bot.mem.marches.push(memo_for(a, SealKind::Garbage, false));
+    assert!(!settle_racer_polls(&bot, a - 1), "before its arrival");
+    assert!(settle_racer_polls(&bot, a));
+    assert!(settle_racer_polls(&bot, a + 4));
+    assert!(!settle_racer_polls(&bot, a + 5), "the race is long over");
+    bot.mem.marches[0].redeparted = true;
+    assert!(!settle_racer_polls(&bot, a + 1));
+    let mut other = Bot::new(spec(FINAL, Arch::Bot, Some(Persona::LateRevealer)), SEED);
+    other.mem.marches.push(memo_for(a, SealKind::Honest, false));
+    assert!(!settle_racer_polls(&other, a + 1));
+}
+
 #[tokio::test]
 async fn the_settle_racer_redeparts_then_settles_at_the_first_instant() {
     let sh = shared::<NoDirect>(MockRelay::new(presets()), None);

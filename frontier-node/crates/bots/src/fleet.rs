@@ -182,6 +182,28 @@ impl Times {
 /// One bot's pacing (the rules in the module note), shared by
 /// [`Fleet::run`] (wall clock) and [`Fleet::step_due`] (a clock the caller
 /// moves, e.g. an in-process chain on virtual time).
+/// Game seconds between a settle racer's polls while a march of its is
+/// between its arrival and the keepers' SettleTransit (integ-W6t review).
+pub const RACER_POLL_SECS: i64 = 8;
+
+/// Whether a settle racer is in its race (integ-W6t review): a march past
+/// its arrival bell (up to `RACE_BELLS` on), not yet re-departed or settled.
+/// Its window is the few slots between the destination's resolve of the
+/// arrival bell (`seed_margin` after the close, ≈ 60–100 game seconds into
+/// the next bell) and the keepers' SettleTransit; duties 0–20 s into each
+/// bell never land there at 20× (the rehearsal `integ-w6t-rv-3d`: 5 racers,
+/// no re-depart in 3 game days, criterion 5 n.a.), so the racer polls every
+/// [`RACER_POLL_SECS`] until it has re-departed.
+pub fn settle_racer_polls(bot: &Bot, bell: u32) -> bool {
+    bot.spec.persona == Some(frontier_agents::Persona::SettleRacer)
+        && bot.mem.marches.iter().any(|m| {
+            !m.settled
+                && !m.redeparted
+                && bell >= m.arrive_bell
+                && bell <= m.arrive_bell + frontier_agents::policy::RACE_BELLS
+        })
+}
+
 struct Pace {
     sched: Schedule,
     jitter: Rng,
@@ -224,7 +246,8 @@ impl Pace {
         let eager = eager && bot.spec.persona.is_some();
         let new_bell = self.last_duty_bell != Some(bell);
         let session_due = !pre_join && (now >= self.next_session || (eager && new_bell));
-        let duty_due = !pre_join && (busy || onboarding || eager) && new_bell;
+        let duty_due = !pre_join
+            && ((busy || onboarding || eager) && new_bell || settle_racer_polls(bot, bell));
         (session_due || duty_due).then_some(session_due)
     }
 
@@ -271,6 +294,9 @@ impl Pace {
         } else {
             self.next_session
         };
+        if settle_racer_polls(bot, bell) {
+            self.wake = self.wake.min(now + RACER_POLL_SECS);
+        }
         self.wake
     }
 }

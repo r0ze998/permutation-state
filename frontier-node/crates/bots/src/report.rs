@@ -173,7 +173,16 @@ impl Report {
             }
         };
         match p {
-            Persona::SettleRacer => judge(tagged("redepart"), &["HostInTransit"]),
+            // integ-W6t review: the racer tries from its arrival bell on;
+            // a try before the resolve (`NotResident`, `HostBusy`) tests
+            // nothing and is left out.
+            Persona::SettleRacer => judge(
+                tagged("redepart")
+                    .into_iter()
+                    .filter(|o| !refused_as(o, &["NotResident", "HostBusy"]))
+                    .collect(),
+                &["HostInTransit"],
+            ),
             // integ-W6 (W6-C F1): the keeper's `202` on `/f/reveal` means
             // "queued" (§8.2, `/v1/reveal`: the keeper's pipeline never
             // sends at or after `A + W − 2 slots` and expires the track), not
@@ -317,6 +326,24 @@ mod tests {
     /// integ-W6t review: a late Reveal refused because the march was
     /// already revealed or settled is the expected refusal.
     #[test]
+    fn a_settle_racer_try_before_the_resolve_is_no_evidence() {
+        let mut r = Report::default();
+        r.record(o(Persona::SettleRacer, "redepart", false, "NotResident", 0));
+        r.record(o(Persona::SettleRacer, "redepart", false, "HostBusy", 0));
+        assert_eq!(r.verdict(Persona::SettleRacer), Verdict::Pending);
+        r.record(o(
+            Persona::SettleRacer,
+            "redepart",
+            false,
+            "HostInTransit",
+            0,
+        ));
+        assert_eq!(r.verdict(Persona::SettleRacer), Verdict::Observed);
+        r.record(o(Persona::SettleRacer, "redepart", true, "", 0));
+        assert_eq!(r.verdict(Persona::SettleRacer), Verdict::Violated);
+    }
+
+    #[test]
     fn a_forged_settle_that_came_too_late_is_no_evidence() {
         let mut r = Report::default();
         r.record(o(Persona::Forger, "forged", false, "TransitState", 0));
@@ -379,6 +406,9 @@ mod tests {
             "NotResident",
             400,
         ));
+        // integ-W6t review: a try before the resolve is no evidence.
+        assert_eq!(r.verdict(Persona::SettleRacer), Verdict::Pending);
+        r.record(o(Persona::SettleRacer, "redepart", false, "Shielded", 400));
         assert_eq!(r.verdict(Persona::SettleRacer), Verdict::NeedsChain);
         assert_eq!(r.verdict(Persona::MinTip), Verdict::NeedsChain);
         let j = r.to_json();

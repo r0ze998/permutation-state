@@ -955,12 +955,14 @@ fn building_copies_count_production_items_by_resource() {
     }
 }
 
-/// The settle racer re-departs its host only once the destination resolved
-/// the arrival bell (a Stays host then stands in the destination's roster
-/// with its transit unsettled: `HostInTransit`, §8.6, G12); before that
-/// the host is busy or departed at its origin and a Depart tests nothing.
+/// The settle racer re-departs its host from its arrival bell on, for
+/// `RACE_BELLS` bells, until a try counts (integ-W6t review: it does not wait to see the
+/// destination's resolve, whose window before the keepers' SettleTransit is
+/// shorter than the herald's lag at 20×; the relay refuses the early tries
+/// `NotResident` in simulation); before the arrival bell a Depart tests
+/// nothing.
 #[test]
-fn the_settle_racer_redeparts_only_after_the_arrival() {
+fn the_settle_racer_redeparts_from_the_arrival_bell() {
     let o = observe(FINAL);
     let w = fixture::world();
     let h = o.me.holdings[0].1.clone();
@@ -974,19 +976,20 @@ fn the_settle_racer_redeparts_only_after_the_arrival() {
     m.key = (t.host_id, t.depart_bell);
     m.dest = (w.enemy_home.0 as i32, w.enemy_home.1 as i32);
     let s = spec(FINAL, Arch::Bot, Some(Persona::SettleRacer));
-    let mem = Memory {
-        marches: vec![m],
-        ..Memory::default()
-    };
-    let redeparts = |o: &Observation| {
+    let redeparts = |o: &Observation, m: &policy::MarchMemo| {
+        let mem = Memory {
+            marches: vec![m.clone()],
+            ..Memory::default()
+        };
         decide(o, &ctx(&s, &mem, true))
             .iter()
             .filter(|i| matches!(i, Intent::Redepart { .. }))
             .count()
     };
-    // Destination resolved past the arrival bell (fixture: 40 > 38).
-    assert_eq!(redeparts(&o), 1);
-    // Not yet resolved: no redepart.
+    let bell = o.bell();
+    assert!((fixture::IN_TRANSIT_ARRIVE..=fixture::IN_TRANSIT_ARRIVE + 2).contains(&bell));
+    // From the arrival bell, whether or not the resolve is seen yet.
+    assert_eq!(redeparts(&o, &m), 1);
     let mut early = o.clone();
     early
         .provinces
@@ -994,24 +997,18 @@ fn the_settle_racer_redeparts_only_after_the_arrival() {
         .expect("destination observed")
         .province
         .resolved_next = fixture::IN_TRANSIT_ARRIVE;
-    assert_eq!(redeparts(&early), 0);
-    // integ-W6t review: arrived, but the destination is behind the bell
-    // (four bells later, not resolved on: a Depart there is `NotResident`):
-    // a nudge of it, no redepart yet.
-    let mut behind = o.clone();
-    behind.now += 4 * 600;
-    let rn = behind.provinces[&w.enemy_home].province.resolved_next;
-    assert!(
-        !fclient::play::resident_ok(rn, behind.bell()),
-        "the case needs a lag"
-    );
-    let out = decide(&behind, &ctx(&s, &mem, true));
-    assert_eq!(redeparts(&behind), 0, "{out:?}");
-    assert!(
-        out.iter()
-            .any(|i| matches!(i, Intent::Nudge { province } if *province == w.enemy_home)),
-        "{out:?}"
-    );
+    assert_eq!(redeparts(&early, &m), 1);
+    // Before the arrival bell: nothing to race yet.
+    let mut before = m.clone();
+    before.arrive_bell = bell + 1;
+    assert_eq!(redeparts(&o, &before), 0);
+    // Past the race (`RACE_BELLS`), or once a try counted: done.
+    let mut late = o.clone();
+    late.now += (policy::RACE_BELLS as i64 + 3) * 600;
+    assert_eq!(redeparts(&late, &m), 0);
+    let mut done = m.clone();
+    done.redeparted = true;
+    assert_eq!(redeparts(&o, &done), 0);
 }
 
 // ------------------------------------------------------ W6T-3 (w6-s7)

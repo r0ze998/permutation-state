@@ -969,14 +969,21 @@ impl Bot {
                 };
                 // The host stands at the destination once it arrived.
                 let at = (m.dest.0 as i16, m.dest.1 as i16);
-                self.sponsored(sh, "depart", Some("redepart"), |p| {
-                    ix::depart(&a, p, m.h, at, &args)
-                })
-                .await;
-                if let Some(mm) = self.mem.march_mut(key) {
-                    mm.redeparted = true;
+                let r = self
+                    .sponsored(sh, "depart", Some("redepart"), |p| {
+                        ix::depart(&a, p, m.h, at, &args)
+                    })
+                    .await;
+                // integ-W6t review: a try before the destination resolved
+                // the arrival (`NotResident`, `HostBusy`) tests nothing; the
+                // racer tries again at its next poll.
+                let early = matches!(r.code().as_deref(), Some("NotResident" | "HostBusy"));
+                if !early {
+                    if let Some(mm) = self.mem.march_mut(key) {
+                        mm.redeparted = true;
+                    }
+                    self.journal_state(sh, key, "redeparted");
                 }
-                self.journal_state(sh, key, "redeparted");
                 1
             }
             Intent::Prefund { targets, lamports } => {

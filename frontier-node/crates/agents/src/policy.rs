@@ -222,6 +222,10 @@ impl Intent {
     }
 }
 
+/// Bells after its arrival bell a settle racer keeps trying its re-depart
+/// (integ-W6t review; the resolve lands in the bell after the arrival's).
+pub const RACE_BELLS: u32 = 4;
+
 /// A march's identity in the journal: (host id, depart bell).
 pub type MarchKey = (u64, u32);
 
@@ -914,30 +918,22 @@ fn duties(obs: &Observation, cx: &Ctx, prof: &Profile, rng: &mut Rng, out: &mut 
         // settle_racer: Depart the same host again from where it now
         // stands — the destination, once that province resolved the arrival
         // bell (a Stays host is in its roster) — and before its settlement
-        // (§8.6, G12: `HostInTransit`). Earlier, at the origin, the entry is
-        // busy or departed and the program answers `HostBusy`/`NotResident`
-        // (W4-F's in-process day), which tests nothing.
-        let arrived = obs
-            .province(m.dest.0 as i16, m.dest.1 as i16)
-            .is_some_and(|pv| pv.resolved_next > m.arrive_bell);
-        if persona == Some(Persona::SettleRacer) && !m.redeparted && transit.is_some() && arrived {
-            // integ-W6t review: the Depart is a resident action at the
-            // destination; while that province is behind (`NotResident`,
-            // the rehearsal's nightly 2: both re-departs refused so, the
-            // HostInTransit test never reached), nudge it instead and try
-            // again next session (the residency gate's rule).
-            let dest = (m.dest.0 as i16, m.dest.1 as i16);
-            let resident = obs
-                .province(dest.0, dest.1)
-                .is_none_or(|pv| fclient::play::resident_ok(pv.resolved_next, bell));
-            if resident {
-                out.push(Intent::Redepart { key: m.key });
-            } else if !out
-                .iter()
-                .any(|i| matches!(i, Intent::Nudge { province } if *province == dest))
-            {
-                out.push(Intent::Nudge { province: dest });
-            }
+        // (§8.6, G12: `HostInTransit`). integ-W6t review: that window is the
+        // few slots between the resolve (mid-bell after the arrival bell)
+        // and the keepers' SettleTransit, shorter than the herald's lag at
+        // 20×, so the racer does not wait to see the resolve: from the
+        // arrival bell for five bells it tries at every poll
+        // (`frontier_bots::fleet::settle_racer_polls`); the relay's
+        // simulation refuses the early tries (`NotResident`, `HostBusy`,
+        // nothing sent, nothing charged) and the first one after the
+        // resolve is the `HostInTransit` the persona tests.
+        if persona == Some(Persona::SettleRacer)
+            && !m.redeparted
+            && transit.is_some()
+            && bell >= m.arrive_bell
+            && bell <= m.arrive_bell + RACE_BELLS
+        {
+            out.push(Intent::Redepart { key: m.key });
         }
         // Reveals: from the arrival bell's start, one bell long for owners.
         let in_bell = bell >= m.arrive_bell && bell <= m.arrive_bell + 1;
