@@ -400,6 +400,86 @@ pub fn not_resident_ratio(by: &BTreeMap<(String, String, String), u64>) -> Vec<(
         .collect()
 }
 
+/// The largest share of resident actions (per action) the relay may refuse
+/// `NotResident` in the gate day (a herald view a bell old, a nudge still
+/// in flight).
+pub const NOT_RESIDENT_MAX_PCT: u64 = 25;
+
+/// The settle racer's designed early tries (integ-W6t review, S29; M1
+/// exit U3, M1-EXIT-NOTES §4.1), per resident action: its re-depart from
+/// the bell after its arrival bell, every 8 game seconds for 4 bells, which
+/// the relay refuses `NotResident` in simulation (nothing is sent) until
+/// the destination resolved the arrival. Only those: a `settle_racer`
+/// outcome tagged `redepart`, sent through the relay, refused
+/// `NotResident`. Any other refusal (an archetype bot's, another
+/// persona's, the racer's own first march) is not in here.
+pub fn designed_not_resident(bots: &frontier_bots::report::Report) -> BTreeMap<String, u64> {
+    let n = bots
+        .persona_outcomes
+        .iter()
+        .filter(|o| {
+            o.persona == Some(frontier_agents::Persona::SettleRacer)
+                && o.tag == Some("redepart")
+                && o.route == "relay"
+                && !o.ok
+                && o.code.as_deref() == Some("NotResident")
+        })
+        .count() as u64;
+    [("Depart".to_string(), n)]
+        .into_iter()
+        .filter(|(_, n)| *n > 0)
+        .collect()
+}
+
+/// The resident-liveness condition (integ-W4 review, W4-F): per resident
+/// action, `NotResident / (sent + NotResident)` at most
+/// [`NOT_RESIDENT_MAX_PCT`], with the settle racer's designed early tries
+/// ([`designed_not_resident`]) taken out of the relay's refusals (M1 exit
+/// U3). More designed refusals than the relay counted for an action is a
+/// failure (the subtraction would hide a real refusal); pending while
+/// stubs stand in.
+pub fn resident_liveness_cond(
+    by: &BTreeMap<(String, String, String), u64>,
+    bots: &frontier_bots::report::Report,
+    stubs: bool,
+) -> Cond {
+    let designed = designed_not_resident(bots);
+    let raw = not_resident_ratio(by);
+    let mut bad: Vec<String> = vec![];
+    let ratio: Vec<(String, u64, u64)> = raw
+        .iter()
+        .map(|(ix, refused, sent)| {
+            let d = designed.get(ix).copied().unwrap_or(0);
+            if d > *refused {
+                bad.push(format!(
+                    "{ix}: {d} designed racer refusals but the relay counted {refused} NotResident"
+                ));
+            }
+            (ix.clone(), refused.saturating_sub(d), *sent)
+        })
+        .collect();
+    for (ix, refused, sent) in &ratio {
+        if refused * 100 > (refused + sent) * NOT_RESIDENT_MAX_PCT {
+            bad.push(format!(
+                "over {NOT_RESIDENT_MAX_PCT}%: {ix} {refused} refused, {sent} sent"
+            ));
+        }
+    }
+    if bad.is_empty() {
+        Cond::Pass(format!(
+            "NotResident / (sent + NotResident) ≤ {NOT_RESIDENT_MAX_PCT}% per action: {ratio:?} (the settle racer's designed early tries left out: {designed:?}; relay counted {raw:?}); nudges {:?}",
+            bots.nudges
+        ))
+    } else if stubs {
+        Cond::Pending(format!("{bad:?}; {ratio:?}"))
+    } else {
+        Cond::Fail(format!(
+            "{bad:?}; counted {ratio:?} after leaving out the settle racer's designed early tries {designed:?} (relay {raw:?}); nudges {:?}",
+            bots.nudges
+        ))
+    }
+}
+
 /// A named pass condition: pass, fail, or pending (a stub of a unit not
 /// merged yet stands between the run and the condition).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -513,5 +593,120 @@ mod tests {
         let dead: BTreeMap<String, (u64, u64, u64, u64)> =
             [("gather".to_string(), (3, 2, 0, 1))].into();
         assert!(keeper_writes_cond(&ok, &[], &dead).is_fail());
+    }
+
+    // ---- resident liveness (M1 exit U3, M1-EXIT-NOTES §4.1).
+
+    use frontier_agents::{Arch, Persona};
+    use frontier_bots::report::{Outcome, Report};
+
+    fn relay(depart_sent: u64, depart_nr: u64) -> BTreeMap<(String, String, String), u64> {
+        let r = |ix: &str, res: &str| ("/f/relay".to_string(), ix.to_string(), res.to_string());
+        [
+            (r("Muster", "sent"), 40),
+            (r("Explore", "sent"), 30),
+            (r("Depart", "sent"), depart_sent),
+            (r("Depart", "NotResident"), depart_nr),
+        ]
+        .into_iter()
+        .filter(|(_, n)| *n > 0)
+        .collect()
+    }
+
+    fn refusal(persona: Option<Persona>, tag: Option<&'static str>) -> Outcome {
+        Outcome {
+            bot: 1,
+            arch: Arch::Daily,
+            persona,
+            action: "depart",
+            route: "relay",
+            ok: false,
+            status: 409,
+            code: Some("NotResident".into()),
+            signature: None,
+            tag,
+        }
+    }
+
+    fn racer_try() -> Outcome {
+        refusal(Some(Persona::SettleRacer), Some("redepart"))
+    }
+
+    fn bots(outcomes: impl IntoIterator<Item = Outcome>) -> Report {
+        let mut r = Report::default();
+        for o in outcomes {
+            r.record(o);
+        }
+        r
+    }
+
+    /// The G14 re-run of the exit (03:13): Depart 116 refused `NotResident`
+    /// against 38 sent, all 116 the settle racer's early re-depart tries
+    /// (integ-W6t review, S29: refused in simulation by design, nothing
+    /// sent). They are not a liveness miss.
+    #[test]
+    fn the_settle_racers_designed_early_tries_are_no_liveness_miss() {
+        let by = relay(38, 116);
+        let r = bots((0..116).map(|_| racer_try()));
+        let c = resident_liveness_cond(&by, &r, false);
+        assert!(matches!(c, Cond::Pass(_)), "{c:?}");
+    }
+
+    /// Any other refusal still counts: an archetype bot's Depart, another
+    /// persona's, and the racer's own first march (not a re-depart try)
+    /// refused `NotResident` fail the condition over the limit, next to the
+    /// racer's excluded tries.
+    #[test]
+    fn a_refusal_that_is_not_a_racer_try_still_fails() {
+        let others: [(Option<Persona>, Option<&'static str>); 3] = [
+            (None, None),
+            (Some(Persona::Squatter), None),
+            (Some(Persona::SettleRacer), None),
+        ];
+        for (persona, tag) in others {
+            // 116 racer tries + 20 other refusals against 38 sent:
+            // 20 / 58 = 34 % > 25 %.
+            let by = relay(38, 136);
+            let r = bots(
+                (0..116)
+                    .map(|_| racer_try())
+                    .chain((0..20).map(|_| refusal(persona, tag))),
+            );
+            let c = resident_liveness_cond(&by, &r, false);
+            assert!(c.is_fail(), "{persona:?} {tag:?}: {c:?}");
+        }
+        // Under the limit they pass: 10 / 48 = 21 %.
+        let by = relay(38, 126);
+        let r = bots(
+            (0..116)
+                .map(|_| racer_try())
+                .chain((0..10).map(|_| refusal(None, None))),
+        );
+        assert!(!resident_liveness_cond(&by, &r, false).is_fail());
+        // With no racer at all, the old rule unchanged: 13 / 51 = 25.5 %.
+        let r = bots((0..13).map(|_| refusal(None, None)));
+        assert!(resident_liveness_cond(&relay(38, 13), &r, false).is_fail());
+        assert!(!resident_liveness_cond(&relay(39, 13), &r, false).is_fail());
+    }
+
+    /// A racer try the relay did not count `NotResident` (another route, a
+    /// racer outcome the relay never saw) is not subtracted from what the
+    /// relay counted: more claimed designed refusals than the relay's own
+    /// count fail rather than hide a real refusal.
+    #[test]
+    fn designed_refusals_beyond_the_relays_count_fail() {
+        let by = relay(38, 20);
+        let r = bots((0..116).map(|_| racer_try()));
+        assert!(resident_liveness_cond(&by, &r, false).is_fail());
+        let mut other_route = racer_try();
+        other_route.route = "direct";
+        let r = bots((0..20).map(|_| other_route.clone()));
+        assert!(resident_liveness_cond(&by, &r, false).is_fail());
+        // Stubs still turn a fail into pending.
+        let r = bots(std::iter::empty());
+        assert!(matches!(
+            resident_liveness_cond(&by, &r, true),
+            Cond::Pending(_)
+        ));
     }
 }
