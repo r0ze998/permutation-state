@@ -1076,11 +1076,6 @@ async fn wait_season_file(herald: &str, limit: Duration) -> Result<(), String> {
     }
 }
 
-struct HoldState {
-    plan: adversary::Planned,
-    done: bool,
-}
-
 async fn supervise(
     st: &mut Stack,
     genesis_ts: i64,
@@ -1127,10 +1122,10 @@ async fn supervise(
     st.state["chaos_forced"] = json!(forced.iter().map(|k| k.to_json()).collect::<Vec<_>>());
     let mut kills = chaos::merge(kills, forced);
     st.state["chaos_plan"] = json!(kills.iter().map(|k| k.to_json()).collect::<Vec<_>>());
-    let mut holds: Vec<HoldState> = if st.cfg.adversary {
+    let mut holds: Vec<adversary::HoldState> = if st.cfg.adversary {
         adversary::plan(genesis_ts, play_end)
             .into_iter()
-            .map(|plan| HoldState { plan, done: false })
+            .map(adversary::HoldState::new)
             .collect()
     } else {
         vec![]
@@ -1311,7 +1306,7 @@ async fn supervise(
             let want_slots = holds.iter().any(|h| {
                 !h.done && now >= h.plan.at && matches!(h.plan.kind, "slots-below" | "slots-above")
             });
-            for h in holds.iter_mut().filter(|h| !h.done && now >= h.plan.at) {
+            {
                 if provinces.is_none() {
                     provinces = Some(
                         st.chain
@@ -1377,52 +1372,67 @@ async fn supervise(
                         open_claims,
                     });
                 }
-                match adversary::keys_for_pending(
-                    h.plan.kind,
+            }
+            let ps = provinces.as_deref().unwrap_or(&[]);
+            let actions = match pending.as_mut() {
+                Some(pd) => adversary::decide_holds(
+                    &mut holds,
+                    pd,
                     &st.addrs,
                     ps,
-                    pending.as_ref().expect("pending"),
                     bell_now,
                     transit_slots,
                     &keeper_reveal,
                     &relay_payers,
-                ) {
-                    Some((keys, detail)) => {
-                        // The ticket hold lasts through its cohort's bells.
-                        let game_secs = match detail["until_bell"].as_i64() {
-                            Some(u) => (genesis_ts + u * bell_secs - now).max(bell_secs),
-                            None => h.plan.game_secs,
-                        };
+                    genesis_ts,
+                    bell_secs,
+                    play_end,
+                ),
+                None => vec![],
+            };
+            for act in actions {
+                match act {
+                    adversary::HoldAction::Fire {
+                        i,
+                        keys,
+                        detail,
+                        game_secs,
+                    } => {
+                        let h = &holds[i].plan;
                         let slots = adversary::slots_for(game_secs, scale);
-                        let r = st.chain.hold(&keys, h.plan.priority_milli, slots).await;
+                        let r = st.chain.hold(&keys, h.priority_milli, slots).await;
                         st.run.event(Some(now), "hold", json!({
-                            "kind": h.plan.kind, "priority_milli": h.plan.priority_milli, "slots": slots,
+                            "kind": h.kind, "priority_milli": h.priority_milli, "slots": slots,
                             "game_secs": game_secs, "bell": bell_now, "keys": keys.len(),
-                            "above_keeper_cap": adversary::above_cap(h.plan.kind, h.plan.priority_milli),
+                            "above_keeper_cap": adversary::above_cap(h.kind, h.priority_milli),
+                            "rearmed": holds[i].rearm,
                             "detail": detail, "result": r.as_ref().ok(), "error": r.as_ref().err(),
                         }));
-                        h.done = true;
-                        // W6T-4: the other slot hold of this probe takes
-                        // another province.
-                        if let (Some(pd), Some(p), Some(q)) = (
-                            pending.as_mut(),
-                            detail["province"][0].as_i64(),
-                            detail["province"][1].as_i64(),
-                        ) {
-                            if h.plan.kind.starts_with("slots-") {
-                                pd.held.push((p as i16, q as i16));
-                            }
-                        }
                     }
-                    None if now > h.plan.deadline => {
+                    adversary::HoldAction::Skip { i } => {
+                        let h = &holds[i].plan;
                         st.run.event(
                             Some(now),
                             "hold-skipped",
-                            json!({"kind": h.plan.kind, "why": "nothing to hold before the deadline", "deadline": h.plan.deadline}),
+                            json!({"kind": h.kind, "why": "nothing to hold before the deadline", "deadline": h.deadline}),
                         );
-                        h.done = true;
                     }
-                    None => {}
+                    adversary::HoldAction::RearmExpired { i } => {
+                        let h = &holds[i].plan;
+                        st.run.event(
+                            Some(now),
+                            "hold-rearm-expired",
+                            json!({"kind": h.kind, "why": "the re-armed hold found nothing before its deadline", "deadline": h.deadline}),
+                        );
+                    }
+                    adversary::HoldAction::Rearm { i, attempt, why } => {
+                        let h = &holds[i].plan;
+                        st.run.event(
+                            Some(now),
+                            "hold-rearmed",
+                            json!({"kind": h.kind, "attempt": attempt, "at": h.at, "deadline": h.deadline, "detail": why}),
+                        );
+                    }
                 }
             }
         }

@@ -168,6 +168,47 @@ pub struct Stats {
     /// Ingest → WS latency of every diff message that carried `t`.
     pub ws_lat: Histogram,
     pub ws_lat_max_us: AtomicU64,
+    /// integ-W6t review: the two shares of ingest → WS for messages that
+    /// carry the herald's send stamp `s`: **herald** `s − t` (fold, the
+    /// broadcast queue, the socket's turn) and **delivery** receipt − `s`
+    /// (the socket and this generator's own backlog).
+    pub ws_herald: Histogram,
+    pub ws_deliver: Histogram,
+    pub ws_herald_max_us: AtomicU64,
+    pub ws_deliver_max_us: AtomicU64,
+    /// File latency of the answered (200/304) requests only (integ-W6t
+    /// review: 44 % of R5's requests were cheap 404s for not-yet shapes,
+    /// which pull the all-request p99 down).
+    pub hist_ok: Histogram,
+    pub max_ok_us: AtomicU64,
+}
+
+/// `(seq, s, t)` of a diff message without parsing its payload (integ-W6t
+/// review: a full `serde_json::Value` of every 5-KB Province diff was the
+/// generator's own cost). The wire is `{"seq":N[,"s":S],…,"t":T}` (the
+/// tail's keys are sorted, `t` last); anything else falls back to a full
+/// parse. `None`: not a diff message (an ack, an error).
+pub fn stamps(msg: &str) -> Option<(u64, Option<u64>, Option<u64>)> {
+    fn num(s: &str) -> Option<u64> {
+        let end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
+        s[..end].parse().ok()
+    }
+    if let Some(rest) = msg.strip_prefix("{\"seq\":") {
+        let seq = num(rest)?;
+        let s = rest
+            .find(",\"s\":")
+            .filter(|&i| i < 24)
+            .and_then(|i| num(&rest[i + 5..]));
+        let t = msg.rfind(",\"t\":").and_then(|i| num(&msg[i + 5..]));
+        return Some((seq, s, t));
+    }
+    let v: Value = serde_json::from_str(msg).ok()?;
+    let seq = v.get("seq")?.as_u64()?;
+    Some((
+        seq,
+        v.get("s").and_then(|x| x.as_u64()),
+        v.get("t").and_then(|x| x.as_u64()),
+    ))
 }
 
 /// §13.4 criterion 6 (E5) and the Gate W5 load line: file p99 ≤ 250 ms.
@@ -279,6 +320,20 @@ impl Stats {
                 "ingest_p99_ms": self.ws_lat.quantile_ms(0.99),
                 "ingest_p99_upper_ms": self.ws_lat.quantile_upper_ms(0.99),
                 "ingest_max_ms": self.ws_lat_max_us.load(Ordering::SeqCst) as f64 / 1_000.0,
+                "send_stamped": self.ws_herald.count(),
+                "herald_p50_ms": self.ws_herald.quantile_ms(0.50),
+                "herald_p99_upper_ms": self.ws_herald.quantile_upper_ms(0.99),
+                "herald_max_ms": self.ws_herald_max_us.load(Ordering::SeqCst) as f64 / 1_000.0,
+                "delivery_p50_ms": self.ws_deliver.quantile_ms(0.50),
+                "delivery_p99_upper_ms": self.ws_deliver.quantile_upper_ms(0.99),
+                "delivery_max_ms": self.ws_deliver_max_us.load(Ordering::SeqCst) as f64 / 1_000.0,
+            },
+            "answered": {
+                "requests": self.hist_ok.count(),
+                "p50_ms": self.hist_ok.quantile_ms(0.50),
+                "p99_ms": self.hist_ok.quantile_ms(0.99),
+                "p99_upper_ms": self.hist_ok.quantile_upper_ms(0.99),
+                "max_ms": self.max_ok_us.load(Ordering::SeqCst) as f64 / 1_000.0,
             },
         })
     }
@@ -513,7 +568,12 @@ async fn poller(id: usize, cfg: Arc<ViewerCfg>, stats: Arc<Stats>, deadline: Ins
             .max_us
             .fetch_max(dt.as_micros() as u64, Ordering::Relaxed);
         match res {
-            Ok((200, _)) | Ok((304, _)) => {}
+            Ok((200, _)) | Ok((304, _)) => {
+                stats.hist_ok.record(dt);
+                stats
+                    .max_ok_us
+                    .fetch_max(dt.as_micros() as u64, Ordering::Relaxed);
+            }
             Ok((404, _)) => {
                 stats.not_found.fetch_add(1, Ordering::Relaxed);
             }
@@ -603,16 +663,26 @@ async fn ws_viewer(id: usize, cfg: Arc<ViewerCfg>, stats: Arc<Stats>, deadline: 
                 return;
             }
             match tokio::time::timeout(left, c.next_text()).await {
-                Ok(Some(t)) => {
-                    let Ok(v) = serde_json::from_str::<Value>(&t) else {
+                Ok(Some(text)) => {
+                    // The receipt, before any work on the message.
+                    let got = crate::runner::unix_ms();
+                    let Some((seq, s, t)) = stamps(&text) else {
                         continue;
                     };
-                    if let Some(seq) = v.get("seq").and_then(|s| s.as_u64()) {
+                    {
                         stats.ws_messages.fetch_add(1, Ordering::Relaxed);
-                        if let Some(t) = v.get("t").and_then(|t| t.as_u64()).filter(|t| *t > 0) {
-                            let us = crate::runner::unix_ms().saturating_sub(t) * 1_000;
+                        if let Some(t) = t.filter(|t| *t > 0) {
+                            let us = got.saturating_sub(t) * 1_000;
                             stats.ws_lat.record(Duration::from_micros(us));
                             stats.ws_lat_max_us.fetch_max(us, Ordering::Relaxed);
+                            if let Some(s) = s.filter(|s| *s > 0) {
+                                let h = s.saturating_sub(t) * 1_000;
+                                let d = got.saturating_sub(s) * 1_000;
+                                stats.ws_herald.record(Duration::from_micros(h));
+                                stats.ws_deliver.record(Duration::from_micros(d));
+                                stats.ws_herald_max_us.fetch_max(h, Ordering::Relaxed);
+                                stats.ws_deliver_max_us.fetch_max(d, Ordering::Relaxed);
+                            }
                         }
                         if last.is_some_and(|l| seq != l + 1) {
                             stats.ws_gaps.fetch_add(1, Ordering::Relaxed);
@@ -735,6 +805,35 @@ pub async fn run(cfg: ViewerCfg, stats: Arc<Stats>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// integ-W6t review: the stamps come off the wire without a parse of
+    /// the payload, for the herald's own messages and any other shape.
+    #[test]
+    fn stamps_without_parsing_the_payload() {
+        let d = crate::fold::Diff {
+            kind: "acct",
+            key: "k,\"t\":1".into(),
+            slot: 7,
+            head: Some([1; 32]),
+            bytes: vec![7; 4_096],
+            scope: crate::fold::Scope::Province(1, -1),
+            t_ms: 1_790_000_000_123,
+            wire: Default::default(),
+        };
+        let m = crate::ws::message_sent(42, Some(1_790_000_000_456), &d);
+        assert_eq!(
+            stamps(&m),
+            Some((42, Some(1_790_000_000_456), Some(1_790_000_000_123)))
+        );
+        let old = crate::ws::message(43, &d);
+        assert_eq!(stamps(&old), Some((43, None, Some(1_790_000_000_123))));
+        assert_eq!(
+            stamps(r#"{"kind":"bell","seq":5,"t":9}"#),
+            Some((5, None, Some(9)))
+        );
+        assert_eq!(stamps(r#"{"op":"subscribed","provinces":2}"#), None);
+        assert_eq!(stamps("not json"), None);
+    }
 
     #[test]
     fn histogram_quantiles() {

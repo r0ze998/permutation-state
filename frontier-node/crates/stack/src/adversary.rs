@@ -597,6 +597,180 @@ pub fn keys_for_pending(
     }
 }
 
+/// One hold of the run's schedule and where it stands.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HoldState {
+    pub plan: Planned,
+    pub done: bool,
+    /// Game time its window ends, once fired.
+    pub ends: Option<i64>,
+    /// A re-armed `slots-below` (integ-W6t review): the kind has fired
+    /// already, so expiring unused is not a `hold-skipped`.
+    pub rearm: bool,
+}
+
+impl HoldState {
+    pub fn new(plan: Planned) -> HoldState {
+        HoldState {
+            plan,
+            done: false,
+            ends: None,
+            rearm: false,
+        }
+    }
+}
+
+/// What the supervisor does for the holds at one probe.
+#[derive(Clone, Debug, PartialEq)]
+pub enum HoldAction {
+    /// Place `frontier_hold` on `keys` for `game_secs` (hold `i`).
+    Fire {
+        i: usize,
+        keys: Vec<Address>,
+        detail: Value,
+        game_secs: i64,
+    },
+    /// Hold `i` found nothing to hold before its deadline (`hold-skipped`:
+    /// the run is not exit-grade).
+    Skip { i: usize },
+    /// A re-armed `slots-below` found nothing before its deadline (the kind
+    /// fired earlier; reported, not a skip).
+    RearmExpired { i: usize },
+    /// A new `slots-below` was armed (hold `i`).
+    Rearm {
+        i: usize,
+        attempt: usize,
+        why: Value,
+    },
+}
+
+/// Re-arms of `slots-below` at most (integ-W6t review): one per
+/// `slots-below` window that opened no defence claim, until `defence-pool`
+/// has one.
+pub const SLOTS_BELOW_REARMS: usize = 12;
+
+/// The holds' decisions at one probe (the supervisor places the fired ones
+/// and writes the events). `pending.now` is the game time of the probe.
+///
+/// integ-W6t review (the R3 and nightly-3 runs of integ-W6t skipped
+/// `defence-pool`: its claim comes only from a Reveal the below-cap
+/// `slots-below` hold delays past `lateness_slots`, and one window may
+/// delay none): while `defence-pool` waits and no live claim is open, a
+/// `slots-below` whose window ended a bell ago without opening one is
+/// re-armed on the next planned arrivals, up to [`SLOTS_BELOW_REARMS`]
+/// times and only while the new window, a claim and the defence hold still
+/// fit before the end of play.
+#[allow(clippy::too_many_arguments)]
+pub fn decide_holds(
+    holds: &mut Vec<HoldState>,
+    pending: &mut Pending,
+    a: &Addresses,
+    ps: &[Province],
+    bell_now: u32,
+    transit_slots: u8,
+    keeper_reveal_payers: &[Address],
+    relay_payers: &[Address],
+    genesis_ts: i64,
+    bell_secs: i64,
+    play_end: i64,
+) -> Vec<HoldAction> {
+    let now = pending.now;
+    let mut out = vec![];
+    for (i, h) in holds.iter_mut().enumerate() {
+        if h.done || now < h.plan.at {
+            continue;
+        }
+        match keys_for_pending(
+            h.plan.kind,
+            a,
+            ps,
+            pending,
+            bell_now,
+            transit_slots,
+            keeper_reveal_payers,
+            relay_payers,
+        ) {
+            Some((keys, detail)) => {
+                // The ticket hold lasts through its cohort's bells.
+                let game_secs = match detail["until_bell"].as_i64() {
+                    Some(u) => (genesis_ts + u * bell_secs - now).max(bell_secs),
+                    None => h.plan.game_secs,
+                };
+                h.done = true;
+                h.ends = Some(now + game_secs);
+                // W6T-4: the other slot hold of this probe takes another
+                // province.
+                if let (Some(p), Some(q)) = (
+                    detail["province"][0].as_i64(),
+                    detail["province"][1].as_i64(),
+                ) {
+                    if h.plan.kind.starts_with("slots-") {
+                        pending.held.push((p as i16, q as i16));
+                    }
+                }
+                out.push(HoldAction::Fire {
+                    i,
+                    keys,
+                    detail,
+                    game_secs,
+                });
+            }
+            None if now > h.plan.deadline => {
+                h.done = true;
+                out.push(if h.rearm {
+                    HoldAction::RearmExpired { i }
+                } else {
+                    HoldAction::Skip { i }
+                });
+            }
+            None => {}
+        }
+    }
+    let defence_waits = holds
+        .iter()
+        .any(|h| h.plan.kind == "defence-pool" && !h.done);
+    let below: Vec<&HoldState> = holds
+        .iter()
+        .filter(|h| h.plan.kind == "slots-below")
+        .collect();
+    let live_claims = pending
+        .open_claims
+        .iter()
+        .filter(|c| c.1 - now >= DEFENCE_HOLD_SECS + 600)
+        .count();
+    let last_end = below.iter().filter_map(|h| h.ends).max();
+    let proto = below.first().map(|h| h.plan.clone());
+    if let (true, Some(end), Some(proto)) = (defence_waits, last_end, proto) {
+        let all_fired = below.iter().all(|h| h.done);
+        let attempts = below.len();
+        let fits = now + proto.game_secs + DEFENCE_HOLD_SECS + 2 * bell_secs <= play_end;
+        if all_fired
+            && live_claims == 0
+            && now >= end + bell_secs
+            && attempts <= SLOTS_BELOW_REARMS
+            && fits
+        {
+            holds.push(HoldState {
+                plan: Planned {
+                    at: now,
+                    deadline: play_end - DEFENCE_HOLD_SECS - bell_secs,
+                    ..proto
+                },
+                done: false,
+                ends: None,
+                rearm: true,
+            });
+            out.push(HoldAction::Rearm {
+                i: holds.len() - 1,
+                attempt: attempts,
+                why: json!({"why": "defence-pool still waits: no live defence claim a bell after the last slots-below window",
+                    "last_window_end": end, "open_claims": pending.open_claims.len()}),
+            });
+        }
+    }
+    out
+}
+
 /// Whether a hold of this kind at this price is above the keeper's cap for
 /// the writes it blocks (so its liveness findings are expected).
 pub fn above_cap(kind: &str, priority_milli: u64) -> bool {
@@ -931,5 +1105,114 @@ mod tests {
         let (k, d) = keys_for_pending("defence-pool", &ad, &ps, &open, 10, 4, &[], &[]).unwrap();
         assert_eq!(k, vec![ad.defence_pool()]);
         assert_eq!(d["open_claims"], 1);
+    }
+
+    /// Runs the hold schedule of a `days`-day play over a world where only
+    /// the `claim_on`-th `slots-below` window delays a Reveal enough to open
+    /// a defence claim (`None`: never). Returns the actions by kind.
+    fn simulate(days: i64, claim_on: Option<usize>) -> (Vec<(String, &'static str)>, usize) {
+        simulate_span(days * 86_400, claim_on)
+    }
+
+    fn simulate_span(
+        play_secs: i64,
+        claim_on: Option<usize>,
+    ) -> (Vec<(String, &'static str)>, usize) {
+        let ad = Addresses::new(Address::new_from_array([7; 32]), 7);
+        let (bell, start) = (600i64, 0i64);
+        let end = start + play_secs;
+        let mut holds: Vec<HoldState> = plan(start, end).into_iter().map(HoldState::new).collect();
+        let mut a = empty_province(0, 0);
+        a.entries[0].state = 1;
+        let ps = vec![a, empty_province(1, 0)];
+        let payers = vec![Address::new_from_array([9; 32])];
+        let mut log: Vec<(String, &'static str)> = vec![];
+        let mut below_windows: Vec<i64> = vec![];
+        let mut t = start;
+        // The supervisor probes past the end of play too (the drain).
+        while t <= end + 2 * bell {
+            let claim = claim_on.and_then(|k| below_windows.get(k - 1).copied());
+            let open_claims = match claim {
+                // The late Reveal's claim is open for 6 bells after its close.
+                Some(e) if t >= e && t < e + 6 * bell => vec![(ad.defence_pool(), e + 6 * bell)],
+                _ => vec![],
+            };
+            let mut pd = Pending {
+                require: true,
+                now: t,
+                // A few sealed marches: one province, every bell.
+                planned_next: vec![((0, 0), 1)],
+                open_claims,
+                ..Pending::default()
+            };
+            let bell_now = ((t - start) / bell) as u32;
+            for act in decide_holds(
+                &mut holds, &mut pd, &ad, &ps, bell_now, 4, &payers, &payers, start, bell, end,
+            ) {
+                let (i, what) = match act {
+                    HoldAction::Fire { i, game_secs, .. } => {
+                        if holds[i].plan.kind == "slots-below" {
+                            below_windows.push(t + game_secs);
+                        }
+                        (i, "fire")
+                    }
+                    HoldAction::Skip { i } => (i, "skip"),
+                    HoldAction::RearmExpired { i } => (i, "rearm-expired"),
+                    HoldAction::Rearm { i, .. } => (i, "rearm"),
+                };
+                log.push((holds[i].plan.kind.to_string(), what));
+            }
+            t += bell;
+        }
+        (log, below_windows.len())
+    }
+
+    /// integ-W6t review: `defence-pool` fires although the first
+    /// `slots-below` windows delay no Reveal (integ-W6t R3 and nightly 3
+    /// skipped it): `slots-below` is re-armed until a claim opens.
+    #[test]
+    fn defence_pool_fires_when_only_a_later_slots_below_opens_a_claim() {
+        for days in [1, 3, 7] {
+            let (log, windows) = simulate(days, Some(3));
+            let n = |k: &str, w: &str| log.iter().filter(|x| x.0 == k && x.1 == w).count();
+            assert_eq!(n("defence-pool", "fire"), 1, "{days} days: {log:?}");
+            assert_eq!(n("defence-pool", "skip"), 0, "{days} days");
+            assert_eq!(windows, 3, "{days} days: re-armed twice, then the claim");
+            assert_eq!(n("slots-below", "rearm"), 2, "{days} days");
+            assert_eq!(
+                n("slots-below", "skip") + n("slots-below", "rearm-expired"),
+                0
+            );
+            // Once defence-pool has fired, slots-below is not re-armed.
+            let last_dp = log.iter().rposition(|x| x.0 == "defence-pool").unwrap();
+            assert!(!log[last_dp..].iter().any(|x| x.1 == "rearm"));
+        }
+        // The first window opens the claim: no re-arm at all.
+        let (log, windows) = simulate(3, Some(1));
+        assert_eq!(windows, 1);
+        assert!(log
+            .iter()
+            .any(|x| x == &("defence-pool".to_string(), "fire")));
+        assert!(!log.iter().any(|x| x.1 == "rearm"));
+    }
+
+    /// integ-W6t review: without any claim the re-arms stop (cap, or no
+    /// time left for a window, a claim and the defence hold) and
+    /// `defence-pool` is still reported skipped (not exit-grade).
+    #[test]
+    fn slots_below_rearms_are_bounded() {
+        let (log, windows) = simulate(7, None);
+        let n = |k: &str, w: &str| log.iter().filter(|x| x.0 == k && x.1 == w).count();
+        assert_eq!(n("slots-below", "rearm"), SLOTS_BELOW_REARMS, "{log:?}");
+        assert_eq!(windows, SLOTS_BELOW_REARMS + 1);
+        assert_eq!(n("defence-pool", "skip"), 1);
+        assert_eq!(n("slots-below", "skip"), 0);
+        // A short play: the re-arms stop when a window, a claim and the
+        // defence hold no longer fit before its end.
+        let (log, windows) = simulate_span(3 * 3_600 + 3_600, None);
+        let n = |k: &str, w: &str| log.iter().filter(|x| x.0 == k && x.1 == w).count();
+        assert!(n("slots-below", "rearm") < SLOTS_BELOW_REARMS, "{log:?}");
+        assert_eq!(windows, n("slots-below", "rearm") + 1);
+        assert_eq!(n("defence-pool", "skip"), 1);
     }
 }

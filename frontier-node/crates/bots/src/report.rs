@@ -185,7 +185,16 @@ impl Report {
                     .into_iter()
                     .filter(|o| !(o.route == "keeper" && o.ok))
                     .collect(),
-                &["WindowClosed", "LatchClosed", "Archived", "TooLate"],
+                // integ-W6t review: `AlreadyDone` is a refusal too (the
+                // march was revealed in its window before the late try;
+                // w6-s7's late_revealer read `needs-chain` for it).
+                &[
+                    "WindowClosed",
+                    "LatchClosed",
+                    "Archived",
+                    "TooLate",
+                    "AlreadyDone",
+                ],
             ),
             Persona::Forger => judge(
                 tagged("forged"),

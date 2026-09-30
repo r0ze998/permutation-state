@@ -460,7 +460,7 @@ pub fn judge(rep: &Value, lag_secs: &[f64], cov: Option<&Coverage>) -> Value {
         }
     }
     let recovery = rep.get("staleRetries").is_some();
-    json!({
+    let mut v = json!({
         "p99_file_ms": p99, "p99_file_target_ms": P99_FILE_MS, "p99_file_ok": ok_file,
         "requests": req, "ws_sessions": sessions, "denominator": denom,
         "errors": errs, "error_rate": rate, "error_rate_target": ERROR_RATE, "error_rate_ok": ok_err,
@@ -476,13 +476,27 @@ pub fn judge(rep: &Value, lag_secs: &[f64], cov: Option<&Coverage>) -> Value {
         "not_found": not_found,
         "not_found_note": "404 for a per-bell file of a bell without a change: the contract's answer (§8.4), not an error",
         "ingest_note": "ws-stamp: the WS message's ingest stamp t to its receipt; fold-lag (fallback): newest program tx slot - last folded slot, x 0.4 s, sampled each second",
-        "summary": format!("p99 file {p99:.1} ms, ingest->WS p99 {} s ({how}), error rate {rate:.5}, gaps {gaps}, 404 {not_found}, WS coverage {}, recovery outside outages {}",
+        "summary": format!("p99 file {p99:.1} ms (answered only {}), ingest->WS p99 {} s ({how}; herald share p99 {} ms, delivery p99 {} ms), error rate {rate:.5}, gaps {gaps}, 404 {not_found}, WS coverage {}, recovery outside outages {}",
+            rep["answered"]["p99_upper_ms"].as_f64().map_or("-".into(), |x| format!("{x:.1} ms")),
             ingest.map_or("-".into(), |x| format!("{x:.2}")),
+            rep["ws"]["herald_p99_upper_ms"].as_f64().map_or("-".into(), |x| format!("{x:.0}")),
+            rep["ws"]["delivery_p99_upper_ms"].as_f64().map_or("-".into(), |x| format!("{x:.0}")),
             cc.as_ref().and_then(|c| c["ws_coverage"].as_f64()).map_or("-".into(), |x| format!("{:.1}%", x * 100.0)),
             stale_out + rec_out),
         "misses": misses,
         "pass": ok_file && ok_err && ok_ingest && ok_gaps && ok_cov && ok_recovery,
-    })
+    });
+    // integ-W6t review (reported, not judged): the answered requests' own
+    // file latency (the 404s are cheap and pull the p99 down), and who owns
+    // the ingest → WS tail: the herald (`s − t`) or the delivery to this
+    // generator (receipt − `s`).
+    v["p99_file_answered_ms"] = rep["answered"]["p99_upper_ms"].clone();
+    v["file_answered"] = rep["answered"]["requests"].clone();
+    let w = &rep["ws"];
+    v["ws_split"] = json!({"send_stamped": w["send_stamped"],
+        "herald_p50_ms": w["herald_p50_ms"], "herald_p99_upper_ms": w["herald_p99_upper_ms"], "herald_max_ms": w["herald_max_ms"],
+        "delivery_p50_ms": w["delivery_p50_ms"], "delivery_p99_upper_ms": w["delivery_p99_upper_ms"], "delivery_max_ms": w["delivery_max_ms"]});
+    v
 }
 
 /// One fold-lag sample (seconds): the program's newest transaction slot

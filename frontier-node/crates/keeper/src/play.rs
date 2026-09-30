@@ -48,6 +48,9 @@ pub const SLOT_MOVED_RETRIES: u8 = 4;
 const PROVINCE_READ_SLOTS: u64 = 8;
 /// Bells per SkipQuiet at most.
 const SKIP_MAX: u32 = 24;
+/// Bells of taken nudges the status lists (two game days: the stack
+/// samples the status once a bell and keeps the union).
+pub const NUDGE_LOG_BELLS: u32 = 288;
 /// Claim grace (§5.12, I-52), bells.
 pub const CLAIM_GRACE_BELLS: i64 = fclient::play::CLAIM_GRACE_BELLS;
 const BELL_SECS: i64 = 600;
@@ -166,6 +169,11 @@ pub struct PlayDuty {
     pub not_quiet: BTreeSet<(i16, i16, u32)>,
     /// Nudged provinces → the bell a player wants to act at (§8.2 `/v1/nudge`).
     nudged: BTreeMap<(i16, i16), u32>,
+    /// Nudges taken `(P, Q, bell)` over the last [`NUDGE_LOG_BELLS`]
+    /// (integ-W6t review: published in `/v1/status` `play.nudges_recent`,
+    /// so the stack report can tell a nudged province-day from an idle one,
+    /// §13.4 A1 as amended in v1.13).
+    nudge_log: BTreeSet<(i16, i16, u32)>,
     /// Estimated game seconds per slot (from the Clock samples).
     pub slot_secs: f64,
     last_clock: Option<(u64, i64)>,
@@ -424,6 +432,7 @@ impl PlayDuty {
                 if let (Some(p), Some(q)) = (a[0].as_i64(), a[1].as_i64()) {
                     let e = self.nudged.entry((p as i16, q as i16)).or_insert(0);
                     *e = (*e).max(bell);
+                    self.log_nudge((p as i16, q as i16), bell);
                 }
             }
         }
@@ -1406,6 +1415,14 @@ impl PlayDuty {
     /// this keeper does not know yet targets nothing (it targeted its
     /// origin before). The season's end is `end_flush` in
     /// [`Self::clashes`].
+    /// Keeps a taken nudge for the status (the last
+    /// [`NUDGE_LOG_BELLS`] bells of nudges).
+    fn log_nudge(&mut self, pq: (i16, i16), bell: u32) {
+        self.nudge_log.insert((pq.0, pq.1, bell));
+        let floor = bell.saturating_sub(NUDGE_LOG_BELLS);
+        self.nudge_log.retain(|x| x.2 >= floor);
+    }
+
     fn skip_target(&self, pq: (i16, i16), s: &ProvState) -> Option<u32> {
         if self.nudged.contains_key(&pq) {
             return Some(s.rn);
@@ -2370,6 +2387,7 @@ impl PlayDuty {
             "claims": s.claims, "returns": s.returns,
             "provinces_tracked": self.provinces.len(),
             "findings": self.findings.len(),
+            "nudges_recent": self.nudge_log.iter().map(|(p, q, b)| json!([p, q, b])).collect::<Vec<_>>(),
         })
     }
 }
@@ -2538,6 +2556,24 @@ mod review_tests {
         d.nudged.insert(pq, 130);
         assert_eq!(d.skip_target(pq, &prov(100)), Some(100));
         assert!(d.skip_now(end, pq, &prov(100), 100, 1));
+    }
+
+    /// integ-W6t review (§13.4 A1 as amended): every nudge taken is listed
+    /// in the status for the stack report, the last two days' only.
+    #[test]
+    fn nudges_taken_are_published_for_two_days() {
+        let mut d = PlayDuty::default();
+        d.log_nudge((1, -2), 10);
+        d.log_nudge((3, 4), 200);
+        assert_eq!(
+            d.status()["nudges_recent"],
+            json!([[1, -2, 10], [3, 4, 200]])
+        );
+        d.log_nudge((3, 4), 10 + NUDGE_LOG_BELLS + 1);
+        assert_eq!(
+            d.status()["nudges_recent"],
+            json!([[3, 4, 200], [3, 4, 10 + NUDGE_LOG_BELLS + 1]])
+        );
     }
 
     #[test]

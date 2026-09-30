@@ -165,6 +165,57 @@ async fn restart_and_crash(commit: std::time::Duration) {
     let _ = std::fs::remove_dir_all(&reference);
 }
 
+/// integ-W6t review (R5: the herald's fold lag reached 20–25 s three times
+/// without a kill; `Ingest::step` awaited the checkpoint every 150 slots):
+/// the ingest does not wait for a checkpoint's save, a checkpoint saved in
+/// the background restores like an awaited one, and the files are the
+/// same.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn checkpoints_save_in_the_background() {
+    let txs = fixture::mini_season(BELLS);
+    let reference = tmp("bgref");
+    fold_all(&reference.join("files"), &txs);
+    let data = tmp("bgckpt");
+    let (diffs, _) = broadcast::channel(16_384);
+    let mut c = IngestCfg::new(&data, fixture::program(), fixture::SEASON_ID);
+    c.segment_bytes = 64 * 1024;
+    c.checkpoint_slots = 1;
+    c.checkpoint_pause = std::time::Duration::from_millis(1_500);
+    {
+        // `open` checkpoints once (awaited, at start-up): no pause yet.
+        let mut c0 = c.clone();
+        c0.checkpoint_pause = std::time::Duration::ZERO;
+        let mut ing = Ingest::open(c0, diffs.clone()).unwrap();
+        ing.cfg = c.clone();
+        let mut src = VecSource::new(txs.clone(), 7);
+        ing.findex.resume(&mut src);
+        let t0 = std::time::Instant::now();
+        let mut steps = 0;
+        while ing.step(&mut src).await.unwrap() > 0 {
+            steps += 1;
+        }
+        let took = t0.elapsed();
+        assert!(steps > 3, "{steps}");
+        // Awaited, every step past the first would have paused 1.5 s.
+        assert!(
+            took < std::time::Duration::from_millis(1_400),
+            "the ingest waited for a checkpoint: {steps} steps in {took:?}"
+        );
+        assert!(ing.checkpoint_in_flight(), "the save is still running");
+        // The last checkpoint (on the way out) waits for the one in flight.
+        ing.checkpoint_async().await.unwrap();
+        assert!(!ing.checkpoint_in_flight());
+    }
+    {
+        let ing = Ingest::open(c.clone(), diffs.clone()).unwrap();
+        let f = ing.fold.read().unwrap();
+        assert_eq!(f.st.folded_through, txs.len() as u64);
+    }
+    assert_eq!(tree(&data.join("files")), tree(&reference.join("files")));
+    let _ = std::fs::remove_dir_all(&data);
+    let _ = std::fs::remove_dir_all(&reference);
+}
+
 #[test]
 fn per_bell_files_overviews_and_bell_records() {
     let txs = fixture::mini_season(BELLS);

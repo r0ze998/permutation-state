@@ -2,9 +2,12 @@
 //!
 //! Client → server: `{"op":"sub","provinces":[[P,Q]…≤64],"rings":[…],
 //! "wallet":"<b58>"?, "bells":true}` (each `sub` replaces the previous
-//! one). Server → client: `{"seq","kind":"acct|bell|event","key","slot",
-//! "head","bytes_b64"}` numbered **per connection** from 1 in the order
-//! sent; a `sub` is acknowledged by `{"op":"subscribed",…}` (no `seq`).
+//! one). Server → client: `{"seq","s","kind":"acct|bell|event","key","slot",
+//! "head","bytes_b64","t"}` numbered **per connection** from 1 in the order
+//! sent; `t` is the ingest stamp (unix ms before the pull) and `s` the
+//! send stamp (unix ms when the socket's batch was handed to it;
+//! integ-W6t review); a `sub` is acknowledged by `{"op":"subscribed",…}`
+//! (no `seq`).
 //!
 //! Fan-out: one broadcast channel of [`Diff`]s from the fold, a bounded
 //! queue per socket (the channel's capacity). A socket that falls behind
@@ -254,6 +257,15 @@ const BATCH_BYTES: usize = 256 * 1024;
 /// A diff as a numbered message: `{"seq": n, …}` with the rest of the
 /// object serialised once per diff ([`Diff::wire`]).
 pub fn message(seq: u64, d: &Diff) -> String {
+    message_sent(seq, None, d)
+}
+
+/// [`message`] with the herald's **send stamp** `s` (unix ms when this
+/// socket's batch was handed to the socket; integ-W6t review): with the
+/// ingest stamp `t` a viewer splits ingest → WS into the herald's share
+/// (`s − t`: fold, fan-out queue) and the delivery share (receipt − `s`:
+/// socket, the viewer's own backlog).
+pub fn message_sent(seq: u64, s_ms: Option<u64>, d: &Diff) -> String {
     let tail = d.wire.get_or_init(|| {
         let v = json!({
             "kind": d.kind, "key": d.key, "slot": d.slot,
@@ -264,7 +276,10 @@ pub fn message(seq: u64, d: &Diff) -> String {
         // `{…}` → `,…}` (the object is never empty).
         format!(",{}", &v[1..])
     });
-    format!("{{\"seq\":{seq}{tail}")
+    match s_ms {
+        Some(s) => format!("{{\"seq\":{seq},\"s\":{s}{tail}"),
+        None => format!("{{\"seq\":{seq}{tail}"),
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -406,12 +421,13 @@ pub async fn serve<S>(
                     // folds hundreds at once; W5-C).
                     let mut out: Vec<u8> = vec![];
                     let mut next = Some(d);
+                    let s_ms = crate::runner::unix_ms();
                     let mut n = 0;
                     let mut over = false;
                     while let Some(d) = next.take() {
                         if sub.wants(&d.scope) {
                             seq += 1;
-                            out.extend_from_slice(&encode_frame(OP_TEXT, message(seq, &d).as_bytes(), None));
+                            out.extend_from_slice(&encode_frame(OP_TEXT, message_sent(seq, Some(s_ms), &d).as_bytes(), None));
                         }
                         n += 1;
                         if n >= BATCH_MAX || out.len() >= BATCH_BYTES {
@@ -510,7 +526,10 @@ pub async fn serve<S>(
 
 /// A minimal WebSocket client (the viewer generator and the tests).
 pub struct Client {
-    pub rd: tokio::io::ReadHalf<tokio::net::TcpStream>,
+    /// Buffered (integ-W6t review: a frame read unbuffered costs 3–4 read
+    /// calls; a 1,000-socket generator draining a burst of ≈ 1,100 messages
+    /// per socket spent its time there, not waiting for the herald).
+    pub rd: tokio::io::BufReader<tokio::io::ReadHalf<tokio::net::TcpStream>>,
     pub wr: tokio::io::WriteHalf<tokio::net::TcpStream>,
     mask: u32,
 }
@@ -520,7 +539,8 @@ impl Client {
     pub async fn connect(hostport: &str, path: &str) -> std::io::Result<Client> {
         let s = tokio::net::TcpStream::connect(hostport).await?;
         s.set_nodelay(true)?;
-        let (mut rd, mut wr) = tokio::io::split(s);
+        let (rd, mut wr) = tokio::io::split(s);
+        let mut rd = tokio::io::BufReader::with_capacity(256 * 1024, rd);
         let key = B64.encode(&sha1(format!("{hostport}{path}").as_bytes())[..16]);
         let req = format!(
             "GET {path} HTTP/1.1\r\nHost: {hostport}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
@@ -607,8 +627,17 @@ mod tests {
             wire: Default::default(),
         };
         let unsent = d.clone();
-        let _ = message(1, &d);
+        let m = message(1, &d);
         assert!(d.wire.get().is_some());
+        // integ-W6t review: the send stamp rides after `seq`; the rest is
+        // the cached tail.
+        let sent = message_sent(1, Some(99), &d);
+        assert_eq!(sent, m.replacen("{\"seq\":1", "{\"seq\":1,\"s\":99", 1));
+        let v: serde_json::Value = serde_json::from_str(&sent).unwrap();
+        assert_eq!(
+            (v["seq"].as_u64(), v["s"].as_u64(), v["t"].as_u64()),
+            (Some(1), Some(99), Some(5))
+        );
         assert!(unsent.wire.get().is_none());
         assert_eq!(d, unsent);
         let mut other = unsent.clone();

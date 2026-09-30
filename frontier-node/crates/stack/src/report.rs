@@ -419,15 +419,72 @@ pub fn latencies(
 /// A province-day without post-states for its Province is not judged
 /// (`unknown`).
 pub fn catch_up(txs: &[TxRecord], program: &Address, genesis_ts: i64, bell_secs: i64) -> Value {
+    catch_up_with(
+        txs,
+        program,
+        genesis_ts,
+        bell_secs,
+        u32::MAX,
+        &std::collections::BTreeSet::new(),
+    )
+}
+
+/// Bells a SkipQuiet batch spans at most (the keeper's `SKIP_MAX`): a
+/// resident action at bell `b` can only have split a batch that started at
+/// `b − SPLIT_REACH` or later (integ-W6t review, §13.4 A1 as amended).
+pub const SPLIT_REACH: u32 = 26;
+
+/// The instructions that need their Province resolved through `b − 2` and
+/// so make a keeper catch it up at once (a nudge): §5.1 resident actions
+/// (integ-W6t review: 49 of the 58 short batches of `w6-s7`'s A1-idle days
+/// over 6 were a bot's nudge before an Explore).
+pub const RESIDENT_IXS: &[Ix] = &[
+    Ix::Muster,
+    Ix::Dissolve,
+    Ix::Garrison,
+    Ix::Explore,
+    Ix::Depart,
+];
+
+/// The days a resident action or a nudge of a province at `bell` can have
+/// added a SkipQuiet split to: the day of `bell` and of the batch start it
+/// cut (`bell − SPLIT_REACH`).
+pub fn split_days(bell: u32) -> [u32; 2] {
+    [bell.saturating_sub(SPLIT_REACH) / 144, bell / 144]
+}
+
+/// [`catch_up`] with the season's `end_bell` and the keepers' nudges
+/// (integ-W6t review, §13.4 A1 as amended in v1.13):
+///
+/// - a province-day with a **resident action** (a Muster, Dissolve,
+///   Garrison, Explore or Depart transaction naming the Province, landed or
+///   refused) or a **nudge** a keeper served for it, on that day or within
+///   the batch it could have cut ([`split_days`]), is `resident`: each nudge
+///   costs one SkipQuiet split by design, so it is reported, not judged;
+/// - the SkipQuiet that reaches `end_bell` (`b0 + n ≥ end_bell`, the
+///   season-end flush) is not counted (reported as `season_end_flush`).
+pub fn catch_up_with(
+    txs: &[TxRecord],
+    program: &Address,
+    genesis_ts: i64,
+    bell_secs: i64,
+    end_bell: u32,
+    nudges: &std::collections::BTreeSet<(i32, i32, u32)>,
+) -> Value {
     use std::collections::BTreeSet;
     let mut epoch: HashMap<(i32, i32), u32> = HashMap::new();
     let mut churned: BTreeSet<(i32, i32, u32)> = BTreeSet::new();
     let mut skips: BTreeMap<(i32, i32, u32), u64> = BTreeMap::new();
     let mut active: BTreeSet<(i32, i32, u32)> = BTreeSet::new();
+    let mut resident: BTreeSet<(i32, i32, u32)> = BTreeSet::new();
+    let mut flush: BTreeMap<(i32, i32, u32), u64> = BTreeMap::new();
+    let mut pv_at: HashMap<Address, (i32, i32)> = HashMap::new();
     let mut with_post = 0usize;
-    let mut order: Vec<&TxRecord> = txs.iter().filter(|t| t.err.is_none()).collect();
+    let n_off = field(Kind::SKIP, "n").unwrap_or(12);
+    let mut order: Vec<&TxRecord> = txs.iter().collect();
     order.sort_by_key(|t| t.seq);
-    for t in order {
+    let bell_of = |t: &TxRecord| ((t.block_time - genesis_ts).max(0) / bell_secs.max(1)) as u32;
+    for t in order.iter().filter(|t| t.err.is_none()) {
         let mut skip_day: HashMap<(i32, i32), u32> = HashMap::new();
         for b in fclient::log::bodies_from_logs(&t.logs, program).unwrap_or_default() {
             let Ok(r) = Record::decode_with(&b, &lens) else {
@@ -436,7 +493,12 @@ pub fn catch_up(txs: &[TxRecord], program: &Address, genesis_ts: i64, bell_secs:
             if r.kind == Kind::SKIP as u8 {
                 let kp = &r.key_payload;
                 let (p, q, b0) = (le_i32(kp, 0), le_i32(kp, 4), le_u32(kp, 8));
-                *skips.entry((p, q, b0 / 144)).or_default() += 1;
+                let n = kp.get(n_off).copied().unwrap_or(0) as u32;
+                if b0.saturating_add(n) >= end_bell {
+                    *flush.entry((p, q, b0 / 144)).or_default() += 1;
+                } else {
+                    *skips.entry((p, q, b0 / 144)).or_default() += 1;
+                }
                 skip_day.insert((p, q), b0 / 144);
             } else if r.kind == Kind::GATHER as u8 || r.kind == Kind::CLASH as u8 {
                 // §13.4 A1: a day with a GATHER or CLASH is not idle.
@@ -445,8 +507,8 @@ pub fn catch_up(txs: &[TxRecord], program: &Address, genesis_ts: i64, bell_secs:
                 active.insert((p, q, bell / 144));
             }
         }
-        let landing_day = ((t.block_time - genesis_ts).max(0) / bell_secs.max(1) / 144) as u32;
-        for (_, a) in &t.post {
+        let landing_day = bell_of(t) / 144;
+        for (key, a) in &t.post {
             let Some(a) = a else { continue };
             if a.data.len() != fclient::abi::size::PROVINCE {
                 continue;
@@ -456,6 +518,7 @@ pub fn catch_up(txs: &[TxRecord], program: &Address, genesis_ts: i64, bell_secs:
             };
             with_post += 1;
             let k = (pv.p as i32, pv.q as i32);
+            pv_at.insert(*key, k);
             let prev = epoch.insert(k, pv.roster_epoch);
             if prev.is_some_and(|e| e != pv.roster_epoch) {
                 let d = skip_day.get(&k).copied().unwrap_or(landing_day);
@@ -463,46 +526,116 @@ pub fn catch_up(txs: &[TxRecord], program: &Address, genesis_ts: i64, bell_secs:
             }
         }
     }
+    // Resident actions, landed or refused (a refused one was still a
+    // player acting there; the Province is named by its account key).
+    let tags: Vec<u8> = RESIDENT_IXS.iter().map(|ix| *ix as u8).collect();
+    let mut resident_actions = 0usize;
+    for t in &order {
+        let Some(tag) = tag_of(t, program) else {
+            continue;
+        };
+        if !tags.contains(&tag) {
+            continue;
+        }
+        let Ok(tx) = fclient::tx::from_wire(&t.tx) else {
+            continue;
+        };
+        let bell = bell_of(t);
+        for k in &tx.message.account_keys {
+            if let Some(&(p, q)) = pv_at.get(k) {
+                resident_actions += 1;
+                for d in split_days(bell) {
+                    resident.insert((p, q, d));
+                }
+            }
+        }
+    }
+    for &(p, q, bell) in nudges {
+        for d in split_days(bell) {
+            resident.insert((p, q, d));
+        }
+    }
     let seen: BTreeSet<(i32, i32)> = epoch.keys().copied().collect();
-    let mut v = classify_days(&skips, &churned, &active, &seen);
+    let mut v = classify_days_with(&skips, &churned, &active, &resident, &seen);
     v["province_post_states"] = json!(with_post);
+    v["resident_actions"] = json!(resident_actions);
+    v["nudges_served"] = json!(nudges.len());
+    v["season_end_flush"] = json!(flush.values().sum::<u64>());
     v
 }
 
-/// Province-days by class for criterion 3's catch-up (W6T-4, §13.4 A1):
-/// **churned** (the roster epoch moved), **active** (roster unchanged but
-/// the province had a GATHER or CLASH that day: each resolved bell needs its
-/// own SkipQuiet split, so such a day cannot be judged against 6), else
-/// **idle** (judged: ≤ 6); a province never seen in a post-state is not
-/// judged.
+/// The keepers' served nudges `(P, Q, bell)` from their per-bell status
+/// samples (`status.play.nudges_recent`, integ-W6t review): the union over
+/// every sample of both keepers (each sample lists the last two days').
+pub fn nudges_from_samples(samples: &[Value]) -> std::collections::BTreeSet<(i32, i32, u32)> {
+    let mut out = std::collections::BTreeSet::new();
+    for s in samples {
+        for n in s["status"]["play"]["nudges_recent"]
+            .as_array()
+            .into_iter()
+            .flatten()
+        {
+            if let (Some(p), Some(q), Some(b)) = (n[0].as_i64(), n[1].as_i64(), n[2].as_u64()) {
+                out.insert((p as i32, q as i32, b as u32));
+            }
+        }
+    }
+    out
+}
+
+/// [`classify_days_with`] without resident days (W6T-4's classes).
 pub fn classify_days(
     skips: &BTreeMap<(i32, i32, u32), u64>,
     churned: &std::collections::BTreeSet<(i32, i32, u32)>,
     active: &std::collections::BTreeSet<(i32, i32, u32)>,
     seen: &std::collections::BTreeSet<(i32, i32)>,
 ) -> Value {
-    let (mut idle, mut churn, mut act, mut unknown) = (vec![], vec![], vec![], 0usize);
+    classify_days_with(
+        skips,
+        churned,
+        active,
+        &std::collections::BTreeSet::new(),
+        seen,
+    )
+}
+
+/// Province-days by class for criterion 3's catch-up (W6T-4, §13.4 A1 as
+/// amended by the integ-W6t review): **churned** (the roster epoch moved),
+/// **active** (roster unchanged but the province had a GATHER or CLASH that
+/// day: each resolved bell needs its own SkipQuiet split), **resident** (a
+/// resident action or a served nudge: each nudge is one split by design),
+/// else **idle** (judged: ≤ 6); a province never seen in a post-state is
+/// not judged.
+pub fn classify_days_with(
+    skips: &BTreeMap<(i32, i32, u32), u64>,
+    churned: &std::collections::BTreeSet<(i32, i32, u32)>,
+    active: &std::collections::BTreeSet<(i32, i32, u32)>,
+    resident: &std::collections::BTreeSet<(i32, i32, u32)>,
+    seen: &std::collections::BTreeSet<(i32, i32)>,
+) -> Value {
+    let (mut idle, mut churn, mut act, mut res, mut unknown) =
+        (vec![], vec![], vec![], vec![], 0usize);
     let mut idle_over: Vec<String> = vec![];
     let mut churn_over: Vec<String> = vec![];
     let mut act_over: Vec<String> = vec![];
+    let mut res_over: Vec<String> = vec![];
     for ((p, q, d), n) in skips {
-        if !seen.contains(&(*p, *q)) {
+        let k = (*p, *q, *d);
+        let (bucket, over) = if !seen.contains(&(*p, *q)) {
             unknown += 1;
-        } else if churned.contains(&(*p, *q, *d)) {
-            churn.push(*n as f64);
-            if *n > 6 {
-                churn_over.push(format!("({p},{q}) day {d}: {n}"));
-            }
-        } else if active.contains(&(*p, *q, *d)) {
-            act.push(*n as f64);
-            if *n > 6 {
-                act_over.push(format!("({p},{q}) day {d}: {n}"));
-            }
+            continue;
+        } else if churned.contains(&k) {
+            (&mut churn, &mut churn_over)
+        } else if active.contains(&k) {
+            (&mut act, &mut act_over)
+        } else if resident.contains(&k) {
+            (&mut res, &mut res_over)
         } else {
-            idle.push(*n as f64);
-            if *n > 6 {
-                idle_over.push(format!("({p},{q}) day {d}: {n}"));
-            }
+            (&mut idle, &mut idle_over)
+        };
+        bucket.push(*n as f64);
+        if *n > 6 {
+            over.push(format!("({p},{q}) day {d}: {n}"));
         }
     }
     let all: Vec<f64> = skips.values().map(|n| *n as f64).collect();
@@ -511,11 +644,13 @@ pub fn classify_days(
         "skip_txs_per_idle_province_day": stats(&idle),
         "skip_txs_per_churned_province_day": stats(&churn),
         "skip_txs_per_active_province_day": stats(&act),
+        "skip_txs_per_resident_province_day": stats(&res),
         "idle_province_days_over_6": idle_over,
         "churned_province_days_over_6": churn_over,
         "active_province_days_over_6": act_over,
+        "resident_province_days_over_6": res_over,
         "province_days_not_judged": unknown,
-        "definition": "idle = the Province's roster_epoch unchanged over the day (post-states) and no GATHER or CLASH of the province that day (§13.4 A1); active = roster unchanged with a GATHER/CLASH (reported); churned = roster moved (reported); a SkipQuiet's change counts for its b0's day",
+        "definition": "idle = the Province's roster_epoch unchanged over the day (post-states), no GATHER or CLASH of the province that day (§13.4 A1), and no resident action (Muster/Dissolve/Garrison/Explore/Depart naming it, landed or refused) or keeper-served nudge of it within the day or the 26 bells before (A1 as amended, v1.13); active = roster unchanged with a GATHER/CLASH (reported); resident = with a resident action or nudge (reported: each nudge is one split); churned = roster moved (reported); a SkipQuiet's change counts for its b0's day; the SkipQuiet reaching end_bell (the season-end flush) is not counted",
     })
 }
 
@@ -986,7 +1121,286 @@ pub fn events_summary(ev: &[Value]) -> Value {
         .map(|e| e["detail"].clone())
         .collect();
     json!({"chaos_kills": count("chaos-kill"), "restarts": count("restart"), "crashes": crashes,
+           "holds_rearmed": count("hold-rearmed"), "holds_rearm_expired": count("hold-rearm-expired"),
            "holds": holds, "end_season": ev.iter().find(|e| e["event"] == "end-season").map(|e| e["detail"].clone())})
+}
+
+/// Personas whose expected outcome the run did not show (integ-W6t
+/// review, §13.4 criterion 5): `pending` ones, and chain-judged
+/// (`needs-chain`) ones that never did the thing their outcome is about
+/// (a landed Depart, a prefund, a ticket or hold); a locally checkable
+/// persona left `needs-chain` was refused with a code the contract does
+/// not name (listed with its results).
+pub fn persona_gaps(personas: &Value) -> Vec<String> {
+    let ok = |p: &Value, action: &str| -> u64 {
+        p["results"]
+            .as_object()
+            .map(|m| {
+                m.iter()
+                    .filter(|(k, _)| k.starts_with(&format!("{action}@")) && k.ends_with(":ok"))
+                    .filter_map(|(_, v)| v.as_u64())
+                    .sum()
+            })
+            .unwrap_or(0)
+    };
+    let mut gaps = vec![];
+    for p in personas.as_array().into_iter().flatten() {
+        let name = p["persona"].as_str().unwrap_or("?");
+        match p["verdict"].as_str().unwrap_or("") {
+            "observed" | "violated" => {}
+            "pending" => gaps.push(format!("{name} pending (never reached its test)")),
+            "needs-chain" => {
+                let exercised = match name {
+                    "min_tip" | "garbage_seal" | "bad_plaintext" | "squatter" | "self_tip" => {
+                        ok(p, "depart") >= 1
+                    }
+                    "double_arrival" => ok(p, "depart") >= 2,
+                    "prefunder" => ok(p, "prefund") >= 1,
+                    "ticket_holder" => ok(p, "file_ticket") + ok(p, "hold") >= 1,
+                    // Locally checkable: refused, but with a code its rule
+                    // does not name.
+                    "settle_racer" | "late_revealer" | "forger" | "spammer" | "zero_tip" => {
+                        gaps.push(format!(
+                            "{name} refused with a code its rule does not name ({})",
+                            p["results"]
+                        ));
+                        continue;
+                    }
+                    _ => false,
+                };
+                if !exercised {
+                    gaps.push(format!("{name} not exercised ({})", p["results"]));
+                }
+            }
+            other => gaps.push(format!("{name} verdict {other:?}")),
+        }
+    }
+    if personas.as_array().is_none_or(|a| a.is_empty()) {
+        gaps.push("no persona in the bots' report".into());
+    }
+    gaps
+}
+
+/// The bots' reports of every fleet lifetime merged (integ-W6t review: a
+/// chaos-killed `frontier-bots` starts a new report; `w6-s7`'s final
+/// report covered 2,107 of the season's steps). `frontier-bots` keeps each
+/// earlier lifetime's report as `report-life-<n>.json` next to
+/// `report.json`. Counts add up; a persona's verdict is the strongest seen
+/// (violated > observed > needs-chain > pending); unrevealed marches are
+/// kept once per (host, arrive), the latest lifetime's entry winning.
+pub fn merge_bots_reports(reports: &[Value]) -> Value {
+    fn add(into: &mut Value, from: &Value) {
+        match (into, from) {
+            (Value::Object(a), Value::Object(b)) => {
+                for (k, v) in b {
+                    add(a.entry(k.clone()).or_insert(Value::Null), v);
+                }
+            }
+            (a @ Value::Null, b) => *a = b.clone(),
+            (a, b) if a.is_u64() && b.is_u64() => {
+                *a = json!(a.as_u64().unwrap_or(0) + b.as_u64().unwrap_or(0))
+            }
+            _ => {}
+        }
+    }
+    let rank = |v: &str| match v {
+        "violated" => 3,
+        "observed" => 2,
+        "needs-chain" => 1,
+        _ => 0,
+    };
+    let reports: Vec<&Value> = reports.iter().filter(|r| r.is_object()).collect();
+    if reports.is_empty() {
+        return Value::Null;
+    }
+    let (mut groups, mut errors, mut nudges) = (json!({}), json!({}), json!({}));
+    let mut personas: BTreeMap<String, Value> = BTreeMap::new();
+    let mut unrevealed: BTreeMap<(String, u64), Value> = BTreeMap::new();
+    let (mut steps, mut bots) = (0u64, 0u64);
+    for r in &reports {
+        add(&mut groups, &r["groups"]);
+        add(&mut errors, &r["errors"]);
+        add(&mut nudges, &r["nudges"]);
+        steps += r["steps"].as_u64().unwrap_or(0);
+        bots = bots.max(r["bots"].as_u64().unwrap_or(0));
+        for p in r["personas"].as_array().into_iter().flatten() {
+            let name = p["persona"].as_str().unwrap_or("?").to_string();
+            match personas.get_mut(&name) {
+                None => {
+                    personas.insert(name, p.clone());
+                }
+                Some(have) => {
+                    let mut res = have["results"].clone();
+                    add(&mut res, &p["results"]);
+                    have["results"] = res;
+                    let (a, b) = (
+                        have["verdict"].as_str().unwrap_or("").to_string(),
+                        p["verdict"].as_str().unwrap_or(""),
+                    );
+                    if rank(b) > rank(&a) {
+                        have["verdict"] = json!(b);
+                    }
+                }
+            }
+        }
+        for u in r["unrevealed"].as_array().into_iter().flatten() {
+            let host = match &u["host"] {
+                Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            unrevealed.insert((host, u["arrive"].as_u64().unwrap_or(0)), u.clone());
+        }
+    }
+    let unrevealed: Vec<Value> = unrevealed.into_values().collect();
+    let honest = unrevealed.iter().filter(|u| u["seal"] == "honest").count();
+    json!({
+        "v": 1, "lifetimes": reports.len(), "bots": bots, "steps": steps, "groups": groups,
+        "personas": personas.into_values().collect::<Vec<_>>(), "errors": errors, "nudges": nudges,
+        "unrevealed": unrevealed, "unrevealed_honest": honest,
+    })
+}
+
+/// `bots/report.json` and the earlier lifetimes' `report-life-<n>.json`,
+/// merged ([`merge_bots_reports`]).
+pub fn read_bots_reports(dir: &std::path::Path) -> Value {
+    let mut lives: Vec<(u64, Value)> = std::fs::read_dir(dir)
+        .map(|d| {
+            d.filter_map(|e| e.ok())
+                .filter_map(|e| {
+                    let n = e.file_name().to_string_lossy().into_owned();
+                    let k = n.strip_prefix("report-life-")?.strip_suffix(".json")?;
+                    Some((k.parse().ok()?, read_json(&e.path())))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    lives.sort_by_key(|x| x.0);
+    let mut all: Vec<Value> = lives.into_iter().map(|x| x.1).collect();
+    all.push(read_json(&dir.join("report.json")));
+    merge_bots_reports(&all)
+}
+
+/// The fleet's bad-seal transits (integ-W6t review, §13.4 criterion 8):
+/// the marchbooks' `sealed` lines of kind `garbage` or `bad_plaintext`
+/// whose Depart was `sent` and not `failed`, as `(host, arrive, kind)`.
+pub fn bad_seal_marches(bots_dir: &std::path::Path) -> Option<Vec<(u64, u32, String)>> {
+    use std::collections::BTreeSet;
+    let rd = std::fs::read_dir(bots_dir).ok()?;
+    let mut sealed: BTreeMap<(u64, u64), (u32, String)> = BTreeMap::new();
+    let mut sent: BTreeSet<(u64, u64)> = BTreeSet::new();
+    let mut failed: BTreeSet<(u64, u64)> = BTreeSet::new();
+    let mut books = 0;
+    for e in rd.flatten() {
+        let n = e.file_name().to_string_lossy().into_owned();
+        if !(n.starts_with("marchbook-") && n.ends_with(".jsonl")) {
+            continue;
+        }
+        books += 1;
+        let Ok(text) = std::fs::read_to_string(e.path()) else {
+            continue;
+        };
+        for l in text.lines() {
+            let Ok(v) = serde_json::from_str::<Value>(l) else {
+                continue;
+            };
+            let host = match &v["host"] {
+                Value::String(s) => s.parse::<u64>().ok(),
+                x => x.as_u64(),
+            };
+            let (Some(h), Some(d)) = (host, v["depart_bell"].as_u64()) else {
+                continue;
+            };
+            match v["ev"].as_str() {
+                Some("sealed") => {
+                    let kind = v["kind"].as_str().unwrap_or("honest");
+                    if kind != "honest" {
+                        if let Some(a) = v["arrive_bell"].as_u64() {
+                            sealed.insert((h, d), (a as u32, kind.to_string()));
+                        }
+                    }
+                }
+                Some("sent") => {
+                    sent.insert((h, d));
+                }
+                Some("failed") => {
+                    failed.insert((h, d));
+                }
+                _ => {}
+            }
+        }
+    }
+    if books == 0 {
+        return None;
+    }
+    Some(
+        sealed
+            .into_iter()
+            .filter(|(k, _)| sent.contains(k) && !failed.contains(k))
+            .map(|((h, _), (a, kind))| (h, a, kind))
+            .collect(),
+    )
+}
+
+/// Each transit's settlement `(host, arrive) → (outcome, seal code)`,
+/// matched as [`outcomes`] does (a host's TRANSIT_SETTLED settles its
+/// earliest unsettled DEPART).
+pub fn settles_by_march(recs: &[Rec]) -> BTreeMap<(u64, u32), (u8, u8)> {
+    let mut open: BTreeMap<u64, Vec<(u32, bool)>> = BTreeMap::new();
+    let mut out = BTreeMap::new();
+    for x in recs {
+        let kp = &x.r.key_payload;
+        match Kind::from_u8(x.r.kind) {
+            Some(Kind::DEPART) => {
+                let arrive = le_u32(kp, field(Kind::DEPART, "arrive_bell").unwrap_or(21));
+                open.entry(le_u64(kp, 0)).or_default().push((arrive, false));
+            }
+            Some(Kind::TRANSIT_SETTLED) => {
+                let host = le_u64(kp, 0);
+                if let Some(d) = open
+                    .get_mut(&host)
+                    .and_then(|v| v.iter_mut().find(|d| !d.1))
+                {
+                    d.1 = true;
+                    out.insert((host, d.0), (kp[8], kp[9]));
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Criterion 8's facts from the marchbooks and the settlements.
+pub fn bad_seal_facts(
+    marches: Option<Vec<(u64, u32, String)>>,
+    settles: &BTreeMap<(u64, u32), (u8, u8)>,
+    last_bell: u32,
+) -> Value {
+    let Some(ms) = marches else {
+        return Value::Null;
+    };
+    let mut due: BTreeMap<String, u64> = BTreeMap::new();
+    let mut codes: BTreeMap<String, u64> = BTreeMap::new();
+    let mut not_bad = vec![];
+    for (h, a, kind) in ms {
+        if a + 3 > last_bell {
+            continue;
+        }
+        *due.entry(kind.clone()).or_default() += 1;
+        let want5 = kind == "bad_plaintext";
+        match settles.get(&(h, a)) {
+            Some(&(o, c))
+                if o == frontier_abi::log::transit_outcome::BAD_SEAL
+                    && c != 0
+                    && (!want5 || c == frontier_abi::log::seal_code::BAD_PLAINTEXT) =>
+            {
+                *codes.entry(format!("{kind}:{c}")).or_default() += 1;
+            }
+            Some(&(o, c)) => not_bad.push(format!("{kind} {h:#x}@{a} outcome {o} seal {c}")),
+            None => not_bad.push(format!("{kind} {h:#x}@{a} unsettled")),
+        }
+    }
+    json!({"due": due, "codes": codes, "not_bad_seal": not_bad})
 }
 
 pub fn personas(bots: &Value) -> Value {
@@ -1324,11 +1738,27 @@ pub fn decide(facts: &Value) -> Vec<Value> {
         }
         verdict("5", "fail", why.join("; "))
     } else {
-        verdict(
-            "5",
-            "pass",
-            "no persona violated; no honest march refused by rule",
-        )
+        // integ-W6t review: §13.4 needs every persona's expected outcome
+        // observed; a persona still `pending`, or one only the chain can
+        // judge that never acted (no transit, no prefund, no ticket), was
+        // not exercised: the criterion is not decided (n.a.), not passed.
+        let gaps = persona_gaps(&facts["personas"]);
+        if gaps.is_empty() {
+            verdict(
+                "5",
+                "pass",
+                "no persona violated; no honest march refused by rule; every persona observed or exercised (the chain-judged ones by verify and criteria 4, 8, 9)",
+            )
+        } else {
+            verdict(
+                "5",
+                "n.a.",
+                format!(
+                    "no persona violated, but not every expected outcome was observed: {}",
+                    gaps.join("; ")
+                ),
+            )
+        }
     });
     // 6 — the herald under the in-run viewer window.
     let inrun = facts["loads"]
@@ -1350,16 +1780,48 @@ pub fn decide(facts: &Value) -> Vec<Value> {
             bad.push(format!("{p} violated"));
         }
     }
+    // integ-W6t review: every garbage / bad-plaintext transit the fleet
+    // sent (the bots' marchbooks) and that is due must have settled as
+    // bad-seal (bad plaintext with code 5); a run with none of either kind
+    // did not exercise the criterion (n.a., not pass).
+    let bs = &facts["bad_seal_marches"];
+    for x in bs["not_bad_seal"].as_array().into_iter().flatten() {
+        bad.push(format!("not settled as bad-seal: {}", f(x)));
+    }
+    let missing: Vec<&str> = ["garbage", "bad_plaintext"]
+        .into_iter()
+        .filter(|k| bs["due"][k].as_u64().unwrap_or(0) == 0)
+        .collect();
     v.push(if facts["verify_verdict"].is_null() {
         verdict("8", "n.a.", "no verify report")
-    } else if bad.is_empty() {
+    } else if !bad.is_empty() {
+        verdict("8", "fail", bad.join("; "))
+    } else if bs.is_null() {
+        verdict(
+            "8",
+            "n.a.",
+            "no bad seal survived, but the bots' marchbooks were not read (the bad-seal transits are unknown)",
+        )
+    } else if !missing.is_empty() {
+        verdict(
+            "8",
+            "n.a.",
+            format!(
+                "no bad seal survived, but no {} transit was sent and due: the bad-seal personas were not exercised",
+                missing.join(" or ")
+            ),
+        )
+    } else {
         verdict(
             "8",
             "pass",
-            "no bad seal survived; the bad-seal personas held",
+            format!(
+                "no bad seal survived; {} garbage and {} bad-plaintext transits sent and due, each settled as bad-seal (codes {})",
+                f(&bs["due"]["garbage"]),
+                f(&bs["due"]["bad_plaintext"]),
+                f(&bs["codes"])
+            ),
         )
-    } else {
-        verdict("8", "fail", bad.join("; "))
     });
     // 9 — tickets.
     let old = len(&facts["cohorts_open_past_24_bells"]);
@@ -1456,7 +1918,6 @@ pub async fn report(rd: &RunDir) -> i32 {
         frontier_abi::presets::M1_LOCAL_7D.reveal_window,
         frontier_abi::presets::M1_LOCAL_7D.seed_margin,
     );
-    let catch = catch_up(&inp.txs, &program, genesis, bell_secs);
     let out = outcomes(&recs, last_bell);
     let ps = final_provinces(&inp);
     let pc = province_checks(&ps, play_bells, last_bell);
@@ -1473,7 +1934,7 @@ pub async fn report(rd: &RunDir) -> i32 {
     );
     let herald = herald_summary(&read_jsonl(&rd.path("metrics/herald.jsonl")));
     let ev = events_summary(&rd.events());
-    let bots = read_json(&rd.path("bots/report.json"));
+    let bots = read_bots_reports(&rd.path("bots"));
     let pers = personas(&bots);
     let verify = read_json(&rd.path("verify/summary.json"));
     let tamper = read_json(&rd.path("tamper/report.json"));
@@ -1501,6 +1962,21 @@ pub async fn report(rd: &RunDir) -> i32 {
         .as_array()
         .is_some_and(|a| a.iter().any(|c| c == "BadSealSurvived"));
     let end_bell = st["season"]["end_bell"].as_u64().unwrap_or(1_008) as u32;
+    let mut samples = read_jsonl(&rd.path("metrics/keeper-a.jsonl"));
+    samples.extend(read_jsonl(&rd.path("metrics/keeper-b.jsonl")));
+    let catch = catch_up_with(
+        &inp.txs,
+        &program,
+        genesis,
+        bell_secs,
+        end_bell,
+        &nudges_from_samples(&samples),
+    );
+    let bsf = bad_seal_facts(
+        bad_seal_marches(&rd.path("bots")),
+        &settles_by_march(&recs),
+        last_bell,
+    );
     let criteria = json!({
         "1_complete": {"reaches_end_bell": play_bells >= end_bell, "end_season": ev["end_season"],
             "stuck_province_bells": pc["stuck_province_bells"].as_array().map_or(0, |a| a.len()),
@@ -1513,7 +1989,7 @@ pub async fn report(rd: &RunDir) -> i32 {
         "4_liveness": {"keeper_a_min_effective_n": ka["min_reveal_effective_n_in_play"], "effective_n_ok": ka["effective_n_ok"]},
         "5_personas": {"violated": pers["violated"]},
         "6_herald": {"loads": loads.iter().map(|l| l["verdict"].clone()).collect::<Vec<_>>(), "alarms": herald["alarms_total"]},
-        "8_bad_seals": {"bad_seal_codes": out["bad_seal_codes"], "BadSealSurvived": bad_seal_survived},
+        "8_bad_seals": {"bad_seal_codes": out["bad_seal_codes"], "BadSealSurvived": bad_seal_survived, "marchbook": bsf},
         "9_tickets": {"cohorts_open_past_24_bells": pc["cohorts_open_past_24_bells"]},
     });
     let verify_report = read_json(&rd.path("verify/report.json"));
@@ -1549,6 +2025,7 @@ pub async fn report(rd: &RunDir) -> i32 {
         "loads": loads, "bad_seal_survived": bad_seal_survived, "verify_verdict": verify["verdict"],
         "unrevealed_by_rule": verify_report["liveness"]["unrevealed_by_rule"],
         "bots_unrevealed": bots["unrevealed"], "exit_grade": eg,
+        "bad_seal_marches": bsf,
     });
     let decided = decide(&facts);
     let holds = hold_effects(&inp.txs, &rd.events());
@@ -1561,7 +2038,7 @@ pub async fn report(rd: &RunDir) -> i32 {
         "loadavg": load_avg, "no_landing_windows": no_landing, "exit_grade": eg,
         "unrevealed_by_rule": by_rule_reasons(&verify_report["liveness"]["unrevealed_by_rule"]),
         "outcomes": out, "provinces": pc, "keepers": {"a": ka, "b": kb}, "herald": herald,
-        "events": ev, "bots": {"personas": pers, "errors": bots["errors"], "bots": bots["bots"]},
+        "events": ev, "bots": {"personas": pers, "errors": bots["errors"], "bots": bots["bots"], "lifetimes": bots["lifetimes"]},
         "verify": verify, "tamper": {"ok": tamper["ok"], "total": tamper["total"], "on_run": tamper["on_run"], "secs": tamper["secs"]},
         "loads": loads, "criteria": criteria, "hold_effects": holds,
     });
@@ -1760,6 +2237,11 @@ pub fn markdown(r: &Value) -> String {
             "skip_txs_per_active_province_day",
             "active_province_days_over_6",
         ),
+        (
+            "resident (resident action or nudge, reported)",
+            "skip_txs_per_resident_province_day",
+            "resident_province_days_over_6",
+        ),
         ("all", "skip_txs_per_province_day", ""),
     ] {
         let s = &c[k];
@@ -1776,6 +2258,12 @@ pub fn markdown(r: &Value) -> String {
             }
         ));
     }
+    m.push_str(&format!(
+        "\nResident actions {} (landed or refused), keeper-served nudges {}, season-end flush SkipQuiet {} (not counted).\n",
+        f(&c["resident_actions"]),
+        f(&c["nudges_served"]),
+        f(&c["season_end_flush"])
+    ));
     let ci = &r["criteria"]["1_complete"]["clash_inputs"];
     m.push_str(&format!(
         "\n**ClashInputs:** {} closed, {} open: {} closable after grace, {} pending, {} blocked.\n",
@@ -1994,7 +2482,105 @@ mod tests {
             "keeper_a": {"min_reveal_effective_n_in_play": 150, "bells_below_150": []}, "keeper_b": null,
             "loads": [{"window": "in-run", "verdict": {"pass": true, "summary": "ok"}}],
             "bad_seal_survived": false, "verify_verdict": "PASS",
+            "bad_seal_marches": {"due": {"garbage": 2, "bad_plaintext": 1},
+                "codes": {"garbage:2": 2, "bad_plaintext:5": 1}, "not_bad_seal": []},
         })
+    }
+
+    /// integ-W6t review: criteria 5 and 8 are not passed vacuously (R5: 490
+    /// bots joined, no garbage / bad-plaintext / settle-racer transit, the
+    /// personas mostly `needs-chain` or `pending`, both criteria "pass").
+    #[test]
+    fn criteria_5_and_8_need_their_personas_exercised() {
+        let st = |f: &Value, id: &str| {
+            decide(f)
+                .into_iter()
+                .find(|c| c["criterion"] == id)
+                .unwrap()
+        };
+        let f = good_facts();
+        assert_eq!(st(&f, "5")["status"], "pass");
+        assert_eq!(st(&f, "8")["status"], "pass", "{}", st(&f, "8"));
+        // R5's shape: no bad-seal transit due.
+        let mut g = good_facts();
+        g["bad_seal_marches"] = json!({"due": {}, "codes": {}, "not_bad_seal": []});
+        let c = st(&g, "8");
+        assert_eq!(c["status"], "n.a.", "{c}");
+        assert!(c["why"]
+            .as_str()
+            .unwrap()
+            .contains("garbage or bad_plaintext"));
+        g["bad_seal_marches"] = json!({"due": {"garbage": 3}, "codes": {}, "not_bad_seal": []});
+        assert!(st(&g, "8")["why"]
+            .as_str()
+            .unwrap()
+            .contains("no bad_plaintext"));
+        g["bad_seal_marches"] = Value::Null;
+        assert_eq!(st(&g, "8")["status"], "n.a.");
+        // A due bad-seal march that settled otherwise fails.
+        g["bad_seal_marches"] = json!({"due": {"garbage": 1, "bad_plaintext": 1}, "codes": {},
+            "not_bad_seal": ["garbage 0x5@40 outcome 1 seal 0"]});
+        assert_eq!(st(&g, "8")["status"], "fail");
+        // R5's personas: pending and never-departed needs-chain ones.
+        let mut h = good_facts();
+        h["personas"] = json!([
+            {"persona": "garbage_seal", "verdict": "needs-chain", "results": {"build@relay:ok": 2, "file_ticket@relay:QuotaExceeded": 131}},
+            {"persona": "settle_racer", "verdict": "pending", "results": {}},
+            {"persona": "min_tip", "verdict": "needs-chain", "results": {"depart@relay:ok": 1}},
+            {"persona": "zero_tip", "verdict": "observed", "results": {}},
+        ]);
+        let c = st(&h, "5");
+        assert_eq!(c["status"], "n.a.", "{c}");
+        let why = c["why"].as_str().unwrap();
+        assert!(
+            why.contains("garbage_seal not exercised") && why.contains("settle_racer pending"),
+            "{why}"
+        );
+        assert!(!why.contains("min_tip"), "{why}");
+        // A violation still fails.
+        h["violated"] = json!(["forger"]);
+        assert_eq!(st(&h, "5")["status"], "fail");
+    }
+
+    /// integ-W6t review: a restarted fleet's lifetimes merge; verdicts keep
+    /// the strongest; counts add up; unrevealed marches once each.
+    #[test]
+    fn bots_lifetimes_merge() {
+        let a = json!({"bots": 1000, "steps": 5, "groups": {"arch:bot": {"depart": {"ok": 2}}},
+            "personas": [{"persona": "late_revealer", "verdict": "observed", "results": {"reveal@direct:WindowClosed": 1}},
+                         {"persona": "forger", "verdict": "pending", "results": {}}],
+            "errors": {"x": 1}, "nudges": {"sent": 3},
+            "unrevealed": [{"host": "7", "arrive": 40, "seal": "honest", "tries": 1}]});
+        let b = json!({"bots": 1000, "steps": 7, "groups": {"arch:bot": {"depart": {"ok": 1}, "muster": {"ok": 1}}},
+            "personas": [{"persona": "late_revealer", "verdict": "pending", "results": {"reveal@direct:WindowClosed": 2}},
+                         {"persona": "forger", "verdict": "observed", "results": {"forge@direct:BadAccount": 1}}],
+            "errors": {}, "nudges": {"sent": 1, "failed": 1},
+            "unrevealed": [{"host": "7", "arrive": 40, "seal": "honest", "tries": 3},
+                           {"host": "9", "arrive": 41, "seal": "garbage", "tries": 0}]});
+        let m = merge_bots_reports(&[a, Value::Null, b]);
+        assert_eq!(m["lifetimes"], 2);
+        assert_eq!(m["steps"], 12);
+        assert_eq!(m["groups"]["arch:bot"]["depart"]["ok"], 3);
+        assert_eq!(m["groups"]["arch:bot"]["muster"]["ok"], 1);
+        assert_eq!(m["nudges"], json!({"sent": 4, "failed": 1}));
+        let p = |n: &str| {
+            m["personas"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|p| p["persona"] == n)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(p("late_revealer")["verdict"], "observed");
+        assert_eq!(
+            p("late_revealer")["results"]["reveal@direct:WindowClosed"],
+            3
+        );
+        assert_eq!(p("forger")["verdict"], "observed");
+        assert_eq!(m["unrevealed"].as_array().unwrap().len(), 2);
+        assert_eq!(m["unrevealed_honest"], 1);
+        assert_eq!(merge_bots_reports(&[Value::Null]), Value::Null);
     }
 
     /// Wave-5 review of W5-B: the report decides the criteria and fails.
@@ -2254,6 +2840,116 @@ mod tests {
         let mut f = good_facts();
         f["catch_up"]["active_province_days_over_6"] = json!(["(-4,-2) day 5: 15"]);
         assert_eq!(decide(&f)[2]["status"], "pass");
+    }
+
+    /// integ-W6t review (§13.4 A1 as amended, v1.13): a province-day with a
+    /// resident action or a served nudge within the batch it could cut is
+    /// `resident` (reported), not idle; w6-s7's 24 A1-idle days over 6 had
+    /// 49 short batches right before an EXPLORE (a bot's nudge).
+    #[test]
+    fn nudged_or_resident_day_is_not_idle() {
+        use std::collections::BTreeSet;
+        // A nudge at bell 870 (day 6) can have cut a batch from bell 844
+        // (day 5): both days are resident.
+        assert_eq!(split_days(870), [5, 6]);
+        assert_eq!(split_days(900), [6, 6]);
+        assert_eq!(split_days(3), [0, 0]);
+        let skips: BTreeMap<(i32, i32, u32), u64> =
+            [((-7, 3, 6), 7), ((-2, 0, 5), 7), ((4, 4, 5), 7)]
+                .into_iter()
+                .collect();
+        let seen: BTreeSet<(i32, i32)> = [(-7, 3), (-2, 0), (4, 4)].into_iter().collect();
+        let mut resident: BTreeSet<(i32, i32, u32)> = BTreeSet::new();
+        for d in split_days(875) {
+            resident.insert((-7, 3, d));
+        }
+        let samples = vec![
+            json!({"bell": 760, "status": {"play": {"nudges_recent": [[-2, 0, 760]]}}}),
+            json!({"bell": 761, "status": null}),
+            json!({"bell": 762, "status": {"play": {"nudges_recent": [[-2, 0, 760], [-2, 0, 734]]}}}),
+        ];
+        let n = nudges_from_samples(&samples);
+        assert_eq!(n.len(), 2);
+        for &(p, q, b) in &n {
+            for d in split_days(b) {
+                resident.insert((p, q, d));
+            }
+        }
+        let v = classify_days_with(&skips, &BTreeSet::new(), &BTreeSet::new(), &resident, &seen);
+        assert_eq!(
+            v["idle_province_days_over_6"],
+            json!(["(4,4) day 5: 7"]),
+            "{v}"
+        );
+        assert_eq!(
+            v["resident_province_days_over_6"],
+            json!(["(-7,3) day 6: 7", "(-2,0) day 5: 7"]),
+            "{v}"
+        );
+        assert_eq!(v["skip_txs_per_resident_province_day"]["n"], 2);
+        // The old classes are unchanged without resident days.
+        let v = classify_days(&skips, &BTreeSet::new(), &BTreeSet::new(), &seen);
+        assert_eq!(v["idle_province_days_over_6"].as_array().unwrap().len(), 3);
+    }
+
+    /// integ-W6t review: the SkipQuiet reaching `end_bell` (the season-end
+    /// flush) is not counted, and a refused resident action (no post-state)
+    /// still names its Province by account key.
+    #[test]
+    fn season_end_flush_and_refused_resident_actions() {
+        let inp = program_fixture();
+        let program = inp.cfg.program;
+        let genesis = inp
+            .txs
+            .iter()
+            .filter(|t| t.err.is_none())
+            .flat_map(|t| fclient::log::bodies_from_logs(&t.logs, &program).unwrap_or_default())
+            .filter_map(|b| Record::decode_with(&b, &lens).ok())
+            .find(|r| r.kind == Kind::SEASON_CREATED as u8)
+            .map(|r| {
+                le_i64(
+                    &r.key_payload,
+                    field(Kind::SEASON_CREATED, "genesis_ts").unwrap(),
+                )
+            })
+            .expect("SEASON_CREATED");
+        let empty = std::collections::BTreeSet::new();
+        let all = catch_up_with(&inp.txs, &program, genesis, 600, u32::MAX, &empty);
+        assert_eq!(all["season_end_flush"], 0, "{all}");
+        let n_all = all["skip_txs_per_province_day"]["n"].as_u64().unwrap();
+        // The last skipped bell of the recording as end_bell: every skip
+        // reaching it is the flush and leaves the counts.
+        let mut last = 0u32;
+        let n_off = field(Kind::SKIP, "n").unwrap();
+        for r in records(&inp.txs, &program) {
+            if r.r.kind == Kind::SKIP as u8 {
+                let kp = &r.r.key_payload;
+                last = last.max(le_u32(kp, 8) + kp[n_off] as u32);
+            }
+        }
+        assert!(last > 0);
+        let cut = catch_up_with(&inp.txs, &program, genesis, 600, last, &empty);
+        let flushed = cut["season_end_flush"].as_u64().unwrap();
+        assert!(flushed > 0, "{cut}");
+        assert!(cut["skip_txs_per_province_day"]["n"].as_u64().unwrap() <= n_all);
+        // The recording's Musters/Explores/Departs name their Provinces.
+        assert!(all["resident_actions"].as_u64().unwrap() > 0, "{all}");
+        // Refused ones too: strip the post-states and error every resident
+        // action; the Province keys are learnt from the other transactions.
+        let mut txs = inp.txs.clone();
+        let tags: Vec<u8> = RESIDENT_IXS.iter().map(|ix| *ix as u8).collect();
+        let mut refused = 0;
+        for t in txs.iter_mut() {
+            if tag_of(t, &program).is_some_and(|g| tags.contains(&g)) {
+                t.err = Some("NotResident".into());
+                t.post.clear();
+                t.logs.clear();
+                refused += 1;
+            }
+        }
+        assert!(refused > 0);
+        let v = catch_up_with(&txs, &program, genesis, 600, u32::MAX, &empty);
+        assert!(v["resident_actions"].as_u64().unwrap() > 0, "{v}");
     }
 
     /// W6T-4 (§13.4 A2): a by-rule refusal of an honest march fails
