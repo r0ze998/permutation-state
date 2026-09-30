@@ -995,6 +995,23 @@ fn the_settle_racer_redeparts_only_after_the_arrival() {
         .province
         .resolved_next = fixture::IN_TRANSIT_ARRIVE;
     assert_eq!(redeparts(&early), 0);
+    // integ-W6t review: arrived, but the destination is behind the bell
+    // (four bells later, not resolved on: a Depart there is `NotResident`):
+    // a nudge of it, no redepart yet.
+    let mut behind = o.clone();
+    behind.now += 4 * 600;
+    let rn = behind.provinces[&w.enemy_home].province.resolved_next;
+    assert!(
+        !fclient::play::resident_ok(rn, behind.bell()),
+        "the case needs a lag"
+    );
+    let out = decide(&behind, &ctx(&s, &mem, true));
+    assert_eq!(redeparts(&behind), 0, "{out:?}");
+    assert!(
+        out.iter()
+            .any(|i| matches!(i, Intent::Nudge { province } if *province == w.enemy_home)),
+        "{out:?}"
+    );
 }
 
 // ------------------------------------------------------ W6T-3 (w6-s7)

@@ -1,0 +1,58 @@
+{
+ "answered": {
+  "max_ms": 685.922,
+  "p50_ms": 0.192,
+  "p99_ms": 8.704,
+  "p99_upper_ms": 9.216,
+  "requests": 98995
+ },
+ "burst": {
+  "fromSlot": 2040,
+  "generator": "dcfece9 frontier-viewers",
+  "input": "frontier-node/.local/frontier/integ-w6t-tri-20x/verify/input.json.gz",
+  "pacedTxs": 247,
+  "prefixTxs": 2276,
+  "slots": 260,
+  "txsIn2075to2076": 72
+ },
+ "elapsed_s": 151.382913292,
+ "errorRate": 0.0,
+ "errors": 0,
+ "follow": {
+  "errors": 0,
+  "liveBell": null
+ },
+ "max_ms": 685.922,
+ "notFound": 16160,
+ "p50_ms": 0.184,
+ "p99_ms": 8.192,
+ "p99_upper_ms": 8.704,
+ "requests": 115155,
+ "rps": 760.686906440223,
+ "staleRetries": 0,
+ "targetMisses": [],
+ "targetsMet": true,
+ "unavailable": 0,
+ "unavailable_ms": 0.0,
+ "viewers": 4000,
+ "ws": {
+  "connected": 1000,
+  "delivery_max_ms": 124.0,
+  "delivery_p50_ms": 12.8,
+  "delivery_p99_upper_ms": 86.016,
+  "errors": 0,
+  "gaps": 0,
+  "herald_max_ms": 672.0,
+  "herald_p50_ms": 557.056,
+  "herald_p99_upper_ms": 688.128,
+  "ingest_max_ms": 732.0,
+  "ingest_p50_ms": 589.824,
+  "ingest_p99_ms": 720.896,
+  "ingest_p99_upper_ms": 753.664,
+  "messages": 1409055,
+  "reconnects": 0,
+  "send_stamped": 1409055,
+  "timed": 1409055
+ },
+ "wsViewers": 1000
+}

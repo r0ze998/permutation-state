@@ -185,15 +185,17 @@ impl Report {
                     .into_iter()
                     .filter(|o| !(o.route == "keeper" && o.ok))
                     .collect(),
-                // integ-W6t review: `AlreadyDone` is a refusal too (the
-                // march was revealed in its window before the late try;
-                // w6-s7's late_revealer read `needs-chain` for it).
+                // integ-W6t review: `AlreadyDone` (the march was revealed
+                // in its window before the late try; w6-s7) and
+                // `TransitState` (it had already settled; the rehearsal's
+                // nightly 1) are refusals of the late Reveal too.
                 &[
                     "WindowClosed",
                     "LatchClosed",
                     "Archived",
                     "TooLate",
                     "AlreadyDone",
+                    "TransitState",
                 ],
             ),
             Persona::Forger => judge(
@@ -301,6 +303,19 @@ mod tests {
             signature: None,
             tag: Some(tag),
         }
+    }
+
+    /// integ-W6t review: a late Reveal refused because the march was
+    /// already revealed or settled is the expected refusal.
+    #[test]
+    fn late_reveal_refused_after_reveal_or_settle_is_observed() {
+        let mut r = Report::default();
+        r.record(o(Persona::LateRevealer, "late", false, "WindowClosed", 0));
+        r.record(o(Persona::LateRevealer, "late", false, "TransitState", 0));
+        r.record(o(Persona::LateRevealer, "late", false, "AlreadyDone", 0));
+        assert_eq!(r.verdict(Persona::LateRevealer), Verdict::Observed);
+        r.record(o(Persona::LateRevealer, "late", true, "", 0));
+        assert_eq!(r.verdict(Persona::LateRevealer), Verdict::Violated);
     }
 
     #[test]

@@ -100,7 +100,11 @@ def main() -> int:
 
     # ---- contract: version line and §28 --------------------------------
     header = next((ln for ln in contract.splitlines() if ln.startswith("**Version")), "")
-    c.ok(header.startswith("**Version v1.12**"), "contract: header is not **Version v1.12**")
+    # v1.12 or a later version that keeps the v1.12 entry (integ-W6t review: v1.13).
+    c.ok(
+        header.startswith("**Version v1.12**") or header.startswith("**Version v1.13**"),
+        "contract: header is not **Version v1.12** (or v1.13)",
+    )
     c.ok("§28 lists each change" in header, "contract: header does not point at §28")
     s28 = section(contract, "## 28.", "## 29.")
     c.ok(s28.startswith("## 28. Amendments v1.12"), "contract: no '## 28. Amendments v1.12'")

@@ -921,7 +921,23 @@ fn duties(obs: &Observation, cx: &Ctx, prof: &Profile, rng: &mut Rng, out: &mut 
             .province(m.dest.0 as i16, m.dest.1 as i16)
             .is_some_and(|pv| pv.resolved_next > m.arrive_bell);
         if persona == Some(Persona::SettleRacer) && !m.redeparted && transit.is_some() && arrived {
-            out.push(Intent::Redepart { key: m.key });
+            // integ-W6t review: the Depart is a resident action at the
+            // destination; while that province is behind (`NotResident`,
+            // the rehearsal's nightly 2: both re-departs refused so, the
+            // HostInTransit test never reached), nudge it instead and try
+            // again next session (the residency gate's rule).
+            let dest = (m.dest.0 as i16, m.dest.1 as i16);
+            let resident = obs
+                .province(dest.0, dest.1)
+                .is_none_or(|pv| fclient::play::resident_ok(pv.resolved_next, bell));
+            if resident {
+                out.push(Intent::Redepart { key: m.key });
+            } else if !out
+                .iter()
+                .any(|i| matches!(i, Intent::Nudge { province } if *province == dest))
+            {
+                out.push(Intent::Nudge { province: dest });
+            }
         }
         // Reveals: from the arrival bell's start, one bell long for owners.
         let in_bell = bell >= m.arrive_bell && bell <= m.arrive_bell + 1;
