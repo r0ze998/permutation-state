@@ -86,6 +86,7 @@ import { hostParts } from './faddr.mjs';
 import { RETREAT_CHOICES, retreatBps } from './fmarch.mjs';
 import { uiKey, uiStorage, loadUi, saveUi } from './fui.mjs';
 import * as hud from './hud/hud.mjs';
+import * as inspect from './hud/inspect.mjs';
 
 const $ = id => globalThis.document?.getElementById(id);
 const setText = (id, text) => { const el = $(id); if (el && el.textContent !== text) el.textContent = text; };
@@ -146,9 +147,12 @@ export function panelMarkup(FS) {
   const parts = [renderNotice(FS.notice)];
   if (FS.practice) return [...parts, practiceScreen.render(FS.practice, { kernelError: FS.practiceError ?? null, closable: true })];
   if (FS.report) return [...parts, reportScreen.render(FS, mineOf(FS.holdings))];
+  // The selection first on the map tab (the player just chose it), then the guide.
+  if (tab === 'map' && FS.selected) parts.push(inspect.render(FS, terrainRef));
   parts.push(onboardingCard.render(FS, { open: tab === 'map' }));
+  // Another tab keeps one line of the selection (the inspector itself is on the map tab).
+  if (tab !== 'map' && FS.selected) parts.push(html`<p class="sel-line">${Number.isInteger(FS.selected.idx) ? L`選択中：州 ${FS.selected.p},${FS.selected.q} · マス ${FS.selected.idx + 1}` : L`選択中：州 ${FS.selected.p},${FS.selected.q}`} <button type="button" class="btn small" data-act="tab" data-tab="map">${L`詳細`}</button></p>`);
   if (tab === 'map') {
-    if (FS.selected) parts.push(html`<p class="muted">${L`州 ${FS.selected.p},${FS.selected.q} を選びました`}</p>`);
     parts.push(joinScreen.render(FS));
   } else if (tab === 'holding') parts.push(holdingScreen.render(FS));
   else if (tab === 'hosts') parts.push(hostScreen.render(FS), exploreScreen.render(FS));
@@ -165,7 +169,7 @@ export function panelMarkup(FS) {
 /** The panel of the practice and spectator pages. */
 export function modePanel(FS) {
   if (FS.mode === 'practice') return [renderNotice(FS.notice), practiceScreen.render(FS.practice, { kernelError: FS.practiceError ?? null })];
-  return spectateScreen.render(FS);
+  return [FS.selected ? inspect.render(FS, terrainRef) : '', spectateScreen.render(FS)];
 }
 
 function renderPlay() {
@@ -187,6 +191,7 @@ function renderMode() {
 
 // ------------------------------------------------------------------ the HUD (hud/hud.mjs)
 let mapRef = null;
+let terrainRef = null;
 const lastHtml = new Map();
 /** Put markup in an element only when it changed (a hover title survives the one-second tick). */
 function setHtmlIfChanged(el, markup) {
@@ -471,7 +476,8 @@ export async function boot() {
   delegate(globalThis.document);
   if (canvas) {
     // Tile-LOD terrain from the season record's ring seeds through the rules module (W5-E R3: passed by the app).
-    const terrainOf = createTerrain({ onReady: () => map?.invalidate() });
+    const terrainOf = createTerrain({ onReady: () => { map?.invalidate(); invalidate('panel'); } });
+    terrainRef = terrainOf;
     map = new FrontierMap(canvas, {
       source: () => {
         const own = ART_FOG ? [{ p: 2, q: 0 }] : (FS.holdings ?? []).map(h => ({ p: h.p, q: h.q }));
@@ -491,6 +497,8 @@ export async function boot() {
       onSelect: hit => {
         FS.selected = hit;
         setText('map-summary', L`州 ${hit.p},${hit.q} を選びました`);
+        // The inspector reads the province envelope (loaded once, on demand).
+        if (FS.mode !== 'practice') wantProvince(hit.p, hit.q, () => { map?.invalidate(); invalidate('panel'); });
         invalidate('map', 'panel');
       },
       onView: (_, lod) => { FS.view.lod = lod; },

@@ -80,3 +80,33 @@ test('rail markup: holdings with the warning mark, tiles, the to-do list', () =>
   assert.match(out, /data-act="tab" data-tab="holding" aria-pressed="true"/);
   assert.match(out, /data-act="attn-go" data-i="0"/);
 });
+
+import * as inspect from '../../permutation-server/web/frontier/hud/inspect.mjs';
+
+test('inspector: a tile with a site, hosts and relations; the actions it offers', () => {
+  setLang('ja');
+  const prov = {
+    p: 2, q: 0, relations: 0n, sites: Uint8Array.from([9, 20]), resolveSummary: { bell: 41 },
+    siteMirror: [{ state: 1, faction: 2, tier: 1, garrison: 300, shieldUntilBell: 0 }, { state: 0, faction: 7, tier: 0, garrison: 0, shieldUntilBell: 0 }],
+    entries: [{ id: 5n, faction: 2, unit: 0, tile: 9, state: 1, troops: 400 }, { id: 6n, faction: 2, unit: 0, tile: 3, state: 1, troops: 1 }], camp: { state: 0 },
+  };
+  const FS = { mode: 'play', citizen: { faction: 0 }, holdings: [], nowBell: 42, land: { stage: 'joined' },
+    overviews: new Map([[2, { provinces: [{ p: 2, q: 0, owners: [2, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7], sites: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], clash: true }] }]]),
+    provinces: new Map([['2,0', { province: prov }]]), selected: { p: 2, q: 0, idx: 9 } };
+  const terrainOf = () => ({ terrain: Array(61).fill(0), sites: [9, 20], names: ['Grassland'] });
+  const m = inspect.inspectModel(FS, terrainOf);
+  assert.equal(m.tile.terrain, 'Grassland');
+  assert.deepEqual([m.tile.site.state, m.tile.site.faction, m.tile.site.garrison], ['holding', 2, 300]);
+  assert.deepEqual(m.tile.hosts.map(h => h.troops), [400], 'only the hosts on this tile');
+  assert.deepEqual(m.relation, [{ faction: 2, friendly: false }]);
+  assert.deepEqual(inspect.inspectActions(FS, m).map(a => a.act), ['report-open']);
+  FS.selected = { p: 2, q: 0, idx: 20 };
+  const free = inspect.inspectModel(FS, terrainOf);
+  assert.equal(free.tile.site.state, 'free');
+  assert.deepEqual(inspect.inspectActions(FS, free).map(a => a.act), ['pick-province', 'report-open'], 'a free site first opens the province for the ticket');
+  FS.joinDraft = { envelope: { province: prov }, sites: [] };
+  assert.equal(inspect.inspectActions(FS, free)[0].act, 'toggle-site');
+  FS.compose = { origin: { p: 2, q: 0 } };
+  assert.ok(inspect.inspectActions(FS, free).some(a => a.act === 'dest-from-map'));
+  assert.equal(inspect.friendly(1n << 2n, 0, 2), true, 'bit a*8+b marks not hostile');
+});
