@@ -123,8 +123,31 @@ const TILES = [
   { tab: 'more', glyph: '☷', text: () => L`記録` },
 ];
 
-/** The left rail: holdings, action tiles, what needs the player. */
+/**
+ * The standings of the six factions from the overviews (the spectator's rail):
+ * `[{faction, holdings, provinces}]`, most holdings first.
+ */
+export function standings(overviews) {
+  const rows = Array.from({ length: 6 }, (_, f) => ({ faction: f, holdings: 0, provinces: 0 }));
+  for (const o of overviews?.values?.() ?? []) for (const pr of o.provinces ?? []) {
+    const seen = new Set();
+    pr.owners.forEach((f, j) => { if (pr.sites[j] === 1 && f < 6) { rows[f].holdings++; seen.add(f); } });
+    for (const f of seen) rows[f].provinces++;
+  }
+  return rows.sort((a, b) => b.holdings - a.holdings || b.provinces - a.provinces || a.faction - b.faction);
+}
+
+function renderStandings(FS) {
+  const rows = standings(FS.overviews);
+  return html`<h2 class="rail-h">${L`勢力の順位`}</h2>
+    <ol class="rail-standings">${rows.map((r, i) => html`<li><span class="rank">${i + 1}</span>${swatch(r.faction)}<strong>${factionName(r.faction)}</strong>
+      <span class="muted">${L`拠点 ${fmtNum(r.holdings)} · ${fmtNum(r.provinces)} 州`}</span></li>`)}</ol>
+    <p class="muted">${L`拠点の数は最新の概観（鐘ごと）から数えています。`}</p>`;
+}
+
+/** The left rail: holdings, action tiles, what needs the player (the spectator: the standings). */
 export function renderRail(FS) {
+  if (FS.mode === 'spectate') return html`<p class="rail-faction muted">${L`観戦中`}</p>${renderStandings(FS)}`;
   const hs = FS.holdings ?? [];
   const active = activeHolding(FS);
   const warned = new Set((FS.incoming ?? []).map(w => `${w.holding.p},${w.holding.q}`));

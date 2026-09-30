@@ -222,3 +222,7 @@ body[data-urgency="crit"] main { box-shadow: inset 0 0 0 4px #c8412f; }
 .rel-war { color: #8f2418; font-weight: 650; } .rel-ally { color: #1f6f4a; font-weight: 650; }
 .host-row { display: flex; align-items: center; flex-wrap: wrap; }
 .sel-line { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; font-size: 13px; color: var(--ink-2); }
+.rail-standings { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.rail-standings li { display: grid; grid-template-columns: 20px auto 1fr; align-items: center; gap: 0 6px; padding: 6px 8px; border-radius: 8px; background: var(--card); }
+.rail-standings .muted { grid-column: 3; }
+.rank { font-weight: 700; color: var(--ink-2); font-variant-numeric: tabular-nums; }

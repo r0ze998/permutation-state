@@ -48,7 +48,7 @@ function artClashOf(p, q) {
   (async () => {
     for (const b of bells) {
       const r = await heraldRef.clash(p, q, b).catch(() => null);
-      if (r?.ok && r.inputs) { artClash.set(key, r.inputs); map?.invalidate(); return; }
+      if (r?.ok && r.inputs) { artClash.set(key, r.inputs); mapRef?.invalidate(); return; }
     }
   })();
   return null;
