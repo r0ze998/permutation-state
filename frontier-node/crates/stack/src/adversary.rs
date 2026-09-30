@@ -34,7 +34,7 @@
 //!
 //! | kind | keys | price (milli) | length | expected |
 //! |---|---|---|---|---|
-//! | `slots-below` | one province-bell's ArrivalSlots + ArrivalDay (armed over play) | 1,500 (< P_def 2.0) | through the close | reveals land (keepers escalate past it; a late one opens a claim) |
+//! | `slots-below` | one province-bell's ArrivalSlots + ArrivalDay (armed over play) | 1,900 (< P_def 2.0; integ-W6t review: above the keepers' third Reveal bid 1,732) | through the close | reveals land on the keepers' fourth version, ≥ `lateness_slots` after the anchor, so each opens a defence claim |
 //! | `slots-above` | the same, another bell | 3,000 (> P_def) | through the close | reveals wait; late ones routed and flagged |
 //! | `anchor` | one region's next BellAnchor | 1,000 (> P_delay 0.5) | ⅓ bell | the window stays open longer (delay only) |
 //! | `keeper-payers` | 20 of keeper A's reveal payers | 3,000 | 1 bell | the keeper draws other payers (effective N ≥ 150 − 20) |
@@ -84,7 +84,7 @@ pub fn plan(start: i64, end: i64) -> Vec<Planned> {
         .enumerate()
         .map(|(i, k)| {
             let (prio, secs) = match *k {
-                "slots-below" => (1_500, 1_500),
+                "slots-below" => (SLOTS_BELOW_MILLI, 1_500),
                 "slots-above" => (3_000, 1_500),
                 "anchor" => (1_000, 200),
                 "keeper-payers" => (3_000, 600),
@@ -126,6 +126,18 @@ pub fn plan(start: i64, end: i64) -> Vec<Planned> {
         })
         .collect()
 }
+
+/// The `slots-below` price (integ-W6t review). Keepers bid a Reveal
+/// 433, 866, 1,732, then 2,000 (P_def) milli-lamports per CU in the slots
+/// after their first version (`keeper::engine::EngineParams::bid`), and the
+/// first version goes out a slot after the anchor lands at the earliest.
+/// At 1,500 the third version won and the Reveal landed 3 slots after the
+/// anchor, one short of `lateness_slots` (4): a claim opened only when a
+/// keeper happened to start late, so `defence-pool` was skipped in 2 of 5
+/// merged-tree runs and a 3-day rehearsal re-armed 12 windows without one.
+/// At 1,900 the fourth version (2,000, still the keepers' cap) wins: the
+/// Reveal lands ≥ 4 slots after the anchor and opens a claim.
+pub const SLOTS_BELOW_MILLI: u64 = 1_900;
 
 /// Slots for `game_secs` at `scale` (a slot is 0.4 × scale game seconds).
 pub fn slots_for(game_secs: i64, scale: f64) -> u64 {
@@ -690,6 +702,16 @@ pub fn decide_holds(
             keeper_reveal_payers,
             relay_payers,
         ) {
+            // A re-armed `slots-below` holds only a bell the fleet sealed
+            // a march to (the marchbook), not the "arrivals today" guess: a
+            // window without a Reveal in it cannot open a claim.
+            Some((_, detail))
+                if h.rearm && detail.get("planned_arrivals").is_none() && now > h.plan.deadline =>
+            {
+                h.done = true;
+                out.push(HoldAction::RearmExpired { i });
+            }
+            Some((_, detail)) if h.rearm && detail.get("planned_arrivals").is_none() => {}
             Some((keys, detail)) => {
                 // The ticket hold lasts through its cohort's bells.
                 let game_secs = match detail["until_bell"].as_i64() {
@@ -815,7 +837,10 @@ mod tests {
             .filter(|x| !matches!(x.kind, "ticket" | "frontier-fund" | "defence-pool"))
             .collect();
         assert!(others.windows(2).all(|w| w[0].at < w[1].at));
-        assert!(!above_cap("slots-below", 1_500), "below the W cap 2.0");
+        assert!(
+            !above_cap("slots-below", SLOTS_BELOW_MILLI),
+            "below the W cap 2.0"
+        );
         assert!(above_cap("slots-above", 3_000));
         assert!(above_cap("anchor", 1_000), "above the D cap 0.5");
     }
@@ -1107,6 +1132,29 @@ mod tests {
         assert_eq!(d["open_claims"], 1);
     }
 
+    /// integ-W6t review: the `slots-below` price lies between the keepers'
+    /// third and fourth Reveal bids, so the Reveal it delays lands on the
+    /// fourth version: ≥ `lateness_slots` after the anchor (the first
+    /// version goes out a slot after the anchor lands at the earliest), and
+    /// still below the keepers' cap (it lands; criterion 4 is unaffected).
+    #[test]
+    fn slots_below_delays_a_reveal_past_lateness() {
+        let p = keeper_core::engine::EngineParams::default();
+        let w = |s: u64| p.bid(fclient::abi::Class::W, s);
+        let first_win = (0..20).find(|&s| w(s) > SLOTS_BELOW_MILLI).unwrap();
+        let lateness = frontier_abi::presets::M1_LOCAL_7D.lateness_slots as u64;
+        assert!(
+            1 + first_win >= lateness,
+            "lands {} slots after the anchor",
+            1 + first_win
+        );
+        assert!(SLOTS_BELOW_MILLI < p.p_def_milli && w(20) > SLOTS_BELOW_MILLI);
+        assert!(SLOTS_BELOW_MILLI < frontier_abi::presets::M1_LOCAL_7D.defence_cap_milli as u64);
+        // The old price let the third version win: one slot short.
+        let old = (0..20).find(|&s| w(s) > 1_500).unwrap();
+        assert!(1 + old < lateness);
+    }
+
     /// Runs the hold schedule of a `days`-day play over a world where only
     /// the `claim_on`-th `slots-below` window delays a Reveal enough to open
     /// a defence claim (`None`: never). Returns the actions by kind.
@@ -1194,6 +1242,72 @@ mod tests {
             .iter()
             .any(|x| x == &("defence-pool".to_string(), "fire")));
         assert!(!log.iter().any(|x| x.1 == "rearm"));
+    }
+
+    /// integ-W6t review: a re-armed `slots-below` waits for a bell the
+    /// fleet sealed a march to; the "arrivals today" guess (the rehearsal's
+    /// windows that held no Reveal) does not fire it.
+    #[test]
+    fn a_rearmed_slots_below_needs_a_planned_arrival() {
+        let ad = Addresses::new(Address::new_from_array([7; 32]), 7);
+        let mut a = empty_province(0, 0);
+        a.entries[0].state = 1;
+        let ps = vec![a];
+        let proto = plan(0, 86_400)
+            .into_iter()
+            .find(|x| x.kind == "slots-below")
+            .unwrap();
+        let mut holds = vec![HoldState {
+            plan: Planned {
+                at: 0,
+                deadline: 50_000,
+                ..proto
+            },
+            done: false,
+            ends: None,
+            rearm: true,
+        }];
+        let mut pd = Pending {
+            require: true,
+            now: 10_000,
+            arrivals_today: vec![(0, 0)],
+            ..Pending::default()
+        };
+        let act = decide_holds(
+            &mut holds,
+            &mut pd,
+            &ad,
+            &ps,
+            16,
+            4,
+            &[],
+            &[],
+            0,
+            600,
+            86_400,
+        );
+        assert!(act.is_empty(), "{act:?}");
+        pd.planned_next = vec![((0, 0), 1)];
+        let act = decide_holds(
+            &mut holds,
+            &mut pd,
+            &ad,
+            &ps,
+            16,
+            4,
+            &[],
+            &[],
+            0,
+            600,
+            86_400,
+        );
+        assert!(matches!(act[0], HoldAction::Fire { .. }), "{act:?}");
+        assert!(matches!(&act[0], HoldAction::Fire { .. }));
+        let HoldAction::Fire { .. } = &act[0] else {
+            unreachable!()
+        };
+        // The price is the new one.
+        assert_eq!(holds[0].plan.priority_milli, SLOTS_BELOW_MILLI);
     }
 
     /// integ-W6t review: without any claim the re-arms stop (cap, or no
