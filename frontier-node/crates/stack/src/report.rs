@@ -189,6 +189,12 @@ pub fn classify_failure(kind: &str, err: &str) -> (&'static str, &'static str) {
         }
         ("SettleTransit" | "SettleDeparture", "TransitState") => ("redundancy", "a/b race"),
         (_, "AlreadyDone") => ("redundancy", "duplicate"),
+        // M1 exit U4: a claim's versions pile up while `defence-pool` holds
+        // the pool and land together when it ends; the first sets
+        // `claimed = 1` and the rest are refused `NotEligible` (43). A
+        // claim refused without any landing shows in the report's
+        // ClaimDefence section (landed 0).
+        ("ClaimDefence", "NotEligible") => ("redundancy", "claim versions"),
         // Bot bugs (W6T-3 fixes them): a war target while shielded, an
         // arrival at or after end_bell.
         ("Reveal", "Shielded" | "WrongStatus") => ("waste", "bot-bug"),
@@ -1469,6 +1475,68 @@ pub fn hold_effects(txs: &[TxRecord], events: &[Value]) -> Vec<Value> {
     out
 }
 
+/// ClaimDefence in this run (M1 exit U4): every landed claim with its
+/// signature, slot, the `DEFENCE_CLAIM` record (day, slots, refund
+/// `amount`, `partial`), the fee its beneficiary paid and the
+/// beneficiary's balance after it, which keeper it was (`keepers`: label
+/// and beneficiary), and the failed ClaimDefence count. An unfunded
+/// beneficiary's claims never reach the chain, so `landed = 0` with
+/// `attempted = 0` is what the `m1-exit` season showed.
+pub fn defence_claims(txs: &[TxRecord], program: &Address, keepers: &[(String, Address)]) -> Value {
+    let (mut claims, mut failed, mut refunded) = (vec![], 0u64, 0u64);
+    let off = |n: &str| field(Kind::DEFENCE_CLAIM, n);
+    for t in txs {
+        if tag_of(t, program) != Some(Ix::ClaimDefence.tag()) {
+            continue;
+        }
+        if t.err.is_some() {
+            failed += 1;
+            continue;
+        }
+        let rec = fclient::log::bodies_from_logs(&t.logs, program)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|b| Record::decode_with(&b, &lens).ok())
+            .find(|r| r.kind == Kind::DEFENCE_CLAIM as u8);
+        let Some(r) = rec else {
+            claims.push(
+                json!({"signature": t.signature.to_string(), "slot": t.slot, "record": null}),
+            );
+            continue;
+        };
+        let kp = &r.key_payload;
+        let (Some(ob), Some(od), Some(os), Some(oa), Some(op)) = (
+            off("beneficiary"),
+            off("day"),
+            off("slots"),
+            off("amount"),
+            off("partial"),
+        ) else {
+            continue;
+        };
+        if kp.len() < op + 1 {
+            continue;
+        }
+        let ben = Address::new_from_array(kp[ob..ob + 32].try_into().expect("32"));
+        let amount = le_u64(kp, oa);
+        refunded += amount;
+        let keeper = keepers
+            .iter()
+            .find(|(_, a)| *a == ben)
+            .map(|(l, _)| l.clone());
+        let after = t
+            .post
+            .iter()
+            .find(|(a, _)| *a == ben)
+            .and_then(|(_, acc)| acc.as_ref().map(|x| x.lamports));
+        claims.push(json!({"signature": t.signature.to_string(), "slot": t.slot, "bell": r.bell,
+            "beneficiary": ben.to_string(), "keeper": keeper, "day": le_u32(kp, od), "slots": kp[os],
+            "amount": amount, "partial": kp[op] != 0, "fee": t.fee, "beneficiary_lamports_after": after}));
+    }
+    json!({"landed": claims.len(), "failed": failed, "attempted": claims.len() as u64 + failed,
+           "refunded_lamports": refunded, "claims": claims})
+}
+
 /// One §13.4 criterion decided on this run.
 fn verdict(id: &str, status: &str, why: impl Into<String>) -> Value {
     json!({"criterion": id, "status": status, "why": why.into()})
@@ -2029,6 +2097,16 @@ pub async fn report(rd: &RunDir) -> i32 {
     });
     let decided = decide(&facts);
     let holds = hold_effects(&inp.txs, &rd.events());
+    let bens: Vec<(String, Address)> = ["a", "b"]
+        .iter()
+        .filter_map(|w| {
+            st["keepers"][*w]["beneficiary"]
+                .as_str()
+                .and_then(|b| b.parse().ok())
+                .map(|b| (format!("keeper-{w}"), b))
+        })
+        .collect();
+    let defence = defence_claims(&inp.txs, &program, &bens);
     let rep = json!({
         "format": "frontier-stack-report-v1",
         "decided": decided,
@@ -2041,6 +2119,7 @@ pub async fn report(rd: &RunDir) -> i32 {
         "events": ev, "bots": {"personas": pers, "errors": bots["errors"], "bots": bots["bots"], "lifetimes": bots["lifetimes"]},
         "verify": verify, "tamper": {"ok": tamper["ok"], "total": tamper["total"], "on_run": tamper["on_run"], "secs": tamper["secs"]},
         "loads": loads, "criteria": criteria, "hold_effects": holds,
+        "defence_claims": defence,
     });
     let md = markdown(&rep);
     let _ = crate::run::write_atomic(
@@ -2382,6 +2461,32 @@ pub fn markdown(r: &Value) -> String {
             f(&h["first_write_after"])
         ));
     }
+    let dc = &r["defence_claims"];
+    m.push_str(&format!(
+        "\n### ClaimDefence (M1 exit U4)\n\nlanded {}, failed {}, refunded {} lamports\n",
+        f(&dc["landed"]),
+        f(&dc["failed"]),
+        f(&dc["refunded_lamports"])
+    ));
+    let cl = dc["claims"].as_array().cloned().unwrap_or_default();
+    if !cl.is_empty() {
+        m.push_str("\n| keeper | slot | bell | day | slots | refund | partial | fee | beneficiary after | signature |\n|---|---|---|---|---|---|---|---|---|---|\n");
+    }
+    for c in cl {
+        m.push_str(&format!(
+            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | `{}` |\n",
+            f(&c["keeper"]),
+            f(&c["slot"]),
+            f(&c["bell"]),
+            f(&c["day"]),
+            f(&c["slots"]),
+            f(&c["amount"]),
+            f(&c["partial"]),
+            f(&c["fee"]),
+            f(&c["beneficiary_lamports_after"]),
+            c["signature"].as_str().unwrap_or("")
+        ));
+    }
     m.push_str(&format!(
         "\n## §13.4 criteria (what this run decides)\n\n```json\n{}\n```\n",
         serde_json::to_string_pretty(&r["criteria"]).unwrap_or_default()
@@ -2646,6 +2751,87 @@ mod tests {
         f["play_bells"] = json!(1008);
         f["end_season"] = json!({"ok": false});
         assert_eq!(decide(&f)[0]["status"], "fail");
+    }
+
+    /// M1 exit U4: a landed ClaimDefence is listed with its signature,
+    /// slot, refund and keeper; a failed one is counted; other kinds are
+    /// not claims.
+    #[test]
+    fn defence_claims_are_listed_with_their_refund() {
+        let program = Address::new_from_array([9; 32]);
+        let a = fclient::addr::Addresses::new(program, 7);
+        let ben = fclient::Keypair::new_from_array([4; 32]);
+        let bk = fclient::Signer::pubkey(&ben);
+        let slot = fclient::ix::ClaimSlot {
+            p: 1,
+            q: 0,
+            bell: 71,
+            faction: 0,
+            i: 0,
+        };
+        let ix = fclient::ix::claim_defence(&a, bk, 0, &[slot]);
+        let budget = fclient::tx::TxBudget {
+            cu_limit: 25_500,
+            cu_price: 1,
+            loaded_limit: 1 << 20,
+            heap: None,
+        };
+        let tx = fclient::tx::build(&[ix], &budget, &[&ben], &Default::default()).unwrap();
+        let mut kp = vec![
+            0u8;
+            Kind::DEFENCE_CLAIM.spec().key_len()
+                + Kind::DEFENCE_CLAIM.spec().payload_len()
+        ];
+        kp[..32].copy_from_slice(&bk.to_bytes());
+        let o = field(Kind::DEFENCE_CLAIM, "amount").unwrap();
+        kp[o..o + 8].copy_from_slice(&12_345u64.to_le_bytes());
+        let body = Record {
+            ver: fclient::log::VERSION,
+            kind: Kind::DEFENCE_CLAIM as u8,
+            bell: 72,
+            key_payload: kp,
+            links: vec![],
+        }
+        .encode();
+        let rec = |err: Option<String>| TxRecord {
+            seq: 1,
+            slot: 5_700,
+            signature: fclient::tx::signature(&tx),
+            block_time: 0,
+            tx: fclient::tx::wire(&tx),
+            logs: fclient::log::in_frame(&program, [fclient::log::log_line(&body)]),
+            err,
+            code: None,
+            units: 24_000,
+            fee: 5_026,
+            post: vec![(
+                bk,
+                Some(fclient::ports::Account {
+                    lamports: 999_000_000,
+                    data: vec![],
+                    owner: Address::default(),
+                    executable: false,
+                }),
+            )],
+        };
+        let d = defence_claims(
+            &[rec(None), rec(Some("NotEligible".into()))],
+            &program,
+            &[("keeper-a".into(), bk)],
+        );
+        assert_eq!(d["landed"], 1, "{d}");
+        assert_eq!(d["failed"], 1, "{d}");
+        assert_eq!(d["refunded_lamports"], 12_345, "{d}");
+        let c = &d["claims"][0];
+        assert_eq!(c["keeper"], "keeper-a");
+        assert_eq!(c["slot"], 5_700);
+        assert_eq!(c["bell"], 72);
+        assert_eq!(c["amount"], 12_345);
+        assert_eq!(c["beneficiary_lamports_after"], 999_000_000);
+        assert_eq!(c["signature"], fclient::tx::signature(&tx).to_string());
+        // Another program's transactions are not claims.
+        let none = defence_claims(&[rec(None)], &Address::new_from_array([8; 32]), &[]);
+        assert_eq!(none["attempted"], 0, "{none}");
     }
 
     #[test]
@@ -3027,6 +3213,10 @@ mod tests {
             "SettleTicket: NoTicket": 31, "SettleTransit: TransitState": 1504, "SkipQuiet: NotQuiet": 2
         });
         let c = failure_classes(&w6s7);
+        assert_eq!(
+            classify_failure("ClaimDefence", "NotEligible"),
+            ("redundancy", "claim versions")
+        );
         assert_eq!(c["total"], 37_042, "{c}");
         assert_eq!(c["unclassified"], 0, "{c}");
         assert_eq!(c["by_class"]["waste"], 32_873 + 160 + 88, "{c}");
