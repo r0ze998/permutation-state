@@ -189,34 +189,29 @@ impl Report {
             // a Reveal the program took, so it is not evidence either way.
             // A late Reveal the program accepts shows as the direct route's
             // `ok`, which still reads `violated`.
+            // integ-W6t review: a late try that found the march already
+            // revealed (`AlreadyDone`, w6-s7), settled (`TransitState`) or
+            // its host gone on a new march (`CommitMismatch`, the 20× racer
+            // check) never reached the window check; it is left out.
             Persona::LateRevealer => judge(
                 tagged("late")
                     .into_iter()
                     .filter(|o| !(o.route == "keeper" && o.ok))
+                    .filter(|o| !refused_as(o, &["AlreadyDone", "TransitState", "CommitMismatch"]))
                     .collect(),
-                // integ-W6t review: `AlreadyDone` (the march was revealed
-                // in its window before the late try; w6-s7) and
-                // `TransitState` (it had already settled; the rehearsal's
-                // nightly 1) are refusals of the late Reveal too.
-                &[
-                    "WindowClosed",
-                    "LatchClosed",
-                    "Archived",
-                    "TooLate",
-                    "AlreadyDone",
-                    "TransitState",
-                ],
+                &["WindowClosed", "LatchClosed", "Archived", "TooLate"],
             ),
             // integ-W6t review: a forged SettleTransit that finds the
             // transit already settled (`TransitState`, `AlreadyDone`: a
-            // keeper settled first) never reached the account check; it
+            // keeper settled first) or not yet settleable (`TooEarly`)
+            // never reached the account check; it
             // tests nothing either way, so it is left out (the rehearsal's
             // nightly 2: 7 forged Reveals refused `BadAddress`, 2 forged
             // settles `TransitState`, read `needs-chain`).
             Persona::Forger => judge(
                 tagged("forged")
                     .into_iter()
-                    .filter(|o| !refused_as(o, &["TransitState", "AlreadyDone"]))
+                    .filter(|o| !refused_as(o, &["TransitState", "AlreadyDone", "TooEarly"]))
                     .collect(),
                 &[
                     "BadAccount",
@@ -354,6 +349,7 @@ mod tests {
     fn a_forged_settle_that_came_too_late_is_no_evidence() {
         let mut r = Report::default();
         r.record(o(Persona::Forger, "forged", false, "TransitState", 0));
+        r.record(o(Persona::Forger, "forged", false, "TooEarly", 0));
         assert_eq!(r.verdict(Persona::Forger), Verdict::Pending);
         r.record(o(Persona::Forger, "forged", false, "BadAddress", 0));
         assert_eq!(r.verdict(Persona::Forger), Verdict::Observed);
@@ -366,9 +362,11 @@ mod tests {
     #[test]
     fn late_reveal_refused_after_reveal_or_settle_is_observed() {
         let mut r = Report::default();
-        r.record(o(Persona::LateRevealer, "late", false, "WindowClosed", 0));
         r.record(o(Persona::LateRevealer, "late", false, "TransitState", 0));
         r.record(o(Persona::LateRevealer, "late", false, "AlreadyDone", 0));
+        r.record(o(Persona::LateRevealer, "late", false, "CommitMismatch", 0));
+        assert_eq!(r.verdict(Persona::LateRevealer), Verdict::Pending);
+        r.record(o(Persona::LateRevealer, "late", false, "WindowClosed", 0));
         assert_eq!(r.verdict(Persona::LateRevealer), Verdict::Observed);
         r.record(o(Persona::LateRevealer, "late", true, "", 0));
         assert_eq!(r.verdict(Persona::LateRevealer), Verdict::Violated);
