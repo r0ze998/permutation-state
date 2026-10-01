@@ -99,6 +99,7 @@ import { hostOwner } from './people/ui.mjs';
 import { leaderSvg } from './people/leaders.mjs';
 import * as glossary from './hud/glossary.mjs';
 import * as milestones from './hud/milestones.mjs';
+import * as guide from './hud/guide.mjs';
 import { battleScene, startBattle, battleLive, BATTLE_SPEEDS, PHASE } from './people/battle.mjs';
 import { decode as decodeAccount } from './fcodec.mjs';
 import { fromBase64 } from '../sdk/bytes.mjs';
@@ -187,6 +188,7 @@ export function panelMarkup(FS) {
   else parts.push(feed.renderCentre(FS.feed ?? [], FS.feedFilter ?? 'all'), bellScreen.render(FS), reportScreen.renderLinks(reportScreen.clashesFrom(FS.chronicle ?? []), L`最近の衝突`), chronicleScreen.render(FS), html`<section aria-labelledby="more-title"><h3 id="more-title">${L`設定`}</h3>
     <label class="choice"><input type="checkbox" data-act="fog" ${FS.view.fog ? '' : 'checked'}>${L`すべてを見せる（どの口座も公開されています）`}</label>
     <label class="choice"><input type="checkbox" data-act="autopan" ${FS.ui?.autoPan ? 'checked' : ''}>${L`自分に関わる戦いが決着したら、地図をそこへ動かして見せる`}</label>
+    <div class="choice-row" role="group" aria-label="${L`ガイドの強さ`}"><span>${L`ガイドの強さ`}</span>${guide.GUIDE_LEVELS.map(v => html`<button type="button" class="btn small" data-act="guide-level" data-v="${v}" aria-pressed="${guide.guideLevel(FS) === v ? 'true' : 'false'}">${guide.GUIDE_TEXT[v]()}</button>`)}</div>
     <div class="choice-row" role="group" aria-label="${L`戦いの演出`}"><span>${L`戦いの演出`}</span>${['normal', 'fast', 'off'].map(v => html`<button type="button" class="btn small" data-act="battle-fx" data-v="${v}" aria-pressed="${(FS.ui?.battleFx ?? 'normal') === v ? 'true' : 'false'}">${BATTLE_FX_TEXT[v]()}</button>`)}</div>
     <button type="button" class="btn" data-act="forget">${L`この端末からこのシーズンの鍵を消す`}</button>
     ${onboardingCard.renderRestore(FS)}
@@ -377,6 +379,37 @@ function closeMilestone() {
   if ((FS.mileQueue ?? []).length) setTimeout(showMilestone, 600);
 }
 
+// ------------------------------------------------------------------ the guide (hud/guide.mjs)
+/** The to-do pill's items at the guide's level: all, warnings only, or none. */
+function pillItems() {
+  const lv = guide.guideLevel(FS);
+  if (lv === 'off') return [];
+  const items = hud.attentionItems(FS);
+  return lv === 'warn' ? items.filter(x => guide.WARN_KINDS.has(x.kind)) : items;
+}
+let guideCache = { at: 0, value: null };
+function guideNow() {
+  const t = Date.now();
+  if (t - guideCache.at > 1000) guideCache = { at: t, value: guide.guideTarget(FS) };
+  return guideCache.value;
+}
+/** The guide card's "show me": the target in view, and for the first march the card with host and destination filled in. */
+async function guideGo() {
+  const g = guide.guideTarget(FS);
+  if (!g) return;
+  if (g.kind === 'settle') { setLens('settle'); FS.tab = 'map'; invalidate('panel', 'tabs', 'map'); return; }
+  if (g.kind === 'build') { FS.tab = 'holding'; invalidate('panel', 'tabs', 'rail'); requestAnimationFrame(() => HUD_ACTIONS['hp-jump']({ id: 'hp-build' })); return; }
+  if (g.kind === 'scout') { goToItem({ p: g.p, q: g.q, tile: g.tile, tab: 'hosts' }); return; }
+  if (g.kind === 'march') {
+    goToItem({ p: g.p, q: g.q, tile: g.tile, tab: 'map' });
+    if (g.host && FS.mode === 'play' && !FS.compose) {
+      ACTIONS.compose({ host: g.host, stay: 'map' });
+      setLens('war');
+      await ACTIONS['dest-quick']({ p: String(g.p), q: String(g.q), tile: String(g.tile) });
+    }
+  }
+}
+
 function closeResPop() { if (FS.resOpen) { FS.resOpen = null; renderHudTick(FS.chain?.now?.() ?? 0); } }
 
 function renderHudTick(now) {
@@ -406,7 +439,7 @@ function renderHudTick(now) {
   renderFeed();
   const attn = $('attn-pill');
   if (attn) {
-    const items = FS.mode === 'play' ? hud.attentionItems(FS) : [];
+    const items = FS.mode === 'play' ? pillItems() : [];
     const text = hud.attentionText(items);
     attn.hidden = !text;
     // phones show only the count (the header keeps one row: no layout shift when it appears); the full text is its name
@@ -653,6 +686,8 @@ export const HUD_ACTIONS = {
   'battle-play': d => { leaveReport(); playBattle(num(d.p), num(d.q), num(d.bell), { focus: true }); },
   'res-open': d => { FS.resOpen = FS.resOpen === d.r ? null : d.r; renderHudTick(FS.chain?.now?.() ?? 0); },
   'res-close': () => closeResPop(),
+  'ob-go': () => guideGo(),
+  'guide-level': d => { if (!guide.GUIDE_LEVELS.includes(d.v)) return; const sc = scope(); FS.ui = sc ? saveUi(uiStorage, uiKey(sc), { guide: d.v }) : { ...(FS.ui ?? {}), guide: d.v }; guideCache.at = 0; invalidate('panel', 'map', 'rail'); renderHudTick(FS.chain?.now?.() ?? 0); },
   'mile-close': () => closeMilestone(),
   'sel-clear': () => { FS.selected = null; invalidate('map', 'panel'); },
   term: d => { FS.term = FS.term === d.term || !glossary.TERMS[d.term] ? null : d.term; renderTermPop(); $('term-pop')?.querySelector('button')?.focus?.(); },
@@ -661,7 +696,7 @@ export const HUD_ACTIONS = {
   'hp-jump': d => { const el = /^hp-[a-z]+$/.test(d.id ?? '') ? $(d.id) : null; el?.scrollIntoView?.({ block: 'start', behavior: 'smooth' }); el?.querySelector?.('h4')?.focus?.(); },
   'battle-fx': d => { if (!['normal', 'fast', 'off'].includes(d.v)) return; const sc = scope(); FS.ui = sc ? saveUi(uiStorage, uiKey(sc), { battleFx: d.v }) : { ...(FS.ui ?? {}), battleFx: d.v }; invalidate('panel'); },
   attn: () => {
-    const items = hud.attentionItems(FS);
+    const items = pillItems();
     if (!items.length) return;
     FS.attnIdx = ((FS.attnIdx ?? -1) + 1) % items.length;
     goToItem(items[FS.attnIdx]);
@@ -931,6 +966,9 @@ export async function boot() {
           // incoming risk around the viewer's holdings (hud/hud.mjs attention, controller incoming warnings)
           threats: (FS.incoming ?? []).map(w => ({ p: w.holding.p, q: w.holding.q, tile: w.holding.tile, bell: w.bell })),
           threatLabel: w => L`来襲 第${fmtNum(w.bell)}鐘`,
+          // the guide's target of the current step (hud/guide.mjs; "all" only)
+          guide: guideNow(),
+          guideLabel: guide.guideLabel,
           // holdings' tiers for the far view from the roster (no province loads for a spectator's world map)
           tierOf: (p, q, site) => rosterRef?.tierOf(p, q, site) ?? null,
           // the march being composed: its route, drawn for this browser only (the destination is sealed)

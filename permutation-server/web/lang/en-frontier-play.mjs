@@ -429,4 +429,16 @@ export default {
   '民が増え、壁が伸びる。次の鐘も怠るな。': 'More hands, taller walls. Do not rest at the next bell.',
   '霧が晴れ、新しい地が見えた。誰より先に向かえ。': 'The mist lifts on new land. Be first there.',
   'シーズンの年表': 'Season timeline',
+  // ---- the guide on the map and its level (hud/guide.mjs, UI plan G1, G2)
+  'すべて': 'All', '警告だけ': 'Warnings only', 'オフ': 'Off', 'ガイドの強さ': 'Guide',
+  'この野営地へ進軍を準備する': 'Prepare a march on this camp',
+  '野営地を地図で見る': 'Show the camp on the map',
+  '建設のパネルへ': 'Go to building',
+  '拠点と軍勢を見る': 'Show the holding and hosts',
+  '入植できる地を地図で見る': 'Show free land on the map',
+  'ガイド：蛮族の野営地': 'Guide: barbarian camp',
+  'ガイド：あなたの拠点': 'Guide: your holding',
+  'ガイド：ここから探索': 'Guide: explore from here',
+  'ガイド：空き区画': 'Guide: free sites',
+  'ガイド': 'Guide',
 };

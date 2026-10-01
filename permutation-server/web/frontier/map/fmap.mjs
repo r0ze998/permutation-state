@@ -163,6 +163,30 @@ export function paintThreats(ctx, threats, zoom, label = null) {
   ctx.restore();
 }
 
+/**
+ * The guide's target (hud/guide.mjs, UI plan G1): a gold ring that breathes
+ * on the tile the current step is about, with a short label.
+ */
+export function paintGuide(ctx, g, zoom, label = '') {
+  if (!g || !Number.isInteger(g.tile)) return;
+  const t = (globalThis.performance?.now?.() ?? Date.now()) / 1000;
+  const k = 1 / zoom, pulse = 0.5 + 0.5 * Math.sin(t * 2.4);
+  const h = tileHex(g.p, g.q, g.tile), c = project(h.q, h.r);
+  const r = Math.max(RADIUS * 1.15, 20 * k) * (1 + pulse * 0.15);
+  ctx.save();
+  ctx.strokeStyle = 'rgba(16,24,22,.55)'; ctx.lineWidth = 6 * k; ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, Math.PI * 2); ctx.stroke();
+  ctx.strokeStyle = `rgba(243,213,138,${0.7 + pulse * 0.3})`; ctx.lineWidth = 3 * k; ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, Math.PI * 2); ctx.stroke();
+  // a pointer above the ring
+  ctx.fillStyle = '#f3d58a'; ctx.beginPath(); const y = c.y - r - (6 + pulse * 4) * k; ctx.moveTo(c.x, y); ctx.lineTo(c.x - 7 * k, y - 11 * k); ctx.lineTo(c.x + 7 * k, y - 11 * k); ctx.closePath(); ctx.fill();
+  if (label) {
+    ctx.font = `700 ${11 * k}px system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const tw = ctx.measureText(label).width + 12 * k, th = 17 * k, ly = y - 13 * k - th;
+    ctx.fillStyle = 'rgba(31,26,16,.94)'; ctx.beginPath(); ctx.roundRect?.(c.x - tw / 2, ly, tw, th, 8 * k); ctx.fill();
+    ctx.fillStyle = '#f3d58a'; ctx.fillText(label, c.x, ly + th / 2 + 0.5 * k);
+  }
+  ctx.restore();
+}
+
 export function paintRoute(ctx, route, zoom) {
   const pts = (route.hexes ?? []).map(h => project(h.q, h.r));
   const k = 1 / zoom;
@@ -409,6 +433,7 @@ export class FrontierMap {
     }
     if (src.route) paintRoute(ctx, src.route, z);
     if (src.threats?.length) { paintThreats(ctx, src.threats, z, src.threatLabel ?? null); this.invalidateSoon(); }
+    if (src.guide && !src.route) { paintGuide(ctx, src.guide, z, src.guideLabel?.(src.guide) ?? ''); this.invalidateSoon(); }
     this.mark(wanted > 0 && drawn === wanted ? 'ready' : 'pending');
   }
 

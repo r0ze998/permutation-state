@@ -9,6 +9,7 @@ import { L, Lh, fmtNum } from '../../lang.mjs';
 import { PIPELINE_TEXT } from '../fi18n.mjs';
 import { STEPS, onboardingState, factsOf, reportOffer, overflowProvinces } from '../onboarding.mjs';
 import { timeHtml } from './shell.mjs';
+import { guideLevel, guideTarget, goText } from '../hud/guide.mjs';
 
 const TITLE = {
   welcome: () => L`ようこそ`,
@@ -63,14 +64,17 @@ function stepItem(s) {
  * tab), else one summary line that expands. Nothing when dismissed.
  */
 export function render(FS, { open = true } = {}) {
+  if (guideLevel(FS) !== 'all') return '';
   const st = onboardingState(factsOf(FS), FS.ui?.dismissed ?? [], FS.clock ?? null);
   if (st.dismissed) return '';
+  const target = guideTarget(FS);
   const cur = st.steps.find(s => s.id === st.current);
   const n = st.steps.filter(s => s.status === 'done' || s.status === 'skipped').length;
   const total = STEPS.length - 1;
   const body = html`<p>${cur.id === 'join' ? DO.join(FS.land?.stage ?? 'none') : DO[cur.id]()}</p>
     ${cur.wait ? html`<p class="muted">${waitText(cur.wait)}</p>` : ''}
     <p>${cur.id === 'welcome' ? html`<button type="button" class="btn primary" data-act="ob-seen" data-flag="welcome">${L`わかりました`}</button>` : ''}
+      ${target && target.step === cur.id ? html`<button type="button" class="btn primary" data-act="ob-go">${goText(target)}</button>` : ''}
       ${cur.id === 'report' ? renderReportGo(FS) : GO[cur.id]?.() ?? ''}
       ${cur.id !== 'done' ? html`<button type="button" class="btn small" data-act="ob-skip" data-step="${cur.id}">${L`この手順を飛ばす`}</button>` : ''}
       <button type="button" class="btn small" data-act="ob-dismiss">${L`ガイドを閉じる`}</button></p>`;

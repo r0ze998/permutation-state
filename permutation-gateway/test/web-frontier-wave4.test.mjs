@@ -89,3 +89,16 @@ test('milestones: reached from state, the first load records quietly, later ones
   setLang('ja');
   assert.equal(M.loadSeen({ get: () => '{bad' }, 'k'), null);
 });
+
+test('the guide: levels filter, the onboarding card hides below "all"', async () => {
+  const G = await import('../../permutation-server/web/frontier/hud/guide.mjs');
+  const card = await import('../../permutation-server/web/frontier/screens/onboarding.mjs');
+  assert.equal(G.guideLevel({ ui: { guide: 'warn' } }), 'warn');
+  assert.equal(G.guideLevel({ ui: { guide: 'bogus' } }), 'all');
+  assert.ok(G.WARN_KINDS.has('incoming') && !G.WARN_KINDS.has('idle'));
+  assert.equal(String(card.render({ ui: { guide: 'off', dismissed: [] }, mode: 'play' })), '');
+  assert.equal(G.guideTarget({ ui: { guide: 'warn' }, mode: 'play' }), null);
+  setLang('en');
+  for (const k of ['march', 'build', 'scout', 'settle']) assert.doesNotMatch(G.guideLabel({ kind: k }) + G.goText({ kind: k, host: '1' }), /[぀-ヿ一-鿿]/);
+  setLang('ja');
+});
