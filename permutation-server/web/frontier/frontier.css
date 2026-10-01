@@ -197,7 +197,7 @@ legend { padding: 0 4px; font-weight: 600; }
 .rail-tile { display: grid; justify-items: center; gap: 2px; min-height: 56px; padding: 6px 2px; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--card); color: var(--ink); font: inherit; font-size: 12px; cursor: pointer; }
 .rail-tile[aria-pressed="true"] { border-color: var(--accent); background: var(--ok-bg); font-weight: 650; }
 .rail-glyph { font-size: 20px; line-height: 1; }
-.rail-todo-btn { width: 100%; min-height: 36px; padding: 6px 10px; border: 0; border-left: 4px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.rail-todo-btn { width: 100%; min-height: var(--target); padding: 6px 10px; border: 0; border-left: 4px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
 .todo-incoming .rail-todo-btn { border-left-color: #b3261e; background: #fbeae7; }
 .todo-settle .rail-todo-btn { border-left-color: #2e7d4f; }
 .todo-draft .rail-todo-btn { border-left-color: #b07a12; background: #fbf1dc; }
@@ -259,3 +259,28 @@ body[data-urgency="crit"] main { box-shadow: inset 0 0 0 4px #c8412f; }
 .doing li { padding: 4px 8px; border-left: 4px solid var(--line); border-radius: 6px; background: var(--paper); }
 .doing-battle { border-left-color: #c8412f !important; } .doing-depart, .doing-muster, .doing-walls, .doing-build, .doing-recruit { border-left-color: #b07a12 !important; }
 .doing-guard, .doing-garrison { border-left-color: #2e7d4f !important; } .doing-shield, .doing-explore { border-left-color: #3f78c2 !important; }
+/* ---- notifications (hud/feed.mjs): toasts over the map's top right, the list in More */
+.feed { position: absolute; top: 8px; right: 60px; z-index: 5; display: grid; gap: 6px; width: min(360px, calc(100% - 76px)); pointer-events: none; }
+.feed:empty { display: none; }
+.toast { pointer-events: auto; display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; align-items: start; padding: 8px 10px; border-radius: 12px; background: rgba(255,250,240,.97); box-shadow: 0 2px 10px rgba(0,0,0,.18); border-left: 5px solid var(--line); font-size: 13px; }
+.toast-icon { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 50%; background: var(--ink); color: #fffaf0; font-weight: 700; font-size: 13px; flex: none; }
+.toast-text { display: grid; gap: 1px; }
+.toast-kind { font-size: 12px; font-weight: 700; color: var(--ink-2); }
+.toast-acts { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; }
+.toast-x { min-width: var(--target); font-size: 16px !important; }
+.toast-battle { border-left-color: #c8412f; } .toast-battle .toast-icon { background: #c8412f; }
+.toast-incoming { border-left-color: #b3261e; } .toast-incoming .toast-icon { background: #b3261e; }
+.toast-march { border-left-color: #b07a12; } .toast-march .toast-icon { background: #b07a12; }
+.toast-build, .toast-holding { border-left-color: #2e7d4f; } .toast-build .toast-icon, .toast-holding .toast-icon { background: #2e7d4f; }
+.toast-summary { border-left-color: var(--accent); } .toast-summary .toast-icon { background: var(--accent); }
+.feed-filters { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 8px; }
+.feed-list li { display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; align-items: start; padding: 6px 8px; border-radius: 8px; background: var(--card); }
+@media (min-width: 760px) { .feed { grid-column: 2; grid-row: 1; align-self: start; justify-self: end; position: relative; margin: 8px 60px 0 0; } }
+@media (max-width: 759px) { .feed { top: 8px; left: 8px; right: 60px; width: auto; } }
+/* the rail's holdings and to-do list on screens without the rail */
+.rail-mini { margin: 4px 0 8px; border: 1px solid var(--line-soft); border-radius: 12px; padding: 0 10px 8px; background: var(--card); }
+.rail-mini > summary { font-weight: 650; }
+@media (min-width: 1100px) { .rail-mini { display: none; } }
+/* to-do kinds carry a word as well as a colour */
+.todo-idle .rail-todo-btn { border-left-color: #2e7d4f; } .todo-build .rail-todo-btn, .todo-muster .rail-todo-btn { border-left-color: #b07a12; } .todo-dormant .rail-todo-btn { border-left-color: #8a8a80; }
+.rail-clock { grid-column: 1 / -1; font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; }

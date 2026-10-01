@@ -56,7 +56,7 @@ test('attention: incoming first, then settlements, the unsent draft, full stores
   assert.deepEqual([items[1].p, items[1].q, items[1].tab], [1, 1, 'marches']);
   assert.equal(items[3].tab, 'holding');
   setLang('ja');
-  assert.equal(hud.attentionText(items), '要対応 4');
+  assert.equal(hud.attentionText(items), '来襲 第44鐘 · ほか 3', 'the first item named, then how many more');
   assert.equal(hud.attentionText([]), null);
   FS.compose.sending = true;
   assert.ok(!hud.attentionItems(FS).some(x => x.kind === 'draft'), 'a march being sent is not a draft');
@@ -132,4 +132,31 @@ test('wantProvince: at most 12 in flight, slots free when a load ends, a stale c
   assert.equal(CTRL.wantProvince(3, 0, () => {}, { now: CTRL.WANT_REFRESH_MS + 1, bell: 8 }), true, 'stale: fetched again');
   pending.splice(0).forEach(f => f());
   STORE.provinces = new Map();
+});
+
+import * as FEED from '../../permutation-server/web/frontier/hud/feed.mjs';
+
+test('feed: changes between two polls become notifications; a turned bell folds into a summary; nothing at first sight', () => {
+  setLang('ja');
+  const base = { nowBell: 40, chain: { now: () => 0 }, holdings: [{ p: 2, q: 0, site: 3, state: 1, tier: 0, queue: [] }], incoming: [], chronicle: [],
+    marches: [{ entry: { host: '7', arriveBell: 41 }, dest: { p: 3, q: 0 }, facts: { pipeline: 'open', slotPresent: false, settleReady: false } }] };
+  const s0 = FEED.snapshot(base);
+  assert.deepEqual(FEED.diffFeed(null, s0), [], 'the first snapshot is not news');
+  const next = { ...base, nowBell: 41, holdings: [{ ...base.holdings[0], state: 2, queue: [{ kind: 1, doneAt: 1n }] }], chain: { now: () => 10 },
+    incoming: [{ bell: 43, holding: { p: 2, q: 0 } }], chronicle: [{ record: { name: 'CLASH', p: 2, q: 0, bell: 40 } }],
+    marches: [{ entry: { host: '7', arriveBell: 41 }, dest: { p: 3, q: 0 }, facts: { pipeline: 'resolved', slotPresent: true, settleReady: true } }] };
+  const items = FEED.diffFeed(s0, FEED.snapshot(next));
+  assert.deepEqual(items.map(x => x.kind).sort(), ['battle', 'battle', 'build', 'holding', 'incoming', 'march', 'march']);
+  const res = items.find(x => x.id.startsWith('rs:'));
+  assert.deepEqual(res.battle, { p: 3, q: 0, bell: 41 }, 'a resolved march offers its battle');
+  let feed = FEED.pushFeed([], items, 1000);
+  feed = FEED.pushFeed(feed, items, 2000);
+  assert.equal(feed.length, items.length, 'no duplicates');
+  const sum = FEED.bellSummary(feed.map(x => ({ ...x, bell: 41 })), 41);
+  assert.match(sum.text, /^第41鐘のまとめ：戦い 2 · 進軍の知らせ 2 · 来襲の恐れ 1 · 完成 1 · 拠点 1$/);
+  assert.equal(FEED.bellSummary([], 41), null);
+  const toasts = [FEED.renderToasts(feed, { now: 1500 })].flat(Infinity).map(String).join('');
+  assert.equal((toasts.match(/class="toast /g) ?? []).length, FEED.TOAST_MAX);
+  assert.match(toasts, /data-act="feed-dismiss"/);
+  assert.equal([FEED.renderToasts(feed, { now: 1000 + FEED.TOAST_MS + 1 })].flat(Infinity).join(''), '', 'toasts expire into the list');
 });

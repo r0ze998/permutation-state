@@ -21,7 +21,7 @@ import { FrontierMap } from './map/fmap.mjs';
 import { SEASON_STATUS_TEXT, clientText } from './fi18n.mjs';
 import { L, fmtNum, mountLangToggle } from '../lang.mjs';
 import { toHex } from '../sdk/bytes.mjs';
-import { html, setHtml } from '../util.mjs';
+import { html, raw, setHtml } from '../util.mjs';
 import { ACTIONS, FORMS, bind, startPlay, wantProvince } from './controller.mjs';
 import { renderTabs, renderNotice, factionChip, quotaChip, mountSheet } from './screens/shell.mjs';
 import { createTerrain } from './map/terrain.mjs';
@@ -87,6 +87,7 @@ import { RETREAT_CHOICES, retreatBps } from './fmarch.mjs';
 import { uiKey, uiStorage, loadUi, saveUi } from './fui.mjs';
 import * as hud from './hud/hud.mjs';
 import * as inspect from './hud/inspect.mjs';
+import * as feed from './hud/feed.mjs';
 import { createRoster } from './people/roster.mjs';
 import * as scene from './people/scene.mjs';
 import { activityText } from './people/activity.mjs';
@@ -156,6 +157,11 @@ export function panelMarkup(FS) {
   const parts = [renderNotice(FS.notice)];
   if (FS.practice) return [...parts, practiceScreen.render(FS.practice, { kernelError: FS.practiceError ?? null, closable: true })];
   if (FS.report) return [...parts, reportScreen.render(FS, mineOf(FS.holdings))];
+  // Phones and tablets (no left rail below 1100 px): the rail's holdings and to-do list, folded.
+  if (tab === 'map' && (FS.holdings ?? []).length) {
+    const n = hud.attentionItems(FS).length;
+    parts.push(html`<details class="rail-mini" ${raw(n ? 'open' : '')}><summary>${n ? L`拠点と次の鐘までにやること（${fmtNum(n)}）` : L`拠点と次の鐘までにやること`}</summary>${hud.renderRail(FS)}</details>`);
+  }
   // The selection first on the map tab (the player just chose it), then the guide.
   if (tab === 'map' && FS.selected) parts.push(inspect.render(FS, terrainRef, mapRef?.art?.activities ?? null));
   parts.push(onboardingCard.render(FS, { open: tab === 'map' }));
@@ -166,8 +172,9 @@ export function panelMarkup(FS) {
   } else if (tab === 'holding') parts.push(holdingScreen.render(FS));
   else if (tab === 'hosts') parts.push(hostScreen.render(FS), exploreScreen.render(FS));
   else if (tab === 'marches') parts.push(marchScreen.render(FS), trackerScreen.render(FS), reportScreen.renderLinks(myReports(FS), L`あなたの衝突の報告`), incomingScreen.render(FS));
-  else parts.push(bellScreen.render(FS), reportScreen.renderLinks(reportScreen.clashesFrom(FS.chronicle ?? []), L`最近の衝突`), chronicleScreen.render(FS), html`<section aria-labelledby="more-title"><h3 id="more-title">${L`設定`}</h3>
+  else parts.push(feed.renderCentre(FS.feed ?? [], FS.feedFilter ?? 'all'), bellScreen.render(FS), reportScreen.renderLinks(reportScreen.clashesFrom(FS.chronicle ?? []), L`最近の衝突`), chronicleScreen.render(FS), html`<section aria-labelledby="more-title"><h3 id="more-title">${L`設定`}</h3>
     <label class="choice"><input type="checkbox" data-act="fog" ${FS.view.fog ? '' : 'checked'}>${L`すべてを見せる（どの口座も公開されています）`}</label>
+    <label class="choice"><input type="checkbox" data-act="autopan" ${FS.ui?.autoPan ? 'checked' : ''}>${L`自分に関わる戦いが決着したら、地図をそこへ動かして見せる`}</label>
     <button type="button" class="btn" data-act="forget">${L`この端末からこのシーズンの鍵を消す`}</button>
     ${onboardingCard.renderRestore(FS)}
     <p><button type="button" class="btn" data-act="practice-open">${L`練習モードを開く`}</button></p>
@@ -287,12 +294,43 @@ function renderHudTick(now) {
     strip.hidden = !tokens.length;
     setHtmlIfChanged(strip, hud.renderStrip(tokens));
   }
+  tickFeed();
+  renderFeed();
   const attn = $('attn-pill');
   if (attn) {
     const text = FS.mode === 'play' ? hud.attentionText(hud.attentionItems(FS)) : null;
     attn.hidden = !text;
     if (text && attn.textContent !== text) attn.textContent = text;
   }
+}
+
+// ------------------------------------------------------------------ notifications (hud/feed.mjs)
+let feedPrev = null;
+let feedBell = null;
+/** Compare what the page knows with the last tick's; new changes become notifications; a new bell folds the last one into a summary. */
+function tickFeed() {
+  if (FS.mode !== 'play' || !FS.citizen || !FS.chronicle) return;
+  const snap = feed.snapshot(FS);
+  const fresh = feed.diffFeed(feedPrev, snap);
+  feedPrev = snap;
+  let items = fresh;
+  if (feedBell !== null && snap.bell !== null && snap.bell > feedBell) {
+    const sum = feed.bellSummary(FS.feed ?? [], feedBell);
+    if (sum) items = [sum, ...items];
+  }
+  if (snap.bell !== null) feedBell = snap.bell;
+  if (!items.length) return;
+  FS.feed = feed.pushFeed(FS.feed ?? [], items);
+  // Civ VII's "pan to combat", opt-in: the newest battle of the viewer's plays where it happened
+  const b = fresh.find(x => x.battle);
+  if (b && FS.ui?.autoPan) playBattle(b.battle.p, b.battle.q, b.battle.bell, { focus: true });
+  invalidate('panel');
+}
+
+function renderFeed() {
+  const el = $('feed');
+  if (!el) return;
+  setHtmlIfChanged(el, feed.renderToasts(FS.feed ?? [], { dismissed: FS.feedDismissed ?? new Set() }));
 }
 
 function renderRail() {
@@ -353,14 +391,26 @@ function autoBattles() {
 /** Move the map to an attention item and open its tab. */
 function goToItem(x) {
   if (!x) return;
-  mapRef?.focus(x.p, x.q, 0.6);
-  FS.selected = { kind: 'province', p: x.p, q: x.q };
+  // the item's holding becomes the active one (its tab then shows that holding)
+  if (x.holding && FS.holdings?.includes(x.holding)) FS.activeHolding = FS.holdings.indexOf(x.holding);
+  if (Number.isInteger(x.tile)) {
+    const h = tileHex(x.p, x.q, x.tile), c = project(h.q, h.r);
+    mapRef?.setView({ x: c.x, y: c.y, zoom: 1.0 });
+    FS.selected = { kind: 'tile', p: x.p, q: x.q, idx: x.tile };
+  } else {
+    mapRef?.focus(x.p, x.q, 0.6);
+    FS.selected = { kind: 'province', p: x.p, q: x.q };
+  }
   if (FS.mode === 'play' && x.tab) FS.tab = x.tab;
   invalidate('map', 'panel', 'tabs', 'rail');
 }
 
 /** The HUD's actions (data-act): cycle the attention items, jump to one, choose the active holding. */
 export const HUD_ACTIONS = {
+  'feed-go': d => goToItem((FS.feed ?? []).find(x => x.id === d.id)),
+  'feed-dismiss': d => { FS.feedDismissed = new Set([...(FS.feedDismissed ?? []), d.id]); renderFeed(); },
+  'feed-filter': d => { FS.feedFilter = feed.FEED_FILTERS.includes(d.f) ? d.f : 'all'; invalidate('panel'); },
+  autopan: () => { const sc = scope(); const v = !FS.ui?.autoPan; FS.ui = sc ? saveUi(uiStorage, uiKey(sc), { autoPan: v }) : { ...(FS.ui ?? {}), autoPan: v }; invalidate('panel'); },
   'battle-play': d => playBattle(num(d.p), num(d.q), num(d.bell), { focus: true }),
   attn: () => {
     const items = hud.attentionItems(FS);

@@ -16,7 +16,9 @@
 import { html, raw } from '../../util.mjs';
 import { L, fmtNum } from '../../lang.mjs';
 import { RESOURCES, RESOURCE_ORDER, TIERS, factionName } from '../fi18n.mjs';
-import { storesAt } from '../fland.mjs';
+import { storesAt, holdingFacts, SETTLER } from '../fland.mjs';
+import { hostRows } from '../screens/host.mjs';
+import { DEPART_STAMINA } from '../fmarch.mjs';
 import { bellChip, countdown, BELL_SECS } from '../clock.mjs';
 import { swatch } from '../screens/shell.mjs';
 import { personChip, ownTag, highlights, renderHighlights } from '../people/ui.mjs';
@@ -85,25 +87,49 @@ export function resourceTitle(r) {
 export function attentionItems(FS) {
   const out = [];
   for (const w of FS.incoming ?? []) {
-    out.push({ kind: 'incoming', p: w.holding.p, q: w.holding.q, tab: 'marches', bell: w.bell, text: L`第${fmtNum(w.bell)}鐘に州 ${w.holding.p},${w.holding.q} へ敵が来るかもしれません` });
+    out.push({ kind: 'incoming', p: w.holding.p, q: w.holding.q, tab: 'marches', bell: w.bell, short: L`来襲 第${fmtNum(w.bell)}鐘`, text: L`第${fmtNum(w.bell)}鐘に州 ${w.holding.p},${w.holding.q} へ敵が来るかもしれません` });
   }
   for (const m of FS.marches ?? []) {
-    if (m.facts?.settleReady && m.dest) out.push({ kind: 'settle', p: m.dest.p, q: m.dest.q, tab: 'marches', text: L`州 ${m.dest.p},${m.dest.q} の進軍を精算できます` });
+    if (m.facts?.settleReady && m.dest) out.push({ kind: 'settle', p: m.dest.p, q: m.dest.q, tab: 'marches', short: L`精算できる進軍`, text: L`州 ${m.dest.p},${m.dest.q} の進軍を精算できます` });
   }
   if (FS.compose && !FS.compose.sending) {
     const o = FS.compose.origin;
-    out.push({ kind: 'draft', p: o.p, q: o.q, tab: 'marches', text: L`編成中の進軍がまだ送られていません` });
+    out.push({ kind: 'draft', p: o.p, q: o.q, tab: 'marches', short: L`進軍が未送信`, text: L`編成中の進軍がまだ送られていません` });
   }
-  const h = activeHolding(FS);
-  if (h) {
-    const full = resourceModel(h, FS.chain?.now() ?? 0).filter(r => r.state === 'full');
-    if (full.length) out.push({ kind: 'full', p: h.p, q: h.q, tab: 'holding', text: L`${full.map(r => r.name).join(' / ')}が満杯です。収穫するか使いましょう` });
+  if (FS.exploreSeedReady) {
+    const h0 = activeHolding(FS);
+    if (h0) out.push({ kind: 'explore', p: h0.p, q: h0.q, tab: 'hosts', short: L`探索の結果`, text: L`探索の結果を確定できます` });
+  }
+  const now = FS.chain?.now() ?? 0, bell = FS.nowBell ?? 0;
+  // hosts ready to march: in the roster, rested, not on the road, nothing pending
+  const idle = FS.holdings?.length ? hostRows(FS).filter(r => r.state === 1 && !r.inTransit && !r.pending && r.stamina >= DEPART_STAMINA && !(r.readyBell > bell)) : [];
+  if (idle.length) out.push({ kind: 'idle', p: idle[0].p, q: idle[0].q, tile: idle[0].tile, host: String(idle[0].id), tab: 'hosts', n: idle.length, short: L`出陣できる軍勢 ${fmtNum(idle.length)}`, text: L`出陣できる軍勢が ${fmtNum(idle.length)} あります` });
+  for (const h of FS.holdings ?? []) {
+    const full = resourceModel(h, now).filter(r => r.state === 'full');
+    const facts = FS.season ? holdingFacts(h, FS.season, now) : null;
+    if (!facts) { if (full.length) out.push({ kind: 'full', p: h.p, q: h.q, tab: 'holding', holding: h, short: L`満杯 ${fmtNum(full.length)}`, text: L`${full.map(r => r.name).join(' / ')}が満杯です。収穫するか使いましょう` }); continue; }
+    if (facts.final && !facts.queue.some(q => q.doneIn > 0)) out.push({ kind: 'build', p: h.p, q: h.q, tab: 'holding', holding: h, short: L`建設の列が空`, text: L`州 ${h.p},${h.q} の建設の列が空いています` });
+    const musterable = facts.reserve.filter(r => r.unit !== SETTLER).reduce((a, r) => a + r.troops, 0);
+    if (facts.final && musterable >= 100) out.push({ kind: 'muster', p: h.p, q: h.q, tab: 'holding', holding: h, short: L`編成できる兵 ${fmtNum(musterable)}`, text: L`控えの兵 ${fmtNum(musterable)} を軍勢に編成できます` });
+    if (facts.dormantIn > 0 && facts.dormantIn < DORMANT_WARN_SECS) out.push({ kind: 'dormant', p: h.p, q: h.q, tab: 'holding', holding: h, short: L`休眠まで ${span(facts.dormantIn)}`, text: L`州 ${h.p},${h.q} の拠点はあと ${span(facts.dormantIn)} で休眠します。何か操作しましょう` });
+    if (full.length) out.push({ kind: 'full', p: h.p, q: h.q, tab: 'holding', holding: h, short: L`満杯 ${fmtNum(full.length)}`, text: L`${full.map(r => r.name).join(' / ')}が満杯です。収穫するか使いましょう` });
   }
   return out;
 }
 
-/** The pill's text: "要対応 3" / "Needs you 3"; null when nothing needs the player. */
-export const attentionText = items => (items.length ? L`要対応 ${fmtNum(items.length)}` : null);
+/** A holding this close to dormancy (seconds) is an attention item. */
+export const DORMANT_WARN_SECS = 6 * 3600;
+
+/**
+ * The pill's text (Civ's end-turn button names the next blocker): the first
+ * item's short label, then how many more — "来襲 第1,040鐘 · ほか 2";
+ * null when nothing needs the player.
+ */
+export function attentionText(items) {
+  if (!items.length) return null;
+  const first = items[0].short ?? items[0].text;
+  return items.length > 1 ? L`${first} · ほか ${fmtNum(items.length - 1)}` : first;
+}
 
 // ------------------------------------------------------------------ markup
 export function renderStrip(tokens) {
@@ -114,12 +140,28 @@ export function renderStrip(tokens) {
   </span>`);
 }
 
+/**
+ * A holding's clocks for the rail (Civ's city banner timers): the next
+ * building done, the first store full, dormancy when it is near.
+ */
+export function holdingCountdowns(FS, h) {
+  const now = FS.chain?.now?.() ?? 0;
+  const out = [];
+  const facts = FS.season ? holdingFacts(h, FS.season, now) : null;
+  const next = facts?.queue.filter(q => q.doneIn > 0).sort((a, b) => a.doneIn - b.doneIn)[0];
+  if (next) out.push(L`建設 あと ${span(next.doneIn)}`);
+  const full = resourceModel(h, now).filter(r => r.fullIn > 0).sort((a, b) => a.fullIn - b.fullIn)[0];
+  if (full && full.fullIn < 24 * 3600) out.push(L`${full.name} 満杯まで ${span(full.fullIn)}`);
+  if (facts && facts.dormantIn > 0 && facts.dormantIn < DORMANT_WARN_SECS) out.push(L`休眠まで ${span(facts.dormantIn)}`);
+  return out;
+}
+
 /** The action tiles: each opens a tab of the panel (Eternum's Build · Military · Transfer row). */
 const TILES = [
   { tab: 'holding', glyph: '⌂', text: () => L`拠点` },
   { tab: 'hosts', glyph: '⚔', text: () => L`軍勢` },
   { tab: 'marches', glyph: '➚', text: () => L`進軍` },
-  { tab: 'more', glyph: '☷', text: () => L`記録` },
+  { tab: 'more', glyph: '☷', text: () => L`その他` },
 ];
 
 /**
@@ -162,6 +204,7 @@ export function renderRail(FS) {
         <span class="rail-tier">${TIERS[h.tier] ?? h.tier}</span>
         <span class="rail-where">${L`州 ${h.p},${h.q} 区画 ${h.site + 1}`}</span>
         ${warned.has(`${h.p},${h.q}`) ? html`<span class="rail-warn">${L`来襲の恐れ`}</span>` : ''}
+        ${(() => { const c = holdingCountdowns(FS, h); return c.length ? html`<span class="rail-clock">${c.join(' · ')}</span>` : ''; })()}
       </button></li>`)}</ul>`
     : html`<p class="muted">${FS.mode === 'play' ? L`拠点はまだありません。地図の「参加」から始めます。` : L`拠点はありません`}</p>`;
   const tiles = FS.mode === 'play' && hs.length
