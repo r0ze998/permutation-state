@@ -181,11 +181,41 @@ export function modePanel(FS) {
   return [FS.selected ? inspect.render(FS, terrainRef, mapRef?.art?.activities ?? null) : '', spectateScreen.render(FS)];
 }
 
+/**
+ * Re-render a panel without losing what the player was doing: the values
+ * typed into its forms (inputs whose value differs from the markup's), the
+ * focused field and the scroll position come back after the new markup.
+ */
+export function keepState(el, render, scroller = el) {
+  if (!el?.querySelectorAll) { render(); return; }
+  const keyOf = x => { const f = x.closest('form[data-form]')?.dataset.form ?? x.closest('[data-bind]')?.dataset.bind ?? ''; return `${f}|${x.name || x.dataset.bind || x.id}`; };
+  const typed = new Map();
+  for (const x of el.querySelectorAll('input, select, textarea')) {
+    if (x.type === 'checkbox' || x.type === 'radio') continue;
+    if (x.value !== (x.defaultValue ?? x.value)) typed.set(keyOf(x), x.value);
+  }
+  const active = globalThis.document?.activeElement;
+  const focusKey = active && el.contains(active) && active.matches?.('input, select, textarea') ? keyOf(active) : null;
+  const top = scroller?.scrollTop ?? 0;
+  render();
+  if (typed.size || focusKey) for (const x of el.querySelectorAll('input, select, textarea')) {
+    const k = keyOf(x);
+    if (typed.has(k) && x.type !== 'checkbox' && x.type !== 'radio') x.value = typed.get(k);
+    if (k === focusKey) x.focus({ preventScroll: true });
+  }
+  if (scroller && scroller.scrollTop !== top) scroller.scrollTop = top;
+}
+
+let lastPanelView = null;
 function renderPlay() {
   const tabs = $('tabs');
   if (tabs) setHtml(tabs, renderTabs(FS));
   const body = $('panel-body');
-  if (body) setHtml(body, panelMarkup(FS));
+  // the same view keeps its scroll; a new tab, report or practice run starts at the top
+  const view = `${FS.tab ?? 'map'}|${FS.report ? 'r' : ''}|${FS.practice ? 'p' : ''}`;
+  const same = view === lastPanelView;
+  lastPanelView = view;
+  if (body) keepState(body, () => setHtml(body, panelMarkup(FS)), same ? $('panel') : null);
   const title = $('panel-title');
   const sub = FS.practice ? L`練習モード` : FS.report ? L`衝突の報告` : null;
   if (title) setText('panel-title', sub ?? { map: L`地図`, holding: L`拠点`, hosts: L`軍勢`, marches: L`進軍`, more: L`その他` }[FS.tab ?? 'map'] ?? L`シーズン`);
@@ -583,7 +613,7 @@ export async function boot() {
           clashOf: ART_ON ? artClashOf : undefined,
           pendingOf: ART_ON ? (p, q) => FS.provinces.get(`${p},${q}`)?.inputs ?? null : undefined,
           people: ART_ON && FS.mode !== 'practice' ? peopleSource : undefined,
-          provinceOf: ART_ON ? (p, q) => { const env = FS.provinces.get(`${p},${q}`); if (!env) wantProvince(p, q, () => map?.invalidate()); return env?.province ?? null; } : undefined };
+          provinceOf: ART_ON ? (p, q) => { wantProvince(p, q, () => map?.invalidate()); return FS.provinces.get(`${p},${q}`)?.province ?? null; } : undefined };
       },
       onSelect: hit => {
         FS.selected = hit;

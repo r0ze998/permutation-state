@@ -4,6 +4,7 @@
 // later). The first three explorations of a citizen always give Works; the
 // rest do with chance ½ (M1 has no goods). Keepers settle the result; the
 // page offers the settle button once the seed exists.
+import { activeHolding } from '../fstate.mjs';
 import { html, raw } from '../../util.mjs';
 import { L, Lh, fmtNum } from '../../lang.mjs';
 import { exploreTargets, ticketTimes } from '../fland.mjs';
@@ -13,7 +14,7 @@ import { timeHtml } from './shell.mjs';
 export const toggleTile = (chosen, tile) => (chosen.includes(tile) ? chosen.filter(t => t !== tile) : chosen.length < 2 ? [...chosen, tile] : chosen);
 
 export function render(FS) {
-  const h = FS.holdings?.[0];
+  const h = activeHolding(FS);
   const rec = h?.explore;
   const floor = FS.citizen?.exploresFloorLeft ?? 0;
   const pending = rec && rec.state !== 0;
@@ -27,7 +28,7 @@ export function render(FS) {
       <button type="button" class="btn" data-act="settle-explore" ${raw(FS.exploreSeedReady ? '' : 'disabled')}>${L`結果を確定する`}</button>
       <p class="muted">${L`ふつうはキーパーが確定します。`}</p>` : ''}
     ${draft?.host && !pending ? html`<p>${L`隣のマスを2つまで選んでください`}</p>
-      <ul class="list">${targets.map(t => html`<li><button type="button" class="btn" data-act="explore-tile" data-tile="${t}" aria-pressed="${draft.tiles.includes(t) ? 'true' : 'false'}">${L`マス ${fmtNum(t)}`}</button></li>`)}</ul>
+      <ul class="list">${targets.map(t => html`<li><button type="button" class="btn" data-act="explore-tile" data-tile="${t}" aria-pressed="${draft.tiles.includes(t) ? 'true' : 'false'}">${L`マス ${fmtNum(t + 1)}`}</button></li>`)}</ul>
       ${targets.length ? '' : html`<p class="muted">${L`隣に探索できるマスがありません`}</p>`}
       <button type="button" class="btn primary" data-act="explore-send" ${raw(draft.tiles.length ? '' : 'disabled')}>${L`探索に出す`}</button>` : ''}
     ${!draft?.host && !pending ? html`<p class="muted">${L`「軍勢」で斥候の軍勢の「探索」を押してください。`}</p>` : ''}

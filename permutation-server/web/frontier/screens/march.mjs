@@ -4,6 +4,7 @@
 // from a list whose first choice is "never" (0), exactly the three tip
 // presets (no zero tip), the costs, and the four-step send indicator
 // (sealing, saved on this device, sent, on chain).
+import { activeHolding } from '../fstate.mjs';
 import { html, raw } from '../../util.mjs';
 import { L, fmtNum } from '../../lang.mjs';
 import { STANCES as STANCE_TEXT, UNITS, clientText, failureText } from '../fi18n.mjs';
@@ -48,7 +49,7 @@ export function composerChoices(FS) {
 /** The march under composition as checkMarch reads it. */
 export function composerMarch(FS) {
   const c = FS.compose ?? {};
-  const h = FS.holdings?.[0];
+  const h = activeHolding(FS);
   const env = h ? FS.provinces?.get(`${h.p},${h.q}`) : null;
   const host = c.host ?? null;
   return {
@@ -73,9 +74,9 @@ export function render(FS) {
   return html`<section aria-labelledby="march-title"><h3 id="march-title">${L`進軍：${unit} ${fmtNum(m.host.troops)}`}</h3>
     <fieldset><legend>${L`1. 行き先`}</legend>
       <p class="sealed"><span class="lock" aria-hidden="true"></span>${L`行き先は封の中にあり、ほかの人には到着の鐘しか見えません（到着の鐘が始まるまで）。`}</p>
-      ${c.dest ? html`<p><strong>${L`州 ${c.dest.p},${c.dest.q} のマス ${c.dest.tile}`}</strong></p>` : ''}
+      ${c.dest ? html`<p><strong>${L`州 ${c.dest.p},${c.dest.q} のマス ${c.dest.tile + 1}`}</strong></p>` : ''}
       <button type="button" class="btn" data-act="dest-from-map" ${raw(FS.selected?.idx !== undefined ? '' : 'disabled')}>${L`地図で選んだマスにする`}</button>
-      ${(c.quick ?? []).length ? html`<ul class="list">${c.quick.map(q => html`<li><button type="button" class="btn" data-act="dest-quick" data-p="${q.p}" data-q="${q.q}" data-tile="${q.tile}">${q.kind === 'camp' ? L`蛮族の野営地 州 ${q.p},${q.q}` : L`州 ${q.p},${q.q} のマス ${q.tile}`}</button></li>`)}</ul>` : ''}
+      ${(c.quick ?? []).length ? html`<ul class="list">${c.quick.map(q => html`<li><button type="button" class="btn" data-act="dest-quick" data-p="${q.p}" data-q="${q.q}" data-tile="${q.tile}">${q.kind === 'camp' ? L`蛮族の野営地 州 ${q.p},${q.q}` : L`州 ${q.p},${q.q} のマス ${q.tile + 1}`}</button></li>`)}</ul>` : ''}
       <form class="inline" data-form="dest"><label>P<input name="p" type="number" inputmode="numeric" value="${c.dest?.p ?? ''}"></label><label>Q<input name="q" type="number" inputmode="numeric" value="${c.dest?.q ?? ''}"></label>
         <label>${L`マス`}<input name="tile" type="number" min="0" max="60" inputmode="numeric" value="${c.dest?.tile ?? ''}"></label><button type="submit" class="btn">${L`決める`}</button></form>
     </fieldset>

@@ -13,6 +13,7 @@
 // Also here: the adjacent-wedge ticket offer (contract §5.9 FileTicket: when
 // the own wedge has no open site left, the program accepts sites in the
 // adjacent wedges' outermost open ring; integ-W3 deferred item K11).
+import { activeHolding } from './fstate.mjs';
 import { SCOUT, CITIZEN, freeByWedge, homeWedge, ticketTimes, baseProduction } from './fland.mjs';
 import { ringOf, wedgeOf, provinceIndex } from './fgeo.mjs';
 
@@ -36,7 +37,7 @@ const NO_TICKET = 0xffffffff;
  * controller.mjs): `{citizen, stage, holding, scoutHost, marches}`.
  */
 export function factsOf(FS) {
-  const holding = FS.holdings?.[0] ?? null;
+  const holding = activeHolding(FS) ?? null;
   const home = holding ? FS.provinces?.get?.(`${holding.p},${holding.q}`)?.province ?? null : null;
   const scoutHost = !!home && (home.entries ?? []).some(e => e.state >= 1 && e.state <= 3 && e.unit === SCOUT && e.faction === FS.citizen?.faction);
   return { citizen: FS.citizen ?? null, stage: FS.land?.stage ?? (FS.citizen ? 'joined' : 'none'), holding, scoutHost, marches: FS.marches ?? [] };

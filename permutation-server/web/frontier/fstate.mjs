@@ -32,6 +32,13 @@ export const FS = {
   stale: { behind: null, stale: false },
 };
 
+/** The holding the play screens act on: the one chosen in the rail (FS.activeHolding), else the first. */
+export function activeHolding(fs = FS) {
+  const hs = fs.holdings ?? [];
+  const i = Number.isInteger(fs.activeHolding) && fs.activeHolding >= 0 && fs.activeHolding < hs.length ? fs.activeHolding : 0;
+  return hs[i] ?? null;
+}
+
 const renderers = new Map();
 const dirty = new Set();
 let scheduled = false;

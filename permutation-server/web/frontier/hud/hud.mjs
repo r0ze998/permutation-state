@@ -28,12 +28,8 @@ export const URGENCY = Object.freeze({ warn: 120, crit: 30 });
 /** A store this close to its cap (seconds of production) reads as "near full". */
 export const NEAR_FULL_SECS = 3600;
 
-/** The holding the HUD shows: the chosen one (FS.activeHolding), else the first. */
-export function activeHolding(FS) {
-  const hs = FS.holdings ?? [];
-  const i = Number.isInteger(FS.activeHolding) && FS.activeHolding < hs.length ? FS.activeHolding : 0;
-  return hs[i] ?? null;
-}
+export { activeHolding } from '../fstate.mjs';
+import { activeHolding } from '../fstate.mjs';
 
 // ------------------------------------------------------------------ the bell pill
 /** `{bell, secondsLeft, frac, urgency, beforeGenesis, ended}` at chain time `now`. */

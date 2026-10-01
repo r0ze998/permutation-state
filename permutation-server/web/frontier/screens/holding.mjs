@@ -5,6 +5,7 @@
 // muster into a host (joins the roster from the next bell), garrison,
 // vigil hours, and the transit records. Every action says why it cannot
 // run now, with a "catch up" nudge when the province lags (NotResident).
+import { activeHolding } from '../fstate.mjs';
 import { html, raw } from '../../util.mjs';
 import { L, Lh, fmtNum } from '../../lang.mjs';
 import { RESOURCES, RESOURCE_ORDER, UNITS, TIERS, BUILDINGS, HOLDING_STATES, errorText } from '../fi18n.mjs';
@@ -22,7 +23,7 @@ export function blockedLine(blocks) {
 
 /** The panel's view model (numbers the tests read): stores, facts, the actions' blocks. */
 export function holdingModel(FS) {
-  const h = FS.holdings?.[0];
+  const h = activeHolding(FS);
   if (!h) return null;
   const now = FS.chain?.now() ?? 0;
   const env = FS.provinces?.get(`${h.p},${h.q}`);

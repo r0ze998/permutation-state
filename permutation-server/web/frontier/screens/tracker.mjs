@@ -37,7 +37,7 @@ const HINT_TEXT = {
 export function privateLine(entry) {
   if (!entry) return null;
   const p = unpack(materialBytes(entry).plain);
-  return L`州 ${p.destP},${p.destQ} のマス ${p.destTile} · ${STANCE_TEXT[STANCES[p.stance]] ?? ''}`;
+  return L`州 ${p.destP},${p.destQ} のマス ${p.destTile + 1} · ${STANCE_TEXT[STANCES[p.stance]] ?? ''}`;
 }
 
 /** One march card: `m = {entry, transit, facts: {nowBell, pipeline, slotPresent, settled, settleReady}}`. */

@@ -5,6 +5,7 @@
 // in order) → FileTicket with the refundable Holding-rent escrow shown →
 // the ticket card (result about 11–21 minutes later; final once the cohort
 // closes) → a one-tap refile after a displacement or an ended ticket.
+import { activeHolding } from '../fstate.mjs';
 import { html, raw } from '../../util.mjs';
 import { L, Lh, fmtNum } from '../../lang.mjs';
 import { factionName, DOCTRINE_NAMES, HOLDING_STATES } from '../fi18n.mjs';
@@ -99,7 +100,7 @@ function renderTicket(FS) {
 }
 
 function renderProvisional(FS) {
-  const h = FS.holdings?.[0];
+  const h = activeHolding(FS);
   const times = FS.clock && h ? ticketTimes(FS.clock, h.ticketBell) : null;
   return html`<section aria-labelledby="join-prov"><h3 id="join-prov">${HOLDING_STATES.provisional}</h3>
     ${h ? html`<p>${L`州 ${h.p},${h.q} の区画 ${h.site + 1} を得ました。`}</p>` : ''}

@@ -110,3 +110,26 @@ test('inspector: a tile with a site, hosts and relations; the actions it offers'
   assert.ok(inspect.inspectActions(FS, free).some(a => a.act === 'dest-from-map'));
   assert.equal(inspect.friendly(1n << 2n, 0, 2), true, 'bit a*8+b marks not hostile');
 });
+
+import * as CTRL from '../../permutation-server/web/frontier/controller.mjs';
+import { FS as STORE } from '../../permutation-server/web/frontier/fstate.mjs';
+
+test('wantProvince: at most 12 in flight, slots free when a load ends, a stale copy is fetched again once per bell', async () => {
+  const pending = [];
+  CTRL.useHerald({ province: (p, q) => new Promise(res => pending.push(() => res({ ok: true, bell: 7, province: { p, q } }))) });
+  STORE.provinces = new Map();
+  let started = 0;
+  for (let i = 0; i < 20; i++) if (CTRL.wantProvince(i, 0, () => {}, { now: 0, bell: 7 })) started++;
+  assert.equal(started, CTRL.WANT_IN_FLIGHT);
+  pending.splice(0).forEach(f => f());
+  await new Promise(r => setTimeout(r, 0));
+  for (let i = 12; i < 20; i++) CTRL.wantProvince(i, 0, () => {}, { now: 0, bell: 7 });
+  pending.splice(0).forEach(f => f());
+  await new Promise(r => setTimeout(r, 0));
+  assert.equal(STORE.provinces.size, 20, 'past the old 12-province ceiling');
+  assert.equal(CTRL.wantProvince(3, 0, () => {}, { now: 1000, bell: 7 }), false, 'fresh for its bell');
+  assert.equal(CTRL.wantProvince(3, 0, () => {}, { now: 1000, bell: 8 }), false, 'a new bell, but fetched under 30 s ago');
+  assert.equal(CTRL.wantProvince(3, 0, () => {}, { now: CTRL.WANT_REFRESH_MS + 1, bell: 8 }), true, 'stale: fetched again');
+  pending.splice(0).forEach(f => f());
+  STORE.provinces = new Map();
+});
