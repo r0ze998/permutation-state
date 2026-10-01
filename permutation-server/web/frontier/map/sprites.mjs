@@ -830,7 +830,7 @@ export class SpriteArt {
     }
     this.activities = activities;
     this.tiles = tiles;
-    const moving = people ? paintPeople(ctx, { tiles, zoom, departures: people.departures ?? [], explores: people.explores ?? [], viewerFaction, columnLabel: people.columnLabel ?? null, activities, life: people.life ?? null, bell: people.bell ?? 0, now: people.now ?? 0, lordOf: people.lordOf ?? null }) : 0;
+    const moving = people ? paintPeople(ctx, { tiles, zoom, departures: people.departures ?? [], explores: people.explores ?? [], marches: people.marches ?? [], viewerFaction, columnLabel: people.columnLabel ?? null, activities, life: people.life ?? null, bell: people.bell ?? 0, now: people.now ?? 0, lordOf: people.lordOf ?? null }) : 0;
     // pass 2d: battle scenes playing (people/battle.mjs)
     let fighting = 0;
     for (const b of people?.battles ?? []) if (paintBattle(ctx, b, { zoom, lossText: people.lossText, fateText: people.fateText })) fighting++;

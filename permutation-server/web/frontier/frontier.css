@@ -507,3 +507,4 @@ body[data-urgency="crit"] main { box-shadow: inset 0 0 0 4px #c8412f; }
 .inspect .person-note { margin-left: 4px; }
 .report-leader { display: flex; gap: 10px; align-items: center; margin: 8px 0 4px; font-style: italic; }
 .report-leader svg { flex: none; border-radius: 50%; background: rgba(0,0,0,.05); }
+.host-row .host-what { margin-left: 8px; }

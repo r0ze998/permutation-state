@@ -135,7 +135,7 @@ export function render(FS, terrainOf, activities = null) {
       ${site.garrison !== null && site.state === 'holding' ? html`<div class="row"><dt>${L`守備隊`}</dt><dd>${fmtNum(site.garrison)}</dd></div>` : ''}
       ${site.shield ? html`<div class="row"><dt>${L`保護`}</dt><dd>${L`保護中（攻撃されません）`}</dd></div>` : ''}
     </dl>` : '';
-  const hosts = t?.hosts?.length ? html`<h4>${L`このマスの軍勢`}</h4><ul class="list">${t.hosts.map(h => html`<li class="host-row">${h.owner ? personChip(h.owner, h.faction, { size: 24 }) : swatch(h.faction)}<span>${factionName(h.faction)} · ${h.unit ? UNITS[h.unit] : ''} ${fmtNum(h.troops)}</span>${h.pending ? html` <span class="muted">${L`（次の鐘から）`}</span>` : ''}</li>`)}</ul>` : '';
+  const hosts = t?.hosts?.length ? html`<h4>${L`このマスの軍勢`}</h4><ul class="list">${t.hosts.map(h => html`<li class="host-row">${h.owner ? personChip(h.owner, h.faction, { size: 24 }) : swatch(h.faction)}<span class="host-what">${factionName(h.faction)} · ${h.unit ? UNITS[h.unit] : ''} ${fmtNum(h.troops)}</span>${h.pending ? html` <span class="muted">${L`（次の鐘から）`}</span>` : ''}</li>`)}</ul>` : '';
   const now = t ? (activities?.get(`${m.p},${m.q},${t.idx}`) ?? []).filter((a, i, all) => all.findIndex(b => b.kind === a.kind) === i) : [];
   const doing = now.length ? html`<h4>${L`いまの様子`}</h4><ul class="list doing">${now.map(a => html`<li class="doing-${a.kind}">${activityText(a)}</li>`)}</ul>` : '';
   const camp = t?.camp ? html`<p class="warn">${L`蛮族の野営地（${fmtNum(t.camp.troops)} 兵）`}</p>` : '';

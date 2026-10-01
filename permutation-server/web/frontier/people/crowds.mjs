@@ -42,6 +42,26 @@ export const PEOPLE_FRAME_MS = 70;
 const CLOTH = ['#8a6a46', '#6f7a52', '#9a7a5a', '#5f6a74', '#a08a62', '#7a5a4a'];
 const hash = (a, b, c = 0) => { let h = Math.imul(a | 0, 0x27d4eb2d) ^ Math.imul(b | 0, 0x165667b1) ^ Math.imul(c | 0, 0x9e3779b9); h ^= h >>> 15; h = Math.imul(h, 0x2c1b3c6d); h ^= h >>> 12; return (h >>> 0) / 4294967296; };
 const hexCentre = (p, q, idx) => { const h = tileHex(p, q, idx); return project(h.q, h.r); };
+
+/**
+ * A round trip (design session: "people should go somewhere, not circle
+ * their tile"): from `a` to `b` and back over `period` seconds — out 40%,
+ * a stay of 15% (doing the errand), back 40%, a short rest at home.
+ * `{x, y, face, walking, at: 'home'|'there'|'road'}`; `off` shifts the lane sideways.
+ */
+export function trip(a, b, t, period, phase = 0, off = 0) {
+  const k = (((t / period) + phase) % 1 + 1) % 1;
+  const ease = u => u * u * (3 - 2 * u);
+  let u, at, dir;
+  if (k < 0.4) { u = ease(k / 0.4); at = 'road'; dir = 1; }
+  else if (k < 0.55) { u = 1; at = 'there'; dir = 0; }
+  else if (k < 0.95) { u = 1 - ease((k - 0.55) / 0.4); at = 'road'; dir = -1; }
+  else { u = 0; at = 'home'; dir = 0; }
+  const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
+  const nx = -dy / len, ny = dx / len;   // the lane: a little to the side of the straight line
+  const lane = off * Math.sin(Math.PI * u);
+  return { x: a.x + dx * u + nx * lane, y: a.y + dy * u + ny * lane, face: (dir >= 0 ? dx : -dx) >= 0 ? 1 : -1, walking: at === 'road', at, back: dir < 0 };
+}
 /** The six neighbour directions of a pointy-top hex in world px (flattened). */
 const DIRS = [0, 60, 120, 180, 240, 300].map(d => { const a = (d * Math.PI) / 180; return [Math.cos(a) * RADIUS * 1.73, Math.sin(a) * RADIUS * 1.73 * FLATTEN]; });
 
@@ -101,6 +121,24 @@ export function figure(ctx, x, y, s, { kind = 'folk', cloth = '#8a6a46', trim = 
     ctx.fillStyle = dark; ctx.beginPath(); ctx.arc(x, top - s * 0.1, s * 0.13, Math.PI * 1.05, -0.05); ctx.fill();
   }
   ctx.globalAlpha = 1;
+}
+
+/** Townsfolk are drawn this much larger than the old dots (readable on their errands). */
+export const FOLK_SCALE = 2.3;
+
+/** "Sealed": a wax seal with a keyhole that breathes, beside a column that has set out. */
+function sealMark(ctx, x, y, r, t) {
+  const pulse = 0.5 + 0.5 * Math.sin(t * 2);
+  ctx.save();
+  ctx.globalAlpha = 0.9;
+  ctx.fillStyle = '#8f2418'; ctx.strokeStyle = '#3a0c05'; ctx.lineWidth = r * 0.12;
+  ctx.beginPath();
+  for (let i = 0; i < 12; i++) { const a = (i / 12) * Math.PI * 2, rr = r * (i % 2 ? 0.86 : 1); i ? ctx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr) : ctx.moveTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr); }
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = `rgba(243,213,138,${0.75 + pulse * 0.25})`;
+  ctx.beginPath(); ctx.arc(x, y - r * 0.12, r * 0.2, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(x - r * 0.1, y - r * 0.05); ctx.lineTo(x + r * 0.1, y - r * 0.05); ctx.lineTo(x + r * 0.16, y + r * 0.38); ctx.lineTo(x - r * 0.16, y + r * 0.38); ctx.closePath(); ctx.fill();
+  ctx.restore();
 }
 
 /** The ground ring under a lord (faction fill, dark rim, a gold glint that breathes). */
@@ -275,7 +313,7 @@ function banner(ctx, x, y, s, faction, t) {
  * `explores` [{p, q, tiles: [idx], faction}]; `fogOf(p, q)` the province's
  * fog. Returns the number of figures drawn (0: nothing moves, no new frame).
  */
-export function paintPeople(ctx, { tiles = [], zoom = 1, t = (globalThis.performance?.now?.() ?? Date.now()) / 1000, departures = [], explores = [], fogOf = () => 'clear', viewerFaction = null, columnLabel = null, activities = null, life = null, bell = 0, now = 0, lordOf = null } = {}) {
+export function paintPeople(ctx, { tiles = [], zoom = 1, t = (globalThis.performance?.now?.() ?? Date.now()) / 1000, departures = [], explores = [], marches = [], fogOf = () => 'clear', viewerFaction = null, columnLabel = null, activities = null, life = null, bell = 0, now = 0, lordOf = null } = {}) {
   const r = RADIUS * zoom;
   if (r < PEOPLE_MIN_R) return 0;
   const s = RADIUS * 0.15;
@@ -293,14 +331,26 @@ export function paintPeople(ctx, { tiles = [], zoom = 1, t = (globalThis.perform
     const at = (dx, dy) => ({ x: u.x + dx * RADIUS, y: u.y + dy * RADIUS * FLATTEN + RADIUS * 0.12 });
     // townsfolk: by tier, fewer the longer the lord has been away
     const n = full ? Math.round((RESIDENTS[u.tier] ?? 2) * lf.liveliness) : lf.liveliness >= 0.7 ? 1 : 0;
+    // townsfolk run errands: to a field or a neighbour of the same faction and back (a few stay at home, idling)
+    const near = [];
+    for (let dq = -2; dq <= 2; dq++) for (let dr = Math.max(-2, -dq - 2); dr <= Math.min(2, -dq + 2); dr++) {
+      if (!dq && !dr) continue;
+      const w = byHex.get(`${u.q + dq},${u.r + dr}`);
+      if (w && !w.cloud && w.terrain !== 'water' && (w.res > 0 || (w.state === 1 && w.owner === u.owner) || Math.abs(dq) + Math.abs(dr) + Math.abs(dq + dr) <= 2)) near.push(w);
+    }
     for (let i = 0; i < n; i++) {
       const h = hash(u.q, u.r ?? u.idx, i);
-      const speed = 0.05 + h * 0.06, a = (t * speed + h) * Math.PI * 2 * (i % 2 ? 1 : -1);
-      const rad = RADIUS * (0.2 + 0.34 * hash(u.idx, i, 7));
-      const x = u.x + Math.cos(a) * rad, y = u.y + Math.sin(a) * rad * FLATTEN + RADIUS * 0.12;
-      const idle = hash(i, u.idx, Math.floor(t / 4)) < 0.3;
-      list.push({ x, y, kind: 'folk', cloth: CLOTH[Math.floor(h * CLOTH.length)], trim: i === 0 ? FACTION_FILL[u.owner] : null, skin: SKIN[Math.floor(hash(i, u.q, 3) * SKIN.length)],
-        step: idle ? 0 : (t * 1.6 + h) % 1, face: Math.sin(a) * (i % 2 ? 1 : -1) >= 0 ? -1 : 1 });
+      const home = { x: u.x + (hash(u.idx, i, 3) - 0.5) * RADIUS * 0.5, y: u.y + RADIUS * 0.12 + (hash(i, u.idx, 4) - 0.5) * RADIUS * 0.2 };
+      const cloth = CLOTH[Math.floor(h * CLOTH.length)], skin = SKIN[Math.floor(hash(i, u.q, 3) * SKIN.length)];
+      const dest = near.length && i % 3 !== 2 ? near[Math.floor(hash(u.idx, i, 9) * near.length) % near.length] : null;
+      if (!dest) {   // at home: a slow stroll on the square
+        const a = (t * (0.04 + h * 0.03) + h) * Math.PI * 2;
+        list.push({ x: home.x + Math.cos(a) * RADIUS * 0.12, y: home.y + Math.sin(a) * RADIUS * 0.05, kind: 'folk', cloth, trim: i === 0 ? FACTION_FILL[u.owner] : null, skin, step: (t * 0.8 + h) % 1, face: Math.sin(a) >= 0 ? -1 : 1 });
+        continue;
+      }
+      const there = { x: dest.x + (hash(dest.q, i, 5) - 0.5) * RADIUS * 0.4, y: dest.y + RADIUS * 0.12 };
+      const w = trip(home, there, t, 18 + h * 14, h, RADIUS * 0.12 * (i % 2 ? 1 : -1));
+      list.push({ x: w.x, y: w.y, kind: w.back && dest.res > 0 ? 'carrier' : 'folk', cloth, trim: i === 0 ? FACTION_FILL[u.owner] : null, skin, step: w.walking ? (t * 1.6 + h) % 1 : 0, face: w.face });
     }
     if (!full || !life) continue;
     // the worked tiles of the holding (its claim): wheat, iron and horse tiles
@@ -363,23 +413,45 @@ export function paintPeople(ctx, { tiles = [], zoom = 1, t = (globalThis.perform
       big(at(0.36, 0.38), { pose: 'spear', step: 0, face: -1 });
     }
   }
-  // departing columns: soldiers circle their own tile (no heading) and fade
+  // departing columns of others: the host forms up in two ranks before its holding and marches on the spot
+  // under its banner — no heading at all (the destination is sealed), a seal mark says so
   for (const dep of departures) {
     if (!seen(fogOf(dep.p, dep.q)) && dep.faction !== viewerFaction) continue;
+    // the viewer's own column walks its road below instead of forming up here
+    if (marches.some(m => m.from.p === dep.p && m.from.q === dep.q && m.from.tile === dep.tile)) continue;
     const c = hexCentre(dep.p, dep.q, dep.tile);
-    const n = 5;
-    for (let i = 0; i < n; i++) {
-      const a = t * 0.35 + (i / n) * Math.PI * 2;
-      list.push({ x: c.x + Math.cos(a) * RADIUS * 0.5, y: c.y + Math.sin(a) * RADIUS * 0.5 * FLATTEN + RADIUS * 0.1, big: true, pose: 'march', cloth: shade(FACTION_FILL[dep.faction] ?? '#8a8a80', -0.05),
-        trim: FACTION_DARK[dep.faction], skin: SKIN[i % SKIN.length], step: (t * 1.4 + i * 0.37) % 1, face: Math.sin(a) >= 0 ? -1 : 1 });
+    for (let i = 0; i < 6; i++) {
+      const row = Math.floor(i / 3), col = (i % 3) - 1;
+      list.push({ x: c.x + col * RADIUS * 0.26 + row * RADIUS * 0.06, y: c.y + RADIUS * (0.34 + row * 0.16), big: true, pose: 'march', cloth: shade(FACTION_FILL[dep.faction] ?? '#8a8a80', -0.05),
+        trim: FACTION_DARK[dep.faction], skin: SKIN[i % SKIN.length], step: (t * 1.4 + (i % 2) * 0.5) % 1, face: 1 });
     }
-    list.push({ banner: true, big: true, x: c.x, y: c.y + RADIUS * 0.12, faction: dep.faction });
+    list.push({ banner: true, big: true, x: c.x - RADIUS * 0.4, y: c.y + RADIUS * 0.42, faction: dep.faction });
+    list.push({ seal: true, big: true, x: c.x + RADIUS * 0.46, y: c.y + RADIUS * 0.2 });
   }
-  // scouts on explored tiles
-  for (const ex of explores) for (const idx of ex.tiles ?? []) {
-    const c = hexCentre(ex.p, ex.q, idx);
-    const a = t * 0.2 + hash(ex.p, idx) * 6.28;
-    list.push({ x: c.x + Math.cos(a) * RADIUS * 0.25, y: c.y + Math.sin(a) * RADIUS * 0.25 * FLATTEN + RADIUS * 0.15, big: true, pose: 'scout', cloth: FACTION_FILL[ex.faction] ?? '#6a6a5e', trim: FACTION_DARK[ex.faction] ?? '#3a3a34', skin: SKIN[3], step: (t * 1.0) % 1, face: Math.cos(a + 1.57) >= 0 ? 1 : -1 });
+  // scouts walk the explored tiles one after another (each EXPLORE record: its tiles in order, then back)
+  for (const ex of explores) {
+    const pts = (ex.tiles ?? []).map(idx => hexCentre(ex.p, ex.q, idx));
+    if (!pts.length) continue;
+    const route = pts.length === 1 ? [pts[0], { x: pts[0].x + RADIUS * 0.6, y: pts[0].y }] : pts;
+    const legs = route.length - 1, period = 6 * legs, k = ((t / period) + hash(ex.p, ex.q)) % 1;
+    const pos = k * legs * 2, leg = Math.floor(pos), back = leg >= legs;
+    const i0 = back ? legs * 2 - leg : leg, i1 = back ? i0 - 1 : i0 + 1, f = pos - leg;
+    const a = route[Math.max(0, Math.min(legs, i0))], b = route[Math.max(0, Math.min(legs, i1))];
+    list.push({ x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f + RADIUS * 0.15, big: true, pose: 'scout', cloth: FACTION_FILL[ex.faction] ?? '#6a6a5e', trim: FACTION_DARK[ex.faction] ?? '#3a3a34', skin: SKIN[3], step: (t * 1.4) % 1, face: b.x - a.x >= 0 ? 1 : -1 });
+  }
+  // the viewer's own marches on the road (their destination is known to this browser only):
+  // the column walks from the origin toward it, from the departure bell to the arrival bell
+  for (const m of marches) {
+    const a = hexCentre(m.from.p, m.from.q, m.from.tile), b = hexCentre(m.to.p, m.to.q, m.to.tile);
+    const k = Math.max(0, Math.min(1, m.k));
+    const x0 = a.x + (b.x - a.x) * k, y0 = a.y + (b.y - a.y) * k, len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    const ux = (b.x - a.x) / len, uy = (b.y - a.y) / len, face = ux >= 0 ? 1 : -1;
+    for (let i = 0; i < 5; i++) {
+      const back = i * RADIUS * 0.22;
+      list.push({ x: x0 - ux * back + (i % 2 ? 1 : -1) * uy * RADIUS * 0.08, y: y0 - uy * back + RADIUS * 0.12, big: true, pose: 'march', cloth: shade(FACTION_FILL[m.faction] ?? '#8a8a80', -0.05),
+        trim: FACTION_DARK[m.faction], skin: SKIN[i % SKIN.length], step: (t * 1.4 + i * 0.37) % 1, face });
+    }
+    list.push({ banner: true, big: true, x: x0 + ux * RADIUS * 0.12, y: y0 + RADIUS * 0.12, faction: m.faction });
   }
   // back to front, within the budget (columns and scouts first, they matter most)
   const kept = list.length > PEOPLE_BUDGET ? [...list.filter(x => x.big || x.kind !== 'folk'), ...list.filter(x => !x.big && x.kind === 'folk')].slice(0, PEOPLE_BUDGET) : list;
@@ -392,9 +464,10 @@ export function paintPeople(ctx, { tiles = [], zoom = 1, t = (globalThis.perform
     if (f.banner) banner(ctx, f.x, f.y, f.big ? S * 0.8 : s, f.faction, t);
     else if (f.fire) campfire(ctx, f.x, f.y, f.big ? S * 0.6 : s, t);
     else if (f.spark) spark(ctx, f.x, f.y, f.big ? S : s);
+    else if (f.seal) sealMark(ctx, f.x, f.y, S * 0.34, t);
     else if (f.big) actor(ctx, f.x, f.y, f.small ? S * 0.72 : f.lordly ? S * 1.12 : S, f);
-    else if (f.kind === 'sitter') sitter(ctx, f.x, f.y, s, f);
-    else figure(ctx, f.x, f.y, s, f);
+    else if (f.kind === 'sitter') sitter(ctx, f.x, f.y, s * FOLK_SCALE * boost, f);
+    else figure(ctx, f.x, f.y, s * FOLK_SCALE * boost, f);
   }
   // the column's only public fact besides its origin: the arrival bell (`columnLabel(dep)` gives the text)
   if (columnLabel && full) {
@@ -406,7 +479,7 @@ export function paintPeople(ctx, { tiles = [], zoom = 1, t = (globalThis.perform
       const text = columnLabel(dep);
       if (!text) continue;
       const c = hexCentre(dep.p, dep.q, dep.tile);
-      const w = ctx.measureText(text).width + 14 * k, h = 17 * k, x = c.x - w / 2, y = c.y + RADIUS * 0.5;
+      const w = ctx.measureText(text).width + 14 * k, h = 17 * k, x = c.x - w / 2, y = c.y + RADIUS * 0.72;
       ctx.fillStyle = FACTION_DARK[dep.faction] ?? '#55554e'; ctx.globalAlpha = 0.92;
       ctx.beginPath(); ctx.roundRect?.(x, y, w, h, 8 * k); ctx.fill();
       ctx.globalAlpha = 1; ctx.fillStyle = '#fffaf0'; ctx.fillText(text, c.x, y + h / 2 + 0.5 * k);

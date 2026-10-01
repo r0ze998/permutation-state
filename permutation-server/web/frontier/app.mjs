@@ -15,7 +15,7 @@ import { FS, invalidate, registerRenderers } from './fstate.mjs';
 import { createHerald, nextPoll, staleness } from './herald.mjs';
 import { setPin, setRelay } from './fchainio.mjs';
 import { checkBeacon } from './seal.mjs';
-import { ChainClock, bellChip, countdown, seasonClock } from './clock.mjs';
+import { ChainClock, bellChip, countdown, seasonClock, bellStart } from './clock.mjs';
 import { effectiveStatus } from './fcodec.mjs';
 import { FrontierMap } from './map/fmap.mjs';
 import { SEASON_STATUS_TEXT, clientText, factionName, TIERS } from './fi18n.mjs';
@@ -276,6 +276,7 @@ export function peopleSource() {
   peopleCache = { at: sec, value: {
     departures: scene.departuresAt(FS.chronicle, FS.overviews, bell),
     explores: scene.exploresAt(FS.chronicle, FS.overviews, bell),
+    marches: ownColumns(),
     nameOf: ownNamer(scene.namer(rosterRef)),
     life: FS.life ?? null,
     tierName: t => TIERS[t] ?? '',
@@ -382,6 +383,31 @@ function closeMilestone() {
 }
 
 // ------------------------------------------------------------------ the viewer's own name (people/profile.mjs, UI plan F4)
+/**
+ * The viewer's own marches on the road, for the people layer: from the
+ * holding's tile toward the destination this browser sealed, `k` the share
+ * of the way from the departure bell to the arrival bell. Never anyone
+ * else's (their destinations are sealed).
+ */
+function ownColumns() {
+  const out = [];
+  const now = FS.chain?.now?.() ?? 0;
+  if (!FS.clock) return out;
+  for (const m of FS.marches ?? []) {
+    const e = m.entry, d = m.dest;
+    if (!e || !d || !Number.isInteger(e.departBell) || !Number.isInteger(e.arriveBell)) continue;
+    if (['revealed', 'settled', 'failed'].includes(e.state)) continue;
+    const hp = hostParts(e.host);
+    const h = hp && (FS.holdings ?? []).find(x => x.p === hp.p && x.q === hp.q && x.site === hp.site);
+    if (!h) continue;
+    const t0 = bellStart(FS.clock.genesisTs, e.departBell), t1 = bellStart(FS.clock.genesisTs, e.arriveBell);
+    const k = t1 > t0 ? (now - t0) / (t1 - t0) : 1;
+    if (k >= 1) continue;
+    out.push({ from: { p: h.p, q: h.q, tile: h.tile }, to: { p: d.p, q: d.q, tile: d.tile }, k: Math.max(0, k), faction: FS.citizen?.faction ?? 0 });
+  }
+  return out;
+}
+
 /** The map's name tags use the viewer's verified profile on their own holdings. */
 function ownNamer(base) {
   const p = FS.ownProfile, tag = p ? ownTag(FS) : null;
