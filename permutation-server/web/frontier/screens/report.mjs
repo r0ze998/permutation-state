@@ -29,7 +29,7 @@
 // against the recorded native call in frontier-wasm/vectors/wasm-vectors.json
 // by web-frontier-practice.test.mjs.
 import { html, raw } from '../../util.mjs';
-import { L, fmtNum } from '../../lang.mjs';
+import { L, fmtNum, lang } from '../../lang.mjs';
 import { sha256 } from '../../sdk/sha256.mjs';
 import { toHex, fromBase64 } from '../../sdk/bytes.mjs';
 import { Writer, Reader, OK } from '../wasm.mjs';
@@ -41,6 +41,7 @@ import { factionName, UNITS as UNIT_TEXT, STANCES as STANCE_TEXT, FATES as FATE_
 import { UNIT_ORDER } from '../fland.mjs';
 import { swatch } from './shell.mjs';
 import { personChip } from '../people/ui.mjs';
+import { LEADERS, leaderSvg } from '../people/leaders.mjs';
 
 // ------------------------------------------------------------------ the resolve_clash codec (borsh)
 /** Postures in borsh order: Stance(Hold|Assault|Flank|Brace), then Disarray. */
@@ -428,7 +429,7 @@ export function summaryOf(rows) {
   const foes = rows.filter(r => !r.mine && r.faction !== own[0].faction);
   const foesLeft = foes.filter(r => r.after !== null && r.after > 0 && (r.fate === null || r.fate === 'Stays')).length;
   const result = !known ? 'none' : fell ? 'fell' : turned ? 'turned' : foesLeft === 0 ? 'won' : 'held';
-  return { mine: true, known, lost, before, result, reached, fates: own.map(r => r.fate).filter(Boolean) };
+  return { mine: true, known, lost, before, result, reached, fates: own.map(r => r.fate).filter(Boolean), faction: own[0].faction };
 }
 
 /**
@@ -579,17 +580,32 @@ const RESULT_TEXT = {
 };
 const RESULT_GLYPH = { won: '★', held: '◆', fell: '✕', turned: '↩', none: '…' };
 
+/** The leader's word on a result (UI plan F1): the viewer's faction, or the side that held the field. */
+const LEADER_LINE = {
+  won: () => L`見事だ。この地の名は、今日のおまえたちのものだ。`,
+  held: () => L`よく踏みとどまった。次の鐘で押し返せ。`,
+  turned: () => L`退くのも兵法のうちだ。兵は残った。`,
+  fell: () => L`痛い負けだ。だが辺境は広い、立て直せ。`,
+  none: () => L`結末はまだ分からぬ。確かめてから語ろう。`,
+  watch: () => L`この地はわれらのものだ。`,
+};
+function leaderLine(f, key) {
+  if (!Number.isInteger(f) || f < 0 || f > 5) return '';
+  const l = LEADERS[f];
+  return html`<p class="report-leader">${raw(leaderSvg(f, { size: 40 }))}<span><q>${LEADER_LINE[key]()}</q> <span class="muted">— <span data-name>${lang() === 'en' ? l.name.en : l.name.ja}</span></span></span></p>`;
+}
+
 /** The headline: the viewer's result, losses and whether the march got there; replay and map buttons. */
 function renderHeadline(sum, r) {
   const buttons = html`<div class="actions"><button type="button" class="btn primary" data-act="battle-play" data-p="${r.p}" data-q="${r.q}" data-bell="${r.bell}">▶ ${L`戦いを再生`}</button>
     <button type="button" class="btn" data-act="goto" data-p="${r.p}" data-q="${r.q}">${L`地図で見る`}</button></div>`;
   if (!sum.mine) {
     return html`<div class="report-head report-head-watch"><p class="report-result"><strong>${sum.leader !== null ? html`${swatch(sum.leader)}${L`${factionName(sum.leader)}が戦場に残った`}` : L`${fmtNum(sum.factions)}つの陣営がぶつかった`}</strong></p>
-      <p class="muted">${L`全体の損害 ${fmtNum(sum.lost)}`}</p>${buttons}</div>`;
+      <p class="muted">${L`全体の損害 ${fmtNum(sum.lost)}`}</p>${sum.leader !== null ? leaderLine(sum.leader, 'watch') : ''}${buttons}</div>`;
   }
   return html`<div class="report-head report-${sum.result}"><p class="report-result"><span class="report-glyph" aria-hidden="true">${RESULT_GLYPH[sum.result]}</span><strong>${RESULT_TEXT[sum.result]()}</strong></p>
     <p>${L`あなたの損害 ${fmtNum(sum.lost)} / ${fmtNum(sum.before)}`}${sum.reached === null ? '' : sum.reached ? html` · ${L`行き先に着いた`}` : html` · ${L`行き先に残れなかった`}`}</p>
-    ${sum.fates.length ? html`<p class="muted">${[...new Set(sum.fates)].map(f => FATE_TEXT[f] ?? f).join(' · ')}</p>` : ''}${buttons}</div>`;
+    ${sum.fates.length ? html`<p class="muted">${[...new Set(sum.fates)].map(f => FATE_TEXT[f] ?? f).join(' · ')}</p>` : ''}${leaderLine(sum.faction, sum.result)}${buttons}</div>`;
 }
 
 /** Per-tile detail: who fought where, losses taken and dealt, the stance edge, the defenders' retaliation. */

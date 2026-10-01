@@ -467,4 +467,11 @@ export default {
   // ---- map pins (hud/pins.mjs, UI plan C5)
   'ピン': 'Pins', 'ピンを立てる': 'Pin this place', 'ピンを外す': 'Remove the pin',
   '地図でマスや州を選び、「ピンを立てる」で印を付けられます（この端末に保存）。': 'Select a tile or province on the map and choose "Pin this place" (kept on this device).',
+  // ---- the leader's word in the clash report (screens/report.mjs, UI plan F1)
+  '見事だ。この地の名は、今日のおまえたちのものだ。': 'Well fought. Today this land carries your name.',
+  'よく踏みとどまった。次の鐘で押し返せ。': 'You held. Push back at the next bell.',
+  '退くのも兵法のうちだ。兵は残った。': 'Falling back is part of war. The troops live.',
+  '痛い負けだ。だが辺境は広い、立て直せ。': 'A hard loss. The frontier is wide; rebuild.',
+  '結末はまだ分からぬ。確かめてから語ろう。': 'The outcome is not known yet. Check it first.',
+  'この地はわれらのものだ。': 'This ground is ours.',
 };

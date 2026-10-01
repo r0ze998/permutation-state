@@ -209,3 +209,22 @@ test('pins: toggled per place, newest first, at most 20, kept per season; found 
   assert.deepEqual([hits[0].kind, hits[0].p, hits[0].tile], ['pin', 3, 4]);
   assert.equal(S.searchMap('pins', { pins: [{ p: 3, q: 0, tile: null }] })[0].tile, undefined);
 });
+
+test('a battle of three factions on one tile: every side in the scene, and it paints without error at every phase', async () => {
+  const B = await import('../../permutation-server/web/frontier/people/battle.mjs');
+  const arr = (id, faction, stance, fate, after) => ({ present: 1, hostId: BigInt(id), faction, unit: 0, troops: 400000, troopsAfter: after, stance, fate, tile: 9 });
+  const inputs = { arrivals: [arr(1, 0, 1, 1, 300000), arr(2, 2, 2, 4, 400000), arr(3, 4, 3, 5, 0)] };
+  const before = { p: 1, q: 0, sites: [9], siteMirror: [{ state: 1, faction: 5, garrison: 80000 }], camp: { state: 0 }, entries: [{ id: 9n, state: 1, tile: 9, faction: 5, troops: 120000 }] };
+  const after = { p: 1, q: 0, sites: [9], siteMirror: [{ state: 1, faction: 5, garrison: 20000 }], camp: { state: 0 }, entries: [] };
+  const s = B.battleScene({ p: 1, q: 0, bell: 9, inputs, before, after });
+  assert.equal(s.tiles.length, 1);
+  const t = s.tiles[0];
+  assert.deepEqual(t.attackers.map(x => x.faction).sort(), [0, 2, 4]);
+  assert.deepEqual(t.defenders.map(x => x.kind).sort(), ['garrison', 'resident']);
+  assert.deepEqual(t.attackers.map(x => x.fate).sort(), ['Destroyed', 'Retreated', 'Stays']);
+  const noop = () => {};
+  const ctx = new Proxy({}, { get: (o, k) => (k in o ? o[k] : k === 'measureText' ? () => ({ width: 10 }) : k === 'createRadialGradient' || k === 'createLinearGradient' ? () => ({ addColorStop: noop }) : noop), set: (o, k, v) => { o[k] = v; return true; } });
+  const play = B.startBattle(s, 0);
+  for (const at of [0.5, 1.5, 3, 4.5, 6, 6.9]) assert.equal(B.paintBattle(ctx, play, { zoom: 2, now: at }), true, `phase at ${at} s`);
+  assert.equal(B.paintBattle(ctx, play, { zoom: 2, now: 8 }), false, 'over after the end');
+});

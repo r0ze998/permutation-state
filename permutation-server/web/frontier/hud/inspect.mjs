@@ -18,6 +18,7 @@ import { identityOf } from '../people/identity.mjs';
 import { activityText } from '../people/activity.mjs';
 import { hostRows } from '../screens/host.mjs';
 import { hasPin } from './pins.mjs';
+import { termButton } from './glossary.mjs';
 
 const TERRAIN_TEXT = { Grassland: () => L`草原`, Plains: () => L`平原`, Forest: () => L`森`, Hills: () => L`丘`, Mountain: () => L`山`, Water: () => L`水` };
 /** Site states as the overview carries them (herald SITE_STATE) and the mirror (3 = released: a Free City). */
@@ -121,7 +122,7 @@ export function render(FS, terrainOf, activities = null) {
   const t = m.tile;
   const title = t ? L`州 ${m.p},${m.q} · マス ${t.idx + 1}` : L`州 ${m.p},${m.q}`;
   const facts = [];
-  facts.push(html`<div class="row"><dt>${L`輪`}</dt><dd>${m.opened ? L`第${m.ring}輪` : L`第${m.ring}輪（まだひらいていません）`}</dd></div>`);
+  facts.push(html`<div class="row"><dt>${L`輪`}</dt><dd>${m.opened ? L`第${m.ring}輪` : L`第${m.ring}輪（まだひらいていません）`}${termButton('ring')}</dd></div>`);
   if (t?.terrain) facts.push(html`<div class="row"><dt>${L`地形`}</dt><dd>${TERRAIN_TEXT[t.terrain]?.() ?? t.terrain}</dd></div>`);
   if (!t && m.owners.length) facts.push(html`<div class="row"><dt>${L`拠点を持つ陣営`}</dt><dd>${m.owners.map(f => html`<span class="nowrap">${swatch(f)}${factionName(f)}</span> `)}</dd></div>`);
   if (m.relation.length) facts.push(html`<div class="row"><dt>${L`あなたとの関係`}</dt><dd>${m.relation.map(r => html`<span class="nowrap rel-${r.friendly ? 'ally' : 'war'}">${swatch(r.faction)}${factionName(r.faction)} ${r.friendly ? L`友好` : L`敵対`}</span> `)}</dd></div>`);
