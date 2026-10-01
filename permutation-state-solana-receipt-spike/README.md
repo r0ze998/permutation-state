@@ -1,4 +1,4 @@
-# Permutation State — Solana Receipt Spike
+# Wylls — Solana Receipt Spike
 
 This is a local, non-deployed scaffold for the smallest credible Solana devnet proof behind the current multi-client demo. It does **not** touch devnet, use a wallet, or modify the prototype.
 

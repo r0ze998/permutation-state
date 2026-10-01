@@ -1,8 +1,8 @@
-# PERMUTATION STATE
+# Wylls
 
 > **One civilization. Thousands of citizens. One verifiable history.**
 
-PERMUTATION STATE is a seasonal generative civilization RPG. Every player enters the same living civilization as a named citizen, inherits consequences created by earlier citizens, and leaves a verified change for someone else.
+Wylls is a seasonal generative civilization RPG. Every player enters the same living civilization as a named citizen, inherits consequences created by earlier citizens, and leaves a verified change for someone else.
 
 The hackathon vertical slice proves one complete **Handoff**:
 

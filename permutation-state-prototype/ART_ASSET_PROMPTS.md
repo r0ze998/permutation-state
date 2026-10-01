@@ -1,4 +1,4 @@
-# PERMUTATION STATE — Visual Asset Provenance
+# Wylls — Visual Asset Provenance
 
 Project-bound raster assets were generated with the built-in OpenAI image-generation tool. No CLI fallback or external API key was used.
 

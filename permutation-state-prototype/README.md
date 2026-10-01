@@ -1,8 +1,8 @@
-# PERMUTATION STATE — Living Civic Atlas Prototype
+# Wylls — Living Civic Atlas Prototype
 
 > **One civilization. Thousands of citizens. One continuously evolving world.**
 
-This dependency-free browser prototype presents PERMUTATION STATE as a map-first civilization RPG. Aster's map, resources, worksites, citizens, Chronicle, and Season Purse remain part of one continuous world while the player moves between civic actions.
+This dependency-free browser prototype presents Wylls as a map-first civilization RPG. Aster's map, resources, worksites, citizens, Chronicle, and Season Purse remain part of one continuous world while the player moves between civic actions.
 
 The playable scenario is **Season Zero: The Water Debt**. Mara Venn's decision at the River Guild changes Ivo Sen's available repair routes at the East Sluice. Ivo then resolves that local Worksite, leaving new resource values, obligations, faction memory, and history for the rest of the civilization.
 

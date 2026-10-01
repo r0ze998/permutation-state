@@ -1,4 +1,4 @@
-# PERMUTATION STATE — Multi-Citizen Handoff Proof
+# Wylls — Multi-Citizen Handoff Proof
 
 **Build:** `handoff-proof-2026-09-21`  
 **Result:** **PASS — 10/10 automated browser scenarios**  
@@ -114,6 +114,6 @@ The local, non-deployed implementation contract for that gate now lives in [`per
 
 Entropy's AI-native game architecture emphasizes persistent character memory, action alignment, shared narrative state, and open-ended play inside designer-defined guardrails. That supports the division used here: AI may express remembered social state, while a fixed resolver owns legal actions and state transitions. See [Building the Infrastructure for AI-Native Games](https://entropyai.co/research/building-the-next-generation-of-games/).
 
-[Realms / Eternum](https://eternum-docs.realms.world/) remains the reference for an open-source seasonal world. PERMUTATION STATE's proposed wedge is narrower and more personal: one citizen's local RPG result rewrites the next citizen's affordances inside the same civilization.
+[Realms / Eternum](https://eternum-docs.realms.world/) remains the reference for an open-source seasonal world. Wylls' proposed wedge is narrower and more personal: one citizen's local RPG result rewrites the next citizen's affordances inside the same civilization.
 
 For later onchain scale, [Honeycomb Protocol's documentation](https://docs.honeycombprotocol.com/) is relevant to compressed and regular Solana state. It is a candidate implementation dependency, not part of this local build and not evidence that the current proof is onchain.
