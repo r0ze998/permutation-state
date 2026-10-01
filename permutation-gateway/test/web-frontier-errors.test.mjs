@@ -45,7 +45,7 @@ function relayCodes(files) {
 /** Codes the page's modules return: `fail('X'`, `code: 'X'`, `codeError('X'`, `…Error('X'`, `add('X')`. */
 function pageCodes(files) {
   const out = new Set();
-  const res = [/\bfail\('([A-Za-z][A-Za-z0-9]+)'/g, /\bcode: '([A-Za-z][A-Za-z0-9]+)'/g, /codeError\('([A-Za-z][A-Za-z0-9]+)'/g, /(?:Herald|Codec|Wasm)Error\('([A-Za-z][A-Za-z0-9]+)'/g, /\badd\('([A-Za-z][A-Za-z0-9]+)'\)/g];
+  const res = [/\bfail\('([A-Za-z][A-Za-z0-9]+)'/g, /\bcode: '([A-Za-z][A-Za-z0-9]+)'/g, /codeError\('([A-Za-z][A-Za-z0-9]+)'/g, /(?:Herald|Codec|Wasm)Error\('([A-Za-z][A-Za-z0-9]+)'/g, /(?<!classList\.)\badd\('([A-Za-z][A-Za-z0-9]+)'\)/g];
   for (const f of files) for (const re of res) for (const m of src(f).matchAll(re)) out.add(m[1]);
   return out;
 }
