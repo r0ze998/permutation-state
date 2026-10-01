@@ -88,13 +88,7 @@ export function inspectActions(FS, m) {
   if (FS.compose && t && !FS.compose.sending) out.push({ act: 'dest-from-map', data: {}, text: L`ここを進軍の行き先にする`, primary: true });
   // the viewer's own ready hosts on this tile can be sent from here (the march card then opens on the map)
   if (!FS.compose && t) for (const h of ownHostsOn(FS, m.p, m.q, t.idx)) out.push({ act: 'compose', data: { host: h.id, stay: 'map' }, text: L`この軍勢（${fmtNum(h.troops)}）で進軍する`, primary: true });
-  if (FS.land?.stage === 'joined' && t?.site?.state === 'free') {
-    const draft = FS.joinDraft?.envelope?.province;
-    if (draft && draft.p === m.p && draft.q === m.q) {
-      const chosen = (FS.joinDraft.sites ?? []).some(x => x.p === m.p && x.q === m.q && x.site === t.site.index);
-      out.push({ act: 'toggle-site', data: { p: m.p, q: m.q, site: t.site.index }, text: chosen ? L`入植希望から外す` : L`この区画を入植希望に加える`, primary: !chosen });
-    } else out.push({ act: 'pick-province', data: { p: m.p, q: m.q }, text: L`この州の空き区画を見る` });
-  }
+  // no site picking from the map (owner decision V2: the first village is placed automatically)
   if (m.reportBell) out.push({ act: 'battle-play', data: { p: m.p, q: m.q, bell: m.reportBell }, text: L`戦いを再生` });
   if (m.reportBell) out.push({ act: 'report-open', data: { p: m.p, q: m.q, bell: m.reportBell }, text: L`第${fmtNum(m.reportBell)}鐘の衝突の報告` });
   out.push(pin);

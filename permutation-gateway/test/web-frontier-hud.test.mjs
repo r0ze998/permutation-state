@@ -103,9 +103,7 @@ test('inspector: a tile with a site, hosts and relations; the actions it offers'
   FS.selected = { p: 2, q: 0, idx: 20 };
   const free = inspect.inspectModel(FS, terrainOf);
   assert.equal(free.tile.site.state, 'free');
-  assert.deepEqual(inspect.inspectActions(FS, free).map(a => a.act), ['pick-province', 'battle-play', 'report-open', 'pin-toggle'], 'a free site first opens the province for the ticket');
-  FS.joinDraft = { envelope: { province: prov }, sites: [] };
-  assert.equal(inspect.inspectActions(FS, free)[0].act, 'toggle-site');
+  assert.deepEqual(inspect.inspectActions(FS, free).map(a => a.act), ['battle-play', 'report-open', 'pin-toggle'], 'no site picking from the map (owner decision V2)');
   FS.compose = { origin: { p: 2, q: 0 } };
   assert.ok(inspect.inspectActions(FS, free).some(a => a.act === 'dest-from-map'));
   assert.equal(inspect.friendly(1n << 2n, 0, 2), true, 'bit a*8+b marks not hostile');

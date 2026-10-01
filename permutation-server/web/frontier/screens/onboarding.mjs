@@ -13,7 +13,7 @@ import { guideLevel, guideTarget, goText } from '../hud/guide.mjs';
 
 const TITLE = {
   welcome: () => L`ようこそ`,
-  join: () => L`勢力と入植地`,
+  join: () => L`国を選ぶ`,
   build: () => L`最初の建設`,
   scout: () => L`最初の斥候`,
   practice: () => L`練習の衝突`,
@@ -24,11 +24,11 @@ const TITLE = {
 const DO = {
   welcome: () => L`五つの言葉だけ覚えましょう：拠点（あなたの土地）、軍勢（動かす兵）、鐘（10分ごとの区切り）、進軍（封をした移動）、探索（斥候で周りを調べる）。`,
   join: stage => ({
-    none: () => L`地図のタブで勢力を選び、ゲーム内の鍵を作って参加します。`,
-    joined: () => L`空いている区画を3つまで選んで入植希望を出します。`,
-    ticket: () => L`入植希望を出しました。この鐘の乱数で区画が決まります。`,
-    refugee: () => L`拠点を失いました。もう一度入植希望を出せます。`,
-  }[stage]?.() ?? L`空いている区画を3つまで選んで入植希望を出します。`),
+    none: () => L`地図のタブで六つの国から一つを選び、ゲーム内の鍵を作って参加します。選ぶのは国だけです。`,
+    joined: () => L`最初の村を、本拠の扇区の空いた区画に自動で置いています。`,
+    ticket: () => L`最初の村の入植希望を自動で出しました。次の鐘（約11〜21分後）に村が現れます。待つあいだに練習で戦ってみましょう。`,
+    refugee: () => L`村を失いました。空いた区画に自動でもう一度入植希望を出します。`,
+  }[stage]?.() ?? L`最初の村を、本拠の扇区の空いた区画に自動で置いています。`),
   build: () => L`拠点のタブで農場と木材所を建てます。`,
   scout: () => L`斥候を訓練して軍勢に編成し、隣の2マスを探索します。`,
   practice: () => L`練習モードで蛮族の野営地を襲ってみます。チェーンには何も送りません。`,
@@ -87,21 +87,6 @@ export function render(FS, { open = true } = {}) {
 function renderReportGo(FS) {
   const r = reportOffer(FS.marches);
   return r ? html`<button type="button" class="btn primary" data-act="report-open" data-p="${r.p}" data-q="${r.q}" data-bell="${r.bell}">${L`報告を開く`}</button>` : '';
-}
-
-/**
- * The adjacent-wedge offer when the home wedge shows no free site (§5.9).
- * Not in the card since W6-D (W5-E D9): the site picker under it lists the
- * same provinces with the same line, and the card showed them twice.
- */
-export function renderOverflow(FS) {
-  const faction = FS.citizen?.faction;
-  if (!Number.isInteger(faction)) return '';
-  const o = overflowProvinces(FS.overviews ?? new Map(), faction, FS.record?.rings?.length ?? 1);
-  if (!o.full) return '';
-  if (!o.provinces.length) return html`<p class="warn">${L`本拠の扇区に空き区画がなく、隣の扇区のいちばん外の輪にも空きが見つかりません。新しい輪がひらくのを待ってください。`}</p>`;
-  return html`<div class="warn"><p>${L`本拠の扇区に空き区画がありません。この場合は隣の扇区のいちばん外の輪（第${o.ring}輪）の区画に入植希望を出せます（最後はチェーンが判断します）。`}</p>
-    <ul class="list">${o.provinces.slice(0, 12).map(pr => html`<li><button type="button" class="btn" data-act="pick-province" data-p="${pr.p}" data-q="${pr.q}">${L`州 ${pr.p},${pr.q}（第${pr.ring}輪、空き 約 ${fmtNum(pr.free)}）`}</button></li>`)}</ul></div>`;
 }
 
 /** The "show the guide again" control for the More tab (only while the card is dismissed or steps are skipped). */

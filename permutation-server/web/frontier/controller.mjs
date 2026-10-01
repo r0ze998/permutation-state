@@ -13,7 +13,8 @@ import * as fsession from './fsession.mjs';
 import * as book from './marchbook.mjs';
 import { submit, track, accountsFor, campMaskOf, campWinner } from './fplay.mjs';
 import { sendMarch, planRoute, earliestBell, arrivalWindow, tipOptions, incomingWarnings, DEPART_MARGIN_SECS, RETREAT_CHOICES } from './fmarch.mjs';
-import { landState, hostsIn } from './fland.mjs';
+import { landState, hostsIn, candidateProvinces, autoSites, TICKET_SEEN_BELLS } from './fland.mjs';
+import { overflowProvinces } from './onboarding.mjs';
 import { toggleTile } from './screens/explore.mjs';
 import { sealMarch, unpack, ctHash as ctHashOf, sealRoot as sealRootOf } from './seal.mjs';
 import { bellAt, bellStart, pipeline, archivePartOf } from './clock.mjs';
@@ -364,6 +365,47 @@ export async function refresh() {
   }
   await refreshChronicle();
   invalidate('panel', 'tabs', 'chips', 'map');
+  autoTicket().catch(e => console.error('frontier auto ticket:', e));
+}
+
+// ------------------------------------------------------------------ the first village, placed automatically (owner decision V2)
+/** Provinces the automatic ticket reads, at most. */
+export const AUTO_PROVINCES = 6;
+/**
+ * Joining is choosing a nation: when the Citizen has neither a holding nor an open
+ * ticket (just joined, its ticket ended — displaced or exhausted — or it lost its
+ * holding), this browser picks up to three free sites of the home wedge (nearest
+ * open ring first; the adjacent wedges' outermost ring when it is full, §5.9) and
+ * files the ticket itself. Once a bell at most; not while the last ticket is still
+ * on its way to the herald. `FS.autoTicket = {state: 'filing'|'nofree'|'failed', bell}`.
+ */
+export async function autoTicket() {
+  const stage = FS.land?.stage;
+  if (stage !== 'joined' && stage !== 'refugee') { FS.autoTicket = null; return; }
+  if (!FS.session || FS.sessionProblem || !Number.isInteger(FS.citizen?.faction) || FS.autoTicketBusy) return;
+  const b = nowBell();
+  const filed = FS.ui?.lastTicketBell;
+  if (FS.ui?.ticketSeen === false && Number.isInteger(filed) && b < filed + TICKET_SEEN_BELLS) return;   // still on its way
+  if (FS.autoTicket?.bell === b) return;   // once a bell
+  FS.autoTicketBusy = true;
+  FS.autoTicket = { state: 'filing', bell: b };
+  invalidate('panel');
+  try {
+    const faction = FS.citizen.faction, overviews = FS.overviews ?? new Map();
+    let cands = candidateProvinces(overviews, faction);
+    if (!cands.length) { const o = overflowProvinces(overviews, faction, FS.record?.rings?.length ?? 1); if (o.full) cands = o.provinces; }
+    const provinces = [];
+    for (const c of cands.slice(0, AUTO_PROVINCES)) { const env = await herald.province(c.p, c.q); if (env.ok) provinces.push(env.province); }
+    const sites = autoSites(provinces);
+    if (!sites.length) { FS.autoTicket = { state: 'nofree', bell: b }; return; }
+    const r = await fileTicket(sites);
+    FS.autoTicket = r?.ok === true ? { state: 'filed', bell: b } : { state: 'failed', bell: b, code: r?.code ?? FS.notice?.code ?? null };
+  } catch (e) {
+    FS.autoTicket = { state: 'failed', bell: b, code: e?.code ?? 'Error' };
+  } finally {
+    FS.autoTicketBusy = false;
+    invalidate('panel');
+  }
 }
 
 // ------------------------------------------------------------------ the composer
@@ -525,20 +567,8 @@ export const ACTIONS = {
     if (m.ok) { FS.sessionProblem = null; return invalidate('panel'); }
     return act('SetSession', { fields: { session: s.publicKeyBytes, expiry: BigInt(Math.floor(now()) + SESSION_DAYS - 600) } });
   },
-  'pick-province': async d => {
-    const env = await herald.province(num(d.p), num(d.q));
-    FS.joinDraft = { ...(FS.joinDraft ?? {}), envelope: env.ok ? env : null };
-    invalidate('panel');
-  },
-  'toggle-site': d => {
-    const s = { p: num(d.p), q: num(d.q), site: num(d.site) };
-    const list = FS.joinDraft?.sites ?? [];
-    const i = list.findIndex(x => x.p === s.p && x.q === s.q && x.site === s.site);
-    FS.joinDraft = { ...FS.joinDraft, sites: i >= 0 ? list.filter((_, j) => j !== i) : list.length < 3 ? [...list, s] : list };
-    invalidate('panel');
-  },
-  'file-ticket': () => fileTicket(FS.joinDraft?.sites ?? []),
-  refile: () => fileTicket(FS.ui?.lastTicket ?? []),
+  // the site picker is gone (owner decision V2): the client files the ticket itself; a retry now
+  'auto-ticket': () => { if (FS.autoTicket) FS.autoTicket.bell = -1; return autoTicket(); },
   harvest: () => act('Harvest', { v: { holding: activeHolding(FS) } }),
   build: d => act('Build', { v: { holding: activeHolding(FS), item: num(d.item) }, fields: { item: num(d.item) } }),
   // W6-D: re-read soon after the keeper was asked (the next poll could be 30 s away, past the window the catch-up opens).

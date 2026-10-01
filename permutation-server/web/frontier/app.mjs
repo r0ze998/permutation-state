@@ -516,7 +516,6 @@ function guideNow() {
 async function guideGo() {
   const g = guide.guideTarget(FS);
   if (!g) return;
-  if (g.kind === 'settle') { setLens('settle'); FS.tab = 'map'; invalidate('panel', 'tabs', 'map'); return; }
   if (g.kind === 'build') { FS.tab = 'holding'; invalidate('panel', 'tabs', 'rail'); requestAnimationFrame(() => HUD_ACTIONS['hp-jump']({ id: 'hp-build' })); return; }
   if (g.kind === 'scout') { goToItem({ p: g.p, q: g.q, tile: g.tile, tab: 'hosts' }); return; }
   if (g.kind === 'march') {

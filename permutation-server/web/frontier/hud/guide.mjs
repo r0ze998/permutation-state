@@ -25,7 +25,7 @@ const dist = (a, b) => { const dq = a.q - b.q, dp = a.p - b.p; return (Math.abs(
 /**
  * The current step's target: `{step, kind, p, q, tile?, host?}` or null —
  * `march` the nearest loaded camp and the first ready host (not a scout or settler),
- * `build` / `scout` the active holding, `settle` free land (the settle lens).
+ * `build` / `scout` the active holding.
  */
 export function guideTarget(FS) {
   if (guideLevel(FS) !== 'all' || FS.mode !== 'play') return null;
@@ -33,7 +33,7 @@ export function guideTarget(FS) {
   try { st = onboardingState(factsOf(FS), FS.ui?.dismissed ?? [], FS.clock ?? null); } catch { return null; }
   if (st.dismissed) return null;
   const step = st.current, h = activeHolding(FS);
-  if (step === 'join' && FS.land?.stage === 'joined') return { step, kind: 'settle' };
+  // joining is choosing a nation (owner decision V2): the guide never points at land to choose
   if (!h) return null;
   if (step === 'build') return { step, kind: 'build', p: h.p, q: h.q, tile: h.tile };
   if (step === 'scout') return { step, kind: 'scout', p: h.p, q: h.q, tile: h.tile };
@@ -53,8 +53,8 @@ export function guideTarget(FS) {
 
 /** The guide card's button for a target. */
 export function goText(t) {
-  return { march: t.host ? L`この野営地へ進軍を準備する` : L`野営地を地図で見る`, build: L`建設のパネルへ`, scout: L`拠点と軍勢を見る`, settle: L`入植できる地を地図で見る` }[t.kind] ?? '';
+  return { march: t.host ? L`この野営地へ進軍を準備する` : L`野営地を地図で見る`, build: L`建設のパネルへ`, scout: L`拠点と軍勢を見る` }[t.kind] ?? '';
 }
 
 /** The map's label at the target. */
-export const guideLabel = t => ({ march: L`ガイド：蛮族の野営地`, build: L`ガイド：あなたの拠点`, scout: L`ガイド：ここから探索`, settle: L`ガイド：空き区画` }[t.kind] ?? L`ガイド`);
+export const guideLabel = t => ({ march: L`ガイド：蛮族の野営地`, build: L`ガイド：あなたの拠点`, scout: L`ガイド：ここから探索` }[t.kind] ?? L`ガイド`);

@@ -34,11 +34,11 @@ export const SCENES = [
     },
   },
   {
-    id: 'sites', title: 'site picker', page: 'index.html', stage: 'joined',
+    id: 'sites', title: 'first village placed automatically', page: 'index.html', stage: 'joined',
     async go(page) {
-      await click(page, '[data-act="pick-province"]');
-      await click(page, '[data-act="toggle-site"]');
-      await page.locator('[data-act="file-ticket"]:not([disabled])').waitFor();
+      // owner decision V2: no site picker; the page files the ticket itself (the fixture relay refuses, so it shows the retry)
+      await page.locator('#join-sites').waitFor();
+      await page.locator('[data-act="pick-province"], [data-act="toggle-site"], [data-act="file-ticket"]').count().then(n => { if (n) throw new Error(`site picker controls: ${n}`); });
     },
   },
   {

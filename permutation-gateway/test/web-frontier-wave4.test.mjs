@@ -99,7 +99,7 @@ test('the guide: levels filter, the onboarding card hides below "all"', async ()
   assert.equal(String(card.render({ ui: { guide: 'off', dismissed: [] }, mode: 'play' })), '');
   assert.equal(G.guideTarget({ ui: { guide: 'warn' }, mode: 'play' }), null);
   setLang('en');
-  for (const k of ['march', 'build', 'scout', 'settle']) assert.doesNotMatch(G.guideLabel({ kind: k }) + G.goText({ kind: k, host: '1' }), /[぀-ヿ一-鿿]/);
+  for (const k of ['march', 'build', 'scout']) assert.doesNotMatch(G.guideLabel({ kind: k }) + G.goText({ kind: k, host: '1' }), /[぀-ヿ一-鿿]/);
   setLang('ja');
 });
 

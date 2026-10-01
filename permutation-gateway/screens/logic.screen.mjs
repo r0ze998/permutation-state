@@ -129,18 +129,17 @@ function overviews(fullHome) {
   return map;
 }
 
-test('the site picker: the home wedge first; a full home wedge offers the adjacent wedges\' outermost ring (§5.9, W4-E D8)', () => {
-  const base = { citizen: { faction: 0 }, record: { rings: [{}, {}, {}, {}] }, land: { stage: 'joined', escrowNeeded: 7_152_640n } };
-  const open = join.sitePicker({ ...base, overviews: overviews(false) });
-  assert.equal(open.overflow, null);
-  assert.ok(open.provinces.length > 0 && open.provinces.every(p => wedgeOf(p.p, p.q) === homeWedge(0)));
-  const full = join.sitePicker({ ...base, overviews: overviews(true) });
-  assert.deepEqual(full.overflow, { ring: 3 });
-  assert.ok(full.provinces.length > 0);
-  for (const p of full.provinces) {
-    assert.equal(p.ring, 3);
-    assert.notEqual(wedgeOf(p.p, p.q), homeWedge(0));
-  }
+test('the automatic ticket (owner decision V2): up to three free sites, one per province in turn, candidates nearest ring first', async () => {
+  const { autoSites, candidateProvinces } = await import('../../permutation-server/web/frontier/fland.mjs');
+  const { overflowProvinces } = await import('../../permutation-server/web/frontier/onboarding.mjs');
+  const prov = (p, q, free) => ({ p, q, siteCount: 12, sites: Array.from({ length: 12 }, (_, i) => i * 5), siteMirror: Array.from({ length: 12 }, (_, i) => ({ state: free.includes(i) ? 0 : 1 })) });
+  const [a, b] = ringProvinces(2).filter(x => wedgeOf(x.p, x.q) === homeWedge(0));
+  assert.deepEqual(autoSites([prov(a.p, a.q, [1, 2, 3]), prov(b.p, b.q, [7])]).map(s => [s.p, s.q, s.site]), [[a.p, a.q, 1], [b.p, b.q, 7], [a.p, a.q, 2]]);
+  assert.deepEqual(autoSites([prov(a.p, a.q, [])]), []);
+  const cands = candidateProvinces(overviews(false), 0);
+  assert.ok(cands.length && cands.every(p => wedgeOf(p.p, p.q) === homeWedge(0)) && cands[0].ring === 2);
+  const o = overflowProvinces(overviews(true), 0, 4);
+  assert.ok(o.full && o.provinces.every(p => p.ring === 3 && wedgeOf(p.p, p.q) !== homeWedge(0)));
 });
 
 // WCAG 2.x relative luminance and contrast of #rrggbb colours.

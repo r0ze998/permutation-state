@@ -62,7 +62,9 @@ export async function startServer() {
     const quota = { left: 38, resetsAt: W.GENESIS_TS + 86_400, lamportsLeft: '400000000' };
     if (method === 'GET' && path === '/gw/f/quota') return json(res, 200, { ok: true, ...quota });
     if (method === 'GET' && path === '/gw/f/relay') return json(res, 200, { ok: true, feePayer: v.A.season, blockhash: '11111111111111111111111111111111', lastValidBlockHeight: 1000, programId: W.PROGRAM, quota });
-    return json(res, 503, { ok: false, code: 'Unavailable', error: 'the screenshot fixture relay sends nothing' });
+    // a refusal in the body, not an HTTP error: the joined page files its first ticket by itself (owner decision V2)
+    // and must show its retry, while the smoke counts HTTP errors as failures
+    return json(res, 200, { ok: false, code: 'Unavailable', error: 'the screenshot fixture relay sends nothing' });
   }
 
   async function file(path, res) {
