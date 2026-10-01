@@ -12,6 +12,7 @@ import { RESOURCES, RESOURCE_ORDER, UNITS, TIERS, BUILDINGS, HOLDING_STATES, err
 import { storesAt, holdingFacts, BUILD_ITEMS, UNIT_ORDER, SETTLER, actionBlocks, baseProduction } from '../fland.mjs';
 import { holdingName } from '../people/ui.mjs';
 import { span } from '../hud/hud.mjs';
+import { termButton } from '../hud/glossary.mjs';
 import { inTime, row, timeHtml } from './shell.mjs';
 
 const costText = cost => cost.map((c, i) => (c ? `${RESOURCES[RESOURCE_ORDER[i]]} ${fmtNum(c)}` : null)).filter(Boolean).join(' · ');
@@ -77,10 +78,10 @@ export function render(FS) {
   const cards = buildCards(h, m.stores);
   return html`<section aria-labelledby="holding-title" class="holding"><h3 id="holding-title">${holdingName(h)} <span class="muted">${L`拠点 州 ${h.p},${h.q} 区画 ${h.site + 1}`}</span></h3>
     <dl class="facts">
-      ${row(L`段階`, `${TIERS[h.tier] ?? h.tier} · ${state}`)}
+      ${row(L`段階`, html`${TIERS[h.tier] ?? h.tier} · ${state}${termButton('tier')}`)}
       ${f.state === 'provisional' ? row(L`確定`, L`同じ鐘の入植希望がすべて決まってから`) : ''}
-      ${f.shieldLeft > 0 ? row(L`保護`, inTime(f.shieldLeft)) : ''}
-      ${row(L`休眠まで`, f.dormantIn > 0 ? inTime(f.dormantIn) : L`休眠中`)}
+      ${f.shieldLeft > 0 ? row(L`保護`, html`${inTime(f.shieldLeft)}${termButton('shield')}`) : ''}
+      ${row(L`休眠まで`, html`${f.dormantIn > 0 ? inTime(f.dormantIn) : L`休眠中`}${termButton('dormant')}`)}
     </dl>
     <nav class="hp-nav" aria-label="${L`拠点の操作`}">${PANELS.map(x => html`<button type="button" class="hp-chip" data-act="hp-jump" data-id="${x.id}"><span aria-hidden="true">${x.glyph}</span>${x.text()}</button>`)}</nav>
 
@@ -122,12 +123,12 @@ export function render(FS) {
     <h4>${L`進軍の記録（4つ）`}</h4>
     ${f.transits.length ? html`<ul class="list">${f.transits.map(t => html`<li>${L`枠 ${t.slot + 1}：第${fmtNum(t.arriveBell)}鐘に到着`}</li>`)}</ul>` : html`<p class="muted">${L`進軍中の軍勢はいません`}</p>`}</section>
 
-    <section class="hpanel" id="hp-garrison" aria-labelledby="hp-garrison-h"><h4 id="hp-garrison-h">⛨ ${L`守備隊`}</h4>
+    <section class="hpanel" id="hp-garrison" aria-labelledby="hp-garrison-h"><h4 id="hp-garrison-h">⛨ ${L`守備隊`}${termButton('garrison')}</h4>
     <form class="inline" data-form="garrison"><label>${L`増員（控えの兵から）`}<input name="delta" type="number" min="1" step="1" value="100" inputmode="numeric"></label>
       <button type="submit" class="btn" ${raw(m.blocks.Garrison.length ? 'disabled' : '')}>${L`守備隊を増やす`}</button></form>
     <p class="muted">${L`M1 の守備隊は増やすだけです（引き上げは次の段階で）。`}</p>
     ${blockedLine(m.blocks.Garrison)}
-    <h4>${L`夜番の時間`}</h4>
+    <h4>${L`夜番の時間`}${termButton('vigil')}</h4>
     <p class="muted">${L`${String(Math.floor((FS.citizen?.vigilStartMin ?? 0) / 60)).padStart(2, '0')}:${String((FS.citizen?.vigilStartMin ?? 0) % 60).padStart(2, '0')} から（UTC）`}</p>
     <form class="inline" data-form="vigil"><label>${L`開始（UTC の時）`}<input name="hour" type="number" min="0" max="23" value="${Math.floor((FS.citizen?.vigilStartMin ?? 0) / 60)}" inputmode="numeric"></label>
       <button type="submit" class="btn">${L`変える`}</button></form>

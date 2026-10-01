@@ -13,7 +13,7 @@ import { UNIT_ORDER } from '../fland.mjs';
 import { ringOf } from '../fgeo.mjs';
 import { troopsOf } from '../fmarch.mjs';
 import { swatch } from '../screens/shell.mjs';
-import { personChip, hostOwner } from '../people/ui.mjs';
+import { personChip, hostOwner, holdingName } from '../people/ui.mjs';
 import { identityOf } from '../people/identity.mjs';
 import { activityText } from '../people/activity.mjs';
 import { hostRows } from '../screens/host.mjs';
@@ -97,6 +97,19 @@ export function inspectActions(FS, m) {
 
 const dataAttrs = d => raw(Object.entries(d).map(([k, v]) => `data-${k}="${String(v).replace(/[^\w.-]/g, '')}"`).join(' '));
 
+/**
+ * The selection on the other tabs (UI plan E4): one line naming what the map
+ * has selected, with "show on the map" and "clear" — the tab keeps its own content.
+ */
+export function renderBrief(FS, terrainOf) {
+  const m = inspectModel(FS, terrainOf);
+  if (!m) return '';
+  const t = m.tile, site = t?.site;
+  const what = site?.state === 'holding' ? html` · ${swatch(site.faction)}${holdingName({ p: m.p, q: m.q, site: site.index }, site.tier ?? 0)}` : t?.hosts?.length ? html` · ${L`軍勢 ${fmtNum(t.hosts.length)}`}` : '';
+  return html`<div class="sel-brief" role="status"><span class="sel-what">${L`選択中`}: ${t ? L`州 ${m.p},${m.q} · マス ${t.idx + 1}` : L`州 ${m.p},${m.q}`}${what}</span>
+    <button type="button" class="btn small" data-act="tab" data-tab="map">${L`地図で詳しく`}</button><button type="button" class="btn small" data-act="sel-clear" aria-label="${L`選択を外す`}">×</button></div>`;
+}
+
 export function render(FS, terrainOf, activities = null) {
   const m = inspectModel(FS, terrainOf);
   if (!m) return html`<section class="inspect" aria-labelledby="inspect-title"><h3 id="inspect-title">${L`選択`}</h3><p class="muted">${L`地図のマスを選ぶと、ここに中身が出ます。`}</p></section>`;
@@ -109,7 +122,7 @@ export function render(FS, terrainOf, activities = null) {
   if (m.relation.length) facts.push(html`<div class="row"><dt>${L`あなたとの関係`}</dt><dd>${m.relation.map(r => html`<span class="nowrap rel-${r.friendly ? 'ally' : 'war'}">${swatch(r.faction)}${factionName(r.faction)} ${r.friendly ? L`友好` : L`敵対`}</span> `)}</dd></div>`);
   if (m.clash) facts.push(html`<div class="row"><dt>${L`この鐘`}</dt><dd>${L`衝突あり`}</dd></div>`);
   const site = t?.site;
-  const siteBlock = site ? html`<h4>${site.state === 'holding' ? html`${swatch(site.faction)}${L`${TIERS[site.tier] ?? ''}（${factionName(site.faction)}）`}` : SITE_TEXT[site.state]()}${site.mine ? html` <span class="tag">${L`あなたの拠点`}</span>` : ''}</h4>
+  const siteBlock = site ? html`<h4>${site.state === 'holding' ? html`${swatch(site.faction)}${L`${holdingName({ p: m.p, q: m.q, site: site.index }, site.tier ?? 0)}（${factionName(site.faction)}）`}` : SITE_TEXT[site.state]()}${site.mine ? html` <span class="tag">${L`あなたの拠点`}</span>` : ''}</h4>
     ${site.owner ? html`<p class="inspect-owner">${personChip(site.owner, site.faction, { size: 40, full: true, note: L`この拠点の領主` })}</p>` : ''}
     <dl class="facts">
       <div class="row"><dt>${L`区画`}</dt><dd>${fmtNum(site.index + 1)}</dd></div>

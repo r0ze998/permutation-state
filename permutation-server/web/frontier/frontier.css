@@ -454,3 +454,17 @@ body[data-urgency="crit"] main { box-shadow: inset 0 0 0 4px #c8412f; }
 /* the strip never widens the header (it takes the room left, never wraps it) */
 .res-strip { flex: 1 1 0; contain: inline-size; }
 @media (max-width: 1699px) { .res-rate { display: none; } }
+
+/* terms (UI plan E3): a small "?" after a term; the definition in a popover; the glossary in More */
+.term-q { display: inline-grid; place-items: center; width: 24px; height: 24px; margin-left: 6px; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: var(--card); color: var(--ink-2); font: 700 13px/1 system-ui, sans-serif; vertical-align: middle; cursor: pointer; }
+.term-q:hover, .term-q:focus-visible { background: #d9b44a; color: #1f1a17; }
+.term-pop { top: auto; bottom: 90px; }
+.glossary div { padding: 6px 0; border-bottom: 1px solid var(--line-soft); }
+.glossary dt { font-weight: 700; } .glossary dd { margin: 2px 0 0; color: var(--ink-2); }
+.mc-label { margin: 10px 0 4px; font-weight: 650; display: flex; align-items: center; }
+@media (max-width: 759px) { .term-q { width: 44px; height: 44px; border-color: transparent; background: none; font-size: 15px; } .term-q::before { content: ""; } }
+.sel-brief { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 10px; padding: 6px 10px; border-radius: 10px; background: rgba(217,180,74,.14); border: 1px solid rgba(217,180,74,.45); }
+.sel-what { flex: 1 1 auto; font-weight: 650; }
+/* the bell's urgency is told by a mark too, not colour alone (UI plan E6) */
+.bell-pill[data-urgency="warn"] .bell-chip::before { content: "\23F3\FE0E"; margin-right: 4px; }
+.bell-pill[data-urgency="crit"] .bell-chip::before { content: "\26A0\FE0E"; margin-right: 4px; }

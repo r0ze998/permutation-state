@@ -97,6 +97,7 @@ import * as scene from './people/scene.mjs';
 import { activityText } from './people/activity.mjs';
 import { hostOwner } from './people/ui.mjs';
 import { leaderSvg } from './people/leaders.mjs';
+import * as glossary from './hud/glossary.mjs';
 import { battleScene, startBattle, battleLive, BATTLE_SPEEDS, PHASE } from './people/battle.mjs';
 import { decode as decodeAccount } from './fcodec.mjs';
 import { fromBase64 } from '../sdk/bytes.mjs';
@@ -173,6 +174,7 @@ export function panelMarkup(FS) {
   }
   // The selection first on the map tab (the player just chose it), then the guide.
   if (tab === 'map' && FS.selected) parts.push(inspect.render(FS, terrainRef, mapRef?.art?.activities ?? null));
+  else if (FS.selected) parts.push(inspect.renderBrief(FS, terrainRef));
   parts.push(onboardingCard.render(FS, { open: tab === 'map' }));
   // Another tab keeps one line of the selection (the inspector itself is on the map tab).
   if (tab !== 'map' && FS.selected) parts.push(html`<p class="sel-line">${Number.isInteger(FS.selected.idx) ? L`選択中：州 ${FS.selected.p},${FS.selected.q} · マス ${FS.selected.idx + 1}` : L`選択中：州 ${FS.selected.p},${FS.selected.q}`} <button type="button" class="btn small" data-act="tab" data-tab="map">${L`詳細`}</button></p>`);
@@ -188,7 +190,7 @@ export function panelMarkup(FS) {
     <button type="button" class="btn" data-act="forget">${L`この端末からこのシーズンの鍵を消す`}</button>
     ${onboardingCard.renderRestore(FS)}
     <p><button type="button" class="btn" data-act="practice-open">${L`練習モードを開く`}</button> <button type="button" class="btn" data-act="intro-open">${L`タイトルを見る`}</button></p>
-    <p><a href="practice.html">${L`練習`}</a> · <a href="spectate.html">${L`観戦`}</a></p></section>`);
+    <p><a href="practice.html">${L`練習`}</a> · <a href="spectate.html">${L`観戦`}</a></p></section>`, glossary.renderGlossary());
   return parts;
 }
 
@@ -330,6 +332,18 @@ function renderResPop(now) {
   el.setAttribute('aria-label', b.name);
   setHtmlIfChanged(el, hud.renderBreakdown(b));
 }
+/** The term popover (hud/glossary.mjs): one definition, a link to the glossary. */
+function renderTermPop() {
+  let el = $('term-pop');
+  if (!FS.term) { if (el) el.hidden = true; return; }
+  const doc = globalThis.document;
+  if (!el && doc) { el = doc.createElement('div'); el.id = 'term-pop'; el.className = 'res-pop term-pop'; el.setAttribute('role', 'dialog'); doc.body.appendChild(el); }
+  if (!el) return;
+  el.hidden = false;
+  el.setAttribute('aria-label', glossary.TERMS[FS.term]?.name() ?? '');
+  setHtmlIfChanged(el, glossary.renderTerm(FS.term));
+}
+function closeTermPop() { if (FS.term) { FS.term = null; renderTermPop(); } }
 function closeResPop() { if (FS.resOpen) { FS.resOpen = null; renderHudTick(FS.chain?.now?.() ?? 0); } }
 
 function renderHudTick(now) {
@@ -605,6 +619,10 @@ export const HUD_ACTIONS = {
   'battle-play': d => { leaveReport(); playBattle(num(d.p), num(d.q), num(d.bell), { focus: true }); },
   'res-open': d => { FS.resOpen = FS.resOpen === d.r ? null : d.r; renderHudTick(FS.chain?.now?.() ?? 0); },
   'res-close': () => closeResPop(),
+  'sel-clear': () => { FS.selected = null; invalidate('map', 'panel'); },
+  term: d => { FS.term = FS.term === d.term || !glossary.TERMS[d.term] ? null : d.term; renderTermPop(); $('term-pop')?.querySelector('button')?.focus?.(); },
+  'term-close': () => closeTermPop(),
+  'glossary-open': () => { closeTermPop(); leaveReport(); if (FS.mode === 'play') FS.tab = 'more'; invalidate('panel', 'tabs'); requestAnimationFrame(() => $('glossary')?.scrollIntoView?.({ block: 'start' })); },
   'hp-jump': d => { const el = /^hp-[a-z]+$/.test(d.id ?? '') ? $(d.id) : null; el?.scrollIntoView?.({ block: 'start', behavior: 'smooth' }); el?.querySelector?.('h4')?.focus?.(); },
   'battle-fx': d => { if (!['normal', 'fast', 'off'].includes(d.v)) return; const sc = scope(); FS.ui = sc ? saveUi(uiStorage, uiKey(sc), { battleFx: d.v }) : { ...(FS.ui ?? {}), battleFx: d.v }; invalidate('panel'); },
   attn: () => {
@@ -744,6 +762,7 @@ function delegate(doc) {
     const intro = $('intro');
     if (intro && !intro.hidden && (e.key === 'Escape' || e.key === 'Enter')) { e.preventDefault(); closeIntro(); return; }
     if (e.key === 'Escape' && FS.resOpen) { e.preventDefault(); closeResPop(); return; }
+    if (e.key === 'Escape' && FS.term) { e.preventDefault(); closeTermPop(); return; }
     // . , next / previous ready host; ] [ next / previous holding; 1–4 the lenses (never while typing)
     if ((FS.mode !== 'play' && !/^[1-4]$/.test(e.key)) || e.target?.closest?.('input, select, textarea') || e.metaKey || e.ctrlKey || e.altKey) return;
     const k = { '.': () => cycleHost(1), ',': () => cycleHost(-1), ']': () => cycleHolding(1), '[': () => cycleHolding(-1),

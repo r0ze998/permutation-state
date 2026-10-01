@@ -19,6 +19,7 @@ import { bellStart } from '../clock.mjs';
 import { composerMarch, routeLine } from '../screens/march.mjs';
 import { clockTime, swatch } from '../screens/shell.mjs';
 import { DIRECTIONS, tileHex } from '../fgeo.mjs';
+import { termButton } from './glossary.mjs';
 
 /** Stance glyphs (the triangle: Assault beats Flank, Flank beats Brace, Brace beats Assault). */
 const STANCE_GLYPH = { Hold: '■', Assault: '▲', Flank: '⇄', Brace: '❙' };
@@ -88,14 +89,16 @@ export function render(FS) {
     <h3 id="mc-title">${L`進軍：${unit} ${fmtNum(c.host.troops)}`}</h3>
     ${c.dest ? html`
       <p class="mc-dest"><strong>${L`行き先 州 ${c.dest.p},${c.dest.q} · マス ${c.dest.tile + 1}`}</strong>
-        <span class="mc-sealed">${L`封の中（あなたにしか見えません）`}</span></p>
+        <span class="mc-sealed">${L`封の中（あなたにしか見えません）`}${termButton('seal')}</span></p>
       <p class="mc-route">${c.route ? routeLine(c.route) : c.routeError ? clientText(c.routeError) : L`道のりを探しています…`}</p>
       ${w ? html`<div class="mc-bell" role="group" aria-label="${L`到着の鐘`}">
         <button type="button" class="btn small" data-act="mc-bell" data-d="-1" aria-label="${L`1つ早い鐘`}" ${raw(w.value <= w.min ? 'disabled' : '')}>−</button>
         <span class="mc-bell-v"><strong>${L`第${fmtNum(w.value)}鐘に到着`}</strong>${at ? html` <span class="muted">${L`${at.local} ごろ`}</span>` : ''}</span>
         <button type="button" class="btn small" data-act="mc-bell" data-d="1" aria-label="${L`1つ遅い鐘`}" ${raw(w.value >= w.max ? 'disabled' : '')}>+</button></div>` : ''}
+      <p class="mc-label">${L`構え`}${termButton('stance')}</p>
       <div class="mc-stances" role="radiogroup" aria-label="${L`構え`}">${STANCES.map((s, i) => html`<button type="button" class="mc-stance" role="radio" aria-checked="${i === m.stance ? 'true' : 'false'}" data-act="mc-stance" data-v="${i}">
         <span class="mc-glyph" aria-hidden="true">${STANCE_GLYPH[s]}</span><span>${STANCE_TEXT[s]}</span>${BEATS[s] ? html`<span class="mc-beats">${L`${STANCE_TEXT[BEATS[s]]}に強い`}</span>` : html`<span class="mc-beats">${L`相性なし`}</span>`}</button>`)}</div>
+      <p class="mc-label">${L`撤退の比率`}${termButton('retreat')}</p>
       <div class="mc-retreat" role="radiogroup" aria-label="${L`撤退`}">${RETREAT_CHOICES.filter(r => r.id !== 'custom').map(r => html`<button type="button" class="btn small" role="radio" aria-checked="${r.id === m.retreat.choice ? 'true' : 'false'}" data-act="mc-retreat" data-v="${r.id}">${RETREAT_SHORT[r.id]()}</button>`)}</div>
       ${def ? html`<div class="mc-odds mc-odds-${odds.id}">
         <p><strong>${odds.text}</strong> <span class="muted">${L`目安（兵数の比べ。実際は鐘の始まりの顔ぶれと乱数で決まります）`}</span></p>
