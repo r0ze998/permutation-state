@@ -15,6 +15,7 @@
 // only provinces the viewer knows or sees are drawn as tiles, with the fog
 // veil over them; H goes to the viewer's first holding.
 import { paintPins } from '../hud/pins.mjs';
+import { paintReach } from '../hud/reach.mjs';
 import { inverseHex } from '../../map.mjs';
 import { L, onLangChange } from '../../lang.mjs';
 import { locate, ringOf, ringProvinces, hexDistance, tileHex } from '../fgeo.mjs';
@@ -432,6 +433,7 @@ export class FrontierMap {
         // people (people/crowds.mjs): the source's departures, explores and holder names; tags nearest the view centre first
         people: src.people ? { ...src.people(), centre: { x: this.view.x, y: this.view.y } } : null });
     }
+    if (src.reach?.tiles?.length) { paintReach(ctx, src.reach.tiles, z, (globalThis.performance?.now?.() ?? Date.now()) / 1000, src.reach.t0); this.invalidateSoon(); }
     if (src.route) paintRoute(ctx, src.route, z);
     if (src.threats?.length) { paintThreats(ctx, src.threats, z, src.threatLabel ?? null); this.invalidateSoon(); }
     if (src.pins?.length) paintPins(ctx, src.pins, z);

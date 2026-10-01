@@ -104,6 +104,7 @@ import * as guide from './hud/guide.mjs';
 import { forecast, forecastKey } from './hud/forecast.mjs';
 import { BUILD_ITEMS } from './fland.mjs';
 import { UNIT_KINDS } from './people/units.mjs';
+import { reachTiles, reachSteps } from './hud/reach.mjs';
 import * as pins from './hud/pins.mjs';
 import { battleScene, startBattle, battleLive, BATTLE_SPEEDS, PHASE } from './people/battle.mjs';
 import { decode as decodeAccount } from './fcodec.mjs';
@@ -444,6 +445,20 @@ function constructionsNow() {
 }
 /** A queued build's length (the first copy's hour when the queue does not say). */
 const buildSecsOf = q => (Number(q.secs) > 0 ? Number(q.secs) : 3_600);
+
+let reachCache = { key: null, tiles: [], t0: 0 };
+/** The tiles the composed march's host could reach (cached per host and loaded provinces). */
+function reachNow() {
+  const c = FS.compose;
+  if (!c?.host || c.dest || c.sending) { reachCache.key = null; return null; }
+  const key = `${c.host.id}|${FS.provinces.size}`;
+  if (reachCache.key !== key) {
+    const tiles = reachTiles({ start: { p: c.origin.p, q: c.origin.q, tile: c.host.tile }, steps: reachSteps(c.host.staminaValue ?? c.host.stamina ?? 120),
+      provinceOf: (p, q) => FS.provinces.get(`${p},${q}`)?.province ?? null, faction: FS.citizen?.faction ?? null });
+    reachCache = { key, tiles, t0: reachCache.key && reachCache.key.split('|')[0] === String(c.host.id) ? reachCache.t0 : performance.now() / 1000 };
+  }
+  return { tiles: reachCache.tiles, t0: reachCache.t0 };
+}
 
 /** The map's name tags use the viewer's verified profile on their own holdings. */
 function ownNamer(base) {
@@ -1133,6 +1148,8 @@ export async function boot() {
           // incoming risk around the viewer's holdings (hud/hud.mjs attention, controller incoming warnings)
           threats: (FS.incoming ?? []).map(w => ({ p: w.holding.p, q: w.holding.q, tile: w.holding.tile, bell: w.bell })),
           threatLabel: w => L`来襲 第${fmtNum(w.bell)}鐘`,
+          // the move preview while a march has a host and no destination yet (hud/reach.mjs)
+          reach: reachNow(),
           // the viewer's pins (hud/pins.mjs)
           pins: FS.pins ?? [],
           // the guide's target of the current step (hud/guide.mjs; "all" only)
