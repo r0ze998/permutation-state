@@ -251,3 +251,11 @@ body[data-urgency="crit"] main { box-shadow: inset 0 0 0 4px #c8412f; }
 .highlights li { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 8px; background: var(--card); }
 .hl-dot { width: 24px; height: 24px; flex: none; border-radius: 50%; background: var(--warn-bg); box-shadow: inset 0 0 0 2px #c8412f; }
 .hl-depart { box-shadow: inset 3px 0 0 #b07a12; } .hl-clash { box-shadow: inset 3px 0 0 #c8412f; } .hl-settle { box-shadow: inset 3px 0 0 #2e7d4f; }
+/* ---- the map's hover tip (what a tile's people are doing; app.mjs showTip) */
+.map-tip { position: absolute; left: 0; top: 0; z-index: 4; transform: translate(var(--x, 0), var(--y, 0)); display: grid; gap: 2px; max-width: 280px; padding: 8px 10px; border-radius: 10px; background: rgba(27,46,40,.94); color: #fffaf0; font-size: 13px; pointer-events: none; box-shadow: 0 2px 10px rgba(0,0,0,.25); }
+.tip-line { display: block; }
+.tip-battle { color: #ffb4a4; font-weight: 650; } .tip-depart, .tip-muster, .tip-walls, .tip-build, .tip-recruit { color: #f3d58a; }
+@media (min-width: 760px) { .map-tip { grid-column: 2; grid-row: 1; align-self: start; justify-self: start; } }
+.doing li { padding: 4px 8px; border-left: 4px solid var(--line); border-radius: 6px; background: var(--paper); }
+.doing-battle { border-left-color: #c8412f !important; } .doing-depart, .doing-muster, .doing-walls, .doing-build, .doing-recruit { border-left-color: #b07a12 !important; }
+.doing-guard, .doing-garrison { border-left-color: #2e7d4f !important; } .doing-shield, .doing-explore { border-left-color: #3f78c2 !important; }

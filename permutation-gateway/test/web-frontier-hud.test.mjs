@@ -87,8 +87,8 @@ test('inspector: a tile with a site, hosts and relations; the actions it offers'
   setLang('ja');
   const prov = {
     p: 2, q: 0, relations: 0n, sites: Uint8Array.from([9, 20]), resolveSummary: { bell: 41 },
-    siteMirror: [{ state: 1, faction: 2, tier: 1, garrison: 300, shieldUntilBell: 0 }, { state: 0, faction: 7, tier: 0, garrison: 0, shieldUntilBell: 0 }],
-    entries: [{ id: 5n, faction: 2, unit: 0, tile: 9, state: 1, troops: 400 }, { id: 6n, faction: 2, unit: 0, tile: 3, state: 1, troops: 1 }], camp: { state: 0 },
+    siteMirror: [{ state: 1, faction: 2, tier: 1, garrison: 300000, shieldUntilBell: 0 }, { state: 0, faction: 7, tier: 0, garrison: 0, shieldUntilBell: 0 }],
+    entries: [{ id: 5n, faction: 2, unit: 0, tile: 9, state: 1, troops: 400000 }, { id: 6n, faction: 2, unit: 0, tile: 3, state: 1, troops: 1 }], camp: { state: 0 },
   };
   const FS = { mode: 'play', citizen: { faction: 0 }, holdings: [], nowBell: 42, land: { stage: 'joined' },
     overviews: new Map([[2, { provinces: [{ p: 2, q: 0, owners: [2, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7], sites: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], clash: true }] }]]),

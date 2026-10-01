@@ -22,6 +22,7 @@ import { tileHex } from '../fgeo.mjs';
 import { project } from '../../map.mjs';
 import { FACTION_FILL, FACTION_DARK, shade, avatarImage } from './avatar.mjs';
 import { SKIN } from './identity.mjs';
+import { paintBadge } from './activity.mjs';
 
 /** Screen px per hex radius from which figures are drawn, and from which every resident is. */
 export const PEOPLE_MIN_R = 22;
@@ -83,6 +84,15 @@ export function figure(ctx, x, y, s, { kind = 'folk', cloth = '#8a6a46', trim = 
     ctx.fillStyle = '#c9ced2'; ctx.beginPath(); ctx.moveTo(x + face * s * 0.24, top - s * 0.52 - bob); ctx.lineTo(x + face * s * 0.2, top - s * 0.38 - bob); ctx.lineTo(x + face * s * 0.28, top - s * 0.38 - bob); ctx.closePath(); ctx.fill();
     ctx.fillStyle = trim ?? cloth; ctx.strokeStyle = dark; ctx.lineWidth = s * 0.03;
     ctx.beginPath(); ctx.ellipse(x - face * s * 0.16, mid - s * 0.18, s * 0.1, s * 0.15, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  } else if (kind === 'builder' || kind === 'fighter') {
+    // an arm with a hammer (builder) or a sword (fighter), swinging with the step
+    const sw = Math.sin(step * Math.PI * 2) * (kind === 'fighter' ? 1.1 : 0.9);
+    const ax = x + face * s * 0.12, ay = top + s * 0.14;
+    const hx = ax + face * Math.cos(sw - 0.6) * s * 0.34, hy = ay - Math.sin(sw - 0.6) * s * 0.34;
+    ctx.strokeStyle = kind === 'fighter' ? '#d8dde2' : '#6b5032'; ctx.lineWidth = s * (kind === 'fighter' ? 0.05 : 0.06);
+    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(hx, hy); ctx.stroke();
+    if (kind === 'builder') { ctx.fillStyle = '#7d848a'; ctx.fillRect(hx - s * 0.07, hy - s * 0.05, s * 0.14, s * 0.1); }
+    else { ctx.fillStyle = '#9aa0a6'; ctx.beginPath(); ctx.arc(x, top - s * 0.11, s * 0.115, Math.PI, 0); ctx.fill(); }
   } else if (kind === 'carrier') {
     ctx.fillStyle = '#c9a66a'; ctx.strokeStyle = '#7a5a2a'; ctx.lineWidth = s * 0.03;
     ctx.beginPath(); ctx.ellipse(x - face * s * 0.1, top + s * 0.06, s * 0.16, s * 0.11, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
@@ -90,6 +100,29 @@ export function figure(ctx, x, y, s, { kind = 'folk', cloth = '#8a6a46', trim = 
     ctx.fillStyle = dark; ctx.beginPath(); ctx.arc(x, top - s * 0.1, s * 0.13, Math.PI * 1.05, -0.05); ctx.fill();
   }
   ctx.globalAlpha = 1;
+}
+
+/** A seated figure (a resting host). */
+function sitter(ctx, x, y, s, { cloth, skin = SKIN[1], trim = null, face = 1 }) {
+  ctx.globalAlpha = 0.25; ctx.fillStyle = '#1a1612'; ctx.beginPath(); ctx.ellipse(x, y, s * 0.26, s * 0.08, 0, 0, 7); ctx.fill(); ctx.globalAlpha = 1;
+  ctx.fillStyle = cloth; ctx.strokeStyle = shade(cloth, -0.35); ctx.lineWidth = s * 0.04;
+  ctx.beginPath(); ctx.ellipse(x, y - s * 0.24, s * 0.17, s * 0.22, 0, 0, 7); ctx.fill(); ctx.stroke();
+  if (trim) { ctx.fillStyle = trim; ctx.fillRect(x - s * 0.15, y - s * 0.26, s * 0.3, s * 0.06); }
+  ctx.fillStyle = skin; ctx.beginPath(); ctx.arc(x + face * s * 0.02, y - s * 0.55, s * 0.11, 0, 7); ctx.fill();
+}
+/** A small campfire with rising smoke. */
+function campfire(ctx, x, y, s, t) {
+  ctx.fillStyle = '#5b4632'; ctx.fillRect(x - s * 0.22, y - s * 0.05, s * 0.44, s * 0.08);
+  const fl = 0.8 + Math.sin(t * 9) * 0.15;
+  ctx.fillStyle = '#f2a33a'; ctx.beginPath(); ctx.moveTo(x - s * 0.14, y - s * 0.04); ctx.quadraticCurveTo(x, y - s * 0.5 * fl, x + s * 0.14, y - s * 0.04); ctx.fill();
+  ctx.fillStyle = '#ffe08a'; ctx.beginPath(); ctx.moveTo(x - s * 0.06, y - s * 0.04); ctx.quadraticCurveTo(x, y - s * 0.28 * fl, x + s * 0.06, y - s * 0.04); ctx.fill();
+  for (let i = 0; i < 3; i++) { const k = (t * 0.5 + i / 3) % 1; ctx.globalAlpha = 0.35 * (1 - k); ctx.fillStyle = '#d8d4cc'; ctx.beginPath(); ctx.arc(x + Math.sin(k * 6 + i) * s * 0.12, y - s * (0.5 + k * 1.1), s * (0.08 + k * 0.12), 0, 7); ctx.fill(); }
+  ctx.globalAlpha = 1;
+}
+/** A clash spark. */
+function spark(ctx, x, y, s) {
+  ctx.strokeStyle = '#ffe08a'; ctx.lineWidth = s * 0.05;
+  ctx.beginPath(); for (let i = 0; i < 6; i++) { const a = i * Math.PI / 3; ctx.moveTo(x + Math.cos(a) * s * 0.06, y + Math.sin(a) * s * 0.06); ctx.lineTo(x + Math.cos(a) * s * 0.2, y + Math.sin(a) * s * 0.2); } ctx.stroke();
 }
 
 /** A banner on a pole (a departing column's standard). */
@@ -108,7 +141,7 @@ function banner(ctx, x, y, s, faction, t) {
  * `explores` [{p, q, tiles: [idx], faction}]; `fogOf(p, q)` the province's
  * fog. Returns the number of figures drawn (0: nothing moves, no new frame).
  */
-export function paintPeople(ctx, { tiles = [], zoom = 1, t = (globalThis.performance?.now?.() ?? Date.now()) / 1000, departures = [], explores = [], fogOf = () => 'clear', viewerFaction = null, columnLabel = null } = {}) {
+export function paintPeople(ctx, { tiles = [], zoom = 1, t = (globalThis.performance?.now?.() ?? Date.now()) / 1000, departures = [], explores = [], fogOf = () => 'clear', viewerFaction = null, columnLabel = null, activities = null } = {}) {
   const r = RADIUS * zoom;
   if (r < PEOPLE_MIN_R) return 0;
   const s = RADIUS * 0.15;
@@ -118,6 +151,8 @@ export function paintPeople(ctx, { tiles = [], zoom = 1, t = (globalThis.perform
   // residents and gatherers around the holdings
   for (const u of tiles) {
     if (u.state !== 1 || !(u.owner < 6) || !seen(u.fog ?? fogOf(u.p, u.pq))) continue;
+    const acts = activities?.get(`${u.p},${u.pq},${u.idx}`) ?? [];
+    if (acts.some(a => a.kind === 'dormant')) continue;  // its lord is away: a quiet holding
     const n = full ? RESIDENTS[u.tier] ?? 2 : 1;
     for (let i = 0; i < n; i++) {
       const h = hash(u.q, u.r ?? u.idx, i);
@@ -133,6 +168,35 @@ export function paintPeople(ctx, { tiles = [], zoom = 1, t = (globalThis.perform
       const d = DIRS[Math.floor(hash(u.idx, u.q, 11) * 6)];
       const k = (t * 0.07 + hash(u.q, u.idx)) % 1, there = k < 0.5 ? k * 2 : 2 - k * 2;
       list.push({ x: u.x + d[0] * 0.75 * there, y: u.y + d[1] * 0.75 * there + RADIUS * 0.1, kind: 'carrier', cloth: '#7a6a4a', skin: SKIN[2], step: (t * 1.8) % 1, face: (k < 0.5 ? d[0] : -d[0]) >= 0 ? 1 : -1 });
+    }
+  }
+  // what the tile is doing (people/activity.mjs): builders, drilling recruits, guards, resting hosts, a fight
+  if (activities && full) for (const u of tiles) {
+    const acts = activities.get(`${u.p},${u.pq},${u.idx}`);
+    if (!acts || !seen(u.fog ?? fogOf(u.p, u.pq))) continue;
+    const kinds = new Set(acts.map(a => a.kind));
+    const f = acts.find(a => a.faction < 6)?.faction ?? u.owner;
+    const cloth = shade(FACTION_FILL[f] ?? '#8a8a80', -0.1), trim = FACTION_DARK[f];
+    const at = (dx, dy) => ({ x: u.x + dx * RADIUS, y: u.y + dy * RADIUS * FLATTEN + RADIUS * 0.1 });
+    if (kinds.has('walls') || kinds.has('build')) for (let i = 0; i < 3; i++) {
+      const p = at(-0.45 + i * 0.42, 0.42 - (i % 2) * 0.12);
+      list.push({ ...p, kind: 'builder', cloth: '#8a6a46', skin: SKIN[(i + 2) % SKIN.length], step: (t * 1.4 + i * 0.33) % 1, face: i % 2 ? -1 : 1 });
+    }
+    if (kinds.has('muster') || kinds.has('recruit')) for (let i = 0; i < 6; i++) {
+      const p = at(-0.3 + (i % 3) * 0.3, -0.05 + Math.floor(i / 3) * 0.24);
+      list.push({ ...p, kind: 'soldier', cloth, trim, skin: SKIN[i % SKIN.length], step: Math.floor(t * 2) % 2 ? 0.25 : 0, face: 1 });
+    }
+    if (kinds.has('garrison')) {
+      const n = Math.min(4, 1 + Math.floor(Math.log10(1 + (acts.find(a => a.kind === 'garrison')?.n ?? 0))));
+      for (let i = 0; i < n; i++) { const a = (i / n) * Math.PI * 2 + 0.6; const p = at(Math.cos(a) * 0.62, Math.sin(a) * 0.62); list.push({ ...p, kind: 'soldier', cloth, trim, skin: SKIN[(i + 1) % SKIN.length], step: 0, face: Math.cos(a) >= 0 ? 1 : -1 }); }
+    }
+    if (kinds.has('rest')) for (let i = 0; i < 3; i++) { const p = at(-0.3 + i * 0.3, 0.38); list.push({ ...p, kind: 'sitter', cloth, trim, skin: SKIN[i % SKIN.length], face: i ? -1 : 1 }); }
+    if (kinds.has('rest')) list.push({ ...at(0, 0.52), fire: true });
+    if (kinds.has('battle')) for (let i = 0; i < 3; i++) {
+      const p = at(-0.38 + i * 0.36, 0.1 + (i % 2) * 0.16);
+      list.push({ ...p, x: p.x - RADIUS * 0.09, kind: 'fighter', cloth, trim, skin: SKIN[i % SKIN.length], step: (t * 2.6 + i * 0.4) % 1, face: 1 });
+      list.push({ ...p, x: p.x + RADIUS * 0.09, kind: 'fighter', cloth: '#5f6a74', trim: '#2a2f34', skin: SKIN[(i + 3) % SKIN.length], step: (t * 2.6 + i * 0.4 + 0.5) % 1, face: -1 });
+      if (((t * 2.6 + i * 0.4) % 1) < 0.18) list.push({ x: p.x, y: p.y - RADIUS * 0.12, spark: true });
     }
   }
   // departing columns: soldiers circle their own tile (no heading) and fade
@@ -158,6 +222,9 @@ export function paintPeople(ctx, { tiles = [], zoom = 1, t = (globalThis.perform
   kept.sort((a, b) => a.y - b.y);
   for (const f of kept) {
     if (f.banner) banner(ctx, f.x, f.y, s, f.faction, t);
+    else if (f.fire) campfire(ctx, f.x, f.y, s, t);
+    else if (f.spark) spark(ctx, f.x, f.y, s);
+    else if (f.kind === 'sitter') sitter(ctx, f.x, f.y, s, f);
     else figure(ctx, f.x, f.y, s, f);
   }
   // the column's only public fact besides its origin: the arrival bell (`columnLabel(dep)` gives the text)
@@ -215,5 +282,31 @@ export function paintNameTags(ctx, { tiles = [], zoom = 1, nameOf = () => null, 
     n++;
   }
   ctx.restore();
+  return n;
+}
+
+/** Status badges from this many screen px of hex radius (Civ's unit flags). */
+export const BADGE_MIN_R = 26;
+
+/**
+ * One badge per tile with an activity (the first kind is the badge; a
+ * "+n" dot counts the rest), at the tile's upper right, screen sized.
+ * Battles pulse. Returns the badges drawn.
+ */
+export function paintBadges(ctx, { tiles = [], zoom = 1, activities = null, t = (globalThis.performance?.now?.() ?? Date.now()) / 1000 } = {}) {
+  if (!activities || RADIUS * zoom < BADGE_MIN_R) return 0;
+  let n = 0;
+  for (const u of tiles) {
+    const acts = activities.get(`${u.p},${u.pq},${u.idx}`);
+    if (!acts?.length || u.fog === 'unopened' || u.fog === 'distant') continue;
+    const top = acts[0];
+    const kinds = new Set(acts.map(a => a.kind));
+    const f = top.faction < 6 ? top.faction : null;
+    paintBadge(ctx, u.x + RADIUS * 0.5, u.y - RADIUS * 0.42, top.kind, {
+      zoom, r: 10, more: kinds.size - 1, fill: f === null ? '#5b3b2a' : FACTION_FILL[f], dark: f === null ? '#2a1a12' : FACTION_DARK[f],
+      pulse: top.kind === 'battle' ? (t * 1.2) % 1 : 0,
+    });
+    n++;
+  }
   return n;
 }

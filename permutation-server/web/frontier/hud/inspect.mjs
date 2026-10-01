@@ -11,9 +11,11 @@ import { L, fmtNum } from '../../lang.mjs';
 import { TIERS, UNITS, factionName } from '../fi18n.mjs';
 import { UNIT_ORDER } from '../fland.mjs';
 import { ringOf } from '../fgeo.mjs';
+import { troopsOf } from '../fmarch.mjs';
 import { swatch } from '../screens/shell.mjs';
 import { personChip, hostOwner } from '../people/ui.mjs';
 import { identityOf } from '../people/identity.mjs';
+import { activityText } from '../people/activity.mjs';
 
 const TERRAIN_TEXT = { Grassland: () => L`草原`, Plains: () => L`平原`, Forest: () => L`森`, Hills: () => L`丘`, Mountain: () => L`山`, Water: () => L`水` };
 /** Site states as the overview carries them (herald SITE_STATE) and the mirror (3 = released: a Free City). */
@@ -51,14 +53,14 @@ export function inspectModel(FS, terrainOf) {
     const faction = m ? m.faction : rec?.owners?.[j];
     const mine = (FS.holdings ?? []).find(h => h.p === s.p && h.q === s.q && h.site === j) ?? null;
     const holder = state === 'holding' ? FS.roster?.ownerOf(s.p, s.q, j) ?? null : null;
-    tile.site = { index: j, state, faction: state === 'holding' ? faction : null, owner: holder ? identityOf(holder.tag) : null, tier: m?.tier ?? null, garrison: m ? Number(m.garrison) : null,
+    tile.site = { index: j, state, faction: state === 'holding' ? faction : null, owner: holder ? identityOf(holder.tag) : null, tier: m?.tier ?? null, garrison: m ? troopsOf(m.garrison) : null,
       shield: m ? m.shieldUntilBell > (FS.nowBell ?? 0) : false, mine: !!mine, holdingIndex: mine ? FS.holdings.indexOf(mine) : -1 };
   }
   for (const e of prov?.entries ?? []) {
     if (e.tile !== s.idx || (e.state !== 1 && e.state !== 2)) continue;
-    tile.hosts.push({ id: String(e.id), faction: e.faction, owner: hostOwner(FS.roster, e.id), unit: UNIT_ORDER[e.unit] ?? null, troops: Number(e.troops), pending: e.state === 2 });
+    tile.hosts.push({ id: String(e.id), faction: e.faction, owner: hostOwner(FS.roster, e.id), unit: UNIT_ORDER[e.unit] ?? null, troops: troopsOf(e.troops), pending: e.state === 2 });
   }
-  if (prov?.camp?.state === 1 && prov.camp.tile === s.idx) tile.camp = { troops: Number(prov.camp.troops) };
+  if (prov?.camp?.state === 1 && prov.camp.tile === s.idx) tile.camp = { troops: troopsOf(prov.camp.troops) };
   out.tile = tile;
   return out;
 }
@@ -83,7 +85,7 @@ export function inspectActions(FS, m) {
 
 const dataAttrs = d => raw(Object.entries(d).map(([k, v]) => `data-${k}="${String(v).replace(/[^\w.-]/g, '')}"`).join(' '));
 
-export function render(FS, terrainOf) {
+export function render(FS, terrainOf, activities = null) {
   const m = inspectModel(FS, terrainOf);
   if (!m) return html`<section class="inspect" aria-labelledby="inspect-title"><h3 id="inspect-title">${L`選択`}</h3><p class="muted">${L`地図のマスを選ぶと、ここに中身が出ます。`}</p></section>`;
   const t = m.tile;
@@ -103,10 +105,12 @@ export function render(FS, terrainOf) {
       ${site.shield ? html`<div class="row"><dt>${L`保護`}</dt><dd>${L`保護中（攻撃されません）`}</dd></div>` : ''}
     </dl>` : '';
   const hosts = t?.hosts?.length ? html`<h4>${L`このマスの軍勢`}</h4><ul class="list">${t.hosts.map(h => html`<li class="host-row">${h.owner ? personChip(h.owner, h.faction, { size: 24 }) : swatch(h.faction)}<span>${factionName(h.faction)} · ${h.unit ? UNITS[h.unit] : ''} ${fmtNum(h.troops)}</span>${h.pending ? html` <span class="muted">${L`（次の鐘から）`}</span>` : ''}</li>`)}</ul>` : '';
+  const now = t ? (activities?.get(`${m.p},${m.q},${t.idx}`) ?? []).filter((a, i, all) => all.findIndex(b => b.kind === a.kind) === i) : [];
+  const doing = now.length ? html`<h4>${L`いまの様子`}</h4><ul class="list doing">${now.map(a => html`<li class="doing-${a.kind}">${activityText(a)}</li>`)}</ul>` : '';
   const camp = t?.camp ? html`<p class="warn">${L`蛮族の野営地（${fmtNum(t.camp.troops)} 兵）`}</p>` : '';
   const acts = inspectActions(FS, m);
   return html`<section class="inspect" aria-labelledby="inspect-title"><h3 id="inspect-title">${title}</h3>
-    <dl class="facts">${facts}</dl>${siteBlock}${hosts}${camp}
+    <dl class="facts">${facts}</dl>${siteBlock}${doing}${hosts}${camp}
     ${!m.loaded && m.opened ? html`<p class="muted">${L`州の詳しい中身を読み込んでいます…`}</p>` : ''}
     ${acts.length ? html`<div class="actions">${acts.map(a => html`<button type="button" class="btn${a.primary ? ' primary' : ''}" data-act="${a.act}" ${dataAttrs(a.data)}>${a.text}</button>`)}</div>` : ''}
   </section>`;

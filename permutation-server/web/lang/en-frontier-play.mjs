@@ -241,4 +241,21 @@ export default {
   '{0}の{1}が州 {2},{3} に入植': '{1} of {0} settles in province {2},{3}',
   '州 {0},{1} で衝突（第{2}鐘）': 'A clash in province {0},{1} (bell {2})',
   'まだ見どころはありません': 'No highlights yet',
+
+  // ---- activities (people/activity.mjs): badges and the hover tip
+  '戦闘中': 'Fighting',
+  '出陣中（第{0}鐘に到着、行き先は秘密）': 'On the march (arrives at bell {0}; destination sealed)',
+  '編成中（第{0}鐘から加わる）': 'Mustering (joins at bell {0})',
+  '城壁を建設中（第{0}鐘に完成）': 'Raising walls (done at bell {0})',
+  '{0}を建設中': 'Building: {0}',
+  '建物': 'a building',
+  '守備隊を増員中（第{0}鐘から {1} 兵）': 'Reinforcing the garrison ({1} troops from bell {0})',
+  '探索中': 'Exploring',
+  '休息中（第{0}鐘に回復）': 'Resting (ready at bell {0})',
+  '駐留中（{0} 兵）': 'Holding the tile ({0} troops)',
+  '守備隊 {0} 兵': 'Garrison: {0} troops',
+  '保護中（第{0}鐘まで攻撃されない）': 'Shielded (safe until bell {0})',
+  '休眠中（領主が留守）': 'Dormant (its lord is away)',
+  '{0}：{1}': '{0}: {1}',
+  'いまの様子': 'Happening now',
 };

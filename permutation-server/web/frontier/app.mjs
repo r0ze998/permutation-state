@@ -89,6 +89,8 @@ import * as hud from './hud/hud.mjs';
 import * as inspect from './hud/inspect.mjs';
 import { createRoster } from './people/roster.mjs';
 import * as scene from './people/scene.mjs';
+import { activityText } from './people/activity.mjs';
+import { identityOf, displayName } from './people/identity.mjs';
 
 const $ = id => globalThis.document?.getElementById(id);
 const setText = (id, text) => { const el = $(id); if (el && el.textContent !== text) el.textContent = text; };
@@ -150,7 +152,7 @@ export function panelMarkup(FS) {
   if (FS.practice) return [...parts, practiceScreen.render(FS.practice, { kernelError: FS.practiceError ?? null, closable: true })];
   if (FS.report) return [...parts, reportScreen.render(FS, mineOf(FS.holdings))];
   // The selection first on the map tab (the player just chose it), then the guide.
-  if (tab === 'map' && FS.selected) parts.push(inspect.render(FS, terrainRef));
+  if (tab === 'map' && FS.selected) parts.push(inspect.render(FS, terrainRef, mapRef?.art?.activities ?? null));
   parts.push(onboardingCard.render(FS, { open: tab === 'map' }));
   // Another tab keeps one line of the selection (the inspector itself is on the map tab).
   if (tab !== 'map' && FS.selected) parts.push(html`<p class="sel-line">${Number.isInteger(FS.selected.idx) ? L`選択中：州 ${FS.selected.p},${FS.selected.q} · マス ${FS.selected.idx + 1}` : L`選択中：州 ${FS.selected.p},${FS.selected.q}`} <button type="button" class="btn small" data-act="tab" data-tab="map">${L`詳細`}</button></p>`);
@@ -171,7 +173,7 @@ export function panelMarkup(FS) {
 /** The panel of the practice and spectator pages. */
 export function modePanel(FS) {
   if (FS.mode === 'practice') return [renderNotice(FS.notice), practiceScreen.render(FS.practice, { kernelError: FS.practiceError ?? null })];
-  return [FS.selected ? inspect.render(FS, terrainRef) : '', spectateScreen.render(FS)];
+  return [FS.selected ? inspect.render(FS, terrainRef, mapRef?.art?.activities ?? null) : '', spectateScreen.render(FS)];
 }
 
 function renderPlay() {
@@ -210,6 +212,8 @@ export function peopleSource() {
     departures: scene.departuresAt(FS.chronicle, FS.overviews, bell),
     explores: scene.exploresAt(FS.chronicle, FS.overviews, bell),
     nameOf: scene.namer(rosterRef),
+    bell,
+    own: FS.holdings ?? [],
     columnLabel: d => L`出陣 · 第${fmtNum(d.arriveBell)}鐘に到着`,
   } };
   return peopleCache.value;
@@ -253,6 +257,27 @@ function renderHudTick(now) {
 function renderRail() {
   const el = $('rail');
   if (el) setHtmlIfChanged(el, hud.renderRail(FS));
+}
+
+/**
+ * The hover tip (Civ's unit tooltip): who holds the tile and what is
+ * happening on it, from the activities the last frame drew. Mouse only;
+ * touch shows the same in the inspector.
+ */
+function showTip(hit, at) {
+  const tip = $('map-tip');
+  if (!tip) return;
+  const acts = hit && Number.isInteger(hit.idx) ? mapRef?.art?.activities?.get(`${hit.p},${hit.q},${hit.idx}`) : null;
+  const t = acts || hit ? mapRef?.art?.tiles?.find(u => u.p === hit?.p && u.pq === hit?.q && u.idx === hit?.idx) : null;
+  const owner = t && t.state === 1 && t.site !== undefined ? rosterRef?.ownerOf(hit.p, hit.q, t.site) : null;
+  if (!acts?.length && !owner) { tip.hidden = true; return; }
+  const lines = [];
+  if (owner) lines.push(html`<strong data-name>${displayName(identityOf(owner.tag), { full: true })}</strong>`);
+  for (const a of (acts ?? []).filter((a, i, all) => all.findIndex(b => b.kind === a.kind) === i)) lines.push(html`<span class="tip-${a.kind}">${activityText(a)}</span>`);
+  setHtml(tip, lines.map(l => html`<span class="tip-line">${l}</span>`));
+  tip.hidden = false;
+  tip.style.setProperty('--x', `${Math.round(at.x + 16)}px`);
+  tip.style.setProperty('--y', `${Math.round(at.y + 12)}px`);
 }
 
 /** Move the map to an attention item and open its tab. */
@@ -527,6 +552,7 @@ export async function boot() {
         invalidate('map', 'panel');
       },
       onView: (_, lod) => { FS.view.lod = lod; },
+      onHover: (hit, at) => showTip(hit, at),
       // Sprite art at tile LOD, opt-in with ?art=1 (docs/frontier/art/tiles/LOD.md).
       art: ART_ON,
     });

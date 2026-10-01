@@ -96,10 +96,11 @@ export class FrontierMap {
    * own: [{p,q}], known: Set "p,q", showAll, selected, terrainOf(p,q) →
    * {terrain, sites, names} | null}; `onSelect(hit)`; `onView(view, lod)`.
    */
-  constructor(canvas, { source, onSelect = () => {}, onView = () => {}, art = false }) {
+  constructor(canvas, { source, onSelect = () => {}, onView = () => {}, onHover = () => {}, art = false }) {
     this.canvas = canvas;
     this.source = source;
     this.onSelect = onSelect;
+    this.onHover = onHover;
     this.onView = onView;
     this.view = { x: 0, y: 0, zoom: 0.06 };
     this.lod = lodFor(this.view.zoom);
@@ -203,7 +204,9 @@ export class FrontierMap {
     c.addEventListener('pointerdown', e => { c.setPointerCapture?.(e.pointerId); this.pointers.set(e.pointerId, { x: e.offsetX, y: e.offsetY }); this.drag = { x: e.offsetX, y: e.offsetY, moved: false }; });
     c.addEventListener('pointermove', e => {
       const prev = this.pointers.get(e.pointerId);
-      if (!prev) return;
+      // a mouse over the map with no button down: what is under it (the page's hover tip)
+      if (!prev) { if (e.pointerType === 'mouse') this.onHover(pick(this.view, this.size(), e.offsetX, e.offsetY), { x: e.offsetX, y: e.offsetY }); return; }
+      this.onHover(null);
       if (this.pointers.size === 2) {
         const [a, b] = [...this.pointers.values()];
         const before = Math.hypot(a.x - b.x, a.y - b.y);
@@ -226,6 +229,7 @@ export class FrontierMap {
       if (d && !d.moved && e.type === 'pointerup') this.onSelect(pick(this.view, this.size(), e.offsetX, e.offsetY));
     };
     c.addEventListener('pointerup', up);
+    c.addEventListener('pointerleave', () => this.onHover(null));
     c.addEventListener('pointercancel', up);
     c.addEventListener('wheel', e => { e.preventDefault(); this.setView(zoomAround(this.view, this.size(), Math.exp(-e.deltaY * 0.0015), e.offsetX, e.offsetY)); }, { passive: false });
     c.addEventListener('keydown', e => {

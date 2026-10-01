@@ -15,7 +15,8 @@ import { COLORS, FLATTEN, RADIUS, hexPoints, polygon, project, shade } from '../
 import { PROVINCE_TILES, locate, provinceCentre, ringOf, ringProvinces, tileHex, wedgeOf } from '../fgeo.mjs';
 import { FACTION_COLORS } from '../fi18n.mjs';
 import { majorityOwner } from '../herald.mjs';
-import { paintPeople, paintNameTags, PEOPLE_FRAME_MS } from '../people/crowds.mjs';
+import { paintPeople, paintNameTags, paintBadges, PEOPLE_FRAME_MS } from '../people/crowds.mjs';
+import { activitiesFor } from '../people/activity.mjs';
 import { BOUNDARY_HALO, BOUNDARY_INK, FOG, UNOPENED_FILL, paintSigil, provincePixel, PROVINCE_CIRCUMRADIUS } from './layers.mjs';
 
 const BASE = new URL('../art/', import.meta.url);
@@ -536,7 +537,11 @@ export class SpriteArt {
       ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
     }
     // pass 2c: people (people/crowds.mjs): townsfolk, carriers, departing columns at their origin, scouts
-    const moving = people ? paintPeople(ctx, { tiles, zoom, departures: people.departures ?? [], explores: people.explores ?? [], viewerFaction, columnLabel: people.columnLabel ?? null }) : 0;
+    // what every tile is doing (people/activity.mjs); kept for the page's hover tip
+    const activities = people ? activitiesFor(entries, { bell: people.bell ?? 0, departures: people.departures ?? [], explores: people.explores ?? [], own: people.own ?? [] }) : null;
+    this.activities = activities;
+    this.tiles = tiles;
+    const moving = people ? paintPeople(ctx, { tiles, zoom, departures: people.departures ?? [], explores: people.explores ?? [], viewerFaction, columnLabel: people.columnLabel ?? null, activities }) : 0;
     // pass 3: fog over known / distant provinces (desaturate, haze, and mist when distant)
     for (const e of entries) {
       if (e.fog !== 'known' && e.fog !== 'distant') continue;
@@ -570,6 +575,7 @@ export class SpriteArt {
     }
     // name tags over the fog (the holder's face and name), then the next animation frame while figures move
     if (people?.nameOf) paintNameTags(ctx, { tiles, zoom, nameOf: people.nameOf, centre: people.centre ?? null, onImage: this.onLoad });
+    if (activities) paintBadges(ctx, { tiles, zoom, activities });
     if (moving && !this.peopleTimer) this.peopleTimer = setTimeout(() => { this.peopleTimer = null; this.onLoad(); }, PEOPLE_FRAME_MS);
     return tiles.length;
   }

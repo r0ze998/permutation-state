@@ -134,3 +134,34 @@ test('profile: a wallet-signed name verifies; another wallet or an edited name d
   const id = I.withProfile(I.identityOf(1n), p);
   assert.equal(I.displayName(id, { full: true, language: 'en' }), 'Kaito');
 });
+
+import * as ACT from '../../permutation-server/web/frontier/people/activity.mjs';
+
+test('activities: walls, recruits, garrison, muster, rest, guard, battle, depart; a sealed march has no destination', () => {
+  setLang('ja');
+  const NO = ACT.NO_BELL;
+  const e = {
+    p: 3, q: 0, rec: { clash: true, dormant: false, sites: [1], owners: [2] },
+    prov: {
+      sites: Uint8Array.from([9]), camp: { state: 1, tile: 40, troops: 5000 },
+      siteMirror: [{ state: 1, faction: 2, garrison: 250_000, wallItem0Bell: 45, wallItem0Delta: 10, wallItem1Bell: NO, wallItem1Delta: 0, pend0Bell: 43, pend0Delta: 100_000, pend1Bell: NO, pend1Delta: 0, shieldUntilBell: 0 }],
+      entries: [
+        { id: 1n, faction: 2, tile: 9, state: 2, troops: 300_000, staminaValue: 120, staminaBell: 0, readyBell: 0 },
+        { id: 2n, faction: 2, tile: 12, state: 1, troops: 500_000, staminaValue: 120, staminaBell: 0, readyBell: 0 },
+        { id: 3n, faction: 4, tile: 13, state: 1, troops: 200_000, staminaValue: 2, staminaBell: 41, readyBell: 44 },
+      ],
+    },
+  };
+  const acts = ACT.tileActivities(e, { bell: 41, departures: [{ p: 3, q: 0, tile: 20, faction: 2, troops: 9, arriveBell: 44, host: '7' }] });
+  assert.deepEqual(acts.get(9).map(a => a.kind), ['muster', 'walls', 'recruit', 'garrison']);
+  assert.equal(acts.get(9).find(a => a.kind === 'garrison').n, 250, 'milli-troops shown as troops');
+  assert.deepEqual(acts.get(12).map(a => a.kind), ['battle', 'guard']);
+  assert.deepEqual(acts.get(13).map(a => a.kind), ['battle', 'rest']);
+  assert.deepEqual(acts.get(20).map(a => a.kind), ['depart']);
+  assert.deepEqual(acts.get(40).map(a => a.kind), ['camp']);
+  assert.equal(ACT.activityText(acts.get(20)[0]), '出陣中（第44鐘に到着、行き先は秘密）');
+  assert.equal(ACT.activityText(acts.get(9)[1]), '城壁を建設中（第45鐘に完成）');
+  setLang('en');
+  assert.match(ACT.activityText(acts.get(13)[1]), /^Resting \(ready at bell \d+\)$/, 'ready once it has the stamina to march again');
+  setLang('ja');
+});
