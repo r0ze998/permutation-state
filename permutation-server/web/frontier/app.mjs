@@ -227,6 +227,8 @@ function renderPlay() {
   const sub = FS.practice ? L`練習モード` : FS.report ? L`衝突の報告` : null;
   if (title) setText('panel-title', sub ?? { map: L`地図`, holding: L`拠点`, hosts: L`軍勢`, marches: L`進軍`, more: L`その他` }[FS.tab ?? 'map'] ?? L`シーズン`);
   renderRail();
+  // the header follows new data at once, not only on the next one-second tick
+  renderHudTick(FS.chain?.now() ?? null);
 }
 
 function renderMode() {
