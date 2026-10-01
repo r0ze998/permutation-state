@@ -84,7 +84,7 @@ import { kernel as loadKernel } from './wasm.mjs';
 import { scope } from './fchainio.mjs';
 import { hostParts } from './faddr.mjs';
 import { RETREAT_CHOICES, retreatBps } from './fmarch.mjs';
-import { uiKey, uiStorage, loadUi, saveUi } from './fui.mjs';
+import { uiKey, uiStorage, loadUi, saveUi, UI_PREFIX } from './fui.mjs';
 import * as hud from './hud/hud.mjs';
 import * as inspect from './hud/inspect.mjs';
 import * as feed from './hud/feed.mjs';
@@ -98,6 +98,7 @@ import { activityText } from './people/activity.mjs';
 import { hostOwner } from './people/ui.mjs';
 import { leaderSvg } from './people/leaders.mjs';
 import * as glossary from './hud/glossary.mjs';
+import * as milestones from './hud/milestones.mjs';
 import { battleScene, startBattle, battleLive, BATTLE_SPEEDS, PHASE } from './people/battle.mjs';
 import { decode as decodeAccount } from './fcodec.mjs';
 import { fromBase64 } from '../sdk/bytes.mjs';
@@ -190,7 +191,7 @@ export function panelMarkup(FS) {
     <button type="button" class="btn" data-act="forget">${L`この端末からこのシーズンの鍵を消す`}</button>
     ${onboardingCard.renderRestore(FS)}
     <p><button type="button" class="btn" data-act="practice-open">${L`練習モードを開く`}</button> <button type="button" class="btn" data-act="intro-open">${L`タイトルを見る`}</button></p>
-    <p><a href="practice.html">${L`練習`}</a> · <a href="spectate.html">${L`観戦`}</a></p></section>`, glossary.renderGlossary());
+    <p><a href="practice.html">${L`練習`}</a> · <a href="spectate.html">${L`観戦`}</a></p></section>`, milestones.renderTimeline(FS.mileRecord), glossary.renderGlossary());
   return parts;
 }
 
@@ -344,6 +345,38 @@ function renderTermPop() {
   setHtmlIfChanged(el, glossary.renderTerm(FS.term));
 }
 function closeTermPop() { if (FS.term) { FS.term = null; renderTermPop(); } }
+// ------------------------------------------------------------------ milestones (hud/milestones.mjs)
+const BOOT_AT = Date.now();
+const MILE_QUIET_MS = 20_000;   // what loads in the first seconds is old news, recorded without a banner
+let mileTimer = null;
+function checkMilestones() {
+  if (FS.mode !== 'play' || !Number.isInteger(FS.citizen?.faction)) return;
+  const sc = scope();
+  if (!sc) return;
+  const key = milestones.MILESTONE_KEY + uiKey(sc).slice(UI_PREFIX.length);
+  if (FS.mileRecord === undefined) FS.mileRecord = milestones.loadSeen(uiStorage, key);
+  const quiet = Date.now() - BOOT_AT < MILE_QUIET_MS;
+  const { fresh, record } = milestones.newMilestones(quiet && !FS.mileRecord ? null : FS.mileRecord ?? { v: 1, seen: {} }, milestones.reachedMilestones(FS), FS.nowBell ?? 0);
+  if (Object.keys(record.seen).length !== Object.keys(FS.mileRecord?.seen ?? {}).length) { FS.mileRecord = record; uiStorage.set(key, JSON.stringify(record)); }
+  if (!quiet && fresh.length) { FS.mileQueue = [...(FS.mileQueue ?? []), ...fresh]; showMilestone(); }
+}
+function showMilestone() {
+  const doc = globalThis.document;
+  if (!doc || mileTimer || !(FS.mileQueue ?? []).length) return;
+  const m = FS.mileQueue.shift();
+  let el = $('mile-banner');
+  if (!el) { el = doc.createElement('div'); el.id = 'mile-banner'; el.className = 'mile-banner'; el.setAttribute('role', 'status'); doc.body.appendChild(el); }
+  setHtml(el, milestones.renderBanner(m, FS.citizen?.faction));
+  el.hidden = false;
+  mileTimer = setTimeout(closeMilestone, milestones.BANNER_MS);
+}
+function closeMilestone() {
+  clearTimeout(mileTimer); mileTimer = null;
+  const el = $('mile-banner');
+  if (el) el.hidden = true;
+  if ((FS.mileQueue ?? []).length) setTimeout(showMilestone, 600);
+}
+
 function closeResPop() { if (FS.resOpen) { FS.resOpen = null; renderHudTick(FS.chain?.now?.() ?? 0); } }
 
 function renderHudTick(now) {
@@ -368,6 +401,7 @@ function renderHudTick(now) {
     setHtmlIfChanged(strip, hud.renderStrip(tokens, FS.resOpen ?? null, w < 760 ? 1 : w < 1100 ? 3 : w < 1440 ? 3 : w < 1700 ? 5 : 8));
   }
   renderResPop(now ?? 0);
+  checkMilestones();
   tickFeed();
   renderFeed();
   const attn = $('attn-pill');
@@ -619,6 +653,7 @@ export const HUD_ACTIONS = {
   'battle-play': d => { leaveReport(); playBattle(num(d.p), num(d.q), num(d.bell), { focus: true }); },
   'res-open': d => { FS.resOpen = FS.resOpen === d.r ? null : d.r; renderHudTick(FS.chain?.now?.() ?? 0); },
   'res-close': () => closeResPop(),
+  'mile-close': () => closeMilestone(),
   'sel-clear': () => { FS.selected = null; invalidate('map', 'panel'); },
   term: d => { FS.term = FS.term === d.term || !glossary.TERMS[d.term] ? null : d.term; renderTermPop(); $('term-pop')?.querySelector('button')?.focus?.(); },
   'term-close': () => closeTermPop(),

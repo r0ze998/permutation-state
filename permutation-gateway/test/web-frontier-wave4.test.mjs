@@ -67,3 +67,25 @@ test('battle playback: a faster speed ends sooner; the tiles of a playing scene 
   assert.equal(B.battleTiles([slow], 99).size, 0);
   assert.equal(B.startBattle(scene, 0, 0).speed, 1, 'speed 0 (off) never freezes a scene asked for by hand');
 });
+
+test('milestones: reached from state, the first load records quietly, later ones are news; the banner and timeline in both languages', async () => {
+  const M = await import('../../permutation-server/web/frontier/hud/milestones.mjs');
+  const FS = { holdings: [{ p: 2, q: 0, site: 3, tier: 1, state: 2, transit: [] }], marches: [], record: { rings: [{}, {}, {}] } };
+  const ids = M.reachedMilestones(FS).map(m => m.id);
+  assert.deepEqual(ids, ['first-holding', 'confirmed', 'tier:2,0,3:1', 'ring:2']);
+  const first = M.newMilestones(null, M.reachedMilestones(FS), 40);
+  assert.equal(first.fresh.length, 0, 'old news on the first load');
+  FS.marches = [{ dest: { p: 3, q: 1 }, facts: { settled: { outcome: 'Stays' } } }];
+  const next = M.newMilestones(first.record, M.reachedMilestones(FS), 44);
+  assert.deepEqual(next.fresh.map(m => m.id), ['first-march', 'first-win']);
+  assert.equal(next.record.seen['first-win'].bell, 44);
+  setLang('ja');
+  assert.match(String(M.renderBanner(next.fresh[1], 2)), /最初の勝利：州 3,1/);
+  setLang('en');
+  const tl = String(M.renderTimeline(next.record)).replace(/<[^>]+>/g, ' ');
+  assert.match(tl, /Season timeline/);
+  assert.doesNotMatch(tl.replace(/data-name/g, ''), /[぀-ヿ一-鿿]/);
+  assert.match(String(M.renderBanner(next.fresh[1], 2)), /First victory: province 3,1/);
+  setLang('ja');
+  assert.equal(M.loadSeen({ get: () => '{bad' }, 'k'), null);
+});

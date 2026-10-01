@@ -415,4 +415,18 @@ export default {
   '用語集': 'Glossary', '用語集を開く': 'Open the glossary',
   '選択中': 'Selected', '地図で詳しく': 'Details on the map', '選択を外す': 'Clear the selection',
   '軍勢 {0}': 'Hosts: {0}',
+  // ---- milestones and the season timeline (hud/milestones.mjs, UI plan F1, F2)
+  '最初の拠点：{0}': 'First holding: {0}',
+  '拠点が確定：{0}': 'Holding confirmed: {0}',
+  '最初の出陣': 'The first march',
+  '最初の勝利：州 {0},{1}': 'First victory: province {0},{1}',
+  '{0}になった': 'Now {0}',
+  '第{0}輪がひらいた': 'Ring {0} has opened',
+  '旗は立った。ここが我らの始まりの地だ。': 'The banner is raised. Here our story begins.',
+  'もう誰にも奪わせはしない。この地を守り抜け。': 'No one takes this from us now. Hold it.',
+  '封は閉じた。行き先を知るのは我らだけだ。': 'The seal is closed. Only we know where we ride.',
+  '見事だ。辺境は勇む者の手に渡る。': 'Well done. The frontier belongs to the bold.',
+  '民が増え、壁が伸びる。次の鐘も怠るな。': 'More hands, taller walls. Do not rest at the next bell.',
+  '霧が晴れ、新しい地が見えた。誰より先に向かえ。': 'The mist lifts on new land. Be first there.',
+  'シーズンの年表': 'Season timeline',
 };

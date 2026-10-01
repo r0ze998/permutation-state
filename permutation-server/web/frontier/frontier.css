@@ -468,3 +468,19 @@ body[data-urgency="crit"] main { box-shadow: inset 0 0 0 4px #c8412f; }
 /* the bell's urgency is told by a mark too, not colour alone (UI plan E6) */
 .bell-pill[data-urgency="warn"] .bell-chip::before { content: "\23F3\FE0E"; margin-right: 4px; }
 .bell-pill[data-urgency="crit"] .bell-chip::before { content: "\26A0\FE0E"; margin-right: 4px; }
+
+/* milestone banners (UI plan F1, F2): the leader's line, not a modal; the season timeline in More */
+.mile-banner { position: fixed; z-index: 65; top: calc(var(--bar) + 10px); left: 50%; transform: translateX(-50%); width: min(520px, calc(100vw - 24px));
+  padding: 10px 12px; border-radius: 14px; background: linear-gradient(180deg, #2a2418, #1d1910); color: #fbf3dc; border: 1px solid #d9b44a; box-shadow: 0 10px 30px rgba(0,0,0,.45); }
+.mile-inner { display: flex; gap: 12px; align-items: center; }
+.mile-inner svg { flex: none; border-radius: 50%; background: rgba(255,255,255,.08); }
+.mile-text { flex: 1; display: grid; gap: 2px; }
+.mile-title { font-family: var(--display, serif); font-size: 17px; color: #f3d58a; }
+.mile-line { font-style: italic; }
+.mile-banner .muted { color: #d6ccb2; }
+.mile-banner .btn { background: transparent; color: #fbf3dc; border-color: rgba(255,255,255,.4); }
+.timeline { list-style: none; padding: 0; margin: 0; border-left: 2px solid #d9b44a; }
+.timeline li { position: relative; padding: 6px 0 6px 14px; }
+.timeline li::before { content: ""; position: absolute; left: -6px; top: 12px; width: 10px; height: 10px; border-radius: 50%; background: #d9b44a; }
+.tl-bell { font-weight: 700; font-variant-numeric: tabular-nums; }
+@media (prefers-reduced-motion: no-preference) { .mile-banner:not([hidden]) { animation: mile-in .5s ease-out; } @keyframes mile-in { from { opacity: 0; transform: translate(-50%, -12px); } } }
