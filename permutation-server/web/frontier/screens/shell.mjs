@@ -102,13 +102,25 @@ export function mountSheet(doc = globalThis.document, win = globalThis.window) {
   handle.dataset.sheetHandle = '';
   handle.setAttribute('aria-controls', 'panel-body');
   panel.prepend(handle);
-  const set = s => {
+  // The phone's back button closes a full sheet (UI plan E6): opening it full
+  // pushes one history entry; back pops it and the sheet returns to half.
+  let pushed = false, skipPop = false;
+  const hist = win?.history;
+  const set = (s, { fromPop = false } = {}) => {
+    if (hist?.pushState && phone()) {
+      if (s === 'full' && !pushed) { try { hist.pushState({ psSheet: 'full' }, ''); pushed = true; } catch { /* no history */ } }
+      else if (s !== 'full' && pushed) { pushed = false; if (!fromPop) { skipPop = true; try { hist.back(); } catch { skipPop = false; } } }
+    }
     panel.dataset.sheet = s;
     handle.setAttribute('aria-expanded', s === 'peek' ? 'false' : 'true');
     handle.setAttribute('aria-label', sheetLabel(s));
   };
   set('half');
   onLangChange(() => set(panel.dataset.sheet));
+  win?.addEventListener?.('popstate', () => {
+    if (skipPop) { skipPop = false; return; }
+    if (panel.dataset.sheet === 'full') set('half', { fromPop: true });
+  });
   // Wave-5 review: a touch drag produces no click, so a drag must not wait
   // for one to clear its state (the next genuine tap was swallowed). The
   // drag ignores only a click that follows it within SUPPRESS_MS; pointer

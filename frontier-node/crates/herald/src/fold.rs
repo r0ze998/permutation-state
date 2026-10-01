@@ -56,6 +56,7 @@ use crate::clash::{fighters_json, ClashBuilder};
 use crate::files::{Out, Written};
 use crate::overview;
 use crate::records::{self, B64};
+use crate::roster;
 
 /// What the fold needs to know besides the records.
 #[derive(Clone)]
@@ -1014,6 +1015,62 @@ impl Fold {
         }
         (!recs.is_empty())
             .then(|| overview::file(self.cfg.season_id, d, bell, self.st.last_slot, &recs))
+    }
+
+    /// The live roster of ring `d` (`roster.rs`): each site's holder
+    /// citizen tag and founding bell, from the Holding accounts the fold
+    /// captured; the header bell is the overview's (`overview_latest`).
+    pub fn roster_latest(&self, d: u16) -> Option<Vec<u8>> {
+        let provs = self.rings.get(&d)?;
+        let genesis = self.season.as_ref().map(|s| s.genesis_ts);
+        let mut recs = vec![];
+        let mut target = u32::MAX;
+        for pq in provs {
+            let Some(m) = self.provinces.get(pq) else {
+                continue;
+            };
+            let Some(c) = self.cap(&m.addr) else {
+                continue;
+            };
+            let Ok(pv) = Province::decode(&c.data) else {
+                continue;
+            };
+            target = target.min(pv.resolved_next);
+            let mut owners: [Option<roster::Owner>; 12] = [None; 12];
+            for (i, o) in owners
+                .iter_mut()
+                .enumerate()
+                .take((pv.site_count as usize).min(12))
+            {
+                if pv.site_mirror[i].state != 1 {
+                    continue;
+                }
+                let Some(h) = self.cap(&self.ctx.holding(pv.p as i32, pv.q as i32, i as u8)) else {
+                    continue;
+                };
+                let tag = h
+                    .data
+                    .get(HL::OWNER_CITIZEN..HL::OWNER_CITIZEN + 8)
+                    .and_then(|b| b.try_into().ok())
+                    .map(u64::from_le_bytes);
+                let founded = h
+                    .data
+                    .get(HL::FOUNDED_TS..HL::FOUNDED_TS + 8)
+                    .and_then(|b| b.try_into().ok())
+                    .map(i64::from_le_bytes);
+                let bell = match (founded, genesis) {
+                    (Some(t), Some(g)) if t >= g => ((t - g) / 600).min(u32::MAX as i64) as u32,
+                    _ => 0,
+                };
+                if let Some(tag) = tag.filter(|t| *t != 0) {
+                    *o = Some((tag, bell, pv.site_mirror[i].tier));
+                }
+            }
+            recs.push(roster::record(pv.p, pv.q, &owners));
+        }
+        let bell = target.saturating_sub(1);
+        (!recs.is_empty())
+            .then(|| roster::file(self.cfg.season_id, d, bell, self.st.last_slot, &recs))
     }
 
     /// The bell-region record, or `None` until THE anchor and a seed of

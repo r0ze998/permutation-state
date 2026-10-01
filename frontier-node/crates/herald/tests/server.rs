@@ -258,6 +258,17 @@ async fn h_routes_caching_and_headers() {
     let ol = get(a, "/h/overview/2/latest.bin").await;
     assert_eq!(ol.h("cache-control"), Some("public, max-age=5"));
     assert_eq!(get(a, "/h/overview/9/latest.bin").await.status, 404);
+    // Roster: who holds each site (names and faces are derived by the page).
+    let rl = get(a, "/h/roster/2/latest.bin").await;
+    assert_eq!(rl.status, 200);
+    assert_eq!(rl.h("cache-control"), Some("public, max-age=30"));
+    assert_eq!(&rl.body[..8], herald_fold::roster::ROSTER_MAGIC);
+    let n = u16::from_le_bytes([rl.body[18], rl.body[19]]) as usize;
+    assert_eq!(
+        rl.body.len(),
+        herald_fold::roster::ROSTER_HEADER + n * herald_fold::roster::ROSTER_RECORD
+    );
+    assert_eq!(get(a, "/h/roster/9/latest.bin").await.status, 404);
     // Clash report.
     let c = get(a, "/h/clash/2,0/0").await;
     assert_eq!(c.json()["heraldCheck"], "match");

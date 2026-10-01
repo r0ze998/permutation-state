@@ -37,7 +37,7 @@ const HINT_TEXT = {
 export function privateLine(entry) {
   if (!entry) return null;
   const p = unpack(materialBytes(entry).plain);
-  return L`州 ${p.destP},${p.destQ} のマス ${p.destTile} · ${STANCE_TEXT[STANCES[p.stance]] ?? ''}`;
+  return L`州 ${p.destP},${p.destQ} のマス ${p.destTile + 1} · ${STANCE_TEXT[STANCES[p.stance]] ?? ''}`;
 }
 
 /** One march card: `m = {entry, transit, facts: {nowBell, pipeline, slotPresent, settled, settleReady}}`. */
@@ -54,6 +54,9 @@ export function renderMarch(m) {
     ${t.locked ? html`<p class="locked-note" role="note">${lockedText()}</p>` : ''}
     ${m.entry?.failure ? html`<p class="notice error">${failureText({ code: m.entry.failure })}</p>` : ''}
     ${m.facts?.settleReady ? html`<button type="button" class="btn" data-act="settle-transit" data-host="${host}" data-slot="${m.entry?.transitSlot ?? m.transit?.slot ?? ''}">${L`精算する`}</button>` : ''}
+    ${m.dest ? html`<div class="actions"><button type="button" class="btn small" data-act="goto" data-p="${m.dest.p}" data-q="${m.dest.q}">${L`地図で見る`}</button>
+      ${t.steps.find(s => s.id === 'resolved')?.state === 'done' && Number.isInteger(t.arriveBell) ? html`<button type="button" class="btn small" data-act="battle-play" data-p="${m.dest.p}" data-q="${m.dest.q}" data-bell="${t.arriveBell}">${L`戦いを再生`}</button>
+      <button type="button" class="btn small" data-act="report-open" data-p="${m.dest.p}" data-q="${m.dest.q}" data-bell="${t.arriveBell}">${L`報告`}</button>` : ''}</div>` : ''}
   </li>`;
 }
 

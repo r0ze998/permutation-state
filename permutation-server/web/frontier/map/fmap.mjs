@@ -14,12 +14,15 @@
 // from the rules module lazily (terrain.mjs) when the caller gives none;
 // only provinces the viewer knows or sees are drawn as tiles, with the fog
 // veil over them; H goes to the viewer's first holding.
+import { paintPins } from '../hud/pins.mjs';
+import { paintReach } from '../hud/reach.mjs';
 import { inverseHex } from '../../map.mjs';
 import { L, onLangChange } from '../../lang.mjs';
-import { locate, ringOf, ringProvinces, hexDistance } from '../fgeo.mjs';
+import { locate, ringOf, ringProvinces, hexDistance, tileHex } from '../fgeo.mjs';
 import { fogLevel, paintProvince, paintTiles, paintVeil, provincePixel, PROVINCE_CIRCUMRADIUS } from './layers.mjs';
 import { createTerrain } from './terrain.mjs';
 import { SpriteArt, terrainLookup } from './sprites.mjs';
+import { project, RADIUS } from '../../map.mjs';
 
 /** Fog levels drawn as tiles at tile LOD (a distant province stays a muted cell). */
 export const TILE_FOGS = Object.freeze(['sight', 'known', 'clear']);
@@ -90,16 +93,133 @@ export function coveredBelow(canvas) {
   return Math.max(0, Math.min(c.bottom, p.bottom) - Math.max(c.top, p.top));
 }
 
+/**
+ * The march being composed, for this browser only (the destination is
+ * sealed for everyone else): a dashed line along the planned hexes and a
+ * ringed marker on the destination tile. `route = {hexes: [{q, r}], dest: {q, r} | null}`.
+ */
+/**
+ * The world view's labels, as a map has them: each faction's name over the
+ * heart of its land (the weighted centre of the provinces it holds most of
+ * in), and the Concord at the centre. Screen-sized type in the display face.
+ */
+export function paintRealmLabels(ctx, recs, zoom, nameOf = null) {
+  const acc = Array.from({ length: 6 }, () => ({ x: 0, y: 0, w: 0 }));
+  for (const r of recs.values()) {
+    const n = Array(6).fill(0);
+    r.owners.forEach((f, j) => { if (r.sites[j] === 1 && f < 6) n[f]++; });
+    const best = n.indexOf(Math.max(...n));
+    if (n[best] <= 0) continue;
+    const c = provincePixel(r.p, r.q);
+    acc[best].x += c.x * n[best]; acc[best].y += c.y * n[best]; acc[best].w += n[best];
+  }
+  const k = 1 / zoom;
+  ctx.save();
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const face = '"Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", Georgia, serif';
+  const label = (text, x, y, size, fill) => {
+    ctx.font = `700 ${size * k}px ${face}`;
+    ctx.lineJoin = 'round'; ctx.lineWidth = 5 * k; ctx.strokeStyle = 'rgba(14,22,20,.78)'; ctx.strokeText(text, x, y);
+    ctx.fillStyle = fill; ctx.fillText(text, x, y);
+  };
+  acc.forEach((a, f) => {
+    if (a.w < 3) return;
+    const name = nameOf ? nameOf(f) : String(f);
+    label(name, a.x / a.w, a.y / a.w, 22, '#fff6e2');
+  });
+  const c0 = provincePixel(0, 0);
+  label(nameOf ? nameOf('concord') : 'Concord', c0.x, c0.y, 15, '#f3d58a');
+  ctx.restore();
+}
+
+/**
+ * Incoming risk (spec §7.3): a red halo that breathes around each of the
+ * viewer's holdings an enemy may reach, with the earliest bell it could
+ * arrive. `threats = [{p, q, tile, bell}]` (destinations are sealed: a
+ * warning, never a certainty).
+ */
+export function paintThreats(ctx, threats, zoom, label = null) {
+  const t = (globalThis.performance?.now?.() ?? Date.now()) / 1000;
+  const k = 1 / zoom, pulse = 0.5 + 0.5 * Math.sin(t * 3);
+  const seen = new Set();
+  ctx.save();
+  for (const w of threats) {
+    const key = `${w.p},${w.q},${w.tile}`;
+    if (seen.has(key) || !Number.isInteger(w.tile)) continue;
+    seen.add(key);
+    const h = tileHex(w.p, w.q, w.tile), c = project(h.q, h.r);
+    const r = Math.max(RADIUS * 1.3, 18 * k) * (1 + pulse * 0.12);
+    const g = ctx.createRadialGradient(c.x, c.y, r * 0.4, c.x, c.y, r);
+    g.addColorStop(0, 'rgba(200,40,30,0)'); g.addColorStop(0.75, `rgba(200,40,30,${0.18 + pulse * 0.14})`); g.addColorStop(1, 'rgba(200,40,30,0)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = `rgba(230,70,50,${0.6 + pulse * 0.4})`; ctx.lineWidth = 2.4 * k; ctx.setLineDash([6 * k, 4 * k]);
+    ctx.beginPath(); ctx.arc(c.x, c.y, r * 0.78, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+    if (label) {
+      const text = label(w);
+      ctx.font = `700 ${11 * k}px system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      const tw = ctx.measureText(text).width + 12 * k, th = 16 * k, y = c.y + r * 0.78 + 4 * k;
+      ctx.fillStyle = 'rgba(120,20,12,.92)'; ctx.beginPath(); ctx.roundRect?.(c.x - tw / 2, y, tw, th, 8 * k); ctx.fill();
+      ctx.fillStyle = '#fff2ee'; ctx.fillText(text, c.x, y + th / 2 + 0.5 * k);
+    }
+  }
+  ctx.restore();
+}
+
+/**
+ * The guide's target (hud/guide.mjs, UI plan G1): a gold ring that breathes
+ * on the tile the current step is about, with a short label.
+ */
+export function paintGuide(ctx, g, zoom, label = '') {
+  if (!g || !Number.isInteger(g.tile)) return;
+  const t = (globalThis.performance?.now?.() ?? Date.now()) / 1000;
+  const k = 1 / zoom, pulse = 0.5 + 0.5 * Math.sin(t * 2.4);
+  const h = tileHex(g.p, g.q, g.tile), c = project(h.q, h.r);
+  const r = Math.max(RADIUS * 1.15, 20 * k) * (1 + pulse * 0.15);
+  ctx.save();
+  ctx.strokeStyle = 'rgba(16,24,22,.55)'; ctx.lineWidth = 6 * k; ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, Math.PI * 2); ctx.stroke();
+  ctx.strokeStyle = `rgba(243,213,138,${0.7 + pulse * 0.3})`; ctx.lineWidth = 3 * k; ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, Math.PI * 2); ctx.stroke();
+  // a pointer above the ring
+  ctx.fillStyle = '#f3d58a'; ctx.beginPath(); const y = c.y - r - (6 + pulse * 4) * k; ctx.moveTo(c.x, y); ctx.lineTo(c.x - 7 * k, y - 11 * k); ctx.lineTo(c.x + 7 * k, y - 11 * k); ctx.closePath(); ctx.fill();
+  if (label) {
+    ctx.font = `700 ${11 * k}px system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const tw = ctx.measureText(label).width + 12 * k, th = 17 * k, ly = y - 13 * k - th;
+    ctx.fillStyle = 'rgba(31,26,16,.94)'; ctx.beginPath(); ctx.roundRect?.(c.x - tw / 2, ly, tw, th, 8 * k); ctx.fill();
+    ctx.fillStyle = '#f3d58a'; ctx.fillText(label, c.x, ly + th / 2 + 0.5 * k);
+  }
+  ctx.restore();
+}
+
+export function paintRoute(ctx, route, zoom) {
+  const pts = (route.hexes ?? []).map(h => project(h.q, h.r));
+  const k = 1 / zoom;
+  ctx.save();
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  if (pts.length > 1) {
+    ctx.beginPath(); pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+    ctx.strokeStyle = 'rgba(16,24,22,.55)'; ctx.lineWidth = 7 * k; ctx.stroke();
+    ctx.setLineDash([10 * k, 8 * k]); ctx.strokeStyle = '#f3d58a'; ctx.lineWidth = 3.5 * k; ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  if (route.dest) {
+    const d = project(route.dest.q, route.dest.r);
+    ctx.beginPath(); ctx.arc(d.x, d.y, 16 * k, 0, Math.PI * 2); ctx.fillStyle = 'rgba(243,213,138,.25)'; ctx.fill();
+    ctx.lineWidth = 3 * k; ctx.strokeStyle = '#f3d58a'; ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(d.x - 7 * k, d.y); ctx.lineTo(d.x + 7 * k, d.y); ctx.moveTo(d.x, d.y - 7 * k); ctx.lineTo(d.x, d.y + 7 * k); ctx.strokeStyle = '#1b2e28'; ctx.lineWidth = 2.5 * k; ctx.stroke();
+  }
+  ctx.restore();
+}
+
 export class FrontierMap {
   /**
    * `canvas`; `source()` → {overviews: Map ring→overview, ringsOpen,
    * own: [{p,q}], known: Set "p,q", showAll, selected, terrainOf(p,q) →
    * {terrain, sites, names} | null}; `onSelect(hit)`; `onView(view, lod)`.
    */
-  constructor(canvas, { source, onSelect = () => {}, onView = () => {}, art = false }) {
+  constructor(canvas, { source, onSelect = () => {}, onView = () => {}, onHover = () => {}, art = false }) {
     this.canvas = canvas;
     this.source = source;
     this.onSelect = onSelect;
+    this.onHover = onHover;
     this.onView = onView;
     this.view = { x: 0, y: 0, zoom: 0.06 };
     this.lod = lodFor(this.view.zoom);
@@ -118,6 +238,8 @@ export class FrontierMap {
 
   size() { return { width: this.canvas.clientWidth, height: this.canvas.clientHeight }; }
   invalidate() { this.dirty = true; }
+  /** Another frame in a moment (an animated overlay: the threat halo). */
+  invalidateSoon(ms = 80) { if (this.soon) return; this.soon = setTimeout(() => { this.soon = null; this.invalidate(); }, ms); }
 
   setView(v) {
     this.view = { ...this.view, ...v };
@@ -203,7 +325,9 @@ export class FrontierMap {
     c.addEventListener('pointerdown', e => { c.setPointerCapture?.(e.pointerId); this.pointers.set(e.pointerId, { x: e.offsetX, y: e.offsetY }); this.drag = { x: e.offsetX, y: e.offsetY, moved: false }; });
     c.addEventListener('pointermove', e => {
       const prev = this.pointers.get(e.pointerId);
-      if (!prev) return;
+      // a mouse over the map with no button down: what is under it (the page's hover tip)
+      if (!prev) { if (e.pointerType === 'mouse') this.onHover(pick(this.view, this.size(), e.offsetX, e.offsetY), { x: e.offsetX, y: e.offsetY }); return; }
+      this.onHover(null);
       if (this.pointers.size === 2) {
         const [a, b] = [...this.pointers.values()];
         const before = Math.hypot(a.x - b.x, a.y - b.y);
@@ -226,6 +350,7 @@ export class FrontierMap {
       if (d && !d.moved && e.type === 'pointerup') this.onSelect(pick(this.view, this.size(), e.offsetX, e.offsetY));
     };
     c.addEventListener('pointerup', up);
+    c.addEventListener('pointerleave', () => this.onHover(null));
     c.addEventListener('pointercancel', up);
     c.addEventListener('wheel', e => { e.preventDefault(); this.setView(zoomAround(this.view, this.size(), Math.exp(-e.deltaY * 0.0015), e.offsetX, e.offsetY)); }, { passive: false });
     c.addEventListener('keydown', e => {
@@ -248,7 +373,10 @@ export class FrontierMap {
     const { width, height } = this.size();
     if (this.canvas.width !== Math.round(width * dpr)) { this.canvas.width = Math.round(width * dpr); this.canvas.height = Math.round(height * dpr); }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = '#e9e5d8';
+    // the world floats on a sea of mist: deep at the edges, lighter where the eye rests
+    const sea = ctx.createRadialGradient(width / 2, height * 0.45, Math.min(width, height) * 0.1, width / 2, height / 2, Math.max(width, height) * 0.75);
+    sea.addColorStop(0, '#2c4a45'); sea.addColorStop(0.6, '#1d3531'); sea.addColorStop(1, '#0f1f1c');
+    ctx.fillStyle = sea;
     ctx.fillRect(0, 0, width, height);
     const src = this.source();
     if (!this.fitted && width > 0 && height > 0) this.fit(src, { width, height });
@@ -286,19 +414,30 @@ export class FrontierMap {
           continue;
         }
       }
-      if (this.art && fog === 'unopened') { artVoid.push(pr); continue; }
-      if (this.art && fog !== 'unopened') {
+      // Art, far: the land itself, painted once per province (sprites.mjs farBitmap); clouds beyond the rim
+      if (this.art && fog === 'unopened') { artCells.push({ ...pr, fog, selected }); continue; }
+      if (this.art) {
         const t = terrainOf?.(pr.p, pr.q);
-        if (t) { artCells.push({ ...pr, t, rec, fog, selected }); continue; }
+        if (t) { artCells.push({ ...pr, ...t, rec, fog: (src.own ?? []).length ? fog : 'clear', selected, prov: src.provinceOf?.(pr.p, pr.q, { far: true }) ?? null, tiers: src.tierOf ? Array.from({ length: 12 }, (_, j) => src.tierOf(pr.p, pr.q, j)) : null }); continue; }
       }
       paintProvince(ctx, { ...pr, rec, fog, selected, scale: z });
     }
-    if (artVoid.length) this.art.paintUnopened(ctx, artVoid, { zoom: z });
-    if (artCells.length) this.art.paintStrategic(ctx, artCells, { zoom: z, dpr });
+    if (artCells.length) {
+      const fogAt = (q, r) => { const at = locate(q, r); return fogLevel({ ringOpen: ringOf(at.p, at.q) < (src.ringsOpen ?? 1), showAll: src.showAll, known: src.known?.has(`${at.p},${at.q}`), sightDistance: sightDistance(at.p, at.q, src.own ?? []) }); };
+      this.art.paintFar(ctx, artCells, { zoom: z, dpr, terrainAt: terrainLookup(terrainOf), fogAt, alliedPairs: src.alliedPairs ?? [], lod: this.lod, lens: src.lens ?? 'realm' });
+      if (this.lod === 'world' && (src.lens ?? 'realm') !== 'land') paintRealmLabels(ctx, recs, z, src.realmName ?? null);
+    }
     if (artTiles.length) {
       const fogAt = (q, r) => { const at = locate(q, r); return fogLevel({ ringOpen: ringOf(at.p, at.q) < (src.ringsOpen ?? 1), showAll: src.showAll, known: src.known?.has(`${at.p},${at.q}`), sightDistance: sightDistance(at.p, at.q, src.own ?? []) }); };
-      this.art.paint(ctx, artTiles, { zoom: z, dpr, terrainAt: terrainLookup(terrainOf), fogAt, selected: src.selected, viewerFaction: src.viewerFaction ?? null, demoRoads: !!src.demoRoads, ringsOpen: src.ringsOpen ?? null, replayRing: src.artReplayRing ?? null, engineStage: src.engineStage ?? 0, relics: src.relics ?? [], waystones: src.waystones ?? [], demoSpecials: !!src.demoSpecials, rivers: src.rivers ?? [], demoRivers: !!src.demoRivers, alliedPairs: src.alliedPairs ?? [] });
+      this.art.paint(ctx, artTiles, { zoom: z, dpr, terrainAt: terrainLookup(terrainOf), fogAt, selected: src.selected, viewerFaction: src.viewerFaction ?? null, demoRoads: !!src.demoRoads, ringsOpen: src.ringsOpen ?? null, replayRing: src.artReplayRing ?? null, engineStage: src.engineStage ?? 0, relics: src.relics ?? [], waystones: src.waystones ?? [], demoSpecials: !!src.demoSpecials, rivers: src.rivers ?? [], demoRivers: !!src.demoRivers, alliedPairs: src.alliedPairs ?? [],
+        // people (people/crowds.mjs): the source's departures, explores and holder names; tags nearest the view centre first
+        people: src.people ? { ...src.people(), centre: { x: this.view.x, y: this.view.y } } : null });
     }
+    if (src.reach?.tiles?.length) { paintReach(ctx, src.reach.tiles, z, (globalThis.performance?.now?.() ?? Date.now()) / 1000, src.reach.t0); this.invalidateSoon(); }
+    if (src.route) paintRoute(ctx, src.route, z);
+    if (src.threats?.length) { paintThreats(ctx, src.threats, z, src.threatLabel ?? null); this.invalidateSoon(); }
+    if (src.pins?.length) paintPins(ctx, src.pins, z);
+    if (src.guide && !src.route) { paintGuide(ctx, src.guide, z, src.guideLabel?.(src.guide) ?? ''); this.invalidateSoon(); }
     this.mark(wanted > 0 && drawn === wanted ? 'ready' : 'pending');
   }
 

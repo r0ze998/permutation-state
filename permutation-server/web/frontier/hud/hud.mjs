@@ -14,23 +14,24 @@
 // Models are pure (they read FS and return numbers and text the tests
 // check); the render functions return markup; app.mjs puts it in the page.
 import { html, raw } from '../../util.mjs';
-import { L, fmtNum } from '../../lang.mjs';
+import { L, fmtNum, lang } from '../../lang.mjs';
 import { RESOURCES, RESOURCE_ORDER, TIERS, factionName } from '../fi18n.mjs';
-import { storesAt } from '../fland.mjs';
+import { storesAt, holdingFacts, SETTLER } from '../fland.mjs';
+import { hostRows } from '../screens/host.mjs';
+import { DEPART_STAMINA } from '../fmarch.mjs';
 import { bellChip, countdown, BELL_SECS } from '../clock.mjs';
 import { swatch } from '../screens/shell.mjs';
+import { personChip, ownTag, ownIdentity, highlights, renderHighlights, holdingName } from '../people/ui.mjs';
+import { leaderSvg } from '../people/leaders.mjs';
+import { identityOf } from '../people/identity.mjs';
 
 /** Seconds before the bell at which the pill turns amber, then red. */
 export const URGENCY = Object.freeze({ warn: 120, crit: 30 });
 /** A store this close to its cap (seconds of production) reads as "near full". */
 export const NEAR_FULL_SECS = 3600;
 
-/** The holding the HUD shows: the chosen one (FS.activeHolding), else the first. */
-export function activeHolding(FS) {
-  const hs = FS.holdings ?? [];
-  const i = Number.isInteger(FS.activeHolding) && FS.activeHolding < hs.length ? FS.activeHolding : 0;
-  return hs[i] ?? null;
-}
+export { activeHolding } from '../fstate.mjs';
+import { activeHolding } from '../fstate.mjs';
 
 // ------------------------------------------------------------------ the bell pill
 /** `{bell, secondsLeft, frac, urgency, beforeGenesis, ended}` at chain time `now`. */
@@ -86,33 +87,135 @@ export function resourceTitle(r) {
 export function attentionItems(FS) {
   const out = [];
   for (const w of FS.incoming ?? []) {
-    out.push({ kind: 'incoming', p: w.holding.p, q: w.holding.q, tab: 'marches', bell: w.bell, text: L`第${fmtNum(w.bell)}鐘に州 ${w.holding.p},${w.holding.q} へ敵が来るかもしれません` });
+    out.push({ kind: 'incoming', p: w.holding.p, q: w.holding.q, tab: 'marches', bell: w.bell, short: L`来襲 第${fmtNum(w.bell)}鐘`, text: L`第${fmtNum(w.bell)}鐘に州 ${w.holding.p},${w.holding.q} へ敵が来るかもしれません` });
   }
   for (const m of FS.marches ?? []) {
-    if (m.facts?.settleReady && m.dest) out.push({ kind: 'settle', p: m.dest.p, q: m.dest.q, tab: 'marches', text: L`州 ${m.dest.p},${m.dest.q} の進軍を精算できます` });
+    if (m.facts?.settleReady && m.dest) out.push({ kind: 'settle', p: m.dest.p, q: m.dest.q, tab: 'marches', short: L`精算できる進軍`, text: L`州 ${m.dest.p},${m.dest.q} の進軍を精算できます` });
   }
   if (FS.compose && !FS.compose.sending) {
     const o = FS.compose.origin;
-    out.push({ kind: 'draft', p: o.p, q: o.q, tab: 'marches', text: L`編成中の進軍がまだ送られていません` });
+    out.push({ kind: 'draft', p: o.p, q: o.q, tab: 'marches', short: L`進軍が未送信`, text: L`編成中の進軍がまだ送られていません` });
   }
-  const h = activeHolding(FS);
-  if (h) {
-    const full = resourceModel(h, FS.chain?.now() ?? 0).filter(r => r.state === 'full');
-    if (full.length) out.push({ kind: 'full', p: h.p, q: h.q, tab: 'holding', text: L`${full.map(r => r.name).join(' / ')}が満杯です。収穫するか使いましょう` });
+  if (FS.exploreSeedReady) {
+    const h0 = activeHolding(FS);
+    if (h0) out.push({ kind: 'explore', p: h0.p, q: h0.q, tab: 'hosts', short: L`探索の結果`, text: L`探索の結果を確定できます` });
+  }
+  const now = FS.chain?.now() ?? 0, bell = FS.nowBell ?? 0;
+  // hosts ready to march: in the roster, rested, not on the road, nothing pending
+  const idle = FS.holdings?.length ? hostRows(FS).filter(r => r.state === 1 && !r.inTransit && !r.pending && r.stamina >= DEPART_STAMINA && !(r.readyBell > bell)) : [];
+  if (idle.length) out.push({ kind: 'idle', p: idle[0].p, q: idle[0].q, tile: idle[0].tile, host: String(idle[0].id), tab: 'hosts', n: idle.length, short: L`出陣できる軍勢 ${fmtNum(idle.length)}`, text: L`出陣できる軍勢が ${fmtNum(idle.length)} あります` });
+  for (const h of FS.holdings ?? []) {
+    const full = resourceModel(h, now).filter(r => r.state === 'full');
+    const facts = FS.season ? holdingFacts(h, FS.season, now) : null;
+    if (!facts) { if (full.length) out.push({ kind: 'full', p: h.p, q: h.q, tab: 'holding', holding: h, short: L`満杯 ${fmtNum(full.length)}`, text: L`${full.map(r => r.name).join(' / ')}が満杯です。収穫するか使いましょう` }); continue; }
+    if (facts.final && !facts.queue.some(q => q.doneIn > 0)) out.push({ kind: 'build', p: h.p, q: h.q, tab: 'holding', holding: h, short: L`建設の列が空`, text: L`州 ${h.p},${h.q} の建設の列が空いています` });
+    const musterable = facts.reserve.filter(r => r.unit !== SETTLER).reduce((a, r) => a + r.troops, 0);
+    if (facts.final && musterable >= 100) out.push({ kind: 'muster', p: h.p, q: h.q, tab: 'holding', holding: h, short: L`編成できる兵 ${fmtNum(musterable)}`, text: L`控えの兵 ${fmtNum(musterable)} を軍勢に編成できます` });
+    if (facts.dormantIn > 0 && facts.dormantIn < DORMANT_WARN_SECS) out.push({ kind: 'dormant', p: h.p, q: h.q, tab: 'holding', holding: h, short: L`休眠まで ${span(facts.dormantIn)}`, text: L`州 ${h.p},${h.q} の拠点はあと ${span(facts.dormantIn)} で休眠します。何か操作しましょう` });
+    if (full.length) out.push({ kind: 'full', p: h.p, q: h.q, tab: 'holding', holding: h, short: L`満杯 ${fmtNum(full.length)}`, text: L`${full.map(r => r.name).join(' / ')}が満杯です。収穫するか使いましょう` });
   }
   return out;
 }
 
-/** The pill's text: "要対応 3" / "Needs you 3"; null when nothing needs the player. */
-export const attentionText = items => (items.length ? L`要対応 ${fmtNum(items.length)}` : null);
+/** A mark per kind of item (not colour alone, UI plan E6). */
+export const TODO_GLYPH = Object.freeze({ incoming: '⚠', settle: '✓', draft: '✎', explore: '⌕', idle: '⚑', build: '⚒', muster: '⚔', dormant: '☾', full: '▣' });
+
+/** A holding this close to dormancy (seconds) is an attention item. */
+export const DORMANT_WARN_SECS = 6 * 3600;
+
+/**
+ * The pill's text (Civ's end-turn button names the next blocker): the first
+ * item's short label, then how many more — "来襲 第1,040鐘 · ほか 2";
+ * null when nothing needs the player.
+ */
+export function attentionText(items) {
+  if (!items.length) return null;
+  const first = items[0].short ?? items[0].text;
+  return items.length > 1 ? L`${first} · ほか ${fmtNum(items.length - 1)}` : first;
+}
 
 // ------------------------------------------------------------------ markup
-export function renderStrip(tokens) {
-  return tokens.map(r => html`<span class="res res-${r.state}" title="${resourceTitle(r)}">
+const STATE_RANK = { full: 0, near: 1, ok: 2 };
+/**
+ * The strip: `max` tokens (the header's room: one on a phone), the most
+ * pressing first (full, then near full); when some are left out, a press
+ * opens every resource ('*').
+ */
+export function renderStrip(tokens, open = null, max = tokens.length) {
+  const all = tokens.length > max;
+  const shown = all ? [...tokens].sort((a, b) => STATE_RANK[a.state] - STATE_RANK[b.state] || tokens.indexOf(a) - tokens.indexOf(b)).slice(0, max) : tokens;
+  return shown.map(r => html`<button type="button" class="res res-${r.state}" data-act="res-open" data-r="${all ? '*' : r.resource}" aria-expanded="${open === (all ? '*' : r.resource) ? 'true' : 'false'}" aria-haspopup="dialog" title="${resourceTitle(r)}" aria-label="${all ? L`${resourceTitle(r)} · ほか ${fmtNum(tokens.length - max)} 種` : resourceTitle(r)}">
+    <span class="res-dot res-c-${r.resource}" aria-hidden="true"></span>
     <span class="res-name">${r.name}</span>
-    <span class="res-val">${fmtNum(r.value)}</span>
+    <span class="res-val">${fmtNum(r.value)}</span><span class="res-short" aria-hidden="true">${shortNum(r.value)}</span>
+    ${r.perHour > 0 ? html`<span class="res-rate">${L`+${fmtNum(r.perHour)}/時`}</span>` : ''}
     ${r.state === 'full' ? html`<span class="res-flag">${L`満杯`}</span>` : r.state === 'near' ? html`<span class="res-flag">${span(r.fullIn)}</span>` : ''}
-  </span>`);
+  </button>`);
+}
+
+/** A number in a few characters for the phone strip: 980, 1.2k / 1.2万. */
+export function shortNum(n) {
+  const v = Number(n ?? 0);
+  if (Math.abs(v) < 1000) return String(Math.round(v));
+  try { return new Intl.NumberFormat(lang() === 'en' ? 'en' : 'ja', { notation: 'compact', maximumFractionDigits: 1 }).format(v); } catch { return fmtNum(v); }
+}
+
+/**
+ * One resource across the viewer's holdings (UI plan E1, Civ's yield
+ * breakdown on press): `{resource, name, total, perHour, rows: [{holding,
+ * value, cap, perHour, fullIn, state}]}`.
+ */
+export function resourceBreakdown(holdings, resource, now) {
+  const rows = [];
+  for (const h of holdings ?? []) {
+    const r = resourceModel(h, now).find(x => x.resource === resource);
+    if (r) rows.push({ holding: h, value: r.value, cap: r.cap, perHour: r.perHour, fullIn: r.fullIn, state: r.state });
+  }
+  return { resource, name: RESOURCES[resource], total: rows.reduce((a, r) => a + r.value, 0), perHour: rows.reduce((a, r) => a + r.perHour, 0), rows };
+}
+
+/** Every resource of the viewer's holdings in one list (the phone's strip shows one): `[breakdown]`. */
+export function allBreakdowns(holdings, now) {
+  const seen = new Set();
+  for (const h of holdings ?? []) for (const r of resourceModel(h, now)) seen.add(r.resource);
+  return RESOURCE_ORDER.filter(r => seen.has(r)).map(r => resourceBreakdown(holdings, r, now));
+}
+
+/** The popover for every resource: one row each, a press opens that one's breakdown. */
+export function renderAllBreakdowns(list) {
+  return html`<div class="res-pop-head"><strong>${L`資源`}</strong><span></span>
+    <button type="button" class="btn small" data-act="res-close" aria-label="${L`閉じる`}">×</button></div>
+    <ul class="list res-rows">${list.map(b => html`<li class="${b.rows.some(r => r.state === 'full') ? 'res-full' : ''}"><button type="button" class="res-row" data-act="res-open" data-r="${b.resource}">
+      <span class="res-row-name"><span class="res-dot res-c-${b.resource}" aria-hidden="true"></span> ${b.name}</span><span>${fmtNum(b.total)}</span>
+      <span class="muted">${L`毎時 +${fmtNum(b.perHour)}`}</span><span class="muted">${b.rows.some(r => r.state === 'full') ? L`満杯` : ''}</span></button></li>`)}</ul>`;
+}
+
+/** The breakdown popover's markup. */
+export function renderBreakdown(b) {
+  if (!b) return '';
+  return html`<div class="res-pop-head"><strong>${b.name}</strong> <span>${L`合計 ${fmtNum(b.total)} · 毎時 +${fmtNum(b.perHour)}`}</span>
+    <button type="button" class="btn small" data-act="res-close" aria-label="${L`閉じる`}">×</button></div>
+    <ul class="list res-rows">${b.rows.map(r => html`<li class="res-${r.state}"><button type="button" class="res-row" data-act="goto" data-p="${r.holding.p}" data-q="${r.holding.q}">
+      <span class="res-row-name">${holdingName(r.holding)}</span>
+      <span>${fmtNum(r.value)} / ${fmtNum(r.cap)}</span><span class="muted">${L`毎時 +${fmtNum(r.perHour)}`}</span>
+      <span class="muted">${r.fullIn === 0 ? L`満杯` : r.fullIn !== null ? L`満杯まで ${span(r.fullIn)}` : ''}</span></button></li>`)}</ul>
+    <p class="muted">${L`増える量は建物と働く区画で決まります。満杯になると増えません。拠点の画面で収穫や建設ができます。`}</p>`;
+}
+
+/**
+ * A holding's clocks for the rail (Civ's city banner timers): the next
+ * building done, the first store full, dormancy when it is near.
+ */
+export function holdingCountdowns(FS, h) {
+  const now = FS.chain?.now?.() ?? 0;
+  const out = [];
+  const facts = FS.season ? holdingFacts(h, FS.season, now) : null;
+  const next = facts?.queue.filter(q => q.doneIn > 0).sort((a, b) => a.doneIn - b.doneIn)[0];
+  if (next) out.push(L`建設 あと ${span(next.doneIn)}`);
+  const full = resourceModel(h, now).filter(r => r.fullIn > 0).sort((a, b) => a.fullIn - b.fullIn)[0];
+  if (full && full.fullIn < 24 * 3600) out.push(L`${full.name} 満杯まで ${span(full.fullIn)}`);
+  if (facts && facts.dormantIn > 0 && facts.dormantIn < DORMANT_WARN_SECS) out.push(L`休眠まで ${span(facts.dormantIn)}`);
+  return out;
 }
 
 /** The action tiles: each opens a tab of the panel (Eternum's Build · Military · Transfer row). */
@@ -120,7 +223,7 @@ const TILES = [
   { tab: 'holding', glyph: '⌂', text: () => L`拠点` },
   { tab: 'hosts', glyph: '⚔', text: () => L`軍勢` },
   { tab: 'marches', glyph: '➚', text: () => L`進軍` },
-  { tab: 'more', glyph: '☷', text: () => L`記録` },
+  { tab: 'more', glyph: '☷', text: () => L`その他` },
 ];
 
 /**
@@ -137,12 +240,19 @@ export function standings(overviews) {
   return rows.sort((a, b) => b.holdings - a.holdings || b.provinces - a.provinces || a.faction - b.faction);
 }
 
+/** The standings list alone (the spectator's phone panel folds it). */
+export function renderStandingsList(FS) {
+  return html`<ol class="rail-standings">${standings(FS.overviews).map((r, i) => html`<li><span class="rank">${i + 1}</span>${raw(leaderSvg(r.faction, { size: 34 }))}<strong>${factionName(r.faction)}</strong>
+      <span class="muted">${L`拠点 ${fmtNum(r.holdings)} · ${fmtNum(r.provinces)} 州`}</span></li>`)}</ol>`;
+}
+
 function renderStandings(FS) {
   const rows = standings(FS.overviews);
   return html`<h2 class="rail-h">${L`勢力の順位`}</h2>
-    <ol class="rail-standings">${rows.map((r, i) => html`<li><span class="rank">${i + 1}</span>${swatch(r.faction)}<strong>${factionName(r.faction)}</strong>
+    <ol class="rail-standings">${rows.map((r, i) => html`<li><span class="rank">${i + 1}</span>${raw(leaderSvg(r.faction, { size: 34 }))}<strong>${factionName(r.faction)}</strong>
       <span class="muted">${L`拠点 ${fmtNum(r.holdings)} · ${fmtNum(r.provinces)} 州`}</span></li>`)}</ol>
-    <p class="muted">${L`拠点の数は最新の概観（鐘ごと）から数えています。`}</p>`;
+    <p class="muted">${L`拠点の数は最新の概観（鐘ごと）から数えています。`}</p>
+    <h2 class="rail-h">${L`見どころ`}</h2>${renderHighlights(highlights(FS.chronicle, FS.overviews, FS.roster))}`;
 }
 
 /** The left rail: holdings, action tiles, what needs the player (the spectator: the standings). */
@@ -153,21 +263,23 @@ export function renderRail(FS) {
   const warned = new Set((FS.incoming ?? []).map(w => `${w.holding.p},${w.holding.q}`));
   const items = attentionItems(FS);
   const faction = FS.citizen?.faction;
+  const tag = Number.isInteger(faction) ? ownTag(FS) : null;
   const head = Number.isInteger(faction)
-    ? html`<p class="rail-faction">${swatch(faction)}<strong>${factionName(faction)}</strong></p>`
+    ? html`<div class="rail-me">${tag !== null ? personChip(ownIdentity(FS), faction, { size: 44, full: true, note: factionName(faction) }) : html`<p class="rail-faction">${swatch(faction)}<strong>${factionName(faction)}</strong></p>`}</div>`
     : html`<p class="rail-faction muted">${FS.mode === 'spectate' ? L`観戦中` : L`まだ陣営に加わっていません`}</p>`;
   const list = hs.length
     ? html`<ul class="rail-list">${hs.map((h, i) => html`<li><button type="button" class="rail-holding" data-act="holding-pick" data-i="${i}" ${raw(h === active ? 'aria-current="true"' : '')}>
-        <span class="rail-tier">${TIERS[h.tier] ?? h.tier}</span>
+        <span class="rail-tier">${holdingName(h)}</span>
         <span class="rail-where">${L`州 ${h.p},${h.q} 区画 ${h.site + 1}`}</span>
         ${warned.has(`${h.p},${h.q}`) ? html`<span class="rail-warn">${L`来襲の恐れ`}</span>` : ''}
+        ${(() => { const c = holdingCountdowns(FS, h); return c.length ? html`<span class="rail-clock">${c.join(' · ')}</span>` : ''; })()}
       </button></li>`)}</ul>`
     : html`<p class="muted">${FS.mode === 'play' ? L`拠点はまだありません。地図の「参加」から始めます。` : L`拠点はありません`}</p>`;
   const tiles = FS.mode === 'play' && hs.length
     ? html`<div class="rail-tiles">${TILES.map(t => html`<button type="button" class="rail-tile" data-act="tab" data-tab="${t.tab}" ${raw((FS.tab ?? 'map') === t.tab ? 'aria-pressed="true"' : 'aria-pressed="false"')}><span class="rail-glyph" aria-hidden="true">${t.glyph}</span><span>${t.text()}</span></button>`)}</div>`
     : '';
   const todo = items.length
-    ? html`<ol class="rail-todo">${items.map((x, i) => html`<li class="todo-${x.kind}"><button type="button" class="rail-todo-btn" data-act="attn-go" data-i="${i}">${x.text}</button></li>`)}</ol>`
+    ? html`<ol class="rail-todo">${items.map((x, i) => html`<li class="todo-${x.kind}"><button type="button" class="rail-todo-btn" data-act="attn-go" data-i="${i}"><span class="todo-glyph" aria-hidden="true">${TODO_GLYPH[x.kind] ?? '•'}</span>${x.text}</button></li>`)}</ol>`
     : html`<p class="muted">${L`次の鐘までにやることはありません`}</p>`;
   return html`${head}
     <h2 class="rail-h">${L`拠点`}</h2>${list}

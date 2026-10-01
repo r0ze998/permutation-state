@@ -11,6 +11,7 @@ import { L, fmtNum } from '../../lang.mjs';
 import { PIPELINE_TEXT } from '../fi18n.mjs';
 import { pipeline, countdown } from '../clock.mjs';
 import { timeHtml, quotaChip } from './shell.mjs';
+import { termButton } from '../hud/glossary.mjs';
 
 /**
  * The sheet's rows: `items = [{bell, region, why, facts: {anchor, archive,
@@ -30,7 +31,7 @@ export function render(FS) {
   // The local clock's offset means something only on a real cluster (a localnet Clock runs scaled).
   const offset = FS.pin?.cluster === 'localnet' ? 0 : FS.chain.offset?.() ?? 0;
   const current = FS.clock ? Math.max(0, Math.floor((now - FS.clock.genesisTs) / 600)) : null;
-  return html`<section aria-labelledby="bell-title"><h3 id="bell-title">${L`鐘の進み具合`}</h3>
+  return html`<section aria-labelledby="bell-title"><h3 id="bell-title">${L`鐘の進み具合`}${termButton('bell')}</h3>
     ${current !== null && now >= FS.clock.genesisTs ? html`<p>${L`いまは第${fmtNum(current)}鐘`}</p>` : ''}
     ${Math.abs(offset) > 2 ? html`<p class="muted">${L`この端末の時計はチェーンより ${Math.round(offset)} 秒ずれています`}</p>` : ''}
     ${quotaChip(FS.quota) ? html`<p class="quota-line" data-quota-line>${quotaChip(FS.quota)}</p>` : ''}

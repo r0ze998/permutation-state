@@ -143,13 +143,6 @@ test('the adjacent-wedge offer (§5.9): only when the home wedge shows no free s
   // Not full: no offer.
   const open = new Map([[2, withFree(ring(2), [2])]]);
   assert.deepEqual(ob.overflowProvinces(open, 2, 3), { full: false, ring: null, provinces: [] });
-  // renderOverflow gives the offer as pick-province buttons (the site picker then reads the Province itself).
-  const store = { citizen: citizen(), land: { stage: 'joined' }, overviews, record: { rings: [0, 1, 2, 3].map(d => ({ d })) }, ui: { dismissed: [ob.FLAG.welcome] } };
-  assert.match(String(card.renderOverflow(store)), /data-act="pick-province"/);
-  setLang('en');
-  assert.match(text(card.renderOverflow(store)), /adjacent wedges(&#39;|')? outermost ring \(Ring 3\)/);
-  // W6-D (W5-E D9): the card itself no longer repeats the list the site picker under it shows.
-  assert.doesNotMatch(String(card.render(store)), /data-act="pick-province"/);
   setLang('ja');
 });
 

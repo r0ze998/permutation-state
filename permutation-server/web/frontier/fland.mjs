@@ -101,6 +101,23 @@ export function freeSitesOf(province) {
   return out;
 }
 
+/**
+ * The sites of an automatic ticket (owner decision V2: joining is choosing a nation;
+ * the client places the first village). `provinces` = decoded Provinces of the
+ * candidates, nearest open ring first (`candidateProvinces`, or the overflow list of
+ * §5.9 when the home wedge is full). Up to `max` free sites, one per province in turn
+ * (three different provinces when there are, so one crowded province cannot take all
+ * three chances), in candidate order. The program and the fair lottery decide the rest.
+ */
+export function autoSites(provinces, max = 3) {
+  const lists = provinces.map(pv => freeSitesOf(pv)).filter(l => l.length);
+  const out = [];
+  for (let round = 0; out.length < max && lists.some(l => l.length > round); round++) {
+    for (const l of lists) { if (out.length >= max) break; if (l[round]) out.push({ p: l[round].p, q: l[round].q, site: l[round].site }); }
+  }
+  return out;
+}
+
 /** Whether a site may go on a ticket of `faction` (the program checks the overflow rule for a full wedge). */
 export const siteAllowed = (faction, s) => ringOf(s.p, s.q) >= FIRST_TICKET_RING && wedgeOf(s.p, s.q) === homeWedge(faction) && s.site >= 0 && s.site < 12;
 

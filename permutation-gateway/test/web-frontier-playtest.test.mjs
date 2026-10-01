@@ -98,10 +98,7 @@ test('catch-up (W6-D): the page asks the keeper once per bell while the home pro
   assert.equal(C.retryAfterCatchUp('Muster', 'NotFinal'), false);
 });
 
-test('the onboarding card leaves the adjacent-wedge list to the site picker below it (W5-E D9)', () => {
-  const app = read(`${WEB}screens/onboarding.mjs`);
-  // The card's body no longer renders its own overflow list; the picker (join.mjs) does, once.
-  assert.doesNotMatch(app, /\$\{cur\.id === 'join'[^\n]*renderOverflow\(FS\)/);
-  setLang('ja');
-  assert.equal(typeof card.renderOverflow, 'function', 'kept for callers outside the card');
+test('no site picker anywhere (owner decision V2): joining is choosing a nation', () => {
+  for (const f of ['screens/onboarding.mjs', 'screens/join.mjs', 'hud/inspect.mjs']) assert.doesNotMatch(read(`${WEB}${f}`), /data-act="(pick-province|toggle-site|file-ticket)"|act: '(pick-province|toggle-site)'/, f);
+  assert.equal(typeof card.renderOverflow, 'undefined');
 });

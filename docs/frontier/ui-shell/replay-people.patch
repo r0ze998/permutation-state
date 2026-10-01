@@ -1,0 +1,62 @@
+diff --git a/permutation-server/web/frontier/replay/main.mjs b/permutation-server/web/frontier/replay/main.mjs
+index 98486d0..663c97d 100644
+--- a/permutation-server/web/frontier/replay/main.mjs
++++ b/permutation-server/web/frontier/replay/main.mjs
+@@ -22,6 +22,8 @@ import * as C from './camera.mjs';
+ import * as V from './view.mjs';
+ import { loadSeason, OverviewStore, ProvinceStore } from './data.mjs';
+ import { Effects, paint } from './overlay.mjs';
++import { createReplayPeople } from '../people/replay.mjs';
++import { createRoster } from '../people/roster.mjs';
+ 
+ const doc = globalThis.document;
+ const $ = id => doc.getElementById(id);
+@@ -38,6 +40,9 @@ const S = {
+ };
+ const effects = new Effects();
+ let map = null, terrainOf = null, applying = false;
++// the people layer (people/replay.mjs): holders' names and the battles of the bell entered
++let roster = null, people = null;
++const onScreen = new Set();   // provinces the map asked for at tile detail this frame
+ 
+ function setState(s) { if (doc.body.dataset.state !== s) doc.body.dataset.state = s; }
+ function fail(text) { const e = $('error-line'); if (e) { e.hidden = false; e.textContent = text; } setState('error'); }
+@@ -53,7 +58,11 @@ function source() {
+   return {
+     overviews: S.overviews, ringsOpen: S.ringsOpen, own: [], known: new Set(), showAll: true, selected: null, terrainOf,
+     viewerFaction: null,
+-    provinceOf: (p, q) => (tile && S.provinces ? S.provinces.at(p, q, b)?.province ?? null : null),
++    provinceOf: (p, q) => { if (!tile || !S.provinces) return null; onScreen.add(`${p},${q}`); return S.provinces.at(p, q, b)?.province ?? null; },
++    people: people ? () => people.at(b, {
++      envelopes: [...onScreen].map(k => { const [p, q] = k.split(',').map(Number); return S.provinces?.at(p, q, b) ?? null; }),
++      before: (p, q) => S.provinces?.at(p, q, b - 1)?.province ?? null,
++    }) : undefined,
+     clashOf: (p, q) => {
+       if (!tile || !S.provinces) return null;
+       const env = S.provinces.at(p, q, b);
+@@ -80,6 +89,7 @@ function mountMap() {
+ function show(b) {
+   const store = S.store;
+   if (!store || !store.summaries.has(b)) return;
++  if (S.shown !== b) onScreen.clear();
+   S.shown = b;
+   S.overviews = store.overviews(b);
+   S.ringsOpen = Math.max(1, T.ringsOpenAt(S.meta.opens, b));
+@@ -92,6 +102,7 @@ function show(b) {
+ function enter(b, now) {
+   const s = S.store.summaries.get(b);
+   if (!s) return;
++  if (s.clashes?.length) people?.enter(b);
+   const ring = S.meta.opens.find(o => o.bell === b && b > S.meta.first)?.ring ?? null;
+   const founded = T.newHoldings(S.store.records(b - 1), S.store.records(b));
+   effects.bell({ clashes: s.clashes, founded, ring }, now);
+@@ -311,6 +322,9 @@ export async function boot() {
+   mountTicks();
+   renderControls();
+   S.provinces = new ProvinceStore({ base, seasonId: S.meta.seasonId, onLoad: () => map?.invalidate() });
++  roster = createRoster({ base, onChange: () => map?.invalidate() });
++  for (let d = 0; d < (S.meta.record?.rings?.length ?? 1); d++) roster.ensure(d);
++  people = createReplayPeople({ roster });
+   S.store = new OverviewStore({
+     base, meta: S.meta, range: S.range,
+     onProgress: st => {

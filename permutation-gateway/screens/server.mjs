@@ -37,6 +37,13 @@ export async function startServer() {
       res.end(W.overview(d));
       return 200;
     }
+    if ((m = /^\/h\/roster\/(\d+)\/latest\.bin$/.exec(path))) {
+      const d = Number(m[1]);
+      if (d > 2) return json(res, 404, { code: 'NotFound' });
+      res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'no-store' });
+      res.end(W.roster(d));
+      return 200;
+    }
     if ((m = /^\/h\/province\/(-?\d+),(-?\d+)\/(latest|\d+)$/.exec(path))) return json(res, 200, W.provinceEnvelope(Number(m[1]), Number(m[2]), m[3] === 'latest' ? W.BELL : Number(m[3])));
     if ((m = /^\/h\/bell\/(\d+)\/region\/(\d+)$/.exec(path))) return json(res, 200, W.bellRegion(Number(m[1]), Number(m[2])));
     if ((m = /^\/h\/me\/(\w+)$/.exec(path))) return m[1] === v.wallet ? json(res, 200, W.meRecord(v, stage)) : json(res, 200, W.meRecord({ ...v, wallet: m[1] }, 'none'));
@@ -55,7 +62,9 @@ export async function startServer() {
     const quota = { left: 38, resetsAt: W.GENESIS_TS + 86_400, lamportsLeft: '400000000' };
     if (method === 'GET' && path === '/gw/f/quota') return json(res, 200, { ok: true, ...quota });
     if (method === 'GET' && path === '/gw/f/relay') return json(res, 200, { ok: true, feePayer: v.A.season, blockhash: '11111111111111111111111111111111', lastValidBlockHeight: 1000, programId: W.PROGRAM, quota });
-    return json(res, 503, { ok: false, code: 'Unavailable', error: 'the screenshot fixture relay sends nothing' });
+    // a refusal in the body, not an HTTP error: the joined page files its first ticket by itself (owner decision V2)
+    // and must show its retry, while the smoke counts HTTP errors as failures
+    return json(res, 200, { ok: false, code: 'Unavailable', error: 'the screenshot fixture relay sends nothing' });
   }
 
   async function file(path, res) {
