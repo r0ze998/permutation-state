@@ -274,7 +274,7 @@ export function renderRail(FS) {
         ${warned.has(`${h.p},${h.q}`) ? html`<span class="rail-warn">${L`来襲の恐れ`}</span>` : ''}
         ${(() => { const c = holdingCountdowns(FS, h); return c.length ? html`<span class="rail-clock">${c.join(' · ')}</span>` : ''; })()}
       </button></li>`)}</ul>`
-    : html`<p class="muted">${FS.mode === 'play' ? L`拠点はまだありません。地図の「参加」から始めます。` : L`拠点はありません`}</p>`;
+    : html`<p class="muted">${FS.mode !== 'play' ? L`拠点はありません` : (FS.land?.stage ?? 'none') === 'none' ? L`拠点はまだありません。地図の「参加」から始めます。` : FS.land.stage === 'ticket' ? L`拠点はまだありません。入植希望を自動で出しました（次の鐘ごろに決まります）。` : L`拠点はまだありません。入植希望を自動で出しています。`}</p>`;
   const tiles = FS.mode === 'play' && hs.length
     ? html`<div class="rail-tiles">${TILES.map(t => html`<button type="button" class="rail-tile" data-act="tab" data-tab="${t.tab}" ${raw((FS.tab ?? 'map') === t.tab ? 'aria-pressed="true"' : 'aria-pressed="false"')}><span class="rail-glyph" aria-hidden="true">${t.glyph}</span><span>${t.text()}</span></button>`)}</div>`
     : '';

@@ -101,23 +101,6 @@ export function freeSitesOf(province) {
   return out;
 }
 
-/**
- * The sites of an automatic ticket (owner decision V2: joining is choosing a nation;
- * the client places the first village). `provinces` = decoded Provinces of the
- * candidates, nearest open ring first (`candidateProvinces`, or the overflow list of
- * §5.9 when the home wedge is full). Up to `max` free sites, one per province in turn
- * (three different provinces when there are, so one crowded province cannot take all
- * three chances), in candidate order. The program and the fair lottery decide the rest.
- */
-export function autoSites(provinces, max = 3) {
-  const lists = provinces.map(pv => freeSitesOf(pv)).filter(l => l.length);
-  const out = [];
-  for (let round = 0; out.length < max && lists.some(l => l.length > round); round++) {
-    for (const l of lists) { if (out.length >= max) break; if (l[round]) out.push({ p: l[round].p, q: l[round].q, site: l[round].site }); }
-  }
-  return out;
-}
-
 /** Whether a site may go on a ticket of `faction` (the program checks the overflow rule for a full wedge). */
 export const siteAllowed = (faction, s) => ringOf(s.p, s.q) >= FIRST_TICKET_RING && wedgeOf(s.p, s.q) === homeWedge(faction) && s.site >= 0 && s.site < 12;
 
@@ -162,23 +145,6 @@ export function ticketTimes(clock, ticketBell) {
   };
 }
 
-/**
- * Whether to offer the one-tap refile (I-47): the Citizen has no holding
- * and no open ticket, and this device remembers the sites it filed last.
- * `why`: 'displaced' when it had held a provisional holding (the
- * displacement ended its ticket), else 'ended' (taken or expired).
- */
-export function refileOffer(state, lastTicket, { hadHolding = false, seen = true, filedBell = null, nowBell = null } = {}) {
-  // `seen` false: the ticket was filed but the herald has not shown it yet (W6-D:
-  // the onboarding run met "your ticket ended" right after filing). A page that
-  // never saw the ticket open (it ended between two polls, integ-W6 review)
-  // still counts it as seen once `TICKET_SEEN_BELLS` have passed since the
-  // filing bell: by then the ticket has been drawn and settled, or is still
-  // open, in which case the stage is 'ticket' and there is no offer anyway.
-  const ended = seen || (Number.isInteger(filedBell) && Number.isInteger(nowBell) && nowBell >= filedBell + TICKET_SEEN_BELLS);
-  if (!lastTicket?.length || state.stage !== 'joined' || !ended) return null;
-  return { sites: lastTicket, why: hadHolding ? 'displaced' : 'ended' };
-}
 /**
  * Bells after the filing bell from which the last ticket counts as seen
  * without the page having watched it: the result is drawn at

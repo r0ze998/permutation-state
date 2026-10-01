@@ -13,8 +13,8 @@ import * as fsession from './fsession.mjs';
 import * as book from './marchbook.mjs';
 import { submit, track, accountsFor, campMaskOf, campWinner } from './fplay.mjs';
 import { sendMarch, planRoute, earliestBell, arrivalWindow, tipOptions, incomingWarnings, DEPART_MARGIN_SECS, RETREAT_CHOICES } from './fmarch.mjs';
-import { landState, hostsIn, candidateProvinces, autoSites, TICKET_SEEN_BELLS } from './fland.mjs';
-import { overflowProvinces } from './onboarding.mjs';
+import { landState, hostsIn, TICKET_SEEN_BELLS } from './fland.mjs';
+import { planTicket } from './fjoin.mjs';
 import { toggleTile } from './screens/explore.mjs';
 import { sealMarch, unpack, ctHash as ctHashOf, sealRoot as sealRootOf } from './seal.mjs';
 import { bellAt, bellStart, pipeline, archivePartOf } from './clock.mjs';
@@ -52,7 +52,7 @@ function ctx(extra = {}) {
 }
 
 /** One sponsored action, tracked to its landing; the notice says how it went. */
-async function act(name, { v = {}, fields = {}, signer, requester = null, label, after } = {}) {
+async function act(name, { v = {}, fields = {}, signer, requester = null, label, after, onSent } = {}) {
   // `signer: null` = a settle shape (no authority signs; the session key signs the request only).
   if (!io.pinned()) return failed({ code: 'NoPin' });
   if (!FS.wallet) return failed({ code: 'NoWallet' });
@@ -73,6 +73,8 @@ async function act(name, { v = {}, fields = {}, signer, requester = null, label,
     const accounts = typeof v === 'function' ? fp => accountsFor(name, v(fp)) : accountsFor(name, ctx(v));
     const send = () => submit({ name, accounts, fields, signer: sign, requester, citizen: requester ? io.pinned().addresses.of('Citizen', { wallet: FS.wallet.address }) : undefined, invite: v.invite });
     let r = await send();
+    // the transaction left this browser (a refusal before sending never reaches here)
+    if (r.ok) onSent?.(r);
     let t = r.ok ? await track(r.signature) : r;
     // W6-D: a resident action refused because the province fell a bell behind between the check and the landing:
     // ask the keeper to catch it up, wait for the herald to show it, and send once more.
@@ -330,8 +332,14 @@ export async function refresh() {
       FS.citizen = me.citizen;
       FS.holdings = me.holdings;
       FS.land = landState(me.citizen);
-      if (before === 'provisional' && FS.land.stage === 'joined') FS.hadHolding = true;
-      if (FS.ui?.ticketSeen === false && FS.land.stage !== 'joined' && FS.land.stage !== 'none') saveUiPatch({ ticketSeen: true });
+      // why the last holding or ticket ended, kept with its bell for the next cards (review finding 7)
+      const after = FS.land.stage, gone = after === 'joined' || after === 'refugee';
+      if (before && gone && ['provisional', 'final', 'ticket'].includes(before)) saveUiPatch({ landEnd: { why: before === 'provisional' ? 'displaced' : before === 'final' ? 'lost' : 'ended', bell: nowBell() } });
+      if (after === 'provisional' || after === 'final') { if (FS.ui?.landEnd) saveUiPatch({ landEnd: null }); }
+      // the filed ticket counts as seen once the herald shows it (or what it led to); not merely because the stage is
+      // not 'joined' (a refugee is not a ticket) — review finding 5
+      const shown = ['ticket', 'provisional', 'final'].includes(after) || (Number.isInteger(FS.ui?.lastTicketBell) && Number(me.citizen?.ticketBell) === FS.ui.lastTicketBell);
+      if (FS.ui?.ticketSeen === false && shown) saveUiPatch({ ticketSeen: true });
       if (me.record?.quota) FS.quota = me.record.quota;
       if (FS.session && FS.citizen) {
         const m = fsession.matchesCitizen(FS.session, FS.citizen, now());
@@ -368,43 +376,69 @@ export async function refresh() {
   autoTicket().catch(e => console.error('frontier auto ticket:', e));
 }
 
-// ------------------------------------------------------------------ the first village, placed automatically (owner decision V2)
-/** Provinces the automatic ticket reads, at most. */
-export const AUTO_PROVINCES = 6;
+// ------------------------------------------------------------------ the first holding, placed automatically (owner decision V2)
 /**
- * Joining is choosing a nation: when the Citizen has neither a holding nor an open
+ * Joining is choosing a faction: when the Citizen has neither a holding nor an open
  * ticket (just joined, its ticket ended — displaced or exhausted — or it lost its
- * holding), this browser picks up to three free sites of the home wedge (nearest
- * open ring first; the adjacent wedges' outermost ring when it is full, §5.9) and
- * files the ticket itself. Once a bell at most; not while the last ticket is still
- * on its way to the herald. `FS.autoTicket = {state: 'filing'|'nofree'|'failed', bell}`.
+ * holding), this browser plans a ticket (fjoin.mjs: its own order of the home wedge's
+ * free sites, cohort room, the §5.9 overflow) and files it.
+ *   - once a bell for this device (the stored `autoTryBell`, re-read: other tabs count);
+ *   - not while a ticket that left this browser is not yet shown by the herald
+ *     (`ticketSeen` false, written only once the transaction was sent — a refusal
+ *     before sending locks nothing; review finding 1);
+ *   - `force` (the "file again now" button) skips both.
+ * `FS.autoTicket = {state: 'searching'|'sent'|'waiting'|'nofree'|'failed', bell, code?}`.
  */
-export async function autoTicket() {
+export async function autoTicket({ force = false } = {}) {
   const stage = FS.land?.stage;
   if (stage !== 'joined' && stage !== 'refugee') { FS.autoTicket = null; return; }
   if (!FS.session || FS.sessionProblem || !Number.isInteger(FS.citizen?.faction) || FS.autoTicketBusy) return;
   const b = nowBell();
+  const sc = scope();
+  if (sc) FS.ui = loadUi(uiStorage, uiKey(sc));   // another tab may have filed (review finding 6)
   const filed = FS.ui?.lastTicketBell;
-  if (FS.ui?.ticketSeen === false && Number.isInteger(filed) && b < filed + TICKET_SEEN_BELLS) return;   // still on its way
-  if (FS.autoTicket?.bell === b) return;   // once a bell
+  const onItsWay = FS.ui?.ticketSeen === false && Number.isInteger(filed) && b < filed + TICKET_SEEN_BELLS;
+  if (!force) {
+    if (onItsWay) { FS.autoTicket = { state: 'sent', bell: filed }; invalidate('panel'); return; }
+    if (FS.ui?.autoTryBell === b) { if (!FS.autoTicket) { FS.autoTicket = { state: 'waiting', bell: b }; invalidate('panel'); } return; }
+  }
   FS.autoTicketBusy = true;
-  FS.autoTicket = { state: 'filing', bell: b };
+  saveUiPatch({ autoTryBell: b });   // before sending: a second tab skips this bell
+  FS.autoTicket = { state: 'searching', bell: b };
   invalidate('panel');
   try {
-    const faction = FS.citizen.faction, overviews = FS.overviews ?? new Map();
-    let cands = candidateProvinces(overviews, faction);
-    if (!cands.length) { const o = overflowProvinces(overviews, faction, FS.record?.rings?.length ?? 1); if (o.full) cands = o.provinces; }
-    const provinces = [];
-    for (const c of cands.slice(0, AUTO_PROVINCES)) { const env = await herald.province(c.p, c.q); if (env.ok) provinces.push(env.province); }
-    const sites = autoSites(provinces);
-    if (!sites.length) { FS.autoTicket = { state: 'nofree', bell: b }; return; }
-    const r = await fileTicket(sites);
-    FS.autoTicket = r?.ok === true ? { state: 'filed', bell: b } : { state: 'failed', bell: b, code: r?.code ?? FS.notice?.code ?? null };
+    await refreshOverviews(b);
+    const plan = await planTicket({ overviews: FS.overviews ?? new Map(), faction: FS.citizen.faction, ringsOpen: FS.record?.rings?.length ?? 1,
+      seed: `${FS.wallet?.address ?? ''}|${b}`, nowBell: b, read: async (p, q) => { try { const e = await herald.province(p, q); return e.ok ? e.province : null; } catch { return null; } } });
+    if (!plan.ok) { FS.autoTicket = plan.why === 'readfail' ? { state: 'failed', bell: b, code: 'Unavailable' } : { state: 'nofree', bell: b }; return; }
+    const r = await fileTicket(plan.sites, plan.source);
+    if (r?.ok === true) FS.autoTicket = { state: 'sent', bell: b };
+    else {
+      FS.autoTicket = { state: 'failed', bell: b, code: r?.code ?? FS.notice?.code ?? 'Error' };
+      if (FS.notice && FS.notice.ok === false) FS.notice = null;   // the card says it (one live region, review finding 11)
+    }
   } catch (e) {
     FS.autoTicket = { state: 'failed', bell: b, code: e?.code ?? 'Error' };
   } finally {
     FS.autoTicketBusy = false;
     invalidate('panel');
+  }
+}
+
+/**
+ * The season record's open rings and their overviews, re-read once a bell while a ticket
+ * is being planned: new rings and freed sites show up (review finding 3).
+ */
+async function refreshOverviews(b) {
+  if (FS.overviewsBell === b) return;
+  FS.overviewsBell = b;
+  try {
+    const r = await herald.season();
+    if (r?.ok && r.record) FS.record = r.record;
+  } catch { /* keep the last record */ }
+  const rings = Math.max(1, FS.record?.rings?.length ?? 1);
+  for (let d = 0; d < rings; d++) {
+    try { const o = await herald.overview(d); if (o.ok) FS.overviews.set(d, o); } catch { /* keep the last overview */ }
   }
 }
 
@@ -568,7 +602,7 @@ export const ACTIONS = {
     return act('SetSession', { fields: { session: s.publicKeyBytes, expiry: BigInt(Math.floor(now()) + SESSION_DAYS - 600) } });
   },
   // the site picker is gone (owner decision V2): the client files the ticket itself; a retry now
-  'auto-ticket': () => { if (FS.autoTicket) FS.autoTicket.bell = -1; return autoTicket(); },
+  'auto-ticket': () => autoTicket({ force: true }),
   harvest: () => act('Harvest', { v: { holding: activeHolding(FS) } }),
   build: d => act('Build', { v: { holding: activeHolding(FS), item: num(d.item) }, fields: { item: num(d.item) } }),
   // W6-D: re-read soon after the keeper was asked (the next poll could be 30 s away, past the window the catch-up opens).
@@ -643,11 +677,10 @@ function hostRow(id) {
   return null;
 }
 
-async function fileTicket(sites) {
+async function fileTicket(sites, source = null) {
   if (!sites.length) return undefined;
-  saveUiPatch({ lastTicket: sites, ticketSeen: false, lastTicketBell: nowBell() });
-  FS.hadHolding = false;
-  return act('FileTicket', { v: { sites }, fields: { sites } });
+  // the "on its way" lock is written once the transaction has left this browser, never before (review finding 1)
+  return act('FileTicket', { v: { sites }, fields: { sites }, onSent: () => saveUiPatch({ lastTicket: sites, ticketSeen: false, lastTicketBell: nowBell(), ticketSource: source }) });
 }
 
 // ------------------------------------------------------------------ start

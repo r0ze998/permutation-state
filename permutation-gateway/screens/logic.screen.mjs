@@ -129,17 +129,13 @@ function overviews(fullHome) {
   return map;
 }
 
-test('the automatic ticket (owner decision V2): up to three free sites, one per province in turn, candidates nearest ring first', async () => {
-  const { autoSites, candidateProvinces } = await import('../../permutation-server/web/frontier/fland.mjs');
-  const { overflowProvinces } = await import('../../permutation-server/web/frontier/onboarding.mjs');
-  const prov = (p, q, free) => ({ p, q, siteCount: 12, sites: Array.from({ length: 12 }, (_, i) => i * 5), siteMirror: Array.from({ length: 12 }, (_, i) => ({ state: free.includes(i) ? 0 : 1 })) });
-  const [a, b] = ringProvinces(2).filter(x => wedgeOf(x.p, x.q) === homeWedge(0));
-  assert.deepEqual(autoSites([prov(a.p, a.q, [1, 2, 3]), prov(b.p, b.q, [7])]).map(s => [s.p, s.q, s.site]), [[a.p, a.q, 1], [b.p, b.q, 7], [a.p, a.q, 2]]);
-  assert.deepEqual(autoSites([prov(a.p, a.q, [])]), []);
+test('the automatic ticket\'s candidates (owner decision V2): the home wedge nearest ring first; a full home wedge gives the adjacent wedges\' outermost ring', async () => {
+  const { candidateProvinces } = await import('../../permutation-server/web/frontier/fland.mjs');
+  const { overflowCandidates } = await import('../../permutation-server/web/frontier/fjoin.mjs');
   const cands = candidateProvinces(overviews(false), 0);
   assert.ok(cands.length && cands.every(p => wedgeOf(p.p, p.q) === homeWedge(0)) && cands[0].ring === 2);
-  const o = overflowProvinces(overviews(true), 0, 4);
-  assert.ok(o.full && o.provinces.every(p => p.ring === 3 && wedgeOf(p.p, p.q) !== homeWedge(0)));
+  const o = overflowCandidates(overviews(true), 0, 4);
+  assert.ok(o.length && o.every(p => p.ring === 3 && wedgeOf(p.p, p.q) !== homeWedge(0)));
 });
 
 // WCAG 2.x relative luminance and contrast of #rrggbb colours.

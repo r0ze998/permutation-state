@@ -39,6 +39,18 @@ export const SCENES = [
       // owner decision V2: no site picker; the page files the ticket itself (the fixture relay refuses, so it shows the retry)
       await page.locator('#join-sites').waitFor();
       await page.locator('[data-act="pick-province"], [data-act="toggle-site"], [data-act="file-ticket"]').count().then(n => { if (n) throw new Error(`site picker controls: ${n}`); });
+      // the refusal shows once, on the card, with the retry; the retry files again at once (review findings 1, 11)
+      const posts = [];
+      page.on('request', r => { if (r.method() === 'POST' && r.url().includes('/f/relay')) posts.push(r.url()); });
+      await page.locator('section[aria-labelledby="join-sites"] [role="alert"]').waitFor();
+      await page.locator('[data-act="auto-ticket"]').waitFor();
+      const alerts = await page.locator('[role="alert"]:visible').count();
+      if (alerts !== 1) throw new Error(`${alerts} alerts (one live region expected)`);
+      const before = posts.length;
+      await page.locator('[data-act="auto-ticket"]').click();
+      for (let i = 0; i < 50 && posts.length <= before; i++) await page.waitForTimeout(100);
+      if (posts.length <= before) throw new Error('the retry sent nothing');
+      await page.locator('section[aria-labelledby="join-sites"] [role="alert"]').waitFor();
     },
   },
   {
