@@ -95,7 +95,8 @@ import * as search from './hud/search.mjs';
 import { createRoster } from './people/roster.mjs';
 import * as scene from './people/scene.mjs';
 import { activityText } from './people/activity.mjs';
-import { battleScene, startBattle, PHASE } from './people/battle.mjs';
+import { hostOwner } from './people/ui.mjs';
+import { battleScene, startBattle, battleLive, BATTLE_SPEEDS, PHASE } from './people/battle.mjs';
 import { decode as decodeAccount } from './fcodec.mjs';
 import { fromBase64 } from '../sdk/bytes.mjs';
 import { tileHex } from './fgeo.mjs';
@@ -161,7 +162,7 @@ export function panelMarkup(FS) {
   const tab = FS.tab ?? 'map';
   const parts = [renderNotice(FS.notice)];
   if (FS.practice) return [...parts, practiceScreen.render(FS.practice, { kernelError: FS.practiceError ?? null, closable: true })];
-  if (FS.report) return [...parts, reportScreen.render(FS, mineOf(FS.holdings))];
+  if (FS.report) return [...parts, reportScreen.render(FS, mineOf(FS.holdings), { ownerOf: reportOwner })];
   // A march being composed on the map: its card first (hud/marchcard.mjs).
   if (tab === 'map' && FS.compose) parts.push(marchCard.render(FS));
   // Phones and tablets (no left rail below 1100 px): the rail's holdings and to-do list, folded (closed while composing).
@@ -182,6 +183,7 @@ export function panelMarkup(FS) {
   else parts.push(feed.renderCentre(FS.feed ?? [], FS.feedFilter ?? 'all'), bellScreen.render(FS), reportScreen.renderLinks(reportScreen.clashesFrom(FS.chronicle ?? []), L`最近の衝突`), chronicleScreen.render(FS), html`<section aria-labelledby="more-title"><h3 id="more-title">${L`設定`}</h3>
     <label class="choice"><input type="checkbox" data-act="fog" ${FS.view.fog ? '' : 'checked'}>${L`すべてを見せる（どの口座も公開されています）`}</label>
     <label class="choice"><input type="checkbox" data-act="autopan" ${FS.ui?.autoPan ? 'checked' : ''}>${L`自分に関わる戦いが決着したら、地図をそこへ動かして見せる`}</label>
+    <div class="choice-row" role="group" aria-label="${L`戦いの演出`}"><span>${L`戦いの演出`}</span>${['normal', 'fast', 'off'].map(v => html`<button type="button" class="btn small" data-act="battle-fx" data-v="${v}" aria-pressed="${(FS.ui?.battleFx ?? 'normal') === v ? 'true' : 'false'}">${BATTLE_FX_TEXT[v]()}</button>`)}</div>
     <button type="button" class="btn" data-act="forget">${L`この端末からこのシーズンの鍵を消す`}</button>
     ${onboardingCard.renderRestore(FS)}
     <p><button type="button" class="btn" data-act="practice-open">${L`練習モードを開く`}</button> <button type="button" class="btn" data-act="intro-open">${L`タイトルを見る`}</button></p>
@@ -192,7 +194,7 @@ export function panelMarkup(FS) {
 /** The panel of the practice and spectator pages. */
 export function modePanel(FS) {
   if (FS.mode === 'practice') return [renderNotice(FS.notice), practiceScreen.render(FS.practice, { kernelError: FS.practiceError ?? null })];
-  return [FS.selected ? inspect.render(FS, terrainRef, mapRef?.art?.activities ?? null) : '', spectateScreen.render(FS)];
+  return [FS.selected ? inspect.render(FS, terrainRef, mapRef?.art?.activities ?? null) : '', spectateScreen.render(FS, { ownerOf: reportOwner })];
 }
 
 /**
@@ -251,12 +253,14 @@ let mapRef = null;
 let terrainRef = null;
 /** Who holds each site (people/roster.mjs): names and faces for tags, the rail, the inspector, reports. */
 let rosterRef = null;
+/** The face and name of a report row's owner (a host id; holdings' ids give none). */
+const reportOwner = id => { try { return hostOwner(rosterRef, id); } catch { return null; } };
 /** The people layer's inputs, rebuilt at most once a second (the chronicle changes on polls only). */
 let peopleCache = { at: -1, value: null };
 export function peopleSource() {
   const bell = FS.nowBell ?? (FS.clock ? Math.max(0, Math.floor(((FS.chain?.now() ?? 0) - FS.clock.genesisTs) / 600)) : 0);
   const sec = Math.floor(Date.now() / 1000);
-  if (peopleCache.at === sec && peopleCache.value) { peopleCache.value.battles = (FS.battles ?? []).filter(b => (performance.now() / 1000 - b.t0) <= PHASE.end); return peopleCache.value; }
+  if (peopleCache.at === sec && peopleCache.value) { peopleCache.value.battles = (FS.battles ?? []).filter(b => battleLive(b, performance.now() / 1000)); return peopleCache.value; }
   if (rosterRef) {
     for (let d = 0; d < (FS.record?.rings?.length ?? 1); d++) rosterRef.ensure(d);
     scene.seedOwn(rosterRef, FS.holdings);
@@ -277,7 +281,7 @@ export function peopleSource() {
     lossText: n => L`−${fmtNum(n)} 兵`,
     fateText: f => ({ Stays: L`持ちこたえた`, Withdrew: L`隣へ退いた`, Bounced: L`押し戻された`, Retreated: L`撤退した`, Destroyed: L`壊滅` })[f] ?? null,
   } };
-  peopleCache.value.battles = (FS.battles ?? []).filter(b => (performance.now() / 1000 - b.t0) <= PHASE.end);
+  peopleCache.value.battles = (FS.battles ?? []).filter(b => battleLive(b, performance.now() / 1000));
   autoBattles();
   return peopleCache.value;
 }
@@ -404,7 +408,9 @@ function showTip(hit, at) {
 // ------------------------------------------------------------------ battle scenes (people/battle.mjs)
 const battleSeen = new Map(); // "P,Q" → the last resolved bell a scene was considered for
 /** Load a clash and play its scene on the map; `focus` moves the camera to it first. */
-export async function playBattle(p, q, bell, { focus = false } = {}) {
+export async function playBattle(p, q, bell, { focus = false, auto = false } = {}) {
+  const fx = FS.ui?.battleFx ?? 'normal';
+  if (auto && fx === 'off') return false;
   if (!heraldRef || ![p, q, bell].every(Number.isInteger)) return false;
   const r = await heraldRef.clash(p, q, bell).catch(() => null);
   if (!r?.ok || !r.inputs) return false;
@@ -414,7 +420,7 @@ export async function playBattle(p, q, bell, { focus = false } = {}) {
   const scene = battleScene({ p, q, bell, inputs: r.inputs, before, after: after && after.resolvedNext > bell ? after : null });
   if (!scene) return false;
   if (focus && mapRef) { const h = tileHex(p, q, scene.tiles[0].idx), c = project(h.q, h.r); mapRef.setView({ x: c.x, y: c.y, zoom: 1.6 }); }
-  FS.battles = [...(FS.battles ?? []).filter(b => !(b.scene.p === p && b.scene.q === q)), startBattle(scene, performance.now() / 1000)];
+  FS.battles = [...(FS.battles ?? []).filter(b => !(b.scene.p === p && b.scene.q === q)), startBattle(scene, performance.now() / 1000, BATTLE_SPEEDS[fx] || 1)];
   mapRef?.invalidate();
   return true;
 }
@@ -426,7 +432,7 @@ function autoBattles() {
     const prev = battleSeen.get(key);
     battleSeen.set(key, b);
     if (prev === undefined || prev >= b) continue;  // the first sight of a province is not news
-    playBattle(env.province.p, env.province.q, b);
+    playBattle(env.province.p, env.province.q, b, { auto: true });
   }
 }
 
@@ -526,6 +532,10 @@ function ringToll(bell) {
 }
 
 /** Move the map to an attention item and open its tab. */
+/** The report's map buttons close it, so the map (and on phones the sheet's map) is in view. */
+function leaveReport() { if (FS.report) { FS.report = null; invalidate('panel'); } }
+const BATTLE_FX_TEXT = { normal: () => L`ふつう`, fast: () => L`早送り`, off: () => L`自動では見せない` };
+
 function goToItem(x) {
   if (!x) return;
   // the item's holding becomes the active one (its tab then shows that holding)
@@ -563,14 +573,15 @@ function cycleHolding(dir) {
 export const HUD_ACTIONS = {
   'search-go': d => { const x = searchHits[num(d.i)]; if (!x) return; goToItem({ ...x, tab: FS.mode === 'play' ? 'map' : undefined }); const el = $('map-search-results'); if (el) setHtml(el, ''); },
   lens: d => setLens(d.lens),
-  goto: d => goToItem({ p: num(d.p), q: num(d.q), tab: 'map' }),
+  goto: d => { leaveReport(); goToItem({ p: num(d.p), q: num(d.q), tab: 'map' }); },
   'intro-close': () => closeIntro(),
   'intro-open': () => openIntro(),
   'feed-go': d => goToItem((FS.feed ?? []).find(x => x.id === d.id)),
   'feed-dismiss': d => { FS.feedDismissed = new Set([...(FS.feedDismissed ?? []), d.id]); renderFeed(); },
   'feed-filter': d => { FS.feedFilter = feed.FEED_FILTERS.includes(d.f) ? d.f : 'all'; invalidate('panel'); },
   autopan: () => { const sc = scope(); const v = !FS.ui?.autoPan; FS.ui = sc ? saveUi(uiStorage, uiKey(sc), { autoPan: v }) : { ...(FS.ui ?? {}), autoPan: v }; invalidate('panel'); },
-  'battle-play': d => playBattle(num(d.p), num(d.q), num(d.bell), { focus: true }),
+  'battle-play': d => { leaveReport(); playBattle(num(d.p), num(d.q), num(d.bell), { focus: true }); },
+  'battle-fx': d => { if (!['normal', 'fast', 'off'].includes(d.v)) return; const sc = scope(); FS.ui = sc ? saveUi(uiStorage, uiKey(sc), { battleFx: d.v }) : { ...(FS.ui ?? {}), battleFx: d.v }; invalidate('panel'); },
   attn: () => {
     const items = hud.attentionItems(FS);
     if (!items.length) return;

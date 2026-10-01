@@ -91,17 +91,31 @@ function formation(stance, side, n) {
   return out;
 }
 
+/** Playback speeds (UI plan D4, Civ's quick combat): the setting's values and their rates. */
+export const BATTLE_SPEEDS = Object.freeze({ normal: 1, fast: 2.5, off: 0 });
+
 /**
- * A playing scene: `{scene, t0}`; `paintBattle(ctx, play, {zoom, now, lossText})`
- * draws it at time `now` (s) and returns false once it is over.
+ * A playing scene: `{scene, t0, speed}`; `paintBattle(ctx, play, {zoom, now, lossText})`
+ * draws it at time `now` (s) and returns false once it is over. `speed` > 1 plays it faster.
  */
-export function startBattle(scene, now = (globalThis.performance?.now?.() ?? Date.now()) / 1000) {
-  return scene ? { scene, t0: now } : null;
+export function startBattle(scene, now = (globalThis.performance?.now?.() ?? Date.now()) / 1000, speed = 1) {
+  return scene ? { scene, t0: now, speed: speed > 0 ? speed : 1 } : null;
+}
+
+/** The scene's own time (s) at `now`. */
+export const battleTime = (play, now) => (now - play.t0) * (play.speed ?? 1);
+/** Whether a scene is still playing at `now`. */
+export const battleLive = (play, now) => !!play && battleTime(play, now) <= PHASE.end;
+/** "P,Q,tile" of every tile a playing scene covers (the map hides the host sprites there). */
+export function battleTiles(plays, now) {
+  const out = new Set();
+  for (const b of plays ?? []) if (battleLive(b, now)) for (const t of b.scene.tiles) out.add(`${b.scene.p},${b.scene.q},${t.idx}`);
+  return out;
 }
 
 export function paintBattle(ctx, play, { zoom = 1, now = (globalThis.performance?.now?.() ?? Date.now()) / 1000, lossText = n => `−${n}`, fateText = null } = {}) {
   if (!play) return false;
-  const t = now - play.t0;
+  const t = battleTime(play, now);
   if (t > PHASE.end) return false;
   const s = RADIUS * 0.15 * ACTOR_SCALE * 0.9;
   for (const tile of play.scene.tiles) {

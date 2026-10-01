@@ -381,3 +381,30 @@ body[data-urgency="crit"] main { box-shadow: inset 0 0 0 4px #c8412f; }
 @media (max-width: 759px) { .attn-long { display: none; } .attn-short { display: inline; } .attn-pill { min-width: var(--target); justify-content: center; } }
 /* phones: the attention pill floats just under the header over the map (the header never grows a second row) */
 @media (max-width: 759px) { .attn-pill { position: absolute; top: calc(100% + 8px); right: 60px; z-index: 3; box-shadow: 0 2px 8px rgba(0,0,0,.3); } }
+
+/* the clash report (UI plan D1–D3): the headline, people in the rows, per-tile detail, the proof folded */
+.report-head { border-radius: 10px; padding: 10px 12px; margin: 8px 0 10px; background: rgba(217, 180, 74, .10); border: 1px solid rgba(217, 180, 74, .35); }
+.report-head p { margin: 2px 0; }
+.report-result { font-size: 1.15em; display: flex; align-items: center; gap: 8px; }
+.report-glyph { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: #3b3122; color: #f3d58a; font-size: .9em; }
+.report-won .report-glyph { background: #2f6b3f; color: #fff; }
+.report-held .report-glyph { background: #3f5f78; color: #fff; }
+.report-fell .report-glyph { background: #8a2f2a; color: #fff; }
+.report-turned .report-glyph { background: #6b5a3a; color: #fff; }
+.report-fell { border-color: rgba(193, 80, 74, .55); background: rgba(193, 80, 74, .10); }
+.report-won { border-color: rgba(70, 150, 90, .55); background: rgba(70, 150, 90, .10); }
+.report-head .actions { margin-top: 8px; }
+.report table .person { margin-right: 6px; vertical-align: middle; }
+.report tr.mine { background: rgba(243, 213, 138, .14); }
+.report tr.mine th { box-shadow: inset 3px 0 0 #d9b44a; }
+.mine-mark { font-weight: 700; color: #6b4e0a; }
+.report-tiles h4 { margin: 12px 0 4px; }
+.report-sides { list-style: none; padding-left: 0; margin: 4px 0; }
+.report-sides li { padding: 2px 0; }
+.report-sides li.mine { font-weight: 600; }
+.report-edge { margin: 2px 0; color: #5e4708; }
+.report-proof { margin-top: 10px; }
+.report-proof summary { cursor: pointer; min-height: 32px; }
+.choice-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 6px 0; }
+.choice-row .btn[aria-pressed="true"] { background: #d9b44a; color: #1f1a17; border-color: #d9b44a; }
+@media (max-width: 760px) { .report-proof summary, .choice-row .btn { min-height: 44px; } }

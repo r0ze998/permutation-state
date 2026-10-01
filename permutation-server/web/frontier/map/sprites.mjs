@@ -18,7 +18,7 @@ import { majorityOwner } from '../herald.mjs';
 import { paintPeople, paintNameTags, paintBadges, PEOPLE_FRAME_MS } from '../people/crowds.mjs';
 import { activitiesFor } from '../people/activity.mjs';
 import { lifeAt } from '../people/life.mjs';
-import { paintBattle } from '../people/battle.mjs';
+import { paintBattle, battleTiles } from '../people/battle.mjs';
 import { BOUNDARY_HALO, BOUNDARY_INK, FOG, UNOPENED_FILL, paintSigil, provincePixel, PROVINCE_CIRCUMRADIUS } from './layers.mjs';
 
 const BASE = new URL('../art/', import.meta.url);
@@ -758,6 +758,8 @@ export class SpriteArt {
     if (far) return tiles.length;
     // pass 2b: hosts on their tiles, back to front (hidden under fog unless the viewer's own)
     const hosts = [];
+    // a tile whose battle is playing shows the scene's figures, not the hosts' sprites (UI plan D4)
+    const fightingAt = battleTiles(people?.battles, (globalThis.performance?.now?.() ?? Date.now()) / 1000);
     for (const e of entries) {
       if (!e.prov?.entries || e.fog === 'unopened') continue;
       const byTile = new Map();
@@ -785,6 +787,7 @@ export class SpriteArt {
         push(a.tile, { faction: a.faction, stance: ART_STANCES[a.stance] ?? 'hold', arriving: true });
       }
       for (const [idx, list] of byTile) {
+        if (fightingAt.has(`${e.p},${e.q},${idx}`)) continue;
         const hx = tileHex(e.p, e.q, idx);
         const c = project(hx.q, hx.r);
         // assault and flank face the nearest hex held by another faction (else the province centre)

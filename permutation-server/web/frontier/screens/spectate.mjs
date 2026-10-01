@@ -31,8 +31,8 @@ export function spectateBells(FS, now) {
 }
 
 /** The spectator's panel. */
-export function render(FS) {
-  if (FS.report) return reportScreen.render(FS, () => false, { whatIf: false });
+export function render(FS, { ownerOf = null } = {}) {
+  if (FS.report) return reportScreen.render(FS, () => false, { whatIf: false, ownerOf });
   const clashes = reportScreen.clashesFrom(FS.chronicle ?? [], SPECTATE_REPORTS);
   return [
     html`<p class="muted">${L`ウォレットなしで地図と鐘の進み具合を見られます。`}</p>`,
