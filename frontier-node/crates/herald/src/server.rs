@@ -90,6 +90,7 @@ type SeasonAnswer = Arc<(Vec<u8>, String)>;
 struct LiveCache {
     season: Option<(SeasonKey, SeasonAnswer)>,
     overview: std::collections::BTreeMap<u16, (u64, Arc<Vec<u8>>)>,
+    roster: std::collections::BTreeMap<u16, (u64, Arc<Vec<u8>>)>,
 }
 
 impl App {
@@ -123,6 +124,7 @@ pub fn router(app: Shared) -> Router {
         .route("/h/season", get(season))
         .route("/h/status", get(status))
         .route("/h/overview/{ring}/{file}", get(overview))
+        .route("/h/roster/{ring}/latest.bin", get(roster))
         .route("/h/province/{pq}/{bell}", get(province))
         .route("/h/clash/{pq}/{bell}", get(clash))
         .route("/h/bell/{bell}/region/{r}", get(bell_region))
@@ -307,6 +309,36 @@ async fn status(State(app): State<Shared>) -> Response {
         }),
         "no-store",
     )
+}
+
+/// `/h/roster/{ring}/latest.bin` (`roster.rs`): one answer per fold
+/// version, shared by every viewer.
+async fn roster(State(app): State<Shared>, Path(ring): Path<u16>) -> Response {
+    let bin = |b: Vec<u8>| {
+        (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+                (header::CACHE_CONTROL, "public, max-age=30".to_string()),
+            ],
+            b,
+        )
+            .into_response()
+    };
+    let f = read_fold(&app);
+    let mut c = app.cache.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((v, b)) = c.roster.get(&ring) {
+        if *v == f.version {
+            return bin(b.to_vec());
+        }
+    }
+    match f.roster_latest(ring) {
+        Some(b) => {
+            c.roster.insert(ring, (f.version, Arc::new(b.clone())));
+            bin(b)
+        }
+        None => err(StatusCode::NOT_FOUND, "NoSuchRing"),
+    }
 }
 
 async fn overview(
