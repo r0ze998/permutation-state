@@ -836,8 +836,10 @@ export class SpriteArt {
         ctx.beginPath(); ctx.roundRect?.(x, y, w, h, 5 * k); ctx.fillStyle = fill; ctx.fill();
         if (g.arriving) { ctx.setLineDash([3 * k, 2 * k]); ctx.strokeStyle = '#fffaf0'; ctx.lineWidth = 1.2 * k; ctx.stroke(); ctx.setLineDash([]); }
         ctx.fillStyle = '#fffaf0'; ctx.font = `700 ${11 * k}px system-ui, sans-serif`;
-        const t = g.troops >= 1000 ? `${(g.troops / 1000).toFixed(g.troops >= 10000 ? 0 : 1)}k` : String(g.troops);
-        ctx.fillText(`\u2694${g.n > 1 ? g.n + '\u00b7' : ''}${t}`, x + w / 2, y + h / 2 + 0.5 * k);
+        const t = g.troops <= 0 ? '?' : g.troops >= 1000 ? `${(g.troops / 1000).toFixed(g.troops >= 10000 ? 0 : 1)}k` : String(g.troops);
+        ctx.fillText(`\u2694${t}`, x + w / 2 - (g.n > 1 ? 5 * k : 0), y + h / 2 + 0.5 * k);
+        // more than one host: their number in a small dot at the flag's corner (never read as part of the troops)
+        if (g.n > 1) { ctx.fillStyle = '#1a1d22'; ctx.beginPath(); ctx.arc(x + w - 1 * k, y + 1 * k, 6.5 * k, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = '#fffaf0'; ctx.font = `700 ${9 * k}px system-ui, sans-serif`; ctx.fillText(String(g.n), x + w - 1 * k, y + 1.5 * k); }
         const st = Math.max(0, Math.min(1, g.stamina / 120));
         ctx.fillStyle = 'rgba(255,255,255,.18)'; ctx.fillRect(x, y + h + 1.5 * k, w, 3 * k);
         ctx.fillStyle = g.stamina < 40 ? '#e0533d' : g.stamina < 74 ? '#e0a83d' : '#5fbf6a'; ctx.fillRect(x, y + h + 1.5 * k, w * st, 3 * k);
