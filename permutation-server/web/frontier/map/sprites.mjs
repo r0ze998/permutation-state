@@ -17,6 +17,7 @@ import { FACTION_COLORS } from '../fi18n.mjs';
 import { majorityOwner } from '../herald.mjs';
 import { paintPeople, paintNameTags, paintBadges, PEOPLE_FRAME_MS } from '../people/crowds.mjs';
 import { activitiesFor } from '../people/activity.mjs';
+import { lifeAt } from '../people/life.mjs';
 import { paintBattle } from '../people/battle.mjs';
 import { BOUNDARY_HALO, BOUNDARY_INK, FOG, UNOPENED_FILL, paintSigil, provincePixel, PROVINCE_CIRCUMRADIUS } from './layers.mjs';
 
@@ -495,6 +496,7 @@ export class SpriteArt {
           camp: !!(e.prov?.camp?.state === 1 && e.prov.camp.tile === i && j === undefined),
           shield: !!(m && m.shieldUntilBell > 0 && m.shieldUntilBell !== 0xffffffff && m.shieldUntilBell >= (e.prov?.resolvedNext ?? 0)) };
         t.road = !cloud && SITE_LAND.has(name) && roadBit(e.prov?.roadMask, i);
+        t.res = e.prov?.resource?.[i] ?? 0;
         t.ring = ringOf(e.p, e.q);
         t.rel = e.prov?.relations ?? 0;
         const pc = provinceCentre(e.p, e.q);
@@ -786,7 +788,7 @@ export class SpriteArt {
     }
     this.activities = activities;
     this.tiles = tiles;
-    const moving = people ? paintPeople(ctx, { tiles, zoom, departures: people.departures ?? [], explores: people.explores ?? [], viewerFaction, columnLabel: people.columnLabel ?? null, activities }) : 0;
+    const moving = people ? paintPeople(ctx, { tiles, zoom, departures: people.departures ?? [], explores: people.explores ?? [], viewerFaction, columnLabel: people.columnLabel ?? null, activities, life: people.life ?? null, bell: people.bell ?? 0, now: people.now ?? 0, lordOf: people.lordOf ?? null }) : 0;
     // pass 2d: battle scenes playing (people/battle.mjs)
     let fighting = 0;
     for (const b of people?.battles ?? []) if (paintBattle(ctx, b, { zoom, lossText: people.lossText, fateText: people.fateText })) fighting++;
@@ -822,7 +824,8 @@ export class SpriteArt {
       if (t) polygon(ctx, hexPoints(t.x, t.y, 2), null, '#1b2e28', 3 / zoom);
     }
     // name tags over the fog (the holder's face and name), then the next animation frame while figures move
-    if (people?.nameOf) paintNameTags(ctx, { tiles, zoom, nameOf: people.nameOf, centre: people.centre ?? null, onImage: this.onLoad });
+    if (people?.nameOf) paintNameTags(ctx, { tiles, zoom, nameOf: people.nameOf, centre: people.centre ?? null, onImage: this.onLoad,
+      present: people.life ? (p, q, site) => lifeAt(people.life.get(`${p},${q},${site}`), people.bell ?? 0, people.now ?? 0).lord : null });
     if (activities) paintBadges(ctx, { tiles, zoom, activities });
     if ((moving || fighting) && !this.peopleTimer) this.peopleTimer = setTimeout(() => { this.peopleTimer = null; this.onLoad(); }, fighting ? 33 : PEOPLE_FRAME_MS);
     return tiles.length;

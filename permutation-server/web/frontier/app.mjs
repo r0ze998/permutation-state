@@ -99,6 +99,7 @@ import { fromBase64 } from '../sdk/bytes.mjs';
 import { tileHex } from './fgeo.mjs';
 import { project } from '../map.mjs';
 import { identityOf, displayName } from './people/identity.mjs';
+import { lifeAt, lordLine } from './people/life.mjs';
 
 const $ = id => globalThis.document?.getElementById(id);
 const setText = (id, text) => { const el = $(id); if (el && el.textContent !== text) el.textContent = text; };
@@ -260,6 +261,9 @@ export function peopleSource() {
     departures: scene.departuresAt(FS.chronicle, FS.overviews, bell),
     explores: scene.exploresAt(FS.chronicle, FS.overviews, bell),
     nameOf: scene.namer(rosterRef),
+    life: FS.life ?? null,
+    now: FS.chain?.now() ?? 0,
+    lordOf: (p, q, site) => { const o = rosterRef?.ownerOf(p, q, site); return o ? identityOf(o.tag) : null; },
     bell,
     own: FS.holdings ?? [],
     columnLabel: d => L`出陣 · 第${fmtNum(d.arriveBell)}鐘に到着`,
@@ -377,6 +381,9 @@ function showTip(hit, at) {
   if (!acts?.length && !owner) { tip.hidden = true; return; }
   const lines = [];
   if (owner) lines.push(html`<strong data-name>${displayName(identityOf(owner.tag), { full: true })}</strong>`);
+  // the lord out on their land (people/life.mjs): what they are doing
+  const lf = owner && FS.life ? lifeAt(FS.life.get(`${hit.p},${hit.q},${t.site}`), FS.nowBell ?? 0, FS.chain?.now() ?? 0) : null;
+  if (lf?.lord) lines.push(html`<span class="tip-lord">${lordLine(displayName(identityOf(owner.tag)), lf.doing, L)}</span>`);
   for (const a of (acts ?? []).filter((a, i, all) => all.findIndex(b => b.kind === a.kind) === i)) lines.push(html`<span class="tip-${a.kind}">${activityText(a)}</span>`);
   setHtml(tip, lines.map(l => html`<span class="tip-line">${l}</span>`));
   tip.hidden = false;

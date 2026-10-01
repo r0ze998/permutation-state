@@ -339,4 +339,14 @@ export default {
   '地図で見る': 'Show on the map',
   '座標で指定する': 'Enter coordinates',
   '地図でマスをタップしても行き先になります。': 'Tapping a tile on the map also sets the destination.',
+
+  // ---- the lords out on their land (people/life.mjs)
+  '領主 {0} が建設を見守っている': 'Lord {0} oversees the building',
+  '領主 {0} が兵を訓練している': 'Lord {0} drills new troops',
+  '領主 {0} が収穫を取り入れている': 'Lord {0} brings in the harvest',
+  '領主 {0} が出陣を率いている': 'Lord {0} leads a march',
+  '領主 {0} が軍勢を編成している': 'Lord {0} musters a host',
+  '領主 {0} が探索を指揮している': 'Lord {0} sends out scouts',
+  '領主 {0} がこの地に着いたばかり': 'Lord {0} has just settled here',
+  '領主 {0} が領地にいる': 'Lord {0} is on their land',
 };

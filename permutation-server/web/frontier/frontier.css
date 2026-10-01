@@ -354,3 +354,4 @@ body[data-urgency="crit"] main { box-shadow: inset 0 0 0 4px #c8412f; }
 .mc-hint { margin: 4px 0 8px; font-weight: 650; }
 .coords > summary { font-size: 13px; }
 @media (max-width: 759px) { .mc-stances { grid-template-columns: repeat(2, 1fr); } }
+.tip-lord { color: #f3d58a; font-weight: 650; }

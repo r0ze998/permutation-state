@@ -7,6 +7,7 @@
 // one action: build → check → sign → relay → track (fplay.mjs), the march
 // through fmarch.sendMarch. Nothing here decides a rule; the program does.
 import { FS, invalidate, activeHolding } from './fstate.mjs';
+import { updateLife } from './people/life.mjs';
 import * as io from './fchainio.mjs';
 import * as fsession from './fsession.mjs';
 import * as book from './marchbook.mjs';
@@ -270,6 +271,8 @@ async function refreshChronicle() {
     if (!r.ok) break;
     const { records } = decodePage(r.events);
     FS.chronicle = [...(FS.chronicle ?? []), ...records].slice(-400);
+    // the life of every holding (people/life.mjs): folded from every record read, not only the last 400
+    FS.life = updateLife(FS.life ?? new Map(), records);
     if (r.next !== null && r.next !== undefined) cursor = r.next;
     if (!r.full) break;
   }

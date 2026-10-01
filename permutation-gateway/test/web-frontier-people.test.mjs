@@ -12,7 +12,7 @@ import * as U from '../../permutation-server/web/frontier/people/ui.mjs';
 import * as LD from '../../permutation-server/web/frontier/people/leaders.mjs';
 import * as P from '../../permutation-server/web/frontier/people/profile.mjs';
 import { encode as toBase58 } from '../../permutation-server/web/sdk/base58.mjs';
-import { setLang } from '../../permutation-server/web/lang.mjs';
+import { setLang, L } from '../../permutation-server/web/lang.mjs';
 
 const tags = n => Array.from({ length: n }, (_, i) => BigInt.asUintN(64, BigInt(i + 1) * 0x9e3779b97f4a7c15n));
 
@@ -185,4 +185,28 @@ test('battle scene: the arrivals where they fought, the defenders of that tile, 
   assert.equal(BT.losses(t.defenders), 130);
   assert.equal(BT.battleScene({ p: 0, q: 0, bell: 1, inputs: { arrivals: [] } }), null);
   assert.equal(BT.battleScene({ p: 2, q: 1, bell: 45, inputs, before }).tiles[0].defenders[0].after, null, 'without the province after, losses are unknown');
+});
+
+import * as LIFE from '../../permutation-server/web/frontier/people/life.mjs';
+
+test('life: what a lord did lately decides who is out at the holding', () => {
+  const host = hostId({ p: 3, q: 0, site: 0, gen: 1, seq: 1 });
+  const life = LIFE.updateLife(new Map(), [
+    { record: { name: 'HARVEST', bell: 40, p: 3, q: 0, site: 0 } },
+    { record: { name: 'BUILD', bell: 41, p: 3, q: 0, site: 0, item: 1, done_at: 5000 } },
+    { record: { name: 'TRAIN', bell: 30, p: 3, q: 0, site: 2, unit: 0, n: 300, done_at: 100 } },
+    { record: { name: 'DEPART', bell: 41, host_id: host } },
+    { record: { name: 'CLASH', bell: 41, p: 3, q: 0 } },
+  ]);
+  assert.equal(life.size, 2);
+  const a = LIFE.lifeAt(life.get('3,0,0'), 42, 4000);
+  assert.deepEqual([a.lord, a.doing, a.building, a.harvesting, a.working, a.liveliness], [true, 'march', true, false, true, 1]);
+  const later = LIFE.lifeAt(life.get('3,0,0'), 60, 6000);
+  assert.deepEqual([later.lord, later.building, later.working], [false, false, false], 'the lord left, the building is done, the fields rest');
+  assert.ok(later.liveliness < 1);
+  const quiet = LIFE.lifeAt(undefined, 60, 0);
+  assert.deepEqual([quiet.lord, quiet.doing], [false, null], 'a holding with no record is quiet: nothing invented');
+  setLang('en');
+  assert.equal(LIFE.lordLine('Kaito', 'build', (s, ...v) => L(s, ...v)), 'Lord Kaito oversees the building');
+  setLang('ja');
 });
