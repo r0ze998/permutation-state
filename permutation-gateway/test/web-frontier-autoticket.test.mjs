@@ -164,3 +164,33 @@ test('a ticket sent and then failed or expired on chain clears the lock and show
   assert.equal(landed.state, 'sent');
   C.useTransport(null);
 });
+
+test('the program\'s wedge counters (/h/season wedgeOpen / wedgeOccupied) decide the overflow when the herald serves them', async () => {
+  const C = await import('../../permutation-server/web/frontier/controller.mjs');
+  const { FS } = await import('../../permutation-server/web/frontier/fstate.mjs');
+  const io = await import('../../permutation-server/web/frontier/fchainio.mjs');
+  const { PROGRAM, SEASON_ID } = await import('../screens/world.mjs');
+  const { encode: b58 } = await import('../../permutation-server/web/sdk/base58.mjs');
+  io.setPin({ programId: PROGRAM, cluster: 'localnet', seasonId: SEASON_ID });
+  let overflowReads = 0, n = 0;
+  const run = async (open, occupied) => {
+    overflowReads = 0;
+    C.useHerald({
+      season: async () => ({ ok: true, record: { rings: [{}, {}, {}, {}], wedgeOpen: open, wedgeOccupied: occupied } }),
+      overview: async d => ({ ok: d >= 2, ...(overviews().get(d) ?? {}) }),
+      // the home wedge looks full when read (short provinces); the adjacent wedges have room
+      province: async (p, q) => { if (G.wedgeOf(p, q) !== HOME) overflowReads++; return { ok: true, province: G.wedgeOf(p, q) === HOME ? prov(p, q, { count: 6, free: [] }) : prov(p, q) }; },
+    });
+    C.useTransport({ submit: async () => ({ ok: false, code: 'Unavailable' }) });
+    Object.assign(FS, { land: { stage: 'joined' }, session: { publicKeyBytes: new Uint8Array(32) }, sessionProblem: null, citizen: { faction: 0 }, wallet: { address: b58(new Uint8Array(32).fill(0x70 + n++)) },
+      overviews: new Map(), record: { rings: [{}] }, autoTicket: null, autoTicketBusy: false, overviewsBell: undefined, autoProv: undefined, autoFull: undefined, autoForceAt: 0, notice: null });
+    await C.autoTicket();
+    return FS.autoTicket.state;
+  };
+  const six = v => Array(6).fill(v);
+  assert.equal(await run(six(20), six(5)), 'nofree', 'the program says the home wedge has room: no overflow ticket');
+  assert.equal(overflowReads, 0);
+  await run(six(20), six(20));
+  assert.ok(overflowReads > 0, 'home wedge full by the counters: the overflow ring is read');
+  C.useTransport(null);
+});
