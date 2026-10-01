@@ -18,7 +18,7 @@ import { checkBeacon } from './seal.mjs';
 import { ChainClock, bellChip, countdown, seasonClock } from './clock.mjs';
 import { effectiveStatus } from './fcodec.mjs';
 import { FrontierMap } from './map/fmap.mjs';
-import { SEASON_STATUS_TEXT, clientText } from './fi18n.mjs';
+import { SEASON_STATUS_TEXT, clientText, factionName } from './fi18n.mjs';
 import { L, fmtNum, mountLangToggle } from '../lang.mjs';
 import { toHex } from '../sdk/bytes.mjs';
 import { html, raw, setHtml } from '../util.mjs';
@@ -772,9 +772,11 @@ export async function boot() {
           clashOf: ART_ON ? artClashOf : undefined,
           pendingOf: ART_ON ? (p, q) => FS.provinces.get(`${p},${q}`)?.inputs ?? null : undefined,
           people: ART_ON && FS.mode !== 'practice' ? peopleSource : undefined,
+          // the world view's labels: the faction names and the Concord, in the page's language
+          realmName: f => (f === 'concord' ? L`大協約` : factionName(f)),
           // the march being composed: its route, drawn for this browser only (the destination is sealed)
           route: FS.compose ? { hexes: marchCard.routeHexes(FS.compose), dest: FS.compose.dest ? tileHex(FS.compose.dest.p, FS.compose.dest.q, FS.compose.dest.tile) : null } : null,
-          provinceOf: ART_ON ? (p, q) => { wantProvince(p, q, () => map?.invalidate()); return FS.provinces.get(`${p},${q}`)?.province ?? null; } : undefined };
+          provinceOf: ART_ON ? (p, q, { far = false } = {}) => { if (!far) wantProvince(p, q, () => map?.invalidate()); return FS.provinces.get(`${p},${q}`)?.province ?? null; } : undefined };
       },
       onSelect: hit => {
         FS.selected = hit;

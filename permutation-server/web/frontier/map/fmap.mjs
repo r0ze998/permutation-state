@@ -96,6 +96,40 @@ export function coveredBelow(canvas) {
  * sealed for everyone else): a dashed line along the planned hexes and a
  * ringed marker on the destination tile. `route = {hexes: [{q, r}], dest: {q, r} | null}`.
  */
+/**
+ * The world view's labels, as a map has them: each faction's name over the
+ * heart of its land (the weighted centre of the provinces it holds most of
+ * in), and the Concord at the centre. Screen-sized type in the display face.
+ */
+export function paintRealmLabels(ctx, recs, zoom, nameOf = null) {
+  const acc = Array.from({ length: 6 }, () => ({ x: 0, y: 0, w: 0 }));
+  for (const r of recs.values()) {
+    const n = Array(6).fill(0);
+    r.owners.forEach((f, j) => { if (r.sites[j] === 1 && f < 6) n[f]++; });
+    const best = n.indexOf(Math.max(...n));
+    if (n[best] <= 0) continue;
+    const c = provincePixel(r.p, r.q);
+    acc[best].x += c.x * n[best]; acc[best].y += c.y * n[best]; acc[best].w += n[best];
+  }
+  const k = 1 / zoom;
+  ctx.save();
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const face = '"Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", Georgia, serif';
+  const label = (text, x, y, size, fill) => {
+    ctx.font = `700 ${size * k}px ${face}`;
+    ctx.lineJoin = 'round'; ctx.lineWidth = 5 * k; ctx.strokeStyle = 'rgba(14,22,20,.78)'; ctx.strokeText(text, x, y);
+    ctx.fillStyle = fill; ctx.fillText(text, x, y);
+  };
+  acc.forEach((a, f) => {
+    if (a.w < 3) return;
+    const name = nameOf ? nameOf(f) : String(f);
+    label(name, a.x / a.w, a.y / a.w, 22, '#fff6e2');
+  });
+  const c0 = provincePixel(0, 0);
+  label(nameOf ? nameOf('concord') : 'Concord', c0.x, c0.y, 15, '#f3d58a');
+  ctx.restore();
+}
+
 export function paintRoute(ctx, route, zoom) {
   const pts = (route.hexes ?? []).map(h => project(h.q, h.r));
   const k = 1 / zoom;
@@ -319,15 +353,19 @@ export class FrontierMap {
           continue;
         }
       }
-      if (this.art && fog === 'unopened') { artVoid.push(pr); continue; }
-      if (this.art && fog !== 'unopened') {
+      // Art, far: the land itself, painted once per province (sprites.mjs farBitmap); clouds beyond the rim
+      if (this.art && fog === 'unopened') { artCells.push({ ...pr, fog, selected }); continue; }
+      if (this.art) {
         const t = terrainOf?.(pr.p, pr.q);
-        if (t) { artCells.push({ ...pr, t, rec, fog, selected }); continue; }
+        if (t) { artCells.push({ ...pr, ...t, rec, fog: (src.own ?? []).length ? fog : 'clear', selected, prov: src.provinceOf?.(pr.p, pr.q, { far: true }) ?? null }); continue; }
       }
       paintProvince(ctx, { ...pr, rec, fog, selected, scale: z });
     }
-    if (artVoid.length) this.art.paintUnopened(ctx, artVoid, { zoom: z });
-    if (artCells.length) this.art.paintStrategic(ctx, artCells, { zoom: z, dpr });
+    if (artCells.length) {
+      const fogAt = (q, r) => { const at = locate(q, r); return fogLevel({ ringOpen: ringOf(at.p, at.q) < (src.ringsOpen ?? 1), showAll: src.showAll, known: src.known?.has(`${at.p},${at.q}`), sightDistance: sightDistance(at.p, at.q, src.own ?? []) }); };
+      this.art.paintFar(ctx, artCells, { zoom: z, dpr, terrainAt: terrainLookup(terrainOf), fogAt, alliedPairs: src.alliedPairs ?? [], lod: this.lod });
+      if (this.lod === 'world') paintRealmLabels(ctx, recs, z, src.realmName ?? null);
+    }
     if (artTiles.length) {
       const fogAt = (q, r) => { const at = locate(q, r); return fogLevel({ ringOpen: ringOf(at.p, at.q) < (src.ringsOpen ?? 1), showAll: src.showAll, known: src.known?.has(`${at.p},${at.q}`), sightDistance: sightDistance(at.p, at.q, src.own ?? []) }); };
       this.art.paint(ctx, artTiles, { zoom: z, dpr, terrainAt: terrainLookup(terrainOf), fogAt, selected: src.selected, viewerFaction: src.viewerFaction ?? null, demoRoads: !!src.demoRoads, ringsOpen: src.ringsOpen ?? null, replayRing: src.artReplayRing ?? null, engineStage: src.engineStage ?? 0, relics: src.relics ?? [], waystones: src.waystones ?? [], demoSpecials: !!src.demoSpecials, rivers: src.rivers ?? [], demoRivers: !!src.demoRivers, alliedPairs: src.alliedPairs ?? [],

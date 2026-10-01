@@ -315,6 +315,7 @@ export default {
   '十分ごとに鐘が鳴る。そのあいだに出された進軍はすべて封をされ、行き先は誰にもわからない。': 'Every ten minutes a bell tolls. Each march sent before it is sealed: no one knows where it goes.',
   '鐘が鳴ると、同じ州に着いた軍勢がいっせいにぶつかる。人が増えれば、霧の向こうに新しい輪がひらく。': 'When the bell tolls, every host that reached the same province clashes at once. As the people grow, a new ring opens beyond the mist.',
   'タイトルを見る': 'Show the title',
+  '大協約': 'The Concord',
 
   // ---- the march card (hud/marchcard.mjs), cycling, tracker links
   '撤退しない': 'Never retreat',
