@@ -15,6 +15,17 @@ import { span } from '../hud/hud.mjs';
 import { termButton } from '../hud/glossary.mjs';
 import { inTime, row, timeHtml } from './shell.mjs';
 
+/**
+ * The − / + buttons and presets around a count (UI plan B4: no typing for
+ * the common amounts). The input stays a plain number field (keyboard and
+ * screen readers); `max` caps the presets ("all" when it is known).
+ */
+const steps = (name, { d = 100, presets = [100, 500, 1000], max = null } = {}) => html`<span class="stepper" role="group" aria-label="${L`数を変える`}">
+  <button type="button" class="btn small" data-act="step" data-name="${name}" data-d="${-d}" aria-label="${L`${fmtNum(d)} 減らす`}">−</button>
+  <button type="button" class="btn small" data-act="step" data-name="${name}" data-d="${d}" aria-label="${L`${fmtNum(d)} 増やす`}">+</button>
+  ${presets.filter(v => max === null || v <= max).map(v => html`<button type="button" class="btn small" data-act="step-set" data-name="${name}" data-v="${v}">${fmtNum(v)}</button>`)}
+  ${max !== null && max > 0 ? html`<button type="button" class="btn small" data-act="step-set" data-name="${name}" data-v="${max}">${L`全部（${fmtNum(max)}）`}</button>` : ''}</span>`;
+
 const costText = cost => cost.map((c, i) => (c ? `${RESOURCES[RESOURCE_ORDER[i]]} ${fmtNum(c)}` : null)).filter(Boolean).join(' · ');
 
 /** Why an action is blocked, as text, with the catch-up offer for a lagging province. */
@@ -46,6 +57,9 @@ export function buildCards(h, stores) {
     return { item: b.item, resource: b.resource, perHour: b.perHour, cost: b.cost, copies, secs: buildSecs(copies), short };
   });
 }
+
+/** The viewer's local clock time of a UTC hour today ("09:00"). */
+const localHour = hr => { const d = new Date(Date.UTC(2026, 0, 1, hr, 0)); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
 
 /** The panel's view model (numbers the tests read): stores, facts, the actions' blocks. */
 export function holdingModel(FS) {
@@ -107,7 +121,7 @@ export function render(FS) {
 
     <section class="hpanel" id="hp-train" aria-labelledby="hp-train-h"><h4 id="hp-train-h">⚔ ${L`訓練（すぐに終わります）`}</h4>
     <form class="inline" data-form="train"><label>${L`兵種`}<select name="unit">${units.map(x => html`<option value="${x.i}">${UNITS[x.u]}</option>`)}</select></label>
-      <label>${L`人数`}<input name="n" type="number" min="1" step="1" value="100" inputmode="numeric"></label>
+      <label>${L`人数`}<input name="n" type="number" min="1" step="1" value="100" inputmode="numeric"></label>${steps('n')}
       <button type="submit" class="btn" ${raw(m.blocks.Train.length ? 'disabled' : '')}>${L`訓練する`}</button></form>
     ${blockedLine(m.blocks.Train)}
     <h4>${L`控えの兵`}</h4>
@@ -115,7 +129,7 @@ export function render(FS) {
 
     <section class="hpanel" id="hp-muster" aria-labelledby="hp-muster-h"><h4 id="hp-muster-h">⚑ ${L`軍勢を編成する`}</h4>
     <form class="inline" data-form="muster"><label>${L`兵種`}<select name="unit">${f.reserve.filter(r => r.unit !== SETTLER).map(r => html`<option value="${r.unit}">${UNITS[UNIT_ORDER[r.unit]]}</option>`)}</select></label>
-      <label>${L`兵数（100〜30,000）`}<input name="troops" type="number" min="100" max="30000" step="1" value="100" inputmode="numeric"></label>
+      <label>${L`兵数（100〜30,000）`}<input name="troops" type="number" min="100" max="30000" step="1" value="100" inputmode="numeric"></label>${steps('troops', { max: Math.min(30000, f.reserve.find(r => r.unit !== SETTLER)?.troops ?? 0) || null })}
       <button type="submit" class="btn" ${raw(m.blocks.Muster.length || !f.reserve.length ? 'disabled' : '')}>${L`編成する`}</button></form>
     ${!f.reserve.length ? html`<p class="blocked">${L`控えの兵がいません：先に訓練しましょう`}</p>` : ''}
     <p class="muted">${L`新しい軍勢は次の鐘から顔ぶれに加わります。`}</p>
@@ -124,13 +138,13 @@ export function render(FS) {
     ${f.transits.length ? html`<ul class="list">${f.transits.map(t => html`<li>${L`枠 ${t.slot + 1}：第${fmtNum(t.arriveBell)}鐘に到着`}</li>`)}</ul>` : html`<p class="muted">${L`進軍中の軍勢はいません`}</p>`}</section>
 
     <section class="hpanel" id="hp-garrison" aria-labelledby="hp-garrison-h"><h4 id="hp-garrison-h">⛨ ${L`守備隊`}${termButton('garrison')}</h4>
-    <form class="inline" data-form="garrison"><label>${L`増員（控えの兵から）`}<input name="delta" type="number" min="1" step="1" value="100" inputmode="numeric"></label>
+    <form class="inline" data-form="garrison"><label>${L`増員（控えの兵から）`}<input name="delta" type="number" min="1" step="1" value="100" inputmode="numeric"></label>${steps('delta', { max: f.reserve.filter(r => r.unit !== SETTLER).reduce((a, r) => a + r.troops, 0) || null })}
       <button type="submit" class="btn" ${raw(m.blocks.Garrison.length ? 'disabled' : '')}>${L`守備隊を増やす`}</button></form>
     <p class="muted">${L`M1 の守備隊は増やすだけです（引き上げは次の段階で）。`}</p>
     ${blockedLine(m.blocks.Garrison)}
     <h4>${L`夜番の時間`}${termButton('vigil')}</h4>
     <p class="muted">${L`${String(Math.floor((FS.citizen?.vigilStartMin ?? 0) / 60)).padStart(2, '0')}:${String((FS.citizen?.vigilStartMin ?? 0) % 60).padStart(2, '0')} から（UTC）`}</p>
-    <form class="inline" data-form="vigil"><label>${L`開始（UTC の時）`}<input name="hour" type="number" min="0" max="23" value="${Math.floor((FS.citizen?.vigilStartMin ?? 0) / 60)}" inputmode="numeric"></label>
+    <form class="inline" data-form="vigil"><label>${L`開始（UTC の時）`}<select name="hour">${Array.from({ length: 24 }, (_, hr) => html`<option value="${hr}" ${raw(hr === Math.floor((FS.citizen?.vigilStartMin ?? 0) / 60) ? 'selected' : '')}>${L`${String(hr).padStart(2, '0')}:00 UTC（あなたの時刻 ${localHour(hr)}）`}</option>`)}</select></label>
       <button type="submit" class="btn">${L`変える`}</button></form>
     <p class="muted">${L`変更は24時間以上あとの最初の UTC 0時から有効で、週に1回までです。`}</p></section>
     ${f.finalTs && f.state === 'provisional' ? html`<p class="muted">${Lh`早くても ${timeHtml(f.finalTs)} 以降に確定します。`}</p>` : ''}

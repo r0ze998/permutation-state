@@ -446,6 +446,14 @@ async function guideGo() {
   }
 }
 
+function nudgeField(el, name, f) {
+  const i = el?.closest?.('form')?.querySelector?.(`input[name="${String(name).replace(/[^\w-]/g, '')}"]`);
+  if (!i) return;
+  const min = i.min === '' ? -Infinity : Number(i.min), max = i.max === '' ? Infinity : Number(i.max);
+  i.value = String(Math.max(min, Math.min(max, Math.round(f(Number(i.value) || 0)))));
+  i.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
 function closeResPop() { if (FS.resOpen) { FS.resOpen = null; renderHudTick(FS.chain?.now?.() ?? 0); } }
 
 function renderHudTick(now) {
@@ -723,6 +731,9 @@ export const HUD_ACTIONS = {
   'battle-play': d => { leaveReport(); playBattle(num(d.p), num(d.q), num(d.bell), { focus: true }); },
   'res-open': d => { FS.resOpen = FS.resOpen === d.r ? null : d.r; renderHudTick(FS.chain?.now?.() ?? 0); },
   'res-close': () => closeResPop(),
+  // the count steppers (screens/holding.mjs): change the number field of the same form, within its min and max
+  step: (d, el) => nudgeField(el, d.name, v => v + (num(d.d) || 0)),
+  'step-set': (d, el) => nudgeField(el, d.name, () => num(d.v) || 0),
   'profile-clear': () => { const sc = scope(); if (sc) profile.clearOwnProfile(uiStorage, sc.seasonId); FS.ownProfile = null; peopleCache.at = -1; invalidate('panel', 'rail', 'map'); },
   // the spectator (screens/spectate.mjs, UI plan G3): faction filter, bell timeline, the camera following battles
   'watch-faction': d => { FS.watch = { ...(FS.watch ?? {}), faction: d.f === '' ? null : num(d.f) }; invalidate('panel'); },
@@ -890,7 +901,7 @@ function delegate(doc) {
     const fn = el && !el.disabled ? action(el.dataset.act) : undefined;
     if (!fn) return;
     if (el.tagName !== 'INPUT') e.preventDefault();
-    run(fn(el.dataset));
+    run(fn(el.dataset, el));
   });
   doc.addEventListener('submit', e => {
     const f = e.target.closest?.('form[data-form]');

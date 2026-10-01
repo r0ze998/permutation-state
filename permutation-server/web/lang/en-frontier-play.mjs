@@ -454,4 +454,7 @@ export default {
   '名前は1〜24文字の文字・数字・空白・「-」「_」「.」で付けてください': 'Use 1–24 letters, digits, spaces, "-", "_" or "."',
   '名前を「{0}」にしました': 'Your name is now "{0}"',
   '名前を保存できませんでした（{0}）': 'The name could not be saved ({0})',
+  // ---- count steppers and the vigil hour (screens/holding.mjs, UI plan B4)
+  '数を変える': 'Change the number', '{0} 増やす': 'Add {0}', '{0} 減らす': 'Remove {0}', '全部（{0}）': 'All ({0})',
+  '{0}:00 UTC（あなたの時刻 {1}）': '{0}:00 UTC (your time {1})',
 };
