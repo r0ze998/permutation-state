@@ -476,7 +476,7 @@ function backupSave() {
   const url = URL.createObjectURL(new Blob([S.session.backupText()], { type: 'text/plain' }));
   const a = document.createElement('a');
   a.href = url;
-  a.download = `permutation-state-season${S.session.scope.seasonId}-key.txt`;
+  a.download = `wylls-season${S.session.scope.seasonId}-key.txt`;
   document.body.appendChild(a);
   a.click();
   a.remove();
