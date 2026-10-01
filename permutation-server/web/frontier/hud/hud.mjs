@@ -19,6 +19,9 @@ import { RESOURCES, RESOURCE_ORDER, TIERS, factionName } from '../fi18n.mjs';
 import { storesAt } from '../fland.mjs';
 import { bellChip, countdown, BELL_SECS } from '../clock.mjs';
 import { swatch } from '../screens/shell.mjs';
+import { personChip, ownTag, highlights, renderHighlights } from '../people/ui.mjs';
+import { leaderSvg } from '../people/leaders.mjs';
+import { identityOf } from '../people/identity.mjs';
 
 /** Seconds before the bell at which the pill turns amber, then red. */
 export const URGENCY = Object.freeze({ warn: 120, crit: 30 });
@@ -140,9 +143,10 @@ export function standings(overviews) {
 function renderStandings(FS) {
   const rows = standings(FS.overviews);
   return html`<h2 class="rail-h">${L`勢力の順位`}</h2>
-    <ol class="rail-standings">${rows.map((r, i) => html`<li><span class="rank">${i + 1}</span>${swatch(r.faction)}<strong>${factionName(r.faction)}</strong>
+    <ol class="rail-standings">${rows.map((r, i) => html`<li><span class="rank">${i + 1}</span>${raw(leaderSvg(r.faction, { size: 34 }))}<strong>${factionName(r.faction)}</strong>
       <span class="muted">${L`拠点 ${fmtNum(r.holdings)} · ${fmtNum(r.provinces)} 州`}</span></li>`)}</ol>
-    <p class="muted">${L`拠点の数は最新の概観（鐘ごと）から数えています。`}</p>`;
+    <p class="muted">${L`拠点の数は最新の概観（鐘ごと）から数えています。`}</p>
+    <h2 class="rail-h">${L`見どころ`}</h2>${renderHighlights(highlights(FS.chronicle, FS.overviews, FS.roster))}`;
 }
 
 /** The left rail: holdings, action tiles, what needs the player (the spectator: the standings). */
@@ -153,8 +157,9 @@ export function renderRail(FS) {
   const warned = new Set((FS.incoming ?? []).map(w => `${w.holding.p},${w.holding.q}`));
   const items = attentionItems(FS);
   const faction = FS.citizen?.faction;
+  const tag = Number.isInteger(faction) ? ownTag(FS) : null;
   const head = Number.isInteger(faction)
-    ? html`<p class="rail-faction">${swatch(faction)}<strong>${factionName(faction)}</strong></p>`
+    ? html`<div class="rail-me">${tag !== null ? personChip(identityOf(tag), faction, { size: 44, full: true, note: factionName(faction) }) : html`<p class="rail-faction">${swatch(faction)}<strong>${factionName(faction)}</strong></p>`}</div>`
     : html`<p class="rail-faction muted">${FS.mode === 'spectate' ? L`観戦中` : L`まだ陣営に加わっていません`}</p>`;
   const list = hs.length
     ? html`<ul class="rail-list">${hs.map((h, i) => html`<li><button type="button" class="rail-holding" data-act="holding-pick" data-i="${i}" ${raw(h === active ? 'aria-current="true"' : '')}>

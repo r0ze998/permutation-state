@@ -15,6 +15,7 @@ import { COLORS, FLATTEN, RADIUS, hexPoints, polygon, project, shade } from '../
 import { PROVINCE_TILES, locate, provinceCentre, ringOf, ringProvinces, tileHex, wedgeOf } from '../fgeo.mjs';
 import { FACTION_COLORS } from '../fi18n.mjs';
 import { majorityOwner } from '../herald.mjs';
+import { paintPeople, paintNameTags, PEOPLE_FRAME_MS } from '../people/crowds.mjs';
 import { BOUNDARY_HALO, BOUNDARY_INK, FOG, UNOPENED_FILL, paintSigil, provincePixel, PROVINCE_CIRCUMRADIUS } from './layers.mjs';
 
 const BASE = new URL('../art/', import.meta.url);
@@ -226,7 +227,7 @@ export class SpriteArt {
    */
   paint(ctx, entries, { zoom, dpr = 1, terrainAt = () => null, fogAt = () => null, selected = null, viewerFaction = null, demoRoads = false,
     ringsOpen = null, replayRing = null, replayEvery = 6000, engineStage = 0,
-    relics = [], waystones = [], demoSpecials = false, rivers = [], demoRivers = false, alliedPairs = [] }) {
+    relics = [], waystones = [], demoSpecials = false, rivers = [], demoRivers = false, alliedPairs = [], people = null }) {
     const allied = new Set(alliedPairs.map(([a, b]) => `${Math.min(a, b)}-${Math.max(a, b)}`));
     const calm = (rel, a, b) => peaceful(rel, a, b) || allied.has(`${Math.min(a, b)}-${Math.max(a, b)}`);
     const s = artSize(RADIUS * zoom * dpr);
@@ -534,6 +535,8 @@ export class SpriteArt {
       }
       ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
     }
+    // pass 2c: people (people/crowds.mjs): townsfolk, carriers, departing columns at their origin, scouts
+    const moving = people ? paintPeople(ctx, { tiles, zoom, departures: people.departures ?? [], explores: people.explores ?? [], viewerFaction, columnLabel: people.columnLabel ?? null }) : 0;
     // pass 3: fog over known / distant provinces (desaturate, haze, and mist when distant)
     for (const e of entries) {
       if (e.fog !== 'known' && e.fog !== 'distant') continue;
@@ -565,6 +568,9 @@ export class SpriteArt {
       const t = tiles.find((u) => u.p === selected.p && u.pq === selected.q && u.idx === selected.idx);
       if (t) polygon(ctx, hexPoints(t.x, t.y, 2), null, '#1b2e28', 3 / zoom);
     }
+    // name tags over the fog (the holder's face and name), then the next animation frame while figures move
+    if (people?.nameOf) paintNameTags(ctx, { tiles, zoom, nameOf: people.nameOf, centre: people.centre ?? null, onImage: this.onLoad });
+    if (moving && !this.peopleTimer) this.peopleTimer = setTimeout(() => { this.peopleTimer = null; this.onLoad(); }, PEOPLE_FRAME_MS);
     return tiles.length;
   }
 }

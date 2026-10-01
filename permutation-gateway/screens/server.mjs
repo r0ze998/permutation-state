@@ -37,6 +37,13 @@ export async function startServer() {
       res.end(W.overview(d));
       return 200;
     }
+    if ((m = /^\/h\/roster\/(\d+)\/latest\.bin$/.exec(path))) {
+      const d = Number(m[1]);
+      if (d > 2) return json(res, 404, { code: 'NotFound' });
+      res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'no-store' });
+      res.end(W.roster(d));
+      return 200;
+    }
     if ((m = /^\/h\/province\/(-?\d+),(-?\d+)\/(latest|\d+)$/.exec(path))) return json(res, 200, W.provinceEnvelope(Number(m[1]), Number(m[2]), m[3] === 'latest' ? W.BELL : Number(m[3])));
     if ((m = /^\/h\/bell\/(\d+)\/region\/(\d+)$/.exec(path))) return json(res, 200, W.bellRegion(Number(m[1]), Number(m[2])));
     if ((m = /^\/h\/me\/(\w+)$/.exec(path))) return m[1] === v.wallet ? json(res, 200, W.meRecord(v, stage)) : json(res, 200, W.meRecord({ ...v, wallet: m[1] }, 'none'));

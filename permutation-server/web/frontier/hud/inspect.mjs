@@ -12,6 +12,8 @@ import { TIERS, UNITS, factionName } from '../fi18n.mjs';
 import { UNIT_ORDER } from '../fland.mjs';
 import { ringOf } from '../fgeo.mjs';
 import { swatch } from '../screens/shell.mjs';
+import { personChip, hostOwner } from '../people/ui.mjs';
+import { identityOf } from '../people/identity.mjs';
 
 const TERRAIN_TEXT = { Grassland: () => L`草原`, Plains: () => L`平原`, Forest: () => L`森`, Hills: () => L`丘`, Mountain: () => L`山`, Water: () => L`水` };
 /** Site states as the overview carries them (herald SITE_STATE) and the mirror (3 = released: a Free City). */
@@ -48,12 +50,13 @@ export function inspectModel(FS, terrainOf) {
     const state = m ? (m.state === 3 ? 'freeCity' : ['free', 'holding', 'camp', 'free', 'reserved'][m.state] ?? 'free') : ['free', 'holding', 'camp', 'reserved'][rec?.sites?.[j] ?? 0];
     const faction = m ? m.faction : rec?.owners?.[j];
     const mine = (FS.holdings ?? []).find(h => h.p === s.p && h.q === s.q && h.site === j) ?? null;
-    tile.site = { index: j, state, faction: state === 'holding' ? faction : null, tier: m?.tier ?? null, garrison: m ? Number(m.garrison) : null,
+    const holder = state === 'holding' ? FS.roster?.ownerOf(s.p, s.q, j) ?? null : null;
+    tile.site = { index: j, state, faction: state === 'holding' ? faction : null, owner: holder ? identityOf(holder.tag) : null, tier: m?.tier ?? null, garrison: m ? Number(m.garrison) : null,
       shield: m ? m.shieldUntilBell > (FS.nowBell ?? 0) : false, mine: !!mine, holdingIndex: mine ? FS.holdings.indexOf(mine) : -1 };
   }
   for (const e of prov?.entries ?? []) {
     if (e.tile !== s.idx || (e.state !== 1 && e.state !== 2)) continue;
-    tile.hosts.push({ id: String(e.id), faction: e.faction, unit: UNIT_ORDER[e.unit] ?? null, troops: Number(e.troops), pending: e.state === 2 });
+    tile.hosts.push({ id: String(e.id), faction: e.faction, owner: hostOwner(FS.roster, e.id), unit: UNIT_ORDER[e.unit] ?? null, troops: Number(e.troops), pending: e.state === 2 });
   }
   if (prov?.camp?.state === 1 && prov.camp.tile === s.idx) tile.camp = { troops: Number(prov.camp.troops) };
   out.tile = tile;
@@ -93,12 +96,13 @@ export function render(FS, terrainOf) {
   if (m.clash) facts.push(html`<div class="row"><dt>${L`この鐘`}</dt><dd>${L`衝突あり`}</dd></div>`);
   const site = t?.site;
   const siteBlock = site ? html`<h4>${site.state === 'holding' ? html`${swatch(site.faction)}${L`${TIERS[site.tier] ?? ''}（${factionName(site.faction)}）`}` : SITE_TEXT[site.state]()}${site.mine ? html` <span class="tag">${L`あなたの拠点`}</span>` : ''}</h4>
+    ${site.owner ? html`<p class="inspect-owner">${personChip(site.owner, site.faction, { size: 40, full: true, note: L`この拠点の領主` })}</p>` : ''}
     <dl class="facts">
       <div class="row"><dt>${L`区画`}</dt><dd>${fmtNum(site.index + 1)}</dd></div>
       ${site.garrison !== null && site.state === 'holding' ? html`<div class="row"><dt>${L`守備隊`}</dt><dd>${fmtNum(site.garrison)}</dd></div>` : ''}
       ${site.shield ? html`<div class="row"><dt>${L`保護`}</dt><dd>${L`保護中（攻撃されません）`}</dd></div>` : ''}
     </dl>` : '';
-  const hosts = t?.hosts?.length ? html`<h4>${L`このマスの軍勢`}</h4><ul class="list">${t.hosts.map(h => html`<li class="host-row">${swatch(h.faction)}<span>${factionName(h.faction)} · ${h.unit ? UNITS[h.unit] : ''} ${fmtNum(h.troops)}</span>${h.pending ? html` <span class="muted">${L`（次の鐘から）`}</span>` : ''}</li>`)}</ul>` : '';
+  const hosts = t?.hosts?.length ? html`<h4>${L`このマスの軍勢`}</h4><ul class="list">${t.hosts.map(h => html`<li class="host-row">${h.owner ? personChip(h.owner, h.faction, { size: 24 }) : swatch(h.faction)}<span>${factionName(h.faction)} · ${h.unit ? UNITS[h.unit] : ''} ${fmtNum(h.troops)}</span>${h.pending ? html` <span class="muted">${L`（次の鐘から）`}</span>` : ''}</li>`)}</ul>` : '';
   const camp = t?.camp ? html`<p class="warn">${L`蛮族の野営地（${fmtNum(t.camp.troops)} 兵）`}</p>` : '';
   const acts = inspectActions(FS, m);
   return html`<section class="inspect" aria-labelledby="inspect-title"><h3 id="inspect-title">${title}</h3>

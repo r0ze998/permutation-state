@@ -11,6 +11,7 @@ import { factionName, DOCTRINE_NAMES, HOLDING_STATES } from '../fi18n.mjs';
 import { freeByWedge, candidateProvinces, freeSitesOf, ticketTimes, refileOffer, homeWedge } from '../fland.mjs';
 import { overflowProvinces } from '../onboarding.mjs';
 import { lamports, swatch, timeHtml } from './shell.mjs';
+import { leaderCard } from '../people/ui.mjs';
 
 const FACTIONS = [0, 1, 2, 3, 4, 5];
 const siteText = s => L`州 ${s.p},${s.q} の区画 ${s.site + 1}`;
@@ -31,7 +32,7 @@ export function factionCards(FS) {
 
 function renderFactions(FS) {
   const cards = factionCards(FS).map(c => html`<li><button type="button" class="card" data-act="pick-faction" data-f="${c.faction}" aria-pressed="${c.chosen ? 'true' : 'false'}">
-    ${swatch(c.faction)}<strong>${c.name}</strong><span>${L`教義：${c.doctrine}`}</span><span class="muted">${L`本拠の扇区の空き区画 約 ${fmtNum(c.free)}`}</span></button></li>`);
+    ${leaderCard(c.faction, { size: 88 })}<span class="muted">${L`本拠の扇区の空き区画 約 ${fmtNum(c.free)}`}</span></button></li>`);
   // The season's join gate (I-51), or a relay that answered InviteRequired.
   const gated = FS.inviteRequired || !!FS.season?.joinGate?.some?.(x => x !== 0);
   const ready = Number.isInteger(FS.joinDraft?.faction);

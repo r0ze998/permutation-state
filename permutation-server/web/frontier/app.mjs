@@ -87,6 +87,8 @@ import { RETREAT_CHOICES, retreatBps } from './fmarch.mjs';
 import { uiKey, uiStorage, loadUi, saveUi } from './fui.mjs';
 import * as hud from './hud/hud.mjs';
 import * as inspect from './hud/inspect.mjs';
+import { createRoster } from './people/roster.mjs';
+import * as scene from './people/scene.mjs';
 
 const $ = id => globalThis.document?.getElementById(id);
 const setText = (id, text) => { const el = $(id); if (el && el.textContent !== text) el.textContent = text; };
@@ -192,6 +194,26 @@ function renderMode() {
 // ------------------------------------------------------------------ the HUD (hud/hud.mjs)
 let mapRef = null;
 let terrainRef = null;
+/** Who holds each site (people/roster.mjs): names and faces for tags, the rail, the inspector, reports. */
+let rosterRef = null;
+/** The people layer's inputs, rebuilt at most once a second (the chronicle changes on polls only). */
+let peopleCache = { at: -1, value: null };
+export function peopleSource() {
+  const bell = FS.nowBell ?? (FS.clock ? Math.max(0, Math.floor(((FS.chain?.now() ?? 0) - FS.clock.genesisTs) / 600)) : 0);
+  const sec = Math.floor(Date.now() / 1000);
+  if (peopleCache.at === sec && peopleCache.value) return peopleCache.value;
+  if (rosterRef) {
+    for (let d = 0; d < (FS.record?.rings?.length ?? 1); d++) rosterRef.ensure(d);
+    scene.seedOwn(rosterRef, FS.holdings);
+  }
+  peopleCache = { at: sec, value: {
+    departures: scene.departuresAt(FS.chronicle, FS.overviews, bell),
+    explores: scene.exploresAt(FS.chronicle, FS.overviews, bell),
+    nameOf: scene.namer(rosterRef),
+    columnLabel: d => L`出陣 · 第${fmtNum(d.arriveBell)}鐘に到着`,
+  } };
+  return peopleCache.value;
+}
 const lastHtml = new Map();
 /** Put markup in an element only when it changed (a hover title survives the one-second tick). */
 function setHtmlIfChanged(el, markup) {
@@ -462,6 +484,8 @@ export async function boot() {
   // The phone bottom sheet (W5-E; mounted here since W6-D, R3).
   mountSheet();
   const herald = createHerald({ base: cfg.herald });
+  rosterRef = createRoster({ base: cfg.herald ?? '', onChange: () => { mapRef?.invalidate(); invalidate('panel'); } });
+  FS.roster = rosterRef;
   let map = null;
   const canvas = $('frontier-map');
   heraldRef = herald;
@@ -492,6 +516,7 @@ export async function boot() {
           artReplayRing: ART_RINGOPEN ? Math.max(0, (FS.record?.rings?.length ?? 1) - 1) : null,
           clashOf: ART_ON ? artClashOf : undefined,
           pendingOf: ART_ON ? (p, q) => FS.provinces.get(`${p},${q}`)?.inputs ?? null : undefined,
+          people: ART_ON && FS.mode !== 'practice' ? peopleSource : undefined,
           provinceOf: ART_ON ? (p, q) => { const env = FS.provinces.get(`${p},${q}`); if (!env) wantProvince(p, q, () => map?.invalidate()); return env?.province ?? null; } : undefined };
       },
       onSelect: hit => {

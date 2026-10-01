@@ -218,6 +218,27 @@ export function provinceEnvelope(p, q, bell = BELL) {
 
 export const overview = d => Buffer.from(overviewBytes(d));
 
+/** The roster of ring d (herald roster.rs): every held site of the overview gets a fixed citizen tag. */
+function rosterBytes(d) {
+  const provs = ringProvinces(d).sort((a, b) => a.p - b.p || a.q - b.q);
+  const ov = overviewBytes(d);
+  const out = new Uint8Array(32 + 148 * provs.length), dv = new DataView(out.buffer);
+  out.set(ov.subarray(0, 32), 0);
+  out.set(Buffer.from('PSFRS1\0\0', 'latin1'), 0);
+  provs.forEach((v, i) => {
+    const o = 32 + 148 * i, oo = 32 + 24 * i;
+    dv.setInt16(o, v.p, true); dv.setInt16(o + 2, v.q, true);
+    const sites = ov[oo + 9] | (ov[oo + 10] << 8) | (ov[oo + 11] << 16);
+    for (let s = 0; s < 12; s++) {
+      if (((sites >> (2 * s)) & 3) !== 1) continue;
+      dv.setBigUint64(o + 4 + s * 12, 0x5eed0000n + BigInt((v.p + 64) * 4096 + (v.q + 64) * 16 + s), true);
+      dv.setUint32(o + 12 + s * 12, 1, true);
+    }
+  });
+  return out;
+}
+export const roster = d => Buffer.from(rosterBytes(d));
+
 /** `/h/bell/{b}/region/{r}`: anchored and seeded up to bell 40, open after it. */
 export function bellRegion(bell, region) {
   if (bell > BELL) return { v: 1, bell, region, anchor: null, S: null, caches: [], tombstoned: false, archived: false, resolved: [] };
