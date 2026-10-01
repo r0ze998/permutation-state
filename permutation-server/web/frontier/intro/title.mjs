@@ -67,9 +67,7 @@ export function render({ mode = 'play', live = '' } = {}) {
   return html`<div class="intro-veil" aria-hidden="true"></div>
     <div class="intro-card">
       <div class="intro-emblem">${raw(emblemSvg({ size: 108 }))}</div>
-      <p class="intro-kicker">PERMUTATION STATE</p>
-      <h2 class="intro-title" id="intro-title">${L`六重の辺境`}</h2>
-      ${lang() === 'en' ? '' : html`<p class="intro-sub" lang="en">THE SIXFOLD FRONTIER</p>`}
+      <h2 class="intro-title" id="intro-title" data-name>Wylls</h2>
       <p class="intro-tagline">${L`六つの勢力。十分ごとの鐘。封じられた進軍。`}</p>
       <ol class="intro-leaders">${leaders}</ol>
       <div class="intro-lore">

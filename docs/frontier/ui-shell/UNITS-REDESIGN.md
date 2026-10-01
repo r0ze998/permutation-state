@@ -24,7 +24,7 @@ and fixes the rules the map follows from now on.
 The principle under all of it: **one thing on the map = one figure, and its state is
 said by its motion and a label, never by a crowd.**
 
-## Where Sixfold Frontier stood
+## Where Wylls stood
 
 On one tile the map drew at once: up to six host sprites in slots, a flag per faction,
 "activity actors" (two builders, three recruits, two sword fighters), townsfolk on
