@@ -41,3 +41,51 @@ source.people = () => ({
 ```
 
 A canvas overlay that draws its own scene can call `paintPeople` and `paintNameTags` directly instead, with tiles of the form `{x, y, p, pq, idx, site, state, owner, tier, fog}`.
+
+## The lords and the life of each holding (`life.mjs`)
+
+The chronicle is public. Each holding's record is built from these entries:
+
+- HARVEST, BUILD (item, `done_at`) and TRAIN (unit, n, `done_at`), keyed by P, Q, site.
+- MUSTER, DEPART and EXPLORE, through the host id.
+- SETTLE.
+
+Every record the page reads is folded in with `updateLife(map, records)`. `lifeAt(rec, bell, now)` then says what is visible:
+
+| Field | Meaning |
+|---|---|
+| `lord`, `doing` | The lord is out (they acted in the last 2 bells) and what they are doing |
+| `building`, `training` | Work is under way: `now < done_at` |
+| `harvesting`, `working` | Carriers for 1 bell after a harvest; field hands for 6 bells after it |
+| `liveliness` | How many townsfolk are out |
+
+`crowds.paintPeople` draws from this. Pass these four options:
+
+- `life`, the map
+- `bell`
+- `now`, in chain seconds
+- `lordOf(p, q, site)`, which returns the holder's identity so the lord wears their own face
+
+The page also ties `paintNameTags({present})` to the same map, so lords who are out are named from afar.
+
+### In the replay page: the life of a past bell
+
+The replay already reads the season's records bell by bell. Fold them into one map as the playhead moves, and ask for that bell:
+
+```js
+import { updateLife } from './people/life.mjs';
+import { bellEnd } from './clock.mjs';
+const life = new Map();
+// whenever the playhead passes bell b: fold that bell's records (the replay reads them anyway)
+updateLife(life, recordsOfBell(b));
+source.people = () => ({
+  ...otherPeopleInputs,
+  life, bell: shownBell,
+  now: bellEnd(genesisTs, shownBell) - 60,       // inside the bell shown
+  lordOf: (p, q, site) => { const o = roster.ownerOf(p, q, site, shownBell); return o ? identityOf(o.tag) : null; },
+});
+```
+
+Going back in time needs the map rebuilt from the start, or a snapshot per bell. A record only moves a holding forward, so folding from bell 0 up to the shown bell is always correct. The design session checks this with a script that rebuilds bell 592 from the 41040 log.
+
+Tiers come from the roster. Its 16-byte site carries the tier, and `roster.tierOf(p, q, site)` reads it. The far view uses them without loading provinces.
