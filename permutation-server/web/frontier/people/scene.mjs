@@ -62,5 +62,5 @@ export function namer(roster, { bell = null, language } = {}) {
 
 /** Seed the roster with the viewer's own holdings (their Holding accounts name the owner). */
 export function seedOwn(roster, holdings) {
-  for (const h of holdings ?? []) if (h?.ownerCitizen) roster.put(h.p, h.q, h.site, tagOf(h.ownerCitizen), 0);
+  for (const h of holdings ?? []) if (h?.ownerCitizen) roster.put(h.p, h.q, h.site, tagOf(h.ownerCitizen), 0, h.tier);
 }

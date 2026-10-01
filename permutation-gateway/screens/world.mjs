@@ -224,17 +224,18 @@ export const overview = d => Buffer.from(overviewBytes(d));
 function rosterBytes(d) {
   const provs = ringProvinces(d).sort((a, b) => a.p - b.p || a.q - b.q);
   const ov = overviewBytes(d);
-  const out = new Uint8Array(32 + 148 * provs.length), dv = new DataView(out.buffer);
+  const out = new Uint8Array(32 + 196 * provs.length), dv = new DataView(out.buffer);
   out.set(ov.subarray(0, 32), 0);
   out.set(Buffer.from('PSFRS1\0\0', 'latin1'), 0);
   provs.forEach((v, i) => {
-    const o = 32 + 148 * i, oo = 32 + 24 * i;
+    const o = 32 + 196 * i, oo = 32 + 24 * i;
     dv.setInt16(o, v.p, true); dv.setInt16(o + 2, v.q, true);
     const sites = ov[oo + 9] | (ov[oo + 10] << 8) | (ov[oo + 11] << 16);
     for (let s = 0; s < 12; s++) {
       if (((sites >> (2 * s)) & 3) !== 1) continue;
-      dv.setBigUint64(o + 4 + s * 12, 0x5eed0000n + BigInt((v.p + 64) * 4096 + (v.q + 64) * 16 + s), true);
-      dv.setUint32(o + 12 + s * 12, 1, true);
+      dv.setBigUint64(o + 4 + s * 16, 0x5eed0000n + BigInt((v.p + 64) * 4096 + (v.q + 64) * 16 + s), true);
+      dv.setUint32(o + 12 + s * 16, 1, true);
+      out[o + 16 + s * 16] = (s + i) % 4;
     }
   });
   return out;

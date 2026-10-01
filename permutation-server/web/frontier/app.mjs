@@ -759,6 +759,7 @@ export async function boot() {
     terrainRef = terrainOf;
     map = new FrontierMap(canvas, {
       source: () => {
+        if (rosterRef) for (let d = 0; d < (FS.record?.rings?.length ?? 1); d++) rosterRef.ensure(d);
         const own = ART_FOG ? [{ p: 2, q: 0 }] : (FS.holdings ?? []).map(h => ({ p: h.p, q: h.q }));
         return { overviews: FS.overviews, ringsOpen: FS.record?.rings?.length ?? 1, own, known: new Set([...own.map(o => `${o.p},${o.q}`), ...(ART_FOG ? ['-1,0', '-1,1', '0,-2', '-2,1'] : [])]), showAll: (ART_PREVIEW && !ART_FOG) || !FS.view.fog, selected: FS.selected, terrainOf,
           // art mode: the decoded Province (holdings' tiers, hosts on tiles, camp), loaded on demand
@@ -774,6 +775,8 @@ export async function boot() {
           people: ART_ON && FS.mode !== 'practice' ? peopleSource : undefined,
           // the world view's labels: the faction names and the Concord, in the page's language
           realmName: f => (f === 'concord' ? L`大協約` : factionName(f)),
+          // holdings' tiers for the far view from the roster (no province loads for a spectator's world map)
+          tierOf: (p, q, site) => rosterRef?.tierOf(p, q, site) ?? null,
           // the march being composed: its route, drawn for this browser only (the destination is sealed)
           route: FS.compose ? { hexes: marchCard.routeHexes(FS.compose), dest: FS.compose.dest ? tileHex(FS.compose.dest.p, FS.compose.dest.q, FS.compose.dest.tile) : null } : null,
           provinceOf: ART_ON ? (p, q, { far = false } = {}) => { if (!far) wantProvince(p, q, () => map?.invalidate()); return FS.provinces.get(`${p},${q}`)?.province ?? null; } : undefined };

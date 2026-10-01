@@ -51,15 +51,15 @@ test('avatar: SVG markup only (no style attribute), faction colours, the badge o
 });
 
 test('roster: decode the herald file; owners by site, only from their founding bell; own holdings seed it', async () => {
-  const bytes = new Uint8Array(32 + 148);
+  const bytes = new Uint8Array(32 + 196);
   bytes.set(new TextEncoder().encode('PSFRS1\0\0'));
   const dv = new DataView(bytes.buffer);
   dv.setUint16(16, 3, true); dv.setUint16(18, 1, true); dv.setUint32(20, 99, true);
   dv.setInt16(32, -2, true); dv.setInt16(34, 5, true);
-  dv.setBigUint64(36 + 4 * 12, 77n, true); dv.setUint32(44 + 4 * 12, 50, true);
+  dv.setBigUint64(36 + 4 * 16, 77n, true); dv.setUint32(44 + 4 * 16, 50, true); bytes[48 + 4 * 16] = 2;
   const d = R.decodeRoster(bytes);
   assert.equal(d.ring, 3);
-  assert.deepEqual(d.provinces.get('-2,5')[4], { tag: 77n, bell: 50 });
+  assert.deepEqual(d.provinces.get('-2,5')[4], { tag: 77n, bell: 50, tier: 2 });
   assert.equal(d.provinces.get('-2,5')[0], null);
   assert.throws(() => R.decodeRoster(bytes.subarray(0, 40)), /roster/);
   let changed = 0;

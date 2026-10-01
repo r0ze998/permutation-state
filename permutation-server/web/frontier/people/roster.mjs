@@ -1,6 +1,6 @@
 // Who holds each site: the herald's `/h/roster/{ring}/latest.bin`
 // (frontier-node herald `roster.rs`): per province 12 × {citizen_tag u64,
-// founded_bell u32}. The page turns a tag into a name and a face
+// founded_bell u32, tier u8, 3 reserved}. The page turns a tag into a name and a face
 // (identity.mjs); this module only decodes and keeps the file. A herald
 // without the file (404) leaves the roster empty: holdings then show their
 // faction and tier only, never a made-up owner.
@@ -12,11 +12,11 @@
 
 export const ROSTER_MAGIC = 'PSFRS1\0\0';
 export const ROSTER_HEADER = 32;
-export const ROSTER_SITE = 12;
+export const ROSTER_SITE = 16;
 export const ROSTER_RECORD = 4 + 12 * ROSTER_SITE;
 export const ROSTER_REFRESH_MS = 60_000;
 
-/** Decode a roster file → `{season, ring, bell, provinces: Map("P,Q" → [{tag, bell} | null] × 12)}`. */
+/** Decode a roster file → `{season, ring, bell, provinces: Map("P,Q" → [{tag, bell, tier} | null] × 12)}`. */
 export function decodeRoster(bytes) {
   const b = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes);
   if (b.length < ROSTER_HEADER || String.fromCharCode(...b.subarray(0, 8)) !== ROSTER_MAGIC) throw Object.assign(new Error('not a roster'), { code: 'BadRoster' });
@@ -31,7 +31,7 @@ export function decodeRoster(bytes) {
     for (let s = 0; s < 12; s++) {
       const at = o + 4 + s * ROSTER_SITE;
       const tag = dv.getBigUint64(at, true);
-      sites.push(tag === 0n ? null : { tag, bell: dv.getUint32(at + 8, true) });
+      sites.push(tag === 0n ? null : { tag, bell: dv.getUint32(at + 8, true), tier: b[at + 12] });
     }
     out.provinces.set(`${p},${q}`, sites);
   }
@@ -72,10 +72,12 @@ export function createRoster({ base = '', onChange = () => {}, fetch: f = (...a)
       return bell !== null && bell !== undefined && o.bell > bell ? null : o;
     },
     /** Seed a site from data the page has first-hand (the viewer's own Holding: `ownerCitizen`). */
-    put(p, q, site, tag, bell = 0) {
+    /** The tier (0 hamlet … 3 stronghold) the roster gives a held site, or null. */
+    tierOf(p, q, site) { const o = sites.get(`${p},${q}`)?.[site]; return o && Number.isInteger(o.tier) ? o.tier : null; },
+    put(p, q, site, tag, bell = 0, tier = null) {
       const k = `${p},${q}`;
       const list = sites.get(k) ?? Array(12).fill(null);
-      list[site] = { tag, bell };
+      list[site] = { tag, bell, tier: tier ?? list[site]?.tier ?? null };
       sites.set(k, list);
     },
     size: () => sites.size,

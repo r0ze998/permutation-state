@@ -1063,7 +1063,7 @@ impl Fold {
                     _ => 0,
                 };
                 if let Some(tag) = tag.filter(|t| *t != 0) {
-                    *o = Some((tag, bell));
+                    *o = Some((tag, bell, pv.site_mirror[i].tier));
                 }
             }
             recs.push(roster::record(pv.p, pv.q, &owners));

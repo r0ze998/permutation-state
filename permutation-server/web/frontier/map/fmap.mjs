@@ -357,7 +357,7 @@ export class FrontierMap {
       if (this.art && fog === 'unopened') { artCells.push({ ...pr, fog, selected }); continue; }
       if (this.art) {
         const t = terrainOf?.(pr.p, pr.q);
-        if (t) { artCells.push({ ...pr, ...t, rec, fog: (src.own ?? []).length ? fog : 'clear', selected, prov: src.provinceOf?.(pr.p, pr.q, { far: true }) ?? null }); continue; }
+        if (t) { artCells.push({ ...pr, ...t, rec, fog: (src.own ?? []).length ? fog : 'clear', selected, prov: src.provinceOf?.(pr.p, pr.q, { far: true }) ?? null, tiers: src.tierOf ? Array.from({ length: 12 }, (_, j) => src.tierOf(pr.p, pr.q, j)) : null }); continue; }
       }
       paintProvince(ctx, { ...pr, rec, fog, selected, scale: z });
     }

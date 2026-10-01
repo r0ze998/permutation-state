@@ -27,6 +27,42 @@ export const FAR_PIXELS = 24_000_000;
 /** Dark inks of the six factions (borders), after the portraits' palette. */
 const FACTION_DARK_INK = Object.freeze(['#7d2c27', '#1b5a53', '#7d5a14', '#4b3874', '#24497b', '#6f2d4c']);
 
+/** House positions of a settlement by tier (units of its size; x right, y down). */
+const SETTLEMENT = [
+  [[-0.32, 0.05, 0.42], [0.22, -0.12, 0.48], [0.1, 0.28, 0.38]],
+  [[-0.42, 0.1, 0.4], [0.3, 0.12, 0.42], [-0.05, 0.32, 0.4], [0.02, -0.18, 0.5]],
+  [[-0.46, 0.08, 0.38], [0.42, 0.08, 0.38], [-0.2, 0.34, 0.38], [0.22, 0.34, 0.38], [0, -0.18, 0.52]],
+  [[-0.4, 0.12, 0.38], [0.4, 0.12, 0.38], [0, 0.32, 0.38], [0, -0.16, 0.56]],
+];
+/**
+ * A settlement in vector for the far view: a shadow, little houses with
+ * roofs in the faction's colour, a tower for a town and up, walls for a city
+ * and a stronghold. `s` is its width in world px.
+ */
+export function paintSettlement(ctx, x, y, s, f, tier = 0) {
+  const roof = FACTION_COLORS[f] ?? '#8a8f86', ink = FACTION_DARK_INK[f] ?? '#3a3a34';
+  ctx.save();
+  ctx.globalAlpha = 0.35; ctx.fillStyle = '#120f0c';
+  ctx.beginPath(); ctx.ellipse(x, y + s * 0.18, s * 0.62, s * 0.22, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = 1;
+  if (tier >= 2) { // walls
+    ctx.fillStyle = '#d9d2c0'; ctx.strokeStyle = '#5a5246'; ctx.lineWidth = s * 0.05;
+    ctx.beginPath(); ctx.ellipse(x, y + s * 0.1, s * 0.66, s * 0.36, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  }
+  const houses = SETTLEMENT[Math.max(0, Math.min(3, tier))].slice().sort((a, b) => a[1] - b[1]);
+  for (const [hx, hy, hs] of houses) {
+    const w = s * hs, cx = x + hx * s, cy = y + hy * s;
+    const tower = hy < 0 && tier >= 1;
+    const bodyH = tower ? w * 1.1 : w * 0.55;
+    ctx.fillStyle = '#efe6d2'; ctx.strokeStyle = '#3b3328'; ctx.lineWidth = s * 0.035;
+    ctx.beginPath(); ctx.rect(cx - w * 0.38, cy - bodyH, w * 0.76, bodyH); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = roof; ctx.strokeStyle = ink;
+    ctx.beginPath(); ctx.moveTo(cx - w * 0.5, cy - bodyH + w * 0.02); ctx.lineTo(cx, cy - bodyH - w * (tower ? 0.55 : 0.42)); ctx.lineTo(cx + w * 0.5, cy - bodyH + w * 0.02); ctx.closePath(); ctx.fill(); ctx.stroke();
+    if (tower && tier >= 3) { ctx.fillStyle = roof; ctx.beginPath(); ctx.moveTo(cx, cy - bodyH - w * 0.55); ctx.lineTo(cx + w * 0.3, cy - bodyH - w * 0.45); ctx.lineTo(cx, cy - bodyH - w * 0.35); ctx.closePath(); ctx.fill(); }
+  }
+  ctx.restore();
+}
+
 /** The realms of a set of far entries: per faction a fill path and a border path, and the holdings' marks. */
 export function buildRealms(entries, { grow = 0 } = {}) {
   if (typeof Path2D === 'undefined') return null;
@@ -41,7 +77,7 @@ export function buildRealms(entries, { grow = 0 } = {}) {
     e.sites.forEach((idx, j) => {
       if (e.rec.sites[j] !== 1 || !(e.rec.owners[j] < 6)) return;
       const f = e.rec.owners[j];
-      const tier = e.prov?.siteMirror?.[j]?.state === 1 ? e.prov.siteMirror[j].tier : 0;
+      const tier = e.prov?.siteMirror?.[j]?.state === 1 ? e.prov.siteMirror[j].tier : (e.tiers?.[j] ?? 0);
       const h = tileHex(e.p, e.q, idx);
       const c = project(h.q, h.r);
       holdings.push({ x: c.x, y: c.y, f, tier });
@@ -202,7 +238,17 @@ export class SpriteArt {
     const g = cv.getContext('2d');
     g.setTransform(res, 0, 0, res, (half - c.x) * res, (half - c.y) * res);
     this.misses = 0;
-    this.paint(g, [e], { zoom: res, dpr: 1, terrainAt, fogAt, alliedPairs, far: true });
+    // the ground on its own, softened so the tiles melt into land (no hex mosaic), then the props, holdings and territory sharp on top
+    const gcv = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(size, size) : Object.assign(document.createElement('canvas'), { width: size, height: size });
+    const gg = gcv.getContext('2d');
+    gg.setTransform(res, 0, 0, res, (half - c.x) * res, (half - c.y) * res);
+    this.paint(gg, [e], { zoom: res, dpr: 1, terrainAt, fogAt, alliedPairs, far: 'ground' });
+    const blur = Math.max(0.8, Math.min(7, RADIUS * res * 0.32));
+    g.save(); g.setTransform(1, 0, 0, 1, 0, 0);
+    g.drawImage(gcv, 0, 0);   // sharp underneath: the province's edge stays solid where it meets the next
+    if ('filter' in g) { g.filter = `blur(${blur.toFixed(2)}px) saturate(1.08)`; g.globalAlpha = 0.9; g.drawImage(gcv, 0, 0); g.filter = 'none'; g.globalAlpha = 1; }
+    g.restore();
+    this.paint(g, [e], { zoom: res, dpr: 1, terrainAt, fogAt, alliedPairs, far: 'props' });
     const v = { cv, x: c.x - half, y: c.y - half, w: 2 * half, h: 2 * half, px: size * size };
     if (this.misses === 0) {
       this.farCache.set(k, v);
@@ -304,7 +350,7 @@ export class SpriteArt {
   paintFar(ctx, entries, { zoom, dpr = 1, terrainAt, fogAt, alliedPairs = [], recs = new Map(), lod = 'world' }) {
     const res = farRes(zoom * dpr);
     for (const e of entries) {
-      const state = e.rec ? `${e.rec.owners.join('')}${e.rec.sites.join('')}` + (e.prov ? (e.prov.siteMirror ?? []).map(m => `${m.state}${m.tier}`).join('') : '') : '';
+      const state = e.rec ? `${e.rec.owners.join('')}${e.rec.sites.join('')}` + (e.prov ? (e.prov.siteMirror ?? []).map(m => `${m.state}${m.tier}`).join('') : (e.tiers ?? []).join('')) : '';
       const b = this.farBitmap(e, { res, terrainAt, fogAt, alliedPairs, stateKey: state });
       if (!b) continue;
       ctx.imageSmoothingEnabled = true;
@@ -340,7 +386,7 @@ export class SpriteArt {
    * a stronghold). Cached until the drawn provinces' holdings change.
    */
   paintRealms(ctx, entries, { zoom, lod }) {
-    const key = entries.map(e => (e.rec ? `${e.p},${e.q}:${e.rec.owners.join('')}${e.rec.sites.join('')}${e.prov ? (e.prov.siteMirror ?? []).map(m => m.tier).join('') : ''}` : '')).join('|');
+    const key = entries.map(e => (e.rec ? `${e.p},${e.q}:${e.rec.owners.join('')}${e.rec.sites.join('')}${e.prov ? (e.prov.siteMirror ?? []).map(m => m.tier).join('') : (e.tiers ?? []).join('')}` : '')).join('|');
     const rk = `${lod}|${key}`;
     if (this.realmKey !== rk) { this.realm = buildRealms(entries, { grow: 1 }); this.realmKey = rk; }
     const R = this.realm;
@@ -361,15 +407,12 @@ export class SpriteArt {
     }
     // holdings: a mark per site, white-rimmed (a town is read from afar by its mark, Civ's city banner in miniature)
     const unit = 1 / zoom;
-    // province detail: each holding's own art, drawn larger than its tile so a settled land reads as settled
+    // province detail: each holding as a small settlement, crisp at any size (roofs in the faction's colour;
+    // a town adds a tower, a city and a stronghold their walls), so a settled land reads as settled from afar
     if (lod === 'province') {
-      const sz = ART_SIZES[0], k = (RADIUS / sz.r) * 1.7;
       const list = R.holdings.slice().sort((a, b) => a.y - b.y);
-      for (const h of list) {
-        const tier = ART_TIERS[h.tier] ?? 'hamlet';
-        const img = this.image('holdings', sz.key, `${tier}_${tier === 'stronghold' ? 'w' : 'o'}_${ART_FACTIONS[h.f]}`);
-        if (img) ctx.drawImage(img, h.x - sz.ax * k, h.y - sz.ay * k + TOP_LIFT * 1.7, sz.w * k, sz.h * k);
-      }
+      const size = Math.max(RADIUS * 0.7, 15 / zoom);
+      for (const h of list) paintSettlement(ctx, h.x, h.y + RADIUS * 0.15, size * (h.tier >= 2 ? 1.25 : 1), h.f, h.tier);
     }
     for (const h of R.holdings) {
       if (lod !== 'world' || h.tier < 1) continue;   // the world view marks towns and up; nearer, the holdings' own art shows
@@ -448,7 +491,7 @@ export class SpriteArt {
         const t = { q: h.q, r: h.r, x, y, name, cloud, fog: e.fog, v: artVariant(h.q, h.r), p: e.p, pq: e.q, idx: i, site: j,
           state: j === undefined ? undefined : m ? (m.state === 3 ? 5 : m.state === 4 ? 0 : m.state) : e.rec?.sites?.[j],
           owner: j === undefined ? undefined : m ? m.faction : e.rec?.owners?.[j],
-          tier: m && m.state === 1 ? m.tier : 0, walls: !!(m && m.wallsCommitted > 0),
+          tier: m && m.state === 1 ? m.tier : (j !== undefined ? e.tiers?.[j] ?? 0 : 0), walls: !!(m && m.wallsCommitted > 0),
           camp: !!(e.prov?.camp?.state === 1 && e.prov.camp.tile === i && j === undefined),
           shield: !!(m && m.shieldUntilBell > 0 && m.shieldUntilBell !== 0xffffffff && m.shieldUntilBell >= (e.prov?.resolvedNext ?? 0)) };
         t.road = !cloud && SITE_LAND.has(name) && roadBit(e.prov?.roadMask, i);
@@ -555,9 +598,9 @@ export class SpriteArt {
     const draw = (img, t) => ctx.drawImage(img, t.x - s.ax * k, t.y - s.ay * k + TOP_LIFT, s.w * k, s.h * k);
     const nearCentre = (t) => { const pc = provinceCentre(t.p, t.pq); return Math.max(Math.abs(t.q - pc.q), Math.abs(t.r - pc.r), Math.abs(t.q + t.r - pc.q - pc.r)) <= 1; };
     const siteGround = (t) => t.site !== undefined && SITE_LAND.has(t.name);
-    // pass 1: ground and flat overlays
+    // pass 1: ground and flat overlays (a far bitmap paints them on their own, then softens them: farBitmap)
     for (const t of tiles) {
-      if (t.cloud) continue;
+      if (t.cloud || far === 'props') continue;
       const g = t.river ? this.image('rivers', s.key, `${t.name}_${String(t.river).padStart(2, '0')}`)
         : this.image(siteGround(t) ? 'sites' : 'terrain', s.key, `${t.name}_${t.v}`);
       if (!g) { polygon(ctx, hexPoints(t.x, t.y, 0), FLAT[t.name][0], null); continue; }
@@ -592,6 +635,7 @@ export class SpriteArt {
         });
       }
     }
+    if (far === 'ground') return tiles.length;
     // the hex grid, exactly on the game's hexes, under the props (not in the far view: land, not a board)
     if (!far) {
       ctx.beginPath();
