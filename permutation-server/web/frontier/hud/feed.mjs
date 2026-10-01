@@ -89,7 +89,11 @@ export function diffFeed(prev, next) {
   // a holding that is gone: displaced while provisional, or lost (a new site ticket is filed automatically)
   for (const [k, was] of prev.holdings) {
     if (next.holdings.has(k)) continue;
-    out.push({ id: `hg:${k}:${bell}`, kind: 'holding', bell, p: was.p, q: was.q, text: was.state === 2 ? L`州 ${was.p},${was.q} の拠点を失いました。入植希望を自動でもう一度出します` : L`州 ${was.p},${was.q} の仮の拠点は押し出されました。入植希望を自動でもう一度出します` });
+    // a new ticket follows only when no holding is left (re-check 6)
+    const last = next.holdings.size === 0;
+    out.push({ id: `hg:${k}:${bell}`, kind: 'holding', bell, p: was.p, q: was.q, text: was.state === 2
+      ? (last ? L`州 ${was.p},${was.q} の拠点を失いました。入植希望を自動でもう一度出します` : L`州 ${was.p},${was.q} の拠点を失いました`)
+      : (last ? L`州 ${was.p},${was.q} の仮の拠点は押し出されました。入植希望を自動でもう一度出します` : L`州 ${was.p},${was.q} の仮の拠点は押し出されました`) });
   }
   return out;
 }
