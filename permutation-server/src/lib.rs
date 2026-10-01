@@ -1,4 +1,4 @@
-//! Local game server, bots and replay recorder for PERMUTATION STATE.
+//! Local game server, bots and replay recorder for Wylls.
 
 pub mod api;
 pub mod bots;

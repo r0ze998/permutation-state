@@ -1,4 +1,4 @@
-# PERMUTATION STATE — Rules Specification v0.1 (`permutation-rules`)
+# Wylls — Rules Specification v0.1 (`permutation-rules`)
 
 > **Superseded (2026-09-24)** by [Rules Spec v0.2](PERMUTATION_STATE_RULES_SPEC_v0.2.md), which merges the v0.2 changes and matches the V5 implementation. Kept for the record.
 

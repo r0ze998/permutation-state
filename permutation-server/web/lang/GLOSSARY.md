@@ -1,4 +1,4 @@
-# English glossary — PERMUTATION STATE web client
+# English glossary — Wylls web client
 
 The canonical English for every game term, so that every screen reads as one
 game. When a Japanese term below appears in a text you translate, use this

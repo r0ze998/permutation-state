@@ -1,6 +1,6 @@
 # permutation-chain — design
 
-The on-chain half of PERMUTATION STATE (Game Design V5). One native Solana program runs the same `permutation-rules` crate as the game server, the AI members and the replay verifier, so a tick resolved on chain is byte-identical to one resolved anywhere else. Registration, the prize vault and the final world live on the Solana base layer; the world and the nations' accounts are delegated to a MagicBlock Ephemeral Rollup (ER) while the season plays.
+The on-chain half of Wylls (Game Design V5). One native Solana program runs the same `permutation-rules` crate as the game server, the AI members and the replay verifier, so a tick resolved on chain is byte-identical to one resolved anywhere else. Registration, the prize vault and the final world live on the Solana base layer; the world and the nations' accounts are delegated to a MagicBlock Ephemeral Rollup (ER) while the season plays.
 
 ## Code layout
 

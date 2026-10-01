@@ -1,4 +1,4 @@
-# Benchmark: Civilization map/HUD and crypto-native game UI → PERMUTATION STATE V4.1
+# Benchmark: Civilization map/HUD and crypto-native game UI → Wylls V4.1
 
 Status: 2026-09-24. This replaces the earlier V4.1 mock direction, which was rejected: it simplified the map and buried it under opaque panels. The rule from here on: **the map stays the hero at Civ quality, and the chain is visible but never in the way.**
 

@@ -8,7 +8,7 @@ import { plural } from './helpers.mjs';
 
 export default {
   // ================================================================ index.html
-  'PERMUTATION STATE — ひとつの文明、6つの勢力': 'PERMUTATION STATE — One civilization, six factions',
+  'Wylls — ひとつの文明、6つの勢力': 'Wylls — One civilization, six factions',
   // top bar and panels
   'あなたの勢力の資源': "Your faction's resources",
   'チェーン（` キー）': 'Chain (` key)',
@@ -79,7 +79,7 @@ export default {
   'ゲームサーバーに接続しています。': 'Connecting to the game server.',
 
   // ================================================================ spectate.html
-  'PERMUTATION STATE — 観戦': 'PERMUTATION STATE — Spectator',
+  'Wylls — 観戦': 'Wylls — Spectator',
   'メンバーとして参加する': 'Join as a member',
   'AI エージェント向けの説明': 'Guide for AI agents',
   'ONE CIVILIZATION · 勢力': 'ONE CIVILIZATION · FACTIONS',

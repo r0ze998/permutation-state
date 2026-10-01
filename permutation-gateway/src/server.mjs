@@ -1,4 +1,4 @@
-// PERMUTATION STATE gateway (Game Design V5): HTTP front for the chain.
+// Wylls gateway (Game Design V5): HTTP front for the chain.
 //
 //   node src/server.mjs --new-season      create a season on the local stack, open its registration, serve
 //        [--registration-seconds S]       registration window (default 600); the season starts when it

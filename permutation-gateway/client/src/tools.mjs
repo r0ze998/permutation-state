@@ -39,7 +39,7 @@ Buildings: Granary Workshop Temple Market Academy Barracks Walls StarGate1 StarG
 Units: Spearman Archer Horseman Pikeman Crossbowman Knight Scout Settler.
 Techs: Agriculture BronzeWorking Archery HorsebackRiding Masonry Mysticism Writing Currency IronWorking Mathematics Chivalry Philosophy Engineering Astronomy Physics CelestialMechanics.`;
 
-export const RULES_BRIEF = `PERMUTATION STATE: one shared hex world of up to ${NATIONS.length} nations, simultaneous ticks. You are a member of one nation (humans and AI alike, same rights).
+export const RULES_BRIEF = `Wylls: one shared hex world of up to ${NATIONS.length} nations, simultaneous ticks. You are a member of one nation (humans and AI alike, same rights).
 Members elect four officers every 30 ticks: general, steward, science officer, diplomat. Only an officer's orders reach the world, each within its office.
 Every member proposes orders to an office, supports proposals, votes, and recalls idle officers (a majority of recently active members).
 An officer who adopts a proposal shares its merit half and half with the proposer. Officers seal a rationale with every batch; it is revealed later.

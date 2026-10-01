@@ -1,4 +1,4 @@
-# UI/UX audit: PERMUTATION STATE "私たちの文明" prototype
+# UI/UX audit: Wylls "私たちの文明" prototype
 
 All files are in `/Users/r0ze/Documents/Codex/2026-09-20/new-chat-2/outputs/permutation-state-prototype/civilization/`. `styles.css` is minified onto 14 lines, so CSS below is quoted by selector, not line number. Line numbers for `.mjs` files are exact.
 

@@ -1,4 +1,4 @@
-# PERMUTATION STATE — Living Civilization Prototype
+# Wylls — Living Civilization Prototype
 
 > The primary game has been rebuilt at **[`civilization/`](civilization/)**. See the [current project README](../README.md). The older world/repair and proof instructions below are archived experiments, not the new game's design or completion status.
 
@@ -25,7 +25,7 @@ The browser route is explicitly labelled `OFFCHAIN SIMULATION ALPHA`. A separate
 
 The original Living Civic Atlas and `proof/` routes below remain as a causal-receipt and MagicBlock proof lab. They are supporting evidence, not the main game.
 
-This dependency-free browser prototype presents PERMUTATION STATE as a world-first civilization RPG. The close-up East Sluice district, its citizens, resources, worksites, Chronicle, and Season Purse remain part of one continuous world while the player moves between civic actions.
+This dependency-free browser prototype presents Wylls as a world-first civilization RPG. The close-up East Sluice district, its citizens, resources, worksites, Chronicle, and Season Purse remain part of one continuous world while the player moves between civic actions.
 
 The playable scenario is **Season Zero: The Water Debt**. Mara Venn's decision at the River Guild changes Ivo Sen's available repair routes at the East Sluice. Ivo then resolves that local Worksite, leaving new resource values, obligations, faction memory, and history for the rest of the civilization.
 

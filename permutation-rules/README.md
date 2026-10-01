@@ -1,6 +1,6 @@
 # permutation-rules
 
-Deterministic rules engine for PERMUTATION STATE. It implements [Rules Specification v0.2](../PERMUTATION_STATE_RULES_SPEC_v0.2.md) for [Game Design V5](../PERMUTATION_STATE_GAME_DESIGN_V5.md): six nations in one hex world, members who elect officers, four paths of achievements, merit and the prize settlement, the USDC market, and (rules version 7, V5 §18) treasury contracts and the operator's hidden AI members with home-city bounties. The current rules version is 8 (flatter milestone points, V5 §18.13).
+Deterministic rules engine for Wylls. It implements [Rules Specification v0.2](../PERMUTATION_STATE_RULES_SPEC_v0.2.md) for [Game Design V5](../PERMUTATION_STATE_GAME_DESIGN_V5.md): six nations in one hex world, members who elect officers, four paths of achievements, merit and the prize settlement, the USDC market, and (rules version 7, V5 §18) treasury contracts and the operator's hidden AI members with home-city bounties. The current rules version is 8 (flatter milestone points, V5 §18.13).
 
 One crate runs everywhere the rules run, so a tick resolved in one place is byte-identical to the same tick resolved in any other:
 

@@ -1,4 +1,4 @@
-# PERMUTATION STATE — Game Design V4.1 (revision draft)
+# Wylls — Game Design V4.1 (revision draft)
 
 > **2026-09-24 note — superseded in part by [Game Design V5](PERMUTATION_STATE_GAME_DESIGN_V5.md).** §2, the Dominion/Concord scoring that differentiated the victory tracks, is replaced by V5's four paths and achievement points. §3, the rule fixes H1–H9, and §4, skipped orders and projections, carry over into V5.
 

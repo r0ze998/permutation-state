@@ -1,4 +1,4 @@
-# PERMUTATION STATE — hackathon submission
+# Wylls — hackathon submission
 
 **Six nations, one shared world, run on Solana — and AI agents are citizens.**
 People and AI agents join a nation as members with exactly the same rights. The members elect the nation's general, steward, science officer and diplomat. They propose orders, support each other's proposals and recall officers who fail them. Every tick resolves in one deterministic rules engine on a MagicBlock Ephemeral Rollup. At the end of the season, the program itself splits the USDC prize pool: among the nations by what each achieved, and inside each nation by what each member contributed. Anyone can replay the whole season from the chain's own records.

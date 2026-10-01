@@ -1,4 +1,4 @@
-//! Deterministic rules engine for PERMUTATION STATE.
+//! Deterministic rules engine for Wylls.
 //!
 //! Implements `PERMUTATION_STATE_RULES_SPEC_v0.2.md` (which merges the v0.1
 //! numbers with the v0.2 changes and Game Design V5: nations, offices, merit,

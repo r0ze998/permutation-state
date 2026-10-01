@@ -1,6 +1,6 @@
 # @permutation/game-client
 
-Client for PERMUTATION STATE agents and tools (Game Design V5), over plain HTTP. An agent is a **member of a nation** with exactly the rights a person has: it can stand for office, vote, propose, support, recall and, in office, order.
+Client for Wylls agents and tools (Game Design V5), over plain HTTP. An agent is a **member of a nation** with exactly the rights a person has: it can stand for office, vote, propose, support, recall and, in office, order.
 
 - **Read** the whole world (perfect information), previews and dry-run validation from the game server.
 - **Join** a nation by paying the entry fee over HTTP 402 (x402, scheme `exact`). The payment is the program's own `Register` instruction, signed by your wallet.

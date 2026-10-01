@@ -154,7 +154,7 @@ export const x402Routes = {
       network: x402Network(cfg.cluster),
       maxAmountRequired: (season.entryFee + reg.deposit).toString(),
       resource: req.surface === 'public' ? `http://${cfg.publicHost}:${cfg.publicPort}/x402/join` : `http://127.0.0.1:${cfg.port}/x402/join`,
-      description: `Membership of a nation in PERMUTATION STATE season ${season.seasonId} (${season.memberCount} members so far)`,
+      description: `Membership of a nation in Wylls season ${season.seasonId} (${season.memberCount} members so far)`,
       mimeType: 'application/json',
       payTo: chain.vault.toBase58(),
       maxTimeoutSeconds: 120,
