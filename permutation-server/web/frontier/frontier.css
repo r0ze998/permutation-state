@@ -331,3 +331,26 @@ body[data-urgency="crit"] main { box-shadow: inset 0 0 0 4px #c8412f; }
   .intro-veil { background: linear-gradient(180deg, rgba(8,18,16,.55) 0%, rgba(8,18,16,.9) 40%, rgba(6,14,12,.97) 100%); }
   .intro-leaders { gap: 4px; } .intro-leaders .leader { width: 46px; height: 58px; } .intro-leader { font-size: 11px; }
 }
+/* ---- the march card (hud/marchcard.mjs) */
+.marchcard { margin: 4px 0 10px; padding: 10px 12px; border: 2px solid #b07a12; border-radius: 12px; background: #fffaf0; }
+.marchcard h3 { margin-top: 0; }
+.mc-dest { display: grid; gap: 2px; margin: 4px 0; }
+.mc-sealed { font-size: 12px; color: var(--ink-2); }
+.mc-sealed::before { content: "\1F512\FE0E"; margin-right: 4px; }
+.mc-route { margin: 2px 0 6px; font-size: 13px; }
+.mc-bell { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; margin: 6px 0; text-align: center; }
+.mc-bell .btn { min-width: var(--target); font-size: 18px; }
+.mc-stances { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 8px 0; }
+.mc-stance { display: grid; justify-items: center; gap: 2px; min-height: 72px; padding: 6px 2px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--ink); font: inherit; font-size: 13px; cursor: pointer; }
+.mc-stance[aria-checked="true"] { border-color: #b07a12; background: #fbf1dc; box-shadow: inset 0 0 0 2px #b07a12; font-weight: 700; }
+.mc-glyph { font-size: 22px; line-height: 1; }
+.mc-beats { font-size: 11px; color: var(--ink-2); }
+.mc-retreat { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 8px; }
+.mc-retreat .btn[aria-checked="true"] { outline: 3px solid #b07a12; outline-offset: 1px; font-weight: 650; }
+.mc-odds { padding: 8px 10px; border-radius: 10px; background: var(--paper); border-left: 5px solid var(--line); }
+.mc-odds p { margin: 2px 0; }
+.mc-odds-strong, .mc-odds-free { border-left-color: #2e7d4f; } .mc-odds-edge { border-left-color: #6a9b3f; } .mc-odds-even { border-left-color: #b07a12; } .mc-odds-weak, .mc-odds-bad { border-left-color: #c8412f; }
+.mc-def { margin: 4px 0 0; } .mc-def li { font-size: 13px; }
+.mc-hint { margin: 4px 0 8px; font-weight: 650; }
+.coords > summary { font-size: 13px; }
+@media (max-width: 759px) { .mc-stances { grid-template-columns: repeat(2, 1fr); } }

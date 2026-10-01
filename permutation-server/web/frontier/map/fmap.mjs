@@ -20,6 +20,7 @@ import { locate, ringOf, ringProvinces, hexDistance } from '../fgeo.mjs';
 import { fogLevel, paintProvince, paintTiles, paintVeil, provincePixel, PROVINCE_CIRCUMRADIUS } from './layers.mjs';
 import { createTerrain } from './terrain.mjs';
 import { SpriteArt, terrainLookup } from './sprites.mjs';
+import { project } from '../../map.mjs';
 
 /** Fog levels drawn as tiles at tile LOD (a distant province stays a muted cell). */
 export const TILE_FOGS = Object.freeze(['sight', 'known', 'clear']);
@@ -88,6 +89,31 @@ export function coveredBelow(canvas) {
   if (!panel || !view || view.getComputedStyle(panel).position !== 'absolute' || !canvas.getBoundingClientRect) return 0;
   const c = canvas.getBoundingClientRect(), p = panel.getBoundingClientRect();
   return Math.max(0, Math.min(c.bottom, p.bottom) - Math.max(c.top, p.top));
+}
+
+/**
+ * The march being composed, for this browser only (the destination is
+ * sealed for everyone else): a dashed line along the planned hexes and a
+ * ringed marker on the destination tile. `route = {hexes: [{q, r}], dest: {q, r} | null}`.
+ */
+export function paintRoute(ctx, route, zoom) {
+  const pts = (route.hexes ?? []).map(h => project(h.q, h.r));
+  const k = 1 / zoom;
+  ctx.save();
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  if (pts.length > 1) {
+    ctx.beginPath(); pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+    ctx.strokeStyle = 'rgba(16,24,22,.55)'; ctx.lineWidth = 7 * k; ctx.stroke();
+    ctx.setLineDash([10 * k, 8 * k]); ctx.strokeStyle = '#f3d58a'; ctx.lineWidth = 3.5 * k; ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  if (route.dest) {
+    const d = project(route.dest.q, route.dest.r);
+    ctx.beginPath(); ctx.arc(d.x, d.y, 16 * k, 0, Math.PI * 2); ctx.fillStyle = 'rgba(243,213,138,.25)'; ctx.fill();
+    ctx.lineWidth = 3 * k; ctx.strokeStyle = '#f3d58a'; ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(d.x - 7 * k, d.y); ctx.lineTo(d.x + 7 * k, d.y); ctx.moveTo(d.x, d.y - 7 * k); ctx.lineTo(d.x, d.y + 7 * k); ctx.strokeStyle = '#1b2e28'; ctx.lineWidth = 2.5 * k; ctx.stroke();
+  }
+  ctx.restore();
 }
 
 export class FrontierMap {
@@ -308,6 +334,7 @@ export class FrontierMap {
         // people (people/crowds.mjs): the source's departures, explores and holder names; tags nearest the view centre first
         people: src.people ? { ...src.people(), centre: { x: this.view.x, y: this.view.y } } : null });
     }
+    if (src.route) paintRoute(ctx, src.route, z);
     this.mark(wanted > 0 && drawn === wanted ? 'ready' : 'pending');
   }
 

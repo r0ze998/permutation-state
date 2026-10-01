@@ -89,6 +89,7 @@ import * as hud from './hud/hud.mjs';
 import * as inspect from './hud/inspect.mjs';
 import * as feed from './hud/feed.mjs';
 import * as title from './intro/title.mjs';
+import * as marchCard from './hud/marchcard.mjs';
 import { createRoster } from './people/roster.mjs';
 import * as scene from './people/scene.mjs';
 import { activityText } from './people/activity.mjs';
@@ -158,10 +159,12 @@ export function panelMarkup(FS) {
   const parts = [renderNotice(FS.notice)];
   if (FS.practice) return [...parts, practiceScreen.render(FS.practice, { kernelError: FS.practiceError ?? null, closable: true })];
   if (FS.report) return [...parts, reportScreen.render(FS, mineOf(FS.holdings))];
-  // Phones and tablets (no left rail below 1100 px): the rail's holdings and to-do list, folded.
+  // A march being composed on the map: its card first (hud/marchcard.mjs).
+  if (tab === 'map' && FS.compose) parts.push(marchCard.render(FS));
+  // Phones and tablets (no left rail below 1100 px): the rail's holdings and to-do list, folded (closed while composing).
   if (tab === 'map' && (FS.holdings ?? []).length) {
     const n = hud.attentionItems(FS).length;
-    parts.push(html`<details class="rail-mini" ${raw(n ? 'open' : '')}><summary>${n ? L`拠点と次の鐘までにやること（${fmtNum(n)}）` : L`拠点と次の鐘までにやること`}</summary>${hud.renderRail(FS)}</details>`);
+    parts.push(html`<details class="rail-mini" ${raw(n && !FS.compose ? 'open' : '')}><summary>${n ? L`拠点と次の鐘までにやること（${fmtNum(n)}）` : L`拠点と次の鐘までにやること`}</summary>${hud.renderRail(FS)}</details>`);
   }
   // The selection first on the map tab (the player just chose it), then the guide.
   if (tab === 'map' && FS.selected) parts.push(inspect.render(FS, terrainRef, mapRef?.art?.activities ?? null));
@@ -280,8 +283,25 @@ function setHtmlIfChanged(el, markup) {
 }
 
 /** Every second: the bell pill's bar and urgency, the resource strip, the attention pill. */
+let routeShown = null;
+/** When a composed march gets its route, the camera frames origin and destination at tile detail. */
+function frameRoute() {
+  const c = FS.compose;
+  const key = c?.route && c.dest ? `${c.host.id}:${c.dest.p},${c.dest.q},${c.dest.tile}` : null;
+  if (!key || key === routeShown || !mapRef) { routeShown = key ?? routeShown; return; }
+  routeShown = key;
+  const hx = marchCard.routeHexes(c).map(h => project(h.q, h.r));
+  if (!hx.length) return;
+  const xs = hx.map(p => p.x), ys = hx.map(p => p.y);
+  const size = mapRef.size(), span = Math.max(Math.max(...xs) - Math.min(...xs), (Math.max(...ys) - Math.min(...ys)) * 1.4, 1);
+  const zoom = Math.max(0.55, Math.min(1.4, (Math.min(size.width, size.height) * 0.6) / span));
+  const phone = globalThis.matchMedia?.('(max-width: 759px)').matches;
+  mapRef.setView({ x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2 + (phone ? size.height * 0.22 / zoom : 0), zoom });
+}
+
 function renderHudTick(now) {
   const m = hud.bellModel(FS.clock, now);
+  frameRoute();
   ringToll(m.bell);
   renderIntro();
   const pill = $('bell-pill');
@@ -467,7 +487,25 @@ function goToItem(x) {
 }
 
 /** The HUD's actions (data-act): cycle the attention items, jump to one, choose the active holding. */
+/** The next (dir +1) or previous (−1) host ready to march, selected on the map (Civ's "next unit"). */
+function cycleHost(dir) {
+  const ready = FS.holdings?.length ? hostScreen.hostRows(FS).filter(r => r.state === 1 && !r.inTransit && !r.pending) : [];
+  if (!ready.length) return;
+  FS.hostCursor = (((FS.hostCursor ?? -1) + dir) % ready.length + ready.length) % ready.length;
+  const r = ready[FS.hostCursor];
+  goToItem({ p: r.p, q: r.q, tile: r.tile, tab: 'map' });
+}
+/** The next or previous holding (Civ's "next city"). */
+function cycleHolding(dir) {
+  const hs = FS.holdings ?? [];
+  if (!hs.length) return;
+  const i = (((FS.activeHolding ?? 0) + dir) % hs.length + hs.length) % hs.length;
+  FS.activeHolding = i;
+  goToItem({ p: hs[i].p, q: hs[i].q, tile: hs[i].tile, tab: 'holding', holding: hs[i] });
+}
+
 export const HUD_ACTIONS = {
+  goto: d => goToItem({ p: num(d.p), q: num(d.q), tab: 'map' }),
   'intro-close': () => closeIntro(),
   'intro-open': () => openIntro(),
   'feed-go': d => goToItem((FS.feed ?? []).find(x => x.id === d.id)),
@@ -608,7 +646,11 @@ export function w4Bind(name, value) {
 function delegate(doc) {
   doc.addEventListener('keydown', e => {
     const intro = $('intro');
-    if (intro && !intro.hidden && (e.key === 'Escape' || e.key === 'Enter')) { e.preventDefault(); closeIntro(); }
+    if (intro && !intro.hidden && (e.key === 'Escape' || e.key === 'Enter')) { e.preventDefault(); closeIntro(); return; }
+    // . , next / previous ready host; ] [ next / previous holding (never while typing)
+    if (FS.mode !== 'play' || e.target?.closest?.('input, select, textarea') || e.metaKey || e.ctrlKey || e.altKey) return;
+    const k = { '.': () => cycleHost(1), ',': () => cycleHost(-1), ']': () => cycleHolding(1), '[': () => cycleHolding(-1) }[e.key];
+    if (k) { e.preventDefault(); k(); }
   });
   const play = FS.mode === 'play';
   const run = p => Promise.resolve(p).catch(e => { FS.notice = { ok: false, code: e?.code ?? 'Error', text: String(e?.message ?? e) }; invalidate('panel'); });
@@ -730,6 +772,8 @@ export async function boot() {
           clashOf: ART_ON ? artClashOf : undefined,
           pendingOf: ART_ON ? (p, q) => FS.provinces.get(`${p},${q}`)?.inputs ?? null : undefined,
           people: ART_ON && FS.mode !== 'practice' ? peopleSource : undefined,
+          // the march being composed: its route, drawn for this browser only (the destination is sealed)
+          route: FS.compose ? { hexes: marchCard.routeHexes(FS.compose), dest: FS.compose.dest ? tileHex(FS.compose.dest.p, FS.compose.dest.q, FS.compose.dest.tile) : null } : null,
           provinceOf: ART_ON ? (p, q) => { wantProvince(p, q, () => map?.invalidate()); return FS.provinces.get(`${p},${q}`)?.province ?? null; } : undefined };
       },
       onSelect: hit => {
@@ -737,6 +781,9 @@ export async function boot() {
         setText('map-summary', L`州 ${hit.p},${hit.q} を選びました`);
         // The inspector reads the province envelope (loaded once, on demand).
         if (FS.mode !== 'practice') wantProvince(hit.p, hit.q, () => { map?.invalidate(); invalidate('panel'); });
+        // composing a march: a tap on another tile makes it the destination (Civ: select the unit, click where)
+        const c = FS.compose;
+        if (FS.mode === 'play' && c && !c.sending && Number.isInteger(hit.idx) && !(hit.p === c.origin.p && hit.q === c.origin.q && hit.idx === c.host.tile)) ACTIONS['dest-from-map']()?.catch?.(() => {});
         invalidate('map', 'panel');
       },
       onView: (_, lod) => { FS.view.lod = lod; },

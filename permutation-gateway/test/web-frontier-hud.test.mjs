@@ -160,3 +160,22 @@ test('feed: changes between two polls become notifications; a turned bell folds 
   assert.match(toasts, /data-act="feed-dismiss"/);
   assert.equal([FEED.renderToasts(feed, { now: 1000 + FEED.TOAST_MS + 1 })].flat(Infinity).join(''), '', 'toasts expire into the list');
 });
+
+import * as MC from '../../permutation-server/web/frontier/hud/marchcard.mjs';
+
+test('march card: the route as hexes, the defenders frozen at the destination, a guide word from the ratio', () => {
+  setLang('ja');
+  const c = { origin: { p: 2, q: 0 }, host: { tile: 30, troops: 600 }, route: { dirs: [0, 0, 5] } };
+  const hx = MC.routeHexes(c);
+  assert.equal(hx.length, 4);
+  assert.deepEqual([hx[3].q - hx[0].q, hx[3].r - hx[0].r], [2, 1], 'two steps east, one south-east (fgeo DIRECTIONS)');
+  const prov = { sites: Uint8Array.from([32]), siteMirror: [{ state: 1, faction: 2, garrison: 100_000 }], camp: { state: 1, tile: 32, troops: 50 },
+    entries: [{ state: 1, tile: 32, faction: 2, troops: 200_000 }, { state: 1, tile: 32, faction: 0, troops: 900_000 }, { state: 1, tile: 5, faction: 2, troops: 1 }] };
+  const FS = { citizen: { faction: 0 }, provinces: new Map([['2,0', { province: prov }]]) };
+  const d = MC.defendersAt(FS, { p: 2, q: 0, tile: 32 });
+  assert.deepEqual([d.residents.map(r => r.troops), d.garrison, d.camp, d.total], [[200], 100, 50, 350], 'other factions only, on that tile');
+  assert.equal(MC.oddsWord(800, 350).id, 'strong');
+  assert.equal(MC.oddsWord(350, 350).id, 'even');
+  assert.equal(MC.oddsWord(100, 350).id, 'bad');
+  assert.equal(MC.oddsWord(100, 0).id, 'free');
+});

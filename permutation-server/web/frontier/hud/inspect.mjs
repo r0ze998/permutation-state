@@ -16,6 +16,7 @@ import { swatch } from '../screens/shell.mjs';
 import { personChip, hostOwner } from '../people/ui.mjs';
 import { identityOf } from '../people/identity.mjs';
 import { activityText } from '../people/activity.mjs';
+import { hostRows } from '../screens/host.mjs';
 
 const TERRAIN_TEXT = { Grassland: () => L`草原`, Plains: () => L`平原`, Forest: () => L`森`, Hills: () => L`丘`, Mountain: () => L`山`, Water: () => L`水` };
 /** Site states as the overview carries them (herald SITE_STATE) and the mirror (3 = released: a Free City). */
@@ -65,6 +66,11 @@ export function inspectModel(FS, terrainOf) {
   return out;
 }
 
+/** The viewer's hosts standing on a tile and able to march (state 1, not on the road). */
+export function ownHostsOn(FS, p, q, idx) {
+  try { return hostRows(FS).filter(r => r.p === p && r.q === q && r.tile === idx && r.state === 1 && !r.inTransit && !r.pending).map(r => ({ id: String(r.id), troops: r.troops })); } catch { return []; }
+}
+
 /** The actions the selection offers: `[{act, data, text, primary?}]` (existing play actions only). */
 export function inspectActions(FS, m) {
   if (!m) return [];
@@ -75,6 +81,8 @@ export function inspectActions(FS, m) {
   const t = m.tile;
   if (t?.site?.mine) out.push({ act: 'holding-pick', data: { i: t.site.holdingIndex }, text: L`この拠点を開く`, primary: true });
   if (FS.compose && t && !FS.compose.sending) out.push({ act: 'dest-from-map', data: {}, text: L`ここを進軍の行き先にする`, primary: true });
+  // the viewer's own ready hosts on this tile can be sent from here (the march card then opens on the map)
+  if (!FS.compose && t) for (const h of ownHostsOn(FS, m.p, m.q, t.idx)) out.push({ act: 'compose', data: { host: h.id, stay: 'map' }, text: L`この軍勢（${fmtNum(h.troops)}）で進軍する`, primary: true });
   if (FS.land?.stage === 'joined' && t?.site?.state === 'free') {
     const draft = FS.joinDraft?.envelope?.province;
     if (draft && draft.p === m.p && draft.q === m.q) {

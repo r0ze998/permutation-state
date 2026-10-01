@@ -11,7 +11,7 @@ import * as io from './fchainio.mjs';
 import * as fsession from './fsession.mjs';
 import * as book from './marchbook.mjs';
 import { submit, track, accountsFor, campMaskOf, campWinner } from './fplay.mjs';
-import { sendMarch, planRoute, earliestBell, arrivalWindow, tipOptions, incomingWarnings, DEPART_MARGIN_SECS } from './fmarch.mjs';
+import { sendMarch, planRoute, earliestBell, arrivalWindow, tipOptions, incomingWarnings, DEPART_MARGIN_SECS, RETREAT_CHOICES } from './fmarch.mjs';
 import { landState, hostsIn } from './fland.mjs';
 import { toggleTile } from './screens/explore.mjs';
 import { sealMarch, unpack, ctHash as ctHashOf, sealRoot as sealRootOf } from './seal.mjs';
@@ -547,9 +547,20 @@ export const ACTIONS = {
     const tips = tipOptions(FS.season);
     FS.compose = { host: { ...r.entry, id: r.id, troops: r.troops, tile: r.tile, unit: r.unit }, origin: { p: r.p, q: r.q }, stance: 0, retreat: 'never', ratio: null,
       tip: String(tips[0].lamports), quick: quickDestinations(), dest: null, route: null, arriveBell: arrivalWindow(FS.season, nowBell()).min };
-    FS.tab = 'marches';
-    invalidate('panel', 'tabs');
+    // from the map (the inspector) the march is composed on the map; from the Hosts tab, on the Marches tab
+    if (d.stay !== 'map') FS.tab = 'marches';
+    invalidate('panel', 'tabs', 'map');
   },
+  // the march card (hud/marchcard.mjs): the arrival bell stepper, the stance and the retreat presets
+  'mc-bell': d => {
+    const c = FS.compose;
+    if (!c || !FS.season) return;
+    const w = arrivalWindow(FS.season, nowBell(), c.earliest);
+    c.arriveBell = Math.min(w.max, Math.max(w.min, (c.arriveBell ?? w.min) + (num(d.d) || 0)));
+    invalidate('panel');
+  },
+  'mc-stance': d => { if (FS.compose) { FS.compose.stance = Math.max(0, Math.min(3, num(d.v) || 0)); invalidate('panel'); } },
+  'mc-retreat': d => { if (FS.compose && RETREAT_CHOICES.some(r => r.id === d.v)) { FS.compose.retreat = d.v; invalidate('panel'); } },
   'compose-close': () => { FS.compose = null; invalidate('panel'); },
   'dest-from-map': () => { const s = FS.selected; if (s?.idx !== undefined) return setDestination({ p: s.p, q: s.q, tile: s.idx }); return undefined; },
   'dest-quick': d => setDestination({ p: num(d.p), q: num(d.q), tile: num(d.tile) }),

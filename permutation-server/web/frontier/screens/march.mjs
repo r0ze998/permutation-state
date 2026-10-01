@@ -77,8 +77,9 @@ export function render(FS) {
       ${c.dest ? html`<p><strong>${L`州 ${c.dest.p},${c.dest.q} のマス ${c.dest.tile + 1}`}</strong></p>` : ''}
       <button type="button" class="btn" data-act="dest-from-map" ${raw(FS.selected?.idx !== undefined ? '' : 'disabled')}>${L`地図で選んだマスにする`}</button>
       ${(c.quick ?? []).length ? html`<ul class="list">${c.quick.map(q => html`<li><button type="button" class="btn" data-act="dest-quick" data-p="${q.p}" data-q="${q.q}" data-tile="${q.tile}">${q.kind === 'camp' ? L`蛮族の野営地 州 ${q.p},${q.q}` : L`州 ${q.p},${q.q} のマス ${q.tile + 1}`}</button></li>`)}</ul>` : ''}
-      <form class="inline" data-form="dest"><label>P<input name="p" type="number" inputmode="numeric" value="${c.dest?.p ?? ''}"></label><label>Q<input name="q" type="number" inputmode="numeric" value="${c.dest?.q ?? ''}"></label>
-        <label>${L`マス`}<input name="tile" type="number" min="0" max="60" inputmode="numeric" value="${c.dest?.tile ?? ''}"></label><button type="submit" class="btn">${L`決める`}</button></form>
+      <details class="coords"><summary>${L`座標で指定する`}</summary><form class="inline" data-form="dest"><label>P<input name="p" type="number" inputmode="numeric" value="${c.dest?.p ?? ''}"></label><label>Q<input name="q" type="number" inputmode="numeric" value="${c.dest?.q ?? ''}"></label>
+        <label>${L`マス`}<input name="tile" type="number" min="0" max="60" inputmode="numeric" value="${c.dest?.tile ?? ''}"></label><button type="submit" class="btn">${L`決める`}</button></form></details>
+      <p class="muted">${L`地図でマスをタップしても行き先になります。`}</p>
     </fieldset>
     <fieldset><legend>${L`2. 道のりと到着`}</legend>
       ${c.route ? html`<p>${routeLine(c.route)}</p>` : html`<p class="muted">${c.routeError ? clientText(c.routeError) : L`行き先を決めると道のりを探します`}</p>`}
