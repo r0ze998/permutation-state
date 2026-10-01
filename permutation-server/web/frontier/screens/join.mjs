@@ -53,29 +53,31 @@ function renderSessionFix(FS) {
 
 /** Why the last holding or ticket ended (stored with its bell, review finding 7), as a line. */
 function endLine(FS) {
-  const e = FS.ui?.landEnd;
+  const e = FS.landRec?.landEnd;
   if (!e) return '';
   const t = { displaced: () => L`第${fmtNum(e.bell)}鐘：仮の拠点は、同じ鐘のより高い順位の入植希望に押し出されました。`,
     lost: () => L`第${fmtNum(e.bell)}鐘：拠点を失いました。`,
     ended: () => L`第${fmtNum(e.bell)}鐘：前の入植希望は区画を得られずに終わりました。` }[e.why];
-  return t ? html`<p class="callout">${t()} ${L`空いた区画に、入植希望を自動でもう一度出します。`}</p>` : '';
+  // once the new ticket has left, the line says so in the past (re-check 7)
+  return t ? html`<p class="callout">${t()} ${e.refiled ? L`新しい入植希望を自動で出しました。` : L`空いた区画に、入植希望を自動でもう一度出します。`}</p>` : '';
 }
 
 /** While the first holding is being placed (no ticket yet): what this browser is doing about it (review finding 12). */
 function renderPlacing(FS) {
   const a = FS.autoTicket;
-  const again = !!FS.ui?.landEnd || FS.land?.stage === 'refugee';
+  const again = !!FS.landRec?.landEnd || FS.land?.stage === 'refugee';
   const retry = html`<button type="button" class="btn" data-act="auto-ticket">${L`いますぐもう一度出す`}</button>`;
   const line = {
     searching: () => html`<p role="status">${L`本拠の扇区で空いた区画を探して、入植希望を出しています…`}</p>`,
     sent: () => html`<p role="status">${L`入植希望を出しました。チェーンの記録に現れるのを待っています。`}</p>`,
-    waiting: () => html`<p role="status">${L`この鐘の入植希望はもう試しました。次の鐘に自動でもう一度出します。`}</p>${retry}`,
+    waiting: () => html`<p role="status">${L`この鐘の入植希望はもう試しました。次の鐘に自動でもう一度出します。`}</p>${FS.landRec?.autoTryFailed ? retry : ''}`,
+    room: () => html`<p role="status">${L`空いた区画はありますが、この鐘の入植希望の枠がいっぱいです。次の鐘に自動で出します。`}</p>`,
     nofree: () => html`<p class="warn" role="status">${L`本拠の扇区にも隣の扇区にも空いた区画が見つかりません。鐘ごとに自動で探し直し、新しい輪がひらけばそこを探します。`}</p>${retry}`,
     failed: () => html`<p class="notice error" role="alert">${L`入植希望を出せませんでした：${failureText({ code: a.code })}`} ${L`次の鐘に自動でもう一度出します。`}</p>${retry}`,
   }[a?.state] ?? (() => html`<p role="status">${L`まもなく入植希望を自動で出します。`}</p>`);
   return html`<section aria-labelledby="join-sites"><h3 id="join-sites">${again ? L`新しい拠点の場所を探しています` : L`最初の拠点を置いています`}</h3>
-    ${endLine(FS)}
     ${line()}
+    ${endLine(FS)}
     <p class="muted">${L`場所は選びません。同じ鐘の入植希望はその鐘の乱数でまとめて公平に決まり、拠点は次の鐘（約11〜21分後）に決まります。`}</p>
     <p class="muted">${Lh`預け金：<strong>${lamports(FS.land?.escrowNeeded ?? 0n)}</strong>（拠点の口座の賃料。拠点ができればそこへ移り、できなければ払った人に戻ります）`}</p>
     <p><button type="button" class="btn" data-act="practice-open">${L`待つあいだに練習で戦ってみる`}</button></p></section>`;
@@ -88,7 +90,7 @@ function renderTicket(FS) {
     <ol class="chosen">${t.sites.map((s, i) => html`<li ${raw(i < t.next ? 'class="done"' : '')}>${siteText(s)}${i < t.next ? html` <span class="muted">${L`（ふさがっていた）`}</span>` : ''}</li>`)}</ol>
     ${times ? html`<p>${Lh`結果は ${timeHtml(times.resultAbout)} ごろ（出してから約11〜21分）に、この鐘の乱数で決まります。`}</p>` : ''}
     ${endLine(FS)}
-    <p class="muted">${FS.ui?.ticketSource === 'overflow' ? L`本拠の扇区に空きがなかったため、区画は隣の扇区のいちばん外の輪から自動で選びました。区画を得られなければ、自動でもう一度出します。` : L`区画は本拠の扇区から自動で選びました。区画を得られなければ、自動でもう一度出します。`}</p>
+    <p class="muted">${FS.landRec?.ticketSource === 'overflow' ? L`本拠の扇区に空きがなかったため、区画は隣の扇区のいちばん外の輪から自動で選びました。区画を得られなければ、自動でもう一度出します。` : L`区画は本拠の扇区から自動で選びました。区画を得られなければ、自動でもう一度出します。`}</p>
     <p><button type="button" class="btn" data-act="practice-open">${L`待つあいだに練習で戦ってみる`}</button></p></section>`;
 }
 

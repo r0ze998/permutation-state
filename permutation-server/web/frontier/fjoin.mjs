@@ -15,8 +15,8 @@ import { adjacentWedges } from './onboarding.mjs';
 import { ringOf, wedgeOf, provinceIndex } from './fgeo.mjs';
 
 export const AUTO_MAX_SITES = 3;
-/** Provinces read per pass, and at most in all (each read is one herald request). */
-export const AUTO_BATCH = 6, AUTO_READ_MAX = 30;
+/** Provinces read per batch, and at most per pass (home and overflow each; each read is one herald request). */
+export const AUTO_BATCH = 6, AUTO_READ_MAX = 24;
 
 /** A 32-bit FNV-1a hash of a string (stable across browsers). */
 export function hash32(s) {
@@ -60,36 +60,48 @@ export function pickSites(provinces, { seed = '', nowBell = 0, max = AUTO_MAX_SI
   for (let round = 0; out.length < max && lists.some(l => l.length > round); round++) {
     for (const l of lists) { if (out.length >= max) break; if (l[round]) out.push({ p: l[round].p, q: l[round].q, site: l[round].site }); }
   }
-  return out;
+  // the ticket's order is its preference order: nearer rings first (the round-robin can interleave rings)
+  return out.map((x, i) => ({ x, i })).sort((a, b) => (ringOf(a.x.p, a.x.q) - ringOf(b.x.p, b.x.q)) || (a.i - b.i)).map(o => o.x);
 }
 
 /**
- * Plan a ticket: `{ok: true, sites, source: 'home'|'overflow'}` or `{ok: false, why: 'nofree'|'readfail', reads}`.
- * `read(p, q)` → Promise<Province|null> (null = the read failed). The home wedge first
- * (batches until three sites or the candidates run out), then the overflow ring.
+ * Plan a ticket: `{ok: true, sites, source: 'home'|'overflow', full}` or
+ * `{ok: false, why: 'nofree'|'room'|'readfail', reads, full}`.
+ *   `read(p, q)` → Promise<Province|null> (null = the read failed);
+ *   `skip` = Set of "p,q" already known full (decoded, recently): not read again;
+ *   `homeFull` = the program's own view when known (the Frontier account's
+ *     WEDGE_OPEN − WEDGE_OCCUPIED of the home wedge is 0), else null.
+ * The overflow ring (§5.9) is tried only when the program would allow it: `homeFull`
+ * true, or (unknown) every home candidate was read without a failure and none has a
+ * free site. Free home sites without cohort room give 'room' (wait for the next bell),
+ * never an overflow ticket the program refuses. `full` lists the provinces read and
+ * found without a free site, for the caller's `skip` of the next bells.
  */
-export async function planTicket({ overviews, faction, ringsOpen, seed, nowBell, read }) {
+export async function planTicket({ overviews, faction, ringsOpen, seed, nowBell, read, skip = new Set(), homeFull = null }) {
   let reads = 0, failures = 0;
-  const run = async list => {
+  const full = [];
+  const pass = async list => {
     const got = [];
-    for (let i = 0; i < list.length && reads < AUTO_READ_MAX; i += AUTO_BATCH) {
-      for (const c of list.slice(i, i + AUTO_BATCH)) {
-        if (reads >= AUTO_READ_MAX) break;
-        reads++;
-        const pv = await read(c.p, c.q);
-        if (pv) got.push(pv); else failures++;
-      }
-      const sites = pickSites(got, { seed, nowBell });
-      if (sites.length >= AUTO_MAX_SITES) return sites;
+    let n = 0, fails = 0, freeAny = false, complete = true;
+    for (const c of list) {
+      if (skip.has(`${c.p},${c.q}`)) continue;
+      if (n >= AUTO_READ_MAX) { complete = false; break; }
+      n++; reads++;
+      const pv = await read(c.p, c.q);
+      if (!pv) { fails++; failures++; continue; }
+      if (freeSitesOf(pv).length) { freeAny = true; got.push(pv); } else full.push(`${c.p},${c.q}`);
+      if (n % AUTO_BATCH === 0 && pickSites(got, { seed, nowBell }).length >= AUTO_MAX_SITES) break;
     }
-    return pickSites(got, { seed, nowBell });
+    return { sites: pickSites(got, { seed, nowBell }), freeAny, fails, complete };
   };
-  // the home wedge: the overview's free count is an upper bound (sites past site_count read as free), so a
-  // province it shows full is full; the others are read and decided on their decoded sites
-  const home = seededOrder(candidateProvinces(overviews, faction), seed);
-  const a = await run(home);
-  if (a.length) return { ok: true, sites: a, source: 'home' };
-  const b = await run(seededOrder(overflowCandidates(overviews, faction, ringsOpen), seed));
-  if (b.length) return { ok: true, sites: b, source: 'overflow' };
-  return failures && failures === reads ? { ok: false, why: 'readfail', reads } : { ok: false, why: 'nofree', reads };
+  const home = await pass(seededOrder(candidateProvinces(overviews, faction), seed));
+  if (home.sites.length) return { ok: true, sites: home.sites, source: 'home', full };
+  if (home.freeAny) return { ok: false, why: 'room', reads, full };            // free sites, no cohort room this bell
+  if (home.fails) return { ok: false, why: 'readfail', reads, full };          // cannot tell the home wedge is full
+  const allowed = homeFull === null ? home.complete : homeFull;
+  if (!allowed) return { ok: false, why: 'nofree', reads, full };
+  const over = await pass(seededOrder(overflowCandidates(overviews, faction, ringsOpen), seed));
+  if (over.sites.length) return { ok: true, sites: over.sites, source: 'overflow', full };
+  if (over.freeAny) return { ok: false, why: 'room', reads, full };
+  return over.fails && !over.freeAny && failures === reads ? { ok: false, why: 'readfail', reads, full } : { ok: false, why: 'nofree', reads, full };
 }

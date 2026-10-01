@@ -13,7 +13,7 @@ import * as fsession from './fsession.mjs';
 import * as book from './marchbook.mjs';
 import { submit, track, accountsFor, campMaskOf, campWinner } from './fplay.mjs';
 import { sendMarch, planRoute, earliestBell, arrivalWindow, tipOptions, incomingWarnings, DEPART_MARGIN_SECS, RETREAT_CHOICES } from './fmarch.mjs';
-import { landState, hostsIn, TICKET_SEEN_BELLS } from './fland.mjs';
+import { landState, hostsIn, TICKET_SEEN_BELLS, FIRST_TICKET_RING } from './fland.mjs';
 import { planTicket } from './fjoin.mjs';
 import { toggleTile } from './screens/explore.mjs';
 import { sealMarch, unpack, ctHash as ctHashOf, sealRoot as sealRootOf } from './seal.mjs';
@@ -23,7 +23,7 @@ import { hostParts } from './faddr.mjs';
 import { decodePage } from './flog.mjs';
 import { nextPoll } from './herald.mjs';
 import { kernel as loadKernel, UNITS } from './wasm.mjs';
-import { uiKey, uiStorage, loadUi, saveUi } from './fui.mjs';
+import { uiKey, uiStorage, loadUi, saveUi, landKey, loadLand, saveLand, LAND_DEFAULTS } from './fui.mjs';
 import * as wallet from '../wallet.mjs';
 import { decode as fromBase58, encode as toBase58 } from '../sdk/base58.mjs';
 import { fromBase64 } from '../sdk/bytes.mjs';
@@ -35,6 +35,10 @@ const nowBell = () => (FS.clock ? bellAt(FS.clock.genesisTs, now()) ?? 0 : 0);
 const scope = () => io.scope();
 /** Save UI preferences once a season is pinned (convenience only). */
 const saveUiPatch = patch => { const sc = scope(); if (sc) FS.ui = saveUi(uiStorage, uiKey(sc), patch); };
+/** The land record of this season and wallet (fui.mjs; the automatic site ticket's state). */
+const landKeyNow = () => (scope() && FS.wallet?.address ? landKey(scope(), FS.wallet.address) : null);
+const readLand = () => { const k = landKeyNow(); FS.landRec = k ? loadLand(uiStorage, k) : (FS.landRec ?? { ...LAND_DEFAULTS }); return FS.landRec; };
+const saveLandPatch = patch => { const k = landKeyNow(); FS.landRec = k ? saveLand(uiStorage, k, patch) : { ...(FS.landRec ?? LAND_DEFAULTS), ...patch }; return FS.landRec; };
 const bookKey = () => (FS.wallet && scope() ? book.bookKey(scope(), FS.wallet.address) : null);
 // Notices keep a thunk or the failure itself, so a language switch re-renders them in the new language.
 const setNotice = n => { FS.notice = n; invalidate('panel'); };
@@ -51,8 +55,12 @@ function ctx(extra = {}) {
   return { addresses: pin.addresses, wallet: FS.wallet.address, actor: FS.session?.publicKey, faction: FS.citizen?.faction, ...extra };
 }
 
+/** The send and the follow-up (fplay.mjs); tests put stand-ins here to play a relay and a chain. */
+let tx = { submit, track };
+export function useTransport(t) { tx = t ? { submit: t.submit ?? submit, track: t.track ?? track } : { submit, track }; }
+
 /** One sponsored action, tracked to its landing; the notice says how it went. */
-async function act(name, { v = {}, fields = {}, signer, requester = null, label, after, onSent } = {}) {
+async function act(name, { v = {}, fields = {}, signer, requester = null, label, after, onSent, onLost } = {}) {
   // `signer: null` = a settle shape (no authority signs; the session key signs the request only).
   if (!io.pinned()) return failed({ code: 'NoPin' });
   if (!FS.wallet) return failed({ code: 'NoWallet' });
@@ -71,21 +79,24 @@ async function act(name, { v = {}, fields = {}, signer, requester = null, label,
   FS.inFlight = (FS.inFlight ?? 0) + 1;
   try {
     const accounts = typeof v === 'function' ? fp => accountsFor(name, v(fp)) : accountsFor(name, ctx(v));
-    const send = () => submit({ name, accounts, fields, signer: sign, requester, citizen: requester ? io.pinned().addresses.of('Citizen', { wallet: FS.wallet.address }) : undefined, invite: v.invite });
+    const send = () => tx.submit({ name, accounts, fields, signer: sign, requester, citizen: requester ? io.pinned().addresses.of('Citizen', { wallet: FS.wallet.address }) : undefined, invite: v.invite });
     let r = await send();
     // the transaction left this browser (a refusal before sending never reaches here)
     if (r.ok) onSent?.(r);
-    let t = r.ok ? await track(r.signature) : r;
+    let t = r.ok ? await tx.track(r.signature) : r;
     // W6-D: a resident action refused because the province fell a bell behind between the check and the landing:
     // ask the keeper to catch it up, wait for the herald to show it, and send once more.
     if (!t.ok && retryAfterCatchUp(name, t.code)) {
       busy(() => L`州が追いつくのを待っています…`);
       if (await catchUp()) {
         r = await send();
-        t = r.ok ? await track(r.signature) : r;
+        if (r.ok) onSent?.(r);
+        t = r.ok ? await tx.track(r.signature) : r;
       }
     }
     if (!r.ok) return failed(r);
+    // sent, and the chain says it failed or it expired: definitely not landed (an unknown outcome is neither)
+    if (!t.ok && (t.state === 'failed' || t.state === 'expired')) onLost?.(t);
     if (!t.ok) return failed(t);
     done(() => L`チェーンに記録されました`);
     await after?.(r);
@@ -334,12 +345,13 @@ export async function refresh() {
       FS.land = landState(me.citizen);
       // why the last holding or ticket ended, kept with its bell for the next cards (review finding 7)
       const after = FS.land.stage, gone = after === 'joined' || after === 'refugee';
-      if (before && gone && ['provisional', 'final', 'ticket'].includes(before)) saveUiPatch({ landEnd: { why: before === 'provisional' ? 'displaced' : before === 'final' ? 'lost' : 'ended', bell: nowBell() } });
-      if (after === 'provisional' || after === 'final') { if (FS.ui?.landEnd) saveUiPatch({ landEnd: null }); }
+      const lr = readLand();
+      if (before && gone && ['provisional', 'final', 'ticket'].includes(before)) saveLandPatch({ landEnd: { why: before === 'provisional' ? 'displaced' : before === 'final' ? 'lost' : 'ended', bell: nowBell(), refiled: false } });
+      if ((after === 'provisional' || after === 'final') && lr.landEnd) saveLandPatch({ landEnd: null });
       // the filed ticket counts as seen once the herald shows it (or what it led to); not merely because the stage is
       // not 'joined' (a refugee is not a ticket) — review finding 5
-      const shown = ['ticket', 'provisional', 'final'].includes(after) || (Number.isInteger(FS.ui?.lastTicketBell) && Number(me.citizen?.ticketBell) === FS.ui.lastTicketBell);
-      if (FS.ui?.ticketSeen === false && shown) saveUiPatch({ ticketSeen: true });
+      const shown = ['ticket', 'provisional', 'final'].includes(after) || (Number.isInteger(FS.landRec?.lastTicketBell) && Number(me.citizen?.ticketBell) === FS.landRec.lastTicketBell);
+      if (FS.landRec?.ticketSeen === false && shown) saveLandPatch({ ticketSeen: true });
       if (me.record?.quota) FS.quota = me.record.quota;
       if (FS.session && FS.citizen) {
         const m = fsession.matchesCitizen(FS.session, FS.citizen, now());
@@ -394,25 +406,37 @@ export async function autoTicket({ force = false } = {}) {
   if (stage !== 'joined' && stage !== 'refugee') { FS.autoTicket = null; return; }
   if (!FS.session || FS.sessionProblem || !Number.isInteger(FS.citizen?.faction) || FS.autoTicketBusy) return;
   const b = nowBell();
-  const sc = scope();
-  if (sc) FS.ui = loadUi(uiStorage, uiKey(sc));   // another tab may have filed (review finding 6)
-  const filed = FS.ui?.lastTicketBell;
-  const onItsWay = FS.ui?.ticketSeen === false && Number.isInteger(filed) && b < filed + TICKET_SEEN_BELLS;
+  const rec = readLand();   // per wallet; another tab may have filed or be filing (review finding 6, re-check 4)
+  const filed = rec.lastTicketBell;
+  const onItsWay = rec.ticketSeen === false && Number.isInteger(filed) && b < filed + TICKET_SEEN_BELLS;
+  // this bell's attempt is under way or done elsewhere (not failed): the button respects it too (re-check 8)
+  const tried = rec.autoTryBell === b && !rec.autoTryFailed;
   if (!force) {
     if (onItsWay) { FS.autoTicket = { state: 'sent', bell: filed }; invalidate('panel'); return; }
-    if (FS.ui?.autoTryBell === b) { if (!FS.autoTicket) { FS.autoTicket = { state: 'waiting', bell: b }; invalidate('panel'); } return; }
+    if (rec.autoTryBell === b) { if (!FS.autoTicket) { FS.autoTicket = { state: 'waiting', bell: b }; invalidate('panel'); } return; }
+  } else {
+    if (tried && !onItsWay) return;
+    const t = Date.now();
+    if (t - (FS.autoForceAt ?? 0) < AUTO_FORCE_MS) return;   // the button is throttled (re-check 3)
+    FS.autoForceAt = t;
   }
   FS.autoTicketBusy = true;
-  saveUiPatch({ autoTryBell: b });   // before sending: a second tab skips this bell
+  saveLandPatch({ autoTryBell: b, autoTryFailed: false });   // before sending: a second tab skips this bell
   FS.autoTicket = { state: 'searching', bell: b };
   invalidate('panel');
+  let sent = false;
   try {
     await refreshOverviews(b);
+    for (const [k, at] of FS.autoFull ?? []) if (b - at >= AUTO_FULL_BELLS) FS.autoFull.delete(k);
     const plan = await planTicket({ overviews: FS.overviews ?? new Map(), faction: FS.citizen.faction, ringsOpen: FS.record?.rings?.length ?? 1,
-      seed: `${FS.wallet?.address ?? ''}|${b}`, nowBell: b, read: async (p, q) => { try { const e = await herald.province(p, q); return e.ok ? e.province : null; } catch { return null; } } });
-    if (!plan.ok) { FS.autoTicket = plan.why === 'readfail' ? { state: 'failed', bell: b, code: 'Unavailable' } : { state: 'nofree', bell: b }; return; }
-    const r = await fileTicket(plan.sites, plan.source);
-    if (r?.ok === true) FS.autoTicket = { state: 'sent', bell: b };
+      seed: `${FS.wallet?.address ?? ''}|${b}`, nowBell: b, read: (p, q) => readProvinceOnce(p, q, b), skip: new Set((FS.autoFull ?? new Map()).keys()),
+      homeFull: homeWedgeFull(FS.record, FS.citizen.faction) });
+    FS.autoFull ??= new Map();
+    for (const k of plan.full ?? []) FS.autoFull.set(k, b);
+    if (!plan.ok) { FS.autoTicket = plan.why === 'readfail' ? { state: 'failed', bell: b, code: 'Unavailable' } : { state: plan.why, bell: b }; return; }
+    const r = await fileTicket(plan.sites, plan.source, b);
+    if (r?.ok === true) { sent = true; FS.autoTicket = { state: 'sent', bell: b }; }
+    else if (FS.landRec?.ticketSeen === false && FS.landRec.lastTicketBell === b) { sent = true; FS.autoTicket = { state: 'sent', bell: b }; }   // sent, outcome unknown: keep waiting
     else {
       FS.autoTicket = { state: 'failed', bell: b, code: r?.code ?? FS.notice?.code ?? 'Error' };
       if (FS.notice && FS.notice.ok === false) FS.notice = null;   // the card says it (one live region, review finding 11)
@@ -420,9 +444,38 @@ export async function autoTicket({ force = false } = {}) {
   } catch (e) {
     FS.autoTicket = { state: 'failed', bell: b, code: e?.code ?? 'Error' };
   } finally {
+    if (!sent) saveLandPatch({ autoTryFailed: true });   // nothing left this browser for good: the button may try again
     FS.autoTicketBusy = false;
     invalidate('panel');
   }
+}
+/** The "file again now" button at most this often; provinces found full are not read again for this many bells. */
+export const AUTO_FORCE_MS = 20_000, AUTO_FULL_BELLS = 6;
+
+/** A Province read for the automatic ticket, once a bell (re-check 3: no repeated reads of the same bell). */
+async function readProvinceOnce(p, q, b) {
+  FS.autoProv ??= new Map();
+  const k = `${p},${q}`;
+  const hit = FS.autoProv.get(k);
+  if (hit && hit.bell === b) return hit.province;
+  try {
+    const e = await herald.province(p, q);
+    if (!e.ok) return null;
+    FS.autoProv.set(k, { bell: b, province: e.province });
+    if (FS.autoProv.size > 200) FS.autoProv.delete(FS.autoProv.keys().next().value);
+    return e.province;
+  } catch { return null; }
+}
+
+/**
+ * The program's own "home wedge full" (Frontier WEDGE_OPEN − WEDGE_OCCUPIED = 0, the
+ * overflow rule of §5.9) when the season record carries the counters; else null (the
+ * planner then decides conservatively from the Provinces it read).
+ */
+function homeWedgeFull(record, faction) {
+  const o = record?.wedgeOpen, c = record?.wedgeOccupied, w = faction;
+  if (!Array.isArray(o) || !Array.isArray(c) || !Number.isInteger(o[w]) || !Number.isInteger(c[w])) return null;
+  return o[w] - c[w] <= 0;
 }
 
 /**
@@ -437,7 +490,7 @@ async function refreshOverviews(b) {
     if (r?.ok && r.record) FS.record = r.record;
   } catch { /* keep the last record */ }
   const rings = Math.max(1, FS.record?.rings?.length ?? 1);
-  for (let d = 0; d < rings; d++) {
+  for (let d = FIRST_TICKET_RING; d < rings; d++) {   // rings 0–1 hold no ticket sites (re-check 3)
     try { const o = await herald.overview(d); if (o.ok) FS.overviews.set(d, o); } catch { /* keep the last overview */ }
   }
 }
@@ -677,10 +730,14 @@ function hostRow(id) {
   return null;
 }
 
-async function fileTicket(sites, source = null) {
+async function fileTicket(sites, source = null, bell = nowBell()) {
   if (!sites.length) return undefined;
-  // the "on its way" lock is written once the transaction has left this browser, never before (review finding 1)
-  return act('FileTicket', { v: { sites }, fields: { sites }, onSent: () => saveUiPatch({ lastTicket: sites, ticketSeen: false, lastTicketBell: nowBell(), ticketSource: source }) });
+  // the "on its way" lock: written once the transaction left this browser, cleared when the chain says it failed or
+  // expired (review finding 1, re-check major); an unknown outcome keeps it
+  return act('FileTicket', { v: { sites }, fields: { sites },
+    onSent: () => saveLandPatch({ lastTicket: sites, ticketSeen: false, lastTicketBell: bell, ticketSource: source,
+      ...(FS.landRec?.landEnd ? { landEnd: { ...FS.landRec.landEnd, refiled: true } } : {}) }),
+    onLost: () => saveLandPatch({ ticketSeen: true }) });
 }
 
 // ------------------------------------------------------------------ start

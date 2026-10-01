@@ -495,4 +495,9 @@ export default {
   '拠点はまだありません。入植希望を自動で出しました（次の鐘ごろに決まります）。': 'No holding yet. A site ticket was filed automatically (decided around the next bell).',
   '州 {0},{1} の拠点を失いました。入植希望を自動でもう一度出します': 'You lost your holding in province {0},{1}. A new site ticket is filed automatically',
   '州 {0},{1} の仮の拠点は押し出されました。入植希望を自動でもう一度出します': 'Your provisional holding in province {0},{1} was displaced. A new site ticket is filed automatically',
+  '新しい入植希望を自動で出しました。': 'A new site ticket was filed automatically.',
+  '空いた区画はありますが、この鐘の入植希望の枠がいっぱいです。次の鐘に自動で出します。': 'There are free sites, but this bell\'s ticket slots there are full. It is filed automatically at the next bell.',
+  'この鐘の入植希望の枠がいっぱいです。次の鐘に自動で出します。': 'This bell\'s ticket slots are full. It is filed automatically at the next bell.',
+  '州 {0},{1} の拠点を失いました': 'You lost your holding in province {0},{1}',
+  '州 {0},{1} の仮の拠点は押し出されました': 'Your provisional holding in province {0},{1} was displaced',
 };
