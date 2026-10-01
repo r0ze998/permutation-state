@@ -302,4 +302,17 @@ export default {
   '{0} · ほか {1}': '{0} · {1} more',
   '建設 あと {0}': 'Built in {0}',
   '{0} 満杯まで {1}': '{0} full in {1}',
+
+  // ---- the title card and the bell toll (intro/title.mjs)
+  '第{0}季': 'Season {0}',
+  '{0} つの勢力': '{0} factions',
+  '{0} の拠点': n => plural(n, '{0} holding', '{0} holdings'),
+  '観戦をはじめる': 'Start watching',
+  '練習をはじめる': 'Start practising',
+  '辺境へ入る': 'Enter the Frontier',
+  '六つの勢力。十分ごとの鐘。封じられた進軍。': 'Six factions. A bell every ten minutes. Every march sealed.',
+  '大協約の地を中心に、六つの勢力が霧の辺境へ広がっていく。': 'From the Concord at its heart, six factions spread into the misted frontier.',
+  '十分ごとに鐘が鳴る。そのあいだに出された進軍はすべて封をされ、行き先は誰にもわからない。': 'Every ten minutes a bell tolls. Each march sent before it is sealed: no one knows where it goes.',
+  '鐘が鳴ると、同じ州に着いた軍勢がいっせいにぶつかる。人が増えれば、霧の向こうに新しい輪がひらく。': 'When the bell tolls, every host that reached the same province clashes at once. As the people grow, a new ring opens beyond the mist.',
+  'タイトルを見る': 'Show the title',
 };

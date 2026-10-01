@@ -252,7 +252,10 @@ export class FrontierMap {
     const { width, height } = this.size();
     if (this.canvas.width !== Math.round(width * dpr)) { this.canvas.width = Math.round(width * dpr); this.canvas.height = Math.round(height * dpr); }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = '#e9e5d8';
+    // the world floats on a sea of mist: deep at the edges, lighter where the eye rests
+    const sea = ctx.createRadialGradient(width / 2, height * 0.45, Math.min(width, height) * 0.1, width / 2, height / 2, Math.max(width, height) * 0.75);
+    sea.addColorStop(0, '#2c4a45'); sea.addColorStop(0.6, '#1d3531'); sea.addColorStop(1, '#0f1f1c');
+    ctx.fillStyle = sea;
     ctx.fillRect(0, 0, width, height);
     const src = this.source();
     if (!this.fitted && width > 0 && height > 0) this.fit(src, { width, height });

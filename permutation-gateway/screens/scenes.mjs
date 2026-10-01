@@ -20,6 +20,13 @@ const gone = (page, text) => page.waitForFunction(t => !document.body.textConten
 
 export const SCENES = [
   {
+    id: 'intro', title: 'title card (first visit)', page: 'index.html', stage: 'holding', intro: true,
+    async go(page) {
+      await page.locator('#intro:not([hidden]) .intro-go').waitFor();
+      await page.waitForTimeout(4600);   // the card's entrance has played
+    },
+  },
+  {
     id: 'join', title: 'join and faction', page: 'index.html', stage: 'none',
     async go(page) {
       await click(page, '[data-act="pick-faction"][data-f="2"]');

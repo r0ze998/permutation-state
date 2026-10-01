@@ -88,6 +88,7 @@ import { uiKey, uiStorage, loadUi, saveUi } from './fui.mjs';
 import * as hud from './hud/hud.mjs';
 import * as inspect from './hud/inspect.mjs';
 import * as feed from './hud/feed.mjs';
+import * as title from './intro/title.mjs';
 import { createRoster } from './people/roster.mjs';
 import * as scene from './people/scene.mjs';
 import { activityText } from './people/activity.mjs';
@@ -177,7 +178,7 @@ export function panelMarkup(FS) {
     <label class="choice"><input type="checkbox" data-act="autopan" ${FS.ui?.autoPan ? 'checked' : ''}>${L`自分に関わる戦いが決着したら、地図をそこへ動かして見せる`}</label>
     <button type="button" class="btn" data-act="forget">${L`この端末からこのシーズンの鍵を消す`}</button>
     ${onboardingCard.renderRestore(FS)}
-    <p><button type="button" class="btn" data-act="practice-open">${L`練習モードを開く`}</button></p>
+    <p><button type="button" class="btn" data-act="practice-open">${L`練習モードを開く`}</button> <button type="button" class="btn" data-act="intro-open">${L`タイトルを見る`}</button></p>
     <p><a href="practice.html">${L`練習`}</a> · <a href="spectate.html">${L`観戦`}</a></p></section>`);
   return parts;
 }
@@ -281,6 +282,8 @@ function setHtmlIfChanged(el, markup) {
 /** Every second: the bell pill's bar and urgency, the resource strip, the attention pill. */
 function renderHudTick(now) {
   const m = hud.bellModel(FS.clock, now);
+  ringToll(m.bell);
+  renderIntro();
   const pill = $('bell-pill');
   if (pill) {
     if (pill.dataset.urgency !== m.urgency) pill.dataset.urgency = m.urgency;
@@ -390,6 +393,62 @@ function autoBattles() {
   }
 }
 
+// ------------------------------------------------------------------ the title and the bell toll (intro/title.mjs)
+let introDolly = null;
+function introLive() {
+  const total = hud.standings(FS.overviews).reduce((a, r) => a + r.holdings, 0);
+  const bell = FS.clock ? bellChip(FS.clock, FS.chain?.now() ?? null).bell : null;
+  return title.liveLine({ seasonId: FS.record?.season ?? null, bell, holdings: total });
+}
+function renderIntro() {
+  const el = $('intro');
+  if (!el || el.hidden) return;
+  setHtmlIfChanged(el, title.render({ mode: FS.mode, live: introLive() }));
+}
+export function openIntro() {
+  const el = $('intro');
+  if (!el) return;
+  el.hidden = false;
+  lastHtml.delete('intro');
+  renderIntro();
+  el.querySelector('.intro-go')?.focus({ preventScroll: true });
+  // the camera drifts in from the mist toward the fitted view
+  if (mapRef) {
+    let target = null, t0 = 0;
+    const dur = 7000;
+    introDolly = () => {
+      if (el.hidden) { introDolly = null; return; }
+      // wait for the map's first fit (the season's rings), then drift from far above the Concord to it
+      if (!target) {
+        if (!FS.record) { requestAnimationFrame(introDolly); return; }
+        mapRef.fit(mapRef.source(), mapRef.size());   // every open ring, now that the season says how many
+        target = { ...mapRef.view }; t0 = performance.now();
+      }
+      const k = (performance.now() - t0) / dur;
+      mapRef.setView(title.dolly(target, k));
+      if (k < 1) requestAnimationFrame(introDolly); else introDolly = null;
+    };
+    requestAnimationFrame(introDolly);
+  }
+}
+export function closeIntro() {
+  const el = $('intro');
+  if (!el || el.hidden) return;
+  el.hidden = true;
+  title.markSeen(globalThis.localStorage);
+  $('frontier-map')?.focus({ preventScroll: true });
+}
+let tollBell = null;
+/** The bell toll: the new bell's number rings over the map for a moment. */
+function ringToll(bell) {
+  if (!Number.isInteger(bell)) return;
+  if (tollBell !== null && bell > tollBell) {
+    const el = $('bell-toll');
+    if (el) { el.textContent = title.tollText(bell); el.classList.remove('ring'); void el.offsetWidth; el.classList.add('ring'); }
+  }
+  tollBell = bell;
+}
+
 /** Move the map to an attention item and open its tab. */
 function goToItem(x) {
   if (!x) return;
@@ -409,6 +468,8 @@ function goToItem(x) {
 
 /** The HUD's actions (data-act): cycle the attention items, jump to one, choose the active holding. */
 export const HUD_ACTIONS = {
+  'intro-close': () => closeIntro(),
+  'intro-open': () => openIntro(),
   'feed-go': d => goToItem((FS.feed ?? []).find(x => x.id === d.id)),
   'feed-dismiss': d => { FS.feedDismissed = new Set([...(FS.feedDismissed ?? []), d.id]); renderFeed(); },
   'feed-filter': d => { FS.feedFilter = feed.FEED_FILTERS.includes(d.f) ? d.f : 'all'; invalidate('panel'); },
@@ -545,6 +606,10 @@ export function w4Bind(name, value) {
 
 /** Route the screens' clicks, forms and bound inputs: the wave-4 screens here, the play screens to the controller (game page only). */
 function delegate(doc) {
+  doc.addEventListener('keydown', e => {
+    const intro = $('intro');
+    if (intro && !intro.hidden && (e.key === 'Escape' || e.key === 'Enter')) { e.preventDefault(); closeIntro(); }
+  });
   const play = FS.mode === 'play';
   const run = p => Promise.resolve(p).catch(e => { FS.notice = { ok: false, code: e?.code ?? 'Error', text: String(e?.message ?? e) }; invalidate('panel'); });
   const action = name => HUD_ACTIONS[name] ?? W4_ACTIONS[name] ?? (play ? ACTIONS[name] : undefined);
@@ -695,6 +760,7 @@ export async function boot() {
     }
   }
   invalidate('chip', 'status', 'panel');
+  if (title.shouldOpen({ storage: globalThis.localStorage, search: globalThis.location?.search ?? '' })) openIntro();
   if (await loadSeason(herald)) {
     await loadOverviews(herald);
     // Practice runs without a season too (the kernel only needs its own ruleset); a season pins it and keeps its flags.

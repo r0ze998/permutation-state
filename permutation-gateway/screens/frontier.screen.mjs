@@ -83,7 +83,7 @@ for (const vp of viewports) {
       const context = await browser.newContext({ viewport: { width: vp.width, height: vp.height }, deviceScaleFactor: 1, isMobile: vp.phone, hasTouch: vp.phone, locale: 'ja-JP', timezoneId: 'UTC', reducedMotion: 'reduce' });
       const problems = [];
       try {
-        await context.addInitScript(initScript, { storage: storageFor(srv.viewer, { stage: scene.stage, lang: 'ja' }) });
+        await context.addInitScript(initScript, { storage: storageFor(srv.viewer, { stage: scene.stage, lang: 'ja', intro: !!scene.intro }) });
         const page = await context.newPage();
         await page.clock.setFixedTime(new Date(LATEST_UNIX * 1000 + 500));
         page.on('console', m => { if (m.type() === 'error') problems.push(`${scene.id} ${vp.id}: console error: ${m.text()}`); });

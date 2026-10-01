@@ -52,8 +52,10 @@ export async function viewer() {
 }
 
 /** localStorage the page finds at load for a viewer stage and language. */
-export function storageFor(v, { stage, lang }) {
+export function storageFor(v, { stage, lang, intro = false }) {
   const out = { 'ps-lang': lang, 'ps-dev-wallet': toHex(DEV_SEED), 'ps-wallet': DEV_WALLET_NAME };
+  // a returning player: the title card was seen (the "intro" scene opens it as a first visit does)
+  if (!intro) out['ps-fintro:v1'] = '1';
   if (stage !== 'none') out[`ps-fsession:localnet:${PROGRAM}:${SEASON_ID}:${v.wallet}`] = toHex(SESSION_SEED);
   return out;
 }
