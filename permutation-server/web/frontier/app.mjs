@@ -215,6 +215,7 @@ export function peopleSource() {
     bell,
     own: FS.holdings ?? [],
     columnLabel: d => L`出陣 · 第${fmtNum(d.arriveBell)}鐘に到着`,
+    demo: ART_PREVIEW && ART_Q.get('acts') === '1',
   } };
   return peopleCache.value;
 }

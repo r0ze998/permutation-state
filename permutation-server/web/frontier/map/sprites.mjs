@@ -539,6 +539,16 @@ export class SpriteArt {
     // pass 2c: people (people/crowds.mjs): townsfolk, carriers, departing columns at their origin, scouts
     // what every tile is doing (people/activity.mjs); kept for the page's hover tip
     const activities = people ? activitiesFor(entries, { bell: people.bell ?? 0, departures: people.departures ?? [], explores: people.explores ?? [], own: people.own ?? [] }) : null;
+    // preview only (?art=1&acts=1): sample activities on the drawn holdings
+    if (activities && people.demo) for (const t of tiles) {
+      if (t.state !== 1 || !(t.owner < 6) || t.fog === 'unopened') continue;
+      const k = ['walls', 'muster', 'rest', 'battle', 'garrison', 'depart', 'explore', null][((t.q * 7 + t.r * 3) % 8 + 8) % 8];
+      if (!k) continue;
+      const key = `${t.p},${t.pq},${t.idx}`;
+      if (k === 'depart') { people.departures = [...(people.departures ?? []), { p: t.p, q: t.pq, tile: t.idx, faction: t.owner, troops: 2000, arriveBell: (people.bell ?? 0) + 3 }]; }
+      if (k === 'explore') { people.explores = [...(people.explores ?? []), { p: t.p, q: t.pq, tiles: [t.idx], faction: t.owner }]; }
+      activities.set(key, [{ kind: k, faction: t.owner, until: (people.bell ?? 0) + 2, n: 400 }, ...(activities.get(key) ?? [])]);
+    }
     this.activities = activities;
     this.tiles = tiles;
     const moving = people ? paintPeople(ctx, { tiles, zoom, departures: people.departures ?? [], explores: people.explores ?? [], viewerFaction, columnLabel: people.columnLabel ?? null, activities }) : 0;

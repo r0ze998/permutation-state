@@ -102,6 +102,105 @@ export function figure(ctx, x, y, s, { kind = 'folk', cloth = '#8a6a46', trim = 
   ctx.globalAlpha = 1;
 }
 
+/** Actors (what a tile is doing) are drawn this many times a townsperson's height (Civ: units read bigger than buildings). */
+export const ACTOR_SCALE = 3.6;
+const INK = '#1d1a16';
+
+/**
+ * A character doing something, readable at a glance: outlined body,
+ * arms, the tool of its work and an exaggerated motion. `pose`:
+ * 'hammer' | 'spear' | 'drill' | 'sword' | 'scout' | 'sit' | 'march'.
+ * Feet at (x, y), `s` tall (world px); `face` ±1; `step` 0..1.
+ */
+export function actor(ctx, x, y, s, { pose = 'spear', cloth = '#8a6a46', trim = '#3a3a34', skin = SKIN[1], step = 0, face = 1, alpha = 1, hair = '#3b2a20' } = {}) {
+  const w = s * 0.035;
+  const sw = Math.sin(step * Math.PI * 2);
+  const walking = pose === 'march' || pose === 'scout';
+  const bob = walking ? Math.abs(sw) * s * 0.04 : pose === 'drill' ? (step < 0.5 ? s * 0.03 : 0) : 0;
+  const leg = walking ? sw * s * 0.13 : pose === 'drill' ? (step < 0.5 ? s * 0.1 : 0) : 0;
+  const seated = pose === 'sit';
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  // shadow
+  ctx.globalAlpha = alpha * 0.3; ctx.fillStyle = '#120f0c';
+  ctx.beginPath(); ctx.ellipse(x, y, s * 0.26, s * 0.075, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = alpha;
+  const hip = y - (seated ? s * 0.16 : s * 0.42) - bob, shoulder = y - (seated ? s * 0.5 : s * 0.78) - bob, head = shoulder - s * 0.13;
+  const body = shade(cloth, -0.0), dark = shade(cloth, -0.4), boot = '#3b2b1e';
+  // legs (seated: folded in front)
+  ctx.strokeStyle = INK; ctx.lineWidth = s * 0.11 + w * 2;
+  const legs = seated ? [[x - s * 0.05, hip, x + face * s * 0.22, y - s * 0.06], [x + s * 0.05, hip, x + face * s * 0.26, y - s * 0.02]]
+    : [[x - s * 0.06, hip, x - s * 0.06 + leg, y - s * 0.03], [x + s * 0.06, hip, x + s * 0.06 - leg, y - s * 0.03]];
+  for (const [a, b, c, d] of legs) { ctx.beginPath(); ctx.moveTo(a, b); ctx.lineTo(c, d); ctx.stroke(); }
+  ctx.strokeStyle = shade(cloth, -0.55); ctx.lineWidth = s * 0.11;
+  for (const [a, b, c, d] of legs) { ctx.beginPath(); ctx.moveTo(a, b); ctx.lineTo(c, d); ctx.stroke(); }
+  ctx.fillStyle = boot; for (const [, , c, d] of legs) { ctx.beginPath(); ctx.ellipse(c + face * s * 0.02, d, s * 0.07, s * 0.04, 0, 0, Math.PI * 2); ctx.fill(); }
+  // back arm (shield arm for soldiers)
+  const armed = pose === 'spear' || pose === 'drill' || pose === 'sword' || pose === 'march';
+  const backHand = { x: x - face * s * 0.2, y: shoulder + s * 0.26 };
+  ctx.strokeStyle = INK; ctx.lineWidth = s * 0.09 + w * 2;
+  ctx.beginPath(); ctx.moveTo(x - face * s * 0.1, shoulder + s * 0.04); ctx.lineTo(backHand.x, backHand.y); ctx.stroke();
+  ctx.strokeStyle = dark; ctx.lineWidth = s * 0.09; ctx.stroke();
+  if (armed) {
+    ctx.fillStyle = trim; ctx.strokeStyle = INK; ctx.lineWidth = w * 1.4;
+    ctx.beginPath(); ctx.ellipse(backHand.x - face * s * 0.02, backHand.y - s * 0.06, s * 0.13, s * 0.17, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = cloth; ctx.beginPath(); ctx.arc(backHand.x - face * s * 0.02, backHand.y - s * 0.06, s * 0.05, 0, Math.PI * 2); ctx.fill();
+  }
+  // torso: a tunic with a belt, cloak for scouts, apron for builders
+  ctx.fillStyle = body; ctx.strokeStyle = INK; ctx.lineWidth = w * 1.4;
+  ctx.beginPath();
+  ctx.moveTo(x - s * 0.17, hip + s * 0.06);
+  ctx.quadraticCurveTo(x - s * 0.2, shoulder + s * 0.08, x - s * 0.1, shoulder);
+  ctx.lineTo(x + s * 0.1, shoulder);
+  ctx.quadraticCurveTo(x + s * 0.2, shoulder + s * 0.08, x + s * 0.17, hip + s * 0.06);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = trim; ctx.fillRect(x - s * 0.17, hip - s * 0.04, s * 0.34, s * 0.06);
+  if (pose === 'hammer') { ctx.fillStyle = '#a07a4a'; ctx.beginPath(); ctx.moveTo(x - s * 0.12, shoulder + s * 0.12); ctx.lineTo(x + s * 0.12, shoulder + s * 0.12); ctx.lineTo(x + s * 0.14, hip + s * 0.06); ctx.lineTo(x - s * 0.14, hip + s * 0.06); ctx.closePath(); ctx.fill(); ctx.stroke(); }
+  if (pose === 'scout') { ctx.fillStyle = dark; ctx.beginPath(); ctx.moveTo(x - s * 0.12, shoulder - s * 0.02); ctx.quadraticCurveTo(x - face * s * 0.34, hip, x - face * s * 0.26, y - s * 0.12); ctx.lineTo(x + face * s * 0.05, hip + s * 0.04); ctx.closePath(); ctx.fill(); ctx.stroke(); }
+  // head
+  ctx.fillStyle = skin; ctx.strokeStyle = INK; ctx.lineWidth = w * 1.4;
+  ctx.beginPath(); ctx.arc(x + face * s * 0.01, head, s * 0.12, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = INK; ctx.beginPath(); ctx.arc(x + face * s * 0.06, head - s * 0.01, s * 0.018, 0, Math.PI * 2); ctx.fill();
+  if (armed) { // a kettle helmet with a rim
+    ctx.fillStyle = '#9aa0a6'; ctx.beginPath(); ctx.arc(x, head - s * 0.02, s * 0.13, Math.PI * 1.02, Math.PI * 1.98); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x - s * 0.18, head - s * 0.01); ctx.lineTo(x + s * 0.18, head - s * 0.01); ctx.lineWidth = s * 0.035; ctx.strokeStyle = '#6d7277'; ctx.stroke();
+  } else if (pose === 'scout') {
+    ctx.fillStyle = dark; ctx.strokeStyle = INK; ctx.lineWidth = w * 1.4; ctx.beginPath(); ctx.arc(x, head, s * 0.15, Math.PI * 1.05, Math.PI * 1.95 + 0.4); ctx.fill(); ctx.stroke();
+  } else {
+    ctx.fillStyle = hair; ctx.beginPath(); ctx.arc(x - face * s * 0.01, head - s * 0.03, s * 0.12, Math.PI * 1.05, Math.PI * 1.95); ctx.fill();
+  }
+  // front arm and the tool of the work
+  const sh = { x: x + face * s * 0.1, y: shoulder + s * 0.04 };
+  let hand, tool = null;
+  if (pose === 'hammer') { const a = -0.3 + (sw > 0 ? sw : sw * 0.2) * 1.6; hand = { x: sh.x + face * Math.cos(a) * s * 0.26, y: sh.y - Math.sin(a) * s * 0.26 }; tool = 'hammer'; }
+  else if (pose === 'sword') { const a = 0.2 + sw * 1.2; hand = { x: sh.x + face * Math.cos(a) * s * 0.24, y: sh.y - Math.sin(a) * s * 0.24 }; tool = 'sword'; }
+  else if (pose === 'scout') { hand = { x: sh.x + face * s * 0.12, y: sh.y + s * 0.2 }; tool = 'staff'; }
+  else if (pose === 'sit') { hand = { x: sh.x + face * s * 0.18, y: sh.y + s * 0.16 }; tool = 'bowl'; }
+  else { hand = { x: sh.x + face * s * 0.12, y: sh.y + s * 0.18 }; tool = 'spear'; }
+  ctx.strokeStyle = INK; ctx.lineWidth = s * 0.09 + w * 2; ctx.beginPath(); ctx.moveTo(sh.x, sh.y); ctx.lineTo(hand.x, hand.y); ctx.stroke();
+  ctx.strokeStyle = body; ctx.lineWidth = s * 0.09; ctx.stroke();
+  ctx.fillStyle = skin; ctx.beginPath(); ctx.arc(hand.x, hand.y, s * 0.045, 0, Math.PI * 2); ctx.fill();
+  ctx.lineWidth = s * 0.045;
+  if (tool === 'hammer') {
+    const a = Math.atan2(hand.y - sh.y, hand.x - sh.x), hx = hand.x + Math.cos(a) * s * 0.2, hy = hand.y + Math.sin(a) * s * 0.2;
+    ctx.strokeStyle = '#6b5032'; ctx.beginPath(); ctx.moveTo(hand.x, hand.y); ctx.lineTo(hx, hy); ctx.stroke();
+    ctx.save(); ctx.translate(hx, hy); ctx.rotate(a); ctx.fillStyle = '#7d848a'; ctx.strokeStyle = INK; ctx.lineWidth = w; ctx.fillRect(-s * 0.04, -s * 0.09, s * 0.08, s * 0.18); ctx.strokeRect(-s * 0.04, -s * 0.09, s * 0.08, s * 0.18); ctx.restore();
+  } else if (tool === 'sword') {
+    const a = Math.atan2(hand.y - sh.y, hand.x - sh.x) - face * 0.6;
+    ctx.strokeStyle = INK; ctx.lineWidth = s * 0.06; ctx.beginPath(); ctx.moveTo(hand.x, hand.y); ctx.lineTo(hand.x + Math.cos(a) * s * 0.42, hand.y + Math.sin(a) * s * 0.42); ctx.stroke();
+    ctx.strokeStyle = '#e4e8ec'; ctx.lineWidth = s * 0.035; ctx.stroke();
+  } else if (tool === 'spear') {
+    ctx.strokeStyle = '#5b4632'; ctx.lineWidth = s * 0.045; ctx.beginPath(); ctx.moveTo(hand.x, y - s * 0.02); ctx.lineTo(hand.x, y - s * 1.22 - bob); ctx.stroke();
+    ctx.fillStyle = '#c9ced2'; ctx.strokeStyle = INK; ctx.lineWidth = w; ctx.beginPath(); ctx.moveTo(hand.x, y - s * 1.36 - bob); ctx.lineTo(hand.x - s * 0.05, y - s * 1.2 - bob); ctx.lineTo(hand.x + s * 0.05, y - s * 1.2 - bob); ctx.closePath(); ctx.fill(); ctx.stroke();
+  } else if (tool === 'staff') {
+    ctx.strokeStyle = '#6b5032'; ctx.lineWidth = s * 0.04; ctx.beginPath(); ctx.moveTo(hand.x + face * s * 0.04, y - s * 0.02); ctx.lineTo(hand.x - face * s * 0.02, shoulder - s * 0.2); ctx.stroke();
+  } else if (tool === 'bowl') {
+    ctx.fillStyle = '#a07a4a'; ctx.strokeStyle = INK; ctx.lineWidth = w; ctx.beginPath(); ctx.arc(hand.x + face * s * 0.03, hand.y, s * 0.06, 0, Math.PI); ctx.fill(); ctx.stroke();
+  }
+  ctx.restore();
+}
+
 /** A seated figure (a resting host). */
 function sitter(ctx, x, y, s, { cloth, skin = SKIN[1], trim = null, face = 1 }) {
   ctx.globalAlpha = 0.25; ctx.fillStyle = '#1a1612'; ctx.beginPath(); ctx.ellipse(x, y, s * 0.26, s * 0.08, 0, 0, 7); ctx.fill(); ctx.globalAlpha = 1;
@@ -170,60 +269,62 @@ export function paintPeople(ctx, { tiles = [], zoom = 1, t = (globalThis.perform
       list.push({ x: u.x + d[0] * 0.75 * there, y: u.y + d[1] * 0.75 * there + RADIUS * 0.1, kind: 'carrier', cloth: '#7a6a4a', skin: SKIN[2], step: (t * 1.8) % 1, face: (k < 0.5 ? d[0] : -d[0]) >= 0 ? 1 : -1 });
     }
   }
-  // what the tile is doing (people/activity.mjs): builders, drilling recruits, guards, resting hosts, a fight
-  if (activities && full) for (const u of tiles) {
+  // what the tile is doing (people/activity.mjs): one or two big actors per activity, in front of the holding
+  if (activities) for (const u of tiles) {
     const acts = activities.get(`${u.p},${u.pq},${u.idx}`);
     if (!acts || !seen(u.fog ?? fogOf(u.p, u.pq))) continue;
     const kinds = new Set(acts.map(a => a.kind));
     const f = acts.find(a => a.faction < 6)?.faction ?? u.owner;
-    const cloth = shade(FACTION_FILL[f] ?? '#8a8a80', -0.1), trim = FACTION_DARK[f];
-    const at = (dx, dy) => ({ x: u.x + dx * RADIUS, y: u.y + dy * RADIUS * FLATTEN + RADIUS * 0.1 });
-    if (kinds.has('walls') || kinds.has('build')) for (let i = 0; i < 3; i++) {
-      const p = at(-0.45 + i * 0.42, 0.42 - (i % 2) * 0.12);
-      list.push({ ...p, kind: 'builder', cloth: '#8a6a46', skin: SKIN[(i + 2) % SKIN.length], step: (t * 1.4 + i * 0.33) % 1, face: i % 2 ? -1 : 1 });
+    const cloth = shade(FACTION_FILL[f] ?? '#8a8a80', -0.05), trim = FACTION_DARK[f] ?? '#3a3a34';
+    const at = (dx, dy) => ({ x: u.x + dx * RADIUS, y: u.y + dy * RADIUS * FLATTEN + RADIUS * 0.12 });
+    const ph = hash(u.q, u.r ?? u.idx, 5);
+    const big = (p, o) => list.push({ ...p, big: true, cloth, trim, skin: SKIN[Math.floor(hash(p.x | 0, p.y | 0) * SKIN.length)], ...o });
+    if (kinds.has('battle')) {
+      const p = at(-0.05, 0.42);
+      big({ x: p.x - RADIUS * 0.16, y: p.y }, { pose: 'sword', step: (t * 1.6 + ph) % 1, face: 1 });
+      big({ x: p.x + RADIUS * 0.16, y: p.y }, { pose: 'sword', step: (t * 1.6 + ph + 0.5) % 1, face: -1, cloth: '#5f6a74', trim: '#2a2f34' });
+      if (((t * 1.6 + ph) % 1) < 0.22) list.push({ x: p.x, y: p.y - RADIUS * 0.5, spark: true, big: true });
+      continue;
     }
-    if (kinds.has('muster') || kinds.has('recruit')) for (let i = 0; i < 6; i++) {
-      const p = at(-0.3 + (i % 3) * 0.3, -0.05 + Math.floor(i / 3) * 0.24);
-      list.push({ ...p, kind: 'soldier', cloth, trim, skin: SKIN[i % SKIN.length], step: Math.floor(t * 2) % 2 ? 0.25 : 0, face: 1 });
-    }
-    if (kinds.has('garrison')) {
-      const n = Math.min(4, 1 + Math.floor(Math.log10(1 + (acts.find(a => a.kind === 'garrison')?.n ?? 0))));
-      for (let i = 0; i < n; i++) { const a = (i / n) * Math.PI * 2 + 0.6; const p = at(Math.cos(a) * 0.62, Math.sin(a) * 0.62); list.push({ ...p, kind: 'soldier', cloth, trim, skin: SKIN[(i + 1) % SKIN.length], step: 0, face: Math.cos(a) >= 0 ? 1 : -1 }); }
-    }
-    if (kinds.has('rest')) for (let i = 0; i < 3; i++) { const p = at(-0.3 + i * 0.3, 0.38); list.push({ ...p, kind: 'sitter', cloth, trim, skin: SKIN[i % SKIN.length], face: i ? -1 : 1 }); }
-    if (kinds.has('rest')) list.push({ ...at(0, 0.52), fire: true });
-    if (kinds.has('battle')) for (let i = 0; i < 3; i++) {
-      const p = at(-0.38 + i * 0.36, 0.1 + (i % 2) * 0.16);
-      list.push({ ...p, x: p.x - RADIUS * 0.09, kind: 'fighter', cloth, trim, skin: SKIN[i % SKIN.length], step: (t * 2.6 + i * 0.4) % 1, face: 1 });
-      list.push({ ...p, x: p.x + RADIUS * 0.09, kind: 'fighter', cloth: '#5f6a74', trim: '#2a2f34', skin: SKIN[(i + 3) % SKIN.length], step: (t * 2.6 + i * 0.4 + 0.5) % 1, face: -1 });
-      if (((t * 2.6 + i * 0.4) % 1) < 0.18) list.push({ x: p.x, y: p.y - RADIUS * 0.12, spark: true });
+    if (kinds.has('walls') || kinds.has('build')) {
+      big(at(-0.3, 0.44), { pose: 'hammer', step: (t * 1.1 + ph) % 1, face: 1, cloth: '#8a6a46', trim });
+      big(at(0.32, 0.36), { pose: 'hammer', step: (t * 1.1 + ph + 0.45) % 1, face: -1, cloth: '#7a6a52', trim });
+    } else if (kinds.has('muster') || kinds.has('recruit')) {
+      for (let i = 0; i < 3; i++) big(at(-0.3 + i * 0.3, 0.44), { pose: 'drill', step: (t * 1.2) % 1, face: 1 });
+    } else if (kinds.has('rest')) {
+      big(at(-0.22, 0.46), { pose: 'sit', face: 1 }); big(at(0.26, 0.4), { pose: 'sit', face: -1 });
+      list.push({ ...at(0.02, 0.5), fire: true, big: true });
+    } else if (kinds.has('garrison')) {
+      big(at(0.36, 0.38), { pose: 'spear', step: 0, face: -1 });
     }
   }
   // departing columns: soldiers circle their own tile (no heading) and fade
   for (const dep of departures) {
     if (!seen(fogOf(dep.p, dep.q)) && dep.faction !== viewerFaction) continue;
     const c = hexCentre(dep.p, dep.q, dep.tile);
-    const n = Math.max(4, Math.min(12, Math.ceil((dep.troops ?? 500) / 400)));
+    const n = 5;
     for (let i = 0; i < n; i++) {
       const a = t * 0.35 + (i / n) * Math.PI * 2;
-      list.push({ x: c.x + Math.cos(a) * RADIUS * 0.42, y: c.y + Math.sin(a) * RADIUS * 0.42 * FLATTEN + RADIUS * 0.1, kind: 'soldier', cloth: shade(FACTION_FILL[dep.faction] ?? '#8a8a80', -0.1),
-        trim: FACTION_DARK[dep.faction], skin: SKIN[i % SKIN.length], step: (t * 2 + i * 0.37) % 1, face: Math.sin(a) >= 0 ? -1 : 1, alpha: 0.95 });
+      list.push({ x: c.x + Math.cos(a) * RADIUS * 0.5, y: c.y + Math.sin(a) * RADIUS * 0.5 * FLATTEN + RADIUS * 0.1, big: true, pose: 'march', cloth: shade(FACTION_FILL[dep.faction] ?? '#8a8a80', -0.05),
+        trim: FACTION_DARK[dep.faction], skin: SKIN[i % SKIN.length], step: (t * 1.4 + i * 0.37) % 1, face: Math.sin(a) >= 0 ? -1 : 1 });
     }
-    list.push({ banner: true, x: c.x, y: c.y + RADIUS * 0.12, faction: dep.faction });
+    list.push({ banner: true, big: true, x: c.x, y: c.y + RADIUS * 0.12, faction: dep.faction });
   }
   // scouts on explored tiles
   for (const ex of explores) for (const idx of ex.tiles ?? []) {
     const c = hexCentre(ex.p, ex.q, idx);
     const a = t * 0.2 + hash(ex.p, idx) * 6.28;
-    list.push({ x: c.x + Math.cos(a) * RADIUS * 0.25, y: c.y + Math.sin(a) * RADIUS * 0.25 * FLATTEN + RADIUS * 0.1, kind: 'scout', cloth: FACTION_FILL[ex.faction] ?? '#6a6a5e', skin: SKIN[3], step: (t * 1.2) % 1, face: Math.cos(a + 1.57) >= 0 ? 1 : -1 });
+    list.push({ x: c.x + Math.cos(a) * RADIUS * 0.25, y: c.y + Math.sin(a) * RADIUS * 0.25 * FLATTEN + RADIUS * 0.15, big: true, pose: 'scout', cloth: FACTION_FILL[ex.faction] ?? '#6a6a5e', trim: FACTION_DARK[ex.faction] ?? '#3a3a34', skin: SKIN[3], step: (t * 1.0) % 1, face: Math.cos(a + 1.57) >= 0 ? 1 : -1 });
   }
   // back to front, within the budget (columns and scouts first, they matter most)
-  const kept = list.length > PEOPLE_BUDGET ? [...list.filter(x => x.kind !== 'folk'), ...list.filter(x => x.kind === 'folk')].slice(0, PEOPLE_BUDGET) : list;
+  const kept = list.length > PEOPLE_BUDGET ? [...list.filter(x => x.big || x.kind !== 'folk'), ...list.filter(x => !x.big && x.kind === 'folk')].slice(0, PEOPLE_BUDGET) : list;
   kept.sort((a, b) => a.y - b.y);
+  const S = s * ACTOR_SCALE;
   for (const f of kept) {
-    if (f.banner) banner(ctx, f.x, f.y, s, f.faction, t);
-    else if (f.fire) campfire(ctx, f.x, f.y, s, t);
-    else if (f.spark) spark(ctx, f.x, f.y, s);
+    if (f.banner) banner(ctx, f.x, f.y, f.big ? S * 0.8 : s, f.faction, t);
+    else if (f.fire) campfire(ctx, f.x, f.y, f.big ? S * 0.6 : s, t);
+    else if (f.spark) spark(ctx, f.x, f.y, f.big ? S : s);
+    else if (f.big) actor(ctx, f.x, f.y, S, f);
     else if (f.kind === 'sitter') sitter(ctx, f.x, f.y, s, f);
     else figure(ctx, f.x, f.y, s, f);
   }
