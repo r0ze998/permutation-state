@@ -57,6 +57,14 @@ export const saveBook = (storage, key, book) => storage.set(key, JSON.stringify(
 
 const same = (a, b) => a.host === b.host && a.transitSlot === b.transitSlot && a.arriveBell === b.arriveBell;
 
+/** `{p, q, tile, dirs}` of a march's planned route (origin and hex directions 0–5), or null. */
+export function routeOf(m) {
+  const o = m.origin, d = m.route?.dirs;
+  if (!o || !Array.isArray(d) || d.length > 64 || !d.every(x => Number.isInteger(x) && x >= 0 && x < 6)) return null;
+  if (![o.p, o.q, o.tile].every(Number.isInteger)) return null;
+  return { p: o.p, q: o.q, tile: o.tile, dirs: [...d] };
+}
+
 /**
  * A new entry from a sealing result (bytes as Uint8Array). Refuses any
  * field named like the seal key. `random` draws the reveal delay.
@@ -76,6 +84,8 @@ export function entryOf(m, random = Math.random) {
     sealRoot_hex: toHex(m.sealRoot),
     ctHash_hex: toHex(m.ctHash),
     ...(m.seal ? { seal_b64: toBase64(m.seal) } : {}),
+    // the planned route, so this browser can walk its own column along it (design session: units redesign)
+    ...(routeOf(m) ? { route: routeOf(m) } : {}),
     round: Number(m.round),
     tip: String(m.tip),
     state: 'sealed',

@@ -22,8 +22,8 @@ import { RADIUS, FLATTEN, project } from '../../map.mjs';
 import { tileHex } from '../fgeo.mjs';
 import { troopsOf } from '../fmarch.mjs';
 import { FACTION_FILL, FACTION_DARK, shade } from './avatar.mjs';
-import { SKIN } from './identity.mjs';
-import { actor, ACTOR_SCALE, zoomBoost } from './crowds.mjs';
+import { zoomBoost } from './crowds.mjs';
+import { baseDisc, unitFigure, UNIT_KINDS } from './units.mjs';
 
 export const FATES = Object.freeze(['Stays', 'Withdrew', 'Bounced', 'Retreated', 'Destroyed']);
 export const STANCE_POSE = Object.freeze(['hold', 'assault', 'flank', 'brace']);
@@ -46,14 +46,28 @@ export function battleScene({ p, q, bell, inputs, before = null, after = null })
   const byTile = new Map();
   const tileOf = idx => { if (!byTile.has(idx)) byTile.set(idx, { idx, attackers: [], defenders: [] }); return byTile.get(idx); };
   for (const a of arrivals) {
-    tileOf(a.tile).attackers.push({ id: String(a.hostId), faction: a.faction, stance: a.stance ?? 0, before: troopsOf(a.troops), after: a.fate ? troopsOf(a.troopsAfter) : null,
+    tileOf(a.tile).attackers.push({ id: String(a.hostId), faction: a.faction, unit: a.unit ?? 0, stance: a.stance ?? 0, before: troopsOf(a.troops), after: a.fate ? troopsOf(a.troopsAfter) : null,
       fate: FATES[a.fate - 1] ?? null, tag: a.citizenTag ?? null, kind: 'arrival' });
   }
   const alive = new Map((after?.entries ?? []).filter(e => e.state === 1).map(e => [String(e.id), e]));
+  // without the province before the bell (an older report), the defenders are the ones there now: who
+  // stood is known, their losses are not
+  const standIn = !before && after;
+  if (standIn) {
+    for (const e of after.entries ?? []) {
+      if (e.state !== 1 || !byTile.has(e.tile) || arrivals.some(a => String(a.hostId) === String(e.id))) continue;
+      byTile.get(e.tile).defenders.push({ id: String(e.id), faction: e.faction, unit: e.unit ?? 0, stance: 0, before: troopsOf(e.troops), after: null, fate: 'Stays', kind: 'resident' });
+    }
+    const sitesNow = Array.from(after.sites ?? []);
+    (after.siteMirror ?? []).forEach((m, j) => {
+      if (!m || m.state !== 1 || !byTile.has(sitesNow[j]) || troopsOf(m.garrison) <= 0) return;
+      byTile.get(sitesNow[j]).defenders.push({ id: `g${j}`, faction: m.faction, stance: 3, before: troopsOf(m.garrison), after: null, fate: 'Stays', kind: 'garrison' });
+    });
+  }
   for (const e of before?.entries ?? []) {
     if (e.state !== 1 || !byTile.has(e.tile)) continue;
     const now = alive.get(String(e.id));
-    byTile.get(e.tile).defenders.push({ id: String(e.id), faction: e.faction, stance: 0, before: troopsOf(e.troops), after: now ? troopsOf(now.troops) : (after ? 0 : null),
+    byTile.get(e.tile).defenders.push({ id: String(e.id), faction: e.faction, unit: e.unit ?? 0, stance: 0, before: troopsOf(e.troops), after: now ? troopsOf(now.troops) : (after ? 0 : null),
       fate: now ? 'Stays' : after ? 'Destroyed' : null, kind: 'resident' });
   }
   const sites = Array.from(before?.sites ?? []);
@@ -85,7 +99,7 @@ export function residentScene({ p, q, bell, before, after }) {
   for (const e of before.entries ?? []) {
     if (e.state !== 1) continue;
     const now = alive.get(String(e.id));
-    at(e.tile).push({ id: String(e.id), faction: e.faction, stance: 0, before: troopsOf(e.troops), after: now ? troopsOf(now.troops) : 0, fate: now ? 'Stays' : 'Destroyed', kind: 'resident' });
+    at(e.tile).push({ id: String(e.id), faction: e.faction, unit: e.unit ?? 0, stance: 0, before: troopsOf(e.troops), after: now ? troopsOf(now.troops) : 0, fate: now ? 'Stays' : 'Destroyed', kind: 'resident' });
   }
   const sites = Array.from(before.sites ?? []);
   const holderOf = new Map();
@@ -124,22 +138,6 @@ const ease = k => (k <= 0 ? 0 : k >= 1 ? 1 : k * k * (3 - 2 * k));
 const clamp01 = k => Math.max(0, Math.min(1, k));
 const hash = (a, b) => { let h = Math.imul(a | 0, 0x27d4eb2d) ^ Math.imul(b | 0, 0x165667b1); h ^= h >>> 15; return (h >>> 0) / 4294967296; };
 
-/** Where a side's figures stand in a stance, relative to the tile centre (units of RADIUS); side −1 attackers, +1 defenders. */
-function formation(stance, side, n) {
-  const out = [];
-  for (let i = 0; i < n; i++) {
-    const row = Math.floor(i / 3), col = (i % 3) - 1;
-    let x = side * (0.34 + row * 0.16), y = col * 0.26;
-    if (side < 0) {
-      if (stance === 1) { x = side * (0.2 + Math.abs(col) * 0.14 + row * 0.12); }           // assault: a wedge, point forward
-      else if (stance === 2) { y = (col === 0 ? (i % 2 ? 1 : -1) : col) * 0.42; x = side * (0.18 + row * 0.12); } // flank: the wings
-      else if (stance === 3) { x = side * (0.42 + row * 0.08); y = col * 0.18; }               // brace: a tight line
-    }
-    out.push([x, y]);
-  }
-  return out;
-}
-
 /** Playback speeds (UI plan D4, Civ's quick combat): the setting's values and their rates. */
 export const BATTLE_SPEEDS = Object.freeze({ normal: 1, fast: 2.5, off: 0 });
 
@@ -166,7 +164,7 @@ export function paintBattle(ctx, play, { zoom = 1, now = (globalThis.performance
   if (!play) return false;
   const t = battleTime(play, now);
   if (t > PHASE.end) return false;
-  const s = RADIUS * 0.15 * ACTOR_SCALE * 0.9 * zoomBoost(RADIUS * zoom);
+  const s = RADIUS * 0.6 * zoomBoost(RADIUS * zoom);
   for (const tile of play.scene.tiles) {
     const h = tileHex(play.scene.p, play.scene.q, tile.idx);
     const c = project(h.q, h.r);
@@ -184,47 +182,66 @@ export function paintBattle(ctx, play, { zoom = 1, now = (globalThis.performance
       ctx.beginPath(); ctx.arc(c.x + (hash(i, tile.idx) - 0.5) * RADIUS * 0.7, cy - RADIUS * 0.1 - hash(tile.idx, i) * RADIUS * 0.25, RADIUS * (0.12 + 0.1 * hash(i, 9)) * (1 + (t - PHASE.melee) * 0.15), 0, Math.PI * 2); ctx.fill();
     }
     ctx.globalAlpha = 1;
-    const figures = [];
-    const side = (list, sgn) => {
-      const n = Math.min(6, Math.max(2, list.length * 2));
-      const stance = list[0]?.stance ?? 0;
-      const fpos = formation(sgn < 0 ? stance : 0, sgn, n);
-      fpos.forEach(([fx, fy], i) => {
-        const who = list[i % list.length];
-        const f = who.faction;
-        const cloth = f === NEUTRAL ? '#6b5440' : shade(FACTION_FILL[f] ?? '#8a8a80', -0.05), trim = f === NEUTRAL ? '#3a2a1e' : FACTION_DARK[f] ?? '#3a3a34';
-        // deploy: from a huddle at the tile's centre (arrivals) into the stance
-        const dk = sgn < 0 ? ease(clamp01((t - PHASE.deploy) / 1.0)) : 1;
-        let x = c.x + (sgn < 0 ? fx * dk + (1 - dk) * -0.3 : fx) * RADIUS, y = cy + fy * RADIUS * FLATTEN * (sgn < 0 ? dk : 1);
-        // melee: the lines close in
-        const mk = t >= PHASE.melee ? ease(clamp01((t - PHASE.melee) / 0.5)) * (t < PHASE.fates ? 1 : 1 - ease(clamp01((t - PHASE.fates) / 0.8))) : 0;
-        x -= sgn * mk * RADIUS * 0.16;
-        let alpha = sgn < 0 ? clamp01((t - 0.2) / 0.9) : 1, fallen = 0;
-        // fates
-        const fk = clamp01((t - PHASE.fates) / 1.4);
-        const fate = who.fate;
-        if (fk > 0 && fate) {
-          const lost = who.before > 0 && who.after !== null ? 1 - who.after / who.before : 0;
-          if (fate === 'Destroyed' || (i / n) < lost * 0.9) { fallen = ease(fk); }
-          else if (fate === 'Retreated' || fate === 'Withdrew') { x += sgn * ease(fk) * RADIUS * 0.6; alpha *= 1 - ease(fk) * 0.8; }
-          else if (fate === 'Bounced') { x += sgn * Math.sin(fk * Math.PI * 0.5) * RADIUS * 0.35; alpha *= 1 - ease(clamp01((fk - 0.5) * 2)) * 0.7; }
-        }
-        const fighting = t >= PHASE.melee && t < PHASE.fates + 0.4 && !fallen;
-        figures.push({ x, y, alpha, fallen, cloth, trim, skin: SKIN[(i + tile.idx) % SKIN.length], face: sgn < 0 ? 1 : -1,
-          pose: fighting ? 'sword' : sgn < 0 && t < PHASE.deploy + 0.8 ? 'march' : (who.stance === 3 || who.kind === 'garrison') ? 'spear' : 'spear',
-          step: fighting ? (t * 2.2 + hash(i, sgn + 3)) % 1 : (t * 1.4 + i * 0.3) % 1, winner: fate === 'Stays' && t >= PHASE.fates + 0.6, faction: f });
-      });
+    // the sides as tokens (people/units.mjs): one per faction on each side, the garrison and the camp their own
+    const groups = (list, sgn) => {
+      const by = new Map();
+      for (const w of list) {
+        const key = `${w.kind === 'garrison' ? 'g' : w.kind === 'camp' ? 'c' : 'h'}${w.faction}`;
+        const g = by.get(key) ?? { faction: w.faction, kind: w.kind, members: [], sgn };
+        g.members.push(w); by.set(key, g);
+      }
+      return [...by.values()];
     };
-    side(tile.attackers, -1);
-    side(tile.defenders, 1);
-    figures.sort((a, b) => a.y - b.y);
-    for (const f of figures) {
-      if (f.alpha <= 0.02) continue;
-      if (f.fallen) {
-        ctx.save(); ctx.translate(f.x, f.y); ctx.rotate(f.face * f.fallen * 1.35); ctx.globalAlpha = f.alpha * (1 - f.fallen * 0.35);
-        actor(ctx, 0, 0, s, { ...f, pose: 'sword', step: 0.2 });
+    const left = groups(tile.attackers, -1), right = groups(tile.defenders, 1);
+    const toks = [];
+    const place = (list, sgn) => list.forEach((g, i) => {
+      const main = [...g.members].sort((a, b) => b.before - a.before)[0];
+      const kind = g.kind === 'camp' ? 'spearman' : g.kind === 'garrison' ? 'pikeman' : UNIT_KINDS[main.unit ?? 0] ?? 'spearman';
+      const fate = g.members.find(m => m.fate && m.fate !== 'Stays')?.fate ?? (g.members.every(m => m.fate === 'Stays') ? 'Stays' : null);
+      // deploy: arrivals come in from the side they were revealed on; defenders stand
+      const dk = sgn < 0 ? ease(clamp01((t - PHASE.deploy) / 1.0)) : 1;
+      let x = c.x + sgn * (0.36 + i * 0.16) * RADIUS + (sgn < 0 ? (1 - dk) * -0.35 * RADIUS : 0), y = cy + (i % 2 ? 0.16 : -0.02) * RADIUS * 1.4;
+      let alpha = sgn < 0 ? clamp01((t - 0.2) / 0.9) : 1, fallen = 0, walking = sgn < 0 && t < PHASE.deploy + 1, face = -sgn;
+      // the melee: the sides close in and strike
+      const mk = t >= PHASE.melee ? ease(clamp01((t - PHASE.melee) / 0.5)) * (t < PHASE.fates ? 1 : 1 - ease(clamp01((t - PHASE.fates) / 0.8))) : 0;
+      x -= sgn * mk * RADIUS * 0.2;
+      const lunge = t >= PHASE.melee && t < PHASE.fates ? Math.max(0, Math.sin((t - PHASE.melee) * 9 + i + (sgn < 0 ? 0 : 1.7))) : 0;
+      // the fates
+      const fk = clamp01((t - PHASE.fates) / 1.4);
+      if (fk > 0 && fate) {
+        if (fate === 'Destroyed') fallen = ease(fk);
+        else if (fate === 'Retreated' || fate === 'Withdrew') { x += sgn * ease(fk) * RADIUS * 0.7; alpha *= 1 - ease(fk) * 0.85; walking = true; face = sgn; }
+        else if (fate === 'Bounced') { x += sgn * Math.sin(fk * Math.PI * 0.5) * RADIUS * 0.45; alpha *= 1 - ease(clamp01((fk - 0.5) * 2)) * 0.7; }
+      }
+      toks.push({ x, y, alpha, fallen, walking, face, lunge, kind, faction: g.faction, fate, ranged: kind === 'archer' || kind === 'crossbowman', sgn });
+    });
+    place(left, -1); place(right, 1);
+    toks.sort((a, b) => a.y - b.y);
+    for (const k of toks) {
+      if (k.alpha <= 0.02) continue;
+      const step = (t * (k.walking ? 1.6 : 0.6)) % 1;
+      if (k.fallen) {
+        ctx.save(); ctx.globalAlpha = k.alpha * (1 - k.fallen * 0.5);
+        baseDisc(ctx, k.x, k.y, s, k.faction, { alpha: k.alpha * (1 - k.fallen * 0.6) });
+        ctx.translate(k.x, k.y); ctx.rotate(-k.face * k.fallen * 1.4);
+        unitFigure(ctx, 0, 0, s, k.kind, { faction: k.faction, face: k.face, step: 0.2, alpha: 1 });
         ctx.restore();
-      } else actor(ctx, f.x, f.y, s, f);
+        // a skull over the fallen
+        if (k.fallen > 0.6) { ctx.save(); ctx.globalAlpha = (k.fallen - 0.6) * 2.5; ctx.fillStyle = '#f4efe4'; ctx.strokeStyle = '#2a2018'; ctx.lineWidth = s * 0.03;
+          const sx = k.x, sy = k.y - s * 0.9; ctx.beginPath(); ctx.arc(sx, sy, s * 0.13, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.fillRect(sx - s * 0.07, sy + s * 0.08, s * 0.14, s * 0.08);
+          ctx.fillStyle = '#2a2018'; ctx.beginPath(); ctx.arc(sx - s * 0.05, sy, s * 0.03, 0, Math.PI * 2); ctx.arc(sx + s * 0.05, sy, s * 0.03, 0, Math.PI * 2); ctx.fill(); ctx.restore(); }
+        continue;
+      }
+      baseDisc(ctx, k.x, k.y, s, k.faction, { alpha: k.alpha });
+      unitFigure(ctx, k.x, k.y - s * 0.02, s, k.kind, { faction: k.faction, face: k.face, step, walking: k.walking, alpha: k.alpha, lunge: k.ranged ? 0 : k.lunge });
+      // archers and crossbowmen loose: arrows arc to the other side
+      if (k.ranged && t >= PHASE.melee && t < PHASE.fates) for (let j = 0; j < 3; j++) {
+        const u = ((t - PHASE.melee) * 1.4 + j / 3) % 1;
+        const tx = c.x - k.sgn * 0.3 * RADIUS, ax = k.x + (tx - k.x) * u, ay = k.y - s * 0.6 - Math.sin(u * Math.PI) * s * 0.5;
+        const dx = (tx - k.x), dy = -Math.cos(u * Math.PI) * s * 0.5 * Math.PI, len = Math.hypot(dx, dy) || 1;
+        ctx.save(); ctx.globalAlpha = k.alpha; ctx.strokeStyle = '#3a2a1a'; ctx.lineWidth = s * 0.02;
+        ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(ax - dx / len * s * 0.16, ay - dy / len * s * 0.16); ctx.stroke(); ctx.restore();
+      }
     }
     // sparks in the melee
     if (t >= PHASE.melee + 0.3 && t < PHASE.fates) for (let i = 0; i < 3; i++) {

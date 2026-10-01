@@ -15,10 +15,11 @@ import { COLORS, FLATTEN, RADIUS, hexPoints, polygon, project, shade } from '../
 import { PROVINCE_TILES, locate, provinceCentre, ringOf, ringProvinces, tileHex, wedgeOf } from '../fgeo.mjs';
 import { FACTION_COLORS } from '../fi18n.mjs';
 import { majorityOwner } from '../herald.mjs';
-import { paintPeople, paintNameTags, paintBadges, PEOPLE_FRAME_MS } from '../people/crowds.mjs';
+import { paintPeople, paintNameTags, paintBadges, PEOPLE_FRAME_MS, zoomBoost } from '../people/crowds.mjs';
 import { activitiesFor } from '../people/activity.mjs';
 import { lifeAt } from '../people/life.mjs';
 import { paintBattle, battleTiles } from '../people/battle.mjs';
+import { provinceTokens, paintToken, placePills } from '../people/units.mjs';
 import { BOUNDARY_HALO, BOUNDARY_INK, FOG, UNOPENED_FILL, paintSigil, provincePixel, PROVINCE_CIRCUMRADIUS } from './layers.mjs';
 
 const BASE = new URL('../art/', import.meta.url);
@@ -757,7 +758,8 @@ export class SpriteArt {
     // the far view's bitmap stops here: land, props, holdings, territory (map/sprites.mjs farBitmap)
     if (far) return tiles.length;
     // pass 2b: hosts on their tiles, back to front (hidden under fog unless the viewer's own)
-    const hosts = [];
+    const hosts = [], tokens = [], pills = [];
+    this.tokens = tokens; this.tokensMoving = false;
     // a tile whose battle is playing shows the scene's figures, not the hosts' sprites (UI plan D4)
     const fightingAt = battleTiles(people?.battles, (globalThis.performance?.now?.() ?? Date.now()) / 1000);
     for (const e of entries) {
@@ -786,34 +788,33 @@ export class SpriteArt {
         if (!a.present || hidden(a.faction) || resident.has(String(a.hostId))) continue;
         push(a.tile, { faction: a.faction, stance: ART_STANCES[a.stance] ?? 'hold', arriving: true });
       }
+      // the flags' groups (province detail, when the figures are too small): one entry per host
       for (const [idx, list] of byTile) {
         if (fightingAt.has(`${e.p},${e.q},${idx}`)) continue;
-        const hx = tileHex(e.p, e.q, idx);
-        const c = project(hx.q, hx.r);
-        // assault and flank face the nearest hex held by another faction (else the province centre)
-        const foes = tiles.filter((u) => u.p === e.p && u.pq === e.q && u.state === 1 && u.owner < 6);
-        list.slice(0, 6).forEach((h, n) => {
-          const x = c.x + SLOT_R * Math.cos(SLOT_ANG[n]) * RADIUS, y = c.y - SLOT_R * Math.sin(SLOT_ANG[n]) * FLATTEN * RADIUS;
-          let facing = null;
-          if (h.stance === 'assault' || h.stance === 'flank') {
-            const f = foes.filter((u) => u.owner !== h.faction).sort((u, v) => Math.hypot(u.x - c.x, u.y - c.y) - Math.hypot(v.x - c.x, v.y - c.y))[0];
-            const pc = provincePixel(e.p, e.q);
-            facing = f && (f.x !== c.x || f.y !== c.y) ? edgeToward(c.x, c.y, f.x, f.y) : edgeToward(c.x, c.y, pc.x, pc.y);
-          }
-          hosts.push({ x, y, h, cx: c.x, cy: c.y, n, count: list.length, facing });
-        });
+        const hx = tileHex(e.p, e.q, idx), c = project(hx.q, hx.r);
+        for (const h of list) hosts.push({ x: c.x, y: c.y, h, cx: c.x, cy: c.y });
       }
+      // the tokens (tile detail): one soldier per faction per tile (people/units.mjs, after the Eternum benchmark)
+      const holdingTiles = new Set(tiles.filter(u => u.p === e.p && u.pq === e.q && u.state === 1 && u.site !== undefined).map(u => u.idx));
+      const all = [];
+      for (const h of e.prov.entries) {
+        if (h.state < 1 || h.state > 3 || hidden(h.faction)) continue;
+        const a = last.get(String(h.id));
+        all.push({ id: h.id, faction: h.faction, unit: h.unit, tile: h.tile, state: h.state, troops: Math.floor(Number(h.troops) / 1000), stamina: Number(h.staminaValue ?? 120), broken: !!a && BROKEN_FATES.has(a.fate) });
+      }
+      if (pend && !pend.resolvedTs) for (const a of pend.arrivals ?? []) {
+        if (!a.present || hidden(a.faction) || resident.has(String(a.hostId))) continue;
+        all.push({ id: a.hostId, faction: a.faction, unit: a.unit, tile: a.tile, state: 1, troops: Math.floor(Number(a.troops) / 1000), stamina: Number(a.stamina ?? 120), arriving: true });
+      }
+      const skip = new Set([...fightingAt].filter(k => k.startsWith(`${e.p},${e.q},`)).map(k => Number(k.split(',')[2])));
+      for (const tok of provinceTokens({ p: e.p, q: e.q, hosts: all, holdingTiles, viewerFaction, exploring: people?.exploringHosts ?? new Set(), marching: people?.marchingHosts ?? new Set(), restBelow: people?.restBelow ?? 0, skipTiles: skip })) tokens.push(tok);
     }
-    hosts.sort((a, b) => a.y - b.y || a.x - b.x);
+    tokens.sort((a, b) => a.y - b.y || a.x - b.x);
     if (RADIUS * zoom >= HOST_FIGURE_MIN_R) {
-      const hk = s.key === '@2x' ? '@2x' : '@1x';
-      const hs = HOST_SIZES[hk];
-      const kk = RADIUS / (hk === '@2x' ? 88 : 44);
-      for (const o of hosts) {
-        const st = o.h.stance ?? 'hold';
-        const img = this.image('hosts', hk, `${ART_FACTIONS[o.h.faction] ?? 'ember'}_${st}${o.facing === null || o.facing === undefined ? '' : `_${o.facing}`}`);
-        if (img) ctx.drawImage(img, o.x - hs.ax * kk, o.y - hs.ay * kk + TOP_LIFT, hs.w * kk, hs.h * kk);
-      }
+      const t = (globalThis.performance?.now?.() ?? Date.now()) / 1000;
+      const size = RADIUS * 0.66 * zoomBoost(RADIUS * zoom);
+      for (const tok of tokens) { paintToken(ctx, tok, { s: size, k: 1 / zoom, t, label: false }); pills.push({ tok, s: size }); }
+      if (tokens.length) this.tokensMoving = true;
     }
     // pass 2c: people (people/crowds.mjs): townsfolk, carriers, departing columns at their origin, scouts
     // what every tile is doing (people/activity.mjs); kept for the page's hover tip
@@ -830,7 +831,7 @@ export class SpriteArt {
     }
     this.activities = activities;
     this.tiles = tiles;
-    const moving = people ? paintPeople(ctx, { tiles, zoom, departures: people.departures ?? [], explores: people.explores ?? [], marches: people.marches ?? [], viewerFaction, columnLabel: people.columnLabel ?? null, activities, life: people.life ?? null, bell: people.bell ?? 0, now: people.now ?? 0, lordOf: people.lordOf ?? null }) : 0;
+    const moving = people ? paintPeople(ctx, { tiles, zoom, explores: people.explores ?? [], marches: people.marches ?? [], constructions: people.constructions ?? [], pills }) : 0;
     // pass 2d: battle scenes playing (people/battle.mjs)
     let fighting = 0;
     for (const b of people?.battles ?? []) if (paintBattle(ctx, b, { zoom, lossText: people.lossText, fateText: people.fateText })) fighting++;
@@ -861,6 +862,7 @@ export class SpriteArt {
       }
       const perHex = new Map();
       const figures = RADIUS * zoom >= HOST_FIGURE_MIN_R;
+      if (figures) return;   // the tokens carry their own labels at tile detail
       ctx.save(); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       for (const g of groups.values()) {
         const hk = `${g.cx},${g.cy}`;
@@ -902,11 +904,13 @@ export class SpriteArt {
       if (t) polygon(ctx, hexPoints(t.x, t.y, 2), null, '#1b2e28', 3 / zoom);
     }
     // name tags over the fog (the holder's face and name), then the next animation frame while figures move
-    if (people?.nameOf) paintNameTags(ctx, { tiles, zoom, nameOf: people.nameOf, centre: people.centre ?? null, onImage: this.onLoad,
+    const tagBoxes = [];
+    if (people?.nameOf) paintNameTags(ctx, { tiles, zoom, nameOf: people.nameOf, centre: people.centre ?? null, onImage: this.onLoad, boxes: tagBoxes,
       tierName: people.tierName ?? null,
       present: people.life ? (p, q, site) => lifeAt(people.life.get(`${p},${q},${site}`), people.bell ?? 0, people.now ?? 0).lord : null });
-    if (activities) paintBadges(ctx, { tiles, zoom, activities });
-    if ((moving || fighting) && !this.peopleTimer) this.peopleTimer = setTimeout(() => { this.peopleTimer = null; this.onLoad(); }, fighting ? 33 : PEOPLE_FRAME_MS);
+    // the units' labels last: on top, nudged up off the name tags and each other
+    if (pills.length && RADIUS * zoom >= HOST_FIGURE_MIN_R) placePills(ctx, pills, 1 / zoom, (globalThis.performance?.now?.() ?? Date.now()) / 1000, tagBoxes);
+    if ((moving || fighting || this.tokensMoving) && !this.peopleTimer) this.peopleTimer = setTimeout(() => { this.peopleTimer = null; this.onLoad(); }, fighting ? 33 : PEOPLE_FRAME_MS);
     return tiles.length;
   }
 }

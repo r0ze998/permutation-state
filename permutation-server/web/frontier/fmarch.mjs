@@ -208,7 +208,8 @@ export async function sendMarch(m, deps) {
   if (!s?.ok) return { ok: false, step: 'sealing', code: s?.code ?? 'SealFailed', error: s?.error };
   // The record first: a lost answer must never lose a sealed order (§9.1).
   let entry = book.entryOf({ host: BigInt(m.host.id), transitSlot, departBell: m.nowBell, arriveBell: m.arriveBell, holding: m.holdingAddress,
-    plain, salt: s.salt, commit: s.commit, sealRoot: s.sealRoot, ctHash: s.ctHash, seal: s.seal, round: s.round, tip: BigInt(m.tip) });
+    plain, salt: s.salt, commit: s.commit, sealRoot: s.sealRoot, ctHash: s.ctHash, seal: s.seal, round: s.round, tip: BigInt(m.tip),
+    route: m.route ?? null, origin: m.province && Number.isInteger(m.host?.tile) ? { p: m.province.p, q: m.province.q, tile: m.host.tile } : null });
   let current;
   try { current = book.addSealed(book.loadBook(deps.storage, deps.bookKey), entry); } catch (e) { return { ok: false, step: 'saved', code: 'AlreadySent', error: e.message }; }
   if (!book.saveBook(deps.storage, deps.bookKey, current)) return { ok: false, step: 'saved', code: 'NotSaved' };

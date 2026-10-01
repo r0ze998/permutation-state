@@ -18,7 +18,7 @@ import { checkBeacon } from './seal.mjs';
 import { ChainClock, bellChip, countdown, seasonClock, bellStart } from './clock.mjs';
 import { effectiveStatus } from './fcodec.mjs';
 import { FrontierMap } from './map/fmap.mjs';
-import { SEASON_STATUS_TEXT, clientText, factionName, TIERS } from './fi18n.mjs';
+import { SEASON_STATUS_TEXT, clientText, factionName, TIERS, BUILDINGS } from './fi18n.mjs';
 import { L, fmtNum, mountLangToggle, onLangChange } from '../lang.mjs';
 import { toHex } from '../sdk/bytes.mjs';
 import { html, raw, setHtml } from '../util.mjs';
@@ -83,7 +83,7 @@ import { useHerald, refresh as refreshPlay } from './controller.mjs';
 import { kernel as loadKernel } from './wasm.mjs';
 import { scope } from './fchainio.mjs';
 import { hostParts } from './faddr.mjs';
-import { RETREAT_CHOICES, retreatBps } from './fmarch.mjs';
+import { RETREAT_CHOICES, retreatBps, DEPART_STAMINA } from './fmarch.mjs';
 import { uiKey, uiStorage, loadUi, saveUi, UI_PREFIX } from './fui.mjs';
 import * as hud from './hud/hud.mjs';
 import * as inspect from './hud/inspect.mjs';
@@ -102,6 +102,8 @@ import * as glossary from './hud/glossary.mjs';
 import * as milestones from './hud/milestones.mjs';
 import * as guide from './hud/guide.mjs';
 import { forecast, forecastKey } from './hud/forecast.mjs';
+import { BUILD_ITEMS } from './fland.mjs';
+import { UNIT_KINDS } from './people/units.mjs';
 import * as pins from './hud/pins.mjs';
 import { battleScene, startBattle, battleLive, BATTLE_SPEEDS, PHASE } from './people/battle.mjs';
 import { decode as decodeAccount } from './fcodec.mjs';
@@ -277,6 +279,11 @@ export function peopleSource() {
     departures: scene.departuresAt(FS.chronicle, FS.overviews, bell),
     explores: scene.exploresAt(FS.chronicle, FS.overviews, bell),
     marches: ownColumns(),
+    // the token layer (people/units.mjs): who explores, whose column walks its road, the stamina a march needs
+    exploringHosts: new Set(scene.exploresAt(FS.chronicle, FS.overviews, bell).map(x => x.host).filter(Boolean)),
+    marchingHosts: new Set(ownColumns().map(m => m.host)),
+    restBelow: DEPART_STAMINA,
+    constructions: constructionsNow(),
     nameOf: ownNamer(scene.namer(rosterRef)),
     life: FS.life ?? null,
     tierName: t => TIERS[t] ?? '',
@@ -403,10 +410,40 @@ function ownColumns() {
     const t0 = bellStart(FS.clock.genesisTs, e.departBell), t1 = bellStart(FS.clock.genesisTs, e.arriveBell);
     const k = t1 > t0 ? (now - t0) / (t1 - t0) : 1;
     if (k >= 1) continue;
-    out.push({ from: { p: h.p, q: h.q, tile: h.tile }, to: { p: d.p, q: d.q, tile: d.tile }, k: Math.max(0, k), faction: FS.citizen?.faction ?? 0 });
+    const host = (FS.provinces.get(`${hp.p},${hp.q}`)?.province?.entries ?? []).find(x => String(x.id) === String(e.host));
+    out.push({ host: String(e.host), from: e.route ? { p: e.route.p, q: e.route.q, tile: e.route.tile } : { p: h.p, q: h.q, tile: h.tile }, to: { p: d.p, q: d.q, tile: d.tile }, route: e.route ?? null,
+      k: Math.max(0, k), faction: FS.citizen?.faction ?? 0, kind: UNIT_KINDS[host?.unit ?? 0] ?? 'spearman', troops: host ? Math.floor(Number(host.troops) / 1000) : null });
   }
   return out;
 }
+
+/**
+ * Buildings going up (public: the BUILD records of the chronicle, folded into FS.life; and the
+ * viewer's own queue): `[{p, q, site, share, label}]` — the share of the time gone, the
+ * building's name and the time left.
+ */
+function constructionsNow() {
+  const now = FS.chain?.now?.() ?? 0, out = [], seen = new Set();
+  const add = (p, q, site, item, doneAt, startTs) => {
+    const key = `${p},${q},${site}`;
+    if (seen.has(key) || !(doneAt > now)) return;
+    seen.add(key);
+    const total = Math.max(60, doneAt - startTs);
+    out.push({ p, q, site, share: Math.max(0, Math.min(1, 1 - (doneAt - now) / total)), label: `${BUILDINGS[BUILD_ITEMS[item]?.resource] ?? ''} ${hud.span(doneAt - now)}`.trim() });
+  };
+  for (const h of FS.holdings ?? []) for (const q of h.queue ?? []) {
+    const done = Number(q.doneAt ?? 0);
+    if (done > now) add(h.p, h.q, h.site, q.kind, done, done - buildSecsOf(q));
+  }
+  if (FS.clock) for (const [k, rec] of FS.life ?? []) {
+    if (!rec.build || !(rec.build.doneAt > now)) continue;
+    const [p, q, site] = k.split(',').map(Number);
+    add(p, q, site, rec.build.item, rec.build.doneAt, bellStart(FS.clock.genesisTs, rec.build.bell));
+  }
+  return out;
+}
+/** A queued build's length (the first copy's hour when the queue does not say). */
+const buildSecsOf = q => (Number(q.secs) > 0 ? Number(q.secs) : 3_600);
 
 /** The map's name tags use the viewer's verified profile on their own holdings. */
 function ownNamer(base) {
@@ -617,7 +654,7 @@ export async function playBattle(p, q, bell, { focus = false, auto = false } = {
   const after = FS.provinces.get(`${p},${q}`)?.province ?? null;
   const scene = battleScene({ p, q, bell, inputs: r.inputs, before, after: after && after.resolvedNext > bell ? after : null });
   if (!scene) return false;
-  if (focus && mapRef) { const h = tileHex(p, q, scene.tiles[0].idx), c = project(h.q, h.r); mapRef.setView({ x: c.x, y: c.y, zoom: 1.6 }); }
+  if (focus && mapRef) { const h = tileHex(p, q, scene.tiles[0].idx), c = project(h.q, h.r); mapRef.setView({ x: c.x, y: c.y, zoom: 2.1 }); }
   FS.battles = [...(FS.battles ?? []).filter(b => !(b.scene.p === p && b.scene.q === q)), startBattle(scene, performance.now() / 1000, BATTLE_SPEEDS[fx] || 1)];
   mapRef?.invalidate();
   return true;

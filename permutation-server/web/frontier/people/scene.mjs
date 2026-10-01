@@ -45,7 +45,7 @@ export function exploresAt(chronicle, overviews, bell) {
     const h = hostParts(r.host_id);
     const faction = h ? ownerFaction(overviews, h.p, h.q, h.site) : null;
     const tiles = Array.from(r.tiles ?? []).slice(0, Number(r.n ?? 0));
-    out.push({ p: Number(r.p), q: Number(r.q), tiles, faction });
+    out.push({ p: Number(r.p), q: Number(r.q), tiles, faction, host: r.host_id !== undefined ? String(r.host_id) : null, from: h ? { p: h.p, q: h.q, site: h.site } : null });
   }
   return out;
 }

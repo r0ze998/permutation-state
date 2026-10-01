@@ -23,6 +23,7 @@ import { project } from '../../map.mjs';
 import { FACTION_FILL, FACTION_DARK, shade, avatarImage } from './avatar.mjs';
 import { SKIN, HAIR } from './identity.mjs';
 import { lifeAt } from './life.mjs';
+import { paintToken, routePoints, alongPath, paintRoad, scaffold, progressBadge } from './units.mjs';
 import { paintBadge } from './activity.mjs';
 
 /** Screen px per hex radius from which figures are drawn, and from which every resident is. */
@@ -307,186 +308,54 @@ function banner(ctx, x, y, s, faction, t) {
 }
 
 /**
- * The people of one frame. `tiles` are sprites.mjs's drawn tiles ({x, y,
- * p, pq, idx, state, owner, tier, fog?}); `departures` [{p, q, tile,
- * faction, troops, arriveBell}] hosts in transit (origin only);
- * `explores` [{p, q, tiles: [idx], faction}]; `fogOf(p, q)` the province's
- * fog. Returns the number of figures drawn (0: nothing moves, no new frame).
+ * The map's movers (docs/frontier/ui-shell/UNITS-REDESIGN.md): no crowds — only what has
+ * a referent on the chain or in this browser:
+ *   marches        the viewer's own columns walking their planned road (one token each)
+ *   explores       a scout token going from its holding to the explored tiles and back
+ *   constructions  a scaffold beside the holding, a progress ring and the time left
+ * Returns how many movers were drawn (the map keeps animating while any are).
  */
-export function paintPeople(ctx, { tiles = [], zoom = 1, t = (globalThis.performance?.now?.() ?? Date.now()) / 1000, departures = [], explores = [], marches = [], fogOf = () => 'clear', viewerFaction = null, columnLabel = null, activities = null, life = null, bell = 0, now = 0, lordOf = null } = {}) {
+export function paintPeople(ctx, { tiles = [], zoom = 1, t = (globalThis.performance?.now?.() ?? Date.now()) / 1000, explores = [], marches = [], constructions = [], fogOf = () => 'clear', pills = [] } = {}) {
   const r = RADIUS * zoom;
   if (r < PEOPLE_MIN_R) return 0;
-  const s = RADIUS * 0.15;
-  const full = r >= PEOPLE_FULL_R;
+  const k = 1 / zoom, size = RADIUS * 0.66 * zoomBoost(r);
   const seen = f => f === 'clear' || f === 'sight' || f === undefined;
-  const list = [];
-  // the life of each holding (people/life.mjs): what its lord did lately decides who is out
-  const byHex = new Map(tiles.map(u => [`${u.q},${u.r}`, u]));
-  for (const u of tiles) {
-    if (u.state !== 1 || !(u.owner < 6) || !seen(u.fog ?? fogOf(u.p, u.pq))) continue;
-    const acts = activities?.get(`${u.p},${u.pq},${u.idx}`) ?? [];
-    if (acts.some(a => a.kind === 'dormant')) continue;  // its lord is away: a quiet holding
-    const lf = life ? lifeAt(life.get(`${u.p},${u.pq},${u.site}`), bell, now) : { liveliness: 1, lord: false };
-    const cloth = shade(FACTION_FILL[u.owner] ?? '#8a8a80', -0.05), trim = FACTION_DARK[u.owner] ?? '#3a3a34';
-    const at = (dx, dy) => ({ x: u.x + dx * RADIUS, y: u.y + dy * RADIUS * FLATTEN + RADIUS * 0.12 });
-    // townsfolk: by tier, fewer the longer the lord has been away
-    const n = full ? Math.round((RESIDENTS[u.tier] ?? 2) * lf.liveliness) : lf.liveliness >= 0.7 ? 1 : 0;
-    // townsfolk run errands: to a field or a neighbour of the same faction and back (a few stay at home, idling)
-    const near = [];
-    for (let dq = -2; dq <= 2; dq++) for (let dr = Math.max(-2, -dq - 2); dr <= Math.min(2, -dq + 2); dr++) {
-      if (!dq && !dr) continue;
-      const w = byHex.get(`${u.q + dq},${u.r + dr}`);
-      if (w && !w.cloud && w.terrain !== 'water' && (w.res > 0 || (w.state === 1 && w.owner === u.owner) || Math.abs(dq) + Math.abs(dr) + Math.abs(dq + dr) <= 2)) near.push(w);
-    }
-    for (let i = 0; i < n; i++) {
-      const h = hash(u.q, u.r ?? u.idx, i);
-      const home = { x: u.x + (hash(u.idx, i, 3) - 0.5) * RADIUS * 0.5, y: u.y + RADIUS * 0.12 + (hash(i, u.idx, 4) - 0.5) * RADIUS * 0.2 };
-      const cloth = CLOTH[Math.floor(h * CLOTH.length)], skin = SKIN[Math.floor(hash(i, u.q, 3) * SKIN.length)];
-      const dest = near.length && i % 3 !== 2 ? near[Math.floor(hash(u.idx, i, 9) * near.length) % near.length] : null;
-      if (!dest) {   // at home: a slow stroll on the square
-        const a = (t * (0.04 + h * 0.03) + h) * Math.PI * 2;
-        list.push({ x: home.x + Math.cos(a) * RADIUS * 0.12, y: home.y + Math.sin(a) * RADIUS * 0.05, kind: 'folk', cloth, trim: i === 0 ? FACTION_FILL[u.owner] : null, skin, step: (t * 0.8 + h) % 1, face: Math.sin(a) >= 0 ? -1 : 1 });
-        continue;
-      }
-      const there = { x: dest.x + (hash(dest.q, i, 5) - 0.5) * RADIUS * 0.4, y: dest.y + RADIUS * 0.12 };
-      const w = trip(home, there, t, 18 + h * 14, h, RADIUS * 0.12 * (i % 2 ? 1 : -1));
-      list.push({ x: w.x, y: w.y, kind: w.back && dest.res > 0 ? 'carrier' : 'folk', cloth, trim: i === 0 ? FACTION_FILL[u.owner] : null, skin, step: w.walking ? (t * 1.6 + h) % 1 : 0, face: w.face });
-    }
-    if (!full || !life) continue;
-    // the worked tiles of the holding (its claim): wheat, iron and horse tiles
-    const worked = [];
-    for (let dq = -2; dq <= 2; dq++) for (let dr = Math.max(-2, -dq - 2); dr <= Math.min(2, -dq + 2); dr++) {
-      const w = byHex.get(`${u.q + dq},${u.r + dr}`);
-      if (w && w.res > 0 && !w.cloud) worked.push(w);
-    }
-    // field hands while the holding harvests (in the last few bells): a farmer, a miner, a herder
-    if (lf.working) worked.slice(0, 3).forEach((w, i) => {
-      const ph = hash(w.q, w.r, 21);
-      const pose = w.res === 3 ? 'scout' : 'hammer';
-      const clothW = w.res === 1 ? '#c9a24a' : w.res === 2 ? '#6d7277' : '#8a6a46';
-      list.push({ x: w.x + (ph - 0.5) * RADIUS * 0.4, y: w.y + RADIUS * 0.15, big: true, pose, cloth: clothW, trim: '#4a3a28', skin: SKIN[(i + 2) % SKIN.length], step: (t * (pose === 'scout' ? 0.6 : 1.0) + ph) % 1, face: ph < 0.5 ? 1 : -1, small: true });
-    });
-    // carriers bringing in a harvest: from the worked tiles (or a neighbour) to the holding, for a bell
-    if (lf.harvesting) for (let i = 0; i < 2; i++) {
-      const from = worked[i] ?? { x: u.x + DIRS[(i * 2 + Math.floor(hash(u.idx, i) * 6)) % 6][0], y: u.y + DIRS[(i * 2 + Math.floor(hash(u.idx, i) * 6)) % 6][1] };
-      const k = (t * 0.08 + i * 0.5 + hash(u.q, u.idx)) % 1, there = k < 0.5 ? k * 2 : 2 - k * 2;
-      list.push({ x: from.x + (u.x - from.x) * there, y: from.y + (u.y - from.y) * there + RADIUS * 0.12, kind: 'carrier', cloth: '#7a6a4a', skin: SKIN[(i + 1) % SKIN.length], step: (t * 1.8) % 1, face: (k < 0.5 ? u.x - from.x : from.x - u.x) >= 0 ? 1 : -1 });
-    }
-    // builders while a building goes up, recruits while troops train
-    if (lf.building) for (let i = 0; i < 2; i++) list.push({ ...at(lf.lord ? 0.12 + i * 0.3 : -0.32 + i * 0.62, 0.44 - i * 0.08), big: true, pose: 'hammer', cloth: '#8a6a46', trim, skin: SKIN[(i + 3) % SKIN.length], step: (t * 1.1 + i * 0.45) % 1, face: i ? -1 : 1 });
-    if (lf.training) for (let i = 0; i < 3; i++) list.push({ ...at(-0.3 + i * 0.3, -0.1), big: true, pose: 'drill', cloth, trim, skin: SKIN[i % SKIN.length], step: (t * 1.2) % 1, face: 1 });
-    // the lord, when they acted lately: their own face (identity.mjs), a cape and a circlet, doing what they did
-    if (lf.lord) {
-      const who = lordOf?.(u.p, u.pq, u.site) ?? null;
-      const face = who?.face;
-      const pose = lf.doing === 'march' ? 'march' : lf.doing === 'explore' ? 'scout' : 'point';
-      list.push({ ...at(-0.34, 0.5), big: true, lordly: true, lord: true, pose, cloth: shade(FACTION_FILL[u.owner] ?? '#8a8a80', 0.12), trim, ring: FACTION_FILL[u.owner] ?? '#8a8a80',
-        skin: face ? SKIN[face.skin] : SKIN[1], hair: face ? HAIR[face.hair] : '#3b2a20', step: (t * 0.9) % 1, face: -1 });
-    }
+  let n = 0;
+  const holdingAt = (p, q, site) => tiles.find(u => u.p === p && u.pq === q && u.site === site && u.state === 1) ?? null;
+  // construction first (it stands on the ground behind the tokens)
+  for (const c of constructions) {
+    const u = holdingAt(c.p, c.q, c.site);
+    if (!u || !seen(u.fog ?? fogOf(u.p, u.pq))) continue;
+    const x = u.x - RADIUS * 0.44, y = u.y + RADIUS * 0.22;
+    scaffold(ctx, x, y, size * 0.9, t);
+    if (r >= PEOPLE_FULL_R) progressBadge(ctx, x - size * 0.1, y - size * 0.7, k, c.share ?? 0, c.label ?? '', { side: 'left' });
+    n++;
   }
-  // what the tile is doing (people/activity.mjs): one or two big actors per activity, in front of the holding
-  if (activities) for (const u of tiles) {
-    const acts = activities.get(`${u.p},${u.pq},${u.idx}`);
-    if (!acts || !seen(u.fog ?? fogOf(u.p, u.pq))) continue;
-    const kinds = new Set(acts.map(a => a.kind));
-    const f = acts.find(a => a.faction < 6)?.faction ?? u.owner;
-    const cloth = shade(FACTION_FILL[f] ?? '#8a8a80', -0.05), trim = FACTION_DARK[f] ?? '#3a3a34';
-    const at = (dx, dy) => ({ x: u.x + dx * RADIUS, y: u.y + dy * RADIUS * FLATTEN + RADIUS * 0.12 });
-    const ph = hash(u.q, u.r ?? u.idx, 5);
-    const big = (p, o) => list.push({ ...p, big: true, cloth, trim, skin: SKIN[Math.floor(hash(p.x | 0, p.y | 0) * SKIN.length)], ...o });
-    if (kinds.has('battle')) {
-      const p = at(-0.05, 0.42);
-      big({ x: p.x - RADIUS * 0.16, y: p.y }, { pose: 'sword', step: (t * 1.6 + ph) % 1, face: 1 });
-      big({ x: p.x + RADIUS * 0.16, y: p.y }, { pose: 'sword', step: (t * 1.6 + ph + 0.5) % 1, face: -1, cloth: '#5f6a74', trim: '#2a2f34' });
-      if (((t * 1.6 + ph) % 1) < 0.22) list.push({ x: p.x, y: p.y - RADIUS * 0.5, spark: true, big: true });
-      continue;
-    }
-    if (kinds.has('walls') || kinds.has('build')) {
-      big(at(-0.3, 0.44), { pose: 'hammer', step: (t * 1.1 + ph) % 1, face: 1, cloth: '#8a6a46', trim });
-      big(at(0.32, 0.36), { pose: 'hammer', step: (t * 1.1 + ph + 0.45) % 1, face: -1, cloth: '#7a6a52', trim });
-    } else if (kinds.has('muster') || kinds.has('recruit')) {
-      for (let i = 0; i < 3; i++) big(at(-0.3 + i * 0.3, 0.44), { pose: 'drill', step: (t * 1.2) % 1, face: 1 });
-    } else if (kinds.has('rest')) {
-      big(at(-0.22, 0.46), { pose: 'sit', face: 1 }); big(at(0.26, 0.4), { pose: 'sit', face: -1 });
-      list.push({ ...at(0.02, 0.5), fire: true, big: true });
-    } else if (kinds.has('garrison')) {
-      big(at(0.36, 0.38), { pose: 'spear', step: 0, face: -1 });
-    }
+  // the viewer's own marches on their road
+  for (const m of marches) {
+    const from = hexCentre(m.from.p, m.from.q, m.from.tile), to = hexCentre(m.to.p, m.to.q, m.to.tile);
+    const pts = routePoints(m.route ?? null, { from, to });
+    const at = alongPath(pts.length ? pts : [from, to], m.k);
+    if (!at) continue;
+    paintRoad(ctx, at.samples ?? [from, to], from, m.faction, k, t);
+    paintToken(ctx, { x: at.x, y: at.y + RADIUS * 0.14, faction: m.faction, kind: m.kind ?? 'spearman', troops: m.troops ?? null, own: true, status: 'march', walking: true, face: (at.dx ?? 1) >= 0 ? 1 : -1, text: m.text ?? null }, { s: size, k, t, label: false });
+    pills.push({ tok: { x: at.x, y: at.y + RADIUS * 0.14, faction: m.faction, troops: m.troops ?? null, own: true, status: 'march', text: m.text ?? null }, s: size });
+    n++;
   }
-  // departing columns of others: the host forms up in two ranks before its holding and marches on the spot
-  // under its banner — no heading at all (the destination is sealed), a seal mark says so
-  for (const dep of departures) {
-    if (!seen(fogOf(dep.p, dep.q)) && dep.faction !== viewerFaction) continue;
-    // the viewer's own column walks its road below instead of forming up here
-    if (marches.some(m => m.from.p === dep.p && m.from.q === dep.q && m.from.tile === dep.tile)) continue;
-    const c = hexCentre(dep.p, dep.q, dep.tile);
-    for (let i = 0; i < 6; i++) {
-      const row = Math.floor(i / 3), col = (i % 3) - 1;
-      list.push({ x: c.x + col * RADIUS * 0.26 + row * RADIUS * 0.06, y: c.y + RADIUS * (0.34 + row * 0.16), big: true, pose: 'march', cloth: shade(FACTION_FILL[dep.faction] ?? '#8a8a80', -0.05),
-        trim: FACTION_DARK[dep.faction], skin: SKIN[i % SKIN.length], step: (t * 1.4 + (i % 2) * 0.5) % 1, face: 1 });
-    }
-    list.push({ banner: true, big: true, x: c.x - RADIUS * 0.4, y: c.y + RADIUS * 0.42, faction: dep.faction });
-    list.push({ seal: true, big: true, x: c.x + RADIUS * 0.46, y: c.y + RADIUS * 0.2 });
-  }
-  // scouts walk the explored tiles one after another (each EXPLORE record: its tiles in order, then back)
+  // scouts: from their holding to each explored tile in turn and back
   for (const ex of explores) {
     const pts = (ex.tiles ?? []).map(idx => hexCentre(ex.p, ex.q, idx));
     if (!pts.length) continue;
-    const route = pts.length === 1 ? [pts[0], { x: pts[0].x + RADIUS * 0.6, y: pts[0].y }] : pts;
-    const legs = route.length - 1, period = 6 * legs, k = ((t / period) + hash(ex.p, ex.q)) % 1;
-    const pos = k * legs * 2, leg = Math.floor(pos), back = leg >= legs;
-    const i0 = back ? legs * 2 - leg : leg, i1 = back ? i0 - 1 : i0 + 1, f = pos - leg;
-    const a = route[Math.max(0, Math.min(legs, i0))], b = route[Math.max(0, Math.min(legs, i1))];
-    list.push({ x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f + RADIUS * 0.15, big: true, pose: 'scout', cloth: FACTION_FILL[ex.faction] ?? '#6a6a5e', trim: FACTION_DARK[ex.faction] ?? '#3a3a34', skin: SKIN[3], step: (t * 1.4) % 1, face: b.x - a.x >= 0 ? 1 : -1 });
+    const home = ex.from ? holdingAt(ex.from.p, ex.from.q, ex.from.site) : null;
+    const route = home ? [{ x: home.x, y: home.y }, ...pts, { x: home.x, y: home.y }] : [...pts, ...[...pts].reverse()];
+    if (route.length < 2) route.push({ x: route[0].x + RADIUS * 0.5, y: route[0].y });
+    const legs = route.length - 1, period = 7 * legs;
+    const k2 = ((t / period) + hash(ex.p, ex.q)) % 1, pos = k2 * legs, leg = Math.min(legs - 1, Math.floor(pos)), f = pos - leg;
+    const a = route[leg], b = route[leg + 1];
+    paintToken(ctx, { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f + RADIUS * 0.14, faction: ex.faction ?? 0, kind: 'scout', troops: null, text: '', status: 'explore', walking: true, face: b.x - a.x >= 0 ? 1 : -1 }, { s: size * 0.9, k, t, label: false });
+    n++;
   }
-  // the viewer's own marches on the road (their destination is known to this browser only):
-  // the column walks from the origin toward it, from the departure bell to the arrival bell
-  for (const m of marches) {
-    const a = hexCentre(m.from.p, m.from.q, m.from.tile), b = hexCentre(m.to.p, m.to.q, m.to.tile);
-    const k = Math.max(0, Math.min(1, m.k));
-    const x0 = a.x + (b.x - a.x) * k, y0 = a.y + (b.y - a.y) * k, len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
-    const ux = (b.x - a.x) / len, uy = (b.y - a.y) / len, face = ux >= 0 ? 1 : -1;
-    for (let i = 0; i < 5; i++) {
-      const back = i * RADIUS * 0.22;
-      list.push({ x: x0 - ux * back + (i % 2 ? 1 : -1) * uy * RADIUS * 0.08, y: y0 - uy * back + RADIUS * 0.12, big: true, pose: 'march', cloth: shade(FACTION_FILL[m.faction] ?? '#8a8a80', -0.05),
-        trim: FACTION_DARK[m.faction], skin: SKIN[i % SKIN.length], step: (t * 1.4 + i * 0.37) % 1, face });
-    }
-    list.push({ banner: true, big: true, x: x0 + ux * RADIUS * 0.12, y: y0 + RADIUS * 0.12, faction: m.faction });
-  }
-  // back to front, within the budget (columns and scouts first, they matter most)
-  const kept = list.length > PEOPLE_BUDGET ? [...list.filter(x => x.big || x.kind !== 'folk'), ...list.filter(x => !x.big && x.kind === 'folk')].slice(0, PEOPLE_BUDGET) : list;
-  kept.sort((a, b) => a.y - b.y);
-  const boost = zoomBoost(r);
-  const S = s * ACTOR_SCALE * boost;
-  for (const f of kept) {
-    // the lord stands out: a ring in their faction's colour under the feet, a little gold that breathes
-    if (f.lord) lordRing(ctx, f.x, f.y, S * 1.12, f.trim, f.ring, t);
-    if (f.banner) banner(ctx, f.x, f.y, f.big ? S * 0.8 : s, f.faction, t);
-    else if (f.fire) campfire(ctx, f.x, f.y, f.big ? S * 0.6 : s, t);
-    else if (f.spark) spark(ctx, f.x, f.y, f.big ? S : s);
-    else if (f.seal) sealMark(ctx, f.x, f.y, S * 0.34, t);
-    else if (f.big) actor(ctx, f.x, f.y, f.small ? S * 0.72 : f.lordly ? S * 1.12 : S, f);
-    else if (f.kind === 'sitter') sitter(ctx, f.x, f.y, s * FOLK_SCALE * boost, f);
-    else figure(ctx, f.x, f.y, s * FOLK_SCALE * boost, f);
-  }
-  // the column's only public fact besides its origin: the arrival bell (`columnLabel(dep)` gives the text)
-  if (columnLabel && full) {
-    const k = 1 / zoom;
-    ctx.save();
-    ctx.font = `600 ${11 * k}px system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    for (const dep of departures) {
-      const text = columnLabel(dep);
-      if (!text) continue;
-      const c = hexCentre(dep.p, dep.q, dep.tile);
-      const w = ctx.measureText(text).width + 14 * k, h = 17 * k, x = c.x - w / 2, y = c.y + RADIUS * 0.72;
-      ctx.fillStyle = FACTION_DARK[dep.faction] ?? '#55554e'; ctx.globalAlpha = 0.92;
-      ctx.beginPath(); ctx.roundRect?.(x, y, w, h, 8 * k); ctx.fill();
-      ctx.globalAlpha = 1; ctx.fillStyle = '#fffaf0'; ctx.fillText(text, c.x, y + h / 2 + 0.5 * k);
-    }
-    ctx.restore();
-  }
-  return kept.length;
+  return n;
 }
 
 /**
@@ -495,7 +364,7 @@ export function paintPeople(ctx, { tiles = [], zoom = 1, t = (globalThis.perform
  * identity.mjs). Drawn screen-sized; at most NAME_TAG_MAX, the nearest to
  * `centre` (world px) first. `onImage` redraws when a portrait decodes.
  */
-export function paintNameTags(ctx, { tiles = [], zoom = 1, nameOf = () => null, centre = null, onImage = () => {}, fogOf = () => 'clear', present = null, tierName = null } = {}) {
+export function paintNameTags(ctx, { tiles = [], zoom = 1, nameOf = () => null, centre = null, onImage = () => {}, fogOf = () => 'clear', present = null, tierName = null, boxes = [] } = {}) {
   if (RADIUS * zoom < NAME_TAG_MIN_R) return 0;
   const all = RADIUS * zoom >= NAME_TAG_ALL_R;
   // a lord who is out on their land is named from afar too (people/life.mjs)
@@ -515,6 +384,7 @@ export function paintNameTags(ctx, { tiles = [], zoom = 1, nameOf = () => null, 
     const label = tierName ? `${who.name} \u00b7 ${tierName(u.tier)}` : who.name;
     const w = ctx.measureText(label).width + 32 * k, h = 22 * k;
     const x = u.x - w / 2, y = u.y - RADIUS * (0.62 + (zoomBoost(RADIUS * zoom) - 1) * 0.9) - h;
+    boxes.push({ x, y, w, h });
     ctx.globalAlpha = 0.94;
     ctx.fillStyle = '#fffaf0'; ctx.strokeStyle = FACTION_DARK[who.faction] ?? '#55554e'; ctx.lineWidth = 1.5 * k;
     ctx.beginPath(); ctx.roundRect?.(x, y, w, h, 10 * k); ctx.fill(); ctx.stroke();
