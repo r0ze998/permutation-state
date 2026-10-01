@@ -382,4 +382,21 @@ export default {
   'ふつう': 'Normal',
   '早送り': 'Fast',
   '自動では見せない': 'Not automatically',
+  // ---- the resource strip and its breakdown (hud/hud.mjs, UI plan E1); holding names (E5)
+  '+{0}/時': '+{0}/h',
+  '合計 {0} · 毎時 +{1}': 'Total {0} · +{1} per hour',
+  '増える量は建物と働く区画で決まります。満杯になると増えません。拠点の画面で収穫や建設ができます。': 'Growth comes from buildings and worked tiles; a full store stops growing. Harvest and build on the Holding tab.',
+  // ---- the holding tab's panels (screens/holding.mjs, UI plan E2)
+  '収穫': 'Harvest', '訓練': 'Train', '編成': 'Muster', '守備': 'Defend',
+  '拠点の操作': 'Holding actions',
+  '{0}が満杯：これ以上は増えません': '{0} full: no more growth',
+  '建設の列は空です': 'The build queue is empty',
+  '{0} +{1}/時': '{0} +{1}/h',
+  '守りを固める': 'Stronger defences',
+  '（{0}つ目）': '(copy {0})',
+  '{0}（1つ目の費用。2つ目からは高くなります）': '{0} (the first copy\'s cost; later copies cost more)',
+  '足りない：{0}': 'Short: {0}',
+  '建設の列がいっぱいです（4つまで）': 'The build queue is full (4 at most)',
+  '控えの兵がいません：先に訓練しましょう': 'No troops in reserve: train some first',
+  '{0} · ほか {1} 種': '{0} · {1} more',
 };

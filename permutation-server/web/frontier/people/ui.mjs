@@ -4,10 +4,10 @@
 // carry data-name (proper names, not translated text).
 import { html, raw } from '../../util.mjs';
 import { L, fmtNum, lang } from '../../lang.mjs';
-import { factionName, DOCTRINE_NAMES } from '../fi18n.mjs';
+import { factionName, DOCTRINE_NAMES, TIERS } from '../fi18n.mjs';
 import { hostParts } from '../faddr.mjs';
 import { decode as fromBase58 } from '../../sdk/base58.mjs';
-import { identityOf, displayName, tagOf } from './identity.mjs';
+import { identityOf, displayName, tagOf, placeName } from './identity.mjs';
 import { avatarSvg } from './avatar.mjs';
 import { leaderSvg, LEADERS, DOCTRINE_PITCH } from './leaders.mjs';
 import { ownerFaction } from './scene.mjs';
@@ -18,6 +18,13 @@ export function personChip(identity, faction, { size = 28, full = false, note = 
   if (!identity) return '';
   const name = displayName(identity, { full });
   return html`<span class="person">${raw(avatarSvg(identity, faction, { size, uid: `p${uid++ % 100000}` }))}<span class="person-name" data-name>${name}</span>${note ? html`<span class="person-note">${note}</span>` : ''}</span>`;
+}
+
+/** A holding's name: its place and tier, 「サフォードの町」 / "Saford's Town" (UI plan E5). */
+export function holdingName(h, tier = h?.tier) {
+  if (!h) return '';
+  const n = placeName(h.p, h.q, h.site)[lang() === 'en' ? 'en' : 'ja'];
+  return L`${n}の${TIERS[tier] ?? TIERS[0]}`;
 }
 
 /** The viewer's own citizen tag: a holding's owner, else the Citizen address of the wallet. */

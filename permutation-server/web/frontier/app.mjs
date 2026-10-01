@@ -96,6 +96,7 @@ import { createRoster } from './people/roster.mjs';
 import * as scene from './people/scene.mjs';
 import { activityText } from './people/activity.mjs';
 import { hostOwner } from './people/ui.mjs';
+import { leaderSvg } from './people/leaders.mjs';
 import { battleScene, startBattle, battleLive, BATTLE_SPEEDS, PHASE } from './people/battle.mjs';
 import { decode as decodeAccount } from './fcodec.mjs';
 import { fromBase64 } from '../sdk/bytes.mjs';
@@ -312,6 +313,25 @@ function frameRoute() {
   mapRef.setView({ x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2 + (phone ? size.height * 0.22 / zoom : 0), zoom });
 }
 
+/** The resource breakdown under the header (hud.renderBreakdown): every holding's store of one resource. */
+function renderResPop(now) {
+  let el = $('res-pop');
+  if (!FS.resOpen || FS.mode !== 'play') { if (el) el.hidden = true; return; }
+  const doc = globalThis.document;
+  if (!el && doc) {
+    el = doc.createElement('div');
+    el.id = 'res-pop'; el.className = 'res-pop'; el.setAttribute('role', 'dialog');
+    doc.body.appendChild(el);
+  }
+  if (!el) return;
+  el.hidden = false;
+  if (FS.resOpen === '*') { el.setAttribute('aria-label', L`資源`); setHtmlIfChanged(el, hud.renderAllBreakdowns(hud.allBreakdowns(FS.holdings ?? [], now))); return; }
+  const b = hud.resourceBreakdown(FS.holdings ?? [], FS.resOpen, now);
+  el.setAttribute('aria-label', b.name);
+  setHtmlIfChanged(el, hud.renderBreakdown(b));
+}
+function closeResPop() { if (FS.resOpen) { FS.resOpen = null; renderHudTick(FS.chain?.now?.() ?? 0); } }
+
 function renderHudTick(now) {
   const m = hud.bellModel(FS.clock, now);
   frameRoute();
@@ -330,8 +350,10 @@ function renderHudTick(now) {
   if (strip) {
     const tokens = FS.mode === 'play' ? hud.resourceModel(hud.activeHolding(FS), now ?? 0) : [];
     strip.hidden = !tokens.length;
-    setHtmlIfChanged(strip, hud.renderStrip(tokens));
+    const w = globalThis.innerWidth ?? 1440;
+    setHtmlIfChanged(strip, hud.renderStrip(tokens, FS.resOpen ?? null, w < 760 ? 1 : w < 1100 ? 3 : w < 1440 ? 3 : w < 1700 ? 5 : 8));
   }
+  renderResPop(now ?? 0);
   tickFeed();
   renderFeed();
   const attn = $('attn-pill');
@@ -573,7 +595,7 @@ function cycleHolding(dir) {
 export const HUD_ACTIONS = {
   'search-go': d => { const x = searchHits[num(d.i)]; if (!x) return; goToItem({ ...x, tab: FS.mode === 'play' ? 'map' : undefined }); const el = $('map-search-results'); if (el) setHtml(el, ''); },
   lens: d => setLens(d.lens),
-  goto: d => { leaveReport(); goToItem({ p: num(d.p), q: num(d.q), tab: 'map' }); },
+  goto: d => { leaveReport(); closeResPop(); goToItem({ p: num(d.p), q: num(d.q), tab: 'map' }); },
   'intro-close': () => closeIntro(),
   'intro-open': () => openIntro(),
   'feed-go': d => goToItem((FS.feed ?? []).find(x => x.id === d.id)),
@@ -581,6 +603,9 @@ export const HUD_ACTIONS = {
   'feed-filter': d => { FS.feedFilter = feed.FEED_FILTERS.includes(d.f) ? d.f : 'all'; invalidate('panel'); },
   autopan: () => { const sc = scope(); const v = !FS.ui?.autoPan; FS.ui = sc ? saveUi(uiStorage, uiKey(sc), { autoPan: v }) : { ...(FS.ui ?? {}), autoPan: v }; invalidate('panel'); },
   'battle-play': d => { leaveReport(); playBattle(num(d.p), num(d.q), num(d.bell), { focus: true }); },
+  'res-open': d => { FS.resOpen = FS.resOpen === d.r ? null : d.r; renderHudTick(FS.chain?.now?.() ?? 0); },
+  'res-close': () => closeResPop(),
+  'hp-jump': d => { const el = /^hp-[a-z]+$/.test(d.id ?? '') ? $(d.id) : null; el?.scrollIntoView?.({ block: 'start', behavior: 'smooth' }); el?.querySelector?.('h4')?.focus?.(); },
   'battle-fx': d => { if (!['normal', 'fast', 'off'].includes(d.v)) return; const sc = scope(); FS.ui = sc ? saveUi(uiStorage, uiKey(sc), { battleFx: d.v }) : { ...(FS.ui ?? {}), battleFx: d.v }; invalidate('panel'); },
   attn: () => {
     const items = hud.attentionItems(FS);
@@ -600,7 +625,8 @@ export const HUD_ACTIONS = {
 function renderChips() {
   const f = $('faction-chip');
   const fc = factionChip(FS.citizen);
-  if (f) { f.hidden = !fc; f.textContent = fc ?? ''; }
+  // the faction chip carries its leader's portrait (UI plan F1); on phones the portrait alone
+  if (f) { f.hidden = !fc; setHtmlIfChanged(f, fc ? html`${raw(leaderSvg(FS.citizen.faction, { size: 26 }))}<span class="chip-text">${fc}</span>` : ''); }
   const q = $('quota-chip');
   const qc = quotaChip(FS.quota);
   if (q) { q.hidden = !qc; q.textContent = qc ?? ''; }
@@ -717,6 +743,7 @@ function delegate(doc) {
   doc.addEventListener('keydown', e => {
     const intro = $('intro');
     if (intro && !intro.hidden && (e.key === 'Escape' || e.key === 'Enter')) { e.preventDefault(); closeIntro(); return; }
+    if (e.key === 'Escape' && FS.resOpen) { e.preventDefault(); closeResPop(); return; }
     // . , next / previous ready host; ] [ next / previous holding; 1–4 the lenses (never while typing)
     if ((FS.mode !== 'play' && !/^[1-4]$/.test(e.key)) || e.target?.closest?.('input, select, textarea') || e.metaKey || e.ctrlKey || e.altKey) return;
     const k = { '.': () => cycleHost(1), ',': () => cycleHost(-1), ']': () => cycleHolding(1), '[': () => cycleHolding(-1),

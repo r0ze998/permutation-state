@@ -90,6 +90,16 @@ function houseName(rnd) {
   return { en: cap(joinRomaji([s[0], h[0]])), ja: s[1] + h[1] };
 }
 
+/**
+ * The place name of a site (UI plan E5: "Saford" → 「サフォードの町」): from
+ * its coordinates alone, so every page — a spectator's too — names a
+ * holding the same way, and the name stays when the site changes hands.
+ */
+export function placeName(p, q, site) {
+  const k = ((BigInt(p + 0x8000) & 0xffffn) << 24n) | ((BigInt(q + 0x8000) & 0xffffn) << 8n) | BigInt(site & 0xff);
+  return houseName(rngOf(k, 0x51ace));
+}
+
 // ------------------------------------------------------------------ faces
 /** Skin, hair and eye palettes of the generated portraits (avatar.mjs draws them). */
 export const SKIN = Object.freeze(['#f2d3b8', '#e8bf9a', '#d6a27a', '#b9805a', '#8f5c3e', '#6a412b']);

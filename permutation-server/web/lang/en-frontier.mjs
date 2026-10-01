@@ -170,7 +170,6 @@ export default {
   "{0} マス · 1 州 · 約 {1} 分": "{0} tiles · 1 province · about {1} min",
   "1 マス · 1 州 · 約 {0} 分": "1 tile · 1 province · about {0} min",
   "{0}:{1} から（UTC）": "from {0}:{1} (UTC)",
-  "{0}（1つ目）· {1} +{2}/時": "{0} (first copy) · {1} +{2}/h",
   "「軍勢」で斥候の軍勢の「探索」を押してください。": "In Hosts, press Explore on a Scout host.",
   "「軍勢」で軍勢の「進軍」を押すと、ここで行き先と命令を決めます。": "Press March on a host in Hosts to choose its destination and orders here.",
   "あと {0}": "in {0}",

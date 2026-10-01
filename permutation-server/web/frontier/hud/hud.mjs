@@ -14,14 +14,14 @@
 // Models are pure (they read FS and return numbers and text the tests
 // check); the render functions return markup; app.mjs puts it in the page.
 import { html, raw } from '../../util.mjs';
-import { L, fmtNum } from '../../lang.mjs';
+import { L, fmtNum, lang } from '../../lang.mjs';
 import { RESOURCES, RESOURCE_ORDER, TIERS, factionName } from '../fi18n.mjs';
 import { storesAt, holdingFacts, SETTLER } from '../fland.mjs';
 import { hostRows } from '../screens/host.mjs';
 import { DEPART_STAMINA } from '../fmarch.mjs';
 import { bellChip, countdown, BELL_SECS } from '../clock.mjs';
 import { swatch } from '../screens/shell.mjs';
-import { personChip, ownTag, highlights, renderHighlights } from '../people/ui.mjs';
+import { personChip, ownTag, highlights, renderHighlights, holdingName } from '../people/ui.mjs';
 import { leaderSvg } from '../people/leaders.mjs';
 import { identityOf } from '../people/identity.mjs';
 
@@ -117,6 +117,9 @@ export function attentionItems(FS) {
   return out;
 }
 
+/** A mark per kind of item (not colour alone, UI plan E6). */
+export const TODO_GLYPH = Object.freeze({ incoming: '⚠', settle: '✓', draft: '✎', explore: '⌕', idle: '⚑', build: '⚒', muster: '⚔', dormant: '☾', full: '▣' });
+
 /** A holding this close to dormancy (seconds) is an attention item. */
 export const DORMANT_WARN_SECS = 6 * 3600;
 
@@ -132,12 +135,71 @@ export function attentionText(items) {
 }
 
 // ------------------------------------------------------------------ markup
-export function renderStrip(tokens) {
-  return tokens.map(r => html`<span class="res res-${r.state}" title="${resourceTitle(r)}">
+const STATE_RANK = { full: 0, near: 1, ok: 2 };
+/**
+ * The strip: `max` tokens (the header's room: one on a phone), the most
+ * pressing first (full, then near full); when some are left out, a press
+ * opens every resource ('*').
+ */
+export function renderStrip(tokens, open = null, max = tokens.length) {
+  const all = tokens.length > max;
+  const shown = all ? [...tokens].sort((a, b) => STATE_RANK[a.state] - STATE_RANK[b.state] || tokens.indexOf(a) - tokens.indexOf(b)).slice(0, max) : tokens;
+  return shown.map(r => html`<button type="button" class="res res-${r.state}" data-act="res-open" data-r="${all ? '*' : r.resource}" aria-expanded="${open === (all ? '*' : r.resource) ? 'true' : 'false'}" aria-controls="res-pop" title="${resourceTitle(r)}" aria-label="${all ? L`${resourceTitle(r)} · ほか ${fmtNum(tokens.length - max)} 種` : resourceTitle(r)}">
+    <span class="res-dot res-c-${r.resource}" aria-hidden="true"></span>
     <span class="res-name">${r.name}</span>
-    <span class="res-val">${fmtNum(r.value)}</span>
+    <span class="res-val">${fmtNum(r.value)}</span><span class="res-short" aria-hidden="true">${shortNum(r.value)}</span>
+    ${r.perHour > 0 ? html`<span class="res-rate">${L`+${fmtNum(r.perHour)}/時`}</span>` : ''}
     ${r.state === 'full' ? html`<span class="res-flag">${L`満杯`}</span>` : r.state === 'near' ? html`<span class="res-flag">${span(r.fullIn)}</span>` : ''}
-  </span>`);
+  </button>`);
+}
+
+/** A number in a few characters for the phone strip: 980, 1.2k / 1.2万. */
+export function shortNum(n) {
+  const v = Number(n ?? 0);
+  if (Math.abs(v) < 1000) return String(Math.round(v));
+  try { return new Intl.NumberFormat(lang() === 'en' ? 'en' : 'ja', { notation: 'compact', maximumFractionDigits: 1 }).format(v); } catch { return fmtNum(v); }
+}
+
+/**
+ * One resource across the viewer's holdings (UI plan E1, Civ's yield
+ * breakdown on press): `{resource, name, total, perHour, rows: [{holding,
+ * value, cap, perHour, fullIn, state}]}`.
+ */
+export function resourceBreakdown(holdings, resource, now) {
+  const rows = [];
+  for (const h of holdings ?? []) {
+    const r = resourceModel(h, now).find(x => x.resource === resource);
+    if (r) rows.push({ holding: h, value: r.value, cap: r.cap, perHour: r.perHour, fullIn: r.fullIn, state: r.state });
+  }
+  return { resource, name: RESOURCES[resource], total: rows.reduce((a, r) => a + r.value, 0), perHour: rows.reduce((a, r) => a + r.perHour, 0), rows };
+}
+
+/** Every resource of the viewer's holdings in one list (the phone's strip shows one): `[breakdown]`. */
+export function allBreakdowns(holdings, now) {
+  const seen = new Set();
+  for (const h of holdings ?? []) for (const r of resourceModel(h, now)) seen.add(r.resource);
+  return RESOURCE_ORDER.filter(r => seen.has(r)).map(r => resourceBreakdown(holdings, r, now));
+}
+
+/** The popover for every resource: one row each, a press opens that one's breakdown. */
+export function renderAllBreakdowns(list) {
+  return html`<div class="res-pop-head"><strong>${L`資源`}</strong><span></span>
+    <button type="button" class="btn small" data-act="res-close" aria-label="${L`閉じる`}">×</button></div>
+    <ul class="list res-rows">${list.map(b => html`<li class="${b.rows.some(r => r.state === 'full') ? 'res-full' : ''}"><button type="button" class="res-row" data-act="res-open" data-r="${b.resource}">
+      <span class="res-row-name"><span class="res-dot res-c-${b.resource}" aria-hidden="true"></span> ${b.name}</span><span>${fmtNum(b.total)}</span>
+      <span class="muted">${L`毎時 +${fmtNum(b.perHour)}`}</span><span class="muted">${b.rows.some(r => r.state === 'full') ? L`満杯` : ''}</span></button></li>`)}</ul>`;
+}
+
+/** The breakdown popover's markup. */
+export function renderBreakdown(b) {
+  if (!b) return '';
+  return html`<div class="res-pop-head"><strong>${b.name}</strong> <span>${L`合計 ${fmtNum(b.total)} · 毎時 +${fmtNum(b.perHour)}`}</span>
+    <button type="button" class="btn small" data-act="res-close" aria-label="${L`閉じる`}">×</button></div>
+    <ul class="list res-rows">${b.rows.map(r => html`<li class="res-${r.state}"><button type="button" class="res-row" data-act="goto" data-p="${r.holding.p}" data-q="${r.holding.q}">
+      <span class="res-row-name">${holdingName(r.holding)}</span>
+      <span>${fmtNum(r.value)} / ${fmtNum(r.cap)}</span><span class="muted">${L`毎時 +${fmtNum(r.perHour)}`}</span>
+      <span class="muted">${r.fullIn === 0 ? L`満杯` : r.fullIn !== null ? L`満杯まで ${span(r.fullIn)}` : ''}</span></button></li>`)}</ul>
+    <p class="muted">${L`増える量は建物と働く区画で決まります。満杯になると増えません。拠点の画面で収穫や建設ができます。`}</p>`;
 }
 
 /**
@@ -201,7 +263,7 @@ export function renderRail(FS) {
     : html`<p class="rail-faction muted">${FS.mode === 'spectate' ? L`観戦中` : L`まだ陣営に加わっていません`}</p>`;
   const list = hs.length
     ? html`<ul class="rail-list">${hs.map((h, i) => html`<li><button type="button" class="rail-holding" data-act="holding-pick" data-i="${i}" ${raw(h === active ? 'aria-current="true"' : '')}>
-        <span class="rail-tier">${TIERS[h.tier] ?? h.tier}</span>
+        <span class="rail-tier">${holdingName(h)}</span>
         <span class="rail-where">${L`州 ${h.p},${h.q} 区画 ${h.site + 1}`}</span>
         ${warned.has(`${h.p},${h.q}`) ? html`<span class="rail-warn">${L`来襲の恐れ`}</span>` : ''}
         ${(() => { const c = holdingCountdowns(FS, h); return c.length ? html`<span class="rail-clock">${c.join(' · ')}</span>` : ''; })()}
@@ -211,7 +273,7 @@ export function renderRail(FS) {
     ? html`<div class="rail-tiles">${TILES.map(t => html`<button type="button" class="rail-tile" data-act="tab" data-tab="${t.tab}" ${raw((FS.tab ?? 'map') === t.tab ? 'aria-pressed="true"' : 'aria-pressed="false"')}><span class="rail-glyph" aria-hidden="true">${t.glyph}</span><span>${t.text()}</span></button>`)}</div>`
     : '';
   const todo = items.length
-    ? html`<ol class="rail-todo">${items.map((x, i) => html`<li class="todo-${x.kind}"><button type="button" class="rail-todo-btn" data-act="attn-go" data-i="${i}">${x.text}</button></li>`)}</ol>`
+    ? html`<ol class="rail-todo">${items.map((x, i) => html`<li class="todo-${x.kind}"><button type="button" class="rail-todo-btn" data-act="attn-go" data-i="${i}"><span class="todo-glyph" aria-hidden="true">${TODO_GLYPH[x.kind] ?? '•'}</span>${x.text}</button></li>`)}</ol>`
     : html`<p class="muted">${L`次の鐘までにやることはありません`}</p>`;
   return html`${head}
     <h2 class="rail-h">${L`拠点`}</h2>${list}
