@@ -1103,12 +1103,12 @@ export async function boot() {
       const go = () => playBattle(bq[0], bq[1], bq[2], { focus: !FS.battleFocused }).then(ok => { if (ok) FS.battleFocused = true; });
       setTimeout(go, 4000); setInterval(go, (PHASE.end + 2.5) * 1000);
     }
-    if (ART_PREVIEW) {
-      // ?art=1&at=P,Q[,TILE[,ZOOM]]: the camera on a province, or on one tile at a zoom (presentation only)
+    if (ART_PREVIEW || ART_Q.has('at')) {
+      // ?at=P,Q[,TILE[,ZOOM]]: a link that opens the map on a province, or on one tile at a zoom (with ?art=1 the preview's default)
       const [ap, aq, at, az] = (ART_Q.get('at') ?? '2,0').split(',').map(Number);
       const P = Number.isInteger(ap) ? ap : 2, Q = Number.isInteger(aq) ? aq : 0;
       const c = Number.isInteger(at) ? (h => project(h.q, h.r))(tileHex(P, Q, at)) : provincePixel(P, Q);
-      map.setView({ x: c.x, y: c.y, zoom: Number.isFinite(az) && az > 0 ? az : 0.8 });
+      map.setView({ x: c.x, y: c.y, zoom: Number.isFinite(az) && az > 0 ? Math.min(az, 2.5) : 0.8 });
     }
   }
   invalidate('chip', 'status', 'panel');
