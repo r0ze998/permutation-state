@@ -240,6 +240,12 @@ export function standings(overviews) {
   return rows.sort((a, b) => b.holdings - a.holdings || b.provinces - a.provinces || a.faction - b.faction);
 }
 
+/** The standings list alone (the spectator's phone panel folds it). */
+export function renderStandingsList(FS) {
+  return html`<ol class="rail-standings">${standings(FS.overviews).map((r, i) => html`<li><span class="rank">${i + 1}</span>${raw(leaderSvg(r.faction, { size: 34 }))}<strong>${factionName(r.faction)}</strong>
+      <span class="muted">${L`拠点 ${fmtNum(r.holdings)} · ${fmtNum(r.provinces)} 州`}</span></li>`)}</ol>`;
+}
+
 function renderStandings(FS) {
   const rows = standings(FS.overviews);
   return html`<h2 class="rail-h">${L`勢力の順位`}</h2>

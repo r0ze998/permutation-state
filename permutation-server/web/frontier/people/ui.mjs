@@ -60,9 +60,12 @@ export function leaderCard(f, { size = 96 } = {}) {
  * `[{bell, kind, faction, identity, text}]` — departures (with the arrival
  * bell only: the destination is sealed), settlements, explores, clashes.
  */
-export function highlights(chronicle, overviews, roster, { limit = 8 } = {}) {
+export function highlights(chronicle, overviews, roster, { limit = 8, faction = null, bell = null } = {}) {
   const out = [];
   const list = chronicle ?? [];
+  // the spectator's filters (UI plan G3): one faction (a clash counts for the factions holding land in its province), one bell
+  const keep = x => (bell === null || x.bell === bell) && (faction === null || (x.factions ?? [x.faction]).includes(faction));
+  const push = x => { if (keep(x)) out.push(x); };
   for (let i = list.length - 1; i >= 0 && out.length < limit; i--) {
     const r = list[i].record ?? list[i];
     const bell = Number(r.bell);
@@ -72,23 +75,36 @@ export function highlights(chronicle, overviews, roster, { limit = 8 } = {}) {
       const id = hostOwner(roster, r.host_id);
       if (faction === null) continue;
       const who = id ? displayName(id) : L`名もない領主`;
-      out.push({ bell, kind: r.name === 'DEPART' ? 'depart' : 'explore', faction, identity: id,
+      push({ bell, kind: r.name === 'DEPART' ? 'depart' : 'explore', faction, identity: id, p: h.p, q: h.q,
         text: r.name === 'DEPART' ? L`${factionName(faction)}の${who}が出陣（第${fmtNum(Number(r.arrive_bell))}鐘に到着）` : L`${factionName(faction)}の${who}が州 ${Number(r.p)},${Number(r.q)} を探索` });
     } else if (r.name === 'SETTLE' && (Number(r.outcome) === 0 || Number(r.outcome) === 1)) {
       const p = Number(r.p), q = Number(r.q), site = Number(r.site);
       const faction = ownerFaction(overviews, p, q, site);
       const id = identityOf(tagOf(BigInt(String(r.citizen_tag))));
       if (faction === null) continue;
-      out.push({ bell, kind: 'settle', faction, identity: id, text: L`${factionName(faction)}の${displayName(id)}が州 ${p},${q} に入植` });
+      push({ bell, kind: 'settle', faction, identity: id, p, q, text: L`${factionName(faction)}の${displayName(id)}が州 ${p},${q} に入植` });
     } else if (r.name === 'CLASH') {
-      out.push({ bell, kind: 'clash', faction: null, identity: null, text: L`州 ${Number(r.p)},${Number(r.q)} で衝突（第${fmtNum(bell)}鐘）` });
+      const p = Number(r.p), q = Number(r.q);
+      push({ bell, kind: 'clash', faction: null, factions: provinceFactions(overviews, p, q), identity: null, p, q, clash: true, text: L`州 ${p},${q} で衝突（第${fmtNum(bell)}鐘）` });
     }
   }
   return out;
 }
 
-/** The highlights list markup. */
-export function renderHighlights(items) {
+/** The factions holding land in a province (the overviews). */
+export function provinceFactions(overviews, p, q) {
+  for (const o of overviews?.values?.() ?? []) {
+    const r = o.provinces?.find(x => x.p === p && x.q === q);
+    if (r) return [...new Set(r.owners.filter((f, j) => r.sites[j] === 1 && f < 6))];
+  }
+  return [];
+}
+
+/** The highlights list markup; with `go`, each item is a button to its place (a clash replays there). */
+export function renderHighlights(items, { go = false } = {}) {
   if (!items.length) return html`<p class="muted">${L`まだ見どころはありません`}</p>`;
-  return html`<ol class="highlights">${items.map(x => html`<li class="hl-${x.kind}">${x.identity ? raw(avatarSvg(x.identity, x.faction, { size: 24, uid: `h${uid++ % 100000}` })) : html`<span class="hl-dot" aria-hidden="true"></span>`}<span>${x.text}</span></li>`)}</ol>`;
+  const face = x => (x.identity ? raw(avatarSvg(x.identity, x.faction, { size: 24, uid: `h${uid++ % 100000}` })) : html`<span class="hl-dot" aria-hidden="true"></span>`);
+  return html`<ol class="highlights">${items.map(x => html`<li class="hl-${x.kind}">${go && Number.isInteger(x.p)
+    ? html`<button type="button" class="hl-go" data-act="${x.clash ? 'battle-play' : 'goto'}" data-p="${x.p}" data-q="${x.q}" data-bell="${x.bell}">${face(x)}<span>${x.text}</span></button>`
+    : html`${face(x)}<span>${x.text}</span>`}</li>`)}</ol>`;
 }

@@ -441,4 +441,9 @@ export default {
   'ガイド：ここから探索': 'Guide: explore from here',
   'ガイド：空き区画': 'Guide: free sites',
   'ガイド': 'Guide',
+  // ---- the spectator's controls (screens/spectate.mjs, UI plan G3)
+  '観戦の設定': 'Watching', '陣営で絞る': 'Faction', '鐘の年表': 'Bells', '最新': 'Latest',
+  '新しい戦いが起きたら、地図をそこへ動かして見せる': 'When a new battle happens, move the map there and show it',
+  '見どころ（{0}）': 'Highlights ({0})',
+  '参加する': 'Join',
 };

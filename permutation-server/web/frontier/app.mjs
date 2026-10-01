@@ -95,7 +95,7 @@ import * as search from './hud/search.mjs';
 import { createRoster } from './people/roster.mjs';
 import * as scene from './people/scene.mjs';
 import { activityText } from './people/activity.mjs';
-import { hostOwner } from './people/ui.mjs';
+import { hostOwner, provinceFactions } from './people/ui.mjs';
 import { leaderSvg } from './people/leaders.mjs';
 import * as glossary from './hud/glossary.mjs';
 import * as milestones from './hud/milestones.mjs';
@@ -200,7 +200,7 @@ export function panelMarkup(FS) {
 /** The panel of the practice and spectator pages. */
 export function modePanel(FS) {
   if (FS.mode === 'practice') return [renderNotice(FS.notice), practiceScreen.render(FS.practice, { kernelError: FS.practiceError ?? null })];
-  return [FS.selected ? inspect.render(FS, terrainRef, mapRef?.art?.activities ?? null) : '', spectateScreen.render(FS, { ownerOf: reportOwner })];
+  return [FS.selected ? inspect.render(FS, terrainRef, mapRef?.art?.activities ?? null) : '', spectateScreen.render(FS, { ownerOf: reportOwner, standings: hud.renderStandingsList(FS) })];
 }
 
 /**
@@ -686,6 +686,10 @@ export const HUD_ACTIONS = {
   'battle-play': d => { leaveReport(); playBattle(num(d.p), num(d.q), num(d.bell), { focus: true }); },
   'res-open': d => { FS.resOpen = FS.resOpen === d.r ? null : d.r; renderHudTick(FS.chain?.now?.() ?? 0); },
   'res-close': () => closeResPop(),
+  // the spectator (screens/spectate.mjs, UI plan G3): faction filter, bell timeline, the camera following battles
+  'watch-faction': d => { FS.watch = { ...(FS.watch ?? {}), faction: d.f === '' ? null : num(d.f) }; invalidate('panel'); },
+  'watch-bell': d => { FS.watch = { ...(FS.watch ?? {}), bell: d.bell === '' ? null : num(d.bell) }; invalidate('panel'); },
+  'watch-auto': () => { const v = (FS.watch?.auto ?? true) === false; FS.watch = { ...(FS.watch ?? {}), auto: v }; try { globalThis.localStorage?.setItem('ps-fwatch:v1', v ? '1' : '0'); } catch { /* none */ } invalidate('panel'); },
   'ob-go': () => guideGo(),
   'guide-level': d => { if (!guide.GUIDE_LEVELS.includes(d.v)) return; const sc = scope(); FS.ui = sc ? saveUi(uiStorage, uiKey(sc), { guide: d.v }) : { ...(FS.ui ?? {}), guide: d.v }; guideCache.at = 0; invalidate('panel', 'map', 'rail'); renderHudTick(FS.chain?.now?.() ?? 0); },
   'mile-close': () => closeMilestone(),
@@ -865,8 +869,23 @@ function delegate(doc) {
 }
 
 /** The spectator's poll: the events and the bell sheet at load, then every 30 s (§4.2), paused while hidden. */
+/** A clash newer than the last one seen: the spectator's camera goes there and plays it (unless turned off). */
+let watchSeen = null;
+function followBattles() {
+  const c = reportScreen.clashesFrom(FS.chronicle ?? [], 1)[0];
+  if (!c) return;
+  const key = `${c.p},${c.q},${c.bell}`;
+  if (watchSeen === null) { watchSeen = key; return; }   // the first look is not news
+  if (key === watchSeen) return;
+  watchSeen = key;
+  const f = FS.watch?.faction;
+  if (FS.watch?.auto === false || FS.report || (Number.isInteger(f) && !provinceFactions(FS.overviews, c.p, c.q).includes(f))) return;
+  playBattle(c.p, c.q, c.bell, { focus: true }).then(ok => { if (!ok) mapRef?.focus(c.p, c.q, 0.6); });
+}
+
 function startSpectate(herald) {
   useHerald(herald);
+  try { FS.watch = { ...(FS.watch ?? {}), auto: globalThis.localStorage?.getItem('ps-fwatch:v1') !== '0' }; } catch { /* none */ }
   let errors = 0, first = true;
   const tick = async () => {
     const wait = nextPoll({ kind: 'own', hidden: first ? false : globalThis.document?.hidden, errors });
@@ -875,6 +894,7 @@ function startSpectate(herald) {
     try {
       await refreshPlay();
       FS.bellItems = spectateScreen.spectateBells(FS, FS.chain?.now() ?? 0);
+      followBattles();
       errors = 0;
     } catch (e) { errors++; console.error('frontier spectate:', e); }
     invalidate('panel');

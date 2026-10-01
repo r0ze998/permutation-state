@@ -102,3 +102,20 @@ test('the guide: levels filter, the onboarding card hides below "all"', async ()
   for (const k of ['march', 'build', 'scout', 'settle']) assert.doesNotMatch(G.guideLabel({ kind: k }) + G.goText({ kind: k, host: '1' }), /[぀-ヿ一-鿿]/);
   setLang('ja');
 });
+
+test('the spectator: bells with events, highlights filtered by faction and bell, clashes count for the province\'s factions', async () => {
+  const SP = await import('../../permutation-server/web/frontier/screens/spectate.mjs');
+  const U = await import('../../permutation-server/web/frontier/people/ui.mjs');
+  const owners = Array(12).fill(7); owners[0] = 2; owners[1] = 4;
+  const sites = Array(12).fill(0); sites[0] = 1; sites[1] = 1;
+  const overviews = new Map([[1, { provinces: [{ p: 1, q: 0, owners, sites }] }]]);
+  const chronicle = [{ record: { name: 'CLASH', p: 1, q: 0, bell: 40 } }, { record: { name: 'CLASH', p: 1, q: 0, bell: 42 } }, { record: { name: 'HARVEST', bell: 42 } }];
+  assert.deepEqual(SP.eventBells(chronicle), [{ bell: 42, events: 1, clashes: 1 }, { bell: 40, events: 1, clashes: 1 }]);
+  assert.equal(U.highlights(chronicle, overviews, null, { faction: 2 }).length, 2);
+  assert.equal(U.highlights(chronicle, overviews, null, { faction: 3 }).length, 0);
+  assert.deepEqual(U.highlights(chronicle, overviews, null, { bell: 40 }).map(x => x.bell), [40]);
+  assert.match(String(U.renderHighlights(U.highlights(chronicle, overviews, null), { go: true })), /data-act="battle-play" data-p="1" data-q="0" data-bell="42"/);
+  const panel = [SP.render({ chronicle, overviews, watch: { faction: 2, bell: 42 } })].flat(9).map(String).join('');
+  assert.match(panel, /data-act="watch-bell" data-bell="42" aria-pressed="true"/);
+  assert.match(panel, /data-act="watch-faction" data-f="2" aria-pressed="true"/);
+});
