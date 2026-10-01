@@ -20,6 +20,7 @@ import { activitiesFor } from '../people/activity.mjs';
 import { lifeAt } from '../people/life.mjs';
 import { paintBattle, battleTiles } from '../people/battle.mjs';
 import { provinceTokens, paintToken, placePills } from '../people/units.mjs';
+import { paintMoments } from '../people/moments.mjs';
 import { BOUNDARY_HALO, BOUNDARY_INK, FOG, UNOPENED_FILL, paintSigil, provincePixel, PROVINCE_CIRCUMRADIUS } from './layers.mjs';
 
 const BASE = new URL('../art/', import.meta.url);
@@ -832,6 +833,8 @@ export class SpriteArt {
     this.activities = activities;
     this.tiles = tiles;
     const moving = people ? paintPeople(ctx, { tiles, zoom, explores: people.explores ?? [], marches: people.marches ?? [], constructions: people.constructions ?? [], pills }) : 0;
+    // one-shot moments: harvest yields, a building done, a host setting out, an arrival out of the mist
+    if (people?.moments?.length && RADIUS * zoom >= HOST_FIGURE_MIN_R * 0.8 && paintMoments(ctx, people.moments, { tiles, k: 1 / zoom, now: (globalThis.performance?.now?.() ?? Date.now()) / 1000 })) this.tokensMoving = true;
     // pass 2d: battle scenes playing (people/battle.mjs)
     let fighting = 0;
     for (const b of people?.battles ?? []) if (paintBattle(ctx, b, { zoom, lossText: people.lossText, fateText: people.fateText })) fighting++;

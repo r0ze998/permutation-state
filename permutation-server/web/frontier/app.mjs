@@ -105,6 +105,7 @@ import { forecast, forecastKey } from './hud/forecast.mjs';
 import { BUILD_ITEMS } from './fland.mjs';
 import { UNIT_KINDS } from './people/units.mjs';
 import { reachTiles, reachSteps } from './hud/reach.mjs';
+import { momentSnapshot, detectMoments, liveMoments } from './people/moments.mjs';
 import * as pins from './hud/pins.mjs';
 import { battleScene, startBattle, battleLive, BATTLE_SPEEDS, PHASE } from './people/battle.mjs';
 import { decode as decodeAccount } from './fcodec.mjs';
@@ -285,6 +286,7 @@ export function peopleSource() {
     marchingHosts: new Set(ownColumns().map(m => m.host)),
     restBelow: DEPART_STAMINA,
     constructions: constructionsNow(),
+    moments: liveMoments(FS.moments ?? [], performance.now() / 1000),
     nameOf: ownNamer(scene.namer(rosterRef)),
     life: FS.life ?? null,
     tierName: t => TIERS[t] ?? '',
@@ -430,7 +432,8 @@ function constructionsNow() {
     if (seen.has(key) || !(doneAt > now)) return;
     seen.add(key);
     const total = Math.max(60, doneAt - startTs);
-    out.push({ p, q, site, share: Math.max(0, Math.min(1, 1 - (doneAt - now) / total)), label: `${BUILDINGS[BUILD_ITEMS[item]?.resource] ?? ''} ${hud.span(doneAt - now)}`.trim() });
+    const name = BUILDINGS[BUILD_ITEMS[item]?.resource] ?? '';
+    out.push({ p, q, site, name, share: Math.max(0, Math.min(1, 1 - (doneAt - now) / total)), label: `${name} ${hud.span(doneAt - now)}`.trim() });
   };
   for (const h of FS.holdings ?? []) for (const q of h.queue ?? []) {
     const done = Number(q.doneAt ?? 0);
@@ -556,8 +559,20 @@ function updateForecast() {
     .finally(() => { fcBusy = null; invalidate('panel'); });
 }
 
+/** Once a second: compare the page's state with the last look and start the moments it shows (people/moments.mjs). */
+let momentPrev = null;
+function checkMoments() {
+  if (!FS.provinces) return;
+  const next = momentSnapshot({ life: FS.life ?? new Map(), constructions: constructionsNow(), provinces: FS.provinces });
+  const t = performance.now() / 1000;
+  const fresh = detectMoments(momentPrev, next, t);
+  momentPrev = next;
+  if (fresh.length) { FS.moments = liveMoments([...(FS.moments ?? []), ...fresh], t); peopleCache.at = -1; mapRef?.invalidate(); }
+}
+
 function renderHudTick(now) {
   const m = hud.bellModel(FS.clock, now);
+  checkMoments();
   frameRoute();
   updateForecast();
   ringToll(m.bell);

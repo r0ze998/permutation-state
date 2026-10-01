@@ -228,3 +228,31 @@ test('a battle of three factions on one tile: every side in the scene, and it pa
   for (const at of [0.5, 1.5, 3, 4.5, 6, 6.9]) assert.equal(B.paintBattle(ctx, play, { zoom: 2, now: at }), true, `phase at ${at} s`);
   assert.equal(B.paintBattle(ctx, play, { zoom: 2, now: 8 }), false, 'over after the end');
 });
+
+test('units redesign: one token per faction per tile, status from state; moments from real changes only', async () => {
+  const U = await import('../../permutation-server/web/frontier/people/units.mjs');
+  const M = await import('../../permutation-server/web/frontier/people/moments.mjs');
+  const hosts = [
+    { id: 1n, faction: 0, unit: 0, tile: 5, state: 1, troops: 600, stamina: 110 },
+    { id: 2n, faction: 0, unit: 6, tile: 5, state: 1, troops: 100, stamina: 120 },
+    { id: 3n, faction: 2, unit: 2, tile: 5, state: 1, troops: 300, stamina: 90 },
+    { id: 4n, faction: 0, unit: 0, tile: 9, state: 3, troops: 400, stamina: 50 },
+  ];
+  const toks = U.provinceTokens({ p: 1, q: 0, hosts, viewerFaction: 0 });
+  const on5 = toks.filter(t => t.tile === 5);
+  assert.equal(on5.length, 2, 'two factions on tile 5: two tokens, not three figures');
+  const mine = on5.find(t => t.faction === 0);
+  assert.deepEqual([mine.kind, mine.troops, mine.n, mine.status, mine.own], ['spearman', 700, 2, 'fight', true]);
+  assert.equal(on5.find(t => t.faction === 2).kind, 'horseman');
+  assert.equal(toks.find(t => t.tile === 9).status, 'sealed');
+  assert.equal(U.provinceTokens({ p: 1, q: 0, hosts, marching: new Set(['4']) }).some(t => t.tile === 9), false, 'the own column walks its road instead');
+  const pts = U.routePoints({ p: 1, q: 0, tile: 5, dirs: [0, 0, 1] });
+  assert.equal(pts.length, 4);
+  const a = U.alongPath(pts, 0), b = U.alongPath(pts, 1);
+  assert.ok(Math.abs(a.x - pts[0].x) < 1e-6 && Math.abs(b.x - pts[3].x) < 1e-6);
+  const s0 = M.momentSnapshot({ life: new Map([['1,0,3', { harvest: 40 }]]), constructions: [{ p: 1, q: 0, site: 3, name: 'Farm' }] });
+  assert.deepEqual(M.detectMoments(null, s0, 0), [], 'the first look is not news');
+  const s1 = M.momentSnapshot({ life: new Map([['1,0,3', { harvest: 41 }]]), constructions: [] });
+  assert.deepEqual(M.detectMoments(s0, s1, 5).map(m => [m.kind, m.label ?? null]), [['harvest', null], ['built', 'Farm']]);
+  assert.equal(M.liveMoments([{ kind: 'built', t0: 0 }], 10).length, 0);
+});
