@@ -7,7 +7,7 @@ import { L, fmtNum, lang } from '../../lang.mjs';
 import { factionName, DOCTRINE_NAMES, TIERS } from '../fi18n.mjs';
 import { hostParts } from '../faddr.mjs';
 import { decode as fromBase58 } from '../../sdk/base58.mjs';
-import { identityOf, displayName, tagOf, placeName } from './identity.mjs';
+import { identityOf, displayName, tagOf, placeName, withProfile } from './identity.mjs';
 import { avatarSvg } from './avatar.mjs';
 import { leaderSvg, LEADERS, DOCTRINE_PITCH } from './leaders.mjs';
 import { ownerFaction } from './scene.mjs';
@@ -35,6 +35,25 @@ export function ownTag(FS) {
     const a = FS.wallet && FS.pin?.addresses?.of('Citizen', { wallet: FS.wallet.address });
     return a ? tagOf(fromBase58(a)) : null;
   } catch { return null; }
+}
+
+/** The viewer's identity: derived from the tag, with their own verified profile's name (F4). */
+export function ownIdentity(FS) {
+  const tag = ownTag(FS);
+  return tag === null ? null : withProfile(identityOf(tag), FS.ownProfile ?? null);
+}
+
+/** The "your name" section (More): the name others see, a form to sign a new one, the way back. */
+export function renderNameForm(FS) {
+  const id = ownIdentity(FS);
+  if (!id || !FS.wallet) return '';
+  const derived = identityOf(tagOf(BigInt(`0x${id.tag}`)));
+  return html`<section aria-labelledby="name-title"><h3 id="name-title">${L`あなたの名前`}</h3>
+    <p>${personChip(id, FS.citizen?.faction ?? 0, { size: 40, full: true })}</p>
+    <form class="inline" data-form="profile-name"><label>${L`新しい名前（24文字まで）`}<input name="name" maxlength="24" autocomplete="nickname" value="${id.profile ? id.given.ja : ''}"></label>
+      <button type="submit" class="btn primary" ${raw(FS.nameBusy ? 'disabled' : '')}>${FS.nameBusy ? L`署名を待っています…` : L`ウォレットで署名して使う`}</button></form>
+    ${id.profile ? html`<p><button type="button" class="btn small" data-act="profile-clear">${L`元の名前（${displayName(derived, { full: true })}）に戻す`}</button></p>` : ''}
+    <p class="muted">${L`名前はウォレットの署名つきで、この端末に保存されます。ほかの人の画面に出るのは、名前の置き場所が決まる次の段階（M2）からです。`}</p></section>`;
 }
 
 /** The identity of a host's owner (its holding's holder in the roster), or null. */

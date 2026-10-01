@@ -95,7 +95,8 @@ import * as search from './hud/search.mjs';
 import { createRoster } from './people/roster.mjs';
 import * as scene from './people/scene.mjs';
 import { activityText } from './people/activity.mjs';
-import { hostOwner, provinceFactions } from './people/ui.mjs';
+import { hostOwner, provinceFactions, renderNameForm, ownTag } from './people/ui.mjs';
+import * as profile from './people/profile.mjs';
 import { leaderSvg } from './people/leaders.mjs';
 import * as glossary from './hud/glossary.mjs';
 import * as milestones from './hud/milestones.mjs';
@@ -105,7 +106,7 @@ import { decode as decodeAccount } from './fcodec.mjs';
 import { fromBase64 } from '../sdk/bytes.mjs';
 import { tileHex } from './fgeo.mjs';
 import { project } from '../map.mjs';
-import { identityOf, displayName } from './people/identity.mjs';
+import { identityOf, displayName, withProfile, tagKey } from './people/identity.mjs';
 import { lifeAt, lordLine } from './people/life.mjs';
 
 const $ = id => globalThis.document?.getElementById(id);
@@ -193,7 +194,7 @@ export function panelMarkup(FS) {
     <button type="button" class="btn" data-act="forget">${L`この端末からこのシーズンの鍵を消す`}</button>
     ${onboardingCard.renderRestore(FS)}
     <p><button type="button" class="btn" data-act="practice-open">${L`練習モードを開く`}</button> <button type="button" class="btn" data-act="intro-open">${L`タイトルを見る`}</button></p>
-    <p><a href="practice.html">${L`練習`}</a> · <a href="spectate.html">${L`観戦`}</a></p></section>`, milestones.renderTimeline(FS.mileRecord), glossary.renderGlossary());
+    <p><a href="practice.html">${L`練習`}</a> · <a href="spectate.html">${L`観戦`}</a></p></section>`, renderNameForm(FS), milestones.renderTimeline(FS.mileRecord), glossary.renderGlossary());
   return parts;
 }
 
@@ -274,7 +275,7 @@ export function peopleSource() {
   peopleCache = { at: sec, value: {
     departures: scene.departuresAt(FS.chronicle, FS.overviews, bell),
     explores: scene.exploresAt(FS.chronicle, FS.overviews, bell),
-    nameOf: scene.namer(rosterRef),
+    nameOf: ownNamer(scene.namer(rosterRef)),
     life: FS.life ?? null,
     tierName: t => TIERS[t] ?? '',
     now: FS.chain?.now() ?? 0,
@@ -379,6 +380,42 @@ function closeMilestone() {
   if ((FS.mileQueue ?? []).length) setTimeout(showMilestone, 600);
 }
 
+// ------------------------------------------------------------------ the viewer's own name (people/profile.mjs, UI plan F4)
+/** The map's name tags use the viewer's verified profile on their own holdings. */
+function ownNamer(base) {
+  const p = FS.ownProfile, tag = p ? ownTag(FS) : null;
+  if (!p || tag === null) return base;
+  const key = tagKey(tag);
+  return (...a) => { const r = base(...a); if (!r || r.identity.tag !== key) return r; const id = withProfile(r.identity, p); return { ...r, identity: id, name: displayName(id) }; };
+}
+let profileChecked = null;
+/** Load and verify the stored profile once per (season, wallet). */
+async function checkOwnProfile() {
+  const sc = scope(), w = FS.wallet?.address;
+  const k = sc && w ? `${sc.seasonId}:${w}` : null;
+  if (!k || k === profileChecked) return;
+  profileChecked = k;
+  const p = profile.loadOwnProfile(uiStorage, sc.seasonId, w);
+  FS.ownProfile = p && (await profile.verifyProfile(p)) ? p : null;
+  if (FS.ownProfile) { peopleCache.at = -1; invalidate('panel', 'rail', 'map'); }
+}
+async function saveOwnName(raw) {
+  const sc = scope(), w = FS.wallet;
+  const name = profile.validName(raw);
+  if (!name) { FS.notice = { ok: false, code: 'BadName', text: L`名前は1〜24文字の文字・数字・空白・「-」「_」「.」で付けてください` }; invalidate('panel'); return; }
+  if (!sc || !w?.signMessage) return;
+  FS.nameBusy = true; invalidate('panel');
+  try {
+    const p = await profile.makeProfile({ season: sc.seasonId, wallet: w.address, name }, async bytes => (await w.signMessage(bytes)).signature);
+    if (!(await profile.verifyProfile(p))) throw Object.assign(new Error('verify'), { code: 'WalletBadSignature' });
+    profile.saveOwnProfile(uiStorage, p);
+    FS.ownProfile = p;
+    FS.notice = { ok: true, text: L`名前を「${name}」にしました` };
+  } catch (e) {
+    FS.notice = { ok: false, code: e?.code ?? 'Error', text: L`名前を保存できませんでした（${e?.code ?? e?.message ?? 'error'}）` };
+  } finally { FS.nameBusy = false; peopleCache.at = -1; invalidate('panel', 'rail', 'map'); }
+}
+
 // ------------------------------------------------------------------ the guide (hud/guide.mjs)
 /** The to-do pill's items at the guide's level: all, warnings only, or none. */
 function pillItems() {
@@ -435,6 +472,7 @@ function renderHudTick(now) {
   }
   renderResPop(now ?? 0);
   checkMilestones();
+  checkOwnProfile();
   tickFeed();
   renderFeed();
   const attn = $('attn-pill');
@@ -686,6 +724,7 @@ export const HUD_ACTIONS = {
   'battle-play': d => { leaveReport(); playBattle(num(d.p), num(d.q), num(d.bell), { focus: true }); },
   'res-open': d => { FS.resOpen = FS.resOpen === d.r ? null : d.r; renderHudTick(FS.chain?.now?.() ?? 0); },
   'res-close': () => closeResPop(),
+  'profile-clear': () => { const sc = scope(); if (sc) profile.clearOwnProfile(uiStorage, sc.seasonId); FS.ownProfile = null; peopleCache.at = -1; invalidate('panel', 'rail', 'map'); },
   // the spectator (screens/spectate.mjs, UI plan G3): faction filter, bell timeline, the camera following battles
   'watch-faction': d => { FS.watch = { ...(FS.watch ?? {}), faction: d.f === '' ? null : num(d.f) }; invalidate('panel'); },
   'watch-bell': d => { FS.watch = { ...(FS.watch ?? {}), bell: d.bell === '' ? null : num(d.bell) }; invalidate('panel'); },
@@ -818,6 +857,7 @@ export const W4_ACTIONS = {
 };
 /** The wave-4 forms (data-form). */
 export const W4_FORMS = { 'practice-run': () => runPractice(), 'practice-whatif': () => runPractice(),
+  'profile-name': f => saveOwnName(f.querySelector('input[name="name"]')?.value ?? ''),
   'map-search': f => { runSearch(f.querySelector('input')?.value ?? ''); if (searchHits[0]) HUD_ACTIONS['search-go']({ i: '0' }); } };
 /** The wave-4 bound inputs (data-bind), all of the practice panel. */
 export function w4Bind(name, value) {

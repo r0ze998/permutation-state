@@ -21,7 +21,7 @@ import { hostRows } from '../screens/host.mjs';
 import { DEPART_STAMINA } from '../fmarch.mjs';
 import { bellChip, countdown, BELL_SECS } from '../clock.mjs';
 import { swatch } from '../screens/shell.mjs';
-import { personChip, ownTag, highlights, renderHighlights, holdingName } from '../people/ui.mjs';
+import { personChip, ownTag, ownIdentity, highlights, renderHighlights, holdingName } from '../people/ui.mjs';
 import { leaderSvg } from '../people/leaders.mjs';
 import { identityOf } from '../people/identity.mjs';
 
@@ -265,7 +265,7 @@ export function renderRail(FS) {
   const faction = FS.citizen?.faction;
   const tag = Number.isInteger(faction) ? ownTag(FS) : null;
   const head = Number.isInteger(faction)
-    ? html`<div class="rail-me">${tag !== null ? personChip(identityOf(tag), faction, { size: 44, full: true, note: factionName(faction) }) : html`<p class="rail-faction">${swatch(faction)}<strong>${factionName(faction)}</strong></p>`}</div>`
+    ? html`<div class="rail-me">${tag !== null ? personChip(ownIdentity(FS), faction, { size: 44, full: true, note: factionName(faction) }) : html`<p class="rail-faction">${swatch(faction)}<strong>${factionName(faction)}</strong></p>`}</div>`
     : html`<p class="rail-faction muted">${FS.mode === 'spectate' ? L`観戦中` : L`まだ陣営に加わっていません`}</p>`;
   const list = hs.length
     ? html`<ul class="rail-list">${hs.map((h, i) => html`<li><button type="button" class="rail-holding" data-act="holding-pick" data-i="${i}" ${raw(h === active ? 'aria-current="true"' : '')}>

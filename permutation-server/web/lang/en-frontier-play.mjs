@@ -447,4 +447,14 @@ export default {
   '見どころ（{0}）': 'Highlights ({0})',
   '参加する': 'Join',
   'シーズンを振り返る（リプレイ）': 'Look back on the season (replay)',
+  // ---- the viewer's own name (people/ui.mjs renderNameForm, UI plan F4)
+  'あなたの名前': 'Your name',
+  '新しい名前（24文字まで）': 'New name (up to 24 characters)',
+  '署名を待っています…': 'Waiting for the signature…',
+  'ウォレットで署名して使う': 'Sign with the wallet and use it',
+  '元の名前（{0}）に戻す': 'Back to the given name ({0})',
+  '名前はウォレットの署名つきで、この端末に保存されます。ほかの人の画面に出るのは、名前の置き場所が決まる次の段階（M2）からです。': 'The name is signed by your wallet and kept on this device. Others will see it from the next stage (M2), once names have a home.',
+  '名前は1〜24文字の文字・数字・空白・「-」「_」「.」で付けてください': 'Use 1–24 letters, digits, spaces, "-", "_" or "."',
+  '名前を「{0}」にしました': 'Your name is now "{0}"',
+  '名前を保存できませんでした（{0}）': 'The name could not be saved ({0})',
 };

@@ -47,3 +47,16 @@ export async function verifyProfile(p, subtle = globalThis.crypto?.subtle) {
     return await subtle.verify({ name: 'Ed25519' }, key, fromBase64(p.sig), profileMessage(p));
   } catch { return false; }
 }
+
+// ------------------------------------------------------------------ the viewer's own profile on this device (UI plan F4)
+export const PROFILE_KEY = 'ps-fprofile:';
+
+/** The stored profile of (season, wallet), or null (a damaged or foreign record reads as none; verify before use). */
+export function loadOwnProfile(storage, season, wallet) {
+  try {
+    const p = JSON.parse(storage.get(`${PROFILE_KEY}${season}`) ?? 'null');
+    return p && p.v === 1 && p.season === String(season) && p.wallet === String(wallet) && validName(p.name) ? p : null;
+  } catch { return null; }
+}
+export const saveOwnProfile = (storage, p) => storage.set(`${PROFILE_KEY}${p.season}`, JSON.stringify(p));
+export const clearOwnProfile = (storage, season) => storage.set(`${PROFILE_KEY}${season}`, 'null');

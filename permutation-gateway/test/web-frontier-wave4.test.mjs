@@ -155,3 +155,24 @@ test('a clash of residents (no arrivals) plays from the province before and afte
   assert.equal(B.battleScene({ p: 1, q: 0, bell: 7, inputs: { arrivals: [] }, before, after: null }), null, 'without the province after, no guessing');
   assert.ok(B.battleTime(B.startBattle(s, 0), 0) >= B.PHASE.deploy);
 });
+
+test('the own name: a signed profile kept per season and wallet, the form in both languages', async () => {
+  const P = await import('../../permutation-server/web/frontier/people/profile.mjs');
+  const U = await import('../../permutation-server/web/frontier/people/ui.mjs');
+  const store = new Map(); const st = { get: k => store.get(k) ?? null, set: (k, v) => store.set(k, v) };
+  const p = { v: 1, season: '7', wallet: 'W1', name: 'Mira', ts: 1, sig: 'AA==' };
+  P.saveOwnProfile(st, p);
+  assert.equal(P.loadOwnProfile(st, 7, 'W1')?.name, 'Mira');
+  assert.equal(P.loadOwnProfile(st, 7, 'W2'), null, 'another wallet\'s profile is not ours');
+  P.clearOwnProfile(st, '7');
+  assert.equal(P.loadOwnProfile(st, 7, 'W1'), null);
+  const FS = { holdings: [{ ownerCitizen: Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8]) }], wallet: { address: 'W1' }, citizen: { faction: 1 }, ownProfile: p };
+  assert.equal(U.ownIdentity(FS).given.en, 'Mira');
+  const ja = String(U.renderNameForm(FS));
+  assert.match(ja, /data-form="profile-name"/);
+  assert.match(ja, /data-act="profile-clear"/);
+  setLang('en');
+  assert.doesNotMatch(String(U.renderNameForm({ ...FS, ownProfile: null })).replace(/<[^>]+>/g, ' ').replace(/data-name/g, ''), /[぀-ヿ一-鿿]/);
+  setLang('ja');
+  assert.equal(String(U.renderNameForm({ ...FS, wallet: null })), '', 'no wallet: nothing to sign with');
+});
