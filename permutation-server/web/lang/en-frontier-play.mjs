@@ -457,4 +457,11 @@ export default {
   // ---- count steppers and the vigil hour (screens/holding.mjs, UI plan B4)
   '数を変える': 'Change the number', '{0} 増やす': 'Add {0}', '{0} 減らす': 'Remove {0}', '全部（{0}）': 'All ({0})',
   '{0}:00 UTC（あなたの時刻 {1}）': '{0}:00 UTC (your time {1})',
+  // ---- the march card's forecast (hud/forecast.mjs, UI plan B3)
+  'ルールで結果の幅を計算しています…': 'Working out the range with the rules…',
+  '残る兵 {0}': '{0} troops left', '残る兵 {0}〜{1}': '{0}–{1} troops left', '（出発時 {0}）': '(of {0} at departure)',
+  '戦場に残る': 'holds the field', '隣へ退く': 'withdraws next door', '押し戻される': 'is pushed back', '撤退する': 'turns back', '壊滅する': 'is destroyed',
+  '{0}/{1}回': '{0} of {1}',
+  'ルール（frontier.wasm）で{0}通りの乱数を試した幅です。ほかの到着軍勢は封の中なので数えていません。': 'The range over {0} random seeds in the rules (frontier.wasm). Other arrivals are sealed, so they are not counted.',
+  'この鐘は野営地の見直しがあるため、守り手が変わるかもしれません。': 'The camp is reviewed at this bell, so the defenders may change.',
 };

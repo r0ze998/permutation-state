@@ -72,6 +72,18 @@ export function bellWindow(FS) {
   return { ...w, value: Math.min(w.max, Math.max(w.min, c.arriveBell ?? w.min)) };
 }
 
+const FATE_SHORT = { Stays: () => L`戦場に残る`, Withdrew: () => L`隣へ退く`, Bounced: () => L`押し戻される`, Retreated: () => L`撤退する`, Destroyed: () => L`壊滅する` };
+/** The rules' forecast (hud/forecast.mjs): troops left worst–best, how often each fate came up. */
+export function renderForecast(fc) {
+  if (!fc) return '';
+  if (fc.pending) return html`<p class="muted mc-fc">${L`ルールで結果の幅を計算しています…`}</p>`;
+  if (!fc.ok) return '';
+  const fates = Object.entries(fc.fates).sort((a, b) => b[1] - a[1]);
+  return html`<div class="mc-fc"><p><strong>${fc.troops.min === fc.troops.max ? L`残る兵 ${fmtNum(fc.troops.min)}` : L`残る兵 ${fmtNum(fc.troops.min)}〜${fmtNum(fc.troops.max)}`}</strong> <span class="muted">${L`（出発時 ${fmtNum(fc.troops.start)}）`}</span></p>
+    <ul class="mc-fates">${fates.map(([k, n]) => html`<li class="mc-fate-${k}"><meter min="0" max="${fc.runs}" value="${n}" aria-hidden="true"></meter>${FATE_SHORT[k]?.() ?? k} <span class="muted">${L`${fmtNum(n)}/${fmtNum(fc.runs)}回`}</span></li>`)}</ul>
+    <p class="muted">${L`ルール（frontier.wasm）で${fmtNum(fc.runs)}通りの乱数を試した幅です。ほかの到着軍勢は封の中なので数えていません。`}${fc.certain ? '' : html` ${L`この鐘は野営地の見直しがあるため、守り手が変わるかもしれません。`}`}</p></div>`;
+}
+
 /** The card (inside the inspector while a march is composed). */
 export function render(FS) {
   const c = FS.compose;
@@ -104,6 +116,7 @@ export function render(FS) {
         <p><strong>${odds.text}</strong> <span class="muted">${L`目安（兵数の比べ。実際は鐘の始まりの顔ぶれと乱数で決まります）`}</span></p>
         <p>${L`あなた ${fmtNum(c.host.troops)}（${STANCE_TEXT[stance]}）対 守り ${fmtNum(def.total)}`}</p>
         ${def.residents.length || def.garrison || def.camp ? html`<ul class="list mc-def">${def.residents.map(r => html`<li>${swatch(r.faction)}${factionName(r.faction)} ${fmtNum(r.troops)}</li>`)}${def.garrison ? html`<li>${L`守備隊 ${fmtNum(def.garrison)}`}</li>` : ''}${def.camp ? html`<li>${L`蛮族 ${fmtNum(def.camp)}`}</li>` : ''}</ul>` : ''}
+        ${renderForecast(c.forecast)}
       </div>` : html`<p class="muted">${L`行き先の州の中身を読み込むと、守り手が出ます。`}</p>`}
       ${problems.length ? html`<ul class="problems">${problems.map(p => html`<li>${failureText({ code: p })}</li>`)}</ul>` : ''}
       <div class="actions"><button type="button" class="btn primary" data-act="march-send" ${raw(problems.length || busy || !c.route ? 'disabled' : '')}>${L`封をして出発する`}</button>

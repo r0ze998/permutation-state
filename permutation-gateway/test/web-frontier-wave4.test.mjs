@@ -176,3 +176,15 @@ test('the own name: a signed profile kept per season and wallet, the form in bot
   setLang('ja');
   assert.equal(String(U.renderNameForm({ ...FS, wallet: null })), '', 'no wallet: nothing to sign with');
 });
+
+test('the forecast\'s input: only the viewer\'s host arrives, with its stance, retreat, troops and the route\'s stamina cost', async () => {
+  const F = await import('../../permutation-server/web/frontier/hud/forecast.mjs');
+  const c = { host: { id: '77', unit: 0, troops: 600, staminaValue: 100, staminaBell: 40 }, dest: { p: 2, q: 0, tile: 32 }, arriveBell: 44, stance: 1, retreat: 'never', ratio: null, route: { dirs: [0, 0, 1, 1] } };
+  const i = F.forecastInputs(c, 3);
+  assert.deepEqual([i.p, i.q, i.bell, i.arrivals.length], [2, 0, 44, 1]);
+  const a = i.arrivals[0];
+  assert.deepEqual([a.hostId, a.faction, a.troops, a.stance, a.retreat, a.tile], [77n, 3, 600000, 1, 0, 32]);
+  assert.equal(a.stamina, 104 - (10 + 2 * 4), 'stamina regained to the arrival bell, less the march');
+  assert.equal(F.forecastKey(c), '77|2,0,32|44|1|never|null');
+  assert.deepEqual(F.forecast(null, c, null, 3), { ok: false, why: 'NoInput' });
+});

@@ -461,7 +461,7 @@ body[data-urgency="crit"] main { box-shadow: inset 0 0 0 4px #c8412f; }
 .glossary div { padding: 6px 0; border-bottom: 1px solid var(--line-soft); }
 .glossary dt { font-weight: 700; } .glossary dd { margin: 2px 0 0; color: var(--ink-2); }
 .mc-label { margin: 10px 0 4px; font-weight: 650; display: flex; align-items: center; }
-@media (max-width: 759px) { .term-q { width: 44px; height: 44px; border-color: transparent; background: none; font-size: 15px; } .term-q::before { content: ""; } }
+@media (max-width: 759px) { .term-q { width: 44px; height: 44px; border: 0; font-size: 14px; background: radial-gradient(circle at center, var(--card) 0 11px, #9c9480 11px 12.5px, transparent 13px); } }
 .sel-brief { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 10px; padding: 6px 10px; border-radius: 10px; background: rgba(217,180,74,.14); border: 1px solid rgba(217,180,74,.45); }
 .sel-what { flex: 1 1 auto; font-weight: 650; }
 /* the bell's urgency is told by a mark too, not colour alone (UI plan E6) */
@@ -499,3 +499,8 @@ body[data-urgency="crit"] main { box-shadow: inset 0 0 0 4px #c8412f; }
 .stepper { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; margin: 4px 0; }
 .stepper .btn { min-width: 40px; }
 @media (max-width: 759px) { .stepper .btn { min-width: 44px; min-height: 44px; } }
+/* the march card's forecast (UI plan B3) */
+.mc-fc { margin-top: 6px; }
+.mc-fates { list-style: none; padding: 0; margin: 4px 0; display: grid; gap: 3px; font-size: 13px; }
+.mc-fates li { display: flex; align-items: center; gap: 8px; }
+.mc-fates meter { width: 80px; height: 10px; }

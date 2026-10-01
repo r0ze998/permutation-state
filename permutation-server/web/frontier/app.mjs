@@ -101,6 +101,7 @@ import { leaderSvg } from './people/leaders.mjs';
 import * as glossary from './hud/glossary.mjs';
 import * as milestones from './hud/milestones.mjs';
 import * as guide from './hud/guide.mjs';
+import { forecast, forecastKey } from './hud/forecast.mjs';
 import { battleScene, startBattle, battleLive, BATTLE_SPEEDS, PHASE } from './people/battle.mjs';
 import { decode as decodeAccount } from './fcodec.mjs';
 import { fromBase64 } from '../sdk/bytes.mjs';
@@ -456,9 +457,30 @@ function nudgeField(el, name, f) {
 
 function closeResPop() { if (FS.resOpen) { FS.resOpen = null; renderHudTick(FS.chain?.now?.() ?? 0); } }
 
+/** The march card's forecast: recomputed with the rules when the composed march changes (hud/forecast.mjs). */
+let fcBusy = null;
+function updateForecast() {
+  const c = FS.compose;
+  const key = forecastKey(c);
+  if (!key || !c.route || c.sending) return;
+  if (c.forecast?.key === key || fcBusy === key) return;
+  fcBusy = key;
+  c.forecast = { key, pending: true };
+  invalidate('panel');
+  seasonKernel().then(k => {
+    if (FS.compose !== c || forecastKey(c) !== key) return;
+    const prov = FS.provinces.get(`${c.dest.p},${c.dest.q}`)?.province ?? null;
+    let fc;
+    try { fc = forecast(k, c, prov, FS.citizen?.faction ?? 0); } catch (e) { fc = { ok: false, why: e?.code ?? 'Error' }; }
+    c.forecast = { key, ...fc };
+  }).catch(() => { if (FS.compose === c) c.forecast = { key, ok: false, why: 'NoWasm' }; })
+    .finally(() => { fcBusy = null; invalidate('panel'); });
+}
+
 function renderHudTick(now) {
   const m = hud.bellModel(FS.clock, now);
   frameRoute();
+  updateForecast();
   ringToll(m.bell);
   renderIntro();
   const pill = $('bell-pill');
