@@ -180,7 +180,6 @@ export function panelMarkup(FS) {
   else if (FS.selected) parts.push(inspect.renderBrief(FS, terrainRef));
   parts.push(onboardingCard.render(FS, { open: tab === 'map' }));
   // Another tab keeps one line of the selection (the inspector itself is on the map tab).
-  if (tab !== 'map' && FS.selected) parts.push(html`<p class="sel-line">${Number.isInteger(FS.selected.idx) ? L`選択中：州 ${FS.selected.p},${FS.selected.q} · マス ${FS.selected.idx + 1}` : L`選択中：州 ${FS.selected.p},${FS.selected.q}`} <button type="button" class="btn small" data-act="tab" data-tab="map">${L`詳細`}</button></p>`);
   if (tab === 'map') {
     parts.push(joinScreen.render(FS));
   } else if (tab === 'holding') parts.push(holdingScreen.render(FS));
@@ -1072,9 +1071,11 @@ export async function boot() {
       setTimeout(go, 4000); setInterval(go, (PHASE.end + 2.5) * 1000);
     }
     if (ART_PREVIEW) {
-      const [ap, aq] = (ART_Q.get('at') ?? '2,0').split(',').map(Number);
-      const c = provincePixel(Number.isInteger(ap) ? ap : 2, Number.isInteger(aq) ? aq : 0);
-      map.setView({ x: c.x, y: c.y, zoom: 0.8 });
+      // ?art=1&at=P,Q[,TILE[,ZOOM]]: the camera on a province, or on one tile at a zoom (presentation only)
+      const [ap, aq, at, az] = (ART_Q.get('at') ?? '2,0').split(',').map(Number);
+      const P = Number.isInteger(ap) ? ap : 2, Q = Number.isInteger(aq) ? aq : 0;
+      const c = Number.isInteger(at) ? (h => project(h.q, h.r))(tileHex(P, Q, at)) : provincePixel(P, Q);
+      map.setView({ x: c.x, y: c.y, zoom: Number.isFinite(az) && az > 0 ? az : 0.8 });
     }
   }
   invalidate('chip', 'status', 'panel');

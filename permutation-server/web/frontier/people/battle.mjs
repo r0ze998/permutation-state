@@ -23,7 +23,7 @@ import { tileHex } from '../fgeo.mjs';
 import { troopsOf } from '../fmarch.mjs';
 import { FACTION_FILL, FACTION_DARK, shade } from './avatar.mjs';
 import { SKIN } from './identity.mjs';
-import { actor, ACTOR_SCALE } from './crowds.mjs';
+import { actor, ACTOR_SCALE, zoomBoost } from './crowds.mjs';
 
 export const FATES = Object.freeze(['Stays', 'Withdrew', 'Bounced', 'Retreated', 'Destroyed']);
 export const STANCE_POSE = Object.freeze(['hold', 'assault', 'flank', 'brace']);
@@ -166,7 +166,7 @@ export function paintBattle(ctx, play, { zoom = 1, now = (globalThis.performance
   if (!play) return false;
   const t = battleTime(play, now);
   if (t > PHASE.end) return false;
-  const s = RADIUS * 0.15 * ACTOR_SCALE * 0.9;
+  const s = RADIUS * 0.15 * ACTOR_SCALE * 0.9 * zoomBoost(RADIUS * zoom);
   for (const tile of play.scene.tiles) {
     const h = tileHex(play.scene.p, play.scene.q, tile.idx);
     const c = project(h.q, h.r);

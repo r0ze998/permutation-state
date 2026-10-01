@@ -103,8 +103,31 @@ export function figure(ctx, x, y, s, { kind = 'folk', cloth = '#8a6a46', trim = 
   ctx.globalAlpha = 1;
 }
 
+/** The ground ring under a lord (faction fill, dark rim, a gold glint that breathes). */
+function lordRing(ctx, x, y, s, dark, fill, t) {
+  const pulse = 0.5 + 0.5 * Math.sin(t * 2.2);
+  ctx.save();
+  ctx.globalAlpha = 0.5; ctx.fillStyle = fill ?? '#8a8a80';
+  ctx.beginPath(); ctx.ellipse(x, y, s * 0.42, s * 0.13, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = 0.95; ctx.strokeStyle = dark ?? '#3a3a34'; ctx.lineWidth = s * 0.03;
+  ctx.beginPath(); ctx.ellipse(x, y, s * 0.42, s * 0.13, 0, 0, Math.PI * 2); ctx.stroke();
+  ctx.globalAlpha = 0.55 + pulse * 0.35; ctx.strokeStyle = '#f3d58a'; ctx.lineWidth = s * 0.022;
+  ctx.beginPath(); ctx.ellipse(x, y, s * (0.47 + pulse * 0.03), s * (0.15 + pulse * 0.01), 0, 0, Math.PI * 2); ctx.stroke();
+  ctx.restore();
+}
+
 /** Actors (what a tile is doing) are drawn this many times a townsperson's height (Civ: units read bigger than buildings). */
 export const ACTOR_SCALE = 3.6;
+/**
+ * Close up, people grow faster than the land (the design session: "bigger
+ * and easier to read when zoomed"): ×1 up to ZOOM_BOOST_FROM screen px per
+ * hex radius, rising smoothly to ×ZOOM_BOOST_MAX at ZOOM_BOOST_TO.
+ */
+export const ZOOM_BOOST_FROM = 52, ZOOM_BOOST_TO = 110, ZOOM_BOOST_MAX = 1.3;
+export function zoomBoost(r) {
+  const k = Math.max(0, Math.min(1, (r - ZOOM_BOOST_FROM) / (ZOOM_BOOST_TO - ZOOM_BOOST_FROM)));
+  return 1 + (ZOOM_BOOST_MAX - 1) * k * k * (3 - 2 * k);
+}
 const INK = '#1d1a16';
 
 /**
@@ -300,14 +323,14 @@ export function paintPeople(ctx, { tiles = [], zoom = 1, t = (globalThis.perform
       list.push({ x: from.x + (u.x - from.x) * there, y: from.y + (u.y - from.y) * there + RADIUS * 0.12, kind: 'carrier', cloth: '#7a6a4a', skin: SKIN[(i + 1) % SKIN.length], step: (t * 1.8) % 1, face: (k < 0.5 ? u.x - from.x : from.x - u.x) >= 0 ? 1 : -1 });
     }
     // builders while a building goes up, recruits while troops train
-    if (lf.building) for (let i = 0; i < 2; i++) list.push({ ...at(-0.32 + i * 0.62, 0.44 - i * 0.08), big: true, pose: 'hammer', cloth: '#8a6a46', trim, skin: SKIN[(i + 3) % SKIN.length], step: (t * 1.1 + i * 0.45) % 1, face: i ? -1 : 1 });
+    if (lf.building) for (let i = 0; i < 2; i++) list.push({ ...at(lf.lord ? 0.12 + i * 0.3 : -0.32 + i * 0.62, 0.44 - i * 0.08), big: true, pose: 'hammer', cloth: '#8a6a46', trim, skin: SKIN[(i + 3) % SKIN.length], step: (t * 1.1 + i * 0.45) % 1, face: i ? -1 : 1 });
     if (lf.training) for (let i = 0; i < 3; i++) list.push({ ...at(-0.3 + i * 0.3, -0.1), big: true, pose: 'drill', cloth, trim, skin: SKIN[i % SKIN.length], step: (t * 1.2) % 1, face: 1 });
     // the lord, when they acted lately: their own face (identity.mjs), a cape and a circlet, doing what they did
     if (lf.lord) {
       const who = lordOf?.(u.p, u.pq, u.site) ?? null;
       const face = who?.face;
       const pose = lf.doing === 'march' ? 'march' : lf.doing === 'explore' ? 'scout' : 'point';
-      list.push({ ...at(0.05, 0.5), big: true, lordly: true, lord: true, pose, cloth: shade(FACTION_FILL[u.owner] ?? '#8a8a80', 0.12), trim,
+      list.push({ ...at(-0.34, 0.5), big: true, lordly: true, lord: true, pose, cloth: shade(FACTION_FILL[u.owner] ?? '#8a8a80', 0.12), trim, ring: FACTION_FILL[u.owner] ?? '#8a8a80',
         skin: face ? SKIN[face.skin] : SKIN[1], hair: face ? HAIR[face.hair] : '#3b2a20', step: (t * 0.9) % 1, face: -1 });
     }
   }
@@ -361,12 +384,15 @@ export function paintPeople(ctx, { tiles = [], zoom = 1, t = (globalThis.perform
   // back to front, within the budget (columns and scouts first, they matter most)
   const kept = list.length > PEOPLE_BUDGET ? [...list.filter(x => x.big || x.kind !== 'folk'), ...list.filter(x => !x.big && x.kind === 'folk')].slice(0, PEOPLE_BUDGET) : list;
   kept.sort((a, b) => a.y - b.y);
-  const S = s * ACTOR_SCALE;
+  const boost = zoomBoost(r);
+  const S = s * ACTOR_SCALE * boost;
   for (const f of kept) {
+    // the lord stands out: a ring in their faction's colour under the feet, a little gold that breathes
+    if (f.lord) lordRing(ctx, f.x, f.y, S * 1.12, f.trim, f.ring, t);
     if (f.banner) banner(ctx, f.x, f.y, f.big ? S * 0.8 : s, f.faction, t);
     else if (f.fire) campfire(ctx, f.x, f.y, f.big ? S * 0.6 : s, t);
     else if (f.spark) spark(ctx, f.x, f.y, f.big ? S : s);
-    else if (f.big) actor(ctx, f.x, f.y, f.small ? S * 0.72 : f.lordly ? S * 1.18 : S, f);
+    else if (f.big) actor(ctx, f.x, f.y, f.small ? S * 0.72 : f.lordly ? S * 1.12 : S, f);
     else if (f.kind === 'sitter') sitter(ctx, f.x, f.y, s, f);
     else figure(ctx, f.x, f.y, s, f);
   }
@@ -403,7 +429,8 @@ export function paintNameTags(ctx, { tiles = [], zoom = 1, nameOf = () => null, 
   let list = tiles.filter(u => u.state === 1 && u.owner < 6 && u.site !== undefined && (all || u.tier >= 2 || present?.(u.p, u.pq, u.site)) && (u.fog ?? fogOf(u.p, u.pq)) !== 'unopened');
   if (centre) list = list.map(u => ({ u, d: (u.x - centre.x) ** 2 + (u.y - centre.y) ** 2 })).sort((a, b) => a.d - b.d).map(x => x.u);
   let n = 0;
-  const k = 1 / zoom;
+  // close up the banners grow with the people (zoomBoost), the lord's face first of all
+  const k = zoomBoost(RADIUS * zoom) / zoom;
   ctx.save();
   ctx.font = `600 ${12 * k}px system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif`;
   ctx.textBaseline = 'middle';
@@ -413,8 +440,8 @@ export function paintNameTags(ctx, { tiles = [], zoom = 1, nameOf = () => null, 
     if (!who) continue;
     // the holding's banner (Civ's city banner): the lord's face and name, then the holding's tier
     const label = tierName ? `${who.name} \u00b7 ${tierName(u.tier)}` : who.name;
-    const w = ctx.measureText(label).width + 30 * k, h = 20 * k;
-    const x = u.x - w / 2, y = u.y - RADIUS * 0.62 - h;
+    const w = ctx.measureText(label).width + 32 * k, h = 22 * k;
+    const x = u.x - w / 2, y = u.y - RADIUS * (0.62 + (zoomBoost(RADIUS * zoom) - 1) * 0.9) - h;
     ctx.globalAlpha = 0.94;
     ctx.fillStyle = '#fffaf0'; ctx.strokeStyle = FACTION_DARK[who.faction] ?? '#55554e'; ctx.lineWidth = 1.5 * k;
     ctx.beginPath(); ctx.roundRect?.(x, y, w, h, 10 * k); ctx.fill(); ctx.stroke();

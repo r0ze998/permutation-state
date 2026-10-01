@@ -209,9 +209,6 @@ export default {
   '（次の鐘から）': ' (from the next bell)',
   '蛮族の野営地（{0} 兵）': 'Barbarian camp ({0} troops)',
   '州の詳しい中身を読み込んでいます…': 'Loading the province\'s details…',
-  '選択中：州 {0},{1} · マス {2}': 'Selected: province {0},{1} · tile {2}',
-  '選択中：州 {0},{1}': 'Selected: province {0},{1}',
-  '詳細': 'Details',
 
   '勢力の順位': 'Faction standings',
   '拠点 {0} · {1} 州': (h, p) => `${plural(h, '{0} holding', '{0} holdings')} · ${plural(p, '{1} province', '{1} provinces')}`,
