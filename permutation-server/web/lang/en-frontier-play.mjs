@@ -421,7 +421,7 @@ export default {
   '最初の出陣': 'The first march',
   '最初の勝利：州 {0},{1}': 'First victory: province {0},{1}',
   '{0}になった': 'Now {0}',
-  '第{0}輪がひらいた': 'Ring {0} has opened',
+  '第{0}輪がひらいた': 'Ring {0} opens',
   '旗は立った。ここが我らの始まりの地だ。': 'The banner is raised. Here our story begins.',
   'もう誰にも奪わせはしない。この地を守り抜け。': 'No one takes this from us now. Hold it.',
   '封は閉じた。行き先を知るのは我らだけだ。': 'The seal is closed. Only we know where we ride.',

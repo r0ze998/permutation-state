@@ -35,11 +35,14 @@ const NEUTRAL = 6;
 /**
  * The scene of a clash: `{p, q, bell, tiles: [{idx, attackers, defenders}]}`
  * with sides `[{id, faction, stance, before, after, fate, tag?, kind}]` in
- * whole troops. Only tiles where arrivals fought; null if none did.
+ * whole troops. Tiles where arrivals fought; with no arrivals (hosts already
+ * in the province fighting each other, a garrison or a camp — most clashes
+ * of a long season), the tiles where sides met and someone lost troops
+ * between the province before and after (`residentScene`); null if none.
  */
 export function battleScene({ p, q, bell, inputs, before = null, after = null }) {
   const arrivals = (inputs?.arrivals ?? []).filter(a => a.present === 1 || a.present === true);
-  if (!arrivals.length) return null;
+  if (!arrivals.length) return residentScene({ p, q, bell, before, after });
   const byTile = new Map();
   const tileOf = idx => { if (!byTile.has(idx)) byTile.set(idx, { idx, attackers: [], defenders: [] }); return byTile.get(idx); };
   for (const a of arrivals) {
@@ -65,6 +68,52 @@ export function battleScene({ p, q, bell, inputs, before = null, after = null })
     byTile.get(before.camp.tile).defenders.push({ id: 'camp', faction: NEUTRAL, stance: 0, before: Number(before.camp.troops), after: left, fate: left === 0 ? 'Destroyed' : left === null ? null : 'Stays', kind: 'camp' });
   }
   return { p, q, bell, tiles: [...byTile.values()] };
+}
+
+/**
+ * A clash of residents (no arrivals): needs both provinces. On each tile the
+ * hosts, the garrison and the camp before the bell are the sides; a tile is
+ * a battle when two sides met and troops were lost. The defenders are the
+ * garrison's (or the camp's) side, else the faction holding the tile's
+ * site, else the side that lost least; the rest attack.
+ */
+export function residentScene({ p, q, bell, before, after }) {
+  if (!before || !after) return null;
+  const alive = new Map((after.entries ?? []).filter(e => e.state === 1).map(e => [String(e.id), e]));
+  const byTile = new Map();
+  const at = idx => { if (!byTile.has(idx)) byTile.set(idx, []); return byTile.get(idx); };
+  for (const e of before.entries ?? []) {
+    if (e.state !== 1) continue;
+    const now = alive.get(String(e.id));
+    at(e.tile).push({ id: String(e.id), faction: e.faction, stance: 0, before: troopsOf(e.troops), after: now ? troopsOf(now.troops) : 0, fate: now ? 'Stays' : 'Destroyed', kind: 'resident' });
+  }
+  const sites = Array.from(before.sites ?? []);
+  const holderOf = new Map();
+  (before.siteMirror ?? []).forEach((m, j) => {
+    if (!m || m.state !== 1) return;
+    holderOf.set(sites[j], m.faction);
+    if (troopsOf(m.garrison) <= 0) return;
+    const left = troopsOf(after.siteMirror?.[j]?.garrison ?? 0);
+    at(sites[j]).push({ id: `g${j}`, faction: m.faction, stance: 3, before: troopsOf(m.garrison), after: left, fate: left === 0 ? 'Destroyed' : 'Stays', kind: 'garrison' });
+  });
+  if (before.camp?.state === 1) {
+    const left = after.camp?.state === 1 ? Number(after.camp.troops) : 0;
+    at(before.camp.tile).push({ id: 'camp', faction: NEUTRAL, stance: 0, before: Number(before.camp.troops), after: left, fate: left === 0 ? 'Destroyed' : 'Stays', kind: 'camp' });
+  }
+  const tiles = [];
+  for (const [idx, list] of byTile) {
+    const sides = new Set(list.map(x => x.faction));
+    if (sides.size < 2 || !list.some(x => x.after < x.before)) continue;
+    const held = list.find(x => x.kind === 'garrison' || x.kind === 'camp');
+    let def = held ? held.faction : holderOf.has(idx) && sides.has(holderOf.get(idx)) ? holderOf.get(idx) : null;
+    if (def === null) {
+      const lost = new Map();
+      for (const x of list) lost.set(x.faction, (lost.get(x.faction) ?? 0) + (x.before - x.after));
+      def = [...lost.entries()].sort((a, b) => a[1] - b[1] || a[0] - b[0])[0][0];
+    }
+    tiles.push({ idx, attackers: list.filter(x => x.faction !== def), defenders: list.filter(x => x.faction === def) });
+  }
+  return tiles.length ? { p, q, bell, tiles, residents: true } : null;
 }
 
 /** The total losses of a side on a tile (whole troops; null when unknown). */
@@ -103,7 +152,7 @@ export function startBattle(scene, now = (globalThis.performance?.now?.() ?? Dat
 }
 
 /** The scene's own time (s) at `now`. */
-export const battleTime = (play, now) => (now - play.t0) * (play.speed ?? 1);
+export const battleTime = (play, now) => (now - play.t0) * (play.speed ?? 1) + (play.scene?.residents ? PHASE.deploy : 0);   // residents were there all along: no emerging from the mist
 /** Whether a scene is still playing at `now`. */
 export const battleLive = (play, now) => !!play && battleTime(play, now) <= PHASE.end;
 /** "P,Q,tile" of every tile a playing scene covers (the map hides the host sprites there). */

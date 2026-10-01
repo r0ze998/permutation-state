@@ -139,3 +139,19 @@ test('the replay\'s people: battles of the bell entered from its envelopes, name
   assert.equal(rp.at(40).nameOf(1, 0, 2, 0), null, 'founded at bell 50: no name at bell 40');
   assert.ok(rp.at(60).nameOf(1, 0, 2, 0)?.name);
 });
+
+test('a clash of residents (no arrivals) plays from the province before and after; nothing plays where no one lost troops', async () => {
+  const B = await import('../../permutation-server/web/frontier/people/battle.mjs');
+  const before = { p: 1, q: 0, sites: [5], siteMirror: [{ state: 1, faction: 2, garrison: 50000 }], camp: { state: 1, tile: 9, troops: 300 },
+    entries: [{ id: 1n, state: 1, tile: 5, faction: 0, troops: 200000 }, { id: 2n, state: 1, tile: 9, faction: 3, troops: 100000 }, { id: 3n, state: 1, tile: 7, faction: 4, troops: 10000 }] };
+  const after = { p: 1, q: 0, sites: [5], siteMirror: [{ state: 1, faction: 2, garrison: 10000 }], camp: { state: 0 },
+    entries: [{ id: 1n, state: 1, tile: 5, faction: 0, troops: 150000 }, { id: 2n, state: 1, tile: 9, faction: 3, troops: 80000 }, { id: 3n, state: 1, tile: 7, faction: 4, troops: 10000 }] };
+  const s = B.battleScene({ p: 1, q: 0, bell: 7, inputs: { arrivals: [] }, before, after });
+  assert.equal(s.residents, true);
+  assert.deepEqual(s.tiles.map(t => t.idx).sort(), [5, 9]);
+  const t5 = s.tiles.find(t => t.idx === 5);
+  assert.deepEqual([t5.attackers.map(x => x.faction), t5.defenders.map(x => x.kind)], [[0], ['garrison']]);
+  assert.equal(s.tiles.find(t => t.idx === 9).defenders[0].fate, 'Destroyed');
+  assert.equal(B.battleScene({ p: 1, q: 0, bell: 7, inputs: { arrivals: [] }, before, after: null }), null, 'without the province after, no guessing');
+  assert.ok(B.battleTime(B.startBattle(s, 0), 0) >= B.PHASE.deploy);
+});
