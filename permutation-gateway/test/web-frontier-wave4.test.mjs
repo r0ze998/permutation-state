@@ -119,3 +119,23 @@ test('the spectator: bells with events, highlights filtered by faction and bell,
   assert.match(panel, /data-act="watch-bell" data-bell="42" aria-pressed="true"/);
   assert.match(panel, /data-act="watch-faction" data-f="2" aria-pressed="true"/);
 });
+
+test('the replay\'s people: battles of the bell entered from its envelopes, names only of owners founded by then', async () => {
+  const RP = await import('../../permutation-server/web/frontier/people/replay.mjs');
+  const R = await import('../../permutation-server/web/frontier/people/roster.mjs');
+  const inputs = { arrivals: [{ present: 1, hostId: 9n, faction: 0, troops: 100000, troopsAfter: 40000, stance: 1, fate: 1, tile: 3 }] };
+  const env = { bell: 40, inputs, province: { p: 1, q: 0, entries: [], sites: [], siteMirror: [] } };
+  assert.equal(RP.replayBattles(40, [env]).length, 1);
+  assert.equal(RP.replayBattles(41, [env]).length, 0, 'an envelope of another bell plays nothing');
+  let t = 0;
+  const roster = R.createRoster({ fetch: async () => ({ ok: false }) });
+  roster.put(1, 0, 2, 0x1234n, 50, 1);
+  const rp = RP.createReplayPeople({ roster, clock: () => t });
+  assert.equal(rp.at(40, { envelopes: [env] }).battles.length, 0, 'nothing plays before the bell is entered');
+  rp.enter(40);
+  assert.equal(rp.at(40, { envelopes: [env] }).battles.length, 1);
+  t = 60;
+  assert.equal(rp.at(40, { envelopes: [env] }).battles.length, 0, 'the scene ends');
+  assert.equal(rp.at(40).nameOf(1, 0, 2, 0), null, 'founded at bell 50: no name at bell 40');
+  assert.ok(rp.at(60).nameOf(1, 0, 2, 0)?.name);
+});

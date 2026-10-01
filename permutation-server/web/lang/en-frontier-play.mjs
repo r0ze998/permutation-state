@@ -446,4 +446,5 @@ export default {
   '新しい戦いが起きたら、地図をそこへ動かして見せる': 'When a new battle happens, move the map there and show it',
   '見どころ（{0}）': 'Highlights ({0})',
   '参加する': 'Join',
+  'シーズンを振り返る（リプレイ）': 'Look back on the season (replay)',
 };

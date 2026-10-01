@@ -89,3 +89,18 @@ source.people = () => ({
 Going back in time needs the map rebuilt from the start, or a snapshot per bell. A record only moves a holding forward, so folding from bell 0 up to the shown bell is always correct. The design session checks this with a script that rebuilds bell 592 from the 41040 log.
 
 Tiers come from the roster. Its 16-byte site carries the tier, and `roster.tierOf(p, q, site)` reads it. The far view uses them without loading provinces.
+
+### The season replay's people and battles (people/replay.mjs, UI plan F3)
+
+The replay page reads per-bell overviews and, at tile detail, the envelopes of the bell shown — and nothing else. `createReplayPeople` turns that into the map's `people()` input: holders' names founded by the bell shown (the roster), tier names, and the battles of the bell the playhead enters (ClashInputs of the envelope, the province before and after), played fast:
+
+```js
+import { createReplayPeople } from '../people/replay.mjs';
+import { createRoster } from '../people/roster.mjs';
+const roster = createRoster({ base, onChange: () => map.invalidate() });  // roster.ensure(d) for each open ring
+const rp = createReplayPeople({ roster });
+// in source():
+people: () => rp.at(S.shown, { envelopes: visible.map(([p, q]) => S.provinces.at(p, q, S.shown)), before: (p, q) => S.provinces.at(p, q, S.shown - 1)?.province ?? null }),
+// in enter(b):
+rp.enter(b);
+```
