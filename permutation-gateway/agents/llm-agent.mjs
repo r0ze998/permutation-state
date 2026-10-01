@@ -34,7 +34,7 @@ const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, calls: 0 };
 let unavailable = null;
 const FATAL = /credit balance|invalid x-api-key|authentication|permission|not_found_error|token budget reached/i;
 
-const SYSTEM = `You are ${args.name}, an AI member of one nation in PERMUTATION STATE, playing one tick at a time.
+const SYSTEM = `You are ${args.name}, an AI member of one nation in Wylls, playing one tick at a time.
 ${RULES_BRIEF}
 
 ${ORDER_REFERENCE}

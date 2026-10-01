@@ -1,4 +1,4 @@
-# PERMUTATION STATE
+# Wylls
 
 ## Game Constitution — Hackathon Edition / Season Zero
 
@@ -6,13 +6,13 @@
 **Version:** 0.2  
 **Date:** 2026-09-21
 
-This document defines what PERMUTATION STATE is, what the hackathon build must prove, and what the project must refuse to become. If a feature, pitch, economic mechanism, or implementation choice conflicts with this constitution, the constitution wins unless it is explicitly amended.
+This document defines what Wylls is, what the hackathon build must prove, and what the project must refuse to become. If a feature, pitch, economic mechanism, or implementation choice conflicts with this constitution, the constitution wins unless it is explicitly amended.
 
 ---
 
 ## The One-Line Pitch
 
-**PERMUTATION STATE is a seasonal generative civilization RPG where every player is a citizen of the same civilization, each action changes another player's possible future, AI animates the society, and Solana settles its shared history and Season Purse.**
+**Wylls is a seasonal generative civilization RPG where every player is a citizen of the same civilization, each action changes another player's possible future, AI animates the society, and Solana settles its shared history and Season Purse.**
 
 Short form:
 
@@ -96,7 +96,7 @@ The system must explain important changes with “because,” not merely display
 
 The season outcome is collective, but remembrance is personal. At each season boundary, the living chronicle records a civilization-scale result and each citizen's contribution; the world then persists into the next season.
 
-PERMUTATION STATE recognizes citizens through named history, not a single global leaderboard.
+Wylls recognizes citizens through named history, not a single global leaderboard.
 
 ### Pillar 8 — Stakes Without Pay-to-Win
 
@@ -534,7 +534,7 @@ The hackathon slice demonstrates one verified Handoff that consumes or creates a
 
 ### Absolute Economic Prohibitions
 
-PERMUTATION STATE must not:
+Wylls must not:
 
 - issue a native token merely to create speculative demand;
 - sell combat strength, civic authority, votes, contribution credit, or superior payout weight;
@@ -705,7 +705,7 @@ If those five facts are clear, the demo is complete. Additional systems are opti
 
 ## Final Standard
 
-PERMUTATION STATE succeeds when a player can say:
+Wylls succeeds when a player can say:
 
 > “I inherited a promise from somebody I did not know. I chose what that promise meant. Someone else inherited my decision. Together, those choices became our civilization's history.”
 

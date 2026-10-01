@@ -1,4 +1,4 @@
-# The Sixfold Frontier: conquest rules (kernel design for the territory-contest milestone)
+# Wylls: conquest rules (kernel design for the territory-contest milestone)
 
 - **Area:** rules (kernel changes in `permutation-rules/src/frontier`). **Milestone:** the territory contest, called **MC** here, built after M1 "First Bell" and before M2 money (owner decision 2026-10-01).
 - **Base:** `codex/frontier` worktree `frontier-integ` at `aae8617`. Read: DESIGN rev 3.1 §3, §4, §5.4–§5.6, §6, §6.6, §8; M1-CONTRACT v1.13 §4–§10 and I-17; DECISIONS (D9, O-M1-25/T1, O5, U1–U10); M1-EXIT-NOTES. Kernels read: `siege.rs`, `laurel.rs`, `index.rs`, `geometry.rs`, `clash.rs` (garrison holders), `holding.rs`, `travel.rs`, `host.rs` (supply).

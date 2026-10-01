@@ -586,7 +586,7 @@ test('the scan covers web/frontier/** (pages and modules) and its dictionaries a
 test('the Frontier session text is never marked for translation', () => {
   for (const f of webFiles().filter(x => x.startsWith(`frontier${sep}`) && x.endsWith('.mjs'))) {
     const { keys } = scanJs(readFileSync(join(WEB, f), 'utf8'));
-    assert.ok(!keys.some(k => /Sixfold Frontier wants you/.test(k.key)), `${f}: the signed text must stay untranslated`);
+    assert.ok(!keys.some(k => /Wylls wants you/.test(k.key)), `${f}: the signed text must stay untranslated`);
   }
 });
 const ONLY = (process.env.PS_LANG_ONLY || '').split(',').map(s => s.trim()).filter(Boolean);

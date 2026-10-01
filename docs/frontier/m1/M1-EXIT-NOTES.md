@@ -92,7 +92,7 @@ ClaimDefence is signed by the beneficiary (§5.12: `[keeper s,w (= beneficiary)]
 
 ## 6. What M1 delivers
 
-A playable, money-free first season of the Sixfold Frontier on a local chain, with every piece a public-network playtest needs except hosting:
+A playable, money-free first season of Wylls on a local chain, with every piece a public-network playtest needs except hosting:
 
 - **Program** `permutation-frontier` (SBPF v2, 50 instructions incl. the test-only oracle, 17 account kinds, all with-seed addresses of the Season PDA): season lifecycle, rings and provinces with camps, joins (invite gate for the playtest), holdings with tickets and cohorts, harvest/build/train, muster/garrison/explore, sealed marches with a minimum tip, Reveal with quotas and the one-way latch, the quiet-bell proof (ArrivalDay + SkipQuiet), gathers and resolves, SettleTransit as the seal proof, beacons from drand quicknet, archives and every close path, the defence pool and ClaimDefence. Every instruction under its measured budget with adversarial fill; pre-funding, forgery and re-creation covered; reproducible build.
 - **Off-chain** (`frontier-node`): keeper (two profiles, ≥ 150 rotating reveal payers, escalation classes, nudges), herald (fold, files, WebSocket), verifier v2 (V1–V13, 30 tamper classes, checks of the checks), 1,000 bots with 13 personas, the LiteSVM-backed local chain with drand replay, the stack orchestrator with chaos and adversary holds; relay and JS SDK in `permutation-gateway`.

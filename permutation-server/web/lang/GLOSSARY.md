@@ -1,4 +1,4 @@
-# English glossary — PERMUTATION STATE web client
+# English glossary — Wylls web client
 
 The canonical English for every game term, so that every screen reads as one
 game. When a Japanese term below appears in a text you translate, use this
@@ -288,14 +288,14 @@ retype their names in a dictionary.
 
 ## The Frontier
 
-The Sixfold Frontier client (`web/frontier/`, dictionary `en-frontier.mjs`).
+The Wylls client (`web/frontier/`, dictionary `en-frontier.mjs`).
 Where a Japanese word already has another English in the v9 dictionaries,
 the Frontier uses its own Japanese term (軍 is v9's army; the Frontier's
 unit on the map is 軍勢, a host), so the merged dictionary stays consistent.
 
 | Japanese | English | Notes |
 |---|---|---|
-| 六重の辺境 | The Sixfold Frontier | the game's name |
+| Wylls | Wylls | the game's name |
 | 鐘 / 第N鐘 / 鐘 N | bell / Bell N | never "tick" or "turn"; the chip reads `Bell 1,034 · 6:12 left` |
 | 州 | province | |
 | 輪 / 第d輪 | ring / Ring d | ring 0 is the Concord |

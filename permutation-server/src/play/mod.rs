@@ -199,7 +199,7 @@ pub fn serve(cfg: Config) -> Result<(), String> {
         .map_err(|e| format!("{}:{}: {e}", cfg.host, cfg.port))?;
     let origin = format!("http://{}:{}", cfg.host, cfg.port);
     eprintln!(
-        "PERMUTATION STATE (V5) on {origin}/  (web: {})",
+        "Wylls (V5) on {origin}/  (web: {})",
         site.web.display()
     );
     match site.game() {

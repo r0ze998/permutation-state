@@ -135,9 +135,9 @@ export default {
   'うち{0}人は運営のAIメンバーです（誰かは、住む都市が落ちたときとシーズンの終わりに公開）。': n => plural(n,
     "{0} of them is the operator's AI member (identity revealed when its home city falls and at the season's end). ",
     "{0} of them are the operator's AI members (identities revealed when their home city falls and at the season's end). "),
-  'PERMUTATION STATE — ひとつの文明、{0}つの勢力': n => (Number(n) === 6
-    ? 'PERMUTATION STATE — One civilization, six factions'
-    : 'PERMUTATION STATE — One civilization, {0} factions'),
+  'Wylls — ひとつの文明、{0}つの勢力': n => (Number(n) === 6
+    ? 'Wylls — One civilization, six factions'
+    : 'Wylls — One civilization, {0} factions'),
   'ひとつの文明、{0}つの勢力。そのひとつのメンバーとして、勢力を動かす。': 'One civilization, {0} factions. As a member of one, run your faction.',
   '{0}つの勢力が同じ地図を共有しています。{1}{2}秒ごとの「ティック」で、全ての勢力の命令が同時に解決されます。':
     "{0} factions share one map. {1} Every faction's orders resolve at the same time at each “tick”, every {2} seconds.",

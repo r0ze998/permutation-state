@@ -1,4 +1,4 @@
-//! `frontier-abi`: the one source of truth for the Sixfold Frontier M1
+//! `frontier-abi`: the one source of truth for the Wylls M1
 //! program interface (M1 contract §3.1, I-03, I-55).
 //!
 //! No Solana types and no dependency besides `permutation-rules`, so the

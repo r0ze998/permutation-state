@@ -1,4 +1,4 @@
-// PERMUTATION STATE — playable client (Game Design V5).
+// Wylls — playable client (Game Design V5).
 // You are a member of one nation. Flow: select on the map → the inspector
 // explains it → every option shows cost, time and, when blocked, the engine's
 // own reason → add to this tick's orders. Orders of offices you hold are

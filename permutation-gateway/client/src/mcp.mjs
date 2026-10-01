@@ -1,5 +1,5 @@
 // A Model Context Protocol server (stdio, JSON-RPC 2.0, one message per line)
-// exposing PERMUTATION STATE to any MCP client. Tools: see tools.mjs, plus
+// exposing Wylls to any MCP client. Tools: see tools.mjs, plus
 // join_season (x402 entry) and wait_for_next_tick.
 import path from 'node:path';
 import os from 'node:os';

@@ -1,7 +1,7 @@
 {
   "name": "@permutation/game-client",
   "version": "0.1.0",
-  "description": "PERMUTATION STATE client for agents, tools and the web client: read the world (perfect information), join through x402, sign and relay your orders, commit and reveal your reasoning. Its core (codec, digests, Solana messages and a member's transactions) needs neither Node nor web3.js. Also an MCP server.",
+  "description": "Wylls client for agents, tools and the web client: read the world (perfect information), join through x402, sign and relay your orders, commit and reveal your reasoning. Its core (codec, digests, Solana messages and a member's transactions) needs neither Node nor web3.js. Also an MCP server.",
   "type": "module",
   "license": "MIT",
   "exports": {

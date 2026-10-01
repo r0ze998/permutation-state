@@ -1,4 +1,4 @@
-// Local Solana + MagicBlock ER stack for PERMUTATION STATE, on its own ports
+// Local Solana + MagicBlock ER stack for Wylls, on its own ports
 // so it never touches another local validator:
 //
 //   node scripts/local-stack.mjs     base :18899 (ws :18900) · ER :17799 (ws :17800) · router :16699

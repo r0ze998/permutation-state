@@ -1,4 +1,4 @@
-# Research: models and prices for AI agents in The Sixfold Frontier
+# Research: models and prices for AI agents in Wylls
 
 - **Date of research:** 2026-10-01. Every price below was read on that date unless stated otherwise.
 - **Scope:** Claude models (prices, caching, batch, tool use), open-weight models that could run on the owner's Mac (Apple M4 Max, 16-core CPU, 128 GB) or on a rented GPU, their licences, tool calling and speed, and whether open-model inference can be made bit-reproducible so a verifier can re-run an AI's decisions.
@@ -238,7 +238,7 @@ The existing `llm-agent.mjs` default budget of 2,000,000 input tokens per run ca
 5. **Make the outputs mechanical.** Constrain output to a small menu, such as an index into the legal actions. Map invalid output to a fixed fallback, so a model error cannot become an illegal move.
 6. **Run verifiers on the same architecture.** Otherwise mismatches are expected rather than evidence of fraud (S16). In practice that means one reference environment, such as a rented H100 image or a CPU container, which anyone can rent to re-run.
 
-### 4.3 Cost and practicality for The Sixfold Frontier [estimate]
+### 4.3 Cost and practicality for Wylls [estimate]
 
 - **A small model on a pinned CPU container is the most portable option.** Gemma 4 E4B or a 3–4B-active MoE are examples. At 4-bit, CPU-only generation might run at roughly 10–30 tok/s [estimate]. With ~2K-token prompts, every replayed decision costs seconds of CPU, and a verifier must re-run every Shade's every decision for a season. That is feasible for a few hundred Shades at bell granularity, but it makes verification hundreds of times more expensive than replaying deterministic policy code [estimate].
 - **The model becomes consensus-critical.** Changing the model, runtime or ISA mid-season breaks replay.

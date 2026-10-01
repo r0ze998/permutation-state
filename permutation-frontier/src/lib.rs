@@ -1,4 +1,4 @@
-//! `permutation-frontier`: the Sixfold Frontier M1 program (M1 contract
+//! `permutation-frontier`: the Wylls M1 program (M1 contract
 //! §0–§6; new program id, SBPF v2, no money, no MagicBlock).
 //!
 //! Two layers, split by the `program` feature (on by default):

@@ -421,7 +421,7 @@ export class SpriteArt {
         continue;
       }
       const paved = t.ring === 0 && t.name !== 'water' && t.name !== 'mountain';
-      // the Permutation Engine stands over the Concord's centre and its six neighbours
+      // the Engine stands over the Concord's centre and its six neighbours
       if (t.centre && t.ring === 0) {
         const es = ART_SIZES[Math.min(ART_SIZES.length - 1, ART_SIZES.indexOf(s) + 1)], kk = RADIUS / es.r, m = 2.4;
         const en = this.image('specials', es.key, `engine_${Math.max(0, Math.min(5, engineStage | 0))}`);

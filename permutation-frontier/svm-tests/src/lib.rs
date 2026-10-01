@@ -1,4 +1,4 @@
-//! Program-level tests of the Sixfold Frontier (M1 contract §3.5, §11 W2-B,
+//! Program-level tests of Wylls (M1 contract §3.5, §11 W2-B,
 //! §13): the SBPF v2 build of `permutation-frontier` run in LiteSVM 0.16.
 //!
 //! | module | what |

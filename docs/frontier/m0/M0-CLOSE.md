@@ -1,4 +1,4 @@
-# The Sixfold Frontier: M0 close (addendum to M0-FINAL)
+# Wylls: M0 close (addendum to M0-FINAL)
 
 - **Date:** 2026-09-27, written by unit W1-D at the end of M1 wave 1 (CL-38). **Base:** `frontier/m1-integ` at `d9d32ec`.
 - **What it does:** maps every line of `M0-FINAL.md` §5 ("What remains to close M0") to its closeout task (CL-xx, `m1/design/closeout.md`), the M1 unit that owns it (`m1/M1-CONTRACT.md` §11), the commit that carries it and the test that shows it, and re-grades the M0 exit table.

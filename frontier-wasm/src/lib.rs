@@ -1,4 +1,4 @@
-//! The Sixfold Frontier kernels for the web client (M1 contract §9.5).
+//! Wylls kernels for the web client (M1 contract §9.5).
 //!
 //! Every export has the same C ABI over linear memory:
 //!

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.89"
 publish = false
-description = "Sixfold Frontier M1 ABI: account layouts, instruction tags and data, errors, PS2 log records, budgets, presets, prologue tables and the entry codec (no Solana dependencies)"
+description = "Wylls M1 ABI: account layouts, instruction tags and data, errors, PS2 log records, budgets, presets, prologue tables and the entry codec (no Solana dependencies)"
 license = "MIT"
 
 [lib]

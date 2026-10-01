@@ -132,7 +132,7 @@ export async function startCivilizationServer({
   }
   const address = server.address();
   const actualPort = typeof address === "object" && address ? address.port : port;
-  log(`PERMUTATION STATE civilization ready at http://127.0.0.1:${actualPort}/civilization/`);
+  log(`Wylls civilization ready at http://127.0.0.1:${actualPort}/civilization/`);
   return { server, runtime, url: `http://127.0.0.1:${actualPort}/civilization/` };
 }
 

@@ -2,7 +2,7 @@
   "name": "permutation-gateway",
   "private": true,
   "type": "module",
-  "description": "PERMUTATION STATE chain gateway: crank, x402 entry, session-key relay, local test USDC",
+  "description": "Wylls chain gateway: crank, x402 entry, session-key relay, local test USDC",
   "scripts": {
     "test": "node --test test/*.test.mjs screens/logic.screen.mjs"
   },

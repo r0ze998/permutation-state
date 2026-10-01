@@ -1,4 +1,4 @@
-# The Sixfold Frontier: decisions log
+# Wylls: decisions log
 
 Kept with the M1 integration contract (`m1/M1-CONTRACT.md`, **v1.13**, 2026-09-30; the M1 exit is recorded in part U, 2026-10-01; first kept at v1.2, 2026-09-27; v1.0 kept as `lab/contract-rev/DECISIONS.v1.0.md`). Committed here by unit W1-D (CL-37) and linked from `README.md`; `m1/DECISIONS.md` is a pointer to this file. Earlier decisions (O1–O10, D1–D25) are in DESIGN.md §14. Part F records what the first M1 week measured for the questions still open.
 

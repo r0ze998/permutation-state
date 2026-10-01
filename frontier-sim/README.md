@@ -1,6 +1,6 @@
 # frontier-sim
 
-Host balance simulator for the Sixfold Frontier (open-world design §12 M0):
+Host balance simulator for Wylls (open-world design §12 M0):
 a 28-day season of up to tens of thousands of agents whose clashes,
 sieges, holdings, laurel reward indices, faction indices, pools and claims
 all run through the rules-v10 kernels in `permutation_rules::frontier`.

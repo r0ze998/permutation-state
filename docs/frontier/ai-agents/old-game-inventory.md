@@ -1,4 +1,4 @@
-# Old-game AI inventory, and what ports to the Sixfold Frontier
+# Old-game AI inventory, and what ports to Wylls
 
 Research note for the AI-agents plan (owner request 2026-10-01). Written 2026-10-01.
 Repo read at `codex/frontier` `aae8617` (worktree `.claude/worktrees/frontier-integ`); run records read from the main checkout's `permutation-gateway/.local/` (the worktree has none). Read-only: no repo change, no API call, no server, no chain transaction. The API key file and the `keys/`, `session.json`, `wallet.json` and `operator-token` files were not opened.
@@ -9,7 +9,7 @@ Labels: **[source]** = read in code, a doc or a recorded file (path given); **[m
 
 ## 0. Summary
 
-- The old game (v9, "PERMUTATION STATE" V5) had **five AI pieces**. Two call a language model: the **reference LLM agent** (`agents/llm-agent.mjs`, Claude Sonnet 5 through tools, paid by whoever runs it) and the **advisor** (`src/advisor.mjs`, Claude Haiku 4.5 rephrasing the operator AI members' chat replies, paid by the operator). Three call none: the **rule agent** with its runner, the **MCP server and SDK**, and the operator's own **hosted AI members** (Rust `permutation-server/src/bots/`, rule-based).
+- The old game (v9, "Wylls" V5) had **five AI pieces**. Two call a language model: the **reference LLM agent** (`agents/llm-agent.mjs`, Claude Sonnet 5 through tools, paid by whoever runs it) and the **advisor** (`src/advisor.mjs`, Claude Haiku 4.5 rephrasing the operator AI members' chat replies, paid by the operator). Three call none: the **rule agent** with its runner, the **MCP server and SDK**, and the operator's own **hosted AI members** (Rust `permutation-server/src/bots/`, rule-based).
 - **We have only one real token measurement:** tick 0 of one local season (2026-09-25) used about 11k input tokens and 478 output tokens on `claude-sonnet-5`. After that the API credit ran out [source: `IMPLEMENTATION_STATUS.ja.md` l.33]. No full season was played with a model. Nothing under `.local/` logs per-tick token counts: the agent printed them to stdout only. The one LLM run directory (`.local/agents/sophia-llm/decisions-1790289740751.json`) records four "no decision in time; holding" rationales at ticks 12–13 [source]. Only one chat message was ever recorded in any season file (`e2e-wallet.json`, from a human). No advisor reply was ever recorded [source].
 - **Cost of one LLM agent, as the old code is written** (Sonnet 5 at $2 / $10 per MTok, cache read $0.20): about **$0.03–0.06 per decision** in a typical case, and about **$0.40 in the worst case** (10 tool steps) [estimate, §2.1]. For a 180-tick old season that is **$5–10 per agent** [estimate]. The default token cap of 2M counted input tokens would stop the agent after about 57–80 of the 180 ticks [estimate].
 - **Cost of the advisor:** about $0.001 per reply. It is capped at 200 replies per gateway run, so at most about $0.22 per run [estimate]. It is negligible.

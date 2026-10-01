@@ -1,4 +1,4 @@
-# PERMUTATION STATE: The Sixfold Frontier (open-world design, revision 3.1)
+# Wylls (open-world design, revision 3.1)
 
 One civilization, six factions, one shared hex map that grows as people arrive. Anyone can join, at any time until late in the season, in any number up to the season's stated map capacity.
 
@@ -29,7 +29,7 @@ One civilization, six factions, one shared hex map that grows as people arrive. 
 
 ### 0.1 What was chosen
 
-**The game is E4, "The Sixfold Frontier". The chassis underneath it is E3's: the world lives on Solana base, not on a public ER. The contention rules are E1's. Revision 2 replaced the money design and the randomness source** (§0.4). **Revision 3 makes Season 1 base-only (no MagicBlock component at all), pins drand quicknet and SBPF v2, and rebuilds the account, beacon and clash-input layer on the M0 evidence** (§0.5).
+**The game is E4, "Wylls". The chassis underneath it is E3's: the world lives on Solana base, not on a public ER. The contention rules are E1's. Revision 2 replaced the money design and the randomness source** (§0.4). **Revision 3 makes Season 1 base-only (no MagicBlock component at all), pins drand quicknet and SBPF v2, and rebuilds the account, beacon and clash-input layer on the M0 evidence** (§0.5).
 
 In one paragraph: players own holdings and armies (hosts) on a shared hex map of provinces arranged in rings around a neutral centre, the Concord. The economy is lazy, as in Eternum: nothing ticks, values are settled when touched. The one thing that stays simultaneous is conflict. **Departures are public, destinations are sealed, the defender's roster is frozen at the start of the arrival bell, and everything that arrives at a province in the same 10-minute bell resolves together** from pre-clash counts, with a seed from a drand beacon round that is fixed by rule and becomes public at least 60 seconds after every reveal for that bell is in. Factions govern themselves in three tiers (local Wardens, a faction Assembly, four Ministers) and steer thousands of members with Mandates. The map opens a new ring whenever the open land is crowded enough, up to a capacity the season states at creation. USDC comes in as a small **citizen fee** plus an optional **laurel stake**, and goes out as prizes from two separate pools; nothing inside the game is bought with money. Hidden operator AIs (Shades) play among the people under a policy committed at genesis, and are revealed and replayed after the season. Every write extends a per-entity hash chain, and anyone can replay the season from base-chain logs.
 
@@ -40,7 +40,7 @@ In one paragraph: players own holdings and armies (hosts) on a shared hex map of
 | E2 Provinces (regional ticks) | 5.0 | 4.5 | **7.5** | **Two fatal flaws.** (1) The skew rule is a distributed global tick: one stuck province freezes 39% of the map in 6 h and 100% in 24 h (`lab/E2/sim-results.txt`), which breaks A1. (2) It is not an open world: 2 seats per faction per province, no cross-border combat, dealt seats. | Rejected as the base. Grafted: idle recycling, cohorts, beacon book cost, determinism property test, "ship a playable early". |
 | E3 Open Frontier (async + sealed battles) | 7.0 | **8.0** | 7.0 | None fatal. Its game repeats Eternum Season 0's joinable, timed, multi-round battles, which Eternum abandoned. | **Its architecture is chosen**, and in revision 2 also **its per-capita faction scoring**. Its battle model is not. |
 | E1 Six Banners (async entities on ER) | 7.5 | 7.0 | 6.0 | Public scale needs an "F13-strict" gated ER that MagicBlock does not document. | **Its contention rules are chosen** (escrowed operator share as the bond, parimutuel split, "never read a shared account on the hot path"), plus Mandates, the accusation game, occupation. Its daily merit cap is **dropped** in revision 2 (it made scripted wallets profitable, §18 issue 14). |
-| E4 Sixfold Frontier (bells, gated ER) | **8.5** | 6.0 | 5.0 | No fatal *game* flaw. Its architectural flaws (custom ingress gate, CensusBook overflow, Court mode, ~65k delegations, stall changes outcomes) disappear on E3's base-layer chassis. | **Its game is chosen.** |
+| E4 Wylls (bells, gated ER) | **8.5** | 6.0 | 5.0 | No fatal *game* flaw. Its architectural flaws (custom ingress gate, CensusBook overflow, Court mode, ~65k delegations, stall changes outcomes) disappear on E3's base-layer chassis. | **Its game is chosen.** |
 
 ### 0.3 Grafts, and where each one comes from
 
@@ -121,7 +121,7 @@ Inputs: the redone spikes SP-V2 and SP-FEE (`scratchpad/frontier/m0b/spikes/`), 
 
 ## 1. Vision
 
-**The fantasy.** You are one citizen of a civilization split into six rival factions. You own a hamlet on your faction's frontier, you grow it into a stronghold, you raise hosts and send them out under sealed orders, and you watch the bell to see what met them. Around you, thousands of others do the same. Your faction is a real polity: your neighbours elect a Warden, the Wardens elect Ministers, the Ministers post Mandates and make peace, and you decide whether to follow. At the centre stands the Permutation Engine, which the whole civilization builds together. Somewhere among you are the operator's Shades, playing by a policy locked before the season began. At the end, everyone can check every result from the chain.
+**The fantasy.** You are one citizen of a civilization split into six rival factions. You own a hamlet on your faction's frontier, you grow it into a stronghold, you raise hosts and send them out under sealed orders, and you watch the bell to see what met them. Around you, thousands of others do the same. Your faction is a real polity: your neighbours elect a Warden, the Wardens elect Ministers, the Ministers post Mandates and make peace, and you decide whether to follow. At the centre stands the Engine, which the whole civilization builds together. Somewhere among you are the operator's Shades, playing by a policy locked before the season began. At the end, everyone can check every result from the chain.
 
 **Design goals, in priority order.**
 1. **Anyone, any number, any time.** No seat cap below the season's stated map capacity. Joining is open until day 21 of 28, and the price falls with the days left.
@@ -136,12 +136,12 @@ Inputs: the redone spikes SP-V2 and SP-FEE (`scratchpad/frontier/m0b/spikes/`), 
 
 **Eternum mapping, for orientation.**
 
-| Eternum | Sixfold Frontier |
+| Eternum | Wylls |
 |---|---|
 | Realm, Village | Holding (Hamlet → Town → City → Stronghold); ≤ 3 per wallet |
 | Army with stamina | Host with stamina; sealed marches |
 | Instant combat between adjacent units | Everything arriving at a province in one bell resolves together |
-| Hyperstructures and victory points | The Permutation Engine plus four faction paths |
+| Hyperstructures and victory points | The Engine plus four faction paths |
 | Tribes | Companies (≤ 32, no treasury) under a March and a faction |
 | Bank (AMM, 15% + 15% fees) | The Bourse: a batch auction per bell, 1% + 1% fees |
 | Settlement rings grown by demand | Province rings opened by a crowding rule |
@@ -195,7 +195,7 @@ Inputs: the redone spikes SP-V2 and SP-FEE (`scratchpad/frontier/m0b/spikes/`), 
 
 - **Personal:** grow to City and Stronghold; earn **laurels** (if you staked) and **Works**; Chronicle titles.
 - **Faction:** four paths, each measured **per active member and relative to the civilization average** (§5.6): *Dominion* (March control and captures), *Prosperity* (production), *Knowledge* (techs and science), *Concord* (Engine share, treaties kept).
-- **Civilization:** the **Permutation Engine** has 5 stages. Each raises everyone's tech ceiling, advances the Era, grows the Civilisation Share and spawns six **Relic Sites**, one per wedge, **three rings inside the current rim** (not on it; §6.6).
+- **Civilization:** the **Engine** has 5 stages. Each raises everyone's tech ceiling, advances the Era, grows the Civilisation Share and spawns six **Relic Sites**, one per wedge, **three rings inside the current rim** (not on it; §6.6).
 - **Political:** Warden, then Minister.
 - **Shade hunting:** accuse suspected Shades; capture their holdings.
 
@@ -336,7 +336,7 @@ Terrain does not persist. The **Chronicle** persists: a Merkle root of every fou
 
 ### 4.1 Identity
 
-- **One civilization:** the Concord, the Permutation Engine, shared Eras and a shared tech ceiling, and a Civilisation Share of the prize.
+- **One civilization:** the Concord, the Engine, shared Eras and a shared tech ceiling, and a Civilisation Share of the prize.
 - **Six factions with asymmetric doctrines (revision 2; rule fixed in revision 3, O5).** Each faction keeps today's id and display name from HEAD `96a3464` and gets one **doctrine**: a unit variant, a stance or movement edge and a civic power.
 - **Rule (revision 3): no doctrine multiplies a scored fact or growth directly** (production, science, Knowledge weight, cheaper expansion, bigger grants). Such a bonus wins almost every season, because a faction's per-capita index varies only about 1.4% between seasons: with revision 2's draft table **Lumen won 99.5% of 600 seasons and 0 of 6 doctrines were in the band** [sim, `RESULTS.md` §E1]. Removing those multipliers brings every doctrine's mean index within ±0.27% and puts **3 of 6** win rates in the band [sim, §E2].
 - **Criterion (O5):** every doctrine's win rate in the balance simulation lies in **16.7% ± 2 points**, 6 of 6, **on at least 1,500 paired seasons** (revision 3.1). At 600 seasons a win rate's binomial SE is 1.5 points and even a perfectly balanced table passes 6/6 only about 30% of the time; at 1,500 paired seasons the SE is 1.0 [sim, K3 DOCTRINES.md].

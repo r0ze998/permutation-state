@@ -1,4 +1,4 @@
-// PERMUTATION STATE — spectator view.
+// Wylls — spectator view.
 // Reads the whole-world view (no member token, no ?civ), or one nation's
 // view when a row is selected (perfect information: the same world, with that
 // nation's relations and display-only sight). Revealed decisions are

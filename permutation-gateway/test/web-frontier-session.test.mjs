@@ -26,7 +26,7 @@ const scope = { cluster: 'localnet', programId: 'J5yoiT3bVuC7pLFPJeS2yqLTouT5BHx
 const where = { origin: 'http://127.0.0.1:41040', host: '127.0.0.1:41040' };
 
 test('the session text is pinned byte for byte, printable ASCII, never translated', () => {
-  const want = 'Permutation State: Sixfold Frontier wants you to create an in-game key.\n'
+  const want = 'Wylls wants you to create an in-game key.\n'
     + 'Site: http://127.0.0.1:41040\n'
     + 'Cluster: localnet\n'
     + 'Program: J5yoiT3bVuC7pLFPJeS2yqLTouT5BHxBivvpqkG2jvAz\n'
@@ -36,13 +36,13 @@ test('the session text is pinned byte for byte, printable ASCII, never translate
   assert.equal(fs.sessionText({ ...where, ...scope }), want);
   setLang('en');
   assert.equal(fs.sessionText({ ...where, ...scope }), want, 'the language does not change it');
-  assert.equal(Buffer.from(sha256(Buffer.from(want))).toString('hex'), 'af2129ba1bd6d6a9649f672eaf33edf6e1c9d527f205a0c5651e07f71c4e79bb', 'the pinned text\'s sha256');
+  assert.equal(Buffer.from(sha256(Buffer.from(want))).toString('hex'), '932313bc2d1d7c24e7f8c8631b32902bf85f1a1ea2813da159cc9acdb75332b6', 'the pinned text\'s sha256');
   assert.throws(() => fs.sessionText({ ...where, ...scope, programId: 'Prög' }), e => e.code === 'BadSessionText');
   assert.throws(() => fs.sessionText({ ...where, ...scope, cluster: '本番' }), /printable ASCII/);
   // The source keeps the text in one place and is never passed through L`…`.
   const src = readFileSync(new URL('../../permutation-server/web/frontier/fsession.mjs', import.meta.url), 'utf8');
-  assert.equal((src.match(/Sixfold Frontier wants you/g) || []).length, 1);
-  assert.doesNotMatch(src, /L`Permutation State/);
+  assert.equal((src.match(/Wylls wants you/g) || []).length, 1);
+  assert.doesNotMatch(src, /L`Wylls/);
 });
 
 test('distinct from v9: another text, seed domain and storage prefix; v9 session.mjs untouched', () => {
@@ -82,7 +82,7 @@ test('keep, restore and forget per wallet and season; the Citizen check; backup 
   assert.deepEqual(fs.matchesCitizen(s, { session: new Uint8Array(32) }), { ok: false, code: 'NoSession' });
   assert.deepEqual(fs.matchesCitizen(s, { session: new Uint8Array(32).fill(1) }), { ok: false, code: 'SessionMismatch' });
   const text = s.backupText();
-  assert.match(text, /Sixfold Frontier key/);
+  assert.match(text, /Wylls key/);
   fs.forget(s);
   assert.equal(await fs.restore(scope, w.address), null);
   const { session, citizen: c } = await fs.importBackup(text, scope, [{ wallet: 'x', session: 'y' }, { wallet: w.address, session: s.publicKey }]);

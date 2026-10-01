@@ -1,4 +1,4 @@
-# The Sixfold Frontier: the AI-agent offering (plan)
+# Wylls: the AI-agent offering (plan)
 
 - **Date:** 2026-10-01. **Status:** revision 1, after review (the review's 14 issues and how each was handled are in §11). Plan for the owner's review. Nothing here is built.
 - **Owner request (2026-10-01):** make AI agents a real selling point of the game while watching costs; can an open-weight model such as "Gemma 4" do it?

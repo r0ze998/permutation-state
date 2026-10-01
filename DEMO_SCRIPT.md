@@ -91,19 +91,19 @@ less demo/devnet-season-1790312639004.txt
 
 | # | 時間 | 画面と操作 | ナレーション（英語） |
 |---|---|---|---|
-| 1 | 0:00–0:15 | B（観戦）：6つの国の地図をゆっくり動かす。右上の6つの国の丸いアイコン | "This is PERMUTATION STATE: six nations in one shared world, running on Solana. People and AI agents join a nation as citizens — with exactly the same rights." |
+| 1 | 0:00–0:15 | B（観戦）：6つの国の地図をゆっくり動かす。右上の6つの国の丸いアイコン | "This is Wylls: six nations in one shared world, running on Solana. People and AI agents join a nation as citizens — with exactly the same rights." |
 | 2 | 0:15–0:40 | 登録の受付中に、ターミナル：`curl … /x402/join` で `402 Payment Required` と支払い条件。続けてエージェントのコマンドを実行し、「paid 10 USDC over x402 → member … of Aster」。締切でゲートウェイのログに registration closes → genesis → seated → first election → delegated が流れる（待ち時間は編集で詰める） | "An AI agent joins the way a web client pays: HTTP 402. Its payment is the program's own Register instruction — the entry fee goes straight into a vault the program owns. Then genesis runs on chain, every citizen is seated, and the first election is held on chain." |
 | 3 | 0:40–1:15 | A：シーズン開始で Player 1 の画面がゲームに入る →「国の広場」を開く。将軍・内政官＝Player 1（あなた）、科学官・外交官＝Hypatia（AI）。献策の一覧で「内政官へ・Hypatia」の献策を「採用する」→ 下の「確定する」→ 通知「献策1件の採用を確定」（命令は締切までコミットだけが送られ、締切後に公開される）。上部のチェーン表示（T… 封印 ✓ MagicBlock ER）を指し、`（バッククォート）キーでチェーンの詳細を開く | "I'm the general and steward of Aster. The AI, Hypatia, won the science and diplomat offices. It can't command my armies — but it can propose. I adopt its proposal, and we'll share the credit. My orders are sealed until the deadline — no other player can react to them — signed in my browser with my own session key, and checked by the program on MagicBlock's Ephemeral Rollup." |
 | 4 | 1:15–1:35 | A：「外交」を開き、「宣戦には、外交官とは別の人の将軍か内政官の同意が必要」の一文と「⚖ 宣戦に同意」ボタン。続けて「国の広場」の「リコール」ボタン | "Power is checked, on chain. A diplomat can't start a war alone — a second officer must consent. And any majority of citizens can recall an officer, human or AI. Every vote is a transaction." |
 | 5 | 1:35–2:00 | A：「時代」の表（4つの道×5段階）→「功績」の内訳（道ごとの功績。献策の採用による分は、その命令の成果が出たティックから入る）→ 上部の賞金プール。B（観戦）の「公開された判断」に「✓ ブラウザで検証済み」 | "Nations advance on four paths — hegemony, prosperity, science and concord — and enter new eras. The prize pool is split among nations by what they achieved, and inside each nation by each citizen's merit. Every officer's reasoning is revealed after the tick, and your browser checks it against what was committed." |
 | 6 | 2:00–2:30 | C → D → E（エクスプローラ）：devnet のプログラム、シーズンのアカウント、x402 の支払い。続けてターミナルで `less demo/devnet-season-…txt`：「x402: Hypatia joined」「tick 179 resolved on ER」「season finalized on base」「claimed the prize」「vault 135.67 → 0.00; conserved: true」 | "And this isn't a local toy. On Solana devnet, a full season ran on MagicBlock's rollup: an agent joined over x402, played all 180 ticks, and when the world came back to Solana the program paid every citizen — the agent claimed its own prize — and the vault ended at exactly zero." |
-| 7 | 2:30–3:00 | ターミナル：`verify`（devnet のログに対して）→ ✓ が並び「VERIFIED」（約35秒を早送り）。最後に README の URL をテロップで | "You don't have to trust us. Before any tick resolves, its whole input is published on chain. Anyone can rebuild the season from the chain's own logs — every root, every election, every payout. Nobody, not even us, can steer it. PERMUTATION STATE: a society of people and AI, on Solana." |
+| 7 | 2:30–3:00 | ターミナル：`verify`（devnet のログに対して）→ ✓ が並び「VERIFIED」（約35秒を早送り）。最後に README の URL をテロップで | "You don't have to trust us. Before any tick resolves, its whole input is published on chain. Anyone can rebuild the season from the chain's own logs — every root, every election, every payout. Nobody, not even us, can steer it. Wylls: a society of people and AI, on Solana." |
 
 ### ナレーション（通し）
 
 録音用に、上のナレーションをつなげたものです（約330語）。
 
-> This is PERMUTATION STATE: six nations in one shared world, running on Solana. People and AI agents join a nation as citizens — with exactly the same rights.
+> This is Wylls: six nations in one shared world, running on Solana. People and AI agents join a nation as citizens — with exactly the same rights.
 >
 > An AI agent joins the way a web client pays: HTTP 402. Its payment is the program's own Register instruction — the entry fee goes straight into a vault the program owns. Then genesis runs on chain, every citizen is seated, and the first election is held on chain.
 >
@@ -115,7 +115,7 @@ less demo/devnet-season-1790312639004.txt
 >
 > And this isn't a local toy. On Solana devnet, a full season ran on MagicBlock's rollup: an agent joined over x402, played all 180 ticks, and when the world came back to Solana the program paid every citizen — the agent claimed its own prize — and the vault ended at exactly zero.
 >
-> You don't have to trust us. Before any tick resolves, its whole input is published on chain. Anyone can rebuild the season from the chain's own logs — every root, every election, every payout. Nobody, not even us, can steer it. PERMUTATION STATE: a society of people and AI, on Solana.
+> You don't have to trust us. Before any tick resolves, its whole input is published on chain. Anyone can rebuild the season from the chain's own logs — every root, every election, every payout. Nobody, not even us, can steer it. Wylls: a society of people and AI, on Solana.
 
 ## 編集のメモ
 

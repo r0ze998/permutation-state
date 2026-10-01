@@ -1,4 +1,4 @@
-# PERMUTATION STATE — プレイガイド
+# Wylls — プレイガイド
 
 > **履歴として残している文書です（2026-09-24）。** これは以前の試作 `/civilization/`（全員でひとつの文明を育てる市民視点のゲーム）の遊び方です。現在のゲーム（6つの国・選挙・達成と賞金、Game Design V5）の遊び方は [README の How to play](README.md#how-to-play-in-the-browser) と、ゲーム内の「？」ボタンにあります。現在のゲームでは、自分のウォレット（Phantom・Solflare・Backpack。devnet ではウォレットをテストネット/devnet に切り替える）を接続し、テスト USDC を受け取って参加費を払い、ブラウザのセッションの鍵で遊び、賞金を同じウォレットで受け取ります。下の「参加は無料で、ウォレット接続も不要」は以前の試作だけの話です。
 

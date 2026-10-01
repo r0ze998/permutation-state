@@ -1,4 +1,4 @@
-//! PERMUTATION STATE on Solana + MagicBlock Ephemeral Rollups.
+//! Wylls on Solana + MagicBlock Ephemeral Rollups.
 //!
 //! The World PDA holds the borsh-encoded `permutation_rules::WorldState`; the
 //! same crate the server, replay verifier and agents use runs here, so a

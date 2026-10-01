@@ -5,7 +5,7 @@ edition = "2021"
 rust-version = "1.95"
 publish = false
 license = "MIT"
-description = "Program-level tests of the Sixfold Frontier: the SBPF v2 build of permutation-frontier run in LiteSVM with SIMD-0186 loaded-data enforcement (M1 contract §3.5, §11 W2-B, §13)"
+description = "Program-level tests of Wylls: the SBPF v2 build of permutation-frontier run in LiteSVM with SIMD-0186 loaded-data enforcement (M1 contract §3.5, §11 W2-B, §13)"
 
 # Its own workspace, lock and toolchain (1.95.0: LiteSVM 0.16 does not build
 # on 1.89), excluded from the root workspace (contract §3.1). The program is

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.89"
 publish = false
-description = "Sixfold Frontier M1 on-chain program (SBPF v2, no money): seasons, beacons, rings, provinces, holdings, marches, clashes and transits over the permutation-rules frontier kernels"
+description = "Wylls M1 on-chain program (SBPF v2, no money): seasons, beacons, rings, provinces, holdings, marches, clashes and transits over the permutation-rules frontier kernels"
 license = "MIT"
 
 [lib]

@@ -1,4 +1,4 @@
-//! Rules v10: the Sixfold Frontier (open-world design, revision 2).
+//! Rules v10: Wylls (open-world design, revision 2).
 //!
 //! A separate module tree next to the v9 (Skirmish) rules, which it does
 //! not change (design §11.1). Kernels here are pure functions of their
