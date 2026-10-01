@@ -8,7 +8,7 @@
 import { activeHolding } from '../fstate.mjs';
 import { html, raw } from '../../util.mjs';
 import { L, Lh, fmtNum } from '../../lang.mjs';
-import { factionName, DOCTRINE_NAMES, HOLDING_STATES } from '../fi18n.mjs';
+import { factionName, DOCTRINE_NAMES, HOLDING_STATES, failureText } from '../fi18n.mjs';
 import { freeByWedge, ticketTimes, homeWedge } from '../fland.mjs';
 import { lamports, swatch, timeHtml } from './shell.mjs';
 import { leaderCard } from '../people/ui.mjs';
@@ -36,9 +36,9 @@ function renderFactions(FS) {
   // The season's join gate (I-51), or a relay that answered InviteRequired.
   const gated = FS.inviteRequired || !!FS.season?.joinGate?.some?.(x => x !== 0);
   const ready = Number.isInteger(FS.joinDraft?.faction);
-  return html`<section aria-labelledby="join-faction"><h3 id="join-faction">${L`国を選ぶ`}</h3>
-    <p>${L`選ぶのは六つの国のどれか一つだけです。最初の村は、その国の本拠の扇区の空いた区画に自動で置かれ、次の鐘（約11〜21分後）に現れます。`}</p>
-    <p class="muted">${L`M1 では賞金はありません。国は本拠の扇区と教義を決めます。`}</p>
+  return html`<section aria-labelledby="join-faction"><h3 id="join-faction">${L`勢力を選ぶ`}</h3>
+    <p>${L`選ぶのは六つの勢力のどれか一つだけです。最初の拠点の入植希望は、本拠の扇区の空いた区画にこのページが自動で出し、拠点は次の鐘（約11〜21分後）に決まります。`}</p>
+    <p class="muted">${L`M1 では賞金はありません。勢力は本拠の扇区と教義を決めます。`}</p>
     <ul class="cards">${cards}</ul>
     ${gated ? html`<label class="field">${L`招待コード`}<input name="invite" autocomplete="off" data-bind="invite" value="${FS.joinDraft?.invite ?? ''}"></label>` : ''}
     <button type="button" class="btn primary" data-act="join" ${raw(ready ? '' : 'disabled')}>${L`ゲーム内の鍵を作って参加する`}</button>
@@ -51,21 +51,33 @@ function renderSessionFix(FS) {
     <button type="button" class="btn primary" data-act="session">${L`鍵を作り直す`}</button></section>`;
 }
 
-/** While the first village is being placed (no ticket yet): what this browser is doing about it. */
+/** Why the last holding or ticket ended (stored with its bell, review finding 7), as a line. */
+function endLine(FS) {
+  const e = FS.ui?.landEnd;
+  if (!e) return '';
+  const t = { displaced: () => L`第${fmtNum(e.bell)}鐘：仮の拠点は、同じ鐘のより高い順位の入植希望に押し出されました。`,
+    lost: () => L`第${fmtNum(e.bell)}鐘：拠点を失いました。`,
+    ended: () => L`第${fmtNum(e.bell)}鐘：前の入植希望は区画を得られずに終わりました。` }[e.why];
+  return t ? html`<p class="callout">${t()} ${L`空いた区画に、入植希望を自動でもう一度出します。`}</p>` : '';
+}
+
+/** While the first holding is being placed (no ticket yet): what this browser is doing about it (review finding 12). */
 function renderPlacing(FS) {
   const a = FS.autoTicket;
-  const lost = FS.land?.stage === 'refugee' || FS.hadHolding;
-  const body = a?.state === 'nofree'
-    ? html`<p class="warn">${L`本拠の扇区にも隣の扇区にも空いた区画が見つかりません。新しい輪がひらくと、自動でもう一度探します。`}</p>`
-    : a?.state === 'failed'
-      ? html`<p class="notice error" role="alert">${L`入植希望を出せませんでした（${a.code ?? 'error'}）。次の鐘に自動でもう一度出します。`}</p>
-        <button type="button" class="btn" data-act="auto-ticket">${L`いますぐもう一度出す`}</button>`
-      : html`<p role="status">${L`本拠の扇区で空いた区画を探して、入植希望を出しています…`}</p>`;
-  return html`<section aria-labelledby="join-sites"><h3 id="join-sites">${lost ? L`新しい村の場所を探しています` : L`最初の村を置いています`}</h3>
-    ${lost ? html`<p>${L`前の入植希望は終わったか、村を失いました。空いた区画にもう一度、自動で入植希望を出します。`}</p>` : ''}
-    ${body}
-    <p class="muted">${L`場所は選びません。同じ鐘の入植希望はその鐘の乱数でまとめて公平に決まり、村は次の鐘（約11〜21分後）に現れます。`}</p>
-    <p class="muted">${Lh`預け金：<strong>${lamports(FS.land?.escrowNeeded ?? 0n)}</strong>（村の口座の賃料。村ができればそこへ移り、できなければ払った人に戻ります）`}</p>
+  const again = !!FS.ui?.landEnd || FS.land?.stage === 'refugee';
+  const retry = html`<button type="button" class="btn" data-act="auto-ticket">${L`いますぐもう一度出す`}</button>`;
+  const line = {
+    searching: () => html`<p role="status">${L`本拠の扇区で空いた区画を探して、入植希望を出しています…`}</p>`,
+    sent: () => html`<p role="status">${L`入植希望を出しました。チェーンの記録に現れるのを待っています。`}</p>`,
+    waiting: () => html`<p role="status">${L`この鐘の入植希望はもう試しました。次の鐘に自動でもう一度出します。`}</p>${retry}`,
+    nofree: () => html`<p class="warn" role="status">${L`本拠の扇区にも隣の扇区にも空いた区画が見つかりません。鐘ごとに自動で探し直し、新しい輪がひらけばそこを探します。`}</p>${retry}`,
+    failed: () => html`<p class="notice error" role="alert">${L`入植希望を出せませんでした：${failureText({ code: a.code })}`} ${L`次の鐘に自動でもう一度出します。`}</p>${retry}`,
+  }[a?.state] ?? (() => html`<p role="status">${L`まもなく入植希望を自動で出します。`}</p>`);
+  return html`<section aria-labelledby="join-sites"><h3 id="join-sites">${again ? L`新しい拠点の場所を探しています` : L`最初の拠点を置いています`}</h3>
+    ${endLine(FS)}
+    ${line()}
+    <p class="muted">${L`場所は選びません。同じ鐘の入植希望はその鐘の乱数でまとめて公平に決まり、拠点は次の鐘（約11〜21分後）に決まります。`}</p>
+    <p class="muted">${Lh`預け金：<strong>${lamports(FS.land?.escrowNeeded ?? 0n)}</strong>（拠点の口座の賃料。拠点ができればそこへ移り、できなければ払った人に戻ります）`}</p>
     <p><button type="button" class="btn" data-act="practice-open">${L`待つあいだに練習で戦ってみる`}</button></p></section>`;
 }
 
@@ -75,7 +87,8 @@ function renderTicket(FS) {
   return html`<section aria-labelledby="join-ticket"><h3 id="join-ticket">${L`入植希望（第${fmtNum(t.bell)}鐘）`}</h3>
     <ol class="chosen">${t.sites.map((s, i) => html`<li ${raw(i < t.next ? 'class="done"' : '')}>${siteText(s)}${i < t.next ? html` <span class="muted">${L`（ふさがっていた）`}</span>` : ''}</li>`)}</ol>
     ${times ? html`<p>${Lh`結果は ${timeHtml(times.resultAbout)} ごろ（出してから約11〜21分）に、この鐘の乱数で決まります。`}</p>` : ''}
-    <p class="muted">${L`区画はこの国の本拠の扇区から自動で選びました。区画を得られなければ、自動でもう一度出します。`}</p>
+    ${endLine(FS)}
+    <p class="muted">${FS.ui?.ticketSource === 'overflow' ? L`本拠の扇区に空きがなかったため、区画は隣の扇区のいちばん外の輪から自動で選びました。区画を得られなければ、自動でもう一度出します。` : L`区画は本拠の扇区から自動で選びました。区画を得られなければ、自動でもう一度出します。`}</p>
     <p><button type="button" class="btn" data-act="practice-open">${L`待つあいだに練習で戦ってみる`}</button></p></section>`;
 }
 

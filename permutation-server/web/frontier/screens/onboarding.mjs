@@ -13,7 +13,7 @@ import { guideLevel, guideTarget, goText } from '../hud/guide.mjs';
 
 const TITLE = {
   welcome: () => L`ようこそ`,
-  join: () => L`国を選ぶ`,
+  join: () => L`勢力と拠点`,
   build: () => L`最初の建設`,
   scout: () => L`最初の斥候`,
   practice: () => L`練習の衝突`,
@@ -23,12 +23,15 @@ const TITLE = {
 };
 const DO = {
   welcome: () => L`五つの言葉だけ覚えましょう：拠点（あなたの土地）、軍勢（動かす兵）、鐘（10分ごとの区切り）、進軍（封をした移動）、探索（斥候で周りを調べる）。`,
-  join: stage => ({
-    none: () => L`地図のタブで六つの国から一つを選び、ゲーム内の鍵を作って参加します。選ぶのは国だけです。`,
-    joined: () => L`最初の村を、本拠の扇区の空いた区画に自動で置いています。`,
-    ticket: () => L`最初の村の入植希望を自動で出しました。次の鐘（約11〜21分後）に村が現れます。待つあいだに練習で戦ってみましょう。`,
-    refugee: () => L`村を失いました。空いた区画に自動でもう一度入植希望を出します。`,
-  }[stage]?.() ?? L`最初の村を、本拠の扇区の空いた区画に自動で置いています。`),
+  // stage-neutral (a returning or refugee player too), following the automatic ticket (review finding 9)
+  join: FS => {
+    const stage = FS.land?.stage ?? 'none', st = FS.autoTicket?.state;
+    if (stage === 'none') return L`地図のタブで六つの勢力から一つを選び、ゲーム内の鍵を作って参加します。選ぶのは勢力だけです。`;
+    if (stage === 'ticket' || st === 'sent') return L`入植希望を自動で出しました。次の鐘（約11〜21分後）に拠点が決まります。待つあいだに練習で戦ってみましょう。`;
+    if (st === 'nofree') return L`空いた区画が見つかりません。鐘ごとに自動で探し直します。`;
+    if (st === 'failed') return L`入植希望を出せませんでした。次の鐘に自動でもう一度出します（地図のタブからすぐ出し直せます）。`;
+    return L`空いた区画に、拠点の入植希望を自動で出しています。`;
+  },
   build: () => L`拠点のタブで農場と木材所を建てます。`,
   scout: () => L`斥候を訓練して軍勢に編成し、隣の2マスを探索します。`,
   practice: () => L`練習モードで蛮族の野営地を襲ってみます。チェーンには何も送りません。`,
@@ -71,7 +74,7 @@ export function render(FS, { open = true } = {}) {
   const cur = st.steps.find(s => s.id === st.current);
   const n = st.steps.filter(s => s.status === 'done' || s.status === 'skipped').length;
   const total = STEPS.length - 1;
-  const body = html`<p>${cur.id === 'join' ? DO.join(FS.land?.stage ?? 'none') : DO[cur.id]()}</p>
+  const body = html`<p>${cur.id === 'join' ? DO.join(FS) : DO[cur.id]()}</p>
     ${cur.wait ? html`<p class="muted">${waitText(cur.wait)}</p>` : ''}
     <p>${cur.id === 'welcome' ? html`<button type="button" class="btn primary" data-act="ob-seen" data-flag="welcome">${L`わかりました`}</button>` : ''}
       ${target && target.step === cur.id ? html`<button type="button" class="btn primary" data-act="ob-go">${goText(target)}</button>` : ''}

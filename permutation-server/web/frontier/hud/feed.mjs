@@ -86,6 +86,11 @@ export function diffFeed(prev, next) {
     else if (was.state !== 2 && h.state === 2) out.push({ id: `hf:${k}`, kind: 'holding', bell, p: h.p, q: h.q, text: L`州 ${h.p},${h.q} の拠点が確定しました` });
     else if (was.tier !== h.tier) out.push({ id: `ht:${k}:${h.tier}`, kind: 'holding', bell, p: h.p, q: h.q, text: L`州 ${h.p},${h.q} の拠点が${TIERS[h.tier] ?? ''}になりました` });
   }
+  // a holding that is gone: displaced while provisional, or lost (a new site ticket is filed automatically)
+  for (const [k, was] of prev.holdings) {
+    if (next.holdings.has(k)) continue;
+    out.push({ id: `hg:${k}:${bell}`, kind: 'holding', bell, p: was.p, q: was.q, text: was.state === 2 ? L`州 ${was.p},${was.q} の拠点を失いました。入植希望を自動でもう一度出します` : L`州 ${was.p},${was.q} の仮の拠点は押し出されました。入植希望を自動でもう一度出します` });
+  }
   return out;
 }
 

@@ -12,7 +12,7 @@ export const TABS = Object.freeze(['map', 'holding', 'hosts', 'marches', 'more']
 // `lastTicketBell`: the bell the last ticket was filed at (integ-W6 review: a
 // ticket can end between two polls without the page seeing it open, so the
 // offer also counts it as seen `TICKET_SEEN_BELLS` after the filing bell).
-export const DEFAULTS = Object.freeze({ v: 1, fog: true, lod: 'world', tab: 'map', dismissed: [], lastTicket: null, ticketSeen: true, lastTicketBell: null, autoPan: false, battleFx: 'normal', guide: 'all' });
+export const DEFAULTS = Object.freeze({ v: 1, fog: true, lod: 'world', tab: 'map', dismissed: [], lastTicket: null, ticketSeen: true, lastTicketBell: null, autoPan: false, battleFx: 'normal', guide: 'all', autoTryBell: null, ticketSource: null, landEnd: null });
 
 /** `ps-fui:<cluster>:<program>:<season>`. */
 export const uiKey = ({ cluster, programId, seasonId }) => `${UI_PREFIX}${cluster}:${programId}:${seasonId}`;
@@ -50,6 +50,11 @@ export function loadUi(storage, key) {
     autoPan: typeof v.autoPan === 'boolean' ? v.autoPan : DEFAULTS.autoPan,
     battleFx: ['normal', 'fast', 'off'].includes(v.battleFx) ? v.battleFx : DEFAULTS.battleFx,
     guide: ['all', 'warn', 'off'].includes(v.guide) ? v.guide : DEFAULTS.guide,
+    // the automatic ticket (owner decision V2): the bell of the last attempt (any tab of this device), which list the
+    // sites came from, and why the last holding or ticket ended (shown on the next cards)
+    autoTryBell: Number.isInteger(v.autoTryBell) && v.autoTryBell >= 0 ? v.autoTryBell : null,
+    ticketSource: ['home', 'overflow'].includes(v.ticketSource) ? v.ticketSource : null,
+    landEnd: v.landEnd && ['displaced', 'lost', 'ended'].includes(v.landEnd.why) && Number.isInteger(v.landEnd.bell) ? { why: v.landEnd.why, bell: v.landEnd.bell } : null,
   };
 }
 
