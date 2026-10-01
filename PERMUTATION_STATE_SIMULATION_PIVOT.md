@@ -1,4 +1,4 @@
-# PERMUTATION STATE — Simulation Pivot
+# Wylls — Simulation Pivot
 
 > Archived intermediate design. This walking-and-repair slice did not satisfy the required strategic civilization gameplay. The active design is [the map-first rebuild](PERMUTATION_STATE_REBUILD.md), playable at `/civilization/`. The completion language below describes only the old narrow technical experiment, not a completed game.
 
@@ -6,11 +6,11 @@
 
 The existing East Sluice proof is a useful Solana/MagicBlock causality spike, but it is not the game. It demonstrates that one citizen's accepted action can alter a later citizen's valid action and that the resulting state can be checkpointed. Its static scene, three-step command chain, and receipt-led interface must not define the main play experience.
 
-PERMUTATION STATE is now defined as:
+Wylls is now defined as:
 
 > A persistent civilization RPG in which every human player and AI citizen inhabits the same civilization as an embodied character, physically moves through the world, works inside one shared economy, and changes the civilization's seasonal fate through production, logistics, trade, governance, exploration, and defence.
 
-The target is not an Eternum reskin. Eternum supplies the systemic backbone—world time, spatial constraint, production chains, transport, construction, markets, armies, and seasonal pressure. PERMUTATION STATE adds an embodied citizen perspective and a simulated AI society.
+The target is not an Eternum reskin. Eternum supplies the systemic backbone—world time, spatial constraint, production chains, transport, construction, markets, armies, and seasonal pressure. Wylls adds an embodied citizen perspective and a simulated AI society.
 
 ## Non-negotiable player fantasy
 

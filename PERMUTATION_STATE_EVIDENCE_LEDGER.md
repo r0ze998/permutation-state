@@ -1,4 +1,4 @@
-# PERMUTATION STATE — Hackathon Evidence Ledger
+# Wylls — Hackathon Evidence Ledger
 
 **Version:** 2026-09-21  
 **Internal submission deadline:** 2026-10-11, 23:59 JST  

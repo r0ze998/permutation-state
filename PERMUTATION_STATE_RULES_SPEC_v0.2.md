@@ -1,4 +1,4 @@
-# PERMUTATION STATE — Rules Specification v0.2 (`permutation-rules`)
+# Wylls — Rules Specification v0.2 (`permutation-rules`)
 
 Status: implemented in `permutation-rules`, 2026-09-24; revised to `RULES_VERSION = 6` on 2026-09-25 (see "Version 6" below and [Game Design V5 §17](PERMUTATION_STATE_GAME_DESIGN_V5.md)), then to `RULES_VERSION = 7` the same day (see "Version 7" below and [V5 §18](PERMUTATION_STATE_GAME_DESIGN_V5.md)); version 7 is implemented locally and not yet deployed to devnet. Seasons recorded under version 5, such as the devnet seasons, verify with a build of commit `a02862f` or earlier.
 Audience: implementers of the `permutation-rules` Rust crate, the ER program (`permutation-chain`), the replay verifier, the game client and agent authors.

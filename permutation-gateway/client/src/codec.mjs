@@ -1,4 +1,4 @@
-// Borsh encoding of PERMUTATION STATE orders and program instructions,
+// Borsh encoding of Wylls orders and program instructions,
 // decoding of the program's accounts and log records, program error names,
 // and the constants the client shares with the Rust crates. The input shape
 // of orders is the server's order DTO (JSON, camelCase).

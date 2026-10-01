@@ -476,7 +476,7 @@ function backupSave() {
   const url = URL.createObjectURL(new Blob([S.session.backupText()], { type: 'text/plain' }));
   const a = document.createElement('a');
   a.href = url;
-  a.download = `permutation-state-season${S.session.scope.seasonId}-key.txt`;
+  a.download = `wylls-season${S.session.scope.seasonId}-key.txt`;
   document.body.appendChild(a);
   a.click();
   a.remove();
@@ -663,7 +663,7 @@ export function othersText(v) {
 export function describeSeason(v) {
   described = true;
   const nations = v.civs.length;
-  document.title = L`PERMUTATION STATE — ひとつの文明、${nations}つの勢力`;
+  document.title = L`Wylls — ひとつの文明、${nations}つの勢力`;
   $('#help-title').textContent = L`ひとつの文明、${nations}つの勢力。そのひとつのメンバーとして、勢力を動かす。`;
   $('#help-desc').textContent = L`${nations}つの勢力が同じ地図を共有しています。${othersText(v)}${v.tickSeconds}秒ごとの「ティック」で、全ての勢力の命令が同時に解決されます。`;
   for (const el of document.querySelectorAll('[data-season]')) {

@@ -194,7 +194,7 @@ async function sessionOf(seed, scope, wallet) {
     scope: { cluster: scope.cluster, programId: scope.programId, seasonId: String(scope.seasonId) },
     stored: false,
     seedHex: () => hex,
-    backupText: () => `PERMUTATION STATE session key\nSeason: ${scope.seasonId}\nCluster: ${scope.cluster}\nProgram: ${scope.programId}\n`
+    backupText: () => `Wylls session key\nSeason: ${scope.seasonId}\nCluster: ${scope.cluster}\nProgram: ${scope.programId}\n`
       + `Wallet: ${wallet}\nSession: ${k.publicKey}\nKey: ${hex}\n`
       + 'Anyone holding this key can act as you in this season. Keep it private.\n',
   };

@@ -1219,7 +1219,7 @@ export async function startGateway({ port = Number(process.env.PORT || 4173) } =
     ]);
     throw error;
   }
-  console.log(`PERMUTATION STATE gateway ready at http://127.0.0.1:${port}`);
+  console.log(`Wylls gateway ready at http://127.0.0.1:${port}`);
   console.log(`Network: ${runtime.config.cluster} · Program: ${runtime.programId.toBase58()}`);
   return { server, runtime };
 }

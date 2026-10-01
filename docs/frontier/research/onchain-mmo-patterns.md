@@ -20,7 +20,7 @@ Companion documents that this report does not repeat: `scratchpad/scale/understa
    - **many small instances** (Sky Strife matches, Supersize rooms, Loot Survivor runs, Realms Blitz worlds from a factory);
    - **horizontal copies with a shared market** (Pirate Nation's Apex and Boss chains, MagicBlock's USDC PoC "sharded by cohort").
 
-   PERMUTATION STATE's whole-world `ResolveTick` is the outlier. It is exactly why the world caps at about 48 members.
+   Wylls's whole-world `ResolveTick` is the outlier. It is exactly why the world caps at about 48 members.
 2. **Maps grow in two proven ways, and both are cheap because terrain is a pure function.**
    - (a) **The radius follows the population.** Dark Forest sets `r = sqrt((planets_L4+ + 20·players)·rarity·100/314)`, so area grows linearly with players and density stays constant. Primodium spawns player *n* at distance `260·ln((n+105)/10) − 580`, so the map grows logarithmically and gets denser.
    - (b) **Lazy materialisation.** A tile, chunk or sector account is created only when a player first explores it, and that player pays. Examples: OPCraft, Eternum `explore`, SAGE `discoverSector` with a `funder` signer, DUST `exploreChunk` against an operator-seeded Merkle root, Primodium secondary asteroids derived from a hash.
@@ -49,7 +49,7 @@ Companion documents that this report does not repeat: `scratchpad/scale/understa
    - cooldowns (Dark Forest reveal cooldown, FrenPet bonk every 15–30 min, 24 h shields);
    - an entry cost per identity (Loot Survivor pays about $1 of VRF per game, Sky Strife uses orbs, Dark Forest used a whitelist).
 
-   Several teams concluded that bots **cannot be kept out and must be designed for** (Kamigotchi, Dark Forest plugins). That supports PERMUTATION STATE's disclosed operator AIs.
+   Several teams concluded that bots **cannot be kept out and must be designed for** (Kamigotchi, Dark Forest plugins). That supports Wylls's disclosed operator AIs.
 7. **Randomness pattern: commit now, reveal a future beacon.**
    - Influence `random::commit(key, round_delay)` then `reveal` at finish **[code]**.
    - DUST `initChunkCommit` fixes a future drand round, which must be used within 2 min and expires after 10 min **[code]**.
@@ -66,7 +66,7 @@ Companion documents that this report does not repeat: `scratchpad/scale/understa
    - Entity creation write-locks the World account.
 
    BOLT is fine for small per-player entities, and its session-key integration (`apply_with_session`) is useful. The region engine should stay a native zero-copy program, as today.
-10. **Recommended shape for PERMUTATION STATE (details in §5):**
+10. **Recommended shape for Wylls (details in §5):**
    - a hex map cut into **region accounts of ≤ 4 KiB**;
    - lazily opened frontier rings whose seeds are fixed by VRF before opening;
    - **per-region ticks** resolved by a permissionless crank, with neighbours allowed at most one tick apart;
@@ -275,7 +275,7 @@ Useful for "commit the region checkpoint and credit the faction treasury on base
 
   So **every fleet mining the same asteroid, or scanning the same sector, write-locks the same accounts.** With about 2M tx/day, reported as about 15% of Solana's daily transactions, players entered priority-fee auctions. Reports say fees took "as much as 30% of gross revenues of players" **[secondary: Blockworks and Aephia on z.ink]**.
 - **Outcome:** ATMTA launched **z.ink**, its own SVM L1, in December 2025 and moved the game there, expecting fees "at least 99% lower" **[secondary]**.
-- **Lesson for PERMUTATION STATE on base Solana:** shared per-location counters and shared token accounts written by player actions turn into fee auctions. Put per-location contention on the ER (free, but see platform.md §2.3 on griefing). Or make players write only **their own** accounts and fold shared totals in a crank.
+- **Lesson for Wylls on base Solana:** shared per-location counters and shared token accounts written by player actions turn into fee auctions. Put per-location contention on the ER (free, but see platform.md §2.3 on griefing). Or make players write only **their own** accounts and fold shared totals in a crank.
 
 ### 2.8 Loot Survivor (Starknet, `BibliothecaDAO/loot-survivor`) **[code/doc]**
 
@@ -314,7 +314,7 @@ A researcher reverse-engineered the contracts, built an indexer and a bot, and "
 - **Star Atlas:** left Solana mainnet (§2.7).
 - **Bakeland:** VRF rolls on MagicBlock (§2.2).
 
-No public source describes a Solana game with thousands of players resolving simultaneous turns on one shared map on chain. **PERMUTATION STATE would be first, which is a reason to adopt proven sub-patterns and not invent new ones.**
+No public source describes a Solana game with thousands of players resolving simultaneous turns on one shared map on chain. **Wylls would be first, which is a reason to adopt proven sub-patterns and not invent new ones.**
 
 ---
 
@@ -346,7 +346,7 @@ Each pattern states what it is, who proved it, how it maps to our stack, its lim
 
 ### P1. Per-entity and per-region accounts; never a world blob
 
-- **Proven by:** everyone except PERMUTATION STATE today.
+- **Proven by:** everyone except Wylls today.
 - **Solana form:**
   - Region PDAs `[b"region", season, q, r]` of fixed size (≤ 4 KiB zero-copy, which matches today's chunk rule and platform.md's commit limit of about 2.5 KB of dirty data per finalize);
   - per-player accounts on base (Member) and ER ephemeral accounts for per-tick scratch data.
@@ -512,7 +512,7 @@ Sky Strife, Supersize and Blitz show that short matches recruit players and make
 
 ---
 
-## 5. Implications for PERMUTATION STATE (Eternum-like, unlimited players, expandable map)
+## 5. Implications for Wylls (Eternum-like, unlimited players, expandable map)
 
 A proposal consistent with the audit rules. It is for the design team to weigh against scale-design's realms.
 
@@ -554,7 +554,7 @@ A proposal consistent with the audit rules. It is for the design team to weigh a
 
 ## 6. What to avoid (with the project that showed it)
 
-1. **A whole-world transaction** of any kind: resolve, decode, election or settlement loop (PERMUTATION STATE today; nobody else does this).
+1. **A whole-world transaction** of any kind: resolve, decode, election or settlement loop (Wylls today; nobody else does this).
 2. **Global counters written by joins or entity creation:** BOLT `add_entity` World counter, Primodium `AsteroidCount`, HOTS `LocationAllocator`. Use PDAs derived from ids or coordinates, and sharded counters.
 3. **Shared per-location accounts written by every player action on base.** SAGE's `resource`, `planet`, `sector` and shared token accounts led to priority-fee wars (≈ 30% of earnings) and an exit from mainnet.
 4. **Unbounded per-target queues.** Dark Forest had to add `checkPlanetDOS`. Every inbox needs fixed slots, with separate quotas for owner and outsiders.

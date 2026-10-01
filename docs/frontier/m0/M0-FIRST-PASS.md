@@ -1,4 +1,4 @@
-# The Sixfold Frontier: M0 status report
+# Wylls: M0 status report
 
 - **Date:** 2026-09-27
 - **Design:** `openworld/open-world-design.md`, revision 2. The M0 exit criteria are in §12.

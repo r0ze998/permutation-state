@@ -1,4 +1,4 @@
-# Eternum (Realms.World / BibliothecaDAO): research for an open-world PERMUTATION STATE
+# Eternum (Realms.World / BibliothecaDAO): research for an open-world Wylls
 
 Research date: 2026-09-27. Primary sources:
 
@@ -389,7 +389,7 @@ Systems are separate Dojo contracts (`systems/*`): combat (movement, battle, rai
 
 ---
 
-## 4. What this means for PERMUTATION STATE on Solana + MagicBlock ER
+## 4. What this means for Wylls on Solana + MagicBlock ER
 
 (Analysis, not source. These map Eternum's patterns onto our hard requirements.)
 

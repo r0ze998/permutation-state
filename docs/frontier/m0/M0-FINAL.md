@@ -1,4 +1,4 @@
-# The Sixfold Frontier: M0 final report
+# Wylls: M0 final report
 
 - **Date:** 2026-09-27
 - **Design:** `openworld/open-world-design.md`, **revision 3.1** (revision 3 kept as `.rev3.md`, revision 2 as `.rev2.md`). The M0 exit criteria are in §12. This report grades them as revision 3.1 states them. Where 3.1 changed a criterion that the owner had decided (C4, under O7), the report says so.

@@ -1,6 +1,6 @@
 # M1 "First Bell": web client design
 
-- **Area:** web (browser client for the Sixfold Frontier, M1, Solana base only, no money)
+- **Area:** web (browser client for Wylls, M1, Solana base only, no money)
 - **Date:** 2026-09-27. Planning phase: nothing in the repo was changed, no commit, no server started, no chain transaction.
 - **Normative inputs:** `docs/frontier/DESIGN.md` rev 3.1 (§0–§13, §19), `SUMMARY.ja.md`, `m0/M0-FINAL.md`, SP-V2 / SP-FEE results, the S-TLOCK lab (`m0/spikes/S-TLOCK/js`, tlock-js 0.9 on @noble/curves 1.9.7), SP-V2 `program/src/seal.rs` (the compact-16 opener).
 - **Code read:** `codex/frontier` at `d95fa25`, worktree `.claude/worktrees/frontier-integ`: `permutation-server/web/**` (plain ES modules, no build step; 708 KB raw / 225 KB gzip for the play page's files [measured]), `permutation-gateway/test/web-*.test.mjs` (12 files, 2.6k lines, node test runner with a stub DOM), `permutation-gateway/scripts/sync-web-sdk.mjs`, `src/routes/relay.mjs`, `src/cosign.mjs`, `permutation-rules/src/frontier/{clash,travel,terrain,holding,host,geometry,stance}.rs`.
@@ -214,7 +214,7 @@ Every transaction carries `SetComputeUnitLimit` from a budgets table generated f
 
 ### 5.3 The Frontier session key
 
-- `fsession.mjs` builds its own printable-ASCII text, e.g. `Permutation State: Sixfold Frontier wants you to create an in-game key.\nSite: …\nCluster: …\nProgram: …\nSeason: …\nAnyone holding this key can act as you in this season (build, train, march, explore). It cannot move tokens from your wallet.\nSign only on <host>.`, and seed domain `PS/frontier-session/v1`, stored under `ps-fsession:<cluster>:<program>:<season>:<wallet>`.
+- `fsession.mjs` builds its own printable-ASCII text, e.g. `Wylls wants you to create an in-game key.\nSite: …\nCluster: …\nProgram: …\nSeason: …\nAnyone holding this key can act as you in this season (build, train, march, explore). It cannot move tokens from your wallet.\nSign only on <host>.`, and seed domain `PS/frontier-session/v1`, stored under `ps-fsession:<cluster>:<program>:<season>:<wallet>`.
 - The text is part of what a wallet signs, so it is **never translated** (glossary "Never translate" list gets a line for it) and is pinned by a test like `web-session.test.mjs` pins v9's.
 - Backup and import reuse `parseBackup`; the key is checked against the Citizen's registered session key from the herald.
 

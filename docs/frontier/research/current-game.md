@@ -1,4 +1,4 @@
-# PERMUTATION STATE: the current game, mapped for an open-world redesign
+# Wylls: the current game, mapped for an open-world redesign
 
 Research unit "current-game", 2026-09-27. Repo read-only at HEAD `96a3464` (branch `codex/magicblock-playable`). No code was changed, no server was started, no transaction was sent.
 

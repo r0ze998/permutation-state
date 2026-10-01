@@ -1,4 +1,4 @@
-# PERMUTATION STATE — Map-first rebuild
+# Wylls — Map-first rebuild
 
 Status: implementation contract for the new `/civilization/` game, 2026-09-21.
 This replaces the fixed Handoff / East Sluice demo as the primary gameplay design.

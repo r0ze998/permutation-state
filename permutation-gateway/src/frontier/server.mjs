@@ -1,4 +1,4 @@
-// PERMUTATION STATE: Sixfold Frontier (M1) relay — free, sponsored player
+// Wylls (M1) relay — free, sponsored player
 // transactions for one season of the `permutation-frontier` program
 // (contract §8.3). No money: the relay pool pays fees, the Citizen's rent at
 // Join, the Holding-rent escrow at FileTicket and the Depart escrow, all

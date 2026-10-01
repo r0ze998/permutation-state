@@ -9,7 +9,8 @@
 //! 3. the operator: AnnounceSeason (at the run's scale) → the 24-h lead at scale 2,000 → the
 //!    target scale → CreateSeason, InitBeaconLogs, InitShards × 6
 //!    (ConsumeGenesisSeed is keeper A's);
-//! 4. the relay pool and both keepers' delay pools and funders funded
+//! 4. the relay pool, both keepers' delay pools and funders and both
+//!    keepers' beneficiaries (ClaimDefence's fee payer, M1 exit U4) funded
 //!    (test SOL airdrops), keeper A (every role) and keeper B (the public
 //!    profile: reveal, settle-departure, settle, claims), then the relay;
 //! 5. the herald;
@@ -818,6 +819,14 @@ impl Stack {
                 ));
             }
         }
+        // M1 exit U4: the beneficiaries sign ClaimDefence and pay its fee.
+        for (k, l) in beneficiary_airdrops(
+            &self.cfg,
+            &self.keys.keeper_a_beneficiary.pubkey(),
+            &self.keys.keeper_b_beneficiary.pubkey(),
+        ) {
+            list.push(drop(k, l));
+        }
         for i in 0..self.cfg.relay_pool as u32 {
             list.push(drop(
                 fclient::payers::derive(&self.keys.relay_seed, fclient::payers::RELAY_POOL, i)
@@ -830,6 +839,24 @@ impl Stack {
         }
         Ok(json!({"airdrops": n, "lamports": total}))
     }
+}
+
+/// The keeper beneficiaries' airdrops (M1 exit U4): `cfg.beneficiary_lamports`
+/// to keeper A's and, when keeper B runs, keeper B's beneficiary. The
+/// beneficiary is ClaimDefence's signer and fee payer (§5.12, keeper W4-C),
+/// and `frontier-localnet` drops a transaction whose fee payer cannot pay
+/// without a trace, so an unfunded beneficiary's claims all expire (the
+/// `m1-exit` season: 64 versions, none landed). The keeper is unchanged:
+/// only its beneficiary holds lamports.
+pub fn beneficiary_airdrops(cfg: &StackConfig, a: &Address, b: &Address) -> Vec<(Address, u64)> {
+    if cfg.beneficiary_lamports == 0 {
+        return vec![];
+    }
+    let mut v = vec![(*a, cfg.beneficiary_lamports)];
+    if cfg.keeper_b {
+        v.push((*b, cfg.beneficiary_lamports));
+    }
+    v
 }
 
 /// Components of a saved state whose pid is still that component.
@@ -1961,6 +1988,30 @@ mod tests {
         for r in keeper_roles('b') {
             assert!(listed.contains(&r), "{r}");
         }
+    }
+
+    /// M1 exit U4: both beneficiaries are funded (keeper B's only when it
+    /// runs), with at least one ClaimDefence write's spend cap each.
+    #[test]
+    fn beneficiaries_are_funded() {
+        let (a, b) = (
+            Address::new_from_array([1; 32]),
+            Address::new_from_array([2; 32]),
+        );
+        let mut cfg = StackConfig::default();
+        let v = beneficiary_airdrops(&cfg, &a, &b);
+        assert_eq!(
+            v,
+            vec![
+                (a, crate::config::BENEFICIARY_LAMPORTS),
+                (b, crate::config::BENEFICIARY_LAMPORTS)
+            ]
+        );
+        assert!(v.iter().all(|(_, l)| *l >= 20_000_000));
+        cfg.keeper_b = false;
+        assert_eq!(beneficiary_airdrops(&cfg, &a, &b).len(), 1);
+        cfg.beneficiary_lamports = 0;
+        assert!(beneficiary_airdrops(&cfg, &a, &b).is_empty());
     }
 
     #[test]

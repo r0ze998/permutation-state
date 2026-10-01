@@ -4,10 +4,8 @@
 // not repeated here. Terms: GLOSSARY.md, section "The Frontier".
 export default {
   // ---- pages and shell
-  '六重の辺境': 'The Sixfold Frontier',
-  '六重の辺境 — PERMUTATION STATE': 'The Sixfold Frontier — PERMUTATION STATE',
-  '練習モード — 六重の辺境': 'Practice mode — The Sixfold Frontier',
-  '観戦 — 六重の辺境': 'Spectate — The Sixfold Frontier',
+  '練習モード — Wylls': 'Practice mode — Wylls',
+  '観戦 — Wylls': 'Spectate — Wylls',
   '辺境の地図': 'Map of the Frontier',
   '辺境の地図：矢印キーで移動、＋と－で拡大縮小、Enter で中央の州を選択': 'Map of the Frontier: arrow keys move, + and − zoom, Enter selects the province in the centre',
   '辺境の地図：矢印キーで移動、＋と－で拡大縮小、H で自分の保有地へ、Enter で中央の州を選択': 'Map of the Frontier: arrow keys move, + and − zoom, H goes to your holding, Enter selects the province in the centre',

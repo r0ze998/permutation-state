@@ -7,7 +7,7 @@ name = "permutation-state-receipt"
 version = "0.1.0"
 edition = "2021"
 publish = false
-description = "Minimal Solana receipt program for the Permutation State Worksite proof"
+description = "Minimal Solana receipt program for the Wylls Worksite proof"
 
 [lib]
 crate-type = ["cdylib", "lib"]

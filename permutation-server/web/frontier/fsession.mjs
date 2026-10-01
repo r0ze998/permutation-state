@@ -23,7 +23,7 @@ export const STORE_PREFIX = 'ps-fsession:';
 
 /** The text a wallet signs (never translated; printable ASCII only). */
 export function sessionText({ origin, host, cluster, programId, seasonId }) {
-  const text = 'Permutation State: Sixfold Frontier wants you to create an in-game key.\n'
+  const text = 'Wylls wants you to create an in-game key.\n'
     + `Site: ${origin}\n`
     + `Cluster: ${cluster}\n`
     + `Program: ${programId}\n`
@@ -67,7 +67,7 @@ async function sessionOf(seed, scope, wallet) {
     scope: { cluster: scope.cluster, programId: scope.programId, seasonId: String(scope.seasonId) },
     stored: false,
     seedHex: () => hex,
-    backupText: () => `PERMUTATION STATE Sixfold Frontier key\nSeason: ${scope.seasonId}\nCluster: ${scope.cluster}\nProgram: ${scope.programId}\n`
+    backupText: () => `Wylls key\nSeason: ${scope.seasonId}\nCluster: ${scope.cluster}\nProgram: ${scope.programId}\n`
       + `Wallet: ${wallet}\nSession: ${k.publicKey}\nKey: ${hex}\n`
       + 'Anyone holding this key can act as you in this season. Keep it private.\n',
   };

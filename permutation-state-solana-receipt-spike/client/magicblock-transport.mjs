@@ -1,5 +1,5 @@
 /**
- * MagicBlock transport for the Permutation State Worksite vertical slice.
+ * MagicBlock transport for the Wylls Worksite vertical slice.
  *
  * This module intentionally owns transport only. The deterministic transition
  * preview and fixed-width state-root contract remain in adapter.mjs.

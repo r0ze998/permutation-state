@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// MCP server for PERMUTATION STATE. Configure with environment variables:
+// MCP server for Wylls. Configure with environment variables:
 //   PS_SERVER   game server   (default http://127.0.0.1:4185)
 //   PS_GATEWAY  chain gateway (default http://127.0.0.1:4191)
 //   PS_MEMBER   your member id if you already joined (otherwise call join_season)

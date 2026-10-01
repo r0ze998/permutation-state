@@ -1,4 +1,4 @@
-# PERMUTATION STATE: UI/UX benchmark (Eternum, Civilization VI/VII, Old World, Humankind, Polytopia)
+# Wylls: UI/UX benchmark (Eternum, Civilization VI/VII, Old World, Humankind, Polytopia)
 
 **Scope and method.**
 - **Eternum:** I read the client source statically at `/Users/r0ze/Documents/Codex/2026-09-20/new-chat-2/work/eternum`, revision `510c4b9` (2026-09-20). All Eternum paths below are relative to `apps/game/src/` unless marked otherwise. Nothing was run and no files were changed.
@@ -53,7 +53,7 @@
     - an Age icon on the turn counter, a UI-scale setting and a Victory button in the HUD (1.4.0: https://civilization.2k.com/civ-vii/game-update-notes/2026-may-19-patch-1-4-0/);
     - rounded yields and an "Always Show Ribbon Yields" option (1.2.0: https://civilization.2k.com/civ-vii/game-update-notes/2025-apr-22-patch-1-2-0/).
 
-### A3. Recommended information architecture for PERMUTATION STATE
+### A3. Recommended information architecture for Wylls
 
 **Always visible, at 1440×900:**
 1. **Top bar (48 px).**

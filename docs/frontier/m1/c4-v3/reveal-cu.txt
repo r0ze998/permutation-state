@@ -77,7 +77,14 @@
   - path steps: n 23, min 2, p50 5, p90 7, p99 13, max 13, mean 5; path provinces beyond the destination: n 23, min 0, p50 0, p90 1, p99 2, max 2, mean 0
   - reveals per arrival bell (bells with ≥ 1 reveal): n 11, min 1, p50 2, p90 3, p99 3, max 3, mean 2; bells with reveals 11
 
-**All runs pooled:** n 416, min 13,861, p50 18,743, p90 21,200, p99 22,207, max 22,355, mean 19,022
+- `m1-exit` (m1-integ/frontier-node/.local/frontier/m1-exit): beacon archive, scale 20.0, bots 1000, days 7.0, game_hours None, .so 875824 B sha256 d85e1bd74e29..., last bell 1033
+  - Reveal program CU: n 1694, min 15,713, p50 18,940, p90 21,238, p99 22,501, max 23,600, mean 19,266
+  - whole-tx units: n 1694, min 16,163, p50 19,390, p90 21,688, p99 22,951, max 24,050, mean 19,716; requested limit [26500], loaded limit [1146880]; write locks [2, 3]
+  - first of the province-bell (ArrivalDay written): n 1676, min 15,713, p50 18,946, p90 21,239, p99 22,501, max 23,600, mean 19,274; later: n 18, min 17,454, p50 18,724, p90 19,918, p99 20,014, max 20,014, mean 18,493
+  - path steps: n 1694, min 1, p50 7, p90 13, p99 18, max 22, mean 8; path provinces beyond the destination: n 1694, min 0, p50 1, p90 2, p99 3, max 3, mean 1
+  - reveals per arrival bell (bells with ≥ 1 reveal): n 765, min 1, p50 2, p90 4, p99 6, max 8, mean 2; bells with reveals 765
+
+**All runs pooled:** n 2110, min 13,861, p50 18,928, p90 21,234, p99 22,473, max 23,600, mean 19,218 (W7-C: the exit season `m1-exit` added to the 416 rows of integ-W6r; the pooled line recomputed from `reveal-rows.json` with this script's `dist`)
 
 ## 2. svm suite (`PSF_CU_LOG`, landed single-instruction Reveal transactions; Release and TestBeacon builds)
 

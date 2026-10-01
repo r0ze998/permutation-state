@@ -8,7 +8,7 @@ name = "permutation-server"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.89"
-description = "Local game server, bots and replay recorder for PERMUTATION STATE"
+description = "Local game server, bots and replay recorder for Wylls"
 license = "MIT"
 publish = false
 

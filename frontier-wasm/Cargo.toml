@@ -10,7 +10,7 @@ name = "frontier-wasm"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.95"
-description = "Sixfold Frontier kernels for the web client (C ABI over linear memory)"
+description = "Wylls kernels for the web client (C ABI over linear memory)"
 license = "MIT"
 publish = false
 

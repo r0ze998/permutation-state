@@ -1,11 +1,11 @@
-# Permutation State — Playable MagicBlock Slice
+# Wylls — Playable MagicBlock Slice
 
 > **Current game:** the active map-first civilization game is at `/civilization/`.
 > See the [project README](../README.md) for its current status and the chain-independent startup path.
 > The onchain models and receipts documented below belong to earlier experiments. They do not prove
 > that the new civilization simulation is onchain. New-game integration is still in progress.
 
-This package is the Solana program, MagicBlock transport, and local gateway behind PERMUTATION STATE. It includes a canonical Season PDA with a mock-USDC ledger, the earlier causal-proof Worksite PDA, and a new eight-citizen spatial World PDA with verified MagicBlock ER-to-Solana checkpoints.
+This package is the Solana program, MagicBlock transport, and local gateway behind Wylls. It includes a canonical Season PDA with a mock-USDC ledger, the earlier causal-proof Worksite PDA, and a new eight-citizen spatial World PDA with verified MagicBlock ER-to-Solana checkpoints.
 
 The verified target is **localnet**, using disposable demo signers and no real funds. Nothing is deployed to public devnet or mainnet. The gateway holds those disposable signers for the hackathon slice; production wallet approval and player Session Keys are not implemented. Role URLs are presentation and turn-taking aids, not authentication: the HTTP caller is not yet bound to a player wallet.
 

@@ -976,7 +976,7 @@ Marchbook entry (v1): `{v:1, host:"u64 dec", transitSlot, departBell, arriveBell
 
 **Frontier session text** (`web/frontier/fsession.mjs`, pinned byte for byte by `web-frontier-session.test.mjs`, never translated):
 ```
-Permutation State: Sixfold Frontier wants you to create an in-game key.
+Wylls wants you to create an in-game key.
 Site: <origin>
 Cluster: <cluster>
 Program: <program id>

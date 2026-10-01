@@ -1,6 +1,6 @@
 # frontier-node
 
-The off-chain workspace of PERMUTATION STATE "The Sixfold Frontier", M1
+The off-chain workspace of Wylls, M1
 "First Bell" (contract: `docs/frontier/m1/M1-CONTRACT.md` v1.1, §8). It is its
 own cargo workspace with its own lock, toolchain (1.95.0: LiteSVM 0.16 does
 not build on 1.89) and build directory (`frontier-node/target`).

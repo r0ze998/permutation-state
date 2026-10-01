@@ -1,4 +1,4 @@
-# PERMUTATION STATE at scale: Banners, Realms and the Commons
+# Wylls at scale: Banners, Realms and the Commons
 
 The single scale design for thousands to tens of thousands of players. It is synthesized from designs A to D and the three judges. **Revision 2** answers the stress test (15 issues). Every issue was checked against the code and re-measured; see **Revision notes** at the end.
 

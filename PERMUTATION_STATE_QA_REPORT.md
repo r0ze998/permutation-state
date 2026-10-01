@@ -1,4 +1,4 @@
-# PERMUTATION STATE — Prototype QA Report
+# Wylls — Prototype QA Report
 
 **Build reviewed:** Living Chronicle world-first prototype  
 **Date:** 2026-09-21  

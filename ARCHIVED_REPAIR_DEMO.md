@@ -1,10 +1,10 @@
-# PERMUTATION STATE
+# Wylls
 
 > Historical README for the superseded walking-and-repair demo. Its "complete" language refers only to a technical test, not the intended civilization game. See [the current README](README.md) for the map-first rebuild.
 
 > **One civilization. Thousands of citizens. One world that keeps moving.**
 
-PERMUTATION STATE is a persistent civilization RPG simulation. Every human player enters Aster as one embodied citizen, walks to real places, carries real goods, and works inside the same economy as other players and AI citizens.
+Wylls is a persistent civilization RPG simulation. Every human player enters Aster as one embodied citizen, walks to real places, carries real goods, and works inside the same economy as other players and AI citizens.
 
 The current playable alpha proves a complete systemic loop:
 

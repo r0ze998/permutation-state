@@ -243,7 +243,7 @@ Program work (the Join/Citizen skeleton, account init, with-seed helpers) runs i
 ## Appendix A: `docs/frontier/DECISIONS.md` (ready to commit)
 
 ```markdown
-# The Sixfold Frontier: decisions log
+# Wylls: decisions log
 
 Owner decisions after design revision 3.1. Earlier decisions (O1–O10,
 D1–D17) are in DESIGN.md §14. Standing rule: every devnet step and every

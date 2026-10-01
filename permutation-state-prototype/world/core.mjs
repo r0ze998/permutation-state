@@ -1,5 +1,5 @@
 /**
- * Deterministic simulation core for the Permutation State vertical slice.
+ * Deterministic simulation core for the Wylls vertical slice.
  *
  * The module deliberately contains no rendering, networking, wallet, or LLM
  * code. Given the same JSON state, action, and timestamp it returns the same

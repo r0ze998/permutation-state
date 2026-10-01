@@ -1,4 +1,4 @@
-# PERMUTATION STATE — Design V3「Proof of Consequence」
+# Wylls — Design V3「Proof of Consequence」
 
 Status: **不採用（2026-09-24）。ゲーム設計そのものを [Game Design V4](PERMUTATION_STATE_GAME_DESIGN_V4.md) で見直したため、履歴として残す。**
 対象: ゲーム全体の設計と、Colosseum（Solana＋MagicBlock）提出（締切 2026-10-15）。
