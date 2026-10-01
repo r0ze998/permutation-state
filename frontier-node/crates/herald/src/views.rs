@@ -6,7 +6,7 @@
 use serde_json::{json, Value};
 use solana_address::Address;
 
-use fclient::decode::{Citizen, Holding, Province};
+use fclient::decode::{Citizen, Frontier, Holding, Province};
 use fclient::ports::ChainInfo;
 use frontier_abi::addr::{holding_key_of_host, host_id};
 use frontier_abi::layout::AccountKind;
@@ -40,6 +40,16 @@ pub fn season_json(f: &Fold, s: &SeasonStatic) -> Option<Value> {
             }
         }
     }
+    // The Frontier account's per-wedge site counters (§5.9 overflow rule: a wedge is
+    // full when WEDGE_OPEN − WEDGE_OCCUPIED = 0). The page's automatic site ticket reads
+    // them (DECISIONS V2); null until the account is folded.
+    let frontier = f
+        .account(&f.ctx.frontier())
+        .and_then(|c| Frontier::decode(&c.data).ok());
+    let (wedge_open, wedge_occupied) = match &frontier {
+        Some(fr) => (json!(fr.wedge_open), json!(fr.wedge_occupied)),
+        None => (Value::Null, Value::Null),
+    };
     Some(json!({
         "v": 1,
         "programId": f.cfg.program.to_string(),
@@ -60,6 +70,8 @@ pub fn season_json(f: &Fold, s: &SeasonStatic) -> Option<Value> {
         },
         "rulesetHash": hex::encode(se.ruleset_hash),
         "rMax": se.r_max,
+        "wedgeOpen": wedge_open,
+        "wedgeOccupied": wedge_occupied,
         "rings": rings.iter().map(|(d, seed)| json!({"d": d, "seed": hex::encode(seed)})).collect::<Vec<_>>(),
         "tipPriorityMilli": se.min_reveal_priority_milli,
         "revealCuLimit": se.reveal_cu_limit,

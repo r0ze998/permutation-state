@@ -77,6 +77,18 @@ async fn folds_the_programs_beacon_records() {
     .expect("the Season is captured");
     assert_eq!(sj["genesisTs"], genesis_ts);
     assert_eq!(sj["W"], season.reveal_window);
+    // The Frontier's per-wedge counters for the page's automatic site ticket (DECISIONS V2).
+    let open = sj["wedgeOpen"]
+        .as_array()
+        .expect("wedgeOpen once the Frontier is folded");
+    let occupied = sj["wedgeOccupied"].as_array().expect("wedgeOccupied");
+    assert_eq!((open.len(), occupied.len()), (6, 6));
+    for w in 0..6 {
+        assert!(
+            occupied[w].as_u64().unwrap() <= open[w].as_u64().unwrap(),
+            "wedge {w}"
+        );
+    }
     assert_eq!(sj["headSeq"], f.st.events.to_string());
     assert!(f.st.events > 100, "{} events", f.st.events);
     assert_eq!(
