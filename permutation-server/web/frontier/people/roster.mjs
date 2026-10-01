@@ -81,5 +81,7 @@ export function createRoster({ base = '', onChange = () => {}, fetch: f = (...a)
       sites.set(k, list);
     },
     size: () => sites.size,
+    /** Every held site the roster knows: `[{p, q, site, tag, tier}]`. */
+    entries() { const out = []; for (const [k, list] of sites) { const [p, q] = k.split(',').map(Number); list.forEach((o, site) => { if (o) out.push({ p, q, site, tag: o.tag, tier: o.tier }); }); } return out; },
   };
 }

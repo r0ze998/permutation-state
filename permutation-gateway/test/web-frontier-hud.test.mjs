@@ -179,3 +179,30 @@ test('march card: the route as hexes, the defenders frozen at the destination, a
   assert.equal(MC.oddsWord(100, 350).id, 'bad');
   assert.equal(MC.oddsWord(100, 0).id, 'free');
 });
+
+import * as I from '../../permutation-server/web/frontier/people/identity.mjs';
+import * as MINI from '../../permutation-server/web/frontier/hud/minimap.mjs';
+import * as SEARCH from '../../permutation-server/web/frontier/hud/search.mjs';
+
+test('minimap: the majority holder of a province, a frame that maps world and minimap both ways', () => {
+  assert.equal(MINI.majority({ owners: [2, 2, 1, 7, 7, 7, 7, 7, 7, 7, 7, 7], sites: [1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0] }), 2);
+  assert.equal(MINI.majority({ owners: Array(12).fill(7), sites: Array(12).fill(0) }), null);
+  const fr = MINI.frameOf(4, 188);
+  const p = fr.toPx(123, -45), w = fr.toWorld(p.x, p.y);
+  assert.ok(Math.abs(w.x - 123) < 1e-6 && Math.abs(w.y + 45) < 1e-6);
+  assert.deepEqual(fr.toPx(0, 0), { x: 94, y: 94 }, 'the Concord at the centre');
+  assert.deepEqual(MINI.LENSES, ['realm', 'war', 'land', 'settle']);
+});
+
+test('map search: a province by coordinates, a faction by name, a lord by derived name', () => {
+  setLang('ja');
+  const recs = new Map([['3,0', { p: 3, q: 0, owners: [2, 2, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7], sites: [1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }]]);
+  assert.deepEqual(SEARCH.searchMap('州 3,0', { recs }).map(x => [x.kind, x.p, x.q]), [['province', 3, 0]]);
+  assert.deepEqual(SEARCH.searchMap('province 3，0', { recs }).length, 1);
+  assert.deepEqual(SEARCH.searchMap('9,9', { recs }), [], 'a province not open is not found');
+  const roster = { entries: () => [{ p: 3, q: 0, site: 1, tag: 9n, tier: 0 }] };
+  const name = I.displayName(I.identityOf(9n), { language: 'en' });
+  const hit = SEARCH.searchMap(name.slice(0, 4), { recs, roster, sitesOf: () => [5, 12] });
+  assert.equal(hit[0].kind, 'lord');
+  assert.equal(hit[0].tile, 12);
+});

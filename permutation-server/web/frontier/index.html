@@ -27,6 +27,14 @@
   <div class="map-tip" id="map-tip" role="tooltip" hidden></div>
   <div class="feed" id="feed" aria-live="polite"></div>
   <p class="bell-toll" id="bell-toll" aria-hidden="true"></p>
+  <form class="map-search" id="map-search" role="search" data-form="map-search">
+    <input type="search" id="map-search-q" name="q" autocomplete="off" placeholder="州・勢力・領主を探す" aria-label="地図を探す（州の座標、勢力、領主の名前）" data-i18n-attr="placeholder aria-label">
+    <div class="search-results" id="map-search-results"></div>
+  </form>
+  <div class="minimap" id="minimap">
+    <div class="lenses" id="lenses" role="group" aria-label="レンズ" data-i18n-attr="aria-label"></div>
+    <canvas id="minimap-canvas" role="img" aria-label="世界の小さな地図：押すとその場所へ移動します" data-i18n-attr="aria-label"></canvas>
+  </div>
   <section class="panel" id="panel" aria-labelledby="panel-title">
     <h2 id="panel-title" data-i18n>シーズン</h2>
     <p id="season-status">—</p>

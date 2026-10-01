@@ -16,11 +16,11 @@
 // veil over them; H goes to the viewer's first holding.
 import { inverseHex } from '../../map.mjs';
 import { L, onLangChange } from '../../lang.mjs';
-import { locate, ringOf, ringProvinces, hexDistance } from '../fgeo.mjs';
+import { locate, ringOf, ringProvinces, hexDistance, tileHex } from '../fgeo.mjs';
 import { fogLevel, paintProvince, paintTiles, paintVeil, provincePixel, PROVINCE_CIRCUMRADIUS } from './layers.mjs';
 import { createTerrain } from './terrain.mjs';
 import { SpriteArt, terrainLookup } from './sprites.mjs';
-import { project } from '../../map.mjs';
+import { project, RADIUS } from '../../map.mjs';
 
 /** Fog levels drawn as tiles at tile LOD (a distant province stays a muted cell). */
 export const TILE_FOGS = Object.freeze(['sight', 'known', 'clear']);
@@ -130,6 +130,39 @@ export function paintRealmLabels(ctx, recs, zoom, nameOf = null) {
   ctx.restore();
 }
 
+/**
+ * Incoming risk (spec §7.3): a red halo that breathes around each of the
+ * viewer's holdings an enemy may reach, with the earliest bell it could
+ * arrive. `threats = [{p, q, tile, bell}]` (destinations are sealed: a
+ * warning, never a certainty).
+ */
+export function paintThreats(ctx, threats, zoom, label = null) {
+  const t = (globalThis.performance?.now?.() ?? Date.now()) / 1000;
+  const k = 1 / zoom, pulse = 0.5 + 0.5 * Math.sin(t * 3);
+  const seen = new Set();
+  ctx.save();
+  for (const w of threats) {
+    const key = `${w.p},${w.q},${w.tile}`;
+    if (seen.has(key) || !Number.isInteger(w.tile)) continue;
+    seen.add(key);
+    const h = tileHex(w.p, w.q, w.tile), c = project(h.q, h.r);
+    const r = Math.max(RADIUS * 1.3, 18 * k) * (1 + pulse * 0.12);
+    const g = ctx.createRadialGradient(c.x, c.y, r * 0.4, c.x, c.y, r);
+    g.addColorStop(0, 'rgba(200,40,30,0)'); g.addColorStop(0.75, `rgba(200,40,30,${0.18 + pulse * 0.14})`); g.addColorStop(1, 'rgba(200,40,30,0)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = `rgba(230,70,50,${0.6 + pulse * 0.4})`; ctx.lineWidth = 2.4 * k; ctx.setLineDash([6 * k, 4 * k]);
+    ctx.beginPath(); ctx.arc(c.x, c.y, r * 0.78, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+    if (label) {
+      const text = label(w);
+      ctx.font = `700 ${11 * k}px system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      const tw = ctx.measureText(text).width + 12 * k, th = 16 * k, y = c.y + r * 0.78 + 4 * k;
+      ctx.fillStyle = 'rgba(120,20,12,.92)'; ctx.beginPath(); ctx.roundRect?.(c.x - tw / 2, y, tw, th, 8 * k); ctx.fill();
+      ctx.fillStyle = '#fff2ee'; ctx.fillText(text, c.x, y + th / 2 + 0.5 * k);
+    }
+  }
+  ctx.restore();
+}
+
 export function paintRoute(ctx, route, zoom) {
   const pts = (route.hexes ?? []).map(h => project(h.q, h.r));
   const k = 1 / zoom;
@@ -179,6 +212,8 @@ export class FrontierMap {
 
   size() { return { width: this.canvas.clientWidth, height: this.canvas.clientHeight }; }
   invalidate() { this.dirty = true; }
+  /** Another frame in a moment (an animated overlay: the threat halo). */
+  invalidateSoon(ms = 80) { if (this.soon) return; this.soon = setTimeout(() => { this.soon = null; this.invalidate(); }, ms); }
 
   setView(v) {
     this.view = { ...this.view, ...v };
@@ -363,8 +398,8 @@ export class FrontierMap {
     }
     if (artCells.length) {
       const fogAt = (q, r) => { const at = locate(q, r); return fogLevel({ ringOpen: ringOf(at.p, at.q) < (src.ringsOpen ?? 1), showAll: src.showAll, known: src.known?.has(`${at.p},${at.q}`), sightDistance: sightDistance(at.p, at.q, src.own ?? []) }); };
-      this.art.paintFar(ctx, artCells, { zoom: z, dpr, terrainAt: terrainLookup(terrainOf), fogAt, alliedPairs: src.alliedPairs ?? [], lod: this.lod });
-      if (this.lod === 'world') paintRealmLabels(ctx, recs, z, src.realmName ?? null);
+      this.art.paintFar(ctx, artCells, { zoom: z, dpr, terrainAt: terrainLookup(terrainOf), fogAt, alliedPairs: src.alliedPairs ?? [], lod: this.lod, lens: src.lens ?? 'realm' });
+      if (this.lod === 'world' && (src.lens ?? 'realm') !== 'land') paintRealmLabels(ctx, recs, z, src.realmName ?? null);
     }
     if (artTiles.length) {
       const fogAt = (q, r) => { const at = locate(q, r); return fogLevel({ ringOpen: ringOf(at.p, at.q) < (src.ringsOpen ?? 1), showAll: src.showAll, known: src.known?.has(`${at.p},${at.q}`), sightDistance: sightDistance(at.p, at.q, src.own ?? []) }); };
@@ -373,6 +408,7 @@ export class FrontierMap {
         people: src.people ? { ...src.people(), centre: { x: this.view.x, y: this.view.y } } : null });
     }
     if (src.route) paintRoute(ctx, src.route, z);
+    if (src.threats?.length) { paintThreats(ctx, src.threats, z, src.threatLabel ?? null); this.invalidateSoon(); }
     this.mark(wanted > 0 && drawn === wanted ? 'ready' : 'pending');
   }
 

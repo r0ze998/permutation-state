@@ -349,4 +349,16 @@ export default {
   '領主 {0} が探索を指揮している': 'Lord {0} sends out scouts',
   '領主 {0} がこの地に着いたばかり': 'Lord {0} has just settled here',
   '領主 {0} が領地にいる': 'Lord {0} is on their land',
+
+  // ---- the minimap and the lenses (hud/minimap.mjs)
+  '領土': 'Realms', '入植': 'Settle',
+  'レンズ': 'Lenses',
+  '世界の小さな地図：押すとその場所へ移動します': 'Minimap of the world: press to move the map there',
+
+  // ---- map search (hud/search.mjs)
+  '州・勢力・領主を探す': 'Find a province, faction or lord',
+  '地図を探す（州の座標、勢力、領主の名前）': 'Search the map (province coordinates, faction, lord\'s name)',
+  '{0}の領土': 'Lands of {0}',
+  '{0}（州 {1},{2}）': '{0} (province {1},{2})',
+  '見つかりません': 'Nothing found',
 };

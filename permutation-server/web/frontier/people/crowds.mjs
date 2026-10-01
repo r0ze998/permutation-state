@@ -396,7 +396,7 @@ export function paintPeople(ctx, { tiles = [], zoom = 1, t = (globalThis.perform
  * identity.mjs). Drawn screen-sized; at most NAME_TAG_MAX, the nearest to
  * `centre` (world px) first. `onImage` redraws when a portrait decodes.
  */
-export function paintNameTags(ctx, { tiles = [], zoom = 1, nameOf = () => null, centre = null, onImage = () => {}, fogOf = () => 'clear', present = null } = {}) {
+export function paintNameTags(ctx, { tiles = [], zoom = 1, nameOf = () => null, centre = null, onImage = () => {}, fogOf = () => 'clear', present = null, tierName = null } = {}) {
   if (RADIUS * zoom < NAME_TAG_MIN_R) return 0;
   const all = RADIUS * zoom >= NAME_TAG_ALL_R;
   // a lord who is out on their land is named from afar too (people/life.mjs)
@@ -411,7 +411,8 @@ export function paintNameTags(ctx, { tiles = [], zoom = 1, nameOf = () => null, 
     if (n >= NAME_TAG_MAX) break;
     const who = nameOf(u.p, u.pq, u.site, u.owner);
     if (!who) continue;
-    const label = who.name;
+    // the holding's banner (Civ's city banner): the lord's face and name, then the holding's tier
+    const label = tierName ? `${who.name} \u00b7 ${tierName(u.tier)}` : who.name;
     const w = ctx.measureText(label).width + 30 * k, h = 20 * k;
     const x = u.x - w / 2, y = u.y - RADIUS * 0.62 - h;
     ctx.globalAlpha = 0.94;
@@ -423,6 +424,8 @@ export function paintNameTags(ctx, { tiles = [], zoom = 1, nameOf = () => null, 
     else { ctx.fillStyle = FACTION_FILL[who.faction] ?? '#8a8a80'; ctx.beginPath(); ctx.arc(x + h / 2, y + h / 2, h / 2 - 3 * k, 0, Math.PI * 2); ctx.fill(); }
     ctx.fillStyle = '#1b2e28'; ctx.textAlign = 'left';
     ctx.fillText(label, x + h + 4 * k, y + h / 2 + 0.5 * k);
+    // protected: a small shield at the banner's end
+    if (u.shield) { const sx = x + w + 2 * k, sy = y + h / 2; ctx.fillStyle = '#3f78c2'; ctx.strokeStyle = '#fffaf0'; ctx.lineWidth = 1.2 * k; ctx.beginPath(); ctx.moveTo(sx, sy - 6 * k); ctx.lineTo(sx + 6 * k, sy - 4 * k); ctx.lineTo(sx + 5 * k, sy + 3 * k); ctx.lineTo(sx + 3 * k, sy + 6 * k); ctx.lineTo(sx + 1 * k, sy + 3 * k); ctx.lineTo(sx, sy - 4 * k); ctx.closePath(); ctx.fill(); ctx.stroke(); }
     n++;
   }
   ctx.restore();

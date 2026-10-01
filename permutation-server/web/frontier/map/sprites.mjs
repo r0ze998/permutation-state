@@ -25,8 +25,48 @@ const BASE = new URL('../art/', import.meta.url);
 /** The far bitmaps' resolutions (device px per world px) and their cache budget in pixels. */
 export const FAR_RES = Object.freeze([0.1, 0.2, 0.36]);
 export const FAR_PIXELS = 24_000_000;
+/** Milliseconds a frame may spend painting new far bitmaps (the rest wait for the next frame). */
+export const FAR_BUDGET_MS = 8;
 /** Dark inks of the six factions (borders), after the portraits' palette. */
 const FACTION_DARK_INK = Object.freeze(['#7d2c27', '#1b5a53', '#7d5a14', '#4b3874', '#24497b', '#6f2d4c']);
+
+/** The war lens: per province, the hosts of each faction present (the overview's counts) as banners with a number. */
+export function paintWarLens(ctx, entries, zoom) {
+  const k = 1 / zoom;
+  ctx.save();
+  ctx.font = `700 ${11 * k}px system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (const e of entries) {
+    const hosts = e.rec?.hosts;
+    if (!hosts) continue;
+    const list = hosts.map((n, f) => ({ n, f })).filter(x => x.n > 0);
+    if (!list.length) continue;
+    const c = provincePixel(e.p, e.q);
+    const w = 26 * k, h = 16 * k, gap = 3 * k, x0 = c.x - (list.length * (w + gap) - gap) / 2;
+    list.forEach((x, i) => {
+      const bx = x0 + i * (w + gap), by = c.y - h / 2 - 14 * k;
+      ctx.fillStyle = x.f === 6 ? '#5b3b2a' : FACTION_COLORS[x.f]; ctx.strokeStyle = '#1b1a16'; ctx.lineWidth = 1.2 * k;
+      ctx.beginPath(); ctx.roundRect?.(bx, by, w, h, 4 * k); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#fffaf0'; ctx.fillText(`\u2694${x.n}`, bx + w / 2, by + h / 2 + 0.5 * k);
+    });
+  }
+  ctx.restore();
+}
+
+/** The settle lens: every free site as a ring of light (where a new holding could go). */
+export function paintSettleLens(ctx, entries, zoom) {
+  const k = 1 / zoom;
+  ctx.save();
+  for (const e of entries) {
+    if (!e.rec || !e.sites) continue;
+    e.sites.forEach((idx, j) => {
+      if (e.rec.sites[j] !== 0) return;
+      const h = tileHex(e.p, e.q, idx), c = project(h.q, h.r);
+      ctx.beginPath(); ctx.arc(c.x, c.y, Math.max(RADIUS * 0.45, 5 * k), 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(243,213,138,.35)'; ctx.fill(); ctx.strokeStyle = '#f3d58a'; ctx.lineWidth = 2 * k; ctx.stroke();
+    });
+  }
+  ctx.restore();
+}
 
 /** House positions of a settlement by tier (units of its size; x right, y down). */
 const SETTLEMENT = [
@@ -216,8 +256,12 @@ export class SpriteArt {
     this.thumbs = new Map();
     this.misses = 0;
     this.farCache = new Map();   // "P,Q@res|state" → {cv, x, y, w, h, px}
+    this.farLast = new Map();    // "P,Q" → the last bitmap painted for it (shown while a newer one waits)
     this.farPixels = 0;
   }
+
+  /** The newest bitmap this province had, at any resolution or state (a stand-in while a new one waits its turn). */
+  farStale(e) { return this.farLast.get(`${e.p},${e.q}`) ?? null; }
 
   /**
    * The far view of one province (world and province LOD): the real tile
@@ -227,10 +271,12 @@ export class SpriteArt {
    * bitmap painted while some art was still loading is used but not kept.
    * The cache holds at most FAR_PIXELS pixels (oldest dropped first).
    */
-  farBitmap(e, { res, terrainAt, fogAt, alliedPairs = [], stateKey = '' }) {
+  farBitmap(e, { res, terrainAt, fogAt, alliedPairs = [], stateKey = '', canPaint = () => true }) {
     const k = `${e.p},${e.q}@${res}|${e.fog}|${stateKey}`;
     const hit = this.farCache.get(k);
     if (hit) { this.farCache.delete(k); this.farCache.set(k, hit); return hit; }
+    // painting is costly: within the frame's budget only (the rest next frame, an older bitmap or the flat one meanwhile)
+    if (!canPaint()) return this.farStale(e, res) ?? null;
     if (typeof document === 'undefined' && typeof OffscreenCanvas === 'undefined') return null;
     const c = provincePixel(e.p, e.q);
     const half = PROVINCE_CIRCUMRADIUS * 1.08 + RADIUS * 1.6;
@@ -251,6 +297,7 @@ export class SpriteArt {
     g.restore();
     this.paint(g, [e], { zoom: res, dpr: 1, terrainAt, fogAt, alliedPairs, far: 'props' });
     const v = { cv, x: c.x - half, y: c.y - half, w: 2 * half, h: 2 * half, px: size * size };
+    this.farLast.set(`${e.p},${e.q}`, v);
     if (this.misses === 0) {
       this.farCache.set(k, v);
       this.farPixels += v.px;
@@ -348,15 +395,21 @@ export class SpriteArt {
   }
 
   /** Province/world LOD: a far bitmap per province (the land itself), then the labels a map has. */
-  paintFar(ctx, entries, { zoom, dpr = 1, terrainAt, fogAt, alliedPairs = [], recs = new Map(), lod = 'world' }) {
+  paintFar(ctx, entries, { zoom, dpr = 1, terrainAt, fogAt, alliedPairs = [], recs = new Map(), lod = 'world', lens = 'realm' }) {
     const res = farRes(zoom * dpr);
-    for (const e of entries) {
+    const t0 = now(), budget = FAR_BUDGET_MS;
+    let deferred = 0;
+    const canPaint = () => now() - t0 < budget;
+    // nearest the centre of the view first, so what the eye is on is painted first
+    for (const e of entries.slice().sort((a, b) => (a.dist ?? 0) - (b.dist ?? 0))) {
       const state = e.rec ? `${e.rec.owners.join('')}${e.rec.sites.join('')}` + (e.prov ? (e.prov.siteMirror ?? []).map(m => `${m.state}${m.tier}`).join('') : (e.tiers ?? []).join('')) : '';
-      const b = this.farBitmap(e, { res, terrainAt, fogAt, alliedPairs, stateKey: state });
-      if (!b) continue;
+      const b = this.farBitmap(e, { res, terrainAt, fogAt, alliedPairs, stateKey: state, canPaint });
+      if (!b) { deferred++; if (e.t ?? e.terrain) { const th = this.thumb(e.p, e.q, e.t ?? e, zoom * dpr); if (th) ctx.drawImage(th.cv, th.x, th.y, th.w, th.h); } continue; }
+      if (!this.farCache.has(`${e.p},${e.q}@${res}|${e.fog}|${state}`)) deferred++;
       ctx.imageSmoothingEnabled = true;
       ctx.drawImage(b.cv, b.x, b.y, b.w, b.h);
     }
+    if (deferred && !this.farTimer) this.farTimer = setTimeout(() => { this.farTimer = null; this.onLoad(); }, 16);
     // province edges only where provinces are the unit of play (faint, never a board grid)
     if (lod === 'province') for (const e of entries) {
       if (e.fog === 'unopened') continue;
@@ -365,7 +418,9 @@ export class SpriteArt {
       ctx.strokeStyle = 'rgba(24,30,26,0.22)'; ctx.lineWidth = 1.4 / zoom; ctx.stroke(o.path);
       if (e.selected) { ctx.strokeStyle = '#f3d58a'; ctx.lineWidth = 3 / zoom; ctx.stroke(o.path); }
     }
-    this.paintRealms(ctx, entries, { zoom, lod });
+    if (lens !== 'land') this.paintRealms(ctx, entries, { zoom, lod, lens });
+    if (lens === 'war') paintWarLens(ctx, entries, zoom);
+    if (lens === 'settle') paintSettleLens(ctx, entries, zoom);
     // a clash this bell: a small crossed-swords mark, at province detail only (the world view stays a map)
     if (lod === 'province') for (const e of entries) {
       if (!e.rec?.clash) continue;
@@ -386,7 +441,7 @@ export class SpriteArt {
    * and each holding as a mark in its faction's colour (larger for a city or
    * a stronghold). Cached until the drawn provinces' holdings change.
    */
-  paintRealms(ctx, entries, { zoom, lod }) {
+  paintRealms(ctx, entries, { zoom, lod, lens = 'realm' }) {
     const key = entries.map(e => (e.rec ? `${e.p},${e.q}:${e.rec.owners.join('')}${e.rec.sites.join('')}${e.prov ? (e.prov.siteMirror ?? []).map(m => m.tier).join('') : (e.tiers ?? []).join('')}` : '')).join('|');
     const rk = `${lod}|${key}`;
     if (this.realmKey !== rk) { this.realm = buildRealms(entries, { grow: 1 }); this.realmKey = rk; }
@@ -395,7 +450,7 @@ export class SpriteArt {
     ctx.save();
     for (let f = 0; f < 6; f++) {
       if (!R.fill[f]) continue;
-      ctx.globalAlpha = lod === 'world' ? 0.34 : 0.24; ctx.fillStyle = FACTION_COLORS[f]; ctx.fill(R.fill[f]);
+      ctx.globalAlpha = (lod === 'world' ? 0.34 : 0.24) * (lens === 'realm' ? 1 : 0.4); ctx.fillStyle = FACTION_COLORS[f]; ctx.fill(R.fill[f]);
     }
     ctx.globalAlpha = 1; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     for (let f = 0; f < 6; f++) {
@@ -717,7 +772,7 @@ export class SpriteArt {
         if (hidden(h.faction)) continue;
         const a = last.get(String(h.id));
         resident.add(String(h.id));
-        push(h.tile, { faction: h.faction, stance: a ? ART_STANCES[a.stance] ?? 'hold' : 'hold' });
+        push(h.tile, { faction: h.faction, stance: a ? ART_STANCES[a.stance] ?? 'hold' : 'hold', troops: Math.floor(Number(h.troops) / 1000), stamina: Number(h.staminaValue ?? 120) });
       }
       for (const a of last.values()) {
         if (resident.has(String(a.hostId)) || !BROKEN_FATES.has(a.fate) || hidden(a.faction)) continue;
@@ -756,22 +811,38 @@ export class SpriteArt {
         const img = this.image('hosts', hk, `${ART_FACTIONS[o.h.faction] ?? 'ember'}_${st}${o.facing === null || o.facing === undefined ? '' : `_${o.facing}`}`);
         if (img) ctx.drawImage(img, o.x - hs.ax * kk, o.y - hs.ay * kk + TOP_LIFT, hs.w * kk, hs.h * kk);
       }
-    } else {
-      // chips: one per faction per hex, with the host count (screen-sized)
-      const seen = new Set();
+    }
+    // the hosts' flags (Civ's unit flags): one per faction per hex — the faction's colour, its troops and the
+    // weakest host's stamina as a bar (green, amber when it cannot march yet, red when spent); above the
+    // figures when they show, in their place when the map is further out
+    {
+      const groups = new Map();
       for (const o of hosts) {
         const key = `${o.cx},${o.cy},${o.h.faction}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        const n = hosts.filter((u) => u.cx === o.cx && u.cy === o.cy && u.h.faction === o.h.faction).length;
-        const f = [...seen].filter((k2) => k2.startsWith(`${o.cx},${o.cy},`)).length - 1;
-        const w = 30 / zoom, hgt = 16 / zoom, x = o.cx - w / 2 + f * (w + 3 / zoom), y = o.cy + 4 / zoom;
-        ctx.beginPath(); ctx.roundRect?.(x - 1.5 / zoom, y - 1.5 / zoom, w + 3 / zoom, hgt + 3 / zoom, 9.5 / zoom); ctx.fillStyle = '#1a1d22'; ctx.fill();
-        ctx.beginPath(); ctx.roundRect?.(x, y, w, hgt, 8 / zoom); ctx.fillStyle = FACTION_COLORS[o.h.faction] ?? '#8a8f86'; ctx.fill();
-        ctx.fillStyle = '#f6f1e2'; ctx.font = `700 ${12 / zoom}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText(`⚔${n}`, x + w / 2, y + hgt / 2 + 0.5 / zoom);
+        const g = groups.get(key) ?? { cx: o.cx, cy: o.cy, f: o.h.faction, n: 0, troops: 0, stamina: 120, arriving: false };
+        g.n++; g.troops += o.h.troops ?? 0; g.stamina = Math.min(g.stamina, o.h.stamina ?? 120); g.arriving ||= !!o.h.arriving;
+        groups.set(key, g);
       }
-      ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
+      const perHex = new Map();
+      const figures = RADIUS * zoom >= HOST_FIGURE_MIN_R;
+      ctx.save(); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      for (const g of groups.values()) {
+        const hk = `${g.cx},${g.cy}`;
+        const i = perHex.get(hk) ?? 0; perHex.set(hk, i + 1);
+        const k = 1 / zoom, w = 44 * k, h = 15 * k;
+        const x = g.cx - w / 2 + i * (w + 3 * k), y = figures ? g.cy - RADIUS * 0.95 - h : g.cy + 4 * k;
+        const fill = FACTION_COLORS[g.f] ?? '#8a8f86';
+        ctx.beginPath(); ctx.roundRect?.(x - 1.5 * k, y - 1.5 * k, w + 3 * k, h + 7 * k, 6 * k); ctx.fillStyle = '#1a1d22'; ctx.fill();
+        ctx.beginPath(); ctx.roundRect?.(x, y, w, h, 5 * k); ctx.fillStyle = fill; ctx.fill();
+        if (g.arriving) { ctx.setLineDash([3 * k, 2 * k]); ctx.strokeStyle = '#fffaf0'; ctx.lineWidth = 1.2 * k; ctx.stroke(); ctx.setLineDash([]); }
+        ctx.fillStyle = '#fffaf0'; ctx.font = `700 ${11 * k}px system-ui, sans-serif`;
+        const t = g.troops >= 1000 ? `${(g.troops / 1000).toFixed(g.troops >= 10000 ? 0 : 1)}k` : String(g.troops);
+        ctx.fillText(`\u2694${g.n > 1 ? g.n + '\u00b7' : ''}${t}`, x + w / 2, y + h / 2 + 0.5 * k);
+        const st = Math.max(0, Math.min(1, g.stamina / 120));
+        ctx.fillStyle = 'rgba(255,255,255,.18)'; ctx.fillRect(x, y + h + 1.5 * k, w, 3 * k);
+        ctx.fillStyle = g.stamina < 40 ? '#e0533d' : g.stamina < 74 ? '#e0a83d' : '#5fbf6a'; ctx.fillRect(x, y + h + 1.5 * k, w * st, 3 * k);
+      }
+      ctx.restore();
     }
     // pass 2c: people (people/crowds.mjs): townsfolk, carriers, departing columns at their origin, scouts
     // what every tile is doing (people/activity.mjs); kept for the page's hover tip
@@ -800,10 +871,10 @@ export class SpriteArt {
       const far = e.fog === 'distant';
       ctx.save();
       ctx.globalCompositeOperation = 'saturation';
-      ctx.globalAlpha = far ? 0.55 : 0.3;
+      ctx.globalAlpha = far ? 0.8 : 0.25;
       ctx.fillStyle = '#808080'; ctx.fill(o.fill);
       ctx.restore();
-      ctx.fillStyle = far ? 'rgba(217,223,231,0.32)' : 'rgba(223,230,238,0.16)'; ctx.fill(o.fill);
+      ctx.fillStyle = far ? 'rgba(210,218,228,0.46)' : 'rgba(223,230,238,0.1)'; ctx.fill(o.fill);
       if (far) for (const t of tiles) if (t.p === e.p && t.pq === e.q) { const m = this.image('fog', s.key, `mist_${t.v}`); if (m) draw(m, t); }
     }
     for (const e of entries) if (e.fog !== 'unopened') this.frame(ctx, { p: e.p, q: e.q, fog: 'clear', selected: e.selected, zoom });
@@ -825,6 +896,7 @@ export class SpriteArt {
     }
     // name tags over the fog (the holder's face and name), then the next animation frame while figures move
     if (people?.nameOf) paintNameTags(ctx, { tiles, zoom, nameOf: people.nameOf, centre: people.centre ?? null, onImage: this.onLoad,
+      tierName: people.tierName ?? null,
       present: people.life ? (p, q, site) => lifeAt(people.life.get(`${p},${q},${site}`), people.bell ?? 0, people.now ?? 0).lord : null });
     if (activities) paintBadges(ctx, { tiles, zoom, activities });
     if ((moving || fighting) && !this.peopleTimer) this.peopleTimer = setTimeout(() => { this.peopleTimer = null; this.onLoad(); }, fighting ? 33 : PEOPLE_FRAME_MS);

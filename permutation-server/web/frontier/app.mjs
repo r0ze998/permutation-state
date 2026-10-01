@@ -18,8 +18,8 @@ import { checkBeacon } from './seal.mjs';
 import { ChainClock, bellChip, countdown, seasonClock } from './clock.mjs';
 import { effectiveStatus } from './fcodec.mjs';
 import { FrontierMap } from './map/fmap.mjs';
-import { SEASON_STATUS_TEXT, clientText, factionName } from './fi18n.mjs';
-import { L, fmtNum, mountLangToggle } from '../lang.mjs';
+import { SEASON_STATUS_TEXT, clientText, factionName, TIERS } from './fi18n.mjs';
+import { L, fmtNum, mountLangToggle, onLangChange } from '../lang.mjs';
 import { toHex } from '../sdk/bytes.mjs';
 import { html, raw, setHtml } from '../util.mjs';
 import { ACTIONS, FORMS, bind, startPlay, wantProvince } from './controller.mjs';
@@ -90,6 +90,8 @@ import * as inspect from './hud/inspect.mjs';
 import * as feed from './hud/feed.mjs';
 import * as title from './intro/title.mjs';
 import * as marchCard from './hud/marchcard.mjs';
+import * as minimap from './hud/minimap.mjs';
+import * as search from './hud/search.mjs';
 import { createRoster } from './people/roster.mjs';
 import * as scene from './people/scene.mjs';
 import { activityText } from './people/activity.mjs';
@@ -232,6 +234,7 @@ function renderPlay() {
   const sub = FS.practice ? L`練習モード` : FS.report ? L`衝突の報告` : null;
   if (title) setText('panel-title', sub ?? { map: L`地図`, holding: L`拠点`, hosts: L`軍勢`, marches: L`進軍`, more: L`その他` }[FS.tab ?? 'map'] ?? L`シーズン`);
   renderRail();
+  renderMinimap();
   // the header follows new data at once, not only on the next one-second tick
   renderHudTick(FS.chain?.now() ?? null);
 }
@@ -240,6 +243,7 @@ function renderMode() {
   const body = $('panel-body');
   if (body) setHtml(body, modePanel(FS));
   renderRail();
+  renderMinimap();
 }
 
 // ------------------------------------------------------------------ the HUD (hud/hud.mjs)
@@ -262,6 +266,7 @@ export function peopleSource() {
     explores: scene.exploresAt(FS.chronicle, FS.overviews, bell),
     nameOf: scene.namer(rosterRef),
     life: FS.life ?? null,
+    tierName: t => TIERS[t] ?? '',
     now: FS.chain?.now() ?? 0,
     lordOf: (p, q, site) => { const o = rosterRef?.ownerOf(p, q, site); return o ? identityOf(o.tag) : null; },
     bell,
@@ -327,9 +332,14 @@ function renderHudTick(now) {
   renderFeed();
   const attn = $('attn-pill');
   if (attn) {
-    const text = FS.mode === 'play' ? hud.attentionText(hud.attentionItems(FS)) : null;
+    const items = FS.mode === 'play' ? hud.attentionItems(FS) : [];
+    const text = hud.attentionText(items);
     attn.hidden = !text;
-    if (text && attn.textContent !== text) attn.textContent = text;
+    // phones show only the count (the header keeps one row: no layout shift when it appears); the full text is its name
+    if (text && attn.getAttribute('aria-label') !== text) {
+      attn.setAttribute('aria-label', text);
+      setHtml(attn, html`<span class="attn-long" aria-hidden="true">${text}</span><span class="attn-short" aria-hidden="true">${fmtNum(items.length)}</span>`);
+    }
   }
 }
 
@@ -418,6 +428,45 @@ function autoBattles() {
     if (prev === undefined || prev >= b) continue;  // the first sight of a province is not news
     playBattle(env.province.p, env.province.q, b);
   }
+}
+
+// ------------------------------------------------------------------ the minimap and the lenses (hud/minimap.mjs)
+let miniQueued = false;
+function renderMinimap() {
+  if (miniQueued) return;
+  miniQueued = true;
+  requestAnimationFrame(() => {
+    miniQueued = false;
+    const cv = $('minimap-canvas');
+    if (!cv || !mapRef || !cv.getContext) return;
+    const px = minimap.MINIMAP_PX, dpr = Math.min(globalThis.devicePixelRatio || 1, 2);
+    if (cv.width !== px * dpr) { cv.width = px * dpr; cv.height = px * dpr; }
+    const recs = new Map();
+    for (const ov of FS.overviews.values()) for (const r of ov.provinces) recs.set(`${r.p},${r.q}`, r);
+    minimap.paintMinimap(cv.getContext('2d'), { recs, rings: Math.max(1, (FS.record?.rings?.length ?? 1)), own: (FS.holdings ?? []).map(h => ({ p: h.p, q: h.q })),
+      view: mapRef.view, size: mapRef.size(), px, dpr, lens: FS.view.lens ?? 'realm' });
+  });
+}
+function renderLenses() {
+  const el = $('lenses');
+  if (!el) return;
+  const cur = FS.view.lens ?? 'realm';
+  setHtmlIfChanged(el, minimap.LENSES.map((l, i) => html`<button type="button" class="lens" data-act="lens" data-lens="${l}" aria-pressed="${l === cur ? 'true' : 'false'}" title="${minimap.LENS_TEXT[l]()} (${i + 1})"><span aria-hidden="true">${minimap.LENS_GLYPH[l]}</span><span class="lens-text">${minimap.LENS_TEXT[l]()}</span></button>`));
+}
+// ------------------------------------------------------------------ map search (hud/search.mjs)
+let searchHits = [];
+function runSearch(q) {
+  const recs = new Map();
+  for (const ov of FS.overviews.values()) for (const r of ov.provinces) recs.set(`${r.p},${r.q}`, r);
+  searchHits = search.searchMap(q, { recs, roster: rosterRef, sitesOf: (p, q2) => terrainRef?.(p, q2)?.sites ?? null });
+  const el = $('map-search-results');
+  if (el) setHtml(el, search.renderResults(searchHits, q));
+}
+
+function setLens(l) {
+  if (!minimap.LENSES.includes(l)) return;
+  FS.view.lens = l;
+  renderLenses(); renderMinimap(); mapRef?.invalidate();
 }
 
 // ------------------------------------------------------------------ the title and the bell toll (intro/title.mjs)
@@ -512,6 +561,8 @@ function cycleHolding(dir) {
 }
 
 export const HUD_ACTIONS = {
+  'search-go': d => { const x = searchHits[num(d.i)]; if (!x) return; goToItem({ ...x, tab: FS.mode === 'play' ? 'map' : undefined }); const el = $('map-search-results'); if (el) setHtml(el, ''); },
+  lens: d => setLens(d.lens),
   goto: d => goToItem({ p: num(d.p), q: num(d.q), tab: 'map' }),
   'intro-close': () => closeIntro(),
   'intro-open': () => openIntro(),
@@ -637,7 +688,8 @@ export const W4_ACTIONS = {
   'ob-restore': () => setFlags(restoreFlags(FS.ui?.dismissed ?? [])),
 };
 /** The wave-4 forms (data-form). */
-export const W4_FORMS = { 'practice-run': () => runPractice(), 'practice-whatif': () => runPractice() };
+export const W4_FORMS = { 'practice-run': () => runPractice(), 'practice-whatif': () => runPractice(),
+  'map-search': f => { runSearch(f.querySelector('input')?.value ?? ''); if (searchHits[0]) HUD_ACTIONS['search-go']({ i: '0' }); } };
 /** The wave-4 bound inputs (data-bind), all of the practice panel. */
 export function w4Bind(name, value) {
   const st = FS.practice;
@@ -654,9 +706,10 @@ function delegate(doc) {
   doc.addEventListener('keydown', e => {
     const intro = $('intro');
     if (intro && !intro.hidden && (e.key === 'Escape' || e.key === 'Enter')) { e.preventDefault(); closeIntro(); return; }
-    // . , next / previous ready host; ] [ next / previous holding (never while typing)
-    if (FS.mode !== 'play' || e.target?.closest?.('input, select, textarea') || e.metaKey || e.ctrlKey || e.altKey) return;
-    const k = { '.': () => cycleHost(1), ',': () => cycleHost(-1), ']': () => cycleHolding(1), '[': () => cycleHolding(-1) }[e.key];
+    // . , next / previous ready host; ] [ next / previous holding; 1–4 the lenses (never while typing)
+    if ((FS.mode !== 'play' && !/^[1-4]$/.test(e.key)) || e.target?.closest?.('input, select, textarea') || e.metaKey || e.ctrlKey || e.altKey) return;
+    const k = { '.': () => cycleHost(1), ',': () => cycleHost(-1), ']': () => cycleHolding(1), '[': () => cycleHolding(-1),
+      1: () => setLens('realm'), 2: () => setLens('war'), 3: () => setLens('land'), 4: () => setLens('settle') }[e.key];
     if (k) { e.preventDefault(); k(); }
   });
   const play = FS.mode === 'play';
@@ -782,13 +835,19 @@ export async function boot() {
           people: ART_ON && FS.mode !== 'practice' ? peopleSource : undefined,
           // the world view's labels: the faction names and the Concord, in the page's language
           realmName: f => (f === 'concord' ? L`大協約` : factionName(f)),
+          lens: FS.view.lens ?? 'realm',
+          // incoming risk around the viewer's holdings (hud/hud.mjs attention, controller incoming warnings)
+          threats: (FS.incoming ?? []).map(w => ({ p: w.holding.p, q: w.holding.q, tile: w.holding.tile, bell: w.bell })),
+          threatLabel: w => L`来襲 第${fmtNum(w.bell)}鐘`,
           // holdings' tiers for the far view from the roster (no province loads for a spectator's world map)
           tierOf: (p, q, site) => rosterRef?.tierOf(p, q, site) ?? null,
           // the march being composed: its route, drawn for this browser only (the destination is sealed)
           route: FS.compose ? { hexes: marchCard.routeHexes(FS.compose), dest: FS.compose.dest ? tileHex(FS.compose.dest.p, FS.compose.dest.q, FS.compose.dest.tile) : null } : null,
           provinceOf: ART_ON ? (p, q, { far = false } = {}) => { if (!far) wantProvince(p, q, () => map?.invalidate()); return FS.provinces.get(`${p},${q}`)?.province ?? null; } : undefined };
       },
-      onSelect: hit => {
+      onSelect: hit0 => {
+        // a tap selects what the zoom shows: a province from afar, a tile up close
+        const hit = FS.view.lod === 'tile' ? hit0 : { kind: 'province', p: hit0.p, q: hit0.q };
         FS.selected = hit;
         setText('map-summary', L`州 ${hit.p},${hit.q} を選びました`);
         // The inspector reads the province envelope (loaded once, on demand).
@@ -798,12 +857,22 @@ export async function boot() {
         if (FS.mode === 'play' && c && !c.sending && Number.isInteger(hit.idx) && !(hit.p === c.origin.p && hit.q === c.origin.q && hit.idx === c.host.tile)) ACTIONS['dest-from-map']()?.catch?.(() => {});
         invalidate('map', 'panel');
       },
-      onView: (_, lod) => { FS.view.lod = lod; },
+      onView: (_, lod) => { FS.view.lod = lod; renderMinimap(); },
       onHover: (hit, at) => showTip(hit, at),
       // Sprite art at tile LOD, opt-in with ?art=1 (docs/frontier/art/tiles/LOD.md).
       art: ART_ON,
     });
     mapRef = map;
+    renderLenses();
+    const mini = $('minimap-canvas');
+    mini?.addEventListener('pointerup', e => {
+      const r = mini.getBoundingClientRect();
+      const fr = minimap.frameOf(Math.max(1, FS.record?.rings?.length ?? 1) + 1, r.width);
+      const w = fr.toWorld(e.clientX - r.left, e.clientY - r.top);
+      map.setView({ x: w.x, y: w.y, zoom: map.view.zoom });
+    });
+    onLangChange(renderLenses);
+    $('map-search-q')?.addEventListener('input', e => runSearch(e.target.value));
     // The art preview opens on the tiles with everything shown (presentation only).
     if (ART_RINGOPEN) setInterval(() => map?.invalidate(), 6000);
     // ?art=1&battle=P,Q,BELL plays that clash on a loop (presentation only; the demo's battle shot)
