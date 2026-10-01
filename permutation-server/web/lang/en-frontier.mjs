@@ -183,6 +183,7 @@ export default {
   "この端末には封の記録がありません。キーパーがビーコンの後で開封します。": "This device has no record of the seal. Keepers reveal it after the beacon.",
   "この端末に保存": "Saved on this device",
   "この端末に進軍の記録を保存できないため、送りませんでした": "Not sent: this device cannot store the march's record.",
+  '名簿のファイルが読めませんでした': 'The roster file could not be read.',
   "この端末の時計はチェーンより {0} 秒ずれています": "This device's clock differs from the chain's by {0} s",
   "この軍勢は進軍の精算が済むまで出発・解散・探索できません（キーパーが精算します）": "This host cannot depart, dissolve or explore until its march is settled (keepers settle it).",
   "この進軍はすでに送られています": "This march was already sent.",
