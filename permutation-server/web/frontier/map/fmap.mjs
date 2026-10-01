@@ -14,6 +14,7 @@
 // from the rules module lazily (terrain.mjs) when the caller gives none;
 // only provinces the viewer knows or sees are drawn as tiles, with the fog
 // veil over them; H goes to the viewer's first holding.
+import { paintPins } from '../hud/pins.mjs';
 import { inverseHex } from '../../map.mjs';
 import { L, onLangChange } from '../../lang.mjs';
 import { locate, ringOf, ringProvinces, hexDistance, tileHex } from '../fgeo.mjs';
@@ -433,6 +434,7 @@ export class FrontierMap {
     }
     if (src.route) paintRoute(ctx, src.route, z);
     if (src.threats?.length) { paintThreats(ctx, src.threats, z, src.threatLabel ?? null); this.invalidateSoon(); }
+    if (src.pins?.length) paintPins(ctx, src.pins, z);
     if (src.guide && !src.route) { paintGuide(ctx, src.guide, z, src.guideLabel?.(src.guide) ?? ''); this.invalidateSoon(); }
     this.mark(wanted > 0 && drawn === wanted ? 'ready' : 'pending');
   }

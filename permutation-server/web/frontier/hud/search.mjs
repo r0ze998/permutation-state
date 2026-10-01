@@ -16,10 +16,12 @@ const norm = s => String(s ?? '').normalize('NFKC').toLowerCase().replace(/\s+/g
  * The results for a query: `[{kind, text, p, q, tile?}]`. `recs` the
  * overview records by "P,Q"; `roster` the roster store (entries()).
  */
-export function searchMap(query, { recs = new Map(), roster = null, sitesOf = () => null } = {}) {
+export function searchMap(query, { recs = new Map(), roster = null, sitesOf = () => null, pins = [] } = {}) {
   const q = norm(query);
   if (!q) return [];
   const out = [];
+  // "ピン" / "pin": the viewer's pins (hud/pins.mjs)
+  if (/^(?:\u30d4\u30f3|pins?)$/u.test(q)) for (const x of pins) out.push({ kind: 'pin', text: x.tile === null ? L`州 ${x.p},${x.q}` : L`州 ${x.p},${x.q} · マス ${x.tile + 1}`, p: x.p, q: x.q, ...(x.tile === null ? {} : { tile: x.tile }) });
   const m = /^(?:\u5dde|province)?\s*(-?\d+)\s*[,\uff0c\u3001 ]\s*(-?\d+)$/u.exec(q);   // 州 3,0 / province 3,0 / 3、0
   if (m) {
     const p = Number(m[1]), qq = Number(m[2]);

@@ -464,4 +464,7 @@ export default {
   '{0}/{1}回': '{0} of {1}',
   'ルール（frontier.wasm）で{0}通りの乱数を試した幅です。ほかの到着軍勢は封の中なので数えていません。': 'The range over {0} random seeds in the rules (frontier.wasm). Other arrivals are sealed, so they are not counted.',
   'この鐘は野営地の見直しがあるため、守り手が変わるかもしれません。': 'The camp is reviewed at this bell, so the defenders may change.',
+  // ---- map pins (hud/pins.mjs, UI plan C5)
+  'ピン': 'Pins', 'ピンを立てる': 'Pin this place', 'ピンを外す': 'Remove the pin',
+  '地図でマスや州を選び、「ピンを立てる」で印を付けられます（この端末に保存）。': 'Select a tile or province on the map and choose "Pin this place" (kept on this device).',
 };

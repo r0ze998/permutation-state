@@ -45,7 +45,7 @@ export function frameOf(rings, px = MINIMAP_PX) {
  * `dpr`): `{recs: Map "P,Q" → overview record, rings, own: [{p, q}], view,
  * size}` (`view` and `size` the main map's, for the frame).
  */
-export function paintMinimap(ctx, { recs, rings, own = [], view = null, size = null, px = MINIMAP_PX, dpr = 1, lens = 'realm' }) {
+export function paintMinimap(ctx, { recs, rings, own = [], view = null, size = null, px = MINIMAP_PX, dpr = 1, lens = 'realm', pins = [] }) {
   const fr = frameOf(rings + 1, px);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, px, px);
@@ -74,6 +74,11 @@ export function paintMinimap(ctx, { recs, rings, own = [], view = null, size = n
   for (const o of own) {
     const c = (pp => fr.toPx(pp.x, pp.y))(provincePixel(o.p, o.q));
     ctx.strokeStyle = '#fffaf0'; ctx.lineWidth = 2; hex(c.x, c.y, r * 1.05); ctx.stroke();
+  }
+  // the viewer's pins: gold dots with a dark rim
+  for (const pn of pins) {
+    const c = (pp => fr.toPx(pp.x, pp.y))(provincePixel(pn.p, pn.q));
+    ctx.fillStyle = '#f3d58a'; ctx.strokeStyle = '#3a2a08'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.arc(c.x, c.y, 3.2, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
   }
   // the part of the world the map shows
   if (view && size) {

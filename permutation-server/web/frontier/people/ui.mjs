@@ -17,7 +17,7 @@ let uid = 0;
 export function personChip(identity, faction, { size = 28, full = false, note = '' } = {}) {
   if (!identity) return '';
   const name = displayName(identity, { full });
-  return html`<span class="person">${raw(avatarSvg(identity, faction, { size, uid: `p${uid++ % 100000}` }))}<span class="person-name" data-name>${name}</span>${note ? html`<span class="person-note">${note}</span>` : ''}</span>`;
+  return html`<span class="person">${raw(avatarSvg(identity, faction, { size, uid: `p${uid++ % 100000}` }))}<span class="person-name" data-name>${name}</span>${note ? html` <span class="person-note">${note}</span>` : ''}</span>`;
 }
 
 /** A holding's name: its place and tier, 「サフォードの町」 / "Saford's Town" (UI plan E5). */

@@ -17,6 +17,7 @@ import { personChip, hostOwner, holdingName } from '../people/ui.mjs';
 import { identityOf } from '../people/identity.mjs';
 import { activityText } from '../people/activity.mjs';
 import { hostRows } from '../screens/host.mjs';
+import { hasPin } from './pins.mjs';
 
 const TERRAIN_TEXT = { Grassland: () => L`草原`, Plains: () => L`平原`, Forest: () => L`森`, Hills: () => L`丘`, Mountain: () => L`山`, Water: () => L`水` };
 /** Site states as the overview carries them (herald SITE_STATE) and the mirror (3 = released: a Free City). */
@@ -74,8 +75,11 @@ export function ownHostsOn(FS, p, q, idx) {
 /** The actions the selection offers: `[{act, data, text, primary?}]` (existing play actions only). */
 export function inspectActions(FS, m) {
   if (!m) return [];
+  // a pin on this place (players and spectators)
+  const place = { p: m.p, q: m.q, tile: m.tile ? m.tile.idx : null };
+  const pin = { act: 'pin-toggle', data: { p: m.p, q: m.q, tile: place.tile ?? '' }, text: hasPin(FS.pins, place) ? L`ピンを外す` : L`ピンを立てる` };
   // spectators can replay a clash on the map (the report itself is the game page's)
-  if (FS.mode === 'spectate') return m.reportBell ? [{ act: 'battle-play', data: { p: m.p, q: m.q, bell: m.reportBell }, text: L`戦いを再生`, primary: true }] : [];
+  if (FS.mode === 'spectate') return [...(m.reportBell ? [{ act: 'battle-play', data: { p: m.p, q: m.q, bell: m.reportBell }, text: L`戦いを再生`, primary: true }] : []), pin];
   if (FS.mode !== 'play') return [];
   const out = [];
   const t = m.tile;
@@ -92,6 +96,7 @@ export function inspectActions(FS, m) {
   }
   if (m.reportBell) out.push({ act: 'battle-play', data: { p: m.p, q: m.q, bell: m.reportBell }, text: L`戦いを再生` });
   if (m.reportBell) out.push({ act: 'report-open', data: { p: m.p, q: m.q, bell: m.reportBell }, text: L`第${fmtNum(m.reportBell)}鐘の衝突の報告` });
+  out.push(pin);
   return out;
 }
 

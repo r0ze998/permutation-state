@@ -102,6 +102,7 @@ import * as glossary from './hud/glossary.mjs';
 import * as milestones from './hud/milestones.mjs';
 import * as guide from './hud/guide.mjs';
 import { forecast, forecastKey } from './hud/forecast.mjs';
+import * as pins from './hud/pins.mjs';
 import { battleScene, startBattle, battleLive, BATTLE_SPEEDS, PHASE } from './people/battle.mjs';
 import { decode as decodeAccount } from './fcodec.mjs';
 import { fromBase64 } from '../sdk/bytes.mjs';
@@ -194,14 +195,14 @@ export function panelMarkup(FS) {
     <button type="button" class="btn" data-act="forget">${L`この端末からこのシーズンの鍵を消す`}</button>
     ${onboardingCard.renderRestore(FS)}
     <p><button type="button" class="btn" data-act="practice-open">${L`練習モードを開く`}</button> <button type="button" class="btn" data-act="intro-open">${L`タイトルを見る`}</button></p>
-    <p><a href="practice.html">${L`練習`}</a> · <a href="spectate.html">${L`観戦`}</a></p></section>`, renderNameForm(FS), milestones.renderTimeline(FS.mileRecord), glossary.renderGlossary());
+    <p><a href="practice.html">${L`練習`}</a> · <a href="spectate.html">${L`観戦`}</a></p></section>`, pins.renderPins(FS.pins ?? []), renderNameForm(FS), milestones.renderTimeline(FS.mileRecord), glossary.renderGlossary());
   return parts;
 }
 
 /** The panel of the practice and spectator pages. */
 export function modePanel(FS) {
   if (FS.mode === 'practice') return [renderNotice(FS.notice), practiceScreen.render(FS.practice, { kernelError: FS.practiceError ?? null })];
-  return [FS.selected ? inspect.render(FS, terrainRef, mapRef?.art?.activities ?? null) : '', spectateScreen.render(FS, { ownerOf: reportOwner, standings: hud.renderStandingsList(FS) })];
+  return [FS.selected ? inspect.render(FS, terrainRef, mapRef?.art?.activities ?? null) : '', spectateScreen.render(FS, { ownerOf: reportOwner, standings: hud.renderStandingsList(FS) }), FS.report ? '' : pins.renderPins(FS.pins ?? [])];
 }
 
 /**
@@ -502,6 +503,7 @@ function renderHudTick(now) {
   renderResPop(now ?? 0);
   checkMilestones();
   checkOwnProfile();
+  if (FS.pins === undefined) { const sc = scope(); if (sc) { FS.pins = pins.loadPins(uiStorage, sc.seasonId); if (FS.pins.length) { invalidate('map'); renderMinimap(); } } }
   tickFeed();
   renderFeed();
   const attn = $('attn-pill');
@@ -620,7 +622,7 @@ function renderMinimap() {
     const recs = new Map();
     for (const ov of FS.overviews.values()) for (const r of ov.provinces) recs.set(`${r.p},${r.q}`, r);
     minimap.paintMinimap(cv.getContext('2d'), { recs, rings: Math.max(1, (FS.record?.rings?.length ?? 1)), own: (FS.holdings ?? []).map(h => ({ p: h.p, q: h.q })),
-      view: mapRef.view, size: mapRef.size(), px, dpr, lens: FS.view.lens ?? 'realm' });
+      view: mapRef.view, size: mapRef.size(), px, dpr, lens: FS.view.lens ?? 'realm', pins: FS.pins ?? [] });
   });
 }
 function renderLenses() {
@@ -634,7 +636,7 @@ let searchHits = [];
 function runSearch(q) {
   const recs = new Map();
   for (const ov of FS.overviews.values()) for (const r of ov.provinces) recs.set(`${r.p},${r.q}`, r);
-  searchHits = search.searchMap(q, { recs, roster: rosterRef, sitesOf: (p, q2) => terrainRef?.(p, q2)?.sites ?? null });
+  searchHits = search.searchMap(q, { recs, roster: rosterRef, sitesOf: (p, q2) => terrainRef?.(p, q2)?.sites ?? null, pins: FS.pins ?? [] });
   const el = $('map-search-results');
   if (el) setHtml(el, search.renderResults(searchHits, q));
 }
@@ -753,6 +755,16 @@ export const HUD_ACTIONS = {
   'battle-play': d => { leaveReport(); playBattle(num(d.p), num(d.q), num(d.bell), { focus: true }); },
   'res-open': d => { FS.resOpen = FS.resOpen === d.r ? null : d.r; renderHudTick(FS.chain?.now?.() ?? 0); },
   'res-close': () => closeResPop(),
+  // pins (hud/pins.mjs): this device, this season
+  'pin-toggle': d => {
+    const sc = scope(); if (!sc) return;
+    const place = { p: num(d.p), q: num(d.q), tile: d.tile === '' || d.tile === undefined ? null : num(d.tile) };
+    if (!Number.isInteger(place.p) || !Number.isInteger(place.q)) return;
+    FS.pins = pins.togglePin(FS.pins ?? pins.loadPins(uiStorage, sc.seasonId), place);
+    pins.savePins(uiStorage, sc.seasonId, FS.pins);
+    invalidate('panel', 'map'); renderMinimap();
+  },
+  'goto-pin': d => { leaveReport(); goToItem({ p: num(d.p), q: num(d.q), tile: d.tile === '' ? undefined : num(d.tile), tab: 'map' }); },
   // the count steppers (screens/holding.mjs): change the number field of the same form, within its min and max
   step: (d, el) => nudgeField(el, d.name, v => v + (num(d.d) || 0)),
   'step-set': (d, el) => nudgeField(el, d.name, () => num(d.v) || 0),
@@ -1058,6 +1070,8 @@ export async function boot() {
           // incoming risk around the viewer's holdings (hud/hud.mjs attention, controller incoming warnings)
           threats: (FS.incoming ?? []).map(w => ({ p: w.holding.p, q: w.holding.q, tile: w.holding.tile, bell: w.bell })),
           threatLabel: w => L`来襲 第${fmtNum(w.bell)}鐘`,
+          // the viewer's pins (hud/pins.mjs)
+          pins: FS.pins ?? [],
           // the guide's target of the current step (hud/guide.mjs; "all" only)
           guide: guideNow(),
           guideLabel: guide.guideLabel,

@@ -188,3 +188,24 @@ test('the forecast\'s input: only the viewer\'s host arrives, with its stance, r
   assert.equal(F.forecastKey(c), '77|2,0,32|44|1|never|null');
   assert.deepEqual(F.forecast(null, c, null, 3), { ok: false, why: 'NoInput' });
 });
+
+test('pins: toggled per place, newest first, at most 20, kept per season; found by searching "ピン"', async () => {
+  const PN = await import('../../permutation-server/web/frontier/hud/pins.mjs');
+  const S = await import('../../permutation-server/web/frontier/hud/search.mjs');
+  let pins = PN.togglePin([], { p: 1, q: 0, tile: 5 }, 1);
+  pins = PN.togglePin(pins, { p: 2, q: -1, tile: null }, 2);
+  assert.deepEqual(pins.map(PN.pinKey), ['2,-1,-', '1,0,5']);
+  assert.ok(PN.hasPin(pins, { p: 1, q: 0, tile: 5 }));
+  pins = PN.togglePin(pins, { p: 1, q: 0, tile: 5 });
+  assert.equal(pins.length, 1);
+  for (let i = 0; i < 30; i++) pins = PN.togglePin(pins, { p: i, q: 0, tile: 1 });
+  assert.equal(pins.length, PN.PIN_MAX);
+  const store = new Map(); const st = { get: k => store.get(k) ?? null, set: (k, v) => store.set(k, v) };
+  PN.savePins(st, '7', pins);
+  assert.equal(PN.loadPins(st, '7').length, 20);
+  assert.deepEqual(PN.loadPins({ get: () => '{bad' }, '7'), []);
+  setLang('ja');
+  const hits = S.searchMap('ピン', { pins: [{ p: 3, q: 0, tile: 4 }] });
+  assert.deepEqual([hits[0].kind, hits[0].p, hits[0].tile], ['pin', 3, 4]);
+  assert.equal(S.searchMap('pins', { pins: [{ p: 3, q: 0, tile: null }] })[0].tile, undefined);
+});
