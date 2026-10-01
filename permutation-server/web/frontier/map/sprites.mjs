@@ -812,40 +812,6 @@ export class SpriteArt {
         if (img) ctx.drawImage(img, o.x - hs.ax * kk, o.y - hs.ay * kk + TOP_LIFT, hs.w * kk, hs.h * kk);
       }
     }
-    // the hosts' flags (Civ's unit flags): one per faction per hex — the faction's colour, its troops and the
-    // weakest host's stamina as a bar (green, amber when it cannot march yet, red when spent); above the
-    // figures when they show, in their place when the map is further out
-    {
-      const groups = new Map();
-      for (const o of hosts) {
-        const key = `${o.cx},${o.cy},${o.h.faction}`;
-        const g = groups.get(key) ?? { cx: o.cx, cy: o.cy, f: o.h.faction, n: 0, troops: 0, stamina: 120, arriving: false };
-        g.n++; g.troops += o.h.troops ?? 0; g.stamina = Math.min(g.stamina, o.h.stamina ?? 120); g.arriving ||= !!o.h.arriving;
-        groups.set(key, g);
-      }
-      const perHex = new Map();
-      const figures = RADIUS * zoom >= HOST_FIGURE_MIN_R;
-      ctx.save(); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      for (const g of groups.values()) {
-        const hk = `${g.cx},${g.cy}`;
-        const i = perHex.get(hk) ?? 0; perHex.set(hk, i + 1);
-        const k = 1 / zoom, w = 44 * k, h = 15 * k;
-        const x = g.cx - w / 2 + i * (w + 3 * k), y = figures ? g.cy - RADIUS * 0.95 - h : g.cy + 4 * k;
-        const fill = FACTION_COLORS[g.f] ?? '#8a8f86';
-        ctx.beginPath(); ctx.roundRect?.(x - 1.5 * k, y - 1.5 * k, w + 3 * k, h + 7 * k, 6 * k); ctx.fillStyle = '#1a1d22'; ctx.fill();
-        ctx.beginPath(); ctx.roundRect?.(x, y, w, h, 5 * k); ctx.fillStyle = fill; ctx.fill();
-        if (g.arriving) { ctx.setLineDash([3 * k, 2 * k]); ctx.strokeStyle = '#fffaf0'; ctx.lineWidth = 1.2 * k; ctx.stroke(); ctx.setLineDash([]); }
-        ctx.fillStyle = '#fffaf0'; ctx.font = `700 ${11 * k}px system-ui, sans-serif`;
-        const t = g.troops <= 0 ? '?' : g.troops >= 1000 ? `${(g.troops / 1000).toFixed(g.troops >= 10000 ? 0 : 1)}k` : String(g.troops);
-        ctx.fillText(`\u2694${t}`, x + w / 2 - (g.n > 1 ? 5 * k : 0), y + h / 2 + 0.5 * k);
-        // more than one host: their number in a small dot at the flag's corner (never read as part of the troops)
-        if (g.n > 1) { ctx.fillStyle = '#1a1d22'; ctx.beginPath(); ctx.arc(x + w - 1 * k, y + 1 * k, 6.5 * k, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = '#fffaf0'; ctx.font = `700 ${9 * k}px system-ui, sans-serif`; ctx.fillText(String(g.n), x + w - 1 * k, y + 1.5 * k); }
-        const st = Math.max(0, Math.min(1, g.stamina / 120));
-        ctx.fillStyle = 'rgba(255,255,255,.18)'; ctx.fillRect(x, y + h + 1.5 * k, w, 3 * k);
-        ctx.fillStyle = g.stamina < 40 ? '#e0533d' : g.stamina < 74 ? '#e0a83d' : '#5fbf6a'; ctx.fillRect(x, y + h + 1.5 * k, w * st, 3 * k);
-      }
-      ctx.restore();
-    }
     // pass 2c: people (people/crowds.mjs): townsfolk, carriers, departing columns at their origin, scouts
     // what every tile is doing (people/activity.mjs); kept for the page's hover tip
     const activities = people ? activitiesFor(entries, { bell: people.bell ?? 0, departures: people.departures ?? [], explores: people.explores ?? [], own: people.own ?? [] }) : null;
@@ -879,7 +845,43 @@ export class SpriteArt {
       ctx.fillStyle = far ? 'rgba(210,218,228,0.46)' : 'rgba(223,230,238,0.1)'; ctx.fill(o.fill);
       if (far) for (const t of tiles) if (t.p === e.p && t.pq === e.q) { const m = this.image('fog', s.key, `mist_${t.v}`); if (m) draw(m, t); }
     }
+    // the hosts' flags (Civ's unit flags): one per faction per hex — the faction's colour, its troops and the
+    // weakest host's stamina as a bar (green, amber when it cannot march yet, red when spent); above the
+    // figures when they show, in their place when the map is further out
+    const drawFlags = () => {
+      const groups = new Map();
+      for (const o of hosts) {
+        const key = `${o.cx},${o.cy},${o.h.faction}`;
+        const g = groups.get(key) ?? { cx: o.cx, cy: o.cy, f: o.h.faction, n: 0, troops: 0, stamina: 120, arriving: false };
+        g.n++; g.troops += o.h.troops ?? 0; g.stamina = Math.min(g.stamina, o.h.stamina ?? 120); g.arriving ||= !!o.h.arriving;
+        groups.set(key, g);
+      }
+      const perHex = new Map();
+      const figures = RADIUS * zoom >= HOST_FIGURE_MIN_R;
+      ctx.save(); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      for (const g of groups.values()) {
+        const hk = `${g.cx},${g.cy}`;
+        const i = perHex.get(hk) ?? 0; perHex.set(hk, i + 1);
+        const k = 1 / zoom, w = 44 * k, h = 15 * k;
+        const x = g.cx - w / 2 + i * (w + 3 * k), y = figures ? g.cy - RADIUS * 0.95 - h : g.cy + 4 * k;
+        const fill = FACTION_COLORS[g.f] ?? '#8a8f86';
+        ctx.beginPath(); ctx.roundRect?.(x - 1.5 * k, y - 1.5 * k, w + 3 * k, h + 7 * k, 6 * k); ctx.fillStyle = '#1a1d22'; ctx.fill();
+        ctx.beginPath(); ctx.roundRect?.(x, y, w, h, 5 * k); ctx.fillStyle = fill; ctx.fill();
+        if (g.arriving) { ctx.setLineDash([3 * k, 2 * k]); ctx.strokeStyle = '#fffaf0'; ctx.lineWidth = 1.2 * k; ctx.stroke(); ctx.setLineDash([]); }
+        ctx.fillStyle = '#fffaf0'; ctx.font = `700 ${11 * k}px system-ui, sans-serif`;
+        const t = g.troops <= 0 ? '?' : g.troops >= 1000 ? `${(g.troops / 1000).toFixed(g.troops >= 10000 ? 0 : 1)}k` : String(g.troops);
+        ctx.fillText(`\u2694${t}`, x + w / 2 - (g.n > 1 ? 5 * k : 0), y + h / 2 + 0.5 * k);
+        // more than one host: their number in a small dot at the flag's corner (never read as part of the troops)
+        if (g.n > 1) { ctx.fillStyle = '#1a1d22'; ctx.beginPath(); ctx.arc(x + w - 1 * k, y + 1 * k, 6.5 * k, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = '#fffaf0'; ctx.font = `700 ${9 * k}px system-ui, sans-serif`; ctx.fillText(String(g.n), x + w - 1 * k, y + 1.5 * k); }
+        const st = Math.max(0, Math.min(1, g.stamina / 120));
+        ctx.fillStyle = 'rgba(255,255,255,.18)'; ctx.fillRect(x, y + h + 1.5 * k, w, 3 * k);
+        ctx.fillStyle = g.stamina < 40 ? '#e0533d' : g.stamina < 74 ? '#e0a83d' : '#5fbf6a'; ctx.fillRect(x, y + h + 1.5 * k, w * st, 3 * k);
+      }
+      ctx.restore();
+    };
     for (const e of entries) if (e.fog !== 'unopened') this.frame(ctx, { p: e.p, q: e.q, fog: 'clear', selected: e.selected, zoom });
+    // the hosts' flags over the province edges and the fog (they are what a player looks for)
+    drawFlags();
     if (opening !== null) {
       const lvl = OPEN_GLOW[openFrame];
       if (lvl !== null && lvl !== undefined) for (const t of tiles) {
