@@ -165,3 +165,24 @@ test('activities: walls, recruits, garrison, muster, rest, guard, battle, depart
   assert.match(ACT.activityText(acts.get(13)[1]), /^Resting \(ready at bell \d+\)$/, 'ready once it has the stamina to march again');
   setLang('ja');
 });
+
+import * as BT from '../../permutation-server/web/frontier/people/battle.mjs';
+
+test('battle scene: the arrivals where they fought, the defenders of that tile, losses and fates from the bytes', () => {
+  const inputs = { arrivals: [
+    { present: 1, hostId: 11n, faction: 0, tile: 55, stance: 3, troops: 300_000, troopsAfter: 260_000, fate: 3, citizenTag: 9n },
+    { present: 0, hostId: 12n, faction: 1, tile: 20, stance: 0, troops: 1, troopsAfter: 0, fate: 0 },
+  ] };
+  const before = { sites: Uint8Array.from([55]), siteMirror: [{ state: 1, faction: 2, garrison: 50_000 }], camp: { state: 0 },
+    entries: [{ id: 5n, faction: 2, tile: 55, state: 1, troops: 100_000 }, { id: 6n, faction: 2, tile: 3, state: 1, troops: 100_000 }] };
+  const after = { siteMirror: [{ state: 1, faction: 2, garrison: 20_000 }], entries: [] };
+  const sc = BT.battleScene({ p: 2, q: 1, bell: 45, inputs, before, after });
+  assert.equal(sc.tiles.length, 1, 'only the tile an arrival fought on');
+  const t = sc.tiles[0];
+  assert.deepEqual(t.attackers.map(a => [a.faction, a.stance, a.before, a.after, a.fate]), [[0, 3, 300, 260, 'Bounced']]);
+  assert.deepEqual(t.defenders.map(d => [d.kind, d.before, d.after, d.fate]), [['resident', 100, 0, 'Destroyed'], ['garrison', 50, 20, 'Stays']]);
+  assert.equal(BT.losses(t.attackers), 40);
+  assert.equal(BT.losses(t.defenders), 130);
+  assert.equal(BT.battleScene({ p: 0, q: 0, bell: 1, inputs: { arrivals: [] } }), null);
+  assert.equal(BT.battleScene({ p: 2, q: 1, bell: 45, inputs, before }).tiles[0].defenders[0].after, null, 'without the province after, losses are unknown');
+});

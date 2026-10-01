@@ -90,6 +90,11 @@ import * as inspect from './hud/inspect.mjs';
 import { createRoster } from './people/roster.mjs';
 import * as scene from './people/scene.mjs';
 import { activityText } from './people/activity.mjs';
+import { battleScene, startBattle, PHASE } from './people/battle.mjs';
+import { decode as decodeAccount } from './fcodec.mjs';
+import { fromBase64 } from '../sdk/bytes.mjs';
+import { tileHex } from './fgeo.mjs';
+import { project } from '../map.mjs';
 import { identityOf, displayName } from './people/identity.mjs';
 
 const $ = id => globalThis.document?.getElementById(id);
@@ -203,7 +208,7 @@ let peopleCache = { at: -1, value: null };
 export function peopleSource() {
   const bell = FS.nowBell ?? (FS.clock ? Math.max(0, Math.floor(((FS.chain?.now() ?? 0) - FS.clock.genesisTs) / 600)) : 0);
   const sec = Math.floor(Date.now() / 1000);
-  if (peopleCache.at === sec && peopleCache.value) return peopleCache.value;
+  if (peopleCache.at === sec && peopleCache.value) { peopleCache.value.battles = (FS.battles ?? []).filter(b => (performance.now() / 1000 - b.t0) <= PHASE.end); return peopleCache.value; }
   if (rosterRef) {
     for (let d = 0; d < (FS.record?.rings?.length ?? 1); d++) rosterRef.ensure(d);
     scene.seedOwn(rosterRef, FS.holdings);
@@ -216,7 +221,12 @@ export function peopleSource() {
     own: FS.holdings ?? [],
     columnLabel: d => L`出陣 · 第${fmtNum(d.arriveBell)}鐘に到着`,
     demo: ART_PREVIEW && ART_Q.get('acts') === '1',
+    battles: FS.battles ?? [],
+    lossText: n => L`−${fmtNum(n)} 兵`,
+    fateText: f => ({ Stays: L`持ちこたえた`, Withdrew: L`隣へ退いた`, Bounced: L`押し戻された`, Retreated: L`撤退した`, Destroyed: L`壊滅` })[f] ?? null,
   } };
+  peopleCache.value.battles = (FS.battles ?? []).filter(b => (performance.now() / 1000 - b.t0) <= PHASE.end);
+  autoBattles();
   return peopleCache.value;
 }
 const lastHtml = new Map();
@@ -281,6 +291,35 @@ function showTip(hit, at) {
   tip.style.setProperty('--y', `${Math.round(at.y + 12)}px`);
 }
 
+// ------------------------------------------------------------------ battle scenes (people/battle.mjs)
+const battleSeen = new Map(); // "P,Q" → the last resolved bell a scene was considered for
+/** Load a clash and play its scene on the map; `focus` moves the camera to it first. */
+export async function playBattle(p, q, bell, { focus = false } = {}) {
+  if (!heraldRef || ![p, q, bell].every(Number.isInteger)) return false;
+  const r = await heraldRef.clash(p, q, bell).catch(() => null);
+  if (!r?.ok || !r.inputs) return false;
+  let before = null;
+  try { before = r.report?.province_before_b64 ? decodeAccount('Province', fromBase64(r.report.province_before_b64)) : null; } catch { before = null; }
+  const after = FS.provinces.get(`${p},${q}`)?.province ?? null;
+  const scene = battleScene({ p, q, bell, inputs: r.inputs, before, after: after && after.resolvedNext > bell ? after : null });
+  if (!scene) return false;
+  if (focus && mapRef) { const h = tileHex(p, q, scene.tiles[0].idx), c = project(h.q, h.r); mapRef.setView({ x: c.x, y: c.y, zoom: 1.6 }); }
+  FS.battles = [...(FS.battles ?? []).filter(b => !(b.scene.p === p && b.scene.q === q)), startBattle(scene, performance.now() / 1000)];
+  mapRef?.invalidate();
+  return true;
+}
+/** A clash that resolved in a province the page has loaded plays once, when it is new. */
+function autoBattles() {
+  for (const [key, env] of FS.provinces) {
+    const b = env.province?.resolveSummary?.bell;
+    if (!Number.isInteger(b) || b <= 0) continue;
+    const prev = battleSeen.get(key);
+    battleSeen.set(key, b);
+    if (prev === undefined || prev >= b) continue;  // the first sight of a province is not news
+    playBattle(env.province.p, env.province.q, b);
+  }
+}
+
 /** Move the map to an attention item and open its tab. */
 function goToItem(x) {
   if (!x) return;
@@ -292,6 +331,7 @@ function goToItem(x) {
 
 /** The HUD's actions (data-act): cycle the attention items, jump to one, choose the active holding. */
 export const HUD_ACTIONS = {
+  'battle-play': d => playBattle(num(d.p), num(d.q), num(d.bell), { focus: true }),
   attn: () => {
     const items = hud.attentionItems(FS);
     if (!items.length) return;
@@ -560,6 +600,12 @@ export async function boot() {
     mapRef = map;
     // The art preview opens on the tiles with everything shown (presentation only).
     if (ART_RINGOPEN) setInterval(() => map?.invalidate(), 6000);
+    // ?art=1&battle=P,Q,BELL plays that clash on a loop (presentation only; the demo's battle shot)
+    const bq = ART_PREVIEW ? (ART_Q.get('battle') ?? '').split(',').map(Number) : [];
+    if (bq.length === 3 && bq.every(Number.isInteger)) {
+      const go = () => playBattle(bq[0], bq[1], bq[2], { focus: !FS.battleFocused }).then(ok => { if (ok) FS.battleFocused = true; });
+      setTimeout(go, 4000); setInterval(go, (PHASE.end + 2.5) * 1000);
+    }
     if (ART_PREVIEW) {
       const [ap, aq] = (ART_Q.get('at') ?? '2,0').split(',').map(Number);
       const c = provincePixel(Number.isInteger(ap) ? ap : 2, Number.isInteger(aq) ? aq : 0);

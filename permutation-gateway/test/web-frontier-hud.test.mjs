@@ -99,11 +99,11 @@ test('inspector: a tile with a site, hosts and relations; the actions it offers'
   assert.deepEqual([m.tile.site.state, m.tile.site.faction, m.tile.site.garrison], ['holding', 2, 300]);
   assert.deepEqual(m.tile.hosts.map(h => h.troops), [400], 'only the hosts on this tile');
   assert.deepEqual(m.relation, [{ faction: 2, friendly: false }]);
-  assert.deepEqual(inspect.inspectActions(FS, m).map(a => a.act), ['report-open']);
+  assert.deepEqual(inspect.inspectActions(FS, m).map(a => a.act), ['battle-play', 'report-open']);
   FS.selected = { p: 2, q: 0, idx: 20 };
   const free = inspect.inspectModel(FS, terrainOf);
   assert.equal(free.tile.site.state, 'free');
-  assert.deepEqual(inspect.inspectActions(FS, free).map(a => a.act), ['pick-province', 'report-open'], 'a free site first opens the province for the ticket');
+  assert.deepEqual(inspect.inspectActions(FS, free).map(a => a.act), ['pick-province', 'battle-play', 'report-open'], 'a free site first opens the province for the ticket');
   FS.joinDraft = { envelope: { province: prov }, sites: [] };
   assert.equal(inspect.inspectActions(FS, free)[0].act, 'toggle-site');
   FS.compose = { origin: { p: 2, q: 0 } };

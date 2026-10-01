@@ -67,7 +67,10 @@ export function inspectModel(FS, terrainOf) {
 
 /** The actions the selection offers: `[{act, data, text, primary?}]` (existing play actions only). */
 export function inspectActions(FS, m) {
-  if (!m || FS.mode !== 'play') return [];
+  if (!m) return [];
+  // spectators can replay a clash on the map (the report itself is the game page's)
+  if (FS.mode === 'spectate') return m.reportBell ? [{ act: 'battle-play', data: { p: m.p, q: m.q, bell: m.reportBell }, text: L`戦いを再生`, primary: true }] : [];
+  if (FS.mode !== 'play') return [];
   const out = [];
   const t = m.tile;
   if (t?.site?.mine) out.push({ act: 'holding-pick', data: { i: t.site.holdingIndex }, text: L`この拠点を開く`, primary: true });
@@ -79,6 +82,7 @@ export function inspectActions(FS, m) {
       out.push({ act: 'toggle-site', data: { p: m.p, q: m.q, site: t.site.index }, text: chosen ? L`入植希望から外す` : L`この区画を入植希望に加える`, primary: !chosen });
     } else out.push({ act: 'pick-province', data: { p: m.p, q: m.q }, text: L`この州の空き区画を見る` });
   }
+  if (m.reportBell) out.push({ act: 'battle-play', data: { p: m.p, q: m.q, bell: m.reportBell }, text: L`戦いを再生` });
   if (m.reportBell) out.push({ act: 'report-open', data: { p: m.p, q: m.q, bell: m.reportBell }, text: L`第${fmtNum(m.reportBell)}鐘の衝突の報告` });
   return out;
 }

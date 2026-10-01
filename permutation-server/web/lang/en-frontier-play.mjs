@@ -258,4 +258,11 @@ export default {
   '休眠中（領主が留守）': 'Dormant (its lord is away)',
   '{0}：{1}': '{0}: {1}',
   'いまの様子': 'Happening now',
+  '戦いを再生': 'Replay the battle',
+  '持ちこたえた': 'Held',
+  '隣へ退いた': 'Withdrew',
+  '押し戻された': 'Bounced back',
+  '撤退した': 'Retreated',
+  '壊滅': 'Destroyed',
+  '−{0} 兵': '−{0} troops',
 };
